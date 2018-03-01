@@ -7,9 +7,16 @@
 //
 
 #include <iostream>
+#include <fstream>
+
+using std::string;
+
 
 int main(int argc, const char * argv[]) {
-    // insert code here...
-    std::cout << "Hello, World!\n";
+    std::ifstream csv { "COR_USD_Week3.csv", std::ios_base::in };
+    std::string l;
+    
+    csv >> l;
+    
     return 0;
 }

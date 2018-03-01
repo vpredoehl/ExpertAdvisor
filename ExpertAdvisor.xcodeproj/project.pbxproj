@@ -25,6 +25,7 @@
 /* Begin PBXFileReference section */
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
 		0845055C2047962100A0B88F /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
+		0845056320479F1300A0B88F /* COR_USD_Week3.csv */ = {isa = PBXFileReference; lastKnownFileType = text; path = COR_USD_Week3.csv; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +59,7 @@
 			isa = PBXGroup;
 			children = (
 				0845055C2047962100A0B88F /* main.cpp */,
+				0845056320479F1300A0B88F /* COR_USD_Week3.csv */,
 			);
 			path = ExpertAdvisor;
 			sourceTree = "<group>";
