@@ -12,19 +12,23 @@
 #include <chrono>
 
 using namespace std::chrono;
-using tp = time_point<system_clock, seconds>;
+using CandleTime = time_point<system_clock, minutes>;
 
 
-std::istream& operator>>(std::istream& i, struct tm &t)
+std::istream& operator>>(std::istream& i, CandleTime &t)
 {
-    i >> std::get_time(&t, "%F %R:%S");
+    struct tm ct;
+
+    i >> std::get_time(&ct, "%F %R:%S");
+    t = time_point_cast<minutes>(std::chrono::system_clock::from_time_t(mktime(&ct)));
     return i;
 }
 
 int main(int argc, const char * argv[]) {
     std::ifstream csv { "COR_USD_Week3.csv", std::ios_base::in };
     std::string l;
-    struct tm t;
+    CandleTime t;
+    time_t tt;
     
     csv >> l;   // header line
     
@@ -32,7 +36,8 @@ int main(int argc, const char * argv[]) {
     std::getline(csv, l, ',');
     std::getline(csv, l, ',');
     csv >> t;
-    std::cout << std::put_time(&t, "%Y:%m %R");
+    tt = system_clock::to_time_t(t);
+    std::cout << std::put_time(localtime(&tt), "%F");
     std::getline(csv, l, ',');
 
     csv >> l;
