@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
+		084505662048CAB900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* CandleStick.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -26,6 +27,8 @@
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
 		0845055C2047962100A0B88F /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		0845056320479F1300A0B88F /* COR_USD_Week3.csv */ = {isa = PBXFileReference; lastKnownFileType = text; path = COR_USD_Week3.csv; sourceTree = SOURCE_ROOT; };
+		084505642048CAB900A0B88F /* CandleStick.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = CandleStick.cpp; sourceTree = "<group>"; };
+		084505652048CAB900A0B88F /* CandleStick.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = CandleStick.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -60,6 +63,8 @@
 			children = (
 				0845055C2047962100A0B88F /* main.cpp */,
 				0845056320479F1300A0B88F /* COR_USD_Week3.csv */,
+				084505642048CAB900A0B88F /* CandleStick.cpp */,
+				084505652048CAB900A0B88F /* CandleStick.hpp */,
 			);
 			path = ExpertAdvisor;
 			sourceTree = "<group>";
@@ -122,6 +127,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
+				084505662048CAB900A0B88F /* CandleStick.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
