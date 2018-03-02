@@ -13,10 +13,11 @@
 using ChartTimeFrame = CandleStick::TimeFrame;
 using CandleTime = CandleStick::CandleTime;
 
-
 using std::string;
 
-CandleStick::CandleStick(TimeFrame tf, CandleTime ct, string sym, float bid, float ask)
+string CandleStick::sym;
+
+CandleStick::CandleStick(TimeFrame tf, CandleTime ct, float bid, float ask)
 {
     frame = tf;  time = ct;
     CandleStick::bid = bid; CandleStick::ask = ask;
@@ -38,17 +39,16 @@ istream& operator>>(istream& i, CandleTime &t)
 istream& operator>>(istream& i, CandleStick &t)
 {
     using std::getline;
-    string sym;
     CandleTime ct;
     float bid,ask;
     
     i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-    getline(i, sym, ',');
+    getline(i, CandleStick::sym, ',');
     i >> ct;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> ask;
-    t = CandleStick { CandleStick::minutely, ct, sym, bid, ask };
+    t = CandleStick { CandleStick::minutely, ct, bid, ask };
     return i;
 }
 
@@ -60,7 +60,7 @@ ostream& operator<<(ostream& o, CandleStick::CandleTime t)
 }
 ostream& operator<<(ostream& o, CandleStick cs)
 {
-    o << "Chart: ";
+    o << "Symbol: " << CandleStick::sym << "\tChart: ";
     switch (cs.frame) {
         case CandleStick::minutely:
             o << "minute" << endl;

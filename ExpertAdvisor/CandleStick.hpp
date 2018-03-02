@@ -22,7 +22,9 @@ public:
     using CandleTime = time_point<system_clock, minutes>;
     enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
     
-    CandleStick(TimeFrame, CandleTime, std::string sym, float bid, float ask);
+    static std::string sym;
+    
+    CandleStick(TimeFrame, CandleTime, float bid, float ask);
     CandleStick() {}
     
 private:

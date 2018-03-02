@@ -11,20 +11,30 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <map>
+#include <vector>
+#include <string>
 
+using ChartType = std::pair<std::string, CandleStick::TimeFrame>;
+using MarketData = std::vector<CandleStick>;
+using ChartData = std::map<std::string, MarketData>;
 
 int main(int argc, const char * argv[]) {
     std::ifstream csv { "COR_USD_Week3.csv", std::ios_base::in };
     CandleStick::CandleTime t;
     CandleStick cs;
     std::string l;
-    time_t tt;
     
     csv >> l;   // header line
 
-    csv >> cs;
-    
-    std::cout << cs << std::endl;
+    ChartData cd;
+    while(csv >> cs)
+    {
+        MarketData &d = cd[CandleStick::sym];
+        
+        d.push_back(cs);
+        std::cout << cs << std::endl;
+    }
     
     return 0;
 }
