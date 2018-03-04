@@ -6,7 +6,7 @@
 //  Copyright © 2018 Vincent Predoehl. All rights reserved.
 //
 
-#include "CandleStick.hpp"
+#include "PricePoint.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -15,22 +15,22 @@
 #include <vector>
 #include <string>
 
-using ChartType = std::pair<std::string, CandleStick::TimeFrame>;
-using MarketData = std::vector<CandleStick>;
-using ChartData = std::map<std::string, MarketData>;
+using ChartType = std::pair<std::string, TimeFrame>;
+using MarketData = std::vector<PricePoint>;
+using SymbolData = std::map<std::string, MarketData>;
 
 int main(int argc, const char * argv[]) {
     std::ifstream csv { "COR_USD_Week3.csv", std::ios_base::in };
-    CandleStick::CandleTime t;
-    CandleStick cs;
+    PriceTime t;
+    PricePoint cs;
     std::string l;
     
     csv >> l;   // header line
 
-    ChartData cd;
+    SymbolData cd;
     while(csv >> cs)
     {
-        MarketData &d = cd[CandleStick::sym];
+        MarketData &d = cd[PricePoint::sym];
         
         d.push_back(cs);
         std::cout << cs << std::endl;
