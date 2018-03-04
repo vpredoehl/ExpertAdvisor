@@ -7,25 +7,27 @@
 //
 
 #include "PricePoint.hpp"
-
 #include <iomanip>
 
-
+using namespace std::chrono;
 using std::string;
 
 string PricePoint::sym;
 
-PricePoint::PricePoint(TimeFrame tf, PriceTime ct, float bid, float ask)
+PricePoint::PricePoint(PriceTP ct, float bid, float ask)
 {
-    frame = tf;  time = ct;
+    time = ct;
     PricePoint::bid = bid; PricePoint::ask = ask;
 }
 
 using std::istream;
 using std::ostream;
 using std::endl;
+using std::setw;
+using std::showbase;
+using std::put_money;
 
-istream& operator>>(istream& i, PriceTime &t)
+istream& operator>>(istream& i, PriceTP &t)
 {
     struct tm ct;
     
@@ -37,7 +39,7 @@ istream& operator>>(istream& i, PriceTime &t)
 istream& operator>>(istream& i, PricePoint &t)
 {
     using std::getline;
-    PriceTime ct;
+    PriceTP ct;
     float bid,ask;
     
     i.ignore(std::numeric_limits<std::streamsize>::max(),',');
@@ -46,35 +48,18 @@ istream& operator>>(istream& i, PricePoint &t)
     i >> ct;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> ask;
-    t = PricePoint { minutely, ct, bid, ask };
+    t = PricePoint { ct, bid, ask };
     return i;
 }
 
-ostream& operator<<(ostream& o, PriceTime t)
+ostream& operator<<(ostream& o, PriceTP t)
 {
     auto tt = system_clock::to_time_t(t);
     o << std::put_time(localtime(&tt), "%F %R:%S");
     return o;
 }
-ostream& operator<<(ostream& o, PricePoint cs)
+ostream& operator<<(ostream& o, PricePoint pp)
 {
-    o << "Symbol: " << PricePoint::sym << "\tChart: ";
-    switch (cs.frame) {
-        case minutely:
-            o << "minute" << endl;
-            break;
-        case hourly:
-            o << "hourly" << endl;
-            break;
-        case daily:
-            o << "daily" << endl;
-            break;
-        case weekly:
-            o << "weekly" << endl;
-            break;
-        case monthly:
-            o << "monthly" << endl;
-    }
-    o << "\tTime: " << cs.time << "\tBid: " << cs.bid << "\tAsk: " << cs.ask << endl;
+    o << "\tTime: " << pp.time << "\tBid: " << setw(10) << pp.bid << "\tAsk: " << setw(10) << pp.ask;
     return o;
 }

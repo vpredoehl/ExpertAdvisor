@@ -12,37 +12,29 @@
 #include <chrono>
 #include <string>
 
-using namespace std::chrono;
-
-enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
-
-using days = duration<long, std::ratio<24 * 3600>>;
-using weeks = duration<long, std::ratio<7 * 24 * 3600>>;
-using PriceTime = time_point<system_clock, minutes>;
-
+using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::minutes>;
 
 class PricePoint
 {
     float bid, ask;
     
 public:
-    
     static std::string sym;
-    
-    PricePoint(TimeFrame, PriceTime, float bid, float ask);
+    PriceTP time;
+
+    PricePoint(PriceTP, float bid, float ask);
     PricePoint() {}
     
+    operator float() const  {   return bid; }
 private:
-    PriceTime time;
-    TimeFrame frame;
-    
+
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
 };
     
-std::istream& operator>>(std::istream&, PriceTime&);
+std::istream& operator>>(std::istream&, PriceTP&);
 std::istream& operator>>(std::istream&, PricePoint&);
 
-std::ostream& operator<<(std::ostream&, PriceTime);
+std::ostream& operator<<(std::ostream&, PriceTP);
 std::ostream& operator<<(std::ostream&, PricePoint);
 
 #endif /* PricePoint_hpp */

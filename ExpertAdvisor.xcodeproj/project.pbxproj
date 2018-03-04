@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
 		084505662048CAB900A0B88F /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
+		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -29,6 +30,8 @@
 		0845056320479F1300A0B88F /* COR_USD_Week3.csv */ = {isa = PBXFileReference; lastKnownFileType = text; path = COR_USD_Week3.csv; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
+		0845056B204BC46900A0B88F /* CandleStick.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = CandleStick.cpp; sourceTree = "<group>"; };
+		0845056C204BC46900A0B88F /* CandleStick.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = CandleStick.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +68,8 @@
 				0845056320479F1300A0B88F /* COR_USD_Week3.csv */,
 				084505642048CAB900A0B88F /* PricePoint.cpp */,
 				084505652048CAB900A0B88F /* PricePoint.hpp */,
+				0845056B204BC46900A0B88F /* CandleStick.cpp */,
+				0845056C204BC46900A0B88F /* CandleStick.hpp */,
 			);
 			path = ExpertAdvisor;
 			sourceTree = "<group>";
@@ -127,6 +132,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
+				0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */,
 				084505662048CAB900A0B88F /* PricePoint.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

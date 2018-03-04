@@ -2,47 +2,34 @@
 //  CandleStick.hpp
 //  ExpertAdvisor
 //
-//  Created by Vincent Predoehl on 3/1/18.
+//  Created by Vincent Predoehl on 3/4/18.
 //  Copyright © 2018 Vincent Predoehl. All rights reserved.
 //
 
 #ifndef CandleStick_hpp
 #define CandleStick_hpp
 
-#include <chrono>
-#include <string>
-
-using namespace std::chrono;
+#include "PricePoint.hpp"
+#include <vector>
 
 enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
 
-using days = duration<long, std::ratio<24 * 3600>>;
-using weeks = duration<long, std::ratio<7 * 24 * 3600>>;
-using CandleTime = time_point<system_clock, minutes>;
+using MarketData = std::vector<PricePoint>;
 
+using days = std::chrono::duration<long, std::ratio<24 * 3600>>;
+using weeks = std::chrono::duration<long, std::ratio<7 * 24 * 3600>>;
+using ChartType = std::pair<std::string, TimeFrame>;
 
-class PricePoint
+class CandleStick
 {
-    float bid, ask;
+    float high, low, open, close;
+    PriceTP when;
     
+    friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
-    
-    static std::string sym;
-    
-    PricePoint(TimeFrame, CandleTime, float bid, float ask);
-    PricePoint() {}
-    
-private:
-    CandleTime time;
-    TimeFrame frame;
-    
-    friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
+    CandleStick(PriceTP candleTime, MarketData::const_iterator start, MarketData::const_iterator end);
 };
-    
-std::istream& operator>>(std::istream&, CandleTime&);
-std::istream& operator>>(std::istream&, PricePoint&);
 
-std::ostream& operator<<(std::ostream&, CandleTime);
-std::ostream& operator<<(std::ostream&, PricePoint);
+std::ostream& operator<<(std::ostream &o, CandleStick cs);
 
 #endif /* CandleStick_hpp */
