@@ -28,6 +28,9 @@ class CandleStick
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
     CandleStick(PriceTP candleTime, MarketData::const_iterator start, MarketData::const_iterator end);
+    
+    auto closePrice() -> float   {   return close;   }
+    auto operator=(float candleValue) -> float  {   return high = low = open = close = candleValue;  }
 };
 
 std::ostream& operator<<(std::ostream &o, CandleStick cs);

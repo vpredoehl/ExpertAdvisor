@@ -12,15 +12,12 @@
 CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::const_iterator e)
 :  open(*s), close(*(e-1))
 {
-    if(s == e)
-        open = close = high = low = 0;
-    else
-        std::for_each(s, e, [this,s,e](PricePoint pp)
-                      {
-                          std::cout << pp << std::endl;
-                          high = *std::max_element(s,e);
-                          low = *std::min_element(s,e);
-                      });
+    std::for_each(s, e, [this,s,e](PricePoint pp)
+                  {
+                      std::cout << pp << std::endl;
+                      high = *std::max_element(s,e);
+                      low = *std::min_element(s,e);
+                  });
     when = t;
 }
 

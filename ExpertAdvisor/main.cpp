@@ -45,14 +45,18 @@ int main(int argc, const char * argv[]) {
                       auto candleEndTime = candleStartIter->time + candleDuration;
                       auto TimeNotInCandle = [&candleEndTime](const PricePoint &pp) -> bool    {   return pp.time >= candleEndTime;   };
 
-                      while (priceD.end() != (candleEndIter = std::find_if(candleStartIter, priceD.cend(), TimeNotInCandle))) {
-                          CandleStick cs(candleStartTime, candleStartIter, candleEndIter);
+                      float lastCandlePrice = 0;
+                      do
+                      {
+                          CandleStick cs(candleStartTime, candleStartIter, candleEndIter = std::find_if(candleStartIter, priceD.cend(), TimeNotInCandle));
                           
+                          if(candleStartIter == candleEndIter)   cs = lastCandlePrice;
                           std::cout << cs << std::endl;
                           candleStartIter = candleEndIter;
                           candleStartTime = candleEndTime;
                           candleEndTime += candleDuration;
-                      }
+                          lastCandlePrice = cs.closePrice();
+                      } while (priceD.end() != candleEndIter);
                   });
     
     return 0;
