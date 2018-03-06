@@ -14,7 +14,6 @@ CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::co
 {
     std::for_each(s, e, [this,s,e](PricePoint pp)
                   {
-                      std::cout << pp << std::endl;
                       high = *std::max_element(s,e);
                       low = *std::min_element(s,e);
                   });
@@ -37,20 +36,3 @@ ostream& operator<<(ostream &o, CandleStick c)
     return  o;
 }
 
-
-    //    switch (cs.frame) {
-    //        case minutely:
-    //            o << "minute" << endl;
-    //            break;
-    //        case hourly:
-    //            o << "hourly" << endl;
-    //            break;
-    //        case daily:
-    //            o << "daily" << endl;
-    //            break;
-    //        case weekly:
-    //            o << "weekly" << endl;
-    //            break;
-    //        case monthly:
-    //            o << "monthly" << endl;
-    //    }

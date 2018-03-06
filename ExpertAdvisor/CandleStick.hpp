@@ -12,13 +12,10 @@
 #include "PricePoint.hpp"
 #include <vector>
 
-enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
-
 using MarketData = std::vector<PricePoint>;
 
 using days = std::chrono::duration<long, std::ratio<24 * 3600>>;
 using weeks = std::chrono::duration<long, std::ratio<7 * 24 * 3600>>;
-using ChartType = std::pair<std::string, TimeFrame>;
 
 class CandleStick
 {

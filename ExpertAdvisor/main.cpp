@@ -6,7 +6,7 @@
 //  Copyright © 2018 Vincent Predoehl. All rights reserved.
 //
 
-#include "CandleStick.hpp"
+#include "Chart.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -24,39 +24,22 @@ int main(int argc, const char * argv[]) {
     
     csv >> l;   // header line
 
-    SymbolData cd;
+    SymbolData symD;
     while(csv >> pp)
     {
-        MarketData &d = cd[PricePoint::sym];
+        MarketData &d = symD[PricePoint::sym];
         
         d.push_back(pp);
         std::cout << pp << std::endl;
     }
     
-    std::cout.imbue(std::locale("en_US.UTF-8"));
     using namespace std::chrono;
-    minutes candleDuration = minutes { 5 };
-    
-    std::for_each(cd.begin(), cd.end(), [candleDuration](const SymbolData::value_type &m)
+    std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
+    std::for_each(symD.begin(), symD.end(), [](const SymbolData::value_type &m)
                   {
-                      const MarketData& priceD = m.second;
-                      auto candleStartIter = priceD.cbegin(), candleEndIter = candleStartIter;
-                      auto candleStartTime = candleStartIter->time;
-                      auto candleEndTime = candleStartIter->time + candleDuration;
-                      auto TimeNotInCandle = [&candleEndTime](const PricePoint &pp) -> bool    {   return pp.time >= candleEndTime;   };
-
-                      float lastCandlePrice = 0;
-                      do
-                      {
-                          CandleStick cs(candleStartTime, candleStartIter, candleEndIter = std::find_if(candleStartIter, priceD.cend(), TimeNotInCandle));
-                          
-                          if(candleStartIter == candleEndIter)   cs = lastCandlePrice;
-                          std::cout << cs << std::endl;
-                          candleStartIter = candleEndIter;
-                          candleStartTime = candleEndTime;
-                          candleEndTime += candleDuration;
-                          lastCandlePrice = cs.closePrice();
-                      } while (priceD.end() != candleEndIter);
+                      Chart ch(m.second);
+                      
+                      std::cout << ch;
                   });
     
     return 0;
