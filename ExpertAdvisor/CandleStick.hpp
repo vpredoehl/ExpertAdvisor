@@ -23,6 +23,7 @@ using ChartType = std::pair<std::string, TimeFrame>;
 class CandleStick
 {
     float high, low, open, close;
+    MarketData::const_iterator seqIter;
     PriceTP when;
     
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);

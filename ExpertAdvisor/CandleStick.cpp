@@ -18,6 +18,7 @@ CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::co
                       high = *std::max_element(s,e);
                       low = *std::min_element(s,e);
                   });
+    seqIter = s;
     when = t;
 }
 
