@@ -30,7 +30,8 @@ private:
 
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
 };
-    
+using MarketData = std::vector<PricePoint>;
+
 std::istream& operator>>(std::istream&, PriceTP&);
 std::istream& operator>>(std::istream&, PricePoint&);
 

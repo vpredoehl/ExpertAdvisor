@@ -15,21 +15,23 @@
 
 using ChartData = std::vector<CandleStick>;
 
+class MarketData_iterator;
 class Chart
 {
     enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
 
     std::string sym;
     TimeFrame chartTF = minutely;
+    MarketData::const_iterator candleStartIter, candleEndIter;
+    std::vector<MarketData::const_iterator::difference_type> seqOffset;
     ChartData candles;
     
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
-    Chart(const MarketData&, std::chrono::minutes = std::chrono::minutes { 1 });
+    Chart(MarketData_iterator s, MarketData_iterator e, std::chrono::minutes = std::chrono::minutes { 1 });
 
-    ChartData::const_iterator cbegin() const    {   return candles.cbegin();    }
-    ChartData::const_iterator cend() const  {   return candles.cend();  }
-    
+    MarketData::const_iterator cbegin() const    {   return candleStartIter;    }
+    MarketData::const_iterator cend() const  {   return candleEndIter;  }
 };
 
 std::ostream& operator<<(std::ostream &o, const Chart&);

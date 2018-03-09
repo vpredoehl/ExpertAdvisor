@@ -7,38 +7,46 @@
 //
 
 #include "Chart.hpp"
+#include "MarketData_iterator.hpp"
 #include <iostream>
 
 using namespace std::chrono;
 
-Chart::Chart(const MarketData &priceD, minutes candleDuration)
+Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes dur)
+: candleStartIter(startIter), candleEndIter(endIter)
 {
-    auto candleStartIter = priceD.cbegin(), candleEndIter = candleStartIter;
-    auto candleStartTime = candleStartIter->time;
-    auto candleEndTime = candleStartIter->time + candleDuration;
-    auto TimeNotInCandle = [&candleEndTime](const PricePoint &pp) -> bool    {   return pp.time >= candleEndTime;   };
+    auto startTime = startIter->time;
+    auto endTime = startIter->time + dur;
+    auto TimeNotInCandle = [&endTime](const PricePoint &pp) -> bool
+    {
+        std::cout << pp << std::endl;
+        return pp.time >= endTime;
+    };
+    float lastPrice = 0;
     
-    float lastCandlePrice = 0;
+    endIter = startIter;
     do
     {
-        CandleStick cs(candleStartTime, candleStartIter, candleEndIter = std::find_if(candleStartIter, priceD.cend(), TimeNotInCandle));
+        CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, MarketData_iterator(candleEndIter), TimeNotInCandle));
         
-        if(candleStartIter == candleEndIter)   cs = lastCandlePrice;
-        candleStartIter = candleEndIter;
-        candleStartTime = candleEndTime;
-        candleEndTime += candleDuration;
-        lastCandlePrice = cs.closePrice();
+        if(startIter == endIter)   cs = lastPrice;
+        std::cout << cs << std::endl;
+        seqOffset.push_back(endIter - startIter);
+        startIter = endIter;
+        startTime = endTime;
+        endTime += dur;
+        lastPrice = cs.closePrice();
         candles.push_back(cs);
-    } while (priceD.end() != candleEndIter);
+    } while (endIter != candleEndIter);
 }
 
 using std::ostream;
 
-ostream& operator<<(ostream &o, const Chart &c)
+ostream& operator<<(ostream &o, const Chart &ch)
 {
     using std::endl;
-    o << "Chart: " << c.sym << "  TimeFrame: ";
-    switch (c.chartTF) {
+    o << "Chart: " << ch.sym << "  TimeFrame: ";
+    switch (ch.chartTF) {
         case Chart::minutely:
             o << "minute" << endl;
             break;
@@ -54,7 +62,7 @@ ostream& operator<<(ostream &o, const Chart &c)
         case Chart::monthly:
             o << "monthly" << endl;
     }
-    std::for_each(c.cbegin(), c.cend(), [&o](CandleStick c)
+    std::for_each(ch.candles.cbegin(), ch.candles.cend(), [&o](CandleStick c)
                   {
                       o << c << std::endl;
                   });

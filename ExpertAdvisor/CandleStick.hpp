@@ -12,8 +12,6 @@
 #include "PricePoint.hpp"
 #include <vector>
 
-using MarketData = std::vector<PricePoint>;
-
 using days = std::chrono::duration<long, std::ratio<24 * 3600>>;
 using weeks = std::chrono::duration<long, std::ratio<7 * 24 * 3600>>;
 
@@ -29,6 +27,7 @@ public:
     
     auto closePrice() -> float   {   return close;   }
     auto operator=(float candleValue) -> float  {   return high = low = open = close = candleValue;  }
+    operator MarketData::const_iterator() const {   return seqIter; }
 };
 
 std::ostream& operator<<(std::ostream &o, CandleStick cs);

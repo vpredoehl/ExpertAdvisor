@@ -7,6 +7,7 @@
 //
 
 #include "Chart.hpp"
+#include "MarketData_iterator.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -30,16 +31,18 @@ int main(int argc, const char * argv[]) {
         MarketData &d = symD[PricePoint::sym];
         
         d.push_back(pp);
-        std::cout << pp << std::endl;
     }
     
     using namespace std::chrono;
     std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
     std::for_each(symD.begin(), symD.end(), [](const SymbolData::value_type &m)
                   {
-                      Chart ch(m.second);
+                      const MarketData &md = m.second;
+                      Chart ch(md.cbegin(), md.cend());
+                      Chart min5(ch.cbegin(), ch.cend(), minutes {5});
                       
-                      std::cout << ch;
+                      std::cout << "Charts successfully constructed…" << std::endl << ch << std::endl;
+                      std::cout << "5 min chart…" << min5 << std::endl;
                   });
     
     return 0;
