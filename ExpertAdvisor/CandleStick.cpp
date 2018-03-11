@@ -7,16 +7,20 @@
 //
 
 #include "CandleStick.hpp"
+#include "MarketData_iterator.hpp"
 #include <iostream>
 
-CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::const_iterator e)
+CandleStick::CandleStick(PriceTP t, MarketData_iterator s, MarketData_iterator e)
 :  open(*s), close(*(e-1))
 {
-    std::for_each(s, e, [this,s,e](PricePoint pp)
+    auto mm = std::minmax_element(s, e);
+    
+    std::for_each(s, e, [](PricePoint pp)
                   {
-                      high = *std::max_element(s,e);
-                      low = *std::min_element(s,e);
+                      std::cout << pp << std::endl;
                   });
+    low = *mm.first;
+    high = *mm.second;
     seqIter = s;
     when = t;
 }

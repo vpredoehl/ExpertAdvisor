@@ -17,11 +17,7 @@ Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes
 {
     auto startTime = startIter->time;
     auto endTime = startIter->time + dur;
-    auto TimeNotInCandle = [&endTime](const PricePoint &pp) -> bool
-    {
-        std::cout << pp << std::endl;
-        return pp.time >= endTime;
-    };
+    auto TimeNotInCandle = [&endTime](const PricePoint &pp) -> bool {   return pp.time >= endTime;  };
     float lastPrice = 0;
     
     endIter = startIter;
@@ -41,7 +37,6 @@ Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes
 }
 
 using std::ostream;
-
 ostream& operator<<(ostream &o, const Chart &ch)
 {
     using std::endl;
@@ -67,4 +62,18 @@ ostream& operator<<(ostream &o, const Chart &ch)
                       o << c << std::endl;
                   });
     return o;
+}
+
+auto Chart::operator==(const Chart& ch) const -> bool
+{
+    using ForwardIter = ChartData::const_iterator;
+    ForwardIter c2;
+    
+    for(ForwardIter c1 = candles.cbegin(), c2 = ch.candles.cbegin();
+            c1 != candles.cend() && c2 != ch.candles.cend();    ++c1, ++c2)
+    {
+        std::cout << "Comparing: " << *c1 << std::endl << *c2 << std::endl;
+        if(*c1 != *c2)    return false;
+    }
+    return true;
 }

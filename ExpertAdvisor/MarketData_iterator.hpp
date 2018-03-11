@@ -10,32 +10,33 @@
 #define MarketData_iterator_hpp
 
 #include "PricePoint.hpp"
-#include <vector>
 #include <iterator>
 
-using OffsetPP = std::vector<MarketData::const_iterator::difference_type>;
-
+class Chart;
 class MarketData_iterator : public std::iterator<std::forward_iterator_tag, PricePoint>
 {
     MarketData::const_iterator curMD;
-    OffsetPP::const_iterator curO;
-    const OffsetPP *ppo;
+    NextCandleOffset::const_iterator offsetIter;
+    const NextCandleOffset *ppo;
     
+    using OffsetPair = std::pair<const NextCandleOffset*, NextCandleOffset::const_iterator>;
+    
+    friend class Chart;
 public:
-    MarketData_iterator(MarketData::const_iterator, const OffsetPP* = nullptr);
-    ~MarketData_iterator()  {   delete ppo; }
+    MarketData_iterator(MarketData::const_iterator, OffsetPair = OffsetPair { nullptr, NextCandleOffset::const_iterator {}});
 
-    auto operator++(int) -> MarketData::const_iterator;
-    auto operator++() -> MarketData::const_iterator;
-    auto operator-(const MarketData_iterator &mdi) -> OffsetPP::difference_type  {   return curMD - mdi.curMD;   }
+    auto operator++(int) -> MarketData_iterator;
+    auto operator++() -> MarketData_iterator;
+    auto operator-(const MarketData_iterator &mdi) -> NextCandleOffset::difference_type  {   return curMD - mdi.curMD;   }
+    auto operator-(int o) -> MarketData_iterator    {   return curMD - o;    }
 
-    auto operator*() -> PricePoint  {   return *curMD;  }
+    auto operator*() -> PricePoint const  {   return *curMD;  }
     auto operator->() -> const PricePoint* const { return &*curMD;   }
     operator MarketData::const_iterator() const {   return curMD;   }
     auto operator=(const MarketData_iterator& i) -> MarketData_iterator;
 
-    auto operator==(const MarketData_iterator &mdi) -> bool {   return curMD == mdi.curMD;  }
-    auto operator!=(const MarketData_iterator &mdi) -> bool {   return curMD != mdi.curMD;  }
+    auto operator==(const MarketData_iterator &mdi) const -> bool {   return curMD == mdi.curMD;  }
+    auto operator!=(const MarketData_iterator &mdi) const -> bool {   return curMD != mdi.curMD;  }
 };
 
 #endif /* MarketData_iterator_hpp */

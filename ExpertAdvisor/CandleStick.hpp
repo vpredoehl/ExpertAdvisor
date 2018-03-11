@@ -10,11 +10,11 @@
 #define CandleStick_hpp
 
 #include "PricePoint.hpp"
-#include <vector>
 
 using days = std::chrono::duration<long, std::ratio<24 * 3600>>;
 using weeks = std::chrono::duration<long, std::ratio<7 * 24 * 3600>>;
 
+class MarketData_iterator;
 class CandleStick
 {
     float high, low, open, close;
@@ -23,10 +23,12 @@ class CandleStick
     
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
-    CandleStick(PriceTP candleTime, MarketData::const_iterator start, MarketData::const_iterator end);
+    CandleStick(PriceTP candleTime, MarketData_iterator start, MarketData_iterator end);
     
     auto closePrice() -> float   {   return close;   }
     auto operator=(float candleValue) -> float  {   return high = low = open = close = candleValue;  }
+    
+    auto operator!=(const CandleStick& c) const -> bool {   return high != c.high || low != c.low || open != c.open || close != c.close;   }
     operator MarketData::const_iterator() const {   return seqIter; }
 };
 

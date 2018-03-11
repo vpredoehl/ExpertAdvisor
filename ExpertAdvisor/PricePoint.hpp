@@ -25,12 +25,18 @@ public:
     PricePoint(PriceTP, float bid, float ask);
     PricePoint() {}
     
+    auto operator<(PricePoint pp) const -> bool  {   return bid < pp.bid; }
+    auto operator==(PricePoint pp) const -> bool    {   return bid == pp.bid && ask == pp.ask;   }
+
     operator float() const  {   return bid; }
 private:
 
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
 };
+
+#include <vector>
 using MarketData = std::vector<PricePoint>;
+using NextCandleOffset = std::vector<MarketData::const_iterator::difference_type>;
 
 std::istream& operator>>(std::istream&, PriceTP&);
 std::istream& operator>>(std::istream&, PricePoint&);
