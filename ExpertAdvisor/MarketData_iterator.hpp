@@ -9,21 +9,19 @@
 #ifndef MarketData_iterator_hpp
 #define MarketData_iterator_hpp
 
-#include "PricePoint.hpp"
+#include "CandleStick.hpp"
 #include <iterator>
 
-class Chart;
+
 class MarketData_iterator : public std::iterator<std::forward_iterator_tag, PricePoint>
 {
+    const ChartData *cd = nullptr;
     MarketData::const_iterator curMD;
-    NextCandleOffset::const_iterator offsetIter;
-    const NextCandleOffset *ppo;
-    
-    using OffsetPair = std::pair<const NextCandleOffset*, NextCandleOffset::const_iterator>;
     
     friend class Chart;
 public:
-    MarketData_iterator(MarketData::const_iterator, OffsetPair = OffsetPair { nullptr, NextCandleOffset::const_iterator {}});
+    MarketData_iterator(MarketData::const_iterator);
+    MarketData_iterator(ChartData::const_iterator);
 
     auto operator++(int) -> MarketData_iterator;
     auto operator++() -> MarketData_iterator;

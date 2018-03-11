@@ -27,13 +27,12 @@ Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes
         
         if(startIter == endIter)   cs = lastPrice;
         std::cout << cs << std::endl;
-        seqOffset.push_back(endIter - startIter);
         startIter = endIter;
         startTime = endTime;
         endTime += dur;
         lastPrice = cs.closePrice();
         candles.push_back(cs);
-    } while (endIter != candleEndIter);
+    } while (endIter != MarketData_iterator{ candleEndIter });
 }
 
 using std::ostream;
@@ -66,14 +65,14 @@ ostream& operator<<(ostream &o, const Chart &ch)
 
 auto Chart::operator==(const Chart& ch) const -> bool
 {
-    using ForwardIter = ChartData::const_iterator;
-    ForwardIter c2;
-    
-    for(ForwardIter c1 = candles.cbegin(), c2 = ch.candles.cbegin();
-            c1 != candles.cend() && c2 != ch.candles.cend();    ++c1, ++c2)
-    {
-        std::cout << "Comparing: " << *c1 << std::endl << *c2 << std::endl;
-        if(*c1 != *c2)    return false;
-    }
+//    using ForwardIter = ChartData::const_iterator;
+//    ForwardIter c2;
+//
+//    for(ForwardIter c1 = candles.cbegin(), c2 = ch.candles.cbegin();
+//            c1 != candles.cend() && c2 != ch.candles.cend();    ++c1, ++c2)
+//    {
+//        std::cout << "Comparing: " << *c1 << std::endl << *c2 << std::endl;
+//        if(*c1 != *c2)    return false;
+//    }
     return true;
 }

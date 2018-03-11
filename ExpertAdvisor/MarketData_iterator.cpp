@@ -8,35 +8,29 @@
 
 #include "MarketData_iterator.hpp"
 
-MarketData_iterator::MarketData_iterator(MarketData::const_iterator s, OffsetPair p)
+MarketData_iterator::MarketData_iterator(MarketData::const_iterator s)
 {
-    auto seq = p.first;
-    
     curMD = s;
-    offsetIter = p.second;
-    if((ppo = seq)) offsetIter = seq->cbegin();
+}
+
+MarketData_iterator::MarketData_iterator(ChartData::const_iterator iter)
+{
+    
 }
 
 auto MarketData_iterator::operator++(int) -> MarketData_iterator
 {
-    auto r = curMD;
-    
-    if(ppo == nullptr) return curMD++;
-    curMD = std::next(curMD, *offsetIter++);
-    return MarketData_iterator {r, {ppo, offsetIter}};
+    return curMD++;
 }
 
 auto MarketData_iterator::operator++() -> MarketData_iterator
 {
-    if(ppo == nullptr) return ++curMD;
-    return MarketData_iterator {curMD = std::next(curMD, *offsetIter++), { ppo, offsetIter } };
+    return ++curMD;
 }
 
 auto MarketData_iterator::operator=(const MarketData_iterator &mdi) -> MarketData_iterator
 {
     curMD = mdi.curMD;
-    offsetIter = mdi.offsetIter;
-    ppo = mdi.ppo;
     return mdi;
 }
 

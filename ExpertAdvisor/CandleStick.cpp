@@ -21,7 +21,7 @@ CandleStick::CandleStick(PriceTP t, MarketData_iterator s, MarketData_iterator e
                   });
     low = *mm.first;
     high = *mm.second;
-    seqIter = s;
+    seqIter = s;    endIter = e;
     when = t;
 }
 

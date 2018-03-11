@@ -14,9 +14,7 @@
 #include <chrono>
 #include <vector>
 
-using ChartData = std::vector<CandleStick>;
 
-class MarketData_iterator;
 class Chart
 {
     enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
@@ -24,15 +22,14 @@ class Chart
     std::string sym;
     TimeFrame chartTF = minutely;
     MarketData::const_iterator candleStartIter, candleEndIter;
-    NextCandleOffset seqOffset;
     ChartData candles;
     
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
     Chart(MarketData_iterator s, MarketData_iterator e, std::chrono::minutes = std::chrono::minutes { 1 });
 
-    auto cbegin() const -> MarketData_iterator  {   return MarketData_iterator(candleStartIter, MarketData_iterator::OffsetPair(&seqOffset, seqOffset.cbegin())); }
-    auto cend() const -> MarketData_iterator    {   return candleEndIter;   }
+    auto cbegin() const -> MarketData_iterator  {   return candles.cbegin(); }
+    auto cend() const -> MarketData_iterator    {   return candles.cend();   }
 
     auto operator==(const Chart& ch) const -> bool;
 };
