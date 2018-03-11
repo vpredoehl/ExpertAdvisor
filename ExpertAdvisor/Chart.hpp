@@ -10,7 +10,6 @@
 #define Chart_hpp
 
 #include "CandleStick.hpp"
-#include "MarketData_iterator.hpp"
 #include <chrono>
 #include <vector>
 
@@ -26,10 +25,10 @@ class Chart
     
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
-    Chart(MarketData_iterator s, MarketData_iterator e, std::chrono::minutes = std::chrono::minutes { 1 });
+    Chart(MarketData::const_iterator s, MarketData::const_iterator e, std::chrono::minutes = std::chrono::minutes { 1 });
 
-    auto cbegin() const -> MarketData_iterator  {   return candles.cbegin(); }
-    auto cend() const -> MarketData_iterator    {   return candles.cend();   }
+//    auto cbegin() const -> MarketData_iterator  {   return candles.cbegin(); }
+//    auto cend() const -> MarketData_iterator    {   return candles.cend();   }
 
     auto operator==(const Chart& ch) const -> bool;
 };

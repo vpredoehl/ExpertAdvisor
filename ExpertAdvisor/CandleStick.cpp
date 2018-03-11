@@ -7,10 +7,9 @@
 //
 
 #include "CandleStick.hpp"
-#include "MarketData_iterator.hpp"
 #include <iostream>
 
-CandleStick::CandleStick(PriceTP t, MarketData_iterator s, MarketData_iterator e)
+CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::const_iterator e)
 :  open(*s), close(*(e-1))
 {
     auto mm = std::minmax_element(s, e);

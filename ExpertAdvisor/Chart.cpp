@@ -7,12 +7,11 @@
 //
 
 #include "Chart.hpp"
-#include "MarketData_iterator.hpp"
 #include <iostream>
 
 using namespace std::chrono;
 
-Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes dur)
+Chart::Chart(MarketData::const_iterator startIter, MarketData::const_iterator endIter, minutes dur)
 : candleStartIter(startIter), candleEndIter(endIter)
 {
     auto startTime = startIter->time;
@@ -23,7 +22,7 @@ Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes
     endIter = startIter;
     do
     {
-        CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, MarketData_iterator(candleEndIter), TimeNotInCandle));
+        CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, candleEndIter, TimeNotInCandle));
         
         if(startIter == endIter)   cs = lastPrice;
         std::cout << cs << std::endl;
@@ -32,7 +31,7 @@ Chart::Chart(MarketData_iterator startIter, MarketData_iterator endIter, minutes
         endTime += dur;
         lastPrice = cs.closePrice();
         candles.push_back(cs);
-    } while (endIter != MarketData_iterator{ candleEndIter });
+    } while (endIter != candleEndIter);
 }
 
 using std::ostream;

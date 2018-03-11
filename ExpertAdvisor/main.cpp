@@ -7,7 +7,6 @@
 //
 
 #include "Chart.hpp"
-#include "MarketData_iterator.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -40,13 +39,13 @@ int main(int argc, const char * argv[]) {
                       const MarketData &md = m.second;
                       Chart ch { md.cbegin(), md.cend() };
                       Chart min5FromScratch { md.cbegin(), md.cend(), minutes { 5 } };
-                      Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
+//                      Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
                       
                       std::cout << "Charts successfully constructed…" << std::endl << ch << std::endl;
-                      std::cout << "5 min chart…" << min5 << std::endl;
-                      
-                      if (min5FromScratch == min5)
-                          std::cout << "5 Minute Charts Match!!!" << std::endl;
+//                      std::cout << "5 min chart…" << min5 << std::endl;
+//
+//                      if (min5FromScratch == min5)
+//                          std::cout << "5 Minute Charts Match!!!" << std::endl;
                   });
     
     return 0;

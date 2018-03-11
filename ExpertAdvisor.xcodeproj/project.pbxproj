@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		08305975204E2A650066E86F /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
-		0830597B204F89170066E86F /* MarketData_iterator.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305979204F89170066E86F /* MarketData_iterator.cpp */; };
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
 		084505662048CAB900A0B88F /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
@@ -29,8 +28,6 @@
 /* Begin PBXFileReference section */
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
-		08305979204F89170066E86F /* MarketData_iterator.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = MarketData_iterator.cpp; sourceTree = "<group>"; };
-		0830597A204F89170066E86F /* MarketData_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = MarketData_iterator.hpp; sourceTree = "<group>"; };
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
 		0845055C2047962100A0B88F /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		0845056320479F1300A0B88F /* COR_USD_Week3.csv */ = {isa = PBXFileReference; lastKnownFileType = text; path = COR_USD_Week3.csv; sourceTree = SOURCE_ROOT; };
@@ -78,8 +75,6 @@
 				0845056C204BC46900A0B88F /* CandleStick.hpp */,
 				08305973204E2A650066E86F /* Chart.cpp */,
 				08305974204E2A650066E86F /* Chart.hpp */,
-				08305979204F89170066E86F /* MarketData_iterator.cpp */,
-				0830597A204F89170066E86F /* MarketData_iterator.hpp */,
 			);
 			path = ExpertAdvisor;
 			sourceTree = "<group>";
@@ -143,7 +138,6 @@
 			files = (
 				08305975204E2A650066E86F /* Chart.cpp in Sources */,
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
-				0830597B204F89170066E86F /* MarketData_iterator.cpp in Sources */,
 				0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */,
 				084505662048CAB900A0B88F /* PricePoint.cpp in Sources */,
 			);
