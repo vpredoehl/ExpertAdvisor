@@ -20,6 +20,15 @@ PricePoint::PricePoint(PriceTP ct, float bid, float ask)
     PricePoint::bid = bid; PricePoint::ask = ask;
 }
 
+CandlePrice::CandlePrice(MarketData::const_iterator s, MarketData::const_iterator e)
+: open { *s }, close { *(e-1) }
+{
+    auto mm = std::minmax_element(s, e);
+    
+    high = *mm.second;
+    low = *mm.first;
+}
+
 using std::istream;
 using std::ostream;
 using std::endl;

@@ -20,20 +20,45 @@ class Chart
 
     std::string sym;
     TimeFrame chartTF = minutely;
-    MarketData::const_iterator candleStartIter, candleEndIter;
     ChartData candles;
     
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
-    Chart(MarketData::const_iterator s, MarketData::const_iterator e, std::chrono::minutes = std::chrono::minutes { 1 });
-
-//    auto cbegin() const -> MarketData_iterator  {   return candles.cbegin(); }
-//    auto cend() const -> MarketData_iterator    {   return candles.cend();   }
+    template<class ForwardIter>
+    Chart(ForwardIter s, ForwardIter e, std::chrono::minutes = std::chrono::minutes { 1 });
+    Chart(const Chart&, std::chrono::minutes);
+    
+    auto cbegin() const -> ChartData::const_iterator    {   return candles.cbegin();    }
+    auto cend() const -> ChartData::const_iterator  {   return candles.cend();  }
 
     auto operator==(const Chart& ch) const -> bool;
 };
 inline auto operator!=(const Chart& c1, const Chart& c2) -> bool {   return !(c1 == c2);  }
 
 std::ostream& operator<<(std::ostream &o, const Chart&);
+
+template<class ForwardIter>
+Chart::Chart(ForwardIter startIter, ForwardIter endIter, std::chrono::minutes dur)
+{
+    auto candleEndIter = endIter;
+    auto startTime = startIter->time;
+    auto endTime = startIter->time + dur;
+    auto TimeNotInCandle = [&endTime](const PricePoint &pp) -> bool {   return pp.time >= endTime;  };
+    float lastPrice = 0;
+    
+    endIter = startIter;
+    do
+    {
+        CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, candleEndIter, TimeNotInCandle));
+        
+        if(startIter == endIter)   cs = lastPrice;
+        std::cout << cs << std::endl;
+        startIter = endIter;
+        startTime = endTime;
+        endTime += dur;
+        lastPrice = cs.closePrice();
+        candles.push_back(cs);
+    } while (endIter != candleEndIter);
+}
 
 #endif /* Chart_hpp */

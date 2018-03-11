@@ -6,33 +6,9 @@
 //  Copyright © 2018 Vincent Predoehl. All rights reserved.
 //
 
+#include "PricePoint.hpp"
 #include "Chart.hpp"
 #include <iostream>
-
-using namespace std::chrono;
-
-Chart::Chart(MarketData::const_iterator startIter, MarketData::const_iterator endIter, minutes dur)
-: candleStartIter(startIter), candleEndIter(endIter)
-{
-    auto startTime = startIter->time;
-    auto endTime = startIter->time + dur;
-    auto TimeNotInCandle = [&endTime](const PricePoint &pp) -> bool {   return pp.time >= endTime;  };
-    float lastPrice = 0;
-    
-    endIter = startIter;
-    do
-    {
-        CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, candleEndIter, TimeNotInCandle));
-        
-        if(startIter == endIter)   cs = lastPrice;
-        std::cout << cs << std::endl;
-        startIter = endIter;
-        startTime = endTime;
-        endTime += dur;
-        lastPrice = cs.closePrice();
-        candles.push_back(cs);
-    } while (endIter != candleEndIter);
-}
 
 using std::ostream;
 ostream& operator<<(ostream &o, const Chart &ch)

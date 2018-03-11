@@ -7,21 +7,17 @@
 //
 
 #include "CandleStick.hpp"
+#include "PricePoint.hpp"
 #include <iostream>
 
 CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::const_iterator e)
-:  open(*s), close(*(e-1))
+:  priceInfo { s, e }
 {
-    auto mm = std::minmax_element(s, e);
-    
     std::for_each(s, e, [](PricePoint pp)
                   {
                       std::cout << pp << std::endl;
                   });
-    low = *mm.first;
-    high = *mm.second;
-    seqIter = s;    endIter = e;
-    when = t;
+    time = t;
 }
 
 using std::ostream;
@@ -31,11 +27,11 @@ using std::endl;
 #include <iomanip>
 ostream& operator<<(ostream &o, CandleStick c)
 {
-    o << "CandleStick: " << c.when << endl;
-    o << "\tHigh: " << std::setw(10) << c.high << endl;
-    o << "\tLow: " << std::setw(10) << c.low << endl;
-    o << "\tOpen: " << std::setw(10) << c.open << endl;
-    o << "\tClose: " << std::setw(10) << c.close << endl;
+    o << "CandleStick: " << c.time << endl;
+    o << "\tHigh: " << std::setw(10) << c.priceInfo.high << endl;
+    o << "\tLow: " << std::setw(10) << c.priceInfo.low << endl;
+    o << "\tOpen: " << std::setw(10) << c.priceInfo.open << endl;
+    o << "\tClose: " << std::setw(10) << c.priceInfo.close << endl;
     return  o;
 }
 

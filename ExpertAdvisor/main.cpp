@@ -6,6 +6,7 @@
 //  Copyright © 2018 Vincent Predoehl. All rights reserved.
 //
 
+#include "PricePoint.hpp"
 #include "Chart.hpp"
 
 #include <iostream>
@@ -39,7 +40,7 @@ int main(int argc, const char * argv[]) {
                       const MarketData &md = m.second;
                       Chart ch { md.cbegin(), md.cend() };
                       Chart min5FromScratch { md.cbegin(), md.cend(), minutes { 5 } };
-//                      Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
+//                      Chart min5 { ch.cbegin, ch.cend(), minutes {5}};
                       
                       std::cout << "Charts successfully constructed…" << std::endl << ch << std::endl;
 //                      std::cout << "5 min chart…" << min5 << std::endl;
