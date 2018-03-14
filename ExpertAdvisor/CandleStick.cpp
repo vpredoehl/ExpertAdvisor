@@ -38,8 +38,22 @@ CandlePrice::CandlePrice(MarketPrice::const_iterator s, MarketPrice::const_itera
     high = *mm.second;
     low = *mm.first;
 }
+inline auto FindOpenThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e)
+{
+    auto iter = std::find_if(s, e, [](CandleStick cs) -> bool {   std::cout << "open isFiller: " << (cs.isFiller ? "Yes " : "No ") << cs << std::endl;   return !cs.isFiller;  });
+    return iter == e ? s : iter;
+}
+inline auto FindCloseThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e)
+{
+    auto beg = std::make_reverse_iterator(e);
+    auto end = std::make_reverse_iterator(s);
+    auto iter = std::find_if(beg, end, [](CandleStick cs) -> bool {   std::cout << "close isFiller: " << (cs.isFiller ? "Yes " : "No ") << cs << std::endl;   return !cs.isFiller;    });
+
+    return iter == end ? beg : iter;
+}
 CandlePrice::CandlePrice(ChartCandle::const_iterator s, ChartCandle::const_iterator e)
-: open { s->priceInfo.open }, close { (e-1)->priceInfo.close }
+:   open { FindOpenThatIsNotFiller(s, e)->priceInfo.open },
+    close { FindCloseThatIsNotFiller(s, e)->priceInfo.close }
 {
     auto max = std::max_element(s, e, [](const CandleStick &c1, const CandleStick &c2) -> bool
                                 {

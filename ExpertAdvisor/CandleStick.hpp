@@ -43,6 +43,8 @@ class CandleStick
 
     friend class Chart;
     friend class CandlePrice;
+    friend auto FindOpenThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e);
+    friend auto FindCloseThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e);
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
     CandleStick(PriceTP candleTime, MarketPrice::const_iterator start, MarketPrice::const_iterator end);

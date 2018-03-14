@@ -47,7 +47,8 @@ auto Chart::operator==(const Chart& ch) const -> bool
             c1 != candles.cend() && c2 != ch.candles.cend();    ++c1, ++c2)
     {
         std::cout << "Comparing: " << *c1 << std::endl << *c2 << std::endl;
-        if(*c1 != *c2)    return false;
+        if(*c1 != *c2)
+            return false;
     }
     return true;
 }
