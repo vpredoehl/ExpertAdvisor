@@ -14,26 +14,45 @@
 #include <chrono>
 #include <vector>
 
-
+class CandleStick;
 using days = std::chrono::duration<long, std::ratio<24 * 3600>>;
 using weeks = std::chrono::duration<long, std::ratio<7 * 24 * 3600>>;
+using ChartCandle = std::vector<CandleStick>;
+
+
+struct CandlePrice
+{
+    float high, low, open, close;
+    
+    CandlePrice(PricePoint p)    {   operator=(static_cast<float>(p));  }
+    CandlePrice(MarketPrice::const_iterator, MarketPrice::const_iterator);
+    CandlePrice(ChartCandle::const_iterator, ChartCandle::const_iterator);
+    
+    CandlePrice(float f) {   operator=(f);   }
+    
+    auto operator=(float candleValue) -> float    {  return high = low = open = close = candleValue;   }
+    operator float() const  {   return close;   }
+    auto operator!=(CandlePrice c) const -> bool    {   return high != c.high || low != c.low || open != c.open || close != c.close; }
+};
 
 class CandleStick
 {
     CandlePrice priceInfo;
     PriceTP time;
+    bool isFiller = false;  // no activity during candle time period
 
     friend class Chart;
+    friend class CandlePrice;
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
-    CandleStick(PriceTP candleTime, MarketData::const_iterator start, MarketData::const_iterator end);
-    
+    CandleStick(PriceTP candleTime, MarketPrice::const_iterator start, MarketPrice::const_iterator end);
+    CandleStick(PriceTP candleTime, ChartCandle::const_iterator start, ChartCandle::const_iterator end);
+
     auto closePrice() -> float   {   return priceInfo.close;   }
-    auto operator=(float candleValue) -> float  {   return priceInfo = candleValue;  }
+    auto operator=(float candleValue) -> float  {   isFiller = true;   return priceInfo = candleValue;  }
     
-    auto operator!=(const CandleStick& c) const -> bool {   return priceInfo == c.priceInfo;   }
+    auto operator!=(const CandleStick& c) const -> bool {   return priceInfo != c.priceInfo;   }
 };
-using ChartData = std::vector<CandleStick>;
 
 std::ostream& operator<<(std::ostream &o, CandleStick cs);
 

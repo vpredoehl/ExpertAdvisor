@@ -20,16 +20,15 @@ class Chart
 
     std::string sym;
     TimeFrame chartTF = minutely;
-    ChartData candles;
+    ChartCandle candles;
     
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
     template<class ForwardIter>
     Chart(ForwardIter s, ForwardIter e, std::chrono::minutes = std::chrono::minutes { 1 });
-    Chart(const Chart&, std::chrono::minutes);
     
-    auto cbegin() const -> ChartData::const_iterator    {   return candles.cbegin();    }
-    auto cend() const -> ChartData::const_iterator  {   return candles.cend();  }
+    auto cbegin() const -> ChartCandle::const_iterator    {   return candles.cbegin();    }
+    auto cend() const -> ChartCandle::const_iterator  {   return candles.cend();  }
 
     auto operator==(const Chart& ch) const -> bool;
 };
@@ -43,7 +42,7 @@ Chart::Chart(ForwardIter startIter, ForwardIter endIter, std::chrono::minutes du
     auto candleEndIter = endIter;
     auto startTime = startIter->time;
     auto endTime = startIter->time + dur;
-    auto TimeNotInCandle = [&endTime](const PricePoint &pp) -> bool {   return pp.time >= endTime;  };
+    auto TimeNotInCandle = [&endTime](auto &pp) -> bool {   return pp.time >= endTime;  };
     float lastPrice = 0;
     
     endIter = startIter;

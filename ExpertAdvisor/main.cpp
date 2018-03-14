@@ -15,7 +15,7 @@
 #include <map>
 #include <string>
 
-using SymbolData = std::map<std::string, MarketData>;
+using SymbolData = std::map<std::string, MarketPrice>;
 
 int main(int argc, const char * argv[]) {
     std::ifstream csv { "COR_USD_Week3.csv", std::ios_base::in };
@@ -28,7 +28,7 @@ int main(int argc, const char * argv[]) {
     SymbolData symD;
     while(csv >> pp)
     {
-        MarketData &d = symD[PricePoint::sym];
+        MarketPrice &d = symD[PricePoint::sym];
         
         d.push_back(pp);
     }
@@ -37,16 +37,16 @@ int main(int argc, const char * argv[]) {
     std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
     std::for_each(symD.begin(), symD.end(), [](const SymbolData::value_type &m)
                   {
-                      const MarketData &md = m.second;
+                      const MarketPrice &md = m.second;
                       Chart ch { md.cbegin(), md.cend() };
                       Chart min5FromScratch { md.cbegin(), md.cend(), minutes { 5 } };
-//                      Chart min5 { ch.cbegin, ch.cend(), minutes {5}};
+                      Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
                       
                       std::cout << "Charts successfully constructed…" << std::endl << ch << std::endl;
-//                      std::cout << "5 min chart…" << min5 << std::endl;
-//
-//                      if (min5FromScratch == min5)
-//                          std::cout << "5 Minute Charts Match!!!" << std::endl;
+                      std::cout << "5 min chart…" << min5 << std::endl;
+
+                      if (min5FromScratch == min5)
+                          std::cout << "5 Minute Charts Match!!!" << std::endl;
                   });
     
     return 0;

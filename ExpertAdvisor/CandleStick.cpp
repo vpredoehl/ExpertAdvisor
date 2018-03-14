@@ -7,10 +7,9 @@
 //
 
 #include "CandleStick.hpp"
-#include "PricePoint.hpp"
 #include <iostream>
 
-CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::const_iterator e)
+CandleStick::CandleStick(PriceTP t, MarketPrice::const_iterator s, MarketPrice::const_iterator e)
 :  priceInfo { s, e }
 {
     std::for_each(s, e, [](PricePoint pp)
@@ -19,6 +18,47 @@ CandleStick::CandleStick(PriceTP t, MarketData::const_iterator s, MarketData::co
                   });
     time = t;
 }
+
+CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::const_iterator e)
+: priceInfo { s,e }
+{
+    std::for_each(s, e, [](CandleStick pp)
+                  {
+                      std::cout << pp << std::endl;
+                  });
+    time = t;
+}
+
+
+CandlePrice::CandlePrice(MarketPrice::const_iterator s, MarketPrice::const_iterator e)
+: open { *s }, close { *(e-1) }
+{
+    auto mm = std::minmax_element(s, e);
+    
+    high = *mm.second;
+    low = *mm.first;
+}
+CandlePrice::CandlePrice(ChartCandle::const_iterator s, ChartCandle::const_iterator e)
+: open { s->priceInfo.open }, close { (e-1)->priceInfo.close }
+{
+    auto max = std::max_element(s, e, [](const CandleStick &c1, const CandleStick &c2) -> bool
+                                {
+                                    // *largest < *first
+                                    if(c1.isFiller) return true;
+                                    if(c2.isFiller) return false;
+                                    return c1.priceInfo.high < c2.priceInfo.high;
+                                });
+    auto min = std::min_element(s, e, [](const CandleStick &c1, const CandleStick &c2) -> bool
+                                {
+                                    // *first < *smallest
+                                    if(c2.isFiller) return true;
+                                    if(c1.isFiller) return  false;
+                                    return c1.priceInfo.low < c2.priceInfo.low;
+                                });
+    high = max->priceInfo.high;
+    low = min->priceInfo.low;
+}
+
 
 using std::ostream;
 using std::endl;
