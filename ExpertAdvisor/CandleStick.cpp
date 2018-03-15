@@ -26,6 +26,7 @@ CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::
                   {
                       std::cout << pp << std::endl;
                   });
+    isFiller = e == std::find_if(s, e, [](auto &cc)   {   return !cc.isFiller;   });
     time = t;
 }
 
@@ -81,7 +82,7 @@ using std::endl;
 #include <iomanip>
 ostream& operator<<(ostream &o, CandleStick c)
 {
-    o << "CandleStick: " << c.time << endl;
+    o << "CandleStick: isFiller " << (c.isFiller ? "Yes " : "No ") << c.time << endl;
     o << "\tHigh: " << std::setw(10) << c.priceInfo.high << endl;
     o << "\tLow: " << std::setw(10) << c.priceInfo.low << endl;
     o << "\tOpen: " << std::setw(10) << c.priceInfo.open << endl;
