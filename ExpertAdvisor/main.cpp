@@ -41,13 +41,22 @@ int main(int argc, const char * argv[]) {
                       Chart ch { md.cbegin(), md.cend() };
                       Chart min5FromScratch { md.cbegin(), md.cend(), minutes { 5 } };
                       Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
-                      
+
                       std::cout << "Charts successfully constructed…" << std::endl << ch << std::endl;
                       std::cout << "5 min chart…" << min5 << std::endl;
 
                       if (min5FromScratch == min5)
                           std::cout << "5 Minute Charts Match!!!" << std::endl;
-                  });
+
+                      Chart min10FromScratch { md.cbegin(), md.cend(), minutes { 10 } };
+                      Chart min10 { ch.cbegin(), ch.cend(), minutes {10}};
+                      Chart min10From5  {   min5.cbegin(), min5.cend(), minutes {10}};
+
+                      if(min10FromScratch == min10)
+                          std::cout << "10 min charts match!!!" << std::endl;
+                      if(min10 == min10From5)
+                          std::cout << "min10From5 charts match!!!" << std::endl;
+});
     
     return 0;
 }
