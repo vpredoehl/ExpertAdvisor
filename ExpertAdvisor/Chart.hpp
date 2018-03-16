@@ -51,7 +51,6 @@ Chart::Chart(ForwardIter startIter, ForwardIter endIter, std::chrono::minutes du
         CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, candleEndIter, TimeNotInCandle));
         
         if(startIter == endIter)   cs = lastPrice;
-        std::cout << cs << std::endl;
         startIter = endIter;
         startTime = endTime;
         endTime += dur;

@@ -9,23 +9,9 @@
 #include "CandleStick.hpp"
 #include <iostream>
 
-CandleStick::CandleStick(PriceTP t, MarketPrice::const_iterator s, MarketPrice::const_iterator e)
-:  priceInfo { s, e }
-{
-    std::for_each(s, e, [](PricePoint pp)
-                  {
-                      std::cout << pp << std::endl;
-                  });
-    time = t;
-}
-
 CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::const_iterator e)
 : priceInfo { s,e }
 {
-    std::for_each(s, e, [](CandleStick pp)
-                  {
-                      std::cout << pp << std::endl;
-                  });
     isFiller = e == std::find_if(s, e, [](auto &cc)   {   return !cc.isFiller;   });
     time = t;
 }
@@ -41,14 +27,14 @@ CandlePrice::CandlePrice(MarketPrice::const_iterator s, MarketPrice::const_itera
 }
 inline auto FindOpenThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e)
 {
-    auto iter = std::find_if(s, e, [](CandleStick cs) -> bool {   std::cout << "open isFiller: " << (cs.isFiller ? "Yes " : "No ") << cs << std::endl;   return !cs.isFiller;  });
+    auto iter = std::find_if(s, e, [](CandleStick cs) -> bool {   return !cs.isFiller;  });
     return iter == e ? s : iter;
 }
 inline auto FindCloseThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e)
 {
     auto beg = std::make_reverse_iterator(e);
     auto end = std::make_reverse_iterator(s);
-    auto iter = std::find_if(beg, end, [](CandleStick cs) -> bool {   std::cout << "close isFiller: " << (cs.isFiller ? "Yes " : "No ") << cs << std::endl;   return !cs.isFiller;    });
+    auto iter = std::find_if(beg, end, [](CandleStick cs) -> bool {   return !cs.isFiller;    });
 
     return iter == end ? beg : iter;
 }

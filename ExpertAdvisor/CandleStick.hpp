@@ -47,7 +47,8 @@ class CandleStick
     friend auto FindCloseThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e);
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
-    CandleStick(PriceTP candleTime, MarketPrice::const_iterator start, MarketPrice::const_iterator end);
+    CandleStick(PriceTP candleTime, MarketPrice::const_iterator start, MarketPrice::const_iterator end)
+        :   priceInfo { start, end }   {   time = candleTime;   }
     CandleStick(PriceTP candleTime, ChartCandle::const_iterator start, ChartCandle::const_iterator end);
 
     auto closePrice() -> float   {   return priceInfo.close;   }

@@ -44,11 +44,7 @@ auto Chart::operator==(const Chart& ch) const -> bool
     ForwardIter c2;
 
     for(ForwardIter c1 = candles.cbegin(), c2 = ch.candles.cbegin();
-            c1 != candles.cend() && c2 != ch.candles.cend();    ++c1, ++c2)
-    {
-        std::cout << "Comparing: " << *c1 << std::endl << *c2 << std::endl;
-        if(*c1 != *c2)
-            return false;
-    }
+        c1 != candles.cend() && c2 != ch.candles.cend();    ++c1, ++c2)
+            if(*c1 != *c2)  return false;
     return true;
 }
