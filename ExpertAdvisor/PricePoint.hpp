@@ -35,7 +35,7 @@ private:
 };
 
 #include <vector>
-using MarketPrice = std::vector<PricePoint>;
+using RawMarketPrice = std::vector<PricePoint>;
 
 
 std::istream& operator>>(std::istream&, PriceTP&);

@@ -17,7 +17,7 @@ CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::
 }
 
 
-CandlePrice::CandlePrice(MarketPrice::const_iterator s, MarketPrice::const_iterator e)
+CandlePrice::CandlePrice(RawMarketPrice::const_iterator s, RawMarketPrice::const_iterator e)
 : open { *s }, close { *(e-1) }
 {
     auto mm = std::minmax_element(s, e);

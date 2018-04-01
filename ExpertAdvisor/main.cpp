@@ -9,17 +9,20 @@
 #include "PricePoint.hpp"
 #include "Chart.hpp"
 
+#include <experimental/filesystem>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <map>
 #include <string>
 
-using SymbolData = std::map<std::string, MarketPrice>;
+namespace fs = std::experimental::filesystem;
+
+using SymbolData = std::map<std::string, RawMarketPrice>;
+using namespace std::experimental::filesystem;
 
 auto ParseRawPriceData(std::ifstream csv)
 {
-    PriceTP t;
     PricePoint pp;
     std::string headerLine;
     SymbolData symD;
@@ -31,12 +34,16 @@ auto ParseRawPriceData(std::ifstream csv)
 
 int main(int argc, const char * argv[]) {
     SymbolData symD = ParseRawPriceData(std::ifstream { "COR_USD_Week3.csv", std::ios_base::in });
+    auto iter = recursive_directory_iterator( "/Volumes/Forex Data/ratedata.gaincapital.com" );
+    
+    for(auto &f : iter)
+        std::cout << f << std::endl;
     
     using namespace std::chrono;
     std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
     std::for_each(symD.begin(), symD.end(), [](const SymbolData::value_type &m)
                   {
-                      const MarketPrice &md = m.second;
+                      const RawMarketPrice &md = m.second;
                       Chart ch { md.cbegin(), md.cend() };
                       Chart min5FromScratch { md.cbegin(), md.cend(), minutes { 5 } };
                       Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
