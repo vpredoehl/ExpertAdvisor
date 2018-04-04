@@ -43,5 +43,8 @@ std::istream& operator>>(std::istream&, PricePoint&);
 
 std::ostream& operator<<(std::ostream&, PriceTP);
 std::ostream& operator<<(std::ostream&, PricePoint);
+std::ostream& operator<<(std::ostream&, RawMarketPrice);
+
+
 
 #endif /* PricePoint_hpp */

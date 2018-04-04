@@ -63,3 +63,8 @@ ostream& operator<<(ostream& o, PricePoint pp)
     o << "\tTime: " << pp.time << "\tBid: " << setw(10) << pp.bid << "\tAsk: " << setw(10) << pp.ask;
     return o;
 }
+ostream& operator<<(ostream& o, RawMarketPrice rmp)
+{
+    std::for_each(rmp.begin(), rmp.end(), [&o](PricePoint pp)   {   o << pp << endl;    });
+    return o;
+}
