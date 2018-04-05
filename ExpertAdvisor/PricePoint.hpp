@@ -19,7 +19,6 @@ class PricePoint
     float bid, ask;
     
 public:
-    static std::string sym;
     PriceTP time;
 
     PricePoint(PriceTP, float bid, float ask);

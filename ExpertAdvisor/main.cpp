@@ -25,12 +25,13 @@ using namespace std::experimental::filesystem;
 
 auto ParseRawPriceData(std::ifstream csv)
 {
+    extern thread_local std::string lastParsedSym;
     PricePoint pp;
     std::string headerLine;
     SymbolData symD;
 
     csv >> headerLine;   // ignored
-    while(csv >> pp)    symD[PricePoint::sym].push_back(pp);
+    while(csv >> pp)    symD[lastParsedSym].push_back(pp);
     return symD;
 }
 
@@ -65,7 +66,6 @@ again:
                               auto &allMarketD = allSyms[s.first];
                               auto &newData = s.second;
                               
-                              std::cout << "new data: Symbol: " << s.first << newData << std::endl;
                               allMarketD.splice(allMarketD.end(), newData);
                           });
             continue;

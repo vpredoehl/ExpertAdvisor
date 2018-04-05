@@ -12,8 +12,6 @@
 using namespace std::chrono;
 using std::string;
 
-string PricePoint::sym;
-
 PricePoint::PricePoint(PriceTP ct, float bid, float ask)
 {
     time = ct;
@@ -36,6 +34,7 @@ istream& operator>>(istream& i, PriceTP &t)
     return i;
 }
 
+thread_local std::string lastParsedSym;
 istream& operator>>(istream& i, PricePoint &t)
 {
     using std::getline;
@@ -44,7 +43,7 @@ istream& operator>>(istream& i, PricePoint &t)
     
     i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-    getline(i, PricePoint::sym, ',');
+    getline(i, lastParsedSym, ',');
     i >> ct;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> ask;
