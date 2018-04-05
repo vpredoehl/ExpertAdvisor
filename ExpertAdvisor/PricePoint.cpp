@@ -65,6 +65,7 @@ ostream& operator<<(ostream& o, PricePoint pp)
 }
 ostream& operator<<(ostream& o, RawMarketPrice rmp)
 {
+    o << "size: " << rmp.size() << std::endl;
     std::for_each(rmp.begin(), rmp.end(), [&o](PricePoint pp)   {   o << pp << endl;    });
     return o;
 }

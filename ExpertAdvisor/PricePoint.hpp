@@ -34,8 +34,8 @@ private:
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
 };
 
-#include <vector>
-using RawMarketPrice = std::vector<PricePoint>;
+#include <list>
+using RawMarketPrice = std::list<PricePoint>;
 
 
 std::istream& operator>>(std::istream&, PriceTP&);

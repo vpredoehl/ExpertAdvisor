@@ -9,17 +9,19 @@
 #include "PricePoint.hpp"
 #include "Chart.hpp"
 
-#include <experimental/filesystem>
+#include "experimental/filesystem" // Had to set User Header Search Path in Project->Build Settings and include as user headers to avoid conflict with released system headers and satisfy the lexical prepreocessor
+#include <future>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <map>
 #include <string>
-
-namespace fs = std::experimental::filesystem;
+#include <vector>
+#include <list>
 
 using SymbolData = std::map<std::string, RawMarketPrice>;
 using namespace std::experimental::filesystem;
+
 
 auto ParseRawPriceData(std::ifstream csv)
 {
@@ -32,13 +34,50 @@ auto ParseRawPriceData(std::ifstream csv)
     return symD;
 }
 
+
+const std::string forexPath = "/Volumes/Forex Data/ratedata.gaincapital.com";
+const auto maxTasks = 12;
+
 int main(int argc, const char * argv[]) {
-    SymbolData symD = ParseRawPriceData(std::ifstream { "COR_USD_Week3.csv", std::ios_base::in });
-    auto iter = recursive_directory_iterator( "/Volumes/Forex Data/ratedata.gaincapital.com" );
+    std::list<std::future<SymbolData>> parseFU;
+    SymbolData allSyms;
     
-    for(auto &f : iter)
-        std::cout << f << std::endl;
+    auto symD = ParseRawPriceData(std::ifstream { "COR_USD_Week3.csv", std::ios_base::in });
+    auto dirIter = recursive_directory_iterator( forexPath );
     
+    for(auto &f : dirIter)
+    {
+        auto availFU = [](const std::future<SymbolData> &fut) -> bool
+            {   return std::future_status::ready == fut.wait_for(std::chrono::milliseconds{10});    };
+
+        std::cout << f.path() << std::endl;
+        if(f.path().extension() != ".csv")  continue;
+        parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
+
+again:
+        auto availIter = std::find_if(parseFU.begin(), parseFU.end(), availFU);
+        if (availIter != parseFU.end())
+        {
+            auto symD = availIter->get();
+            parseFU.erase(availIter);
+            std::for_each(symD.begin(), symD.end(), [&allSyms](SymbolData::value_type &s)
+                          {
+                              auto &allMarketD = allSyms[s.first];
+                              auto &newData = s.second;
+                              
+                              std::cout << "new data: Symbol: " << s.first << newData << std::endl;
+                              allMarketD.splice(allMarketD.end(), newData);
+                          });
+            continue;
+        }
+        else if(parseFU.size() < maxTasks)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds{50});
+            continue;
+        }
+        goto again;
+    }
+
     using namespace std::chrono;
     std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
     std::for_each(symD.begin(), symD.end(), [](const SymbolData::value_type &m)
