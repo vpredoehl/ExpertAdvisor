@@ -30,7 +30,6 @@
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
 		0845055C2047962100A0B88F /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
-		0845056320479F1300A0B88F /* COR_USD_Week3.csv */ = {isa = PBXFileReference; lastKnownFileType = text; path = COR_USD_Week3.csv; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
 		0845056B204BC46900A0B88F /* CandleStick.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = CandleStick.cpp; sourceTree = "<group>"; };
@@ -68,7 +67,6 @@
 			isa = PBXGroup;
 			children = (
 				0845055C2047962100A0B88F /* main.cpp */,
-				0845056320479F1300A0B88F /* COR_USD_Week3.csv */,
 				084505642048CAB900A0B88F /* PricePoint.cpp */,
 				084505652048CAB900A0B88F /* PricePoint.hpp */,
 				0845056B204BC46900A0B88F /* CandleStick.cpp */,

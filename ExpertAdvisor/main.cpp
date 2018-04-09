@@ -35,24 +35,47 @@ auto ParseRawPriceData(std::ifstream csv)
     return symD;
 }
 
+const std::string savePath = "/Volumes/Forex Data/";
+auto ReadMarketData(std::string sym) -> RawMarketPrice
+{
+    sym.replace(sym.find("/"), 1, "-");
+    std::ifstream f { savePath + sym, std::ios_base::binary | std::ios_base::in };
+    PricePoint pp;
+    RawMarketPrice rmp;
 
-const std::string forexPath = "/Volumes/Forex Data/ratedata.gaincapital.com";
+        // read
+    while (f.read(reinterpret_cast<char*>(&pp), sizeof(pp)))    rmp.push_back(pp);
+        // sort
+    rmp.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
+        // remove duplicates
+    rmp.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
+    return rmp;
+}
+
+void WriteMarketData(std::string sym, RawMarketPrice &rmp)
+{
+    sym.replace(sym.find("/"), 1, "-");
+    std::ofstream f { savePath + sym,  std::ios_base::binary | std::ios_base::out };
+    
+    std::for_each(rmp.begin(), rmp.end(), [&f](PricePoint &pp)
+                  {   f.write(reinterpret_cast<char*>(&pp), sizeof(pp));  });
+}
+
+const std::string forexPath = "/Volumes/Forex Data/ratedata.gaincapital.com/2018/03 March";
 const auto maxTasks = 12;
 
 int main(int argc, const char * argv[]) {
     std::list<std::future<SymbolData>> parseFU;
-    SymbolData allSyms;
-    
-    auto symD = ParseRawPriceData(std::ifstream { "COR_USD_Week3.csv", std::ios_base::in });
     auto dirIter = recursive_directory_iterator( forexPath );
-    
+    SymbolData allSyms;
+
     for(auto &f : dirIter)
     {
         auto availFU = [](const std::future<SymbolData> &fut) -> bool
             {   return std::future_status::ready == fut.wait_for(std::chrono::milliseconds{10});    };
 
-        std::cout << f.path() << std::endl;
         if(f.path().extension() != ".csv")  continue;
+        std::cout << f.path() << std::endl;
         parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
 
 again:
@@ -77,10 +100,28 @@ again:
         }
         goto again;
     }
+    
+    std::for_each(allSyms.begin(), allSyms.end(), [](auto &sd)
+                  {
+                      std::string sym = sd.first;
+                      auto symData = sd.second;
+                      auto rmp = ReadMarketData(sym);
+
+                      symData.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
+                      symData.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
+
+                      if(rmp == symData)
+                          std::cout << sym + ": File matches!!!" << std::endl;
+                      else
+                      {
+                          std::cout << sym + ": File DOES NOT match!!!" << std::endl;
+                          std::cout << "parsed: " << symData.size() << " read from file: " << rmp.size() << std::endl;
+                      }
+                  });
 
     using namespace std::chrono;
     std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
-    std::for_each(symD.begin(), symD.end(), [](const SymbolData::value_type &m)
+    std::for_each(allSyms.begin(), allSyms.end(), [](const SymbolData::value_type &m)
                   {
                       const RawMarketPrice &md = m.second;
                       Chart ch { md.cbegin(), md.cend() };
