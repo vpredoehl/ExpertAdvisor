@@ -19,8 +19,10 @@
 #include <vector>
 #include <list>
 
-using SymbolData = std::map<std::string, RawMarketPrice>;
 using namespace std::experimental::filesystem;
+
+using SymbolData = std::map<std::string, RawMarketPrice>;
+using ChartsForSym = std::map<std::string, Chart>;
 
 
 auto ParseRawPriceData(std::ifstream csv)
@@ -38,27 +40,87 @@ auto ParseRawPriceData(std::ifstream csv)
 const std::string savePath = "/Volumes/Forex Data/";
 auto ReadMarketData(std::string sym) -> RawMarketPrice
 {
-    sym.replace(sym.find("/"), 1, "-");
+    auto posn = sym.find("/");
+
+    if(posn != std::string::npos)    sym.replace(posn, 1, "-");
     std::ifstream f { savePath + sym, std::ios_base::binary | std::ios_base::in };
     PricePoint pp;
     RawMarketPrice rmp;
 
-        // read
     while (f.read(reinterpret_cast<char*>(&pp), sizeof(pp)))    rmp.push_back(pp);
-        // sort
-    rmp.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
-        // remove duplicates
-    rmp.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
     return rmp;
 }
 
-void WriteMarketData(std::string sym, RawMarketPrice &rmp)
+void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
 {
     sym.replace(sym.find("/"), 1, "-");
-    std::ofstream f { savePath + sym,  std::ios_base::binary | std::ios_base::out };
+    std::ofstream f { savePath + sym,  std::ios_base::binary | std::ios_base::out | std::ios_base::ate };
     
-    std::for_each(rmp.begin(), rmp.end(), [&f](PricePoint &pp)
-                  {   f.write(reinterpret_cast<char*>(&pp), sizeof(pp));  });
+    std::for_each(rmp.cbegin(), rmp.cend(), [&f](const PricePoint &pp)
+                  {   f.write(reinterpret_cast<const char*>(&pp), sizeof(pp));  });
+}
+
+auto SymsFromDirectory(std::string dirPath)
+{
+    SymbolData symD;
+    auto fileIter = directory_iterator(dirPath);
+    
+    for (auto f : fileIter)
+    {
+        std::string sym = f.path().filename();
+        auto posn = sym.find("-");
+        
+        if(is_directory(f)) continue;
+        if(sym == ".DS_Store")  continue;
+
+        auto rmp = ReadMarketData(sym);
+        
+        std::cout << "Loaded: " << sym << std::endl;
+        if(posn != std::string::npos)    sym.replace(posn, 1, "/");
+        symD[sym] = rmp;
+    }
+    return symD;
+}
+
+using namespace std::chrono;
+using ChartInterval = std::vector<minutes>;
+using ChartForSym = std::vector<Chart>;
+auto MakeTestCharts(const RawMarketPrice &rmp, ChartInterval timeFrames = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } }) -> ChartForSym
+{
+    ChartForSym charts;
+    Chart ch { rmp.cbegin(), rmp.cend(), minutes { 1 } };
+    Chart min5FromScratch { rmp.cbegin(), rmp.cend(), minutes { 5 } };
+    Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
+    
+    charts.push_back(ch);   charts.push_back(min5FromScratch);  charts.push_back(min5);
+    
+    Chart min10FromScratch { rmp.cbegin(), rmp.cend(), minutes { 10 } };
+    Chart min10 { ch.cbegin(), ch.cend(), minutes {10}};
+    Chart min10From5  {   min5.cbegin(), min5.cend(), minutes {10}};
+
+    charts.push_back(min10FromScratch);   charts.push_back(min10);  charts.push_back(min10From5);
+
+    Chart min15FromScratch { rmp.cbegin(), rmp.cend(), minutes { 15 } };
+    Chart min15 { ch.cbegin(), ch.cend(), minutes {15}};
+    Chart min15From5  {   min5.cbegin(), min5.cend(), minutes {15}};
+    
+    charts.push_back(min15FromScratch);   charts.push_back(min15);  charts.push_back(min15From5);
+
+    Chart min30FromScratch { rmp.cbegin(), rmp.cend(), minutes { 30 } };
+    Chart min30 { ch.cbegin(), ch.cend(), minutes {30}};
+    Chart min30From5  {   min5.cbegin(), min5.cend(), minutes {30}};
+    Chart min30From15  {   min15.cbegin(), min15.cend(), minutes {30}};
+
+    charts.push_back(min30FromScratch);   charts.push_back(min30);  charts.push_back(min30From5);   charts.push_back(min30From15);
+
+    Chart min45FromScratch { rmp.cbegin(), rmp.cend(), minutes { 45 } };
+    Chart min45 { ch.cbegin(), ch.cend(), minutes {45}};
+    Chart min45From5  {   min5.cbegin(), min5.cend(), minutes {45}};
+    Chart min45From15  {   min15.cbegin(), min15.cend(), minutes {45}};
+    
+    charts.push_back(min45FromScratch);   charts.push_back(min45);  charts.push_back(min45From5);   charts.push_back(min45From15);
+
+    return charts;
 }
 
 const std::string forexPath = "/Volumes/Forex Data/ratedata.gaincapital.com/2018/03 March";
@@ -68,18 +130,12 @@ int main(int argc, const char * argv[]) {
     std::list<std::future<SymbolData>> parseFU;
     auto dirIter = recursive_directory_iterator( forexPath );
     SymbolData allSyms;
-
-    for(auto &f : dirIter)
+    auto HasAvailTask = [&parseFU, &allSyms](auto maxTasks) -> bool
     {
         auto availFU = [](const std::future<SymbolData> &fut) -> bool
             {   return std::future_status::ready == fut.wait_for(std::chrono::milliseconds{10});    };
-
-        if(f.path().extension() != ".csv")  continue;
-        std::cout << f.path() << std::endl;
-        parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
-
-again:
         auto availIter = std::find_if(parseFU.begin(), parseFU.end(), availFU);
+        
         if (availIter != parseFU.end())
         {
             auto symD = availIter->get();
@@ -91,89 +147,68 @@ again:
                               
                               allMarketD.splice(allMarketD.end(), newData);
                           });
-            continue;
+            return true;
         }
-        else if(parseFU.size() < maxTasks)
-        {
+        else if(parseFU.size() < maxTasks)  return true;
+        return false;
+    };
+
+        //
+        // parse .csv files
+        //
+    for(auto &f : dirIter)
+    {
+        if(f.path().extension() != ".csv")  continue;
+        std::cout << f.path() << std::endl;
+        parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
+
+        while(!HasAvailTask(maxTasks))
             std::this_thread::sleep_for(std::chrono::milliseconds{50});
-            continue;
-        }
-        goto again;
     }
     
-    std::for_each(allSyms.begin(), allSyms.end(), [](auto &sd)
+    do {
+        HasAvailTask(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    } while (parseFU.size() > 0);
+
+//        //
+//        // compare to data read from file
+//        //
+//    std::for_each(allSyms.begin(), allSyms.end(), [](auto &sd)
+//                  {
+//                      std::string sym = sd.first;
+//                      auto symData = sd.second;
+//                      auto rmp = ReadMarketData(sym);
+//
+//                      symData.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
+//                      symData.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
+//
+//                      if(rmp == symData)
+//                          std::cout << sym + ": File matches!!!" << std::endl;
+//                      else
+//                      {
+//                          std::cout << sym + ": File DOES NOT match!!!" << std::endl;
+//                          std::cout << "parsed: " << symData.size() << " read from file: " << rmp.size() << std::endl;
+//                      }
+//                  });
+
+    //
+    // append parsed data to file(s)
+    //
+    std::for_each(allSyms.cbegin(), allSyms.cend(), [](auto &sd)
                   {
-                      std::string sym = sd.first;
-                      auto symData = sd.second;
-                      auto rmp = ReadMarketData(sym);
-
-                      symData.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
-                      symData.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
-
-                      if(rmp == symData)
-                          std::cout << sym + ": File matches!!!" << std::endl;
-                      else
-                      {
-                          std::cout << sym + ": File DOES NOT match!!!" << std::endl;
-                          std::cout << "parsed: " << symData.size() << " read from file: " << rmp.size() << std::endl;
-                      }
+                      auto sym = sd.first;
+                      auto rawMarketPrice = sd.second;
+                      
+                      WriteMarketData(sym, rawMarketPrice);
                   });
-
-    using namespace std::chrono;
-    std::vector<minutes> scanInterval = { minutes { 5 }, hours { 1 }, days { 1 }, weeks { 1 }, days { 30 } };
+        //
+        // make test charts
+        //
     std::for_each(allSyms.begin(), allSyms.end(), [](const SymbolData::value_type &m)
                   {
-                      const RawMarketPrice &md = m.second;
-                      Chart ch { md.cbegin(), md.cend() };
-                      Chart min5FromScratch { md.cbegin(), md.cend(), minutes { 5 } };
-                      Chart min5 { ch.cbegin(), ch.cend(), minutes {5}};
-
-                      std::cout << "Charts successfully constructed…" << std::endl << ch << std::endl;
-                      std::cout << "5 min chart…" << min5 << std::endl;
-
-                      if (min5FromScratch == min5)
-                          std::cout << "5 Minute Charts Match!!!" << std::endl;
-
-                      Chart min10FromScratch { md.cbegin(), md.cend(), minutes { 10 } };
-                      Chart min10 { ch.cbegin(), ch.cend(), minutes {10}};
-                      Chart min10From5  {   min5.cbegin(), min5.cend(), minutes {10}};
-
-                      if(min10FromScratch == min10)
-                          std::cout << "10 min charts match!!!" << std::endl;
-                      if(min10 == min10From5)
-                          std::cout << "min10From5 charts match!!!" << std::endl;
-                      
-                      Chart min15FromScratch { md.cbegin(), md.cend(), minutes { 15 } };
-                      Chart min15 { ch.cbegin(), ch.cend(), minutes {15}};
-                      Chart min15From5  {   min5.cbegin(), min5.cend(), minutes {15}};
-                      Chart min30FromScratch { md.cbegin(), md.cend(), minutes { 30 } };
-                      Chart min30 { ch.cbegin(), ch.cend(), minutes {30}};
-                      Chart min30From5  {   min5.cbegin(), min5.cend(), minutes {30}};
-                      Chart min30From15  {   min15.cbegin(), min15.cend(), minutes {30}};
-
-                      Chart min45FromScratch { md.cbegin(), md.cend(), minutes { 45 } };
-                      Chart min45 { ch.cbegin(), ch.cend(), minutes {45}};
-                      Chart min45From5  {   min5.cbegin(), min5.cend(), minutes {45}};
-                      Chart min45From15  {   min15.cbegin(), min15.cend(), minutes {45}};
-
-                      if(min45FromScratch == min45)
-                          std::cout << "45 min charts match!!!" << std::endl;
-                      if(min45 == min45From5)
-                          std::cout << "min45From15 charts match!!!" << std::endl;
-                      if(min45 == min45From5)
-                          std::cout << "min45From15 charts match!!!" << std::endl;
-
-                      if(min15FromScratch == min15)
-                          std::cout << "15 min charts match!!!" << std::endl;
-                      if(min15 == min15From5)
-                          std::cout << "min15From5 charts match!!!" << std::endl;
-                      if(min30 == min30FromScratch)
-                          std::cout << "min30 charts match!!!" << std::endl;
-                      if(min30From5 == min30)
-                          std::cout << "min30From5 charts match!!!" << std::endl;
-                      if(min30From15 == min30)
-                          std::cout << "min30From15 charts match!!!" << std::endl;
-});
+                      auto symCharts = MakeTestCharts(m.second);
+                  });
     
     return 0;
 }
