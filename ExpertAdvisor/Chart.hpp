@@ -25,7 +25,7 @@ class Chart
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
     template<class ForwardIter>
-    Chart(ForwardIter s, ForwardIter e, std::chrono::minutes = std::chrono::minutes { 1 });
+    Chart(ForwardIter s, ForwardIter e, std::chrono::minutes);
     
     auto cbegin() const -> ChartCandle::const_iterator    {   return candles.cbegin();    }
     auto cend() const -> ChartCandle::const_iterator  {   return candles.cend();  }
