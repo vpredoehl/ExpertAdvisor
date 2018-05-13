@@ -128,7 +128,7 @@ const auto maxTasks = 12;
 
 int main(int argc, const char * argv[]) {
     std::list<std::future<SymbolData>> parseFU;
-    auto dirIter = recursive_directory_iterator( forexPath );
+    auto dirIter = recursive_directory_iterator( argc == 2 ?  argv[1] : forexPath );
     SymbolData allSyms;
     auto HasAvailTask = [&parseFU, &allSyms](auto maxTasks) -> bool
     {
@@ -201,6 +201,7 @@ int main(int argc, const char * argv[]) {
                       auto rawMarketPrice = sd.second;
                       
                       WriteMarketData(sym, rawMarketPrice);
+                      rawMarketPrice.clear();
                   });
         //
         // make test charts
