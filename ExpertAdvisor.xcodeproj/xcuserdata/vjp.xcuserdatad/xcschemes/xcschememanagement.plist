@@ -7,12 +7,12 @@
 		<key>ChartTest Debug.xcscheme</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>3</integer>
+			<integer>2</integer>
 		</dict>
 		<key>ChartTest Release.xcscheme</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>2</integer>
+			<integer>3</integer>
 		</dict>
 		<key>ExpertAdvisor Debug.xcscheme</key>
 		<dict>
@@ -28,6 +28,11 @@
 	<key>SuppressBuildableAutocreation</key>
 	<dict>
 		<key>084505582047962100A0B88F</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>08BF4E4E20A934D200B6F81D</key>
 		<dict>
 			<key>primary</key>
 			<true/>

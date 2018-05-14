@@ -7,14 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
+		082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
+		082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
+		082BAC9520A93F760003EA86 /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
 		08305975204E2A650066E86F /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
 		084505662048CAB900A0B88F /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
-		08FA2DBC20A923C700383E57 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
-		08FA2DC120A9245700383E57 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
-		08FA2DC220A9245700383E57 /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
-		08FA2DC320A9245700383E57 /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
+		08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
+		08BF4E5620A9385B00B6F81D /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -27,7 +29,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 		};
-		08FA2DB720A923C700383E57 /* CopyFiles */ = {
+		08BF4E4D20A934D200B6F81D /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = /usr/share/man/man1/;
@@ -47,7 +49,9 @@
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
 		0845056B204BC46900A0B88F /* CandleStick.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = CandleStick.cpp; sourceTree = "<group>"; };
 		0845056C204BC46900A0B88F /* CandleStick.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = CandleStick.hpp; sourceTree = "<group>"; };
-		08FA2DB920A923C700383E57 /* ChartTest */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ChartTest; sourceTree = BUILT_PRODUCTS_DIR; };
+		08BF4E4320A9286600B6F81D /* DiskIO.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = DiskIO.cpp; sourceTree = "<group>"; };
+		08BF4E4420A9286600B6F81D /* DiskIO.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = DiskIO.hpp; sourceTree = "<group>"; };
+		08BF4E4F20A934D200B6F81D /* ChartTest */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ChartTest; sourceTree = BUILT_PRODUCTS_DIR; };
 		08FA2DBB20A923C700383E57 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -59,7 +63,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		08FA2DB620A923C700383E57 /* Frameworks */ = {
+		08BF4E4C20A934D200B6F81D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -74,7 +78,8 @@
 			children = (
 				0845055B2047962100A0B88F /* ExpertAdvisor */,
 				08FA2DBA20A923C700383E57 /* ChartTest */,
-				08FA2DC420A924C600383E57 /* Common */,
+				08BF4E4A20A9343100B6F81D /* Source */,
+				08BF4E4820A933FB00B6F81D /* Headers */,
 				0845055A2047962100A0B88F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -83,7 +88,7 @@
 			isa = PBXGroup;
 			children = (
 				084505592047962100A0B88F /* ExpertAdvisor */,
-				08FA2DB920A923C700383E57 /* ChartTest */,
+				08BF4E4F20A934D200B6F81D /* ChartTest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -96,25 +101,35 @@
 			path = ExpertAdvisor;
 			sourceTree = "<group>";
 		};
+		08BF4E4820A933FB00B6F81D /* Headers */ = {
+			isa = PBXGroup;
+			children = (
+				084505652048CAB900A0B88F /* PricePoint.hpp */,
+				0845056C204BC46900A0B88F /* CandleStick.hpp */,
+				08305974204E2A650066E86F /* Chart.hpp */,
+				08BF4E4420A9286600B6F81D /* DiskIO.hpp */,
+			);
+			path = Headers;
+			sourceTree = "<group>";
+		};
+		08BF4E4A20A9343100B6F81D /* Source */ = {
+			isa = PBXGroup;
+			children = (
+				084505642048CAB900A0B88F /* PricePoint.cpp */,
+				0845056B204BC46900A0B88F /* CandleStick.cpp */,
+				08305973204E2A650066E86F /* Chart.cpp */,
+				08BF4E4320A9286600B6F81D /* DiskIO.cpp */,
+			);
+			name = Source;
+			path = Common;
+			sourceTree = "<group>";
+		};
 		08FA2DBA20A923C700383E57 /* ChartTest */ = {
 			isa = PBXGroup;
 			children = (
 				08FA2DBB20A923C700383E57 /* main.cpp */,
 			);
 			path = ChartTest;
-			sourceTree = "<group>";
-		};
-		08FA2DC420A924C600383E57 /* Common */ = {
-			isa = PBXGroup;
-			children = (
-				084505642048CAB900A0B88F /* PricePoint.cpp */,
-				084505652048CAB900A0B88F /* PricePoint.hpp */,
-				0845056B204BC46900A0B88F /* CandleStick.cpp */,
-				0845056C204BC46900A0B88F /* CandleStick.hpp */,
-				08305973204E2A650066E86F /* Chart.cpp */,
-				08305974204E2A650066E86F /* Chart.hpp */,
-			);
-			path = Common;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -137,13 +152,13 @@
 			productReference = 084505592047962100A0B88F /* ExpertAdvisor */;
 			productType = "com.apple.product-type.tool";
 		};
-		08FA2DB820A923C700383E57 /* ChartTest */ = {
+		08BF4E4E20A934D200B6F81D /* ChartTest */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 08FA2DBF20A923C700383E57 /* Build configuration list for PBXNativeTarget "ChartTest" */;
+			buildConfigurationList = 08BF4E5320A934D200B6F81D /* Build configuration list for PBXNativeTarget "ChartTest" */;
 			buildPhases = (
-				08FA2DB520A923C700383E57 /* Sources */,
-				08FA2DB620A923C700383E57 /* Frameworks */,
-				08FA2DB720A923C700383E57 /* CopyFiles */,
+				08BF4E4B20A934D200B6F81D /* Sources */,
+				08BF4E4C20A934D200B6F81D /* Frameworks */,
+				08BF4E4D20A934D200B6F81D /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -151,7 +166,7 @@
 			);
 			name = ChartTest;
 			productName = ChartTest;
-			productReference = 08FA2DB920A923C700383E57 /* ChartTest */;
+			productReference = 08BF4E4F20A934D200B6F81D /* ChartTest */;
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
@@ -167,7 +182,7 @@
 						CreatedOnToolsVersion = 9.2;
 						ProvisioningStyle = Automatic;
 					};
-					08FA2DB820A923C700383E57 = {
+					08BF4E4E20A934D200B6F81D = {
 						CreatedOnToolsVersion = 9.3.1;
 						ProvisioningStyle = Automatic;
 					};
@@ -186,7 +201,7 @@
 			projectRoot = "";
 			targets = (
 				084505582047962100A0B88F /* ExpertAdvisor */,
-				08FA2DB820A923C700383E57 /* ChartTest */,
+				08BF4E4E20A934D200B6F81D /* ChartTest */,
 			);
 		};
 /* End PBXProject section */
@@ -197,20 +212,22 @@
 			buildActionMask = 2147483647;
 			files = (
 				08305975204E2A650066E86F /* Chart.cpp in Sources */,
+				08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */,
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
 				0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */,
 				084505662048CAB900A0B88F /* PricePoint.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		08FA2DB520A923C700383E57 /* Sources */ = {
+		08BF4E4B20A934D200B6F81D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				08FA2DC320A9245700383E57 /* Chart.cpp in Sources */,
-				08FA2DC120A9245700383E57 /* PricePoint.cpp in Sources */,
-				08FA2DC220A9245700383E57 /* CandleStick.cpp in Sources */,
-				08FA2DBC20A923C700383E57 /* main.cpp in Sources */,
+				082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */,
+				082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */,
+				082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */,
+				082BAC9520A93F760003EA86 /* Chart.cpp in Sources */,
+				08BF4E5620A9385B00B6F81D /* main.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -341,6 +358,7 @@
 		084505612047962100A0B88F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
 				L = "";
@@ -351,6 +369,7 @@
 		084505622047962100A0B88F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
 				L = "";
@@ -358,27 +377,29 @@
 			};
 			name = Release;
 		};
-		08FA2DBD20A923C700383E57 /* Debug */ = {
+		08BF4E5420A934D200B6F81D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				USER_HEADER_SEARCH_PATHS = "/Volumes/Darwin/usr/local/Toolchains/LLVM7.0.0svn.xctoolchain/usr/include/c++/v1/";
 			};
 			name = Debug;
 		};
-		08FA2DBE20A923C700383E57 /* Release */ = {
+		08BF4E5520A934D200B6F81D /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				USER_HEADER_SEARCH_PATHS = "/Volumes/Darwin/usr/local/Toolchains/LLVM7.0.0svn.xctoolchain/usr/include/c++/v1/";
 			};
 			name = Release;
 		};
@@ -403,11 +424,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		08FA2DBF20A923C700383E57 /* Build configuration list for PBXNativeTarget "ChartTest" */ = {
+		08BF4E5320A934D200B6F81D /* Build configuration list for PBXNativeTarget "ChartTest" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				08FA2DBD20A923C700383E57 /* Debug */,
-				08FA2DBE20A923C700383E57 /* Release */,
+				08BF4E5420A934D200B6F81D /* Debug */,
+				08BF4E5520A934D200B6F81D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
