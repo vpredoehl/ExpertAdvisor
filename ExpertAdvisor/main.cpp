@@ -171,27 +171,6 @@ int main(int argc, const char * argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds{50});
     } while (parseFU.size() > 0);
 
-//        //
-//        // compare to data read from file
-//        //
-//    std::for_each(allSyms.begin(), allSyms.end(), [](auto &sd)
-//                  {
-//                      std::string sym = sd.first;
-//                      auto symData = sd.second;
-//                      auto rmp = ReadMarketData(sym);
-//
-//                      symData.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
-//                      symData.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
-//
-//                      if(rmp == symData)
-//                          std::cout << sym + ": File matches!!!" << std::endl;
-//                      else
-//                      {
-//                          std::cout << sym + ": File DOES NOT match!!!" << std::endl;
-//                          std::cout << "parsed: " << symData.size() << " read from file: " << rmp.size() << std::endl;
-//                      }
-//                  });
-
     //
     // append parsed data to file(s)
     //
@@ -203,13 +182,26 @@ int main(int argc, const char * argv[]) {
                       WriteMarketData(sym, rawMarketPrice);
                       rawMarketPrice.clear();
                   });
-        //
-        // make test charts
-        //
-    std::for_each(allSyms.begin(), allSyms.end(), [](const SymbolData::value_type &m)
-                  {
-                      auto symCharts = MakeTestCharts(m.second);
-                  });
-    
     return 0;
 }
+
+    //        //
+    //        // compare to data read from file
+    //        //
+    //    std::for_each(allSyms.begin(), allSyms.end(), [](auto &sd)
+    //                  {
+    //                      std::string sym = sd.first;
+    //                      auto symData = sd.second;
+    //                      auto rmp = ReadMarketData(sym);
+    //
+    //                      symData.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
+    //                      symData.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
+    //
+    //                      if(rmp == symData)
+    //                          std::cout << sym + ": File matches!!!" << std::endl;
+    //                      else
+    //                      {
+    //                          std::cout << sym + ": File DOES NOT match!!!" << std::endl;
+    //                          std::cout << "parsed: " << symData.size() << " read from file: " << rmp.size() << std::endl;
+    //                      }
+    //                  });
