@@ -363,6 +363,7 @@
 				DEVELOPMENT_TEAM = X674V92M37;
 				L = "";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 Headers/";
 			};
 			name = Debug;
 		};
@@ -374,6 +375,7 @@
 				DEVELOPMENT_TEAM = X674V92M37;
 				L = "";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 Headers/";
 			};
 			name = Release;
 		};
