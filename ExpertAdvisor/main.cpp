@@ -73,6 +73,7 @@ int main(int argc, const char * argv[]) {
                       auto sym = sd.first;
                       auto rawMarketPrice = sd.second;
                       
+                      rawMarketPrice.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
                       WriteMarketData(sym, rawMarketPrice);
                       rawMarketPrice.clear();
                   });
