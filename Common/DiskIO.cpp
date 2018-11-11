@@ -41,7 +41,7 @@ auto ReadMarketData(std::string sym) -> RawMarketPrice
 void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
 {
     sym.replace(sym.find("/"), 1, "-");
-    std::ofstream f { savePath + sym,  std::ios_base::binary | std::ios_base::out | std::ios_base::ate };
+    std::ofstream f { savePath + sym,  std::ios_base::binary | std::ios_base::out | std::ios_base::app };
     
     std::for_each(rmp.cbegin(), rmp.cend(), [&f](const PricePoint &pp)
                   {   f.write(reinterpret_cast<const char*>(&pp), sizeof(pp));  });
