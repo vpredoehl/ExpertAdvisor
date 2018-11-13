@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		080C8C5B219B702700840B79 /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
 		082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
@@ -41,6 +42,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		080C8C5A219B702700840B79 /* libpq.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpq.tbd; path = usr/lib/libpq.tbd; sourceTree = SDKROOT; };
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -60,6 +62,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				080C8C5B219B702700840B79 /* libpq.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -73,6 +76,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		080C8C59219B702600840B79 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				080C8C5A219B702700840B79 /* libpq.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		084505502047962100A0B88F = {
 			isa = PBXGroup;
 			children = (
@@ -81,6 +92,7 @@
 				08BF4E4A20A9343100B6F81D /* Source */,
 				08BF4E4820A933FB00B6F81D /* Headers */,
 				0845055A2047962100A0B88F /* Products */,
+				080C8C59219B702600840B79 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -362,8 +374,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
 				L = "";
+				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				OTHER_LDFLAGS = (
+					"-lc++experimental",
+					"-lpqxx",
+				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 Headers/";
+				SYSTEM_HEADER_SEARCH_PATHS = /usr/local/include/;
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
 			};
 			name = Debug;
 		};
@@ -374,8 +392,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
 				L = "";
+				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				OTHER_LDFLAGS = (
+					"-lc++experimental",
+					"-lpqxx",
+				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 Headers/";
+				SYSTEM_HEADER_SEARCH_PATHS = /usr/local/include/;
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
 			};
 			name = Release;
 		};
