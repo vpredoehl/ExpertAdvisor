@@ -11,7 +11,27 @@
 #include "experimental/filesystem" // Had to set User Header Search Path in Project->Build Settings and include as user headers to avoid conflict with released system headers and satisfy the lexical prepreocessor
 #include <iostream>
 #include <fstream>
+#include <pqxx/pqxx>
 
+const std::string db = "forex";
+
+pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + db }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+pqxx::work w { c };
+
+void PrintResult(const pqxx::result &r)
+{
+    const auto num_rows = r.size();
+    for (int rownum = 0; rownum < num_rows; ++rownum) {
+        auto row = r[rownum];
+        const int num_cols = row.size();
+        for (int colnum=0; colnum < num_cols; ++colnum)
+        {
+            const pqxx::field field = row[colnum];
+            std::cout << field.c_str() << '\t';
+        }
+        std::cout << std::endl;
+    }
+}
 
 auto ParseRawPriceData(std::ifstream csv) -> SymbolData
 {
@@ -40,11 +60,43 @@ auto ReadMarketData(std::string sym) -> RawMarketPrice
 
 void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
 {
+    std::string tableName = sym;
+
     sym.replace(sym.find("/"), 1, "-");
-    std::ofstream f { savePath + sym,  std::ios_base::binary | std::ios_base::out | std::ios_base::app };
-    
-    std::for_each(rmp.cbegin(), rmp.cend(), [&f](const PricePoint &pp)
-                  {   f.write(reinterpret_cast<const char*>(&pp), sizeof(pp));  });
+    tableName.replace(tableName.find("/"), 1, "");
+
+    try
+    {
+        std::string insertRMP = "insert into " + tableName + "RMP ( time, ask, bid ) values \r";
+        std::string createTable { "create table if not exists " + tableName + "RMP (\
+            priceID serial primary key,\
+            time timestamp not null,\
+            bid decimal ( 9,5 ),\
+            ask decimal ( 9,5 ) );" };
+        pqxx::result r = w.exec(createTable);
+//        r = w.exec("create index if not exists time_frame on " + tableName + "(interval)");
+
+        PrintResult(r);
+        std::for_each(rmp.cbegin(), rmp.cend(), [&insertRMP](const PricePoint &pp)
+                      {
+                          std::time_t tp = std::chrono::system_clock::to_time_t(pp.time);
+                          std::tm tp_tm = *std::localtime(&tp);
+                          char buf[30];
+
+                          strftime(buf, sizeof(buf), "'%F %T'", &tp_tm);
+                          insertRMP += std::string { " ( " }
+                          + std::string { buf } + ", "
+                          + std::string { std::to_string(pp.ask) } + ", "
+                          + std::string { std::to_string(pp.bid) }
+                          + std::string { "), \r" };
+                      });
+        insertRMP.erase(insertRMP.size() - 3);  // remove last comma
+        insertRMP += ";";
+        r = w.exec(insertRMP);
+        w.commit();
+        PrintResult(r);
+    }
+    catch (std::exception e)    {   std::cerr << "postgresql: " << e.what() << std::endl;   }
 }
 
 auto SymsFromDirectory(std::string dirPath) -> SymbolData

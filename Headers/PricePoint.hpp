@@ -14,11 +14,9 @@
 
 using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::minutes>;
 
-class PricePoint
+struct PricePoint
 {
     float bid, ask;
-    
-public:
     PriceTP time;
 
     PricePoint(PriceTP, float bid, float ask);
