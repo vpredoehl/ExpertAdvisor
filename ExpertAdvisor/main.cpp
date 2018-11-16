@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 #include <list>
+#include <algorithm>
+#include <pqxx/pqxx>
 
 using namespace std::experimental::filesystem;
 using namespace std::chrono;
@@ -49,9 +51,19 @@ int main(int argc, const char * argv[]) {
         //
         // parse .csv files
         //
+    pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::work w { c };
+    pqxx::result fileList = w.exec("select * from parsedfiles;");
+    void PrintResult(const pqxx::result &r);
+
+    PrintResult(fileList);
     for(auto &f : dirIter)
     {
         if(f.path().extension() != ".csv")  continue;
+        if(fileList.cend() != std::find_if(fileList.cbegin(), fileList.cend(), [&f](auto fn) -> bool
+                                           {     return f.path() == fn[0].c_str();  }))
+            {   std::cout << "Skipping: " << f.path() << std::endl;   continue;   }
+        
         std::cout << f.path() << std::endl;
         parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
 

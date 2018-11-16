@@ -13,7 +13,6 @@
 #include <fstream>
 #include <pqxx/pqxx>
 
-const std::string db = "forex";
 
 void PrintResult(const pqxx::result &r)
 {
@@ -57,7 +56,7 @@ auto ReadMarketData(std::string sym) -> RawMarketPrice
 
 void WriteMarketData(std::string sym, const RawMarketPrice &rmp, std::string fileName)
 {
-    pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + db }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     std::string tableName = sym;
 
     sym.replace(sym.find("/"), 1, "-"); tableName.replace(tableName.find("/"), 1, "");
