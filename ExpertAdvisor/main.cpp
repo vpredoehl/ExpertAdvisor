@@ -21,10 +21,13 @@ using namespace std::experimental::filesystem;
 using namespace std::chrono;
 
 int main(int argc, const char * argv[]) {
+    constexpr short maxWriteThreads = 6;
+
     std::list<std::future<SymbolData>> parseFU;
+    std::list<std::thread> saveToDB;
     auto dirIter = recursive_directory_iterator( argc == 2 ?  argv[1] : forexPath );
     SymbolData allSyms;
-    auto HasAvailTask = [&parseFU, &allSyms](auto maxTasks) -> bool
+    auto HasAvailTask = [&parseFU, &saveToDB, &allSyms](auto maxTasks) -> bool
     {
         auto availFU = [](const std::future<SymbolData> &fut) -> bool
             {   return std::future_status::ready == fut.wait_for(std::chrono::milliseconds{10});    };
@@ -34,13 +37,12 @@ int main(int argc, const char * argv[]) {
         {
             auto symD = availIter->get();
             parseFU.erase(availIter);
-            std::for_each(symD.begin(), symD.end(), [&allSyms](SymbolData::value_type &s)
+            std::for_each(symD.begin(), symD.end(), [&saveToDB](SymbolData::value_type &s)
                           {
-                              auto &allMarketD = allSyms[s.first];
-                              auto &newData = s.second;
-                              
-                              allMarketD.splice(allMarketD.end(), newData);
+//                              WriteMarketData(s.first, s.second);
+                              saveToDB.push_back(std::thread { WriteMarketData, s.first, std::move(s.second) });
                           });
+            if(saveToDB.size() > maxWriteThreads)   {   saveToDB.front().join();    saveToDB.pop_front(); }
             return true;
         }
         else if(parseFU.size() < maxTasks)  return true;
@@ -65,18 +67,8 @@ int main(int argc, const char * argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds{50});
     } while (parseFU.size() > 0);
 
-    //
-    // append parsed data to file(s)
-    //
-    std::for_each(allSyms.cbegin(), allSyms.cend(), [](auto &sd)
-                  {
-                      auto sym = sd.first;
-                      auto rawMarketPrice = sd.second;
-                      
-                      rawMarketPrice.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
-                      WriteMarketData(sym, rawMarketPrice);
-                      rawMarketPrice.clear();
-                  });
+        // wait for all syms to save to databsae
+    std::for_each(saveToDB.begin(), saveToDB.end(), [](std::thread &th){    th.join(); });
     return 0;
 }
 

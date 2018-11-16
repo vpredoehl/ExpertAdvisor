@@ -15,9 +15,6 @@
 
 const std::string db = "forex";
 
-pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + db }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
-pqxx::work w { c };
-
 void PrintResult(const pqxx::result &r)
 {
     const auto num_rows = r.size();
@@ -60,23 +57,29 @@ auto ReadMarketData(std::string sym) -> RawMarketPrice
 
 void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
 {
+    pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + db }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::work w { c };
     std::string tableName = sym;
 
-    sym.replace(sym.find("/"), 1, "-");
-    tableName.replace(tableName.find("/"), 1, "");
+    sym.replace(sym.find("/"), 1, "-"); tableName.replace(tableName.find("/"), 1, "");
+
+    std::string insertRMP = "insert into " + tableName + "RMP ( time, ask, bid ) values \r";
+    std::string createTable { "create table if not exists " + tableName + "RMP (\
+        time timestamp not null,\
+        bid decimal ( 15,5 ),\
+        ask decimal ( 15,5 ) );" };
+
 
     try
     {
-        std::string insertRMP = "insert into " + tableName + "RMP ( time, ask, bid ) values \r";
-        std::string createTable { "create table if not exists " + tableName + "RMP (\
-            priceID serial primary key,\
-            time timestamp not null,\
-            bid decimal ( 9,5 ),\
-            ask decimal ( 9,5 ) );" };
+            // create the table
         pqxx::result r = w.exec(createTable);
-//        r = w.exec("create index if not exists time_frame on " + tableName + "(interval)");
+            //        r = w.exec("create index if not exists time_frame on " + tableName + "(interval)");
+    }
+    catch (std::exception e)    {   std::cerr << "postgresql: Create Table " << e.what() << std::endl;   }
 
-        PrintResult(r);
+    try
+    {
         std::for_each(rmp.cbegin(), rmp.cend(), [&insertRMP](const PricePoint &pp)
                       {
                           std::time_t tp = std::chrono::system_clock::to_time_t(pp.time);
@@ -92,11 +95,11 @@ void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
                       });
         insertRMP.erase(insertRMP.size() - 3);  // remove last comma
         insertRMP += ";";
-        r = w.exec(insertRMP);
+        pqxx::result r = w.exec(insertRMP);
         w.commit();
         PrintResult(r);
     }
-    catch (std::exception e)    {   std::cerr << "postgresql: " << e.what() << std::endl;   }
+    catch (std::exception e)    {   std::cerr << "postgresql: Insert " << e.what() << std::endl;   }
 }
 
 auto SymsFromDirectory(std::string dirPath) -> SymbolData
