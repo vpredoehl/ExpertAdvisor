@@ -27,8 +27,13 @@ std::set<std::string> pairs { "AUD/CAD", "AUD/CHF", "AUD/NZD", "AUD/JPY", "AUD/U
     "GBP/USD", "GBP/JPY", "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD", "USD/CAD", "USD/CHF", "USD/JPY" };
 constexpr char fileSepChar = '_', pairSepChar = '/';
 
+    // args:
+    //    1.  Directory to parse
+    //    2.  Symbol pairs separated by a '/'
+    //    3.  max parse jobs
 int main(int argc, const char * argv[]) {
     constexpr short maxWriteThreads = 6;
+    auto maxTasks = defaultMaxTasks;
 
     std::list<std::future<SymbolData>> parseFU;
     std::list<std::thread> saveToDB;
@@ -54,6 +59,9 @@ int main(int argc, const char * argv[]) {
     };
 
     if(argc >= 3)   {   pairs.clear();  pairs = { argv[2] }; }
+    if(argc >= 4)   maxTasks = std::stoi(argv[3]);
+
+    std::cout << "Mximum Parse Tasks: " << maxTasks << std::endl;
 
         //
         // parse .csv files
@@ -61,9 +69,7 @@ int main(int argc, const char * argv[]) {
     pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w { c };
     pqxx::result fileList = w.exec("select * from parsedfiles;");
-    void PrintResult(const pqxx::result &r);
 
-    PrintResult(fileList);
     for(auto &f : dirIter)
     {
         if(f.path().extension() != ".csv")  continue;
