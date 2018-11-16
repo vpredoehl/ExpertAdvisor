@@ -21,7 +21,7 @@ using ChartForSym = std::vector<Chart>;
 
 auto ParseRawPriceData(std::ifstream csv) -> SymbolData;
 auto ReadMarketData(std::string sym) -> RawMarketPrice;
-void WriteMarketData(std::string sym, const RawMarketPrice&);
+void WriteMarketData(std::string sym, const RawMarketPrice&, std::string fileName);
 auto SymsFromDirectory(std::string dirPath) -> SymbolData;
 
 const std::string forexPath = "/Volumes/Forex Data/ratedata.gaincapital.com/2018/03 March";

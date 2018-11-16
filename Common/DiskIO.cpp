@@ -55,10 +55,9 @@ auto ReadMarketData(std::string sym) -> RawMarketPrice
         return rmp;
 }
 
-void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
+void WriteMarketData(std::string sym, const RawMarketPrice &rmp, std::string fileName)
 {
     pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + db }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
-    pqxx::work w { c };
     std::string tableName = sym;
 
     sym.replace(sym.find("/"), 1, "-"); tableName.replace(tableName.find("/"), 1, "");
@@ -72,34 +71,41 @@ void WriteMarketData(std::string sym, const RawMarketPrice &rmp)
 
     try
     {
+        pqxx::work w { c };
             // create the table
-        pqxx::result r = w.exec(createTable);
+        pqxx::result  r = w.exec(createTable);
+        w.commit();
             //        r = w.exec("create index if not exists time_frame on " + tableName + "(interval)");
     }
-    catch (std::exception e)    {   std::cerr << "postgresql: Create Table " << e.what() << std::endl;   }
+    catch (pqxx::sql_error e)   {   std::cerr << "postgresql sql_error: Create Table  " << e.what() << std::endl << "Query: " << e.query() << std::endl; }
+    catch (pqxx::usage_error e)   {   std::cerr << "postgresql usage_error: Create Table  " << e.what() << std::endl; }
 
     try
     {
-        std::for_each(rmp.cbegin(), rmp.cend(), [&insertRMP](const PricePoint &pp)
+        pqxx::work w { c };
+
+        std::for_each(rmp.cbegin(), rmp.cend(), [&w, &insertRMP](const PricePoint &pp)
                       {
                           std::time_t tp = std::chrono::system_clock::to_time_t(pp.time);
                           std::tm tp_tm = *std::localtime(&tp);
                           char buf[30];
 
                           strftime(buf, sizeof(buf), "'%F %T'", &tp_tm);
-                          insertRMP += std::string { " ( " }
+                          std::string values = std::string { " ( " }
                           + std::string { buf } + ", "
                           + std::string { std::to_string(pp.ask) } + ", "
                           + std::string { std::to_string(pp.bid) }
-                          + std::string { "), \r" };
+                          + std::string { ");\r" };
+
+                          pqxx::result r = w.exec(insertRMP + values);
+                          PrintResult(r);
                       });
-        insertRMP.erase(insertRMP.size() - 3);  // remove last comma
-        insertRMP += ";";
-        pqxx::result r = w.exec(insertRMP);
+            // add filename to list of parsef files
+        pqxx::result  r = w.exec("insert into parsedfiles ( filename ) values ( '" + fileName + "' );");
         w.commit();
-        PrintResult(r);
     }
-    catch (std::exception e)    {   std::cerr << "postgresql: Insert " << e.what() << std::endl;   }
+    catch (pqxx::sql_error e)   {   std::cerr << "postgresql sql_error: Insert " << e.what() << std::endl << "Query: " << e.query() << std::endl; }
+    catch (pqxx::usage_error e)   {   std::cerr << "postgresql usage_error: Insert " << e.what() << std::endl; }
 }
 
 auto SymsFromDirectory(std::string dirPath) -> SymbolData

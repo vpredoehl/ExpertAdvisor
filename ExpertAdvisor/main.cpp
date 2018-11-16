@@ -27,7 +27,7 @@ int main(int argc, const char * argv[]) {
     std::list<std::thread> saveToDB;
     auto dirIter = recursive_directory_iterator( argc == 2 ?  argv[1] : forexPath );
     SymbolData allSyms;
-    auto HasAvailTask = [&parseFU, &saveToDB, &allSyms](auto maxTasks) -> bool
+    auto HasAvailTask = [&parseFU, &saveToDB, &allSyms](auto maxTasks, std::string fileName = "") -> bool
     {
         auto availFU = [](const std::future<SymbolData> &fut) -> bool
             {   return std::future_status::ready == fut.wait_for(std::chrono::milliseconds{10});    };
@@ -37,11 +37,8 @@ int main(int argc, const char * argv[]) {
         {
             auto symD = availIter->get();
             parseFU.erase(availIter);
-            std::for_each(symD.begin(), symD.end(), [&saveToDB](SymbolData::value_type &s)
-                          {
-//                              WriteMarketData(s.first, s.second);
-                              saveToDB.push_back(std::thread { WriteMarketData, s.first, std::move(s.second) });
-                          });
+            std::for_each(symD.begin(), symD.end(), [&saveToDB, &fileName](SymbolData::value_type &s)
+                          { saveToDB.push_back(std::thread { WriteMarketData, s.first, std::move(s.second), fileName });    });
             if(saveToDB.size() > maxWriteThreads)   {   saveToDB.front().join();    saveToDB.pop_front(); }
             return true;
         }
@@ -58,7 +55,7 @@ int main(int argc, const char * argv[]) {
         std::cout << f.path() << std::endl;
         parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
 
-        while(!HasAvailTask(maxTasks))
+        while(!HasAvailTask(maxTasks, f.path()))
             std::this_thread::sleep_for(std::chrono::milliseconds{50});
     }
     
