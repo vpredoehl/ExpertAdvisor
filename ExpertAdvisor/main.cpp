@@ -14,7 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <string>
-#include <vector>
+#include <set>
 #include <list>
 #include <algorithm>
 #include <pqxx/pqxx>
@@ -22,12 +22,17 @@
 using namespace std::experimental::filesystem;
 using namespace std::chrono;
 
+std::set<std::string> pairs { "AUD/CAD", "AUD/CHF", "AUD/NZD", "AUD/JPY", "AUD/USD", "CAD/CHF", "CAD/JPY", "CHF/JPY",
+    "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/GBP", "EUR/JPY", "EUR/NZD", "EUR/USD", "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/NZD",
+    "GBP/USD", "GBP/JPY", "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD", "USD/CAD", "USD/CHF", "USD/JPY" };
+constexpr char fileSepChar = '_', pairSepChar = '/';
+
 int main(int argc, const char * argv[]) {
     constexpr short maxWriteThreads = 6;
 
     std::list<std::future<SymbolData>> parseFU;
     std::list<std::thread> saveToDB;
-    auto dirIter = recursive_directory_iterator( argc == 2 ?  argv[1] : forexPath );
+    auto dirIter = recursive_directory_iterator( argc >= 2 ?  argv[1] : forexPath );
     SymbolData allSyms;
     auto HasAvailTask = [&parseFU, &saveToDB, &allSyms](auto maxTasks, std::string fileName = "") -> bool
     {
@@ -48,6 +53,8 @@ int main(int argc, const char * argv[]) {
         return false;
     };
 
+    if(argc >= 3)   {   pairs.clear();  pairs = { argv[2] }; }
+
         //
         // parse .csv files
         //
@@ -60,8 +67,17 @@ int main(int argc, const char * argv[]) {
     for(auto &f : dirIter)
     {
         if(f.path().extension() != ".csv")  continue;
-        if(fileList.cend() != std::find_if(fileList.cbegin(), fileList.cend(), [&f](auto fn) -> bool
-                                           {     return f.path() == fn[0].c_str();  }))
+
+        std::string fileN = f.path().filename();
+        auto posn = fileN.find(fileSepChar);
+
+            // check if file is in pairs list
+        fileN.replace(posn, 1, &pairSepChar);
+        fileN.erase(fileN.find(fileSepChar));   // remove _Week*.csv
+        if(pairs.find(fileN) == pairs.end()) continue;
+
+        if(fileList.cend() != std::find_if(fileList.cbegin(), fileList.cend(), [&f](pqxx::row fn) -> bool
+                                           {    return f.path() == fn[0].c_str();   }))
             {   std::cout << "Skipping: " << f.path() << std::endl;   continue;   }
         
         std::cout << f.path() << std::endl;
