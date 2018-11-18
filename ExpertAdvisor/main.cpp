@@ -32,7 +32,7 @@ constexpr char fileSepChar = '_', pairSepChar = '/';
     //    2.  Symbol pairs separated by a '/'
     //    3.  max parse jobs
 int main(int argc, const char * argv[]) {
-    constexpr short maxWriteThreads = 6;
+    constexpr short maxWriteThreads = 18;
     auto maxTasks = defaultMaxTasks;
 
     using FutureAndFileNameP = std::pair<std::future<SymbolData>, std::string>;

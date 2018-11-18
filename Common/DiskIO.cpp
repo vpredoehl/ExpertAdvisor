@@ -82,22 +82,31 @@ void WriteMarketData(std::string sym, const RawMarketPrice &rmp, std::string fil
     try
     {
         pqxx::work w { c };
+        std::string values;
 
-        std::for_each(rmp.cbegin(), rmp.cend(), [&w, &insertRMP](const PricePoint &pp)
+        auto count = 0;
+        std::for_each(rmp.cbegin(), rmp.cend(), [insertRMP, &values, &w, &count](const PricePoint &pp)
                       {
                           std::time_t tp = std::chrono::system_clock::to_time_t(pp.time);
                           std::tm tp_tm = *std::localtime(&tp);
                           char buf[30];
 
                           strftime(buf, sizeof(buf), "'%F %T'", &tp_tm);
-                          std::string values = std::string { " ( " }
+                          values += std::string { " ( " }
                           + std::string { buf } + ", "
                           + std::string { std::to_string(pp.ask) } + ", "
                           + std::string { std::to_string(pp.bid) }
-                          + std::string { ");\r" };
+                          + std::string { "), \r" };
+                          if((++count %= 1000) == 0)
+                          {
+                              values.erase(values.size() - 3);  // remove last comma
+                              values += ";";
 
-                          pqxx::result r = w.exec(insertRMP + values);
-                          PrintResult(r);
+
+                              pqxx::result r = w.exec(insertRMP + values);
+                              PrintResult(r);
+                              values = "";
+                          }
                       });
             // add filename to list of parsef files
         pqxx::result  r = w.exec("insert into parsedfiles ( filename ) values ( '" + fileName + "' );");
