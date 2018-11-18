@@ -35,19 +35,22 @@ int main(int argc, const char * argv[]) {
     constexpr short maxWriteThreads = 6;
     auto maxTasks = defaultMaxTasks;
 
-    std::list<std::future<SymbolData>> parseFU;
+    using FutureAndFileNameP = std::pair<std::future<SymbolData>, std::string>;
+    std::list<FutureAndFileNameP> parseFU;
     std::list<std::thread> saveToDB;
     auto dirIter = recursive_directory_iterator( argc >= 2 ?  argv[1] : forexPath );
     SymbolData allSyms;
-    auto HasAvailTask = [&parseFU, &saveToDB, &allSyms](auto maxTasks, std::string fileName = "") -> bool
+    auto HasAvailTask = [&parseFU, &saveToDB, &allSyms](auto maxTasks) -> bool
     {
-        auto availFU = [](const std::future<SymbolData> &fut) -> bool
-            {   return std::future_status::ready == fut.wait_for(std::chrono::milliseconds{10});    };
+        auto availFU = [](auto &futAndFile) -> bool
+            {   return std::future_status::ready == futAndFile.first.wait_for(std::chrono::milliseconds{10});    };
         auto availIter = std::find_if(parseFU.begin(), parseFU.end(), availFU);
         
         if (availIter != parseFU.end())
         {
-            auto symD = availIter->get();
+            auto symD = availIter->first.get();
+            std::string fileName = availIter->second;
+
             parseFU.erase(availIter);
             std::for_each(symD.begin(), symD.end(), [&saveToDB, &fileName](SymbolData::value_type &s)
                           { saveToDB.push_back(std::thread { WriteMarketData, s.first, std::move(s.second), fileName });    });
@@ -68,7 +71,7 @@ int main(int argc, const char * argv[]) {
         //
     pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w { c };
-    pqxx::result fileList = w.exec("select * from parsedfiles;");
+    pqxx::result AlreadyParsedFiles = w.exec("select * from parsedfiles;");
 
     for(auto &f : dirIter)
     {
@@ -82,14 +85,13 @@ int main(int argc, const char * argv[]) {
         fileN.erase(fileN.find(fileSepChar));   // remove _Week*.csv
         if(pairs.find(fileN) == pairs.end()) continue;
 
-        if(fileList.cend() != std::find_if(fileList.cbegin(), fileList.cend(), [&f](pqxx::row fn) -> bool
+        if(AlreadyParsedFiles.cend() != std::find_if(AlreadyParsedFiles.cbegin(), AlreadyParsedFiles.cend(), [&f](pqxx::row fn) -> bool
                                            {    return f.path() == fn[0].c_str();   }))
             {   std::cout << "Skipping: " << f.path() << std::endl;   continue;   }
-        
         std::cout << f.path() << std::endl;
-        parseFU.push_front(std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }));
+        parseFU.push_front(FutureAndFileNameP { std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }), f.path() });
 
-        while(!HasAvailTask(maxTasks, f.path()))
+        while(!HasAvailTask(maxTasks))
             std::this_thread::sleep_for(std::chrono::milliseconds{50});
     }
     
