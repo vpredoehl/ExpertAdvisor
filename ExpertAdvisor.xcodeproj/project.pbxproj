@@ -18,6 +18,7 @@
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
 		08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		08BF4E5620A9385B00B6F81D /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
+		08FF18FA21A223BF005439FA /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -70,6 +71,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				08FF18FA21A223BF005439FA /* libpq.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -299,12 +301,16 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "";
 				LIBRARY_SEARCH_PATHS = /usr/local/lib;
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MACOSX_DEPLOYMENT_TARGET = 10.14;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
-				OTHER_LDFLAGS = "-lc++experimental";
+				OTHER_LDFLAGS = (
+					"-lc++experimental",
+					"-lpqxx",
+				);
 				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = /usr/local/include/;
 				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1";
 				Xanalyzer = "-I/usr/local/include/c++/v1/experimental";
 			};
@@ -357,11 +363,15 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "";
 				LIBRARY_SEARCH_PATHS = /usr/local/lib;
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
+				MACOSX_DEPLOYMENT_TARGET = 10.14;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
-				OTHER_LDFLAGS = "-lc++experimental";
+				OTHER_LDFLAGS = (
+					"-lc++experimental",
+					"-lpqxx",
+				);
 				SDKROOT = macosx;
+				SYSTEM_HEADER_SEARCH_PATHS = /usr/local/include/;
 				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1";
 				Xanalyzer = "-I/usr/local/include/c++/v1/experimental";
 			};
@@ -411,8 +421,9 @@
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
+				LD_MAP_FILE_PATH = "";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				USER_HEADER_SEARCH_PATHS = "/Volumes/Darwin/usr/local/Toolchains/LLVM7.0.0svn.xctoolchain/usr/include/c++/v1/";
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
 			};
 			name = Debug;
 		};
@@ -424,8 +435,9 @@
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
+				LD_MAP_FILE_PATH = "";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				USER_HEADER_SEARCH_PATHS = "/Volumes/Darwin/usr/local/Toolchains/LLVM7.0.0svn.xctoolchain/usr/include/c++/v1/";
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
 			};
 			name = Release;
 		};
