@@ -11,6 +11,7 @@
 #include "experimental/filesystem" // Had to set User Header Search Path in Project->Build Settings and include as user headers to avoid conflict with released system headers and satisfy the lexical prepreocessor
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <pqxx/pqxx>
 
 
@@ -41,17 +42,19 @@ auto ParseRawPriceData(std::ifstream csv) -> SymbolData
     return symD;
 }
 
-auto ReadMarketData(std::string sym) -> RawMarketPrice
+auto ReadMarketData(std::string sym, std::string fromDT, std::string toDT) -> RawMarketPrice
 {
-    auto posn = sym.find("/");
-    
-    if(posn != std::string::npos)    sym.replace(posn, 1, "-");
-        std::ifstream f { savePath + sym, std::ios_base::binary | std::ios_base::in };
+    std::string tableName = sym + "rmp";
     PricePoint pp;
     RawMarketPrice rmp;
-    
-    while (f.read(reinterpret_cast<char*>(&pp), sizeof(pp)))    rmp.push_back(pp);
-        return rmp;
+    PriceTP fromTime, toTime;
+    std::istringstream fromS { fromDT }, toS { toDT };
+
+    fromS >> fromTime;  toS >> toTime;
+    tableName.erase(tableName.find("/"));
+
+
+    return rmp;
 }
 
 void WriteMarketData(std::string sym, const RawMarketPrice &rmp, std::string fileName)
@@ -114,26 +117,4 @@ void WriteMarketData(std::string sym, const RawMarketPrice &rmp, std::string fil
     }
     catch (pqxx::sql_error e)   {   std::cerr << "postgresql sql_error: Insert " << e.what() << std::endl << "Query: " << e.query() << std::endl; }
     catch (pqxx::usage_error e)   {   std::cerr << "postgresql usage_error: Insert " << e.what() << std::endl; }
-}
-
-auto SymsFromDirectory(std::string dirPath) -> SymbolData
-{
-    SymbolData symD;
-    auto fileIter = std::experimental::filesystem::directory_iterator(dirPath);
-    
-    for (auto f : fileIter)
-    {
-        std::string sym = f.path().filename();
-        auto posn = sym.find("-");
-        
-        if(is_directory(f)) continue;
-        if(sym == ".DS_Store")  continue;
-        
-        auto rmp = ReadMarketData(sym);
-        
-        std::cout << "Loaded: " << sym << std::endl;
-        if(posn != std::string::npos)    sym.replace(posn, 1, "/");
-        symD[sym] = rmp;
-    }
-    return symD;
 }
