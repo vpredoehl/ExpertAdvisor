@@ -18,7 +18,7 @@ CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::
 
 auto operator-(RawMarketPrice::const_iterator i, int n)
 {
-    for (int i=0; i<1; ++i) --i;
+    for (int j=0; j<1; ++j) --i;
     return  i;
 }
 CandlePrice::CandlePrice(RawMarketPrice::const_iterator s, RawMarketPrice::const_iterator e)
