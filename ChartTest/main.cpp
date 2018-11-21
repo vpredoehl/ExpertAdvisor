@@ -16,23 +16,41 @@
 #include <pqxx/pqxx>
 
 using namespace std::chrono;
-using TestTF = std::pair< unsigned short, unsigned short >; // to time frame / from time frame
+using TestTimeFrame = std::pair< unsigned short /* to time frame */, unsigned short /* from time frame */ >;
+using TestChartData = std::pair<TestTimeFrame, Chart>;
 
-std::ostream& operator<<(std::ostream& o, TestTF p)
+std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
 {
     o << p.first << ":" << p.second;
     return o;
 }
 
-auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, TestTF ttf) -> ChartForSym
+auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, std::vector<TestTimeFrame> testParams) -> std::vector<TestChartData>
 {
-    ChartForSym charts;
-
+    std::vector<TestChartData> charts;
     Chart ch { rmp.cbegin(), rmp.cend(), minutes { 1 } };
-    Chart from1Min { ch.cbegin(), ch.cend(), minutes { ttf.first } };
-    Chart fromScratch { rmp.cbegin(), rmp.cend(), minutes { ttf.first } };
 
-    charts.push_back(ch);   charts.push_back(from1Min);  charts.push_back(fromScratch);
+    for( auto tP : testParams )
+    {
+        unsigned short toTimeFrame = tP.first, fromTimeFrame = tP.second;
+
+        if(charts.cend() == std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; }))
+            charts.push_back({ { toTimeFrame, 0 }, ch });
+
+
+            // find fromTimeFrame to use as source chart
+        auto sourceTestToUse = std::find_if(charts.cbegin(), charts.cend(), [fromTimeFrame](const TestChartData &ch) {   return ch.first.first == fromTimeFrame; });
+        
+        if(sourceTestToUse == charts.cend())
+        {
+            Chart sourceChartFromScratch  { rmp.cbegin(), rmp.cend(), minutes { fromTimeFrame } };
+
+            charts.push_back({ { fromTimeFrame, 0 }, sourceChartFromScratch }); // save for possible use later
+            charts.push_back({ { toTimeFrame, fromTimeFrame }, { sourceChartFromScratch.cbegin(), sourceChartFromScratch.cend(), minutes { toTimeFrame } } });
+        }
+        else
+            charts.push_back({ { toTimeFrame, fromTimeFrame }, { sourceTestToUse->second.cbegin(), sourceTestToUse->second.cend(), minutes { toTimeFrame } } });
+    }
 
     return charts;
 }
@@ -47,7 +65,7 @@ int main(int argc, const char * argv[])
     pqxx::work w { c };
     pqxx::result tables = w.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { argv[1] }, toDate { argv[2] };
-    std::vector<TestTF> testTimeFrame;
+    std::vector<TestTimeFrame> testParams;
 
         // get time frame tests from command line
     for(auto t = 3; t < argc; ++t)
@@ -56,7 +74,7 @@ int main(int argc, const char * argv[])
         auto posn = chartTime.find(":");
         std::string fromTimeFrame { chartTime.substr(posn+1) }, toTimeFrame { chartTime.erase(posn) };
 
-        testTimeFrame.push_back({ std::stoi(toTimeFrame), std::stoi(fromTimeFrame) });
+        testParams.push_back({ std::stoi(toTimeFrame), std::stoi(fromTimeFrame) });
     }
 
     for( auto p : tables )
@@ -75,13 +93,22 @@ int main(int argc, const char * argv[])
             time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
             rmp.push_back(pp);
         }
-        for(auto ttf: testTimeFrame)
-        {
-            auto charts = MakeTestCharts(rawPriceTableName, rmp, ttf);
 
-            std::cout << ttf << (charts[0] == charts[1] ? " match" : " don't match") << std::endl;
-            std::cout << ttf << (charts[0] == charts[2] ? " match" : " don't match") << std::endl;
-            std::cout << ttf << (charts[1] == charts[2] ? " match" : " don't match") << std::endl;
+        auto charts = MakeTestCharts(rawPriceTableName, rmp, testParams);
+        TestChartData *scratchChart = nullptr;
+
+            // check results of test
+        std::sort(charts.begin(), charts.end(), [](auto &t1, auto &t2)  {    return t1.first.first == t2.first.first ? t1.first.second < t2.first.second : t1.first.first < t2.first.first;      });
+        for( auto &testResult : charts )
+        {
+            unsigned short fromTimeFrame = testResult.first.second, toTimeFrame = testResult.first.first;
+
+            if(fromTimeFrame == 0)  {   scratchChart = &testResult;  continue;    }   // skip charts from scratch
+
+                // check equality to chart from scratch
+            if(scratchChart && toTimeFrame == scratchChart->first.first)
+                std::cout << testResult.first << " / " << scratchChart->first << ": "
+                << (testResult.second == scratchChart->second ? "match" : "don't match") << std::endl;
         }
     }
     return 0;
