@@ -18,6 +18,7 @@
 using namespace std::chrono;
 using TestTimeFrame = std::pair< unsigned short /* to time frame */, unsigned short /* from time frame */ >;
 using TestChartData = std::pair<TestTimeFrame, Chart>;
+using TestResultData = std::pair<bool, TestChartData>;
 
 std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
 {
@@ -25,16 +26,17 @@ std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
     return o;
 }
 
-auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, std::vector<TestTimeFrame> testParams) -> std::vector<TestChartData>
+auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
 {
     std::vector<TestChartData> charts;
+    std::vector<TestResultData> results;
 
     for( auto tP : testParams )
     {
         unsigned short toTimeFrame = tP.first, fromTimeFrame = tP.second;
 
             // find chart with toTimeFrame made from scratch - add if not found
-            // need to have one of these for each toTimeFrame as bais for comparison
+            // need to have one of these for each toTimeFrame as basis for comparison
         auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
         if(charts.cend() == fromScratchIter)
         {
@@ -45,13 +47,21 @@ auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, std::vector<Test
             // make test chart from base chart made from raw market price
         TestChartData lastTestChart { { toTimeFrame, fromTimeFrame }, { fromScratchIter->second.cbegin(), fromScratchIter->second.cend(), minutes { toTimeFrame } } };
         if(toTimeFrame == fromScratchIter->first.first)
-            std::cout << lastTestChart.first << " / " << fromScratchIter->first << ": "
-            << (lastTestChart.second == fromScratchIter->second ? "match" : "don't match") << std::endl;
+        {
+            bool passed = lastTestChart.second == fromScratchIter->second;
+
+            results.push_back({ passed, std::move(lastTestChart) });
+                // test passed - don't save chart ( if it was not created from raw market price )
+            if(passed && results.back().second.first.second != 0) results.back().second.second.clear();
+        }
         else
+        {
             std::cout << lastTestChart.first << +": No chart made from raw market price to compare to.\r";
+            results.push_back({ false, std::move(lastTestChart) });
+        }
     }
 
-    return charts;
+    return results;
 }
 
 extern std::set<std::string> pairs;
@@ -94,7 +104,8 @@ int main(int argc, const char * argv[])
             rmp.push_back(pp);
         }
 
-        auto charts = MakeTestCharts(rawPriceTableName, rmp, testParams);
+        auto results = MakeTestCharts(rawPriceTableName, rmp, testParams);
+        for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
     }
     return 0;
 }
