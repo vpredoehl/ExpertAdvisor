@@ -104,24 +104,3 @@ int main(int argc, const char * argv[]) {
     std::for_each(saveToDB.begin(), saveToDB.end(), [](std::thread &th){    th.join(); });
     return 0;
 }
-
-    //        //
-    //        // compare to data read from file
-    //        //
-    //    std::for_each(allSyms.begin(), allSyms.end(), [](auto &sd)
-    //                  {
-    //                      std::string sym = sd.first;
-    //                      auto symData = sd.second;
-    //                      auto rmp = ReadMarketData(sym);
-    //
-    //                      symData.sort([](PricePoint a, PricePoint b) -> bool {   return a.time < b.time; });
-    //                      symData.unique([](PricePoint a, PricePoint b)    {   return a.time == b.time && a == b;   });
-    //
-    //                      if(rmp == symData)
-    //                          std::cout << sym + ": File matches!!!" << std::endl;
-    //                      else
-    //                      {
-    //                          std::cout << sym + ": File DOES NOT match!!!" << std::endl;
-    //                          std::cout << "parsed: " << symData.size() << " read from file: " << rmp.size() << std::endl;
-    //                      }
-    //                  });

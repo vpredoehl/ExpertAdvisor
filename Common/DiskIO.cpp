@@ -42,21 +42,6 @@ auto ParseRawPriceData(std::ifstream csv) -> SymbolData
     return symD;
 }
 
-auto ReadMarketData(std::string sym, std::string fromDT, std::string toDT) -> RawMarketPrice
-{
-    std::string tableName = sym + "rmp";
-    PricePoint pp;
-    RawMarketPrice rmp;
-    PriceTP fromTime, toTime;
-    std::istringstream fromS { fromDT }, toS { toDT };
-
-    fromS >> fromTime;  toS >> toTime;
-    tableName.erase(tableName.find("/"));
-
-
-    return rmp;
-}
-
 void WriteMarketData(std::string sym, const RawMarketPrice &rmp, std::string fileName)
 {
     pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
