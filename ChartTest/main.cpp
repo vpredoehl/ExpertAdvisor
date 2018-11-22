@@ -76,6 +76,7 @@ int main(int argc, const char * argv[])
 
         testParams.push_back({ std::stoi(toTimeFrame), std::stoi(fromTimeFrame) });
     }
+    std::sort(testParams.begin(), testParams.end(), [](auto &t1, auto &t2)   {   return t1.first == t2.first ? t1.second < t2.second : t1.first < t2.first;   });
 
     for( auto p : tables )
     {
