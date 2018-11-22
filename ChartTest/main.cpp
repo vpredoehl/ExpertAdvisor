@@ -28,28 +28,27 @@ std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
 auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, std::vector<TestTimeFrame> testParams) -> std::vector<TestChartData>
 {
     std::vector<TestChartData> charts;
-    Chart ch { rmp.cbegin(), rmp.cend(), minutes { 1 } };
 
     for( auto tP : testParams )
     {
         unsigned short toTimeFrame = tP.first, fromTimeFrame = tP.second;
 
-        if(charts.cend() == std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; }))
-            charts.push_back({ { toTimeFrame, 0 }, ch });
-
-
-            // find fromTimeFrame to use as source chart
-        auto sourceTestToUse = std::find_if(charts.cbegin(), charts.cend(), [fromTimeFrame](const TestChartData &ch) {   return ch.first.first == fromTimeFrame; });
-        
-        if(sourceTestToUse == charts.cend())
+            // find chart with toTimeFrame made from scratch - add if not found
+            // need to have one of these for each toTimeFrame as bais for comparison
+        auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
+        if(charts.cend() == fromScratchIter)
         {
-            Chart sourceChartFromScratch  { rmp.cbegin(), rmp.cend(), minutes { toTimeFrame } };
-
-            charts.push_back({ { toTimeFrame, 0 }, sourceChartFromScratch }); // save for possible use later
-            charts.push_back({ { toTimeFrame, fromTimeFrame }, { sourceChartFromScratch.cbegin(), sourceChartFromScratch.cend(), minutes { toTimeFrame } } });
+            charts.push_back({ { toTimeFrame, 0 }, { rmp.cbegin(), rmp.cend(), minutes { toTimeFrame } } });
+            fromScratchIter = charts.end()-1;
         }
+
+            // make test chart from base chart made from raw market price
+        TestChartData lastTestChart { { toTimeFrame, fromTimeFrame }, { fromScratchIter->second.cbegin(), fromScratchIter->second.cend(), minutes { toTimeFrame } } };
+        if(toTimeFrame == fromScratchIter->first.first)
+            std::cout << lastTestChart.first << " / " << fromScratchIter->first << ": "
+            << (lastTestChart.second == fromScratchIter->second ? "match" : "don't match") << std::endl;
         else
-            charts.push_back({ { toTimeFrame, fromTimeFrame }, { sourceTestToUse->second.cbegin(), sourceTestToUse->second.cend(), minutes { toTimeFrame } } });
+            std::cout << lastTestChart.first << +": No chart made from raw market price to compare to.\r";
     }
 
     return charts;
@@ -96,21 +95,6 @@ int main(int argc, const char * argv[])
         }
 
         auto charts = MakeTestCharts(rawPriceTableName, rmp, testParams);
-        TestChartData *scratchChart = nullptr;
-
-            // check results of test
-        std::sort(charts.begin(), charts.end(), [](auto &t1, auto &t2)  {    return t1.first.first == t2.first.first ? t1.first.second < t2.first.second : t1.first.first < t2.first.first;      });
-        for( auto &testResult : charts )
-        {
-            unsigned short fromTimeFrame = testResult.first.second, toTimeFrame = testResult.first.first;
-
-            if(fromTimeFrame == 0)  {   scratchChart = &testResult;  continue;    }   // skip charts from scratch
-
-                // check equality to chart from scratch
-            if(scratchChart && toTimeFrame == scratchChart->first.first)
-                std::cout << testResult.first << " / " << scratchChart->first << ": "
-                << (testResult.second == scratchChart->second ? "match" : "don't match") << std::endl;
-        }
     }
     return 0;
 }
