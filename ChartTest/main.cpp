@@ -43,9 +43,9 @@ auto MakeTestCharts(std::string sym, const RawMarketPrice &rmp, std::vector<Test
         
         if(sourceTestToUse == charts.cend())
         {
-            Chart sourceChartFromScratch  { rmp.cbegin(), rmp.cend(), minutes { fromTimeFrame } };
+            Chart sourceChartFromScratch  { rmp.cbegin(), rmp.cend(), minutes { toTimeFrame } };
 
-            charts.push_back({ { fromTimeFrame, 0 }, sourceChartFromScratch }); // save for possible use later
+            charts.push_back({ { toTimeFrame, 0 }, sourceChartFromScratch }); // save for possible use later
             charts.push_back({ { toTimeFrame, fromTimeFrame }, { sourceChartFromScratch.cbegin(), sourceChartFromScratch.cend(), minutes { toTimeFrame } } });
         }
         else
