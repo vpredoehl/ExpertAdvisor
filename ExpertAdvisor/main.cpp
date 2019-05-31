@@ -8,7 +8,7 @@
 
 #include "DiskIO.hpp"
 
-#include "experimental/filesystem" // Had to set User Header Search Path in Project->Build Settings and include as user headers to avoid conflict with released system headers and satisfy the lexical prepreocessor
+#include <filesystem> // Had to set System Header Search Path in Project->Build Settings and include as user headers to avoid conflict with released system headers and satisfy the lexical prepreocessor
 #include <future>
 #include <iostream>
 #include <fstream>
@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <pqxx/pqxx>
 
-using namespace std::experimental::filesystem;
+using namespace std::filesystem;
 using namespace std::chrono;
 
 std::set<std::string> pairs { "AUD/CAD", "AUD/CHF", "AUD/NZD", "AUD/JPY", "AUD/USD", "CAD/CHF", "CAD/JPY", "CHF/JPY",
