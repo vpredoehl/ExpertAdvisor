@@ -14,6 +14,11 @@
 			<key>orderHint</key>
 			<integer>3</integer>
 		</dict>
+		<key>CursorTest.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>5</integer>
+		</dict>
 		<key>ExpertAdvisor Debug.xcscheme</key>
 		<dict>
 			<key>orderHint</key>
@@ -28,6 +33,11 @@
 	<key>SuppressBuildableAutocreation</key>
 	<dict>
 		<key>084505582047962100A0B88F</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>0896003E22A8B9BE0093513A</key>
 		<dict>
 			<key>primary</key>
 			<true/>

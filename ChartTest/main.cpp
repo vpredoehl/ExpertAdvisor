@@ -14,6 +14,7 @@
 #include <vector>
 #include <sstream>
 #include <pqxx/pqxx>
+#include <pqxx/cursor>
 
 using namespace std::chrono;
 using TestTimeFrame = std::pair< unsigned short /* to time frame */, unsigned short /* from time frame */ >;
@@ -90,20 +91,31 @@ int main(int argc, const char * argv[])
     for( auto p : tables )
     {
         std::string rawPriceTableName { p[0].c_str() };
-        pqxx::result ppR = w.exec("select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;");
+        pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned> cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", "mycursor", false);
         RawMarketPrice rmp;
 
-            // take price points from db and put them into RawMarketPrice
-        for( auto row : ppR )
+        pqxx::result ppR;
+        unsigned long idx = 0;
+        const auto step = 1000;
+
+        do
         {
-            auto bid { row["bid"] }, ask { row["ask"] };
-            std::istringstream time { row["time"].c_str() };
-            PricePoint pp;
+            try { ppR = cur.retrieve(idx, idx += step); }
+            catch(pqxx::range_error e) { break; }
 
-            time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
-            rmp.push_back(pp);
-        }
+            for( auto row : ppR )
+            {
+                auto bid { row["bid"] }, ask { row["ask"] };
+                std::istringstream time { row["time"].c_str() };
+                PricePoint pp;
 
+                time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
+                rmp.push_back(pp);
+            }
+        } while(!ppR.empty());
+        std::cout << "rmp size: " << rmp.size() << std::endl;
+
+                // take price points from db and put them into RawMarketPrice
         auto results = MakeTestCharts(rawPriceTableName, rmp, testParams);
         for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
     }
