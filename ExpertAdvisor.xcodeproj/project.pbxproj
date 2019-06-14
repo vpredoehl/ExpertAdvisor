@@ -16,12 +16,6 @@
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
 		084505662048CAB900A0B88F /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
-		0896004022A8B9BE0093513A /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
-		0896004222A8B9BE0093513A /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
-		0896004422A8B9BE0093513A /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
-		0896004522A8B9BE0093513A /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
-		0896004722A8B9BE0093513A /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
-		0896005122A8BB760093513A /* CursorTest.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0896004D22A8B9FC0093513A /* CursorTest.cpp */; };
 		08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		08BF4E5620A9385B00B6F81D /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
 		08FF18FA21A223BF005439FA /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
@@ -29,15 +23,6 @@
 
 /* Begin PBXCopyFilesBuildPhase section */
 		084505572047962100A0B88F /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = /usr/share/man/man1/;
-			dstSubfolderSpec = 0;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 1;
-		};
-		0896004822A8B9BE0093513A /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = /usr/share/man/man1/;
@@ -69,8 +54,6 @@
 		0845056C204BC46900A0B88F /* CandleStick.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = CandleStick.hpp; sourceTree = "<group>"; };
 		0896002D22A86B8A0093513A /* ee.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = ee.pgsql; sourceTree = "<group>"; };
 		0896002E22A86B8A0093513A /* rmp_cursor.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = rmp_cursor.pgsql; sourceTree = "<group>"; };
-		0896004C22A8B9BE0093513A /* CursorTest */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CursorTest; sourceTree = BUILT_PRODUCTS_DIR; };
-		0896004D22A8B9FC0093513A /* CursorTest.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = CursorTest.cpp; sourceTree = "<group>"; };
 		08BF4E4320A9286600B6F81D /* DiskIO.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = DiskIO.cpp; sourceTree = "<group>"; };
 		08BF4E4420A9286600B6F81D /* DiskIO.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = DiskIO.hpp; sourceTree = "<group>"; };
 		08BF4E4F20A934D200B6F81D /* ChartTest */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ChartTest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -83,14 +66,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				080C8C5B219B702700840B79 /* libpq.tbd in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		0896004622A8B9BE0093513A /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				0896004722A8B9BE0093513A /* libpq.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,7 +106,6 @@
 			children = (
 				084505592047962100A0B88F /* ExpertAdvisor */,
 				08BF4E4F20A934D200B6F81D /* ChartTest */,
-				0896004C22A8B9BE0093513A /* CursorTest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -156,7 +130,6 @@
 		0896005022A8BA170093513A /* CursorTest */ = {
 			isa = PBXGroup;
 			children = (
-				0896004D22A8B9FC0093513A /* CursorTest.cpp */,
 			);
 			path = CursorTest;
 			sourceTree = "<group>";
@@ -213,23 +186,6 @@
 			productReference = 084505592047962100A0B88F /* ExpertAdvisor */;
 			productType = "com.apple.product-type.tool";
 		};
-		0896003E22A8B9BE0093513A /* CursorTest */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 0896004922A8B9BE0093513A /* Build configuration list for PBXNativeTarget "CursorTest" */;
-			buildPhases = (
-				0896003F22A8B9BE0093513A /* Sources */,
-				0896004622A8B9BE0093513A /* Frameworks */,
-				0896004822A8B9BE0093513A /* CopyFiles */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = CursorTest;
-			productName = ExpertAdvisor;
-			productReference = 0896004C22A8B9BE0093513A /* CursorTest */;
-			productType = "com.apple.product-type.tool";
-		};
 		08BF4E4E20A934D200B6F81D /* ChartTest */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 08BF4E5320A934D200B6F81D /* Build configuration list for PBXNativeTarget "ChartTest" */;
@@ -260,9 +216,6 @@
 						CreatedOnToolsVersion = 9.2;
 						ProvisioningStyle = Automatic;
 					};
-					0896003E22A8B9BE0093513A = {
-						ProvisioningStyle = Automatic;
-					};
 					08BF4E4E20A934D200B6F81D = {
 						CreatedOnToolsVersion = 9.3.1;
 						ProvisioningStyle = Automatic;
@@ -284,7 +237,6 @@
 			targets = (
 				084505582047962100A0B88F /* ExpertAdvisor */,
 				08BF4E4E20A934D200B6F81D /* ChartTest */,
-				0896003E22A8B9BE0093513A /* CursorTest */,
 			);
 		};
 /* End PBXProject section */
@@ -299,18 +251,6 @@
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
 				0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */,
 				084505662048CAB900A0B88F /* PricePoint.cpp in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		0896003F22A8B9BE0093513A /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				0896004022A8B9BE0093513A /* Chart.cpp in Sources */,
-				0896004222A8B9BE0093513A /* DiskIO.cpp in Sources */,
-				0896005122A8BB760093513A /* CursorTest.cpp in Sources */,
-				0896004422A8B9BE0093513A /* CandleStick.cpp in Sources */,
-				0896004522A8B9BE0093513A /* PricePoint.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -494,42 +434,6 @@
 			};
 			name = Release;
 		};
-		0896004A22A8B9BE0093513A /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = X674V92M37;
-				MACOSX_DEPLOYMENT_TARGET = 10.14;
-				OTHER_LDFLAGS = (
-					"-lc++fs",
-					"-lpqxx",
-				);
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/Toolchains/LLVM8.0.1.xctoolchain/usr/include/c++/v1/";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
-				Xanalyzer = "-I/usr/local/Toolchains/LLVM8.0.1.xctoolchain/usr/include/c++/v1/";
-			};
-			name = Debug;
-		};
-		0896004B22A8B9BE0093513A /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = X674V92M37;
-				MACOSX_DEPLOYMENT_TARGET = 10.14;
-				OTHER_LDFLAGS = (
-					"-lc++fs",
-					"-lpqxx",
-				);
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/Toolchains/LLVM8.0.1.xctoolchain/usr/include/c++/v1/";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
-				Xanalyzer = "-I/usr/local/Toolchains/LLVM8.0.1.xctoolchain/usr/include/c++/v1/";
-			};
-			name = Release;
-		};
 		08BF4E5420A934D200B6F81D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -577,15 +481,6 @@
 			buildConfigurations = (
 				084505612047962100A0B88F /* Debug */,
 				084505622047962100A0B88F /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		0896004922A8B9BE0093513A /* Build configuration list for PBXNativeTarget "CursorTest" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				0896004A22A8B9BE0093513A /* Debug */,
-				0896004B22A8B9BE0093513A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
