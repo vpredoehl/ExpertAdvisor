@@ -44,7 +44,6 @@ auto MakeTestCharts(std::string sym, rmp_result_iterator cb, rmp_result_iterator
         {
             charts.push_back({ { toTimeFrame, 0 }, { cb, ce, minutes { toTimeFrame } } });
             fromScratchIter = charts.end()-1;
-            std::cout << "Chart: " << std::endl << fromScratchIter->second << std::endl;
         }
 
             // make test chart from base chart made from raw market price
@@ -112,7 +111,6 @@ int main(int argc, const char * argv[])
                 // take price points from db and put them into RawMarketPrice
             auto results = MakeTestCharts(rawPriceTableName, ppR.cbegin(), ppR.cend(), testParams);
             for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
-
         }
         catch(pqxx::range_error e) { std::cout << "range exception: " << e.what(); break; }
 

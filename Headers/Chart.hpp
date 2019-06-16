@@ -43,11 +43,7 @@ Chart::Chart(ForwardIter startIter, ForwardIter endIter, std::chrono::minutes du
     auto candleEndIter = endIter;
     auto startTime = startIter->time;
     auto endTime = startIter->time + dur;
-    auto TimeNotInCandle = [&endTime](auto &pp) -> bool
-        {
-            std::cout << "T1: " << pp << " T2: " << endTime << std::endl;
-            return pp.time >= endTime;
-        };
+    auto TimeNotInCandle = [&endTime](auto &pp) -> bool {   return pp.time >= endTime;  };
     float lastPrice = 0;
     
     endIter = startIter;
