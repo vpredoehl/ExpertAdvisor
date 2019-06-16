@@ -72,11 +72,11 @@ using std::endl;
 #include <iomanip>
 ostream& operator<<(ostream &o, CandleStick c)
 {
-    o << "CandleStick: isFiller " << (c.isFiller ? "Yes " : "No ") << c.time << endl;
-    o << "\tHigh: " << std::setw(10) << c.priceInfo.high << endl;
-    o << "\tLow: " << std::setw(10) << c.priceInfo.low << endl;
-    o << "\tOpen: " << std::setw(10) << c.priceInfo.open << endl;
-    o << "\tClose: " << std::setw(10) << c.priceInfo.close << endl;
+    o << "CandleStick: isFiller " << (c.isFiller ? "Yes " : "No ") << c.time;
+    o << "\tHigh: " << std::setw(10) << c.priceInfo.high;
+    o << "\tLow: " << std::setw(10) << c.priceInfo.low;
+    o << "\tOpen: " << std::setw(10) << c.priceInfo.open;
+    o << "\tClose: " << std::setw(10) << c.priceInfo.close;
     return  o;
 }
 
