@@ -24,28 +24,28 @@ struct rmp_result_iterator : pqxx::const_result_iterator
 {
     using value_type = PricePoint;
 
-    rmp_result_iterator(pqxx::const_result_iterator i) : const_result_iterator { i }
-    {
-        auto row = *i;
-
-        if(row["time"].c_str() == nullptr) return;
-
-        auto bid { row["bid"] }, ask { row["ask"] };
-        std::istringstream time { row["time"].c_str() };
-
-        time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
-        std::cout << "Time: " << row["time"].c_str() << " " << pp.time << std::endl;
-    }
+    rmp_result_iterator(pqxx::const_result_iterator i) : const_result_iterator { i } {}
     rmp_result_iterator() = delete;
 
-    const PricePoint* operator->() const { return &pp; }
-    bool operator>=(rmp_result_iterator i) { return pp.time >= i.pp.time; }
-    const PricePoint operator*() const { return pp; }
+    const PricePoint* operator->() const { ExractPP(); return &pp; }
+    bool operator>=(rmp_result_iterator i) { return ExractPP().time >= i.ExractPP().time; }
+    const PricePoint operator*() const { return ExractPP(); }
 
 private:
-    PricePoint pp;
-};
+    mutable PricePoint pp;
 
-//auto operator<(pqxx::row a, pqxx::row b) -> bool {   return false; }
+        auto ExractPP() const -> PricePoint
+        {
+            auto row = const_result_iterator::operator*();
+
+            if(row["time"].c_str() == nullptr) return PricePoint();
+
+            auto bid { row["bid"] }, ask { row["ask"] };
+            std::istringstream time { row["time"].c_str() };
+
+            time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
+            return pp;
+        }
+};
 
 #endif /* ResultIter_hpp */
