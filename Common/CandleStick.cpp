@@ -16,12 +16,12 @@ CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::
     time = t;
 }
 
-auto operator-(RawMarketPrice::const_iterator i, int n)
+auto operator-(rmp_result_iterator i, int n)
 {
     for (int j=0; j<1; ++j) --i;
     return  i;
 }
-CandlePrice::CandlePrice(RawMarketPrice::const_iterator s, RawMarketPrice::const_iterator e)
+CandlePrice::CandlePrice(rmp_result_iterator s, rmp_result_iterator e)
 : open { *s }, close { *(e-1) }
 {
     auto mm = std::minmax_element(s, e);
