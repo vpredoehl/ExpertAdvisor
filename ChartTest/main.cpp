@@ -92,7 +92,9 @@ int main(int argc, const char * argv[])
     for( auto p : tables )
     {
         std::string rawPriceTableName { p[0].c_str() };
-        Cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", "mycursor", false);
+//        Cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
+//        rmp_cursor { &cur };
+        rmp_cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
         RawMarketPrice rmp;
 
         unsigned long idx = 0;
@@ -103,7 +105,7 @@ int main(int argc, const char * argv[])
 //            try { ppR = cur.retrieve(idx, idx += step); }
         try
         {
-            pqxx::result ppR = cur.retrieve(0, __UINT32_MAX__);
+            pqxx::result ppR = cur;
 
             std::cout << "rmp size: " << rmp.size() << std::endl;
             std::cout << "ppR size: " << ppR.size() << std::endl;

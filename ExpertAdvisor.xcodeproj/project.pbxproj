@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		080C8C5B219B702700840B79 /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
-		0820370422B43B0D0025307B /* rmp_result_iterator.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_result_iterator.cpp */; };
+		0820370422B43B0D0025307B /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
 		082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
@@ -45,7 +45,7 @@
 
 /* Begin PBXFileReference section */
 		080C8C5A219B702700840B79 /* libpq.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpq.tbd; path = usr/lib/libpq.tbd; sourceTree = SDKROOT; };
-		0820370222B43B0D0025307B /* rmp_result_iterator.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = rmp_result_iterator.cpp; path = Common/rmp_result_iterator.cpp; sourceTree = SOURCE_ROOT; };
+		0820370222B43B0D0025307B /* rmp_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = rmp_cursor.cpp; path = Common/rmp_cursor.cpp; sourceTree = SOURCE_ROOT; };
 		0820370322B43B0D0025307B /* rmp_result_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = rmp_result_iterator.hpp; path = Common/rmp_result_iterator.hpp; sourceTree = SOURCE_ROOT; };
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
@@ -156,7 +156,7 @@
 				0845056B204BC46900A0B88F /* CandleStick.cpp */,
 				08305973204E2A650066E86F /* Chart.cpp */,
 				08BF4E4320A9286600B6F81D /* DiskIO.cpp */,
-				0820370222B43B0D0025307B /* rmp_result_iterator.cpp */,
+				0820370222B43B0D0025307B /* rmp_cursor.cpp */,
 				0896002C22A86B1E0093513A /* plpgsql */,
 			);
 			name = Source;
@@ -265,7 +265,7 @@
 			files = (
 				082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */,
 				082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */,
-				0820370422B43B0D0025307B /* rmp_result_iterator.cpp in Sources */,
+				0820370422B43B0D0025307B /* rmp_cursor.cpp in Sources */,
 				082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */,
 				082BAC9520A93F760003EA86 /* Chart.cpp in Sources */,
 				08BF4E5620A9385B00B6F81D /* main.cpp in Sources */,
@@ -451,7 +451,8 @@
 				LD_MAP_FILE_PATH = "";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/include/ /usr/local/Toolchains/LLVM8.0.1.xctoolchain/usr/include/c++/v1/";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 /usr/local/include/pqxx/";
+				Xanalyzer = "-I/usr/local/include/c++/v1 /usr/local/include/pqxx";
 			};
 			name = Debug;
 		};
@@ -466,7 +467,8 @@
 				LD_MAP_FILE_PATH = "";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/include/ /usr/local/Toolchains/LLVM8.0.1.xctoolchain/usr/include/c++/v1/";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
+				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 /usr/local/include/pqxx/";
+				Xanalyzer = "-I/usr/local/include/c++/v1 /usr/local/include/pqxx";
 			};
 			name = Release;
 		};

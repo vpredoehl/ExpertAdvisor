@@ -11,12 +11,9 @@
 
 #include "PricePoint.hpp"
 
+#include <iostream>
 #include <pqxx/pqxx>
 #include <pqxx/cursor>
-
-#include <iostream>
-
-using Cursor = pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned>;
 
 
     // pqxx postgresql cursor iterator to be used with Chart template constructor
@@ -46,6 +43,27 @@ private:
             time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
             return pp;
         }
+};
+
+using Cursor = pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned>;
+class rmp_cursor : Cursor
+{
+    const unsigned sliceSize = 1000;
+    unsigned long idx = 0;
+    pqxx::result cur_slice;
+    Cursor *cur;    // kinda stupid, but can't construct base class Cursor from parameters, so will have to pass in as a pointer
+
+public:
+//    rmp_cursor(Cursor *c, unsigned long posn = 0)
+//    : idx { posn }, cur { c } {}
+    rmp_cursor(pqxx::work &w, std::string query, std::string curName,  unsigned long posn = 0)
+        : idx { posn }, Cursor { static_cast<pqxx::transaction_base&>(w), query, curName, false }
+            {   cur_slice = retrieve(0,sliceSize);  }
+//    : idx { posn }, Cursor { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false } {}
+
+    auto next(unsigned long count = 1) -> rmp_result_iterator;
+
+    operator pqxx::result() {   return cur_slice;   }
 };
 
 #endif /* ResultIter_hpp */
