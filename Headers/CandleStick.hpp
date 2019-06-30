@@ -27,7 +27,7 @@ struct CandlePrice
     float high, low, open, close;
     
     CandlePrice(PricePoint p)    {   operator=(static_cast<float>(p));  }
-    CandlePrice(rmp_result_iterator, rmp_result_iterator);
+    CandlePrice(rmp_stream_iterator, rmp_stream_iterator);
     CandlePrice(ChartCandle::const_iterator, ChartCandle::const_iterator);
     
     CandlePrice(float f) {   operator=(f);   }
@@ -49,7 +49,7 @@ class CandleStick
     friend auto FindCloseThatIsNotFiller(ChartCandle::const_iterator s, ChartCandle::const_iterator e);
     friend std::ostream& operator<<(std::ostream &o, CandleStick c);
 public:
-    CandleStick(PriceTP candleTime, rmp_result_iterator start, rmp_result_iterator end)
+    CandleStick(PriceTP candleTime, rmp_stream_iterator start, rmp_stream_iterator end)
         :   priceInfo { start, end }   {   time = candleTime;   }
     CandleStick(PriceTP candleTime, ChartCandle::const_iterator start, ChartCandle::const_iterator end);
 

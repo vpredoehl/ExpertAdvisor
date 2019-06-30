@@ -29,6 +29,7 @@ public:
     
     auto cbegin() const -> ChartCandle::const_iterator    {   return candles.cbegin();    }
     auto cend() const -> ChartCandle::const_iterator  {   return candles.cend();  }
+    auto size() const -> ChartCandle::size_type { return candles.size();    }
     void clear() noexcept   {   candles.clear();    }
 
     auto operator==(const Chart& ch) const -> bool;

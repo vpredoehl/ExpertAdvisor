@@ -28,7 +28,7 @@ std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
     return o;
 }
 
-auto MakeTestCharts(std::string sym, rmp_result_iterator cb, rmp_result_iterator ce, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
+auto MakeTestCharts(std::string sym, rmp_stream_iterator cb, rmp_stream_iterator ce, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
 {
     std::vector<TestChartData> charts;
     std::vector<TestResultData> results;
@@ -42,8 +42,12 @@ auto MakeTestCharts(std::string sym, rmp_result_iterator cb, rmp_result_iterator
         auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
         if(charts.cend() == fromScratchIter)
         {
+//            std::cout << "result size: " << ce - cb << std::endl;
+            std::for_each(cb, ce, [](PricePoint pp) {   std::cout << pp << std::endl;   });
             charts.push_back({ { toTimeFrame, 0 }, { cb, ce, minutes { toTimeFrame } } });
             fromScratchIter = charts.end()-1;
+            std::cout << sym << " size: " << fromScratchIter->second.size() << std::endl;
+            std::cout << fromScratchIter->second << std::endl;
         }
 
             // make test chart from base chart made from raw market price
@@ -92,40 +96,34 @@ int main(int argc, const char * argv[])
     for( auto p : tables )
     {
         std::string rawPriceTableName { p[0].c_str() };
-//        Cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
-//        rmp_cursor { &cur };
-        rmp_cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
+//        rmp_cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
+//        pqxx::icursorstream ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
+        rmp_stream ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
+        pqxx::result r;
+        PricePoint pp;
         RawMarketPrice rmp;
 
-        unsigned long idx = 0;
-        const auto step = 1000;
-
-//        do
+//        while(ic >> r)
 //        {
-//            try { ppR = cur.retrieve(idx, idx += step); }
+//            std::cout << "result size: " << r.size() << std::endl;
+//            std::for_each(r.cbegin(), r.cend(), [](pqxx::const_result_iterator i)
+//                          {
+//                              rmp_result_iterator pp { i };
+//                              std::cout << *pp << std::endl;
+//                          });
+//        }
+
         try
         {
-            pqxx::result ppR = cur;
+//            rmp_result ppR { cur };
 
-            std::cout << "rmp size: " << rmp.size() << std::endl;
-            std::cout << "ppR size: " << ppR.size() << std::endl;
+//            std::cout << "rmp_cursor size: " << cur.size() << std::endl;
 
                 // take price points from db and put them into RawMarketPrice
-            auto results = MakeTestCharts(rawPriceTableName, ppR.cbegin(), ppR.cend(), testParams);
+            auto results = MakeTestCharts(rawPriceTableName, ic.cbegin(), ic.cend(), testParams);
             for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
         }
         catch(pqxx::range_error e) { std::cout << "range exception: " << e.what(); break; }
-
-//            for( auto row : ppR )
-//            {
-//                auto bid { row["bid"] }, ask { row["ask"] };
-//                std::istringstream time { row["time"].c_str() };
-//                PricePoint pp;
-//
-//                time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
-//                rmp.push_back(pp);
-//            }
-//        } while(!ppR.empty());
     }
     return 0;
 }
