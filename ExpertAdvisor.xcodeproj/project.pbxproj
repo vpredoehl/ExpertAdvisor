@@ -46,7 +46,7 @@
 /* Begin PBXFileReference section */
 		080C8C5A219B702700840B79 /* libpq.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpq.tbd; path = usr/lib/libpq.tbd; sourceTree = SDKROOT; };
 		0820370222B43B0D0025307B /* rmp_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = rmp_cursor.cpp; path = Common/rmp_cursor.cpp; sourceTree = SOURCE_ROOT; };
-		0820370322B43B0D0025307B /* rmp_result_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = rmp_result_iterator.hpp; path = Common/rmp_result_iterator.hpp; sourceTree = SOURCE_ROOT; };
+		0820370322B43B0D0025307B /* rmp_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = rmp_cursor_iterator.hpp; path = Common/rmp_cursor_iterator.hpp; sourceTree = SOURCE_ROOT; };
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -144,7 +144,7 @@
 				0845056C204BC46900A0B88F /* CandleStick.hpp */,
 				08305974204E2A650066E86F /* Chart.hpp */,
 				08BF4E4420A9286600B6F81D /* DiskIO.hpp */,
-				0820370322B43B0D0025307B /* rmp_result_iterator.hpp */,
+				0820370322B43B0D0025307B /* rmp_cursor_iterator.hpp */,
 			);
 			path = Headers;
 			sourceTree = "<group>";

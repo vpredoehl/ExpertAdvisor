@@ -8,7 +8,7 @@
 
 #include "DiskIO.hpp"
 #include "Chart.hpp"
-#include "rmp_result_iterator.hpp"
+#include "rmp_cursor_iterator.hpp"
 
 #include <filesystem>
 #include <set>
@@ -28,7 +28,7 @@ std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
     return o;
 }
 
-auto MakeTestCharts(std::string sym, rmp_stream_iterator cb, rmp_stream_iterator ce, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
+auto MakeTestCharts(std::string sym, rmp_cursor_iterator cb, rmp_cursor_iterator ce, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
 {
     std::vector<TestChartData> charts;
     std::vector<TestResultData> results;
@@ -42,8 +42,8 @@ auto MakeTestCharts(std::string sym, rmp_stream_iterator cb, rmp_stream_iterator
         auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
         if(charts.cend() == fromScratchIter)
         {
-//            std::cout << "result size: " << ce - cb << std::endl;
-            std::for_each(cb, ce, [](PricePoint pp) {   std::cout << pp << std::endl;   });
+            std::cout << "cursor set size: " << ce - cb << std::endl;
+//            std::for_each(cb, ce, [](PricePoint pp) {   std::cout << pp << std::endl;   });
             charts.push_back({ { toTimeFrame, 0 }, { cb, ce, minutes { toTimeFrame } } });
             fromScratchIter = charts.end()-1;
             std::cout << sym << " size: " << fromScratchIter->second.size() << std::endl;
@@ -98,7 +98,7 @@ int main(int argc, const char * argv[])
         std::string rawPriceTableName { p[0].c_str() };
 //        rmp_cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
 //        pqxx::icursorstream ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
-        rmp_stream ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
+        rmp_cursor ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
         pqxx::result r;
         PricePoint pp;
         RawMarketPrice rmp;
