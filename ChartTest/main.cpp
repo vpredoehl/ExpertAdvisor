@@ -96,31 +96,12 @@ int main(int argc, const char * argv[])
     for( auto p : tables )
     {
         std::string rawPriceTableName { p[0].c_str() };
-//        rmp_cursor cur(w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_cursor", false);
-//        pqxx::icursorstream ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
-        rmp_cursor ic { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
-        pqxx::result r;
-        PricePoint pp;
-        RawMarketPrice rmp;
-
-//        while(ic >> r)
-//        {
-//            std::cout << "result size: " << r.size() << std::endl;
-//            std::for_each(r.cbegin(), r.cend(), [](pqxx::const_result_iterator i)
-//                          {
-//                              rmp_result_iterator pp { i };
-//                              std::cout << *pp << std::endl;
-//                          });
-//        }
+        rmp_cursor cur { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
 
         try
         {
-//            rmp_result ppR { cur };
-
-//            std::cout << "rmp_cursor size: " << cur.size() << std::endl;
-
                 // take price points from db and put them into RawMarketPrice
-            auto results = MakeTestCharts(rawPriceTableName, ic.cbegin(), ic.cend(), testParams);
+            auto results = MakeTestCharts(rawPriceTableName, cur.cbegin(), cur.cend(), testParams);
             for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
         }
         catch(pqxx::range_error e) { std::cout << "range exception: " << e.what(); break; }
