@@ -33,11 +33,12 @@ struct rmp_cursor_iterator
     const PricePoint* operator->() const { ExractPP(); return &pp; }
     const PricePoint operator*() const { return ExractPP(); }
 
-    bool operator>=(rmp_cursor_iterator i) { return ExractPP().time >= i.ExractPP().time; }
-    bool operator!=(rmp_cursor_iterator i)  {   return i.idx != idx;   }
-    bool operator==(rmp_cursor_iterator i)  {   return i.idx == idx;   }
+    bool operator>=(rmp_cursor_iterator i) const { return ExractPP().time >= i.ExractPP().time; }
+    bool operator!=(rmp_cursor_iterator i) const  {   return i.idx != idx;   }
+    bool operator==(rmp_cursor_iterator i) const  {   return i.idx == idx;   }
 
-    auto operator-(rmp_cursor_iterator i)   {   return idx - i.idx; }
+    auto operator-(rmp_cursor_iterator i) const   {   return idx - i.idx; }
+    auto operator-(int n) const {   return rmp_cursor_iterator { cur, idx - n, false }; }
 
     auto operator--() -> rmp_cursor_iterator    {   return { cur, --idx, false }; }
     auto operator++() -> rmp_cursor_iterator;

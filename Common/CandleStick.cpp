@@ -16,11 +16,6 @@ CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::
     time = t;
 }
 
-auto operator-(rmp_cursor_iterator i, int n)
-{
-    for (int j=0; j<1; ++j) --i;
-    return  i;
-}
 CandlePrice::CandlePrice(rmp_cursor_iterator s, rmp_cursor_iterator e)
 : open { *s }, close { *(e-1) }
 {
