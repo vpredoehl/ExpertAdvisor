@@ -49,6 +49,7 @@
 		0820370322B43B0D0025307B /* rmp_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = rmp_cursor_iterator.hpp; path = Common/rmp_cursor_iterator.hpp; sourceTree = SOURCE_ROOT; };
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
+		0831355B22CAFED90089B824 /* create_index.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = create_index.pgsql; sourceTree = SOURCE_ROOT; };
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
 		0845055C2047962100A0B88F /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
@@ -124,6 +125,7 @@
 		0896002C22A86B1E0093513A /* plpgsql */ = {
 			isa = PBXGroup;
 			children = (
+				0831355B22CAFED90089B824 /* create_index.pgsql */,
 				0896002E22A86B8A0093513A /* rmp_cursor.pgsql */,
 				0896002D22A86B8A0093513A /* ee.pgsql */,
 			);
