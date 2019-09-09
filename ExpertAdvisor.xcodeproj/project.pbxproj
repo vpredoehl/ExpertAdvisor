@@ -454,7 +454,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/include/ /usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
 				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 /usr/local/include/pqxx/";
-				Xanalyzer = "-I/usr/local/include/c++/v1 /usr/local/include/pqxx";
+				Xanalyzer = "-I/usr/local/include/pqxx";
 			};
 			name = Debug;
 		};
@@ -470,7 +470,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/include/ /usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
 				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 /usr/local/include/pqxx/";
-				Xanalyzer = "-I/usr/local/include/c++/v1 /usr/local/include/pqxx";
+				Xanalyzer = "-I/usr/local/include/pqxx";
 			};
 			name = Release;
 		};
