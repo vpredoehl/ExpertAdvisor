@@ -14,21 +14,35 @@
 #include <pqxx/pqxx>
 #include <pqxx/cursor>
 
+const auto block_size = 10000;
 
     // pqxx postgresql cursor iterator to be used with Chart template constructor
 
 class rmp_cursor;
+
+struct rmp_result_block :  pqxx::result
+{
+    pqxx::result::difference_type fromIdx;
+
+    rmp_result_block(rmp_cursor *cur, pqxx::result::difference_type idx);
+
+    auto IsCached(pqxx::result::difference_type idx) {   return idx >= fromIdx && idx < fromIdx + block_size;   }
+    auto retrieve(pqxx::result::difference_type idx) -> PricePoint;
+};
+
 struct rmp_cursor_iterator
 {
     using value_type = PricePoint;
     using iterator_category = std::random_access_iterator_tag;
-    using difference_type = unsigned long;
+    using difference_type = signed long;
+
+    static rmp_result_block *blk;
 
     rmp_cursor *cur;
-    unsigned long idx;
+    difference_type idx;
     bool isEnd;
 
-    rmp_cursor_iterator(rmp_cursor *c,unsigned long posn, bool end) : cur { c }  {   isEnd = end;    idx = posn;   }
+    rmp_cursor_iterator(rmp_cursor *c,difference_type posn, bool end) : cur { c }  {   isEnd = end;    idx = posn;   }
 
     const PricePoint* operator->() const { ExractPP(); return &pp; }
     const PricePoint operator*() const { return ExractPP(); }
@@ -56,7 +70,7 @@ template<> struct std::iterator_traits<rmp_cursor_iterator>
 };
 
 using Cursor = pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned>;
-struct rmp_cursor : private Cursor
+struct rmp_cursor :  Cursor
 {
     rmp_cursor(pqxx::work &w, std::string query, std::string curName,  unsigned long posn = 0)
         : Cursor { static_cast<pqxx::transaction_base&>(w), query, curName, false } {}
@@ -65,9 +79,7 @@ struct rmp_cursor : private Cursor
     auto size() -> Cursor::size_type { return Cursor::size(); }
 
     auto cbegin() -> rmp_cursor_iterator {   return { this, 0, false }; }
-    auto cend()  -> rmp_cursor_iterator {  return { this, Cursor::size(), true };  }
-
-    friend class rmp_cursor_iterator;
+    auto cend()  -> rmp_cursor_iterator {  return { this, static_cast<difference_type>(Cursor::size()), true };  }
 };
 
 
