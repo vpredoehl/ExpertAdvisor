@@ -31,10 +31,13 @@ ostream& operator<<(ostream &o, const Chart &ch)
         case Chart::monthly:
             o << "monthly" << endl;
     }
-    std::for_each(ch.candles.cbegin(), ch.candles.cend(), [&o](CandleStick c)
+    auto closeSum = 0.0;
+    std::for_each(ch.candles.cbegin(), ch.candles.cend(), [&o, &closeSum](CandleStick c)
                   {
+                      closeSum += c.closePrice();
                       o << c << std::endl;
                   });
+    o << "close sum: " << closeSum << std::endl;
     return o;
 }
 
