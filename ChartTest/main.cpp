@@ -14,6 +14,7 @@
 #include <set>
 #include <vector>
 #include <sstream>
+#include <future>
 #include <pqxx/pqxx>
 
 using namespace std::chrono;
@@ -93,19 +94,36 @@ int main(int argc, const char * argv[])
     }
     std::sort(testParams.begin(), testParams.end(), [](auto &t1, auto &t2)   {   return t1.first == t2.first ? t1.second < t2.second : t1.first < t2.first;   });
 
-    for( auto p : tables )
+    std::list<std::future<std::vector<TestResultData>>> taskR;
+    try
     {
-        std::string rawPriceTableName { p[0].c_str() };
-        rmp_cursor cur { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
+        for( auto p : tables )
+        {
+            std::string rawPriceTableName { p[0].c_str() };
+            rmp_cursor cur { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
 
+                // take price points from db and put them into RawMarketPrice
+            taskR.push_front(std::async(std::launch::async, MakeTestCharts, rawPriceTableName, cur.cbegin(), cur.cend(), testParams));
+        }
+    }
+    catch(pqxx::failure e)  {   std::cout << "pqxx::failure: " << e.what() << std::endl;    }
+
+    do
         try
         {
-                // take price points from db and put them into RawMarketPrice
-            auto results = MakeTestCharts(rawPriceTableName, cur.cbegin(), cur.cend(), testParams);
+            auto FutureReady = [](auto &fu) -> bool
+            {   return std::future_status::ready == fu.wait_for(std::chrono::milliseconds{100});    };
+again:
+            auto iter = std::find_if(taskR.begin(), taskR.end(), FutureReady);
+            if(iter == taskR.cend())    goto again;
+
+            std::vector<TestResultData> results = iter->get();  // or throw exception passed from thread
             for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
+
         }
         catch(pqxx::range_error e) { std::cout << "range exception: " << e.what(); break; }
-    }
+    while (taskR.size() > 0);
+
     return 0;
 }
  
