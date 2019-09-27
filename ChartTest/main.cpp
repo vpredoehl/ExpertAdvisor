@@ -29,10 +29,15 @@ std::ostream& operator<<(std::ostream& o, TestTimeFrame p)
     return o;
 }
 
-auto MakeTestCharts(std::string sym, rmp_cursor_iterator cb, rmp_cursor_iterator ce, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
+auto MakeTestCharts(std::string sym, std::string query, std::vector<TestTimeFrame> testParams) -> std::vector<TestResultData>
 {
     std::vector<TestChartData> charts;
     std::vector<TestResultData> results;
+
+    pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::work w { c };
+    rmp_cursor cur { w, query, sym + "_stream" };
+    rmp_cursor_iterator cb = cur.cbegin(), ce = cur.cend();
 
     for( auto tP : testParams )
     {
@@ -100,10 +105,9 @@ int main(int argc, const char * argv[])
         for( auto p : tables )
         {
             std::string rawPriceTableName { p[0].c_str() };
-            rmp_cursor cur { w, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", rawPriceTableName + "_stream" };
 
                 // take price points from db and put them into RawMarketPrice
-            taskR.push_front(std::async(std::launch::async, MakeTestCharts, rawPriceTableName, cur.cbegin(), cur.cend(), testParams));
+            taskR.push_front(std::async(std::launch::async, MakeTestCharts, rawPriceTableName, "select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;", testParams));
         }
     }
     catch(pqxx::failure e)  {   std::cout << "pqxx::failure: " << e.what() << std::endl;    }
