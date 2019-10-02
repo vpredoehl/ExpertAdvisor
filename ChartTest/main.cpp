@@ -118,6 +118,8 @@ again:
             if(iter == taskR.cend())    goto again;
 
             std::vector<TestResultData> results = iter->get();  // or throw exception passed from thread
+
+            taskR.erase(iter);
             for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
 
         }
