@@ -36,7 +36,7 @@ struct rmp_cursor_iterator
     using iterator_category = std::random_access_iterator_tag;
     using difference_type = signed long;
 
-    static rmp_result_block *blk;
+    mutable std::shared_ptr<rmp_result_block> blk;
 
     rmp_cursor *cur;
     difference_type idx;
