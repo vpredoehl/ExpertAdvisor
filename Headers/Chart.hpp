@@ -18,14 +18,15 @@ class Chart
 {
     enum TimeFrame : char   {   minutely, hourly, daily, weekly, monthly  };
 
-    std::string sym;
     TimeFrame chartTF = minutely;
     ChartCandle candles;
     
     friend std::ostream& operator<<(std::ostream &o, const Chart&);
 public:
+    std::string sym;
+
     template<class ForwardIter>
-    Chart(ForwardIter s, ForwardIter e, std::chrono::minutes);
+    Chart(std::string sym, ForwardIter s, ForwardIter e, std::chrono::minutes);
     
     auto cbegin() const -> ChartCandle::const_iterator    {   return candles.cbegin();    }
     auto cend() const -> ChartCandle::const_iterator  {   return candles.cend();  }
@@ -39,7 +40,8 @@ inline auto operator!=(const Chart& c1, const Chart& c2) -> bool {   return !(c1
 std::ostream& operator<<(std::ostream &o, const Chart&);
 
 template<class ForwardIter>
-Chart::Chart(ForwardIter startIter, ForwardIter endIter, std::chrono::minutes dur)
+Chart::Chart(std::string sym, ForwardIter startIter, ForwardIter endIter, std::chrono::minutes dur)
+: sym { sym }
 {
     auto candleEndIter = endIter;
     auto startTime = startIter->time;

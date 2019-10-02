@@ -48,12 +48,12 @@ auto MakeTestCharts(std::string sym, std::string query, std::vector<TestTimeFram
         auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
         if(charts.cend() == fromScratchIter)
         {
-            charts.push_back({ { toTimeFrame, 0 }, { cb, ce, minutes { toTimeFrame } } });
+            charts.push_back({ { toTimeFrame, 0 }, { sym, cb, ce, minutes { toTimeFrame } } });
             fromScratchIter = charts.end()-1;
         }
 
             // make test chart from base chart made from raw market price
-        TestChartData lastTestChart { { toTimeFrame, fromTimeFrame }, { fromScratchIter->second.cbegin(), fromScratchIter->second.cend(), minutes { toTimeFrame } } };
+        TestChartData lastTestChart { { toTimeFrame, fromTimeFrame }, { sym, fromScratchIter->second.cbegin(), fromScratchIter->second.cend(), minutes { toTimeFrame } } };
         if(toTimeFrame == fromScratchIter->first.first)
         {
             bool passed = lastTestChart.second == fromScratchIter->second;
@@ -120,7 +120,7 @@ again:
             std::vector<TestResultData> results = iter->get();  // or throw exception passed from thread
 
             taskR.erase(iter);
-            for( auto tR : results )    std::cout << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
+            for( auto tR : results )    std::cout << "Test symbol: " << tR.second.second.sym << "  Chart: " << tR.second.first << (tR.first ? " passed" : " failed") << std::endl;
 
         }
         catch(pqxx::range_error e) { std::cout << "range exception: " << e.what(); break; }
