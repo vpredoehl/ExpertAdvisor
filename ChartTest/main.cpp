@@ -48,12 +48,8 @@ auto MakeTestCharts(std::string sym, std::string query, std::vector<TestTimeFram
         auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
         if(charts.cend() == fromScratchIter)
         {
-            std::cout << "cursor set size: " << ce - cb << std::endl;
-//            std::for_each(cb, ce, [](PricePoint pp) {   std::cout << pp << std::endl;   });
             charts.push_back({ { toTimeFrame, 0 }, { cb, ce, minutes { toTimeFrame } } });
             fromScratchIter = charts.end()-1;
-            std::cout << sym << " size: " << fromScratchIter->second.size() << std::endl;
-            std::cout << fromScratchIter->second << std::endl;
         }
 
             // make test chart from base chart made from raw market price
