@@ -17,6 +17,7 @@
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
 		084505662048CAB900A0B88F /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
+		086FD5A623AAD7C300C59E03 /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
 		08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		08BF4E5620A9385B00B6F81D /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
 		08FF18FA21A223BF005439FA /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
@@ -256,6 +257,7 @@
 				08305975204E2A650066E86F /* Chart.cpp in Sources */,
 				08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */,
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
+				086FD5A623AAD7C300C59E03 /* rmp_cursor.cpp in Sources */,
 				0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */,
 				084505662048CAB900A0B88F /* PricePoint.cpp in Sources */,
 			);
@@ -330,7 +332,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "";
 				LIBRARY_SEARCH_PATHS = /usr/local/lib;
-				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
@@ -392,7 +394,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "";
 				LIBRARY_SEARCH_PATHS = /usr/local/lib;
-				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
 				OTHER_LDFLAGS = (
@@ -413,7 +415,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
-				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				OTHER_LDFLAGS = (
 					"-lc++fs",
 					"-lpqxx",
@@ -432,7 +434,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X674V92M37;
-				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				OTHER_LDFLAGS = (
 					"-lc++fs",
 					"-lpqxx",

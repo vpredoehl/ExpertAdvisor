@@ -23,7 +23,7 @@ auto SymsFromDirectory(std::string dirPath) -> SymbolData;
 
 const std::string forexPath = "/Volumes/Forex Data/ratedata.gaincapital.com/2018/03 March";
 const std::string savePath = "/Volumes/Forex Data/";
-const std::string dbName = "forex";
+const std::string dbName = "forexdb";
 const auto defaultMaxTasks = 6;
 
 #endif /* DiskIO_hpp */
