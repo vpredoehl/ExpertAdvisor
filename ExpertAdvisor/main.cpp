@@ -81,7 +81,7 @@ int main(int argc, const char * argv[]) {
         auto posn = fileN.find(fileSepChar);
 
             // check if file is in pairs list
-        fileN.replace(posn, 1, &pairSepChar);
+        fileN.replace(posn, 1, &pairSepChar, 1);
         fileN.erase(fileN.find(fileSepChar));   // remove _Week*.csv
         if(pairs.find(fileN) == pairs.end()) continue;
 
