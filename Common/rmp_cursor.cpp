@@ -34,3 +34,31 @@ auto rmp_cursor_iterator::ExractPP() const -> PricePoint
 }
 
 auto rmp_cursor_iterator::operator++() -> rmp_cursor_iterator      {   return { cur, ++idx, idx == cur->size() }; }
+
+unsigned long rmp_forward_iterator::magic = 0;
+rmp_forward_iterator::rmp_forward_iterator(rmp_cursor_stream *c, bool end)
+    : cur { c }
+{
+    if(!(isSTLEnd = end))
+    {
+        uniqID = magic++;
+        isSTLEnd = !ReadPP();
+    }
+}
+
+bool rmp_forward_iterator::ReadPP()
+{
+    pqxx::result r;
+    bool lineRead = *cur >> r;
+
+    if(lineRead)
+    {
+        auto bid { r[0]["bid"] }, ask { r[0]["ask"] };
+        std::istringstream time { r[0]["time"].c_str() };
+
+        time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
+//        std::cout << pp.time << "\t" << pp.ask << '\t' << pp.bid << std::endl;
+    }
+    return lineRead;
+}
+

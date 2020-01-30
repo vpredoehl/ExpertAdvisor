@@ -51,10 +51,6 @@ struct rmp_cursor_iterator
     bool operator!=(rmp_cursor_iterator i) const  {   return i.idx != idx;   }
     bool operator==(rmp_cursor_iterator i) const  {   return i.idx == idx;   }
 
-    auto operator-(rmp_cursor_iterator i) const   {   return idx - i.idx; }
-    auto operator-(int n) const {   return rmp_cursor_iterator { cur, idx - n, false }; }
-
-    auto operator--() -> rmp_cursor_iterator    {   return { cur, --idx, false }; }
     auto operator++() -> rmp_cursor_iterator;
 
 private:
@@ -82,5 +78,50 @@ struct rmp_cursor :  Cursor
     auto cend()  -> rmp_cursor_iterator {  return { this, static_cast<difference_type>(Cursor::size()), true };  }
 };
 
+struct rmp_cursor_stream;
+struct rmp_forward_iterator
+{
+    using value_type = PricePoint;
+    using iterator_category = std::forward_iterator_tag;
+    using difference_type = signed long;
+
+    rmp_forward_iterator(rmp_cursor_stream *c, bool end);
+
+    const PricePoint operator*() const    {   return pp;  }
+    const PricePoint* operator->() const    {   return &pp;  }
+
+    bool operator!=(rmp_forward_iterator i) const  {   return !operator==(i);   }
+    bool operator==(rmp_forward_iterator i) const
+    {
+        if(!isSTLEnd && !i.isSTLEnd) return uniqID == i.uniqID;
+        return isSTLEnd == i.isSTLEnd;
+    }
+
+    auto operator++() -> rmp_forward_iterator   {   isSTLEnd = !ReadPP();    return *this;   }
+
+private:
+    static unsigned long magic;
+    unsigned long uniqID;
+    rmp_cursor_stream *cur;
+    PricePoint pp;
+    bool isSTLEnd;
+
+    bool ReadPP();  // returns true if row was read
+};
+template<> struct std::iterator_traits<rmp_forward_iterator>
+{
+    using value_type = rmp_forward_iterator::value_type;
+    using iterator_category = std::forward_iterator_tag;
+};
+
+
+struct rmp_cursor_stream : public pqxx::icursorstream
+{
+    rmp_cursor_stream(pqxx::work &w, std::string query, std::string curName)
+    : pqxx::icursorstream { static_cast<pqxx::transaction_base&>(w), query, curName } {}
+
+    auto cbegin() -> rmp_forward_iterator { return { this, false }; }
+    auto cend() -> rmp_forward_iterator   {   return { this, true }; }
+};
 
 #endif /* ResultIter_hpp */

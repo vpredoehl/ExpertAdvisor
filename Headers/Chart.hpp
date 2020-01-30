@@ -46,13 +46,13 @@ Chart::Chart(std::string sym, ForwardIter startIter, ForwardIter endIter, std::c
     auto candleEndIter = endIter;
     auto startTime = startIter->time;
     auto endTime = startIter->time + dur;
-    auto TimeNotInCandle = [&endTime](auto &pp) -> bool {   return pp.time >= endTime;  };
+    auto AdjacentCandlesInRange = [&endTime](auto &pp1, auto &pp2)  {   return pp1.time < endTime && pp2.time >= endTime;   };
     float lastPrice = 0;
     
     endIter = startIter;
     do
     {
-        CandleStick cs(startTime, startIter, endIter = std::find_if(startIter, candleEndIter, TimeNotInCandle));
+        CandleStick cs(startTime, startIter, endIter = std::adjacent_find(startIter, candleEndIter, AdjacentCandlesInRange));
         
         if(startIter == endIter)   cs = lastPrice;
         startIter = endIter;

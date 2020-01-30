@@ -36,8 +36,8 @@ auto MakeTestCharts(std::string sym, std::string query, std::vector<TestTimeFram
 
     pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w { c };
-    rmp_cursor cur { w, query, sym + "_stream" };
-    rmp_cursor_iterator cb = cur.cbegin(), ce = cur.cend();
+    rmp_cursor_stream cur { w, query, sym + "_stream" };
+    rmp_forward_iterator cb = cur.cbegin(), ce = cur.cend();
 
     for( auto tP : testParams )
     {
@@ -45,18 +45,18 @@ auto MakeTestCharts(std::string sym, std::string query, std::vector<TestTimeFram
 
             // find chart with toTimeFrame made from scratch - add if not found
             // need to have one of these for each toTimeFrame as basis for comparison
-        auto fromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
-        if(charts.cend() == fromScratchIter)
+        auto chartFromScratchIter = std::find_if(charts.cbegin(), charts.cend(), [toTimeFrame](const TestChartData &tc) {   return tc.first.first == toTimeFrame && tc.first.second == 0; });
+        if(charts.cend() == chartFromScratchIter)
         {
             charts.push_back({ { toTimeFrame, 0 }, { sym, cb, ce, minutes { toTimeFrame } } });
-            fromScratchIter = charts.end()-1;
+            chartFromScratchIter = charts.end()-1;
         }
 
             // make test chart from base chart made from raw market price
-        TestChartData lastTestChart { { toTimeFrame, fromTimeFrame }, { sym, fromScratchIter->second.cbegin(), fromScratchIter->second.cend(), minutes { toTimeFrame } } };
-        if(toTimeFrame == fromScratchIter->first.first)
+        TestChartData lastTestChart { { toTimeFrame, fromTimeFrame }, { sym, chartFromScratchIter->second.cbegin(), chartFromScratchIter->second.cend(), minutes { toTimeFrame } } };
+        if(toTimeFrame == chartFromScratchIter->first.first)
         {
-            bool passed = lastTestChart.second == fromScratchIter->second;
+            bool passed = lastTestChart.second == chartFromScratchIter->second;
 
             results.push_back({ passed, std::move(lastTestChart) });
                 // test passed - don't save chart ( if it was not created from raw market price )
