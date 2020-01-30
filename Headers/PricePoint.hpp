@@ -22,10 +22,10 @@ struct PricePoint
     PricePoint(PriceTP, float bid, float ask);
     PricePoint() {}
     
-    auto operator<(PricePoint pp) const -> bool  {   return bid < pp.bid; }
-    auto operator==(PricePoint pp) const -> bool    {   return bid == pp.bid && ask == pp.ask;   }
+    auto operator<(PricePoint pp) const -> bool  {   return ask < pp.ask; }
+    auto operator==(PricePoint pp) const -> bool    {   return bid == pp.bid && ask == pp.ask && time == pp.time;   }
 
-    operator float() const  {   return bid; }
+    operator float() const  {   return ask; }
 private:
 
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
