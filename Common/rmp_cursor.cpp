@@ -35,7 +35,7 @@ auto rmp_cursor_iterator::ExractPP() const -> PricePoint
 
 auto rmp_cursor_iterator::operator++() -> rmp_cursor_iterator      {   return { cur, ++idx, idx == cur->size() }; }
 
-unsigned long rmp_forward_iterator::magic = 0;
+thread_local unsigned long rmp_forward_iterator::magic = 0;
 rmp_forward_iterator::rmp_forward_iterator(rmp_cursor_stream *c, bool end)
     : cur { c }
 {

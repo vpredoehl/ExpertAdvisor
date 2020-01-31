@@ -100,7 +100,7 @@ struct rmp_forward_iterator
     auto operator++() -> rmp_forward_iterator   {   isSTLEnd = !ReadPP();    return *this;   }
 
 private:
-    static unsigned long magic;
+    thread_local static unsigned long magic;
     unsigned long uniqID;
     rmp_cursor_stream *cur;
     PricePoint pp;
