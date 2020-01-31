@@ -63,6 +63,10 @@
       <CommandLineArguments>
          <CommandLineArgument
             argument = "2017-05-17 2017-07-23 5:1"
+            isEnabled = "NO">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "2016-05-17 2017-07-23 5:1"
             isEnabled = "YES">
          </CommandLineArgument>
          <CommandLineArgument
