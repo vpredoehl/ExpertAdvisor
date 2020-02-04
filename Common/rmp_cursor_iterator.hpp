@@ -93,11 +93,16 @@ struct rmp_forward_iterator
     bool operator!=(rmp_forward_iterator i) const  {   return !operator==(i);   }
     bool operator==(rmp_forward_iterator i) const
     {
+        if(isSTLEnd == i.isSTLEnd)  return true;
         if(!isSTLEnd && !i.isSTLEnd) return uniqID == i.uniqID;
-        return isSTLEnd == i.isSTLEnd;
+        return false;
     }
 
-    auto operator++() -> rmp_forward_iterator   {   isSTLEnd = !ReadPP();    return *this;   }
+    auto operator++() -> rmp_forward_iterator
+    {
+        if(isSTLEnd)    throw std::range_error { "Can't advance rmp_forward_iterator past end" };
+        return { cur, false };
+    }
 
 private:
     thread_local static unsigned long magic;
