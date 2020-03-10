@@ -63,6 +63,10 @@
       <CommandLineArguments>
          <CommandLineArgument
             argument = "/Volumes/2018"
+            isEnabled = "NO">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "/Volumes/2019"
             isEnabled = "YES">
          </CommandLineArgument>
       </CommandLineArguments>
