@@ -30,15 +30,14 @@ void PrintResult(const pqxx::result &r)
     }
 }
 
-auto ParseRawPriceData(std::ifstream csv) -> SymbolData
+auto ParseRawPriceData(std::ifstream csv, std::string parsedSym) -> SymbolData
 {
-    extern thread_local std::string lastParsedSym;
     PricePoint pp;
     std::string headerLine;
     SymbolData symD;
     
-    csv >> headerLine;   // ignored
-    while(csv >> pp)    symD[lastParsedSym].push_back(pp);
+//    csv >> headerLine;   // ignored
+    while(csv >> pp)    symD[parsedSym].push_back(pp);
     return symD;
 }
 

@@ -34,19 +34,40 @@ istream& operator>>(istream& i, PriceTP &t)
     return i;
 }
 
-thread_local std::string lastParsedSym;
+//istream& operator>>(istream& i, PricePoint &t)
+//{
+//    using std::getline;
+//    PriceTP ct;
+//    float bid,ask;
+//
+//    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
+//    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
+//    getline(i, lastParsedSym, ',');
+//    i >> ct;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
+//    i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
+//    i >> ask;
+//    t = PricePoint { ct, bid, ask };
+//    return i;
+//}
+
 istream& operator>>(istream& i, PricePoint &t)
 {
     using std::getline;
     PriceTP ct;
     float bid,ask;
-    
-    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-    getline(i, lastParsedSym, ',');
-    i >> ct;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
+    char year[5], month[3], day[3], hour[3], min[3], sec[3], nano[4];
+
+
+    i.get(year, 5); i.get(month, 3);    i.get(day, 3);  i.ignore(std::numeric_limits<std::streamsize>::max(),' ');
+    i.get(hour, 3);    i.get(min, 3);    i.get(sec, 3); i.get(nano,4); i.ignore(std::numeric_limits<std::streamsize>::max(),',');
+
+    std::istringstream dateTime { std::string { year } + "-" + std::string { month } + "-" + std::string { day }
+        + " " + std::string { hour } + ":" + std::string { min } + ":" + std::string { sec } + "." + std::string { nano }  };
+
+    dateTime >> ct;
     i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
     i >> ask;
+    i.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
     t = PricePoint { ct, bid, ask };
     return i;
 }

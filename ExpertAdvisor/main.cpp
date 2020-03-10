@@ -78,18 +78,26 @@ int main(int argc, const char * argv[]) {
         if(f.path().extension() != ".csv")  continue;
 
         std::string fileN = f.path().filename();
-        auto posn = fileN.find(fileSepChar);
+//        auto posn = fileN.find(fileSepChar);
 
             // check if file is in pairs list
-        fileN.replace(posn, 1, &pairSepChar, 1);
-        fileN.erase(fileN.find(fileSepChar));   // remove _Week*.csv
-        if(pairs.find(fileN) == pairs.end()) continue;
+                // histdata.com style csv format
+        std::string parsedSym = fileN;
+        parsedSym.erase(0, 10);
+        parsedSym.erase(parsedSym.begin() + 6, parsedSym.end());
+        parsedSym.insert(3, std::string { pairSepChar });
+        if(pairs.find(parsedSym) == pairs.end()) continue;
+
+            // forex.com style csv format
+//        fileN.replace(posn, 1, &pairSepChar, 1);
+//        fileN.erase(fileN.find(fileSepChar));   // remove _Week*.csv
+//        if(pairs.find(fileN) == pairs.end()) continue;
 
         if(AlreadyParsedFiles.cend() != std::find_if(AlreadyParsedFiles.cbegin(), AlreadyParsedFiles.cend(), [&f](pqxx::row fn) -> bool
                                            {    return f.path() == fn[0].c_str();   }))
             {   std::cout << "Skipping: " << f.path() << std::endl;   continue;   }
         std::cout << f.path() << std::endl;
-        parseFU.push_front(FutureAndFileNameP { std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }), f.path() });
+        parseFU.push_front(FutureAndFileNameP { std::async(std::launch::async, ParseRawPriceData, std::ifstream { f.path(), std::ios_base::in }, parsedSym), f.path() });
 
         while(!HasAvailTask(maxTasks))
             std::this_thread::sleep_for(std::chrono::milliseconds{50});

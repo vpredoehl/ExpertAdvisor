@@ -17,7 +17,7 @@
 using SymbolData = std::map<std::string, RawMarketPrice>;
 using ChartsForSym = std::map<std::string, Chart>;
 
-auto ParseRawPriceData(std::ifstream csv) -> SymbolData;
+auto ParseRawPriceData(std::ifstream csv, std::string sym) -> SymbolData;
 void WriteMarketData(std::string sym, const RawMarketPrice&, std::string fileName);
 auto SymsFromDirectory(std::string dirPath) -> SymbolData;
 
