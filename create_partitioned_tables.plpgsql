@@ -29,6 +29,7 @@ drop table if exists usdchfrmp;
 drop table if exists usdjpyrmp;
 
 create table audcadrmp (time timestamp, bid float, ask float) partition by range (time);
+create table audcad_2019 partition of audcadrmp for values from ('2019-01-01') to ('2020-01-01');
 create table audcad_2018 partition of audcadrmp for values from ('2018-01-01') to ('2019-01-01');
 create table audcad_2017 partition of audcadrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table audcad_2016 partition of audcadrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -42,6 +43,7 @@ create table audcadarch partition of audcadrmp for values from ('2000-01-01') to
 
 
 create table audchfrmp (time timestamp, bid float, ask float) partition by range (time);
+create table audchf_2019 partition of audchfrmp for values from ('2019-01-01') to ('2020-01-01');
 create table audchf_2018 partition of audchfrmp for values from ('2018-01-01') to ('2019-01-01');
 create table audchf_2017 partition of audchfrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table audchf_2016 partition of audchfrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -55,6 +57,7 @@ create table audchfarch partition of audchfrmp for values from ('2000-01-01') to
 
 
 create table audjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table audjpy_2019 partition of audjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table audjpy_2018 partition of audjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table audjpy_2017 partition of audjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table audjpy_2016 partition of audjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -68,6 +71,7 @@ create table audjpyarch partition of audjpyrmp for values from ('2000-01-01') to
 
 
 create table audnzdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table audnzd_2019 partition of audnzdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table audnzd_2018 partition of audnzdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table audnzd_2017 partition of audnzdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table audnzd_2016 partition of audnzdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -81,6 +85,7 @@ create table audnzdarch partition of audnzdrmp for values from ('2000-01-01') to
 
 
 create table audusdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table audusd_2019 partition of audusdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table audusd_2018 partition of audusdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table audusd_2017 partition of audusdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table audusd_2016 partition of audusdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -94,6 +99,7 @@ create table audusdarch partition of audusdrmp for values from ('2000-01-01') to
 
 
 create table cadchfrmp (time timestamp, bid float, ask float) partition by range (time);
+create table cadchf_2019 partition of cadchfrmp for values from ('2019-01-01') to ('2020-01-01');
 create table cadchf_2018 partition of cadchfrmp for values from ('2018-01-01') to ('2019-01-01');
 create table cadchf_2017 partition of cadchfrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table cadchf_2016 partition of cadchfrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -107,6 +113,7 @@ create table cadchfarch partition of cadchfrmp for values from ('2000-01-01') to
 
 
 create table cadjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table cadjpy_2019 partition of cadjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table cadjpy_2018 partition of cadjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table cadjpy_2017 partition of cadjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table cadjpy_2016 partition of cadjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -120,6 +127,7 @@ create table cadjpyarch partition of cadjpyrmp for values from ('2000-01-01') to
 
 
 create table chfjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table chfjpy_2019 partition of chfjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table chfjpy_2018 partition of chfjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table chfjpy_2017 partition of chfjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table chfjpy_2016 partition of chfjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -133,6 +141,7 @@ create table chfjpyarch partition of chfjpyrmp for values from ('2000-01-01') to
 
 
 create table euraudrmp (time timestamp, bid float, ask float) partition by range (time);
+create table euraud_2019 partition of euraudrmp for values from ('2019-01-01') to ('2020-01-01');
 create table euraud_2018 partition of euraudrmp for values from ('2018-01-01') to ('2019-01-01');
 create table euraud_2017 partition of euraudrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table euraud_2016 partition of euraudrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -146,6 +155,7 @@ create table euraudarch partition of euraudrmp for values from ('2000-01-01') to
 
 
 create table eurcadrmp (time timestamp, bid float, ask float) partition by range (time);
+create table eurcad_2019 partition of eurcadrmp for values from ('2019-01-01') to ('2020-01-01');
 create table eurcad_2018 partition of eurcadrmp for values from ('2018-01-01') to ('2019-01-01');
 create table eurcad_2017 partition of eurcadrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table eurcad_2016 partition of eurcadrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -159,6 +169,7 @@ create table eurcadarch partition of eurcadrmp for values from ('2000-01-01') to
 
 
 create table eurchfrmp (time timestamp, bid float, ask float) partition by range (time);
+create table eurchf_2019 partition of eurchfrmp for values from ('2019-01-01') to ('2020-01-01');
 create table eurchf_2018 partition of eurchfrmp for values from ('2018-01-01') to ('2019-01-01');
 create table eurchf_2017 partition of eurchfrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table eurchf_2016 partition of eurchfrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -172,6 +183,7 @@ create table eurchfarch partition of eurchfrmp for values from ('2000-01-01') to
 
 
 create table eurgbprmp (time timestamp, bid float, ask float) partition by range (time);
+create table eurgbp_2019 partition of eurgbprmp for values from ('2019-01-01') to ('2020-01-01');
 create table eurgbp_2018 partition of eurgbprmp for values from ('2018-01-01') to ('2019-01-01');
 create table eurgbp_2017 partition of eurgbprmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table eurgbp_2016 partition of eurgbprmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -185,6 +197,7 @@ create table eurgbparch partition of eurgbprmp for values from ('2000-01-01') to
 
 
 create table eurjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table eurjpy_2019 partition of eurjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table eurjpy_2018 partition of eurjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table eurjpy_2017 partition of eurjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table eurjpy_2016 partition of eurjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -198,6 +211,7 @@ create table eurjpyarch partition of eurjpyrmp for values from ('2000-01-01') to
 
 
 create table eurnzdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table eurnzd_2019 partition of eurnzdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table eurnzd_2018 partition of eurnzdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table eurnzd_2017 partition of eurnzdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table eurnzd_2016 partition of eurnzdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -211,6 +225,7 @@ create table eurnzdarch partition of eurnzdrmp for values from ('2000-01-01') to
 
 
 create table eurusdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table eurusd_2019 partition of eurusdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table eurusd_2018 partition of eurusdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table eurusd_2017 partition of eurusdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table eurusd_2016 partition of eurusdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -224,6 +239,7 @@ create table eurusdarch partition of eurusdrmp for values from ('2000-01-01') to
 
 
 create table gbpaudrmp (time timestamp, bid float, ask float) partition by range (time);
+create table gbpaud_2019 partition of gbpaudrmp for values from ('2019-01-01') to ('2020-01-01');
 create table gbpaud_2018 partition of gbpaudrmp for values from ('2018-01-01') to ('2019-01-01');
 create table gbpaud_2017 partition of gbpaudrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table gbpaud_2016 partition of gbpaudrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -237,6 +253,7 @@ create table gbpaudarch partition of gbpaudrmp for values from ('2000-01-01') to
 
 
 create table gbpcadrmp (time timestamp, bid float, ask float) partition by range (time);
+create table gbpcad_2019 partition of gbpcadrmp for values from ('2019-01-01') to ('2020-01-01');
 create table gbpcad_2018 partition of gbpcadrmp for values from ('2018-01-01') to ('2019-01-01');
 create table gbpcad_2017 partition of gbpcadrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table gbpcad_2016 partition of gbpcadrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -250,6 +267,7 @@ create table gbpcadarch partition of gbpcadrmp for values from ('2000-01-01') to
 
 
 create table gbpchfrmp (time timestamp, bid float, ask float) partition by range (time);
+create table gbpchf_2019 partition of gbpchfrmp for values from ('2019-01-01') to ('2020-01-01');
 create table gbpchf_2018 partition of gbpchfrmp for values from ('2018-01-01') to ('2019-01-01');
 create table gbpchf_2017 partition of gbpchfrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table gbpchf_2016 partition of gbpchfrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -263,6 +281,7 @@ create table gbpchfarch partition of gbpchfrmp for values from ('2000-01-01') to
 
 
 create table gbpjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table gbpjpy_2019 partition of gbpjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table gbpjpy_2018 partition of gbpjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table gbpjpy_2017 partition of gbpjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table gbpjpy_2016 partition of gbpjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -276,6 +295,7 @@ create table gbpjpyarch partition of gbpjpyrmp for values from ('2000-01-01') to
 
 
 create table gbpnzdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table gbpnzd_2019 partition of gbpnzdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table gbpnzd_2018 partition of gbpnzdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table gbpnzd_2017 partition of gbpnzdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table gbpnzd_2016 partition of gbpnzdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -289,6 +309,7 @@ create table gbpnzdarch partition of gbpnzdrmp for values from ('2000-01-01') to
 
 
 create table gbpusdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table gbpusd_2019 partition of gbpusdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table gbpusd_2018 partition of gbpusdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table gbpusd_2017 partition of gbpusdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table gbpusd_2016 partition of gbpusdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -302,6 +323,7 @@ create table gbpusdarch partition of gbpusdrmp for values from ('2000-01-01') to
 
 
 create table nzdcadrmp (time timestamp, bid float, ask float) partition by range (time);
+create table nzdcad_2019 partition of nzdcadrmp for values from ('2019-01-01') to ('2020-01-01');
 create table nzdcad_2018 partition of nzdcadrmp for values from ('2018-01-01') to ('2019-01-01');
 create table nzdcad_2017 partition of nzdcadrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table nzdcad_2016 partition of nzdcadrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -315,6 +337,7 @@ create table nzdcadarch partition of nzdcadrmp for values from ('2000-01-01') to
 
 
 create table nzdchfrmp (time timestamp, bid float, ask float) partition by range (time);
+create table nzdchf_2019 partition of nzdchfrmp for values from ('2019-01-01') to ('2020-01-01');
 create table nzdchf_2018 partition of nzdchfrmp for values from ('2018-01-01') to ('2019-01-01');
 create table nzdchf_2017 partition of nzdchfrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table nzdchf_2016 partition of nzdchfrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -328,6 +351,7 @@ create table nzdchfarch partition of nzdchfrmp for values from ('2000-01-01') to
 
 
 create table nzdjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table nzdjpy_2019 partition of nzdjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table nzdjpy_2018 partition of nzdjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table nzdjpy_2017 partition of nzdjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table nzdjpy_2016 partition of nzdjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -341,6 +365,7 @@ create table nzdjpyarch partition of nzdjpyrmp for values from ('2000-01-01') to
 
 
 create table nzdusdrmp (time timestamp, bid float, ask float) partition by range (time);
+create table nzdusd_2019 partition of nzdusdrmp for values from ('2019-01-01') to ('2020-01-01');
 create table nzdusd_2018 partition of nzdusdrmp for values from ('2018-01-01') to ('2019-01-01');
 create table nzdusd_2017 partition of nzdusdrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table nzdusd_2016 partition of nzdusdrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -354,6 +379,7 @@ create table nzdusdarch partition of nzdusdrmp for values from ('2000-01-01') to
 
 
 create table usdcadrmp (time timestamp, bid float, ask float) partition by range (time);
+create table usdcad_2019 partition of usdcadrmp for values from ('2019-01-01') to ('2020-01-01');
 create table usdcad_2018 partition of usdcadrmp for values from ('2018-01-01') to ('2019-01-01');
 create table usdcad_2017 partition of usdcadrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table usdcad_2016 partition of usdcadrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -367,6 +393,7 @@ create table usdcadarch partition of usdcadrmp for values from ('2000-01-01') to
 
 
 create table usdchfrmp (time timestamp, bid float, ask float) partition by range (time);
+create table usdchf_2019 partition of usdchfrmp for values from ('2019-01-01') to ('2020-01-01');
 create table usdchf_2018 partition of usdchfrmp for values from ('2018-01-01') to ('2019-01-01');
 create table usdchf_2017 partition of usdchfrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table usdchf_2016 partition of usdchfrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
@@ -380,6 +407,7 @@ create table usdchfarch partition of usdchfrmp for values from ('2000-01-01') to
 
 
 create table usdjpyrmp (time timestamp, bid float, ask float) partition by range (time);
+create table usdjpy_2019 partition of usdjpyrmp for values from ('2019-01-01') to ('2020-01-01');
 create table usdjpy_2018 partition of usdjpyrmp for values from ('2018-01-01') to ('2019-01-01');
 create table usdjpy_2017 partition of usdjpyrmp for values from ('2017-01-01') to ('2018-01-01')  tablespace forex_archive;
 create table usdjpy_2016 partition of usdjpyrmp for values from ('2016-01-01') to ('2017-01-01')  tablespace forex_archive;
