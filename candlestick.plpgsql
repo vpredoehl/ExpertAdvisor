@@ -1,0 +1,12 @@
+CREATE OR REPLACE FUNCTION candlestick(fromdt timestamp without time zone, todt timestamp without time zone)
+ RETURNS TABLE(ts timestamp without time zone, mnt integer, open double precision, close double precision, high double precision, low double precision)
+AS $$
+begin
+	return query
+	select distinct dt, mn, first_value(ask) over w as open, last_value(ask) over w as close, max(ask) over w as high, min(ask) over w as low   from (
+	select date_trunc('hour', time) as dt, extract(minute from time)::int / 15 as mn,  ask from audcadrmp where time between $1 and $2 order by time) as t 
+	window w as (partition by (dt, mn)) order by dt asc, mn asc;
+end;
+$$
+LANGUAGE 'plpgsql';
+

@@ -1,0 +1,7 @@
+select *, max(high) over higher_close_window < high as higher_close,
+	max(low) over higher_close_window > low as lower_close,
+	max(high) over fractal_high_window < high as fractal_high,
+	min(low) over fractal_high_window > low as fractal_low 
+from candlestick('2019-06-01', '2019-06-03')
+	window 	fractal_high_window  as (rows between 2 preceding and 2 following exclude current row),
+		higher_close_window as (rows 1 preceding exclude current row);
