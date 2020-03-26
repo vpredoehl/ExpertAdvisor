@@ -1,7 +1,15 @@
+create or replace function fractal(tbl text, intervals int, fromdt timestamp without time zone, todt timestamp without time zone) 
+returns table( ts timestamp without time zone, mnt integer, open double precision, close double precision, hi double precision, lo double precision, fractal_high bool, fractal_low bool, higher_close bool, lower_close bool)
+as $$
+begin
+return query
 select *, max(high) over higher_close_window < high as higher_close,
 	max(low) over higher_close_window > low as lower_close,
 	max(high) over fractal_high_window < high as fractal_high,
 	min(low) over fractal_high_window > low as fractal_low 
-from candlestick('2019-06-01', '2019-06-03')
+from candlestick(tbl, intervals, fromdt, todt)
 	window 	fractal_high_window  as (rows between 2 preceding and 2 following exclude current row),
 		higher_close_window as (rows 1 preceding exclude current row);
+end;
+$$
+language 'plpgsql';
