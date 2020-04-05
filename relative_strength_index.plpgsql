@@ -1,0 +1,17 @@
+create or replace function relative_strength_index() returns setof float
+as $$
+declare
+	gain_loss record;
+begin
+with t2 as (
+with t as ( select *, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, '2019-06-01', '2019-06-15') )
+        select ts, tf, gain, loss,
+        close - open as diff_gain, 
+        open - close as diff_loss
+        from t order by ts, tf limit 14
+)
+select   avg(diff_gain) filter( where gain = true)  as avg_gain, avg(diff_loss) filter ( where loss = true )  as avg_loss from t2 into gain_loss;
+raise info 'gain: %', gain_loss;
+end;
+$$
+language 'plpgsql';
