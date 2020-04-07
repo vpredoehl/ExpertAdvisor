@@ -2,12 +2,22 @@ drop function if exists candlestick cascade;
 drop type cst;
 create type cst as ( ts timestamp without time zone, tf int, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6) );
 
-CREATE FUNCTION candlestick(tbl text, intervals int, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS SETOF cst
+CREATE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS SETOF cst
 AS $$
- begin
+declare
+	higher_tf text;
+begin
+	select case when unit='minute' then 'hour'
+	when unit='hour' then 'day'
+	when unit='day' then 'month' 
+	when unit='month' then 'year' 
+	else ''	end into higher_tf;
+	if higher_tf='' then raise exception 'unit must be year, month, day, hour, minute, not %', unit; end if;
+	--raise info 'unit: %, higher_tf: %', unit, higher_tf;
+
 	RETURN QUERY execute
 	'select distinct dt, mn, first_value(ask) over w::numeric(10,6) as open, last_value(ask) over w::numeric(10,6) as close, max(ask) over w::numeric(10,6) as high, min(ask) over w::numeric(10,6) as low   from (
-	select date_trunc(''hour'', time) as dt, extract(minute from time)::int / ' || intervals::text || ' as mn,  ask '
+	select date_trunc(''' || higher_tf || ''', time) as dt, extract(' || unit || ' from time)::int / ' || n::text || ' as mn,  ask '
 	|| ' from ' || tbl || ' where time between ''' || fromdt::text || ''' and ''' || todt::text || ''' order by time) as t'
 	|| ' window w as (partition by (dt, mn)) order by dt asc, mn asc;';
 end;

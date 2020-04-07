@@ -9,7 +9,7 @@ declare
 	rsi real;
 begin
 with t2 as (
-with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, '2019-06-01', '2019-12-31') )
+with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, 'minute', '2019-06-01', '2019-06-03') )
         select ts, tf, gain, loss,
         close - open as diff_gain, 
         open - close as diff_loss
@@ -22,7 +22,7 @@ select avg_gl.avg_gain into avg_gain;
 select avg_gl.avg_loss into avg_loss;
 
 for gl_row in 
-with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, '2019-06-01', '2019-12-31') )
+with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, 'minute', '2019-06-01', '2019-06-03') )
         select ts, tf,
         case when gain=true then close - open
         else 0 end::numeric(10,6) as diff_gain, 
