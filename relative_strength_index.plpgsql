@@ -17,7 +17,10 @@ with t as ( select ts, tf, open, close, close > open as gain, open > close as lo
         from t order by ts, tf limit 14
 )
 select sum(diff_gain) filter( where gain = true) / 14  as avg_gain, sum(diff_loss) filter ( where loss = true ) / 14  as avg_loss from t2 into avg_gl;
-raise info 'gain: %, loss: %', avg_gl.avg_gain, avg_gl.avg_loss;
+
+select avg_gl.avg_gain / avg_gl.avg_loss into rs ;
+select 100 - 100 / (rs + 1) into rsi;
+return next rsi;
 
 select avg_gl.avg_gain into avg_gain;
 select avg_gl.avg_loss into avg_loss;
@@ -31,21 +34,17 @@ with t as ( select ts, tf, open, close, close > open as gain, open > close as lo
         else 0 end::numeric(10,6) as diff_loss
         from t order by ts, tf offset 15 -- offset to point where iterative avg_gain should be caluclated
 LOOP
-	-- raise info 'gl_row: % ', gl_row;
-	raise info 'avg_gain %, diff_gain %', avg_gain, gl_row.diff_gain;
 	select gl_row.ts, gl_row.tf,
 		 (avg_gain*13 + gl_row.diff_gain)/14 as avg_gain,
 		 (avg_loss*13 + gl_row.diff_loss)/14 as avg_loss
 	 into avg_row ;
-	raise info 'avg_gain: %', avg_row.avg_gain;
-	-- raise info 'avg_row: %', avg_row;
 
 	select avg_row.avg_gain into avg_gain;
 	select avg_row.avg_loss into avg_loss;
 
 	select avg_row.avg_gain / avg_row.avg_loss into rs ;
 	select 100 - 100 / (rs + 1) into rsi;
-	raise info 'ts: %, tf: %, avg_gain: %, avg_loss: %, rs: %, rsi: %', avg_row.ts, avg_row.tf, avg_row.avg_gain::numeric(10,6), avg_row.avg_loss::numeric(10,6), rs::numeric(7,3), rsi::numeric(7,3);
+	return next rsi;
 END LOOP;
 end;
 $$
