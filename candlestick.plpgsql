@@ -16,10 +16,14 @@ begin
 	--raise info 'unit: %, higher_tf: %', unit, higher_tf;
 
 	RETURN QUERY execute
-	'select distinct dt, mn, first_value(ask) over w::numeric(10,6) as open, last_value(ask) over w::numeric(10,6) as close, max(ask) over w::numeric(10,6) as high, min(ask) over w::numeric(10,6) as low   from (
+	'select distinct dt, mn, ' 
+		|| 'case when count(*) over w=1 then lag(ask,1) over w_1row else first_value(ask) over w_1row end::numeric(10,6) as open,'
+		|| ' last_value(ask) over w::numeric(10,6) as close,'
+		|| 'case when count(*) over w=1 then max(ask) over w_1row else max(ask) over w end::numeric(10,6) as high,'
+		|| 'case when count(*) over w=1 then min(ask) over w_1row else min(ask) over w end::numeric(10,6) as low   from (
 	select date_trunc(''' || higher_tf || ''', time) as dt, extract(' || unit || ' from time)::int / ' || n::text || ' as mn,  ask '
 	|| ' from ' || tbl || ' where time between ''' || fromdt::text || ''' and ''' || todt::text || ''' order by time) as t'
-	|| ' window w as (partition by (dt, mn)) order by dt asc, mn asc;';
+	|| ' window w as (partition by (dt, mn)), w_1row as ( rows 1 preceding ) order by dt asc, mn asc;';
 end;
 $$
 LANGUAGE 'plpgsql';

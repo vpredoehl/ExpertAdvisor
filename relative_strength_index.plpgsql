@@ -3,43 +3,49 @@ as $$
 declare
 	avg_gl record;
 	gl_row record;
+	avg_row record;
 	avg_gain numeric(10,6);
 	avg_loss numeric(10,6);
 	rs real;
 	rsi real;
 begin
 with t2 as (
-with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, 'minute', '2019-06-01', '2019-06-03') )
+with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('rsi2', 1, 'day', '2009-06-01', '2010-06-03') )
         select ts, tf, gain, loss,
         close - open as diff_gain, 
         open - close as diff_loss
         from t order by ts, tf limit 14
 )
-select avg(diff_gain) filter( where gain = true)  as avg_gain, avg(diff_loss) filter ( where loss = true )  as avg_loss from t2 into avg_gl;
+select sum(diff_gain) filter( where gain = true) / 14  as avg_gain, sum(diff_loss) filter ( where loss = true ) / 14  as avg_loss from t2 into avg_gl;
 raise info 'gain: %, loss: %', avg_gl.avg_gain, avg_gl.avg_loss;
 
 select avg_gl.avg_gain into avg_gain;
 select avg_gl.avg_loss into avg_loss;
 
 for gl_row in 
-with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('audcadrmp', 5, 'minute', '2019-06-01', '2019-06-03') )
+with t as ( select ts, tf, open, close, close > open as gain, open > close as loss from candlestick('rsi2', 1, 'day', '2009-06-01', '2019-06-03') )
         select ts, tf,
         case when gain=true then close - open
         else 0 end::numeric(10,6) as diff_gain, 
         case when loss=true then open - close
         else 0 end::numeric(10,6) as diff_loss
-        from t order by ts, tf offset 14
+        from t order by ts, tf offset 15 -- offset to point where iterative avg_gain should be caluclated
 LOOP
-	--raise info 'gl_row: %', gl_row;
+	-- raise info 'gl_row: % ', gl_row;
+	raise info 'avg_gain %, diff_gain %', avg_gain, gl_row.diff_gain;
 	select gl_row.ts, gl_row.tf,
 		 (avg_gain*13 + gl_row.diff_gain)/14 as avg_gain,
 		 (avg_loss*13 + gl_row.diff_loss)/14 as avg_loss
-	 into gl_row ;
+	 into avg_row ;
+	raise info 'avg_gain: %', avg_row.avg_gain;
+	-- raise info 'avg_row: %', avg_row;
 
-	select gl_row.avg_gain / gl_row.avg_loss into rs ;
+	select avg_row.avg_gain into avg_gain;
+	select avg_row.avg_loss into avg_loss;
+
+	select avg_row.avg_gain / avg_row.avg_loss into rs ;
 	select 100 - 100 / (rs + 1) into rsi;
-	raise info 'ts: %, tf: %, avg_gain: %, avg_loss: %, rs: %, rsi: %', gl_row.ts, gl_row.tf, gl_row.avg_gain::numeric(10,6), gl_row.avg_loss::numeric(10,6), rs::numeric(7,3), rsi::numeric(7,3);
-	--raise info '', rs, rsi;
+	raise info 'ts: %, tf: %, avg_gain: %, avg_loss: %, rs: %, rsi: %', avg_row.ts, avg_row.tf, avg_row.avg_gain::numeric(10,6), avg_row.avg_loss::numeric(10,6), rs::numeric(7,3), rsi::numeric(7,3);
 END LOOP;
 end;
 $$
