@@ -1,7 +1,7 @@
 drop function if exists relative_strength_index cascade;
 create type rsi_type as ( date timestamp without time zone, n int, rsi numeric(10,6));
 
-create or replace function relative_strength_index() returns setof rsi_type
+create or replace function relative_strength_index( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof rsi_type
 as $$
 declare
 	avg_gl record;
@@ -13,21 +13,21 @@ declare
 	rs real;
 	rsi real;
 begin
-with t2 as (
-with t as ( select ts_trunc, tf, open, close, close > open as gain, open > close as loss from candlestick('rsi2', 1, 'day', '2009-06-01', '2010-06-03') )
+execute 'with t2 as (
+with t as ( select ts_trunc, tf, open, close, close > open as gain, open > close as loss from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') )
         select ts_trunc, tf, gain, loss,
         close - open as diff_gain, 
         open - close as diff_loss
-        from t order by ts_trunc, tf limit 14
+        from t order by ts_trunc, tf limit ' || num_periods || '
 )
 select * from (
-select row_number() over (), sum(diff_gain) filter( where gain = true) / 14  as avg_gain, sum(diff_loss) filter ( where loss = true ) / 14  as avg_loss from t2 ) as jt1
+select row_number() over (), sum(diff_gain) filter( where gain = true) / ' || num_periods || '  as avg_gain, sum(diff_loss) filter ( where loss = true ) / ' || num_periods || '  as avg_loss from t2 ) as jt1
 inner join (
 with t3 as ( -- join associated data with first average calculation
-	select  ts_trunc, tf from candlestick('rsi2', 1, 'day', '2009-06-01', '2010-06-03') offset 14 limit 1)
+	select  ts_trunc, tf from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') offset ' || num_periods || ' limit 1)
 		select row_number() over (),* from t3
 ) as jt2
-using(row_number) into avg_gl;
+using(row_number)' into avg_gl;
 
 select avg_gl.avg_gain / avg_gl.avg_loss into rs ;
 select 100 - 100 / (rs + 1) into rsi;
@@ -38,17 +38,17 @@ select avg_gl.avg_gain into avg_gain;
 select avg_gl.avg_loss into avg_loss;
 
 for gl_row in 
-with t as ( select ts_trunc, tf, open, close, close > open as gain, open > close as loss from candlestick('rsi2', 1, 'day', '2009-06-01', '2019-06-03') )
+execute 'with t as ( select ts_trunc, tf, open, close, close > open as gain, open > close as loss from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') )
         select ts_trunc, tf,
         case when gain=true then close - open
         else 0 end::numeric(10,6) as diff_gain, 
         case when loss=true then open - close
         else 0 end::numeric(10,6) as diff_loss
-        from t order by ts_trunc, tf offset 15 -- offset to point where iterative avg_gain should be caluclated
+        from t order by ts_trunc, tf offset ' || num_periods + 1 -- offset to point where iterative avg_gain should be caluclated
 LOOP
 	select gl_row.ts_trunc, gl_row.tf,
-		 (avg_gain*13 + gl_row.diff_gain)/14 as avg_gain,
-		 (avg_loss*13 + gl_row.diff_loss)/14 as avg_loss
+		 (avg_gain*(num_periods-1) + gl_row.diff_gain)/num_periods as avg_gain,
+		 (avg_loss*(num_periods-1) + gl_row.diff_loss)/num_periods as avg_loss
 	 into avg_row ;
 
 	select avg_row.avg_gain into avg_gain;
