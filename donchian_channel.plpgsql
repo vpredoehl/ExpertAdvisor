@@ -1,0 +1,14 @@
+drop type dc_type cascade;
+create type dc_type as ( ts_trunc timestamp without time zone, tf int, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), uc numeric(10,6), lc numeric(10,6), mc numeric(10,6) );
+
+create or replace function donchian_channel(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone) returns setof dc_type as $$
+begin
+	RETURN QUERY
+		with t as (
+		select *, max(high) over w::numeric(10,6) as uc, min(low) over w::numeric(10,6) as lc from candlestick('audcadrmp', 5, 'minute', '2019-06-01', '2019-06-15')
+		window w as ( rows 13 preceding ) 
+		)
+		select *, ((uc+lc) / 2)::numeric(10,6) as mc from t;
+end;
+$$ language 'plpgsql';
+
