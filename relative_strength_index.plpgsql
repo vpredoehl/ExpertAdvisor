@@ -8,8 +8,8 @@ declare
 	gl_row record;
 	avg_row record;
 	rsi_row record;
-	avg_gain numeric(10,6);
-	avg_loss numeric(10,6);
+	avg_gain numeric(12,10);
+	avg_loss numeric(12,10);
 	rs real;
 	rsi real;
 begin
@@ -24,13 +24,15 @@ select * from (
 select row_number() over (), sum(diff_gain) filter( where gain = true) / ' || num_periods || '  as avg_gain, sum(diff_loss) filter ( where loss = true ) / ' || num_periods || '  as avg_loss from t2 ) as jt1
 inner join (
 with t3 as ( -- join associated data with first average calculation
-	select  dt from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') offset ' || num_periods || ' limit 1)
+	select  dt from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') offset ' || num_periods - 1 || ' limit 1)
 		select row_number() over (),* from t3
 ) as jt2
 using(row_number)' into avg_gl;
+raise info 'avg_gl: %', avg_gl;
 
 select avg_gl.avg_gain / avg_gl.avg_loss into rs ;
 select 100 - 100 / (rs + 1) into rsi;
+raise info 'avg_gain: %, avg_loss: %, rs: %  rsi: %', avg_gl.avg_gain, avg_gl.avg_loss, rs, rsi;
 select avg_gl.dt as date,  rsi::numeric(10,6) into rsi_row;
 return next rsi_row;
 
@@ -44,8 +46,10 @@ execute 'with t as ( select dt, open, close, close > open as gain, open > close 
         else 0 end::numeric(10,6) as diff_gain, 
         case when loss=true then open - close
         else 0 end::numeric(10,6) as diff_loss
-        from t order by dt offset ' || num_periods + 1 -- offset to point where iterative avg_gain should be caluclated
+        from t order by dt offset ' || num_periods  -- offset to point where iterative avg_gain should be caluclated
 LOOP
+	raise info 'dt: %, avg_gain: % gl_row.diff_gain: %', gl_row.dt, avg_gain, gl_row.diff_gain;
+	raise info 'dt: %, avg_loss: % gl_row.diff_loss: %', gl_row.dt, avg_loss, gl_row.diff_loss;
 	select gl_row.dt,
 		 (avg_gain*(num_periods-1) + gl_row.diff_gain)/num_periods as avg_gain,
 		 (avg_loss*(num_periods-1) + gl_row.diff_loss)/num_periods as avg_loss
@@ -56,6 +60,7 @@ LOOP
 
 	select avg_row.avg_gain / avg_row.avg_loss into rs ;
 	select 100 - 100 / (rs + 1) into rsi;
+	raise info 'dt: %, avg_gain: %, avg_loss: %, rs: %  rsi: %', avg_row.dt, avg_row.avg_gain::numeric(10,6), avg_row.avg_loss::numeric(10,6), rs, rsi;
 	select avg_row.dt as date , rsi::numeric(10,6) into rsi_row;
 	return next rsi_row;
 END LOOP;
