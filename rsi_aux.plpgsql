@@ -1,4 +1,4 @@
-create or replace function rsi_aux( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof float
+create or replace function rsi_aux( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof numeric(10,6)
 as $$
 declare
 	avg_gl record;
