@@ -1,0 +1,30 @@
+create or replace function ema( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns numeric(10,6)
+as $$
+declare
+begin
+end;
+$$ language 'plpgsql';
+
+create or replace function ema_aux( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof numeric(10,6)
+as $$
+declare
+	weighted_multipler float;
+	ema_yesterday float;
+	ema float;
+	row record;
+begin
+	select 2.0 / ( num_periods + 1 ) into weighted_multipler;
+	raise info 'weighted_multipler: %', weighted_multipler;
+	execute 'select avg(close) over ( rows ' || (num_periods - 1)::text || ' preceding ) from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') order by dt asc offset ' || (num_periods - 1)::text || ' limit 1;' into ema_yesterday;
+	return next ema_yesterday;
+
+	for row in execute 'select close  from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') order by dt asc offset ' || num_periods::text || ';'
+loop
+	-- raise info 'close: % / ema_yesterday: %', row.close, ema_yesterday;
+	select (row.close - ema_yesterday) * weighted_multipler + ema_yesterday into ema;
+	select ema into ema_yesterday;
+	-- raise info 'ema: %', ema;
+	return next ema;
+end loop;
+end;
+$$ language 'plpgsql';
