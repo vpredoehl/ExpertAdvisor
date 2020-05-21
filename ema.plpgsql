@@ -35,3 +35,13 @@ loop
 end loop;
 end;
 $$ language 'plpgsql';
+
+drop type sma_type cascade;
+create type sma_type as ( date timestamp without time zone, sma numeric(10,6));
+
+create or replace function sma( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof sma_type
+as $$
+begin
+	return query execute 'select dt, avg(close) over ( rows ' || (num_periods - 1)::text || ' preceding )::numeric(10,6) as sma from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''',' ||  ' ''' || fromdt || ''', ''' || todt || ''');';
+end;
+$$ language 'plpgsql';
