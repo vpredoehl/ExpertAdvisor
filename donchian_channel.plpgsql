@@ -5,7 +5,7 @@ create function donchian_channel(tbl text, n int, unit text, fromdt timestamp wi
 begin
 	RETURN QUERY
 		with t as (
-		select *, max(high) over w::numeric(10,6) as uc, min(low) over w::numeric(10,6) as lc from candlestick('audcadrmp', 5, 'minute', '2019-06-01', '2019-06-15')
+		select *, max(high) over w::numeric(10,6) as uc, min(low) over w::numeric(10,6) as lc from candlestick(tbl, n, unit, fromdt, todt)
 		window w as ( rows 13 preceding ) 
 		)
 		select *, ((uc+lc) / 2)::numeric(10,6) as mc from t;
