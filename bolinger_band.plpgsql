@@ -1,12 +1,13 @@
 drop type bb_type cascade;
-create type bb_type as ( dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), bolu numeric(10,6), bold numeric(10,6) );
+create type bb_type as ( above bool, below bool, dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), bolu numeric(10,6), bold numeric(10,6) );
 
 create or replace function bolinger_band(tbl text, n int, unit text, periods int, fromdt timestamp without time zone, todt timestamp without time zone, num_std int) returns setof bb_type as $$
 begin
 	RETURN QUERY
-		with t as ( select *, ( high + low + close ) / 3 as TP from candlestick(tbl, n, unit, fromdt, todt) )
-		select  dt, open, close, high, low,  (avg(TP) over w + 2 * stddev(TP) over w)::numeric(10,6) as BOLU,
-		 (avg(TP) over w - 2 * stddev(TP) over w)::numeric(10,6) as BOLD  from t window w as  ( rows 20 preceding );
+		with t2 as ( with t as ( select *, ( high + low + close ) / 3 as TP from candlestick(tbl, n, unit, fromdt, todt) )
+		 select  dt, open, close, high, low,  (avg(TP) over w + 2 * stddev(TP) over w)::numeric(10,6) as BOLU,
+		 (avg(TP) over w - 2 * stddev(TP) over w)::numeric(10,6) as BOLD  from t window w as  ( rows 20 preceding ) ) 
+			select bolu > close as above, bold < close as below, * from t2;
 end;
 $$ language 'plpgsql';
 
