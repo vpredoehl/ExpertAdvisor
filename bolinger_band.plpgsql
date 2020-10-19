@@ -1,7 +1,8 @@
 drop type bb_type cascade;
 drop type bb_backtest_type cascade;
+create type buy_sell as ENUM ( 'buy', 'sell' );
 create type bb_type as ( above bool, below bool, dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), bolu numeric(10,6), bold numeric(10,6) );
-create type bb_backtest_type as ( open_time timestamp without time zone, close_time timestamp without time zone, open numeric(10,6), close numeric(10,6), profit numeric(10,6) ); 
+create type bb_backtest_type as ( open_time timestamp without time zone, close_time timestamp without time zone, trade_type buy_sell, open numeric(10,6), close numeric(10,6), profit numeric(10,6) ); 
 
 create or replace function bolinger_band_cur(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone, todt timestamp without time zone) returns refcursor  as $$
 declare
@@ -35,24 +36,39 @@ declare
 	gl_row record;
 	bb_cur refcursor;
 	trade_open bool;
+	is_sell_trade bool;
+	is_buy_trade bool;
 	trade_open_price numeric(10,6);
 	trade_open_time timestamp without time zone;
 	ret bb_backtest_type;
+	profit numeric(10,6);
+	bs buy_sell;
 begin
 	select false into trade_open;
 	select * from bolinger_band_cur(tbl, n, unit, periods, num_stddevs, fromdt, todt) into bb_cur;
 	LOOP	
 		fetch next from bb_cur into gl_row;
 
-		if not trade_open and gl_row.above then 
+		if not trade_open and ( gl_row.above or gl_row.below ) then 
+			select gl_row.above into is_sell_trade;
+			select gl_row.below into is_buy_trade;
 			select true into trade_open;
 			select gl_row.close into trade_open_price;
 			select gl_row.dt into trade_open_time;
 		end if;
-		if trade_open and gl_row.below then
+		if trade_open and (is_sell_trade and gl_row.below or is_buy_trade and gl_row.above) then
 			select false into trade_open;
-			raise info 'Closing: open: %  close: %  profit: %', trade_open_price,gl_row.close,trade_open_price - gl_row.close;
-			select trade_open_time, gl_row.dt, trade_open_price, gl_row.close, trade_open_price - gl_row.close into ret;
+			if is_sell_trade then 
+				profit = trade_open_price - gl_row.close;
+				select 'sell' into bs;
+				--bs = 'sell';
+			 end if;
+			if is_buy_trade then
+				profit = gl_row.close - trade_open_price;
+				select 'buy' into bs;
+				--bs = 'buy';
+			end if;
+			select trade_open_time, gl_row.dt, bs, trade_open_price, gl_row.close, profit  into ret;
 			return next ret;
 		end if;
 		exit when not found;
