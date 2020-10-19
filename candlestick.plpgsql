@@ -1,10 +1,11 @@
 drop type cst cascade;
 create type cst as ( dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6) );
 
-CREATE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS SETOF cst
+CREATE OR REPLACE FUNCTION candlestick_cur(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS refcursor
 AS $$
 declare
 	higher_tf text;
+	c refcursor;
 begin
 	select case when unit='minute' then 'hour'
 	when unit='hour' then 'day'
@@ -14,7 +15,7 @@ begin
 	if higher_tf='' then raise exception 'unit must be year, month, day, hour, minute, not %', unit; end if;
 	--raise info 'unit: %, higher_tf: %', unit, higher_tf;
 
-	RETURN QUERY execute
+	open c no scroll for execute
 	'select distinct dt + mn * interval ''' || n::text || ' ' || unit || ''' as dt, ' 
 		|| 'case when count(*) over w=1 then lag(ask,1) over w_1row else first_value(ask) over w end::numeric(10,6) as open,'
 		|| ' last_value(ask) over w::numeric(10,6) as close,'
@@ -23,7 +24,24 @@ begin
 	select date_trunc(''' || higher_tf || ''', time) as dt, extract(' || unit || ' from time)::int / ' || n::text || ' as mn,  ask '
 	|| ' from ' || tbl || ' where time between ''' || fromdt::text || ''' and ''' || todt::text || ''' order by time) as t'
 	|| ' window w as (partition by (dt, mn)), w_1row as ( rows 1 preceding ) order by dt asc;';
+
+	return c;
 end;
 $$
 LANGUAGE 'plpgsql';
 
+CREATE OR REPLACE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS setof cst
+as $$
+declare
+	gl_row record;
+	c refcursor;
+begin
+	select * from candlestick_cur(tbl, n, unit, fromdt, todt) into c;
+	LOOP
+		fetch next from c into gl_row;
+		-- raise info 'time: %, high: %, low: %, open: %, close: %', gl_row.time, gl_row.high, gl_row.low, gl_row.open, gl_row.close;
+		return next gl_row;
+		exit when not found;
+	END LOOP;
+end;
+$$ language plpgsql;
