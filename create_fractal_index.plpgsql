@@ -1,0 +1,3 @@
+create index audcad_fractal_ts_idx on audcad_fractal ( ts ) include ( fractal_high, fractal_low );
+create index audcad_fractal_low_idx on audcad_fractal ( fractal_low, ts ) where fractal_low;
+create index audcad_fractal_high_idx on audcad_fractal ( fractal_high, ts ) where fractal_high;

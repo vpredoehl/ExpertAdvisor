@@ -1,5 +1,7 @@
+drop type fractal_type cascade;
+create type fractal_type as ( ts timestamp without time zone, open numeric(10,6), close numeric(10,6), hi numeric(10,6), lo numeric(10,6), fractal_high bool, fractal_low bool );
 create or replace function fractal(tbl text, periods int, unit text, fromdt timestamp without time zone, todt timestamp without time zone) 
-returns table( ts timestamp without time zone, open numeric(10,6), close numeric(10,6), hi numeric(10,6), lo numeric(10,6), fractal_high bool, fractal_low bool )
+returns setof fractal_type
 as $$
 begin
 return query
