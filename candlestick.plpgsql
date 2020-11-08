@@ -40,8 +40,8 @@ begin
 	LOOP
 		fetch next from c into gl_row;
 		-- raise info 'time: %, high: %, low: %, open: %, close: %', gl_row.time, gl_row.high, gl_row.low, gl_row.open, gl_row.close;
-		return next gl_row;
 		exit when not found;
+		return next gl_row;
 	END LOOP;
 end;
 $$ language plpgsql;
