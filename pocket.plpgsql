@@ -1,0 +1,22 @@
+drop type pocket_type cascade;
+create type pocket_type as ( pocket_open_ts timestamp without time zone, pocket_close_ts timestamp without time zone, pocket_high numeric(10,6), pocket_low numeric(10,6), max_pips_to_touch numeric(10,6), max_pips_to_close numeric(10,6) );
+
+create or replace function pocket(tbl text)
+returns setof pocket_type
+as $$
+declare
+	r record;
+	r2 record;
+	r3 record;
+	pips record;
+begin
+	for r in execute 'with t as ( select *, max(high) over ( rows 15 preceding )::numeric(10,6) as pocket_low, lead(low,1) over ()::numeric(10,6) as pocket_high from ' || tbl || ' order by dt) select * from t where pocket_low < pocket_high'
+	loop
+		execute 'select ''' || r.dt || ''' as pocket_open_ts, dt as pocket_touch_ts, ' || r.pocket_high || ' as pocket_high, ' || r.pocket_low || ' as pocket_low from ' || tbl || ' where dt > ''' || r.dt || ''' and low < ' || r.pocket_high into r2;
+		execute 'select (max(high) - ' || r.pocket_high || ')::numeric(10,6) as to_touch, (max(high) - ' || r.pocket_low || ')::numeric(10,6) as to_close from ' || tbl || ' where dt between ''' || r2.pocket_open_ts || ''' and ''' || r2.pocket_touch_ts || '''' into pips; 
+		 raise info 'pocket_open: %, pocket_touch: %, pips_to_touch: %, pips_to_close: %', r2.pocket_open_ts, r2.pocket_touch_ts, pips.to_touch, pips.to_close;
+		select r2.pocket_open_ts::timestamp without time zone, r2.pocket_touch_ts,  r2.pocket_high::numeric(10,6), r2.pocket_low::numeric(10,6), pips.to_touch, pips.to_close into r3;
+		return next r3;
+	end loop;
+end;
+$$ language 'plpgsql';
