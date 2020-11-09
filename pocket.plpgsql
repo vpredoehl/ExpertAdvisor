@@ -1,5 +1,5 @@
 drop type pocket_type cascade;
-create type pocket_type as ( pocket_open_ts timestamp without time zone, pocket_close_ts timestamp without time zone, pocket_high numeric(10,6), pocket_low numeric(10,6), pocket_pips numeric(6,1), max_pips_to_touch numeric(6,1), max_pips_to_close numeric(6,1) );
+create type pocket_type as ( pocket_open_ts timestamp without time zone, pocket_touch_ts timestamp without time zone, pocket_close_ts timestamp without time zone, pocket_high numeric(10,6), pocket_low numeric(10,6), pocket_pips numeric(6,1), max_pips_to_touch numeric(6,1), max_pips_to_close numeric(6,1) );
 
 create or replace function pocket(tbl text)
 returns setof pocket_type
@@ -11,6 +11,7 @@ declare
 	pips record;
 	pair char(6);
 	dollar_per_pip numeric(10,6);
+	pocket_close_ts timestamp without time zone;
 	qs text;
 begin
 	select upper(left(tbl,6)) into pair;
@@ -21,10 +22,12 @@ begin
 		qs = format('select %L as pocket_open_ts, dt as pocket_touch_ts, %L::numeric(10,6) as pocket_high, %L::numeric(10,6) as pocket_low from %I where dt > %L and low < %L', r.dt, r.pocket_high, r.pocket_low, tbl, r.dt, r.pocket_high);
 		execute qs into r2;
 		exit when r2 is null; -- no pocket close before end of data
+		qs = format('select dt   from %I where dt > %L and low < %L', tbl, r.dt, r.pocket_low) ;
+		execute qs into pocket_close_ts;
 		qs = format('select ((max(high) - %L) / %L)::numeric(6,1) as to_touch, ((max(high) - %L) / %L)::numeric(6,1) as to_close from %I where dt between %L and %L', r.pocket_high, dollar_per_pip, r.pocket_low, dollar_per_pip, tbl, r2.pocket_open_ts, r2.pocket_touch_ts); 
 		execute qs into pips;
-		-- raise info 'pocket_open: %, pocket_touch: %, pips_to_touch: %, pips_to_close: %', r2.pocket_open_ts, r2.pocket_touch_ts, pips.to_touch, pips.to_close;
-		select r2.pocket_open_ts::timestamp without time zone, r2.pocket_touch_ts,  r2.pocket_high, r2.pocket_low, ((r2.pocket_high - r2.pocket_low) / dollar_per_pip)::numeric(6,1), pips.to_touch, pips.to_close into r3;
+		raise info 'open_ts: %, touch_ts: %, close_ts: %, pips_to_touch: %, pips_to_close: %', r2.pocket_open_ts, r2.pocket_touch_ts, pocket_close_ts, pips.to_touch, pips.to_close;
+		select r2.pocket_open_ts::timestamp without time zone, r2.pocket_touch_ts, pocket_close_ts,  r2.pocket_high, r2.pocket_low, ((r2.pocket_high - r2.pocket_low) / dollar_per_pip)::numeric(6,1), pips.to_touch, pips.to_close into r3;
 		return next r3;
 	end loop;
 end;
