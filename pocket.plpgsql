@@ -1,7 +1,7 @@
 drop type pocket_type cascade;
 create type pocket_type as ( pocket_open_ts timestamp without time zone, pocket_touch_ts timestamp without time zone, pocket_close_ts timestamp without time zone, pocket_high numeric(10,6), pocket_low numeric(10,6), pocket_pips numeric(6,1), max_pips_to_touch numeric(6,1), max_pips_to_close numeric(6,1) );
 
-create or replace function pocket(tbl text)
+create or replace function pocket(tbl text, pocket_minimum int)
 returns setof pocket_type
 as $$
 declare
@@ -19,6 +19,7 @@ begin
 	-- raise info 'pair: %, dollar_per_pip: %', pair, dollar_per_pip;
 	for r in execute 'with t as ( select *, max(high) over ( rows 15 preceding )::numeric(10,6) as pocket_low, lead(low,1) over ()::numeric(10,6) as pocket_high from ' || tbl || ' order by dt) select * from t where pocket_low < pocket_high'
 	loop
+		continue when (r.pocket_high - r.pocket_low) / dollar_per_pip < pocket_minimum;
 		qs = format('select %L as pocket_open_ts, dt as pocket_touch_ts, %L::numeric(10,6) as pocket_high, %L::numeric(10,6) as pocket_low from %I where dt > %L and low < %L', r.dt, r.pocket_high, r.pocket_low, tbl, r.dt, r.pocket_high);
 		execute qs into r2;
 		exit when r2 is null; -- no pocket close before end of data
