@@ -1,0 +1,14 @@
+create or replace function chande_momentum(tbl text, intervals int, n int, fromdt timestamp without time zone, todt timestamp without time zone) 
+returns table(dt timestamp without time zone, dph int, open_price float, close_price float, high float, low float, chande float)
+as $$
+declare
+	sum_higher_close float[];
+	sum_lower_close float;
+begin
+execute 
+'with t as ( select * from fractal(''' || tbl || ''',' || intervals || ', ''' || fromdt || ''',''' || todt || ''') )
+select array_agg(sum(close)) filter ( where higher_close = true )over ( rows 19 preceding)  as sum_higher_close  from t;' into sum_higher_close;
+raise info 'sum_higher_close: %', sum_higher_close;
+end;
+$$
+language 'plpgsql';

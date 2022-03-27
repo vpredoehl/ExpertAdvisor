@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+	oid int;
+begin
+	FOR f in select tablename from pg_tables  where tablename like '%2021%'  order by tablename
+	LOOP
+ 		qs = format('copy ( with t3 as ( with t2 as ( with t as ( select distinct date_trunc(''day'', time) as dd  from %I where time >= ''09-01-2020'' order by 1) select dd as d2, lag(dd,1) over () as d1  from t) select  d2, d2 - d1 as df from t2 ) select d2, df from t3 where df > ''2 days'' ) to ''/Volumes/Developer USB/ExpertAdvisor/check_%I.txt''', f, f);
+		raise info 'checking: %', f;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';

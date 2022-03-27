@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+	oid int;
+begin
+	FOR f in select indexname from pg_indexes  where indexname like '%low_idx'  order by indexname
+	LOOP
+		qs = format('drop index %I',  f);
+		raise info 'executing: %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
