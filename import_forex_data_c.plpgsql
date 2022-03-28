@@ -12,7 +12,6 @@ begin
 	LOOP
 		select concat(concat('*', upper(substring(f,1,6))), '*') into fu;
 		cmd =  format('find /Volumes/Lacie\ Porsche/2022 -name %I.csv -exec cat {} \;',fu);
-		raise info 'cmd: %', cmd;
 		qs1 = format('drop trigger t_info on csvtemp; create trigger t_info before insert on csvtemp for each row execute procedure t_load("%I")', f);
 		qs2 = format('copy csvtemp from program %L', cmd);
 		begin
