@@ -31,6 +31,7 @@ begin
 	END LOOP;
 end;
 $$ language plpgsql;
+
 create or replace function bolinger_backtest(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone, todt timestamp without time zone) returns setof bb_backtest_type as $$
 declare
 	gl_row record;
@@ -56,6 +57,9 @@ begin
 			select gl_row.close into trade_open_price;
 			select gl_row.dt into trade_open_time;
 		end if;
+		if trade_open and (is_sell_trade and gl_row.high - trade_open_price > .003 or is_buy_trade and trade_open_price - gl_row.low > .003)
+			-- stop loss
+		end if;
 		if trade_open and (is_sell_trade and gl_row.below or is_buy_trade and gl_row.above) then
 			select false into trade_open;
 			if is_sell_trade then 
@@ -75,3 +79,4 @@ begin
 	END LOOP;
 end;
 $$ language plpgsql;
+

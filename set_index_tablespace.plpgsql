@@ -1,0 +1,17 @@
+do $code$
+declare
+	qs1 text;
+	f text;
+begin
+	FOR f in select indexname from pg_indexes  where indexname like '%2022%'   order by indexname
+	LOOP
+		qs1 = format('alter index %I set tablespace forex_indices;', f);
+		BEGIN
+			raise info 'executing: %', qs1;
+			execute qs1;
+		EXCEPTION WHEN OTHERS THEN 
+			raise info 'skipping';
+		END;
+	END LOOP;
+end $code$
+language 'plpgsql';
