@@ -4,35 +4,45 @@ declare
 	qs text;
 	oid int;
 	tbl text;
-	cur_year int;
+	key text;
+	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
 begin
-	FOR f in select tablename from pg_tables  where tablename like '%2010%'  order by tablename
+	FOR y in 2010..2022 LOOP
+	select substring('''%' || y || '%''',2,6) into key;
+	FOR f in pair(key)
 	LOOP
-		select substring(f, 1, 6) into tbl;
- 		qs = format('create materialized view %I_2010_candlestick1m  tablespace forex_view as select * from candlestick(''%I_2010'', 1, ''minute'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl );
+		select substring(f::text, 2, 6) into tbl;
+		raise info 'f: %, tbl: %', f, tbl;
+ 		qs = format('create materialized view %I_2010_candlestick1m  tablespace forex_view as select * from candlestick(''%I_2010'', 1, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
+			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_2010_candlestick5m  tablespace forex_view as select * from candlestick(''%I_2010'', 5, ''minute'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl );
+ 		qs = format('create materialized view %I_2010_candlestick5m  tablespace forex_view as select * from candlestick(''%I_2010'', 5, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
+			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_2010_candlestick15m  tablespace forex_view as select * from candlestick(''%I_2010'', 15, ''minute'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl );
+ 		qs = format('create materialized view %I_2010_candlestick15m  tablespace forex_view as select * from candlestick(''%I_2010'', 15, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
+			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_2010_candlestick1day  tablespace forex_view as select * from candlestick(''%I_2010'', 1, ''day'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl );
+ 		qs = format('create materialized view %I_2010_candlestick1day  tablespace forex_view as select * from candlestick(''%I_2010'', 1, ''day'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
+			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
+		COMMIT;
+	END LOOP;
 	END LOOP;
 end $code$
 language 'plpgsql';
