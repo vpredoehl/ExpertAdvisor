@@ -11,30 +11,30 @@ begin
 	select substring('''%' || y || '%''',2,6) into key;
 	FOR f in pair(key)
 	LOOP
-		select substring(f::text, 2, 6) into tbl;
+		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
- 		qs = format('create materialized view %I_%s_candlestick1m  tablespace forex_view as select * from candlestick(''%I_2010'', 1, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, y, tbl );
+ 		qs = format('create materialized view %I_candlestick1m  tablespace forex_view as select * from candlestick(''%I'', 1, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_%s_candlestick5m  tablespace forex_view as select * from candlestick(''%I_2010'', 5, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, y, tbl );
+ 		qs = format('create materialized view %I_candlestick5m  tablespace forex_view as select * from candlestick(''%I'', 5, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_%s_candlestick15m  tablespace forex_view as select * from candlestick(''%I_2010'', 15, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, y, tbl );
+ 		qs = format('create materialized view %I_candlestick15m  tablespace forex_view as select * from candlestick(''%I'', 15, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_%s_candlestick1day  tablespace forex_view as select * from candlestick(''%I_2010'', 1, ''day'',  ''-infinity'', ''infinity'') with data;', tbl, y, tbl );
+ 		qs = format('create materialized view %I_candlestick1day  tablespace forex_view as select * from candlestick(''%I'', 1, ''day'',  ''-infinity'', ''infinity'') with data;', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
