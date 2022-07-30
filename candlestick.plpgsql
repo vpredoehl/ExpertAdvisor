@@ -28,7 +28,8 @@ begin
 	return c;
 end;
 $$
-LANGUAGE 'plpgsql';
+LANGUAGE 'plpgsql'
+PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS setof cst
 as $$
@@ -44,4 +45,5 @@ begin
 		return next gl_row;
 	END LOOP;
 end;
-$$ language plpgsql;
+$$ language plpgsql
+PARALLEL SAFE;
