@@ -1,3 +1,79 @@
-create index audcad_fractal_ts_idx on audcad_fractal ( ts ) include ( fractal_high, fractal_low );
-create index audcad_fractal_low_idx on audcad_fractal ( fractal_low, ts ) where fractal_low;
-create index audcad_fractal_high_idx on audcad_fractal ( fractal_high, ts ) where fractal_high;
+create index audcad_fractal_ts_idx on audcad_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index audcad_fractal_low_idx on audcad_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index audcad_fractal_high_idx on audcad_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index audchf_fractal_ts_idx on audchf_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index audchf_fractal_low_idx on audchf_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index audchf_fractal_high_idx on audchf_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index audjpy_fractal_ts_idx on audjpy_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index audjpy_fractal_low_idx on audjpy_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index audjpy_fractal_high_idx on audjpy_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index audnzd_fractal_ts_idx on audnzd_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index audnzd_fractal_low_idx on audnzd_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index audnzd_fractal_high_idx on audnzd_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index audusd_fractal_ts_idx on audusd_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index audusd_fractal_low_idx on audusd_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index audusd_fractal_high_idx on audusd_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index cadchf_fractal_ts_idx on cadchf_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index cadchf_fractal_low_idx on cadchf_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index cadchf_fractal_high_idx on cadchf_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index cadjpy_fractal_ts_idx on cadjpy_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index cadjpy_fractal_low_idx on cadjpy_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index cadjpy_fractal_high_idx on cadjpy_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index chfjpy_fractal_ts_idx on chfjpy_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index chfjpy_fractal_low_idx on chfjpy_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index chfjpy_fractal_high_idx on chfjpy_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index euraud_fractal_ts_idx on euraud_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index euraud_fractal_low_idx on euraud_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index euraud_fractal_high_idx on euraud_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index eurcad_fractal_ts_idx on eurcad_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index eurcad_fractal_low_idx on eurcad_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index eurcad_fractal_high_idx on eurcad_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index eurchf_fractal_ts_idx on eurchf_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index eurchf_fractal_low_idx on eurchf_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index eurchf_fractal_high_idx on eurchf_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index eurgbp_fractal_ts_idx on eurgbp_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index eurgbp_fractal_low_idx on eurgbp_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index eurgbp_fractal_high_idx on eurgbp_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index eurjpy_fractal_ts_idx on eurjpy_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index eurjpy_fractal_low_idx on eurjpy_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index eurjpy_fractal_high_idx on eurjpy_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index eurnzd_fractal_ts_idx on eurnzd_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index eurnzd_fractal_low_idx on eurnzd_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index eurnzd_fractal_high_idx on eurnzd_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index eurusd_fractal_ts_idx on eurusd_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index eurusd_fractal_low_idx on eurusd_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index eurusd_fractal_high_idx on eurusd_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index gbpaud_fractal_ts_idx on gbpaud_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index gbpaud_fractal_low_idx on gbpaud_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index gbpaud_fractal_high_idx on gbpaud_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index gbpcad_fractal_ts_idx on gbpcad_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index gbpcad_fractal_low_idx on gbpcad_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index gbpcad_fractal_high_idx on gbpcad_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index gbpchf_fractal_ts_idx on gbpchf_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index gbpchf_fractal_low_idx on gbpchf_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index gbpchf_fractal_high_idx on gbpchf_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index gbpjpy_fractal_ts_idx on gbpjpy_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index gbpjpy_fractal_low_idx on gbpjpy_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index gbpjpy_fractal_high_idx on gbpjpy_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;
+
+create index gbpnzd_fractal_ts_idx on gbpnzd_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices;
+create index gbpnzd_fractal_low_idx on gbpnzd_fractal5m( fractal_low, ts ) tablespace forex_indices where fractal_low;
+create index gbpnzd_fractal_high_idx on gbpnzd_fractal5m( fractal_high, ts ) tablespace forex_indices where fractal_high;

@@ -1,0 +1,29 @@
+do $code$
+declare
+	f text;
+	qs text;
+	oid int;
+	tbl text;
+	key text;
+	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
+begin
+	FOR y in 2010..2021 LOOP
+	select substring('''%' || y || '%''',2,6) into key;
+	FOR f in pair(key)
+	LOOP
+		select substring(f::text, 2, 11) into tbl;
+		raise info 'f: %, tbl: %', f, tbl;
+		qs = format('create materialized view %I_fractal1hr  tablespace forex_view as select * from fractal(%L, 1, ''hour'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		COMMIT;
+	END LOOP;
+	END LOOP;
+end $code$
+language 'plpgsql';
+
+

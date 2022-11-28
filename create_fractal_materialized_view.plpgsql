@@ -1,144 +1,64 @@
-create materialized view audcad_fractal5m  tablespace forex_view as select * from fractal('audcadrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audjpy_fractal5m  tablespace forex_view as select * from fractal('audjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audchf_fractal5m  tablespace forex_view as select * from fractal('audchfrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audusd_fractal5m  tablespace forex_view as select * from fractal('audusdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audnzd_fractal5m  tablespace forex_view as select * from fractal('audnzdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view cadchf_fractal5m  tablespace forex_view as select * from fractal('cadchfrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view cadjpy_fractal5m  tablespace forex_view as select * from fractal('cadjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view chfjpy_fractal5m  tablespace forex_view as select * from fractal('chfjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view euraud_fractal5m  tablespace forex_view as select * from fractal('euraudrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurcad_fractal5m  tablespace forex_view as select * from fractal('eurcadrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurchf_fractal5m  tablespace forex_view as select * from fractal('eurchfrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurgbp_fractal5m  tablespace forex_view as select * from fractal('eurgbprmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurjpy_fractal5m  tablespace forex_view as select * from fractal('eurjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurnzd_fractal5m  tablespace forex_view as select * from fractal('eurnzdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurusd_fractal5m  tablespace forex_view as select * from fractal('eurusdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpaud_fractal5m  tablespace forex_view as select * from fractal('gbpaudrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpcad_fractal5m  tablespace forex_view as select * from fractal('gbpcadrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpchf_fractal5m  tablespace forex_view as select * from fractal('gbpchfrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpjpy_fractal5m  tablespace forex_view as select * from fractal('gbpjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpnzd_fractal5m  tablespace forex_view as select * from fractal('gbpnzdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpusd_fractal5m  tablespace forex_view as select * from fractal('gbpusdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdcad_fractal5m  tablespace forex_view as select * from fractal('nzdcadrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdchf_fractal5m  tablespace forex_view as select * from fractal('nzdchfrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdjpy_fractal5m  tablespace forex_view as select * from fractal('nzdjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdusd_fractal5m  tablespace forex_view as select * from fractal('nzdusdrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view usdcad_fractal5m  tablespace forex_view as select * from fractal('usdcadrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view usdchf_fractal5m  tablespace forex_view as select * from fractal('usdchfrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view usdjpy_fractal5m  tablespace forex_view as select * from fractal('usdjpyrmp', 5, 'minute',  '-infinity', 'infinity') with no data;
+do $code$
+declare
+	f text;
+	qs text;
+	oid int;
+	tbl text;
+	key text;
+	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
+begin
+	FOR y in 2010..2021 LOOP
+	select substring('''%' || y || '%''',2,6) into key;
+	FOR f in pair(key)
+	LOOP
+		select substring(f::text, 2, 11) into tbl;
+		raise info 'f: %, tbl: %', f, tbl;
+		qs = format('create materialized view %I_fractal1m  tablespace forex_view as select * from fractal(%L, 1, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('create materialized view %I_fractal5m  tablespace forex_view as select * from fractal(%L, 5, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('create materialized view %I_fractal15m  tablespace forex_view as select * from fractal(%L, 15, ''minute'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('create materialized view %I_fractal1hr  tablespace forex_view as select * from fractal(%L, 1, ''hour'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('create materialized view %I_fractal4hr  tablespace forex_view as select * from fractal(%L, 4, ''hour'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('create materialized view %I_fractal1day  tablespace forex_view as select * from fractal(%L, 1, ''day'',  ''-infinity'', ''infinity'') with data;', tbl, tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		COMMIT;
+	END LOOP;
+	END LOOP;
+end $code$
+language 'plpgsql';
 
-create materialized view audcad_fractal15m  tablespace forex_view as select * from fractal('audcadrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audjpy_fractal15m  tablespace forex_view as select * from fractal('audjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audchf_fractal15m  tablespace forex_view as select * from fractal('audchfrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audusd_fractal15m  tablespace forex_view as select * from fractal('audusdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view audnzd_fractal15m  tablespace forex_view as select * from fractal('audnzdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view cadchf_fractal15m  tablespace forex_view as select * from fractal('cadchfrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view cadjpy_fractal15m  tablespace forex_view as select * from fractal('cadjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view chfjpy_fractal15m  tablespace forex_view as select * from fractal('chfjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view euraud_fractal15m  tablespace forex_view as select * from fractal('euraudrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurcad_fractal15m  tablespace forex_view as select * from fractal('eurcadrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurchf_fractal15m  tablespace forex_view as select * from fractal('eurchfrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurgbp_fractal15m  tablespace forex_view as select * from fractal('eurgbprmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurjpy_fractal15m  tablespace forex_view as select * from fractal('eurjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurnzd_fractal15m  tablespace forex_view as select * from fractal('eurnzdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view eurusd_fractal15m  tablespace forex_view as select * from fractal('eurusdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpaud_fractal15m  tablespace forex_view as select * from fractal('gbpaudrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpcad_fractal15m  tablespace forex_view as select * from fractal('gbpcadrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpchf_fractal15m  tablespace forex_view as select * from fractal('gbpchfrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpjpy_fractal15m  tablespace forex_view as select * from fractal('gbpjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpnzd_fractal15m  tablespace forex_view as select * from fractal('gbpnzdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view gbpusd_fractal15m  tablespace forex_view as select * from fractal('gbpusdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdcad_fractal15m  tablespace forex_view as select * from fractal('nzdcadrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdchf_fractal15m  tablespace forex_view as select * from fractal('nzdchfrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdjpy_fractal15m  tablespace forex_view as select * from fractal('nzdjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view nzdusd_fractal15m  tablespace forex_view as select * from fractal('nzdusdrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view usdcad_fractal15m  tablespace forex_view as select * from fractal('usdcadrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view usdchf_fractal15m  tablespace forex_view as select * from fractal('usdchfrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
-create materialized view usdjpy_fractal15m  tablespace forex_view as select * from fractal('usdjpyrmp', 15, 'minute',  '-infinity', 'infinity') with no data;
 
-create materialized view audcad_fractal1hr  tablespace forex_view as select * from fractal('audcadrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audjpy_fractal1hr  tablespace forex_view as select * from fractal('audjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audchf_fractal1hr  tablespace forex_view as select * from fractal('audchfrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audusd_fractal1hr  tablespace forex_view as select * from fractal('audusdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audnzd_fractal1hr  tablespace forex_view as select * from fractal('audnzdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view cadchf_fractal1hr  tablespace forex_view as select * from fractal('cadchfrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view cadjpy_fractal1hr  tablespace forex_view as select * from fractal('cadjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view chfjpy_fractal1hr  tablespace forex_view as select * from fractal('chfjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view euraud_fractal1hr  tablespace forex_view as select * from fractal('euraudrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurcad_fractal1hr  tablespace forex_view as select * from fractal('eurcadrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurchf_fractal1hr  tablespace forex_view as select * from fractal('eurchfrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurgbp_fractal1hr  tablespace forex_view as select * from fractal('eurgbprmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurjpy_fractal1hr  tablespace forex_view as select * from fractal('eurjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurnzd_fractal1hr  tablespace forex_view as select * from fractal('eurnzdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurusd_fractal1hr  tablespace forex_view as select * from fractal('eurusdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpaud_fractal1hr  tablespace forex_view as select * from fractal('gbpaudrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpcad_fractal1hr  tablespace forex_view as select * from fractal('gbpcadrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpchf_fractal1hr  tablespace forex_view as select * from fractal('gbpchfrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpjpy_fractal1hr  tablespace forex_view as select * from fractal('gbpjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpnzd_fractal1hr  tablespace forex_view as select * from fractal('gbpnzdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpusd_fractal1hr  tablespace forex_view as select * from fractal('gbpusdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdcad_fractal1hr  tablespace forex_view as select * from fractal('nzdcadrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdchf_fractal1hr  tablespace forex_view as select * from fractal('nzdchfrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdjpy_fractal1hr  tablespace forex_view as select * from fractal('nzdjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdusd_fractal1hr  tablespace forex_view as select * from fractal('nzdusdrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view usdcad_fractal1hr  tablespace forex_view as select * from fractal('usdcadrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view usdchf_fractal1hr  tablespace forex_view as select * from fractal('usdchfrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view usdjpy_fractal1hr  tablespace forex_view as select * from fractal('usdjpyrmp', 1, 'hour',  '-infinity', 'infinity') with no data;
-
-create materialized view audcad_fractal4hr  tablespace forex_view as select * from fractal('audcadrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audjpy_fractal4hr  tablespace forex_view as select * from fractal('audjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audchf_fractal4hr  tablespace forex_view as select * from fractal('audchfrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audusd_fractal4hr  tablespace forex_view as select * from fractal('audusdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view audnzd_fractal4hr  tablespace forex_view as select * from fractal('audnzdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view cadchf_fractal4hr  tablespace forex_view as select * from fractal('cadchfrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view cadjpy_fractal4hr  tablespace forex_view as select * from fractal('cadjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view chfjpy_fractal4hr  tablespace forex_view as select * from fractal('chfjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view euraud_fractal4hr  tablespace forex_view as select * from fractal('euraudrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurcad_fractal4hr  tablespace forex_view as select * from fractal('eurcadrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurchf_fractal4hr  tablespace forex_view as select * from fractal('eurchfrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurgbp_fractal4hr  tablespace forex_view as select * from fractal('eurgbprmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurjpy_fractal4hr  tablespace forex_view as select * from fractal('eurjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurnzd_fractal4hr  tablespace forex_view as select * from fractal('eurnzdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view eurusd_fractal4hr  tablespace forex_view as select * from fractal('eurusdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpaud_fractal4hr  tablespace forex_view as select * from fractal('gbpaudrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpcad_fractal4hr  tablespace forex_view as select * from fractal('gbpcadrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpchf_fractal4hr  tablespace forex_view as select * from fractal('gbpchfrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpjpy_fractal4hr  tablespace forex_view as select * from fractal('gbpjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpnzd_fractal4hr  tablespace forex_view as select * from fractal('gbpnzdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view gbpusd_fractal4hr  tablespace forex_view as select * from fractal('gbpusdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdcad_fractal4hr  tablespace forex_view as select * from fractal('nzdcadrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdchf_fractal4hr  tablespace forex_view as select * from fractal('nzdchfrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdjpy_fractal4hr  tablespace forex_view as select * from fractal('nzdjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view nzdusd_fractal4hr  tablespace forex_view as select * from fractal('nzdusdrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view usdcad_fractal4hr  tablespace forex_view as select * from fractal('usdcadrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view usdchf_fractal4hr  tablespace forex_view as select * from fractal('usdchfrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-create materialized view usdjpy_fractal4hr  tablespace forex_view as select * from fractal('usdjpyrmp', 4, 'hour',  '-infinity', 'infinity') with no data;
-
-create materialized view audcad_fractal1day  tablespace forex_view as select * from fractal('audcadrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view audjpy_fractal1day  tablespace forex_view as select * from fractal('audjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view audchf_fractal1day  tablespace forex_view as select * from fractal('audchfrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view audusd_fractal1day  tablespace forex_view as select * from fractal('audusdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view audnzd_fractal1day  tablespace forex_view as select * from fractal('audnzdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view cadchf_fractal1day  tablespace forex_view as select * from fractal('cadchfrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view cadjpy_fractal1day  tablespace forex_view as select * from fractal('cadjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view chfjpy_fractal1day  tablespace forex_view as select * from fractal('chfjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view euraud_fractal1day  tablespace forex_view as select * from fractal('euraudrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view eurcad_fractal1day  tablespace forex_view as select * from fractal('eurcadrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view eurchf_fractal1day  tablespace forex_view as select * from fractal('eurchfrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view eurgbp_fractal1day  tablespace forex_view as select * from fractal('eurgbprmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view eurjpy_fractal1day  tablespace forex_view as select * from fractal('eurjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view eurnzd_fractal1day  tablespace forex_view as select * from fractal('eurnzdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view eurusd_fractal1day  tablespace forex_view as select * from fractal('eurusdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view gbpaud_fractal1day  tablespace forex_view as select * from fractal('gbpaudrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view gbpcad_fractal1day  tablespace forex_view as select * from fractal('gbpcadrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view gbpchf_fractal1day  tablespace forex_view as select * from fractal('gbpchfrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view gbpjpy_fractal1day  tablespace forex_view as select * from fractal('gbpjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view gbpnzd_fractal1day  tablespace forex_view as select * from fractal('gbpnzdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view gbpusd_fractal1day  tablespace forex_view as select * from fractal('gbpusdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view nzdcad_fractal1day  tablespace forex_view as select * from fractal('nzdcadrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view nzdchf_fractal1day  tablespace forex_view as select * from fractal('nzdchfrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view nzdjpy_fractal1day  tablespace forex_view as select * from fractal('nzdjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view nzdusd_fractal1day  tablespace forex_view as select * from fractal('nzdusdrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view usdcad_fractal1day  tablespace forex_view as select * from fractal('usdcadrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view usdchf_fractal1day  tablespace forex_view as select * from fractal('usdchfrmp', 1, 'day',  '-infinity', 'infinity') with no data;
-create materialized view usdjpy_fractal1day  tablespace forex_view as select * from fractal('usdjpyrmp', 1, 'day',  '-infinity', 'infinity') with no data;
