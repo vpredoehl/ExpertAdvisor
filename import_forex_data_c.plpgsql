@@ -26,11 +26,3 @@ begin
 end $code$
 language 'plpgsql';
 
--- create trigger t_info before insert on csvtemp
--- for each row execute procedure t_load('audcadrmp');
--- copy csvtemp from program 'find /Volumes/Lacie\ Porsche/2022 -name "*AUDCAD*.csv" -exec cat {} \;';
-
--- drop trigger t_info on csvtemp;
--- create trigger t_info before insert on csvtemp
--- for each row execute procedure t_load('audcadrmp');
--- copy csvtemp from program 'find /Volumes/Lacie\ Porsche/2022 -name "*AUDCAD*.csv" -exec cat {} \;';
