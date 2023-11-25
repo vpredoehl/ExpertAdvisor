@@ -13,42 +13,42 @@ begin
 	LOOP
 		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('create materialized view %I_bollinger1m tablespace forex_view as select * from bolinger_band(%L, 1, ''minute'', 14, 2, ''-infinity'', ''infinity'') with data;', tbl,tbl);
+		qs = format('create materialized view %I_bollinger1m tablespace forex_view as select * from bolinger_band(%L, 1, ''minute'', 14, 2, ''-infinity'', ''infinity'') with no data;', tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_bollinger5m tablespace forex_view as select * from bolinger_band(%L, 5, ''minute'', 14, 2, ''-infinity'', ''infinity'') with data;', tbl,tbl);
+		qs = format('create materialized view %I_bollinger5m tablespace forex_view as select * from bolinger_band(%L, 5, ''minute'', 14, 2, ''-infinity'', ''infinity'') with no data;', tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_bollinger15m tablespace forex_view as select * from bolinger_band(%L, 15, ''minute'', 14, 2, ''-infinity'', ''infinity'') with data;', tbl,tbl);
+		qs = format('create materialized view %I_bollinger15m tablespace forex_view as select * from bolinger_band(%L, 15, ''minute'', 14, 2, ''-infinity'', ''infinity'') with no data;', tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_bollinger1hr tablespace forex_view as select * from bolinger_band(%L, 1, ''hour'', 14, 2, ''-infinity'', ''infinity'') with data;', tbl,tbl);
+		qs = format('create materialized view %I_bollinger1hr tablespace forex_view as select * from bolinger_band(%L, 1, ''hour'', 14, 2, ''-infinity'', ''infinity'') with no data;', tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_bollinger4hr tablespace forex_view as select * from bolinger_band(%L, 4, ''hour'', 14, 2, ''-infinity'', ''infinity'') with data;', tbl,tbl);
+		qs = format('create materialized view %I_bollinger4hr tablespace forex_view as select * from bolinger_band(%L, 4, ''hour'', 14, 2, ''-infinity'', ''infinity'') with no data;', tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_bollinger1day tablespace forex_view as select * from bolinger_band(%L, 1, ''day'', 14, 2, ''-infinity'', ''infinity'') with data;', tbl,tbl);
+		qs = format('create materialized view %I_bollinger1day tablespace forex_view as select * from bolinger_band(%L, 1, ''day'', 14, 2, ''-infinity'', ''infinity'') with no data;', tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
