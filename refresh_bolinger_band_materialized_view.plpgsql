@@ -1,0 +1,64 @@
+do $code$
+declare
+	f text;
+	qs text;
+	oid int;
+	tbl text;
+	key text;
+	pair cursor(key text) for select tablename from pg_tables  where tablename like key and tablename not like 'aud%'  order by tablename;
+begin
+	FOR y in 2022..2022 LOOP
+	select substring('''%' || y || '%''',2,6) into key;
+	FOR f in pair(key)
+	LOOP
+		select substring(f::text, 2, 11) into tbl;
+		raise info 'f: %, tbl: %', f, tbl;
+		qs = format('refresh materialized view %I_bollinger1m', tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('refresh materialized view %I_bollinger5m', tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('refresh materialized view %I_bollinger15m', tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('refresh materialized view %I_bollinger1hr', tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('refresh materialized view %I_bollinger4hr', tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('refresh materialized view %I_bollinger1day', tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		COMMIT;
+	END LOOP;
+	END LOOP;
+end $code$
+language 'plpgsql';
+
+
