@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+	cnt timestamp with time zone;
+begin
+	FOR f in select tablename from pg_tables  where tablename like '%2010%'  order by tablename
+	LOOP
+		qs = format('delete from %I t1 where exists ( select 1 from %I t2 where t1.time = t2.time and t1.bid = t2.bid and t1.ask = t2.ask and t2.ctid > t1.ctid )', f, f);
+		raise info 'executing: %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
