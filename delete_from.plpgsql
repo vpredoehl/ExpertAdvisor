@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+	oid int;
+begin
+	FOR f in select tablename from pg_tables  where tablename like '%rmp'  order by tablename
+	LOOP
+		qs = format('delete from  %I', f);
+		raise info 'executing: %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
