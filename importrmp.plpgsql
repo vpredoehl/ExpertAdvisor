@@ -1,0 +1,48 @@
+create temporary table if not exists csvtemp (time text);
+
+create or replace function t_load() returns trigger as
+$$                                   
+declare
+	str text;
+	posn int;
+	year int;
+	month int;
+	day int;
+	hour int;
+	min int;
+	sec int;
+	ask float;
+	bid float;
+	vol int;
+	dt timestamp;
+	qs text;
+begin
+select substring(NEW.time,1,4)::int into year;
+select substring(NEW.time,5,2)::int into month;
+select substring(NEW.time,7,2)::int into day;
+
+select substring(NEW.time,10,2)::int into hour;
+select substring(NEW.time,12,2)::int into min;
+select substring(NEW.time,14,2)::int into sec;
+
+select year || '-' || month || '-' || day || ' ' || hour || ':' || min || ':' || sec into dt;
+--raise info 'time: %  timestamp: %', NEW.time, dt;
+
+posn = position(',' in substring(NEW.time,20));
+select substring(NEW.time,20, posn-1)::float into bid;
+select substring(NEW.time, 20+posn) into str;
+posn = position(',' in str);
+select substring(str,1, posn-1)::float into ask;
+select substring(str, posn+1) into str;
+select str::float into vol;
+--raise info 'dt: % ask: %  bid: %  vol: %', dt, ask, bid, vol;
+qs = format('insert into %I (time, bid, ask, vol) values ( %L, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+execute qs;
+return null;
+end;                           
+$$ language 'plpgsql';
+
+drop trigger if exists t_info on csvtemp;
+create trigger t_info before insert on csvtemp
+for each row execute procedure t_load('audcadrmp');
+
