@@ -14,6 +14,7 @@ declare
 	ask float;
 	bid float;
 	vol int;
+	row_exists boolean;
 	dt timestamp;
 	qs text;
 begin
@@ -26,7 +27,6 @@ select substring(NEW.time,12,2)::int into min;
 select substring(NEW.time,14,2)::int into sec;
 
 select year || '-' || month || '-' || day || ' ' || hour || ':' || min || ':' || sec into dt;
---raise info 'time: %  timestamp: %', NEW.time, dt;
 
 posn = position(',' in substring(NEW.time,20));
 select substring(NEW.time,20, posn-1)::float into bid;
@@ -35,8 +35,19 @@ posn = position(',' in str);
 select substring(str,1, posn-1)::float into ask;
 select substring(str, posn+1) into str;
 select str::float into vol;
---raise info 'dt: % ask: %  bid: %  vol: %', dt, ask, bid, vol;
-qs = format('insert into %I (time, bid, ask, vol) values ( %L, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+-- look for existing duplicate
+qs = format('select not %L and count(vol) > 0  from %I where time = %L and ask = %L and bid = %L', tg_argv[1], tg_argv[0], dt, ask, bid);
+execute qs into row_exists;
+IF row_exists THEN
+	qs = format('select vol+1  from %I where time = %L and ask = %L and bid = %L', tg_argv[0], dt, ask, bid);
+	execute qs into vol;
+	qs = format('update %I set vol=%L where time=%L and ask=%L and bid=%L', tg_argv[0], vol, dt, ask, bid);
+ELSE
+	IF vol = 0 or vol is null THEN
+		vol = 1;
+	END IF;
+	qs = format('insert into %I (time, bid, ask, vol) values ( %L, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+END IF;
 execute qs;
 return null;
 end;                           
@@ -44,5 +55,5 @@ $$ language 'plpgsql';
 
 drop trigger if exists t_info on csvtemp;
 create trigger t_info before insert on csvtemp
-for each row execute procedure t_load('audcadrmp');
+for each row execute procedure t_load('audcadrmp', true);
 
