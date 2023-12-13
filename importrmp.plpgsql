@@ -38,14 +38,12 @@ select str::float into vol;
 -- look for existing duplicate
 qs = format('select not %L and count(vol) > 0  from %I where time = %L and ask = %L and bid = %L', tg_argv[1], tg_argv[0], dt, ask, bid);
 execute qs into row_exists;
+IF vol = 0 or vol is null THEN vol = 1; END IF;
 IF row_exists THEN
-	qs = format('select vol+1  from %I where time = %L and ask = %L and bid = %L', tg_argv[0], dt, ask, bid);
+	qs = format('select vol+%L  from %I where time = %L and ask = %L and bid = %L', vol, tg_argv[0], dt, ask, bid);
 	execute qs into vol;
 	qs = format('update %I set vol=%L where time=%L and ask=%L and bid=%L', tg_argv[0], vol, dt, ask, bid);
 ELSE
-	IF vol = 0 or vol is null THEN
-		vol = 1;
-	END IF;
 	qs = format('insert into %I (time, bid, ask, vol) values ( %L, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
 END IF;
 execute qs;
