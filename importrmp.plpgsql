@@ -35,14 +35,21 @@ posn = position(',' in str);
 select substring(str,1, posn-1)::float into ask;
 select substring(str, posn+1) into str;
 select str::float into vol;
--- look for existing duplicate
-qs = format('select not %L and count(vol) > 0  from %I where time = %L and ask = %L and bid = %L', tg_argv[1], tg_argv[0], dt, ask, bid);
-execute qs into row_exists;
 IF vol = 0 or vol is null THEN vol = 1; END IF;
-IF row_exists THEN
-	qs = format('select vol+%L  from %I where time = %L and ask = %L and bid = %L', vol, tg_argv[0], dt, ask, bid);
-	execute qs into vol;
-	qs = format('update %I set vol=%L where time=%L and ask=%L and bid=%L', tg_argv[0], vol, dt, ask, bid);
+IF tg_argv[1] = 'false' THEN
+	-- look for existing duplicate
+	qs = format('select count(*) > 0  from %I where time=date_trunc(''minute'', %L::timestamp without time zone)', tg_argv[0], dt);
+	--raise info 'Executing: %', qs;
+	execute qs into row_exists;
+	IF row_exists THEN
+		qs = format('select vol+%L  from %I where time=date_trunc(''minute'', %L::timestamp without time zone)', vol, tg_argv[0], dt);
+		--raise info 'Executing: %', qs;
+		execute qs into vol;
+		qs = format('update %I set vol=%L where time=date_trunc(''minute'', %L::timestamp without time zone)', tg_argv[0], vol, dt);
+		--raise info 'Executing: %', qs;
+	ELSE
+		qs = format('insert into %I (time, bid, ask, vol) values ( date_trunc(''minute'', %L::timestamp without time zone), %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+	END IF;
 ELSE
 	qs = format('insert into %I (time, bid, ask, vol) values ( %L, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
 END IF;

@@ -4,31 +4,38 @@ declare
 	qs text;
 	v int;
 	dt timestamp without time zone;
-	a numeric(10,6);
-	b numeric(10,6);
 	min_ctid tid;
 begin
-	FOR f in select tablename from pg_tables  where tablename like '%rmp%'  order by tablename
+	FOR f in select tablename from pg_tables  where tablename like '%\_dups%'  order by tablename
 	LOOP
 		raise info 'updating vol: %', f;
-		qs = format('select time, ask, bid, count(*), min(ctid) from %I group by 1,2,3 order by time', f);
-		FOR dt, a, b, v, min_ctid in execute qs
+		qs = format('select date_trunc(''minute'', time), sum(vol), min(ctid) from %I group by 1 order by 1', f);
+		FOR dt, v, min_ctid in execute qs
 		LOOP
-			--raise info 'ctid: %, time: %, ask: %, bid: %, vol: %', min_ctid, dt, a, b, v;
-			IF v > 1 THEN
-				qs = format('update %I set vol=%L where time=%L and ask=%L and bid=%L and ctid=%L', f, v, dt, a, b, min_ctid);
-				--raise info 'executing: %', qs;
-				execute qs;
-			END IF;
+			qs = format('update %I set vol=%L, time=%L where ctid=%L', f, v, date_trunc('minute',dt), min_ctid);
+			--raise info 'executing: %', qs;
+			begin
+				execute  qs;
+			exception when others then 
+				raise notice '% %', SQLERRM, SQLSTATE;
+			end;
+
+			qs = format('delete from %I where ctid in ( select ctid from %I where time > %L and time < %L and ctid != %L )', f, f, date_trunc('minute',dt), date_trunc('minute', dt) + '1 minute', min_ctid);
+			--raise info 'executing: %', qs;
+			begin
+				execute  qs;
+			exception when others then 
+				raise notice '% %', SQLERRM, SQLSTATE;
+			end;
 		END LOOP;
-		raise info 'removing dups: %', f;
-		qs = format('delete from %I t1 where exists ( select 1 from %I t2 where t1.time = t2.time and t1.bid = t2.bid and t1.ask = t2.ask and t2.ctid > t1.ctid )', f, f);
+		--raise info 'removing dups: %', f;
+		--qs = format('delete from %I t1 where exists ( select 1 from %I t2 where date_trunc(''minute'',t1.time) = date_trunc(''minute'',t2.time) and t2.ctid > t1.ctid )', f, f);
 		--raise info 'executing: %', qs;
-		begin
-			execute  qs;
-		exception when others then 
-			raise notice '% %', SQLERRM, SQLSTATE;
-		end;
+		--begin
+			--execute  qs;
+		--exception when others then 
+			--raise notice '% %', SQLERRM, SQLSTATE;
+		--end;
 	END LOOP;
 end $code$
 language 'plpgsql';
