@@ -55,7 +55,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		COMMIT;
+		--COMMIT;
 	END LOOP;
 	END LOOP;
 end $code$
