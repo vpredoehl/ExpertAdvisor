@@ -32,7 +32,7 @@ $$
 LANGUAGE 'plpgsql'
 PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS setof cst
+CREATE OR REPLACE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY')  RETURNS setof cst
 as $$
 declare
 	gl_row record;
@@ -48,3 +48,33 @@ begin
 end;
 $$ language plpgsql
 PARALLEL SAFE;
+
+
+CREATE OR REPLACE FUNCTION candlestick_mv(tbl text, tf text, fromdt timestamp without time zone default '-INFINITY', todt timestamp without time zone default 'INFINITY') RETURNS setof cst
+as $$
+declare
+	f text;
+	y int;
+	key text;
+	qs text;
+	u text;
+begin
+	select '' into u;	select '' into qs;
+	for y in 2010..2022 LOOP
+		select tbl || '_' || y || '_candlestick' || tf into key;
+		--raise info 'key: %', key;
+		qs = format(qs || u || 'select * from %I', key );
+		select ' union ' into u;
+		--raise info 'qs: %', qs;
+	END LOOP;
+	begin
+		u = format(' where dt between %L and %L', fromdt, todt);
+		raise info 'qs: %', qs || u;
+		RETURN QUERY EXECUTE qs || u;
+	exception when others then 
+		raise notice '% %', SQLERRM, SQLSTATE;
+	end;
+end;
+$$ language 'plpgsql'
+PARALLEL SAFE;
+
