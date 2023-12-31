@@ -1,6 +1,63 @@
 drop type rsi_type cascade;
 create type rsi_type as ( date timestamp without time zone, rsi numeric(10,6));
 
+create or replace function rsi_aux( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof numeric(10,6)
+as $$
+declare
+	avg_gl record;
+	gl_row record;
+	avg_row record;
+	avg_gain numeric(12,10);
+	avg_loss numeric(12,10);
+	rs real;
+	rsi real;
+begin
+execute 'with t2 as (
+with t as ( select dt, open, close, close > open as gain, open > close as loss from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') )
+        select gain, loss,
+        close - open as diff_gain, 
+        open - close as diff_loss
+        from t order by dt limit ' || num_periods || '
+)
+select sum(diff_gain) filter( where gain = true) / ' || num_periods || '  as avg_gain, sum(diff_loss) filter ( where loss = true ) / ' || num_periods || '  as avg_loss from t2' into avg_gl; 
+-- raise info 'avg_gl: %', avg_gl;
+
+select avg_gl.avg_gain / avg_gl.avg_loss into rs ;
+select 100 - 100 / (rs + 1) into rsi;
+-- raise info 'avg_gain: %, avg_loss: %, rs: %  rsi: %', avg_gl.avg_gain, avg_gl.avg_loss, rs, rsi;
+return next rsi::numeric(10,6);
+
+select avg_gl.avg_gain into avg_gain;
+select avg_gl.avg_loss into avg_loss;
+
+for gl_row in 
+execute 'with t as ( select dt, open, close, close > open as gain, open > close as loss from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') )
+        select dt,
+        case when gain=true then close - open
+        else 0 end::numeric(10,6) as diff_gain, 
+        case when loss=true then open - close
+        else 0 end::numeric(10,6) as diff_loss
+        from t order by dt offset ' ||  num_periods  -- offset to point where iterative avg_gain should be caluclated
+LOOP
+	-- raise info 'dt: %, avg_gain: % gl_row.diff_gain: %', gl_row.dt, avg_gain, gl_row.diff_gain;
+	-- raise info 'dt: %, avg_loss: % gl_row.diff_loss: %', gl_row.dt, avg_loss, gl_row.diff_loss;
+	select gl_row.dt,
+		 (avg_gain*(num_periods-1) + gl_row.diff_gain)/num_periods as avg_gain,
+		 (avg_loss*(num_periods-1) + gl_row.diff_loss)/num_periods as avg_loss
+	 into avg_row ;
+
+	select avg_row.avg_gain into avg_gain;
+	select avg_row.avg_loss into avg_loss;
+
+	select avg_row.avg_gain / avg_row.avg_loss into rs ;
+	select 100 - 100 / (rs + 1) into rsi;
+	-- raise info 'dt: %, avg_gain: %, avg_loss: %, rs: %  rsi: %', avg_row.dt, avg_row.avg_gain::numeric(10,6), avg_row.avg_loss::numeric(10,6), rs, rsi;
+	return next rsi::numeric(10,6);
+END LOOP;
+end;
+$$
+language 'plpgsql';
+
 create or replace function rsi( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof rsi_type
 as $$
 begin
