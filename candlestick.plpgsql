@@ -50,7 +50,7 @@ $$ language plpgsql
 PARALLEL SAFE;
 
 
-CREATE OR REPLACE FUNCTION candlestick_mv(tbl text, tf text, fromdt timestamp without time zone default '-INFINITY', todt timestamp without time zone default 'INFINITY') RETURNS setof cst
+CREATE OR REPLACE FUNCTION candlestick_mv(tbl text, tf text, fromdt timestamp without time zone default '2000-01-01', todt timestamp without time zone default '2025-01-01') RETURNS setof cst
 as $$
 declare
 	f text;
@@ -58,9 +58,13 @@ declare
 	key text;
 	qs text;
 	u text;
+	b int;
+	e int;
 begin
 	select '' into u;	select '' into qs;
-	for y in 2010..2022 LOOP
+	select date_part('year', fromdt) into b;
+	select date_part('year',todt) into e;
+	for y in b..e LOOP
 		select tbl || '_' || y || '_candlestick' || tf into key;
 		--raise info 'key: %', key;
 		qs = format(qs || u || 'select * from %I', key );
