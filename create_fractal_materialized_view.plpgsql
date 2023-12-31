@@ -13,42 +13,42 @@ begin
 	LOOP
 		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('create materialized view %I_fractal1m  tablespace forex_view as select * from fractal(%L, 1, ''minute'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl);
+		qs = format('create materialized view %I_fractal1m  tablespace forex_view as select * from fractal(%L, 1, ''minute'',  %L, %L) with no data', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_fractal5m  tablespace forex_view as select * from fractal(%L, 5, ''minute'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl);
+		qs = format('create materialized view %I_fractal5m  tablespace forex_view as select * from fractal(%L, 5, ''minute'',  %L, %L) with no data', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_fractal15m  tablespace forex_view as select * from fractal(%L, 15, ''minute'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl);
+		qs = format('create materialized view %I_fractal15m  tablespace forex_view as select * from fractal(%L, 15, ''minute'',  %L, %L) with no data', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_fractal1hr  tablespace forex_view as select * from fractal(%L, 1, ''hour'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl);
+		qs = format('create materialized view %I_fractal1hr  tablespace forex_view as select * from fractal(%L, 1, ''hour'',  %L, %L) with no data', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_fractal4hr  tablespace forex_view as select * from fractal(%L, 4, ''hour'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl);
+		qs = format('create materialized view %I_fractal4hr  tablespace forex_view as select * from fractal(%L, 4, ''hour'',  %L, %L) with no data', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create materialized view %I_fractal1day  tablespace forex_view as select * from fractal(%L, 1, ''day'',  ''-infinity'', ''infinity'') with no data;', tbl, tbl);
+		qs = format('create materialized view %I_fractal1day  tablespace forex_view as select * from fractal(%L, 1, ''day'',  %L, %L) with no data', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
