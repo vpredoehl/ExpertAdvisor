@@ -1,41 +1,30 @@
-do $code$
+create or replace function remove_duplicates(tbl text) returns void
+as $code$
 declare
-	f text;
 	qs text;
 	v int;
 	dt timestamp without time zone;
 	min_ctid tid;
 begin
-	FOR f in select tablename from pg_tables  where tablename like '%\_dups%'  order by tablename
+	raise info 'updating vol: %', tbl;
+	qs = format('select date_trunc(''minute'', time), sum(vol), min(ctid) from %I group by 1 order by 1', tbl);
+	FOR dt, v, min_ctid in execute qs
 	LOOP
-		raise info 'updating vol: %', f;
-		qs = format('select date_trunc(''minute'', time), sum(vol), min(ctid) from %I group by 1 order by 1', f);
-		FOR dt, v, min_ctid in execute qs
-		LOOP
-			qs = format('update %I set vol=%L, time=%L where ctid=%L', f, v, date_trunc('minute',dt), min_ctid);
-			--raise info 'executing: %', qs;
-			begin
-				execute  qs;
-			exception when others then 
-				raise notice '% %', SQLERRM, SQLSTATE;
-			end;
-
-			qs = format('delete from %I where ctid in ( select ctid from %I where time > %L and time < %L and ctid != %L )', f, f, date_trunc('minute',dt), date_trunc('minute', dt) + '1 minute', min_ctid);
-			--raise info 'executing: %', qs;
-			begin
-				execute  qs;
-			exception when others then 
-				raise notice '% %', SQLERRM, SQLSTATE;
-			end;
-		END LOOP;
-		--raise info 'removing dups: %', f;
-		--qs = format('delete from %I t1 where exists ( select 1 from %I t2 where date_trunc(''minute'',t1.time) = date_trunc(''minute'',t2.time) and t2.ctid > t1.ctid )', f, f);
+		qs = format('update %I set vol=%L, time=%L where ctid=%L', tbl, v, date_trunc('minute',dt), min_ctid);
 		--raise info 'executing: %', qs;
-		--begin
-			--execute  qs;
-		--exception when others then 
-			--raise notice '% %', SQLERRM, SQLSTATE;
-		--end;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+
+		qs = format('delete from %I where ctid in ( select ctid from %I where time > %L and time < %L and ctid != %L )', tbl, tbl, date_trunc('minute',dt), date_trunc('minute', dt) + '1 minute', min_ctid);
+		--raise info 'executing: %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
 	END LOOP;
 end $code$
 language 'plpgsql';
