@@ -3,22 +3,25 @@ as $code$
 declare
 	qs text;
 	v int;
+	ask numeric(10,6);
+	bid numeric(10,6);
 	dt timestamp without time zone;
 	min_ctid tid;
 begin
 	raise info 'updating vol: %', tbl;
-	qs = format('select date_trunc(''minute'', time), sum(vol), min(ctid) from %I group by 1 order by 1', tbl);
-	FOR dt, v, min_ctid in execute qs
+	qs = format('select  time, ask, bid, sum(vol), min(ctid) from %I group by 1,2,3 having sum(vol) > 1  order by 1', tbl);
+	FOR dt, ask, bid, v, min_ctid in execute qs
 	LOOP
-		qs = format('update %I set vol=%L, time=%L where ctid=%L', tbl, v, date_trunc('minute',dt), min_ctid);
+		--raise info 'time: %, ask: %, bid: %, v: %, min_ctid: %', dt, ask, bid, v, min_ctid;
+		qs = format('update %I set vol=%L where ctid=%L returning ctid', tbl, v, min_ctid);
 		--raise info 'executing: %', qs;
 		begin
-			execute  qs;
+			execute  qs into min_ctid;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
 
-		qs = format('delete from %I where ctid in ( select ctid from %I where time > %L and time < %L and ctid != %L )', tbl, tbl, date_trunc('minute',dt), date_trunc('minute', dt) + '1 minute', min_ctid);
+		qs = format('delete from %I where ctid in ( select ctid from %I where time=%L and ask=%L and bid=%L and ctid != %L )', tbl, tbl, dt, ask, bid, min_ctid);
 		--raise info 'executing: %', qs;
 		begin
 			execute  qs;
