@@ -12,42 +12,42 @@ begin
 		FOR f in pair(key)
 		LOOP
 			select substring(f::text, 2, 11) into tbl;
-			qs = format('create index %I_fractal5m_ts_idx on %I_fractal5m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
+			qs = format('create index %I_fractal5m_ts_idx on %I_fractal5m( ts, fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
 			raise info 'executing: %', qs;
 			begin
 				execute  qs;
 			exception when others then 
 				raise notice '% %', SQLERRM, SQLSTATE;
 			end;
-			qs = format('create index %I_fractal4hr_ts_idx on %I_fractal4hr( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
+			qs = format('create index %I_fractal4hr_ts_idx on %I_fractal4hr( ts, fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
 			raise info 'executing: %', qs;
 			begin
 				execute  qs;
 			exception when others then 
 				raise notice '% %', SQLERRM, SQLSTATE;
 			end;
-			qs = format('create index %I_fractal15m_ts_idx on %I_fractal15m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
+			qs = format('create index %I_fractal15m_ts_idx on %I_fractal15m( ts, fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
 			raise info 'executing: %', qs;
 			begin
 				execute  qs;
 			exception when others then 
 				raise notice '% %', SQLERRM, SQLSTATE;
 			end;
-			qs = format('create index %I_fractal1day_ts_idx on %I_fractal1day( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
+			qs = format('create index %I_fractal1day_ts_idx on %I_fractal1day( ts, fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
 			raise info 'executing: %', qs;
 			begin
 				execute  qs;
 			exception when others then 
 				raise notice '% %', SQLERRM, SQLSTATE;
 			end;
-			qs = format('create index %I_fractal1hr_ts_idx on %I_fractal1hr( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
+			qs = format('create index %I_fractal1hr_ts_idx on %I_fractal1hr( ts, fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
 			raise info 'executing: %', qs;
 			begin
 				execute  qs;
 			exception when others then 
 				raise notice '% %', SQLERRM, SQLSTATE;
 			end;
-			qs = format('create index %I_fractal1m_ts_idx on %I_fractal1m( ts ) include ( fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
+			qs = format('create index %I_fractal1m_ts_idx on %I_fractal1m( ts, fractal_high, fractal_low ) tablespace forex_indices', tbl, tbl);
 			raise info 'executing: %', qs;
 			begin
 				execute  qs;
