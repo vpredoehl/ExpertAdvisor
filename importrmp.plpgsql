@@ -14,7 +14,7 @@ declare
 	ask float;
 	bid float;
 	vol int;
-	row_exists boolean;
+	updated_vol int;
 	dt timestamp;
 	qs text;
 begin
@@ -37,23 +37,20 @@ select substring(str, posn+1) into str;
 select str::float into vol;
 IF vol = 0 or vol is null THEN vol = 1; END IF;
 IF tg_argv[1] = 'false' THEN
-	-- look for existing duplicate
-	qs = format('select count(*) > 0  from %I where time=%L::timestamp without time zone and ask=%L and bid=%L', tg_argv[0], dt, ask, bid);
-	--raise info 'Executing: %', qs;
-	execute qs into row_exists;
-	IF row_exists THEN
-		qs = format('select vol+%L  from %I where time=%L::timestamp without time zone and ask=%L and bid=%L', vol, tg_argv[0], dt, ask, bid);
-		--raise info 'Executing: %', qs;
-		execute qs into vol;
-		qs = format('update %I set vol=%L where time=%L::timestamp without time zone and ask=%L and bid=%L', tg_argv[0], vol, dt, ask, bid);
-		--raise info 'Executing: %', qs;
-	ELSE
+	-- try to update existing row
+	qs = format('update %I set vol=vol+%L where time=%L::timestamp without time zone and ask=%L and bid=%L RETURNING vol', tg_argv[0], vol, dt, ask, bid);
+	--raise info 'executing: %', qs;
+	execute qs into updated_vol;
+	IF updated_vol is null THEN
+		-- create new row if does not exist
 		qs = format('insert into %I (time, bid, ask, vol) values (  %L::timestamp without time zone, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+		--raise info 'executing: %', qs;
+		execute qs;
 	END IF;
 ELSE
-	qs = format('insert into %I (time, bid, ask, vol) values ( %L, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+	qs = format('insert into %I (time, bid, ask, vol) values ( %L::timestamp without time zone, %L, %L, %L);', tg_argv[0], dt, bid, ask, vol);
+	execute qs;
 END IF;
-execute qs;
 return null;
 end;                           
 $$ language 'plpgsql';
