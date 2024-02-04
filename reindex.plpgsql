@@ -5,7 +5,7 @@ declare
 	oid int;
 	isready bool;
 begin
-	FOR f in select indexname from pg_indexes  where tablename like 'rmp%'  order by tablename
+	FOR f in select relname from pg_class t1 inner join pg_index t2 on t1.oid=t2.indexrelid where indisready=false and relname like '%2023%' order by relname
 	LOOP
 		qs = format('reindex index %I', f);
 		raise info 'executing: %', qs;
@@ -14,6 +14,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
+		COMMIT;
 	END LOOP;
 end $code$
 language 'plpgsql';
