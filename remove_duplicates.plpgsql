@@ -1,3 +1,49 @@
+create or replace function remove_pages(tbl text) returns void
+as $code$
+declare
+	f text;
+	rows int;
+	last_rows int;
+	qs text;
+	p point;
+	pg int;
+begin
+	qs = format('select tablename from pg_tables where tablename like %L order by 1',tbl);
+	FOR f in execute qs LOOP
+		qs = format('select (max(ctid)::text::point)[0] from %I',f);
+		execute qs into pg;
+		last_rows = 0;
+		LOOP
+			select point(pg-1000,0) into p;
+			LOOP 
+				qs = format('update %I set bid=bid where ctid>=%L', f, p);
+				raise info 'executing: %', qs;
+				execute qs ;
+				GET DIAGNOSTICS rows = ROW_COUNT;
+				raise info 'rows: %', rows;
+				exit when rows = 0 or last_rows = rows;
+				last_rows = rows;
+			END LOOP ;
+			EXIT WHEN rows > 0;	
+			pg = pg - 1000;
+		END LOOP;
+	END LOOP;
+end
+$code$ language 'plpgsql';
+
+create or replace function remove_duplicates_iter(tbl text) returns void
+as $code$
+declare
+	qs text;
+	f text;
+begin
+	qs = format('select tablename from pg_tables where tablename like %L order by 1',tbl);
+	FOR f in execute qs LOOP
+		perform remove_duplicates(f);
+	END LOOP;
+end $code$
+language 'plpgsql';
+
 create or replace function remove_duplicates(tbl text) returns void
 as $code$
 declare
