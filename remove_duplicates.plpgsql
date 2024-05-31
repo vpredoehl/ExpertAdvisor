@@ -44,6 +44,7 @@ begin
 		select remove_duplicates(f) into cnt;
 		tot = tot + cnt;
 	END LOOP;
+	return tot;
 end $code$
 language 'plpgsql';
 
