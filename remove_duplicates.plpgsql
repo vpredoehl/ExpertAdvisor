@@ -31,31 +31,35 @@ begin
 end
 $code$ language 'plpgsql';
 
-create or replace function remove_duplicates_iter(tbl text) returns void
+create or replace function remove_duplicates_iter(tbl text) returns int
 as $code$
 declare
 	qs text;
 	f text;
+	cnt int;
+	tot integer := 0;
 begin
 	qs = format('select tablename from pg_tables where tablename like %L order by 1',tbl);
 	FOR f in execute qs LOOP
-		perform remove_duplicates(f);
+		execute remove_duplicates(f) into cnt;
+		tot = tot + cnt;
 	END LOOP;
 end $code$
 language 'plpgsql';
 
-create or replace function remove_duplicates(tbl text) returns void
+create or replace function remove_duplicates(tbl text) returns int
 as $code$
 declare
 	qs text;
 	v int;
+	cnt integer := 0;
 	ask numeric(10,6);
 	bid numeric(10,6);
 	dt timestamp without time zone;
 	min_ctid tid;
 begin
 	raise info 'updating vol: %', tbl;
-	qs = format('select  time, ask, bid, sum(vol), min(ctid) from %I group by 1,2,3 having sum(vol) > 1  order by 1', tbl);
+	qs = format('select  time, ask, bid, sum(vol), min(ctid), count(ctid) from %I group by 1,2,3 having count(ctid) > 1  order by 1', tbl);
 	FOR dt, ask, bid, v, min_ctid in execute qs
 	LOOP
 		--raise info 'time: %, ask: %, bid: %, v: %, min_ctid: %', dt, ask, bid, v, min_ctid;
@@ -74,6 +78,8 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
+		cnt = cnt + 1;
 	END LOOP;
+	return cnt;
 end $code$
 language 'plpgsql';
