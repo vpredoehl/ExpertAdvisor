@@ -41,7 +41,7 @@ declare
 begin
 	qs = format('select tablename from pg_tables where tablename like %L order by 1',tbl);
 	FOR f in execute qs LOOP
-		execute remove_duplicates(f) into cnt;
+		select remove_duplicates(f) into cnt;
 		tot = tot + cnt;
 	END LOOP;
 end $code$
