@@ -1,4 +1,22 @@
-create or replace function remove_pages(tbl text) returns void
+create or replace function cluster(tbl text) returns void
+as $code$
+declare
+	f text;
+	idx_name text;
+	qs text;
+begin
+	qs = format('select tablename from pg_tables where tablename like %L order by 1',tbl);
+	FOR f in execute qs LOOP
+		qs = format('select indexname from pg_indexes where tablename = %L',f);
+		execute qs into idx_name;
+		qs = format('cluster %I using %I', f, idx_name);
+		raise info 'executing: %', qs;
+		execute qs;
+	END LOOP;
+end
+$code$ language 'plpgsql';
+
+create or replace function remove_pages(tbl text) returns int
 as $code$
 declare
 	f text;
@@ -7,9 +25,11 @@ declare
 	qs text;
 	p point;
 	pg int;
+	tot int;
 begin
 	qs = format('select tablename from pg_tables where tablename like %L order by 1',tbl);
 	FOR f in execute qs LOOP
+		raise info 'updating: %', f;
 		qs = format('select (max(ctid)::text::point)[0] from %I',f);
 		execute qs into pg;
 		last_rows = 0;
@@ -23,11 +43,13 @@ begin
 				raise info 'rows: %', rows;
 				exit when rows = 0 or last_rows = rows;
 				last_rows = rows;
+				tot = tot + rows;
 			END LOOP ;
 			EXIT WHEN rows > 0;	
 			pg = pg - 1000;
 		END LOOP;
 	END LOOP;
+	return tot;
 end
 $code$ language 'plpgsql';
 
