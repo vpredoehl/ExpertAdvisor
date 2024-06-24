@@ -12,6 +12,7 @@ begin
 		qs = format('cluster %I using %I', f, idx_name);
 		raise info 'executing: %', qs;
 		execute qs;
+		execute format('analyze ( verbose ) %I ', f);
 	END LOOP;
 end
 $code$ language 'plpgsql';
