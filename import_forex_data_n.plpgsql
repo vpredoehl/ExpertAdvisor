@@ -11,7 +11,7 @@ begin
 	for f in select tablename from pg_tables where tablename like '%rmp' and tablename like 'n%' order by tablename
 	LOOP
 		select concat(concat('*ASCII_', upper(substring(f,1,6))), '_T*') into fu;
-		cmd =  format('find /Volumes/Raw\ Forex\ Data\ USB/Tick\ Data/2023/ -name %I.csv -exec cat {} \;',fu);
+		cmd =  format('find /Volumes/2023/Tick\ Data -name %I.csv -exec cat {} \;',fu);
 		qs1 = format('drop trigger t_info on csvtemp; create trigger t_info before insert on csvtemp for each row execute procedure t_load("%I", false)', f);
 		qs2 = format('copy csvtemp from program %L', cmd);
 		begin
