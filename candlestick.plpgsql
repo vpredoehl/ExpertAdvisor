@@ -1,5 +1,9 @@
 drop type cst cascade;
-create type cst as ( dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), vol smallint );
+create type cst as ( dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), vol integer, target numeric(10,6) );
+
+drop type tgt cascade;
+create type tgt as ( dt timestamp without time zone, target numeric(10,6) );
+
 
 CREATE OR REPLACE FUNCTION candlestick_cur(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS refcursor
 AS $$
@@ -16,15 +20,15 @@ begin
 	--raise info 'unit: %, higher_tf: %', unit, higher_tf;
 
 	open c no scroll for execute
-	'select distinct dt + mn * interval ''' || n::text || ' ' || unit || ''' as dt, ' 
+	'select *, (( high + low + close ) / 3)::numeric(10,6) as target from ( select distinct dt + mn * interval ''' || n::text || ' ' || unit || ''' as dt, ' 
 		|| 'case when count(*) over w=1 then lag(ask,1) over w_1row else first_value(ask) over w end::numeric(10,6) as open,'
 		|| ' last_value(ask) over w::numeric(10,6) as close,  '
                 || 'case when count(*) over w=1 then max(ask) over w_1row else max(ask) over w end::numeric(10,6) as high,'
                 || 'case when count(*) over w=1 then min(ask) over w_1row else min(ask) over w end::numeric(10,6) as low,'
-		|| ' sum(vol) over w::smallint as vol   from (
+		|| ' sum(vol) over w::integer as vol   from (
 	select date_trunc(''' || higher_tf || ''', time) as dt, extract(' || unit || ' from time)::int / ' || n::text || ' as mn,  ask, vol '
 	|| ' from ' || tbl || ' where time between ''' || fromdt::text || ''' and ''' || todt::text || ''' order by time) as t'
-	|| ' window w as (partition by (dt, mn)), w_1row as ( rows 1 preceding ) order by dt asc;';
+	|| ' window w as (partition by (dt, mn)), w_1row as ( rows 1 preceding ) order by dt asc);';
 
 	return c;
 end;
@@ -50,6 +54,7 @@ $$ language plpgsql
 PARALLEL SAFE;
 
 
+-- union by year
 CREATE OR REPLACE FUNCTION candlestick_mv(tbl text, tf text, fromdt timestamp without time zone default '2000-01-01', todt timestamp without time zone default '2025-01-01') RETURNS setof cst
 as $$
 declare
