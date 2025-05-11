@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+	oid oid;
+begin
+	FOR oid in select indexname::regclass::oid from pg_indexes  where indexname like '%time_ask_vol_idx'
+	LOOP
+		qs = format('select bt_index_check(%L)',oid);
+		raise info 'executing:  %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
