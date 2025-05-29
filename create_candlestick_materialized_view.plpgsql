@@ -2,60 +2,87 @@ do $code$
 declare
 	f text;
 	qs text;
+	ind1 text;
+	ind2 text;
 	oid int;
 	tbl text;
 	key text;
 	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
 begin
-	FOR y in 2000..2023 LOOP
-	select substring('''%' || y || '%''',2,6) into key;
+	FOR y in 2000..2030 LOOP
+	select substring('''%' || y,2,5) into key;
 	FOR f in pair(key)
 	LOOP
 		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
- 		qs = format('create materialized view %I_candlestick1m  tablespace forex_view as select * from candlestick(''%I'', 1, ''minute'',  %L, %L) with no data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		--qs = format('create table %I_candlestick1m  tablespace view as select * from candlestick(''%I'', 1, ''minute'',  %L, %L) with data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		qs = format('create table %I_candlestick1m  tablespace view as select * from candlestick(''%I'', 1, ''minute'');', tbl, tbl );
+		ind1 = format('create index %I_candlestick1m_dt_low_idx on %I_candlestick1m( dt, low )  tablespace candlestick_index',tbl,tbl);
+		ind2 = format('create index %I_candlestick1m_dt_high_idx on %I_candlestick1m( dt, high )  tablespace candlestick_index',tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
+			execute ind1;
+			execute ind2;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_candlestick5m  tablespace forex_view as select * from candlestick(''%I'', 5, ''minute'',  %L, %L) with no data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		qs = format('create table %I_candlestick5m  tablespace view as select * from candlestick(''%I'', 5, ''minute'');', tbl, tbl );
+		ind1 = format('create index %I_candlestick5m_dt_low_idx on %I_candlestick5m( dt, low )  tablespace candlestick_index',tbl,tbl);
+		ind2 = format('create index %I_candlestick5m_dt_high_idx on %I_candlestick5m( dt, high )  tablespace candlestick_index',tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
+			execute ind1;
+			execute ind2;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_candlestick15m  tablespace forex_view as select * from candlestick(''%I'', 15, ''minute'',  %L, %L) with no data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		qs = format('create table %I_candlestick15m  tablespace view as select * from candlestick(''%I'', 15, ''minute'');', tbl, tbl );
+		ind1 = format('create index %I_candlestick15m_dt_low_idx on %I_candlestick15m( dt, low )  tablespace candlestick_index',tbl,tbl);
+		ind2 = format('create index %I_candlestick15m_dt_high_idx on %I_candlestick15m( dt, high )  tablespace candlestick_index',tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
+			execute ind1;
+			execute ind2;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_candlestick1hr  tablespace forex_view as select * from candlestick(''%I'', 1, ''hour'',  %L, %L) with no data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		qs = format('create table %I_candlestick1hr  tablespace view as select * from candlestick(''%I'', 1, ''hour'');', tbl, tbl );
+		ind1 = format('create index %I_candlestick1hr_dt_low_idx on %I_candlestick1hr( dt, low )  tablespace candlestick_index',tbl,tbl);
+		ind2 = format('create index %I_candlestick1hr_dt_high_idx on %I_candlestick1hr( dt, high )  tablespace candlestick_index',tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
+			execute ind1;
+			execute ind2;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_candlestick4hr  tablespace forex_view as select * from candlestick(''%I'', 4, ''hour'',  %L, %L) with no data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		qs = format('create table %I_candlestick4hr  tablespace view as select * from candlestick(''%I'', 4, ''hour'');', tbl, tbl );
+		ind1 = format('create index %I_candlestick4hr_dt_low_idx on %I_candlestick4hr( dt, low )  tablespace candlestick_index',tbl,tbl);
+		ind2 = format('create index %I_candlestick4hr_dt_high_idx on %I_candlestick4hr( dt, high )  tablespace candlestick_index',tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
+			execute ind1;
+			execute ind2;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
- 		qs = format('create materialized view %I_candlestick1day  tablespace forex_view as select * from candlestick(''%I'', 1, ''day'',  %L, %L) with no data;', tbl, tbl, y::text || '-01-01', (y+1)::text || '-01-01' );
+ 		qs = format('create table %I_candlestick1day  tablespace view as select * from candlestick(''%I'', 1, ''day'');', tbl, tbl );
+		ind1 = format('create index %I_candlestick1day_dt_low_idx on %I_candlestick1day( dt, low )  tablespace candlestick_index',tbl,tbl);
+		ind2 = format('create index %I_candlestick1day_dt_high_idx on %I_candlestick1day( dt, high )  tablespace candlestick_index',tbl,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
+			execute ind1;
+			execute ind2;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		--COMMIT;
+		COMMIT;
 	END LOOP;
 	END LOOP;
 end $code$
