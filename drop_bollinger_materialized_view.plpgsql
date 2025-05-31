@@ -3,10 +3,10 @@ declare
 	f text;
 	qs text;
 begin
-	FOR f in select matviewname from pg_matviews  where matviewname like '%fractal%'  order by 1
+	FOR f in select matviewname from pg_matviews  where matviewname like '%bollinger%'  order by 1
 	LOOP
 		qs = format('drop materialized view %I', f);
-		--raise info 'executing: %', qs;
+		raise info 'executing: %', qs;
 		begin
 			execute  qs;
 		exception when others then 

@@ -9,13 +9,13 @@ declare
 	key text;
 	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
 begin
-	FOR y in 2010..2023 LOOP
+	FOR y in 2010..2030 LOOP
 	select substring('''%' || y,2,5) into key;
 	FOR f in pair(key)
 	LOOP
 		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('create table %I_fractal1m  tablespace view as select * from fractal(%L, 1, ''minute'')', tbl, tbl );
+		qs = format('create materialized view %I_fractal1m  tablespace view as select * from fractal(''public.%I'', 1, ''minute'') with no data;', tbl, tbl );
 		ind1 = format('create index %I_fractal1m_tfs_idx on %I_fractal1m( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
 		begin
 			raise info 'executing: %', qs;
@@ -24,7 +24,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create table %I_fractal5m  tablespace view as select * from fractal(%L, 5, ''minute'')', tbl, tbl );
+		qs = format('create materialized view %I_fractal5m  tablespace view as select * from fractal(''public.%I'', 5, ''minute'') with no data;', tbl, tbl );
 		ind1 = format('create index %I_fractal5m_ts_idx on %I_fractal5m( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
 		begin
 			raise info 'executing: %', qs;
@@ -33,7 +33,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create table %I_fractal15m  tablespace view as select * from fractal(%L, 15, ''minute'')', tbl, tbl );
+		qs = format('create materialized view %I_fractal15m  tablespace view as select * from fractal(''public.%I'', 15, ''minute'') with no data;', tbl, tbl );
 		ind1 = format('create index %I_fractal115m_ts_idx on %I_fractal15m( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
 		begin
 			raise info 'executing: %', qs;
@@ -42,7 +42,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create table %I_fractal1hr  tablespace view as select * from fractal(%L, 1, ''hour'')', tbl, tbl );
+		qs = format('create materialized view %I_fractal1hr  tablespace view as select * from fractal(''public.%I'', 1, ''hour'') with no data;', tbl, tbl );
 		ind1 = format('create index %I_fractal11hr_ts_idx on %I_fractal1hr( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
 		begin
 			raise info 'executing: %', qs;
@@ -51,7 +51,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create table %I_fractal4hr  tablespace view as select * from fractal(%L, 4, ''hour'')', tbl, tbl );
+		qs = format('create materialized view %I_fractal4hr  tablespace view as select * from fractal(''public.%I'', 4, ''hour'') with no data;', tbl, tbl );
 		ind1 = format('create index %I_fractal14hr_ts_idx on %I_fractal4hr( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
 		begin
 			raise info 'executing: %', qs;
@@ -60,7 +60,7 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('create table %I_fractal1day  tablespace view as select * from fractal(%L, 1, ''day'')', tbl, tbl );
+		qs = format('create materialized view %I_fractal1day  tablespace view as select * from fractal(''public.%I'', 1, ''day'') with no data;', tbl, tbl );
 		ind1 = format('create index %I_fractal11day_ts_idx on %I_fractal1day( ts, fractal_high, fractal_low ) tablespace candlestick_index', tbl, tbl);
 		begin
 			raise info 'executing: %', qs;
@@ -69,7 +69,6 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		raise info 'next';
 		COMMIT;
 	END LOOP;
 	END LOOP;

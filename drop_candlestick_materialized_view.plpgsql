@@ -3,10 +3,9 @@ declare
 	f text;
 	qs text;
 begin
-	--FOR f in select matviewname from pg_matviews  where matviewname like '%candlestick%'  order by 1
-	FOR f in select tablename from pg_tables  where tablename like '%candlestick%'  order by 1
+	FOR f in select matviewname from pg_matviews  where matviewname like '%candlestick%'  order by 1
 	LOOP
-		qs = format('drop table %I', f);
+		qs = format('drop materialized view %I', f);
 		--raise info 'executing: %', qs;
 		begin
 			execute  qs;

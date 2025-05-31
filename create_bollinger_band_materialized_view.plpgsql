@@ -7,48 +7,48 @@ declare
 	key text;
 	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
 begin
-	FOR y in 2010..2030 LOOP
+	FOR y in 2000..2023 LOOP
 	select substring('''%' || y || '%''',2,6) into key;
 	FOR f in pair(key)
 	LOOP
 		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('refresh materialized view %I_fractal1m', tbl);
+		qs = format('create materialized view %I_bollinger1m tablespace view as select * from public.bollinger_band(''public.%I'', 1, ''minute'', 14, 2) with no data', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal5m', tbl);
+		qs = format('create materialized view %I_bollinger5m tablespace view as select * from public.bollinger_band(''public.%I'', 5, ''minute'', 14, 2) with no data', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal15m', tbl);
+		qs = format('create materialized view %I_bollinger15m tablespace view as select * from public.bollinger_band(''public.%I'', 15, ''minute'', 14, 2) with no data', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal1hr', tbl);
+		qs = format('create materialized view %I_bollinger1hr tablespace view as select * from public.bollinger_band(''public.%I'', 1, ''hour'', 14, 2) with no data', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal4hr', tbl);
+		qs = format('create materialized view %I_bollinger4hr tablespace view as select * from public.bollinger_band(''public.%I'', 4, ''hour'', 14, 2) with no data', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal1day', tbl);
+		qs = format('create materialized view %I_bollinger1day tablespace view as select * from public.bollinger_band(''public.%I'', 1, ''day'', 14, 2) with no data', tbl, tbl );
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;

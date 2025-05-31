@@ -5,11 +5,11 @@ create type buy_sell as ENUM ( 'buy', 'sell' );
 create type bb_type as ( above bool, below bool, dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), bolu numeric(10,6), bold numeric(10,6) );
 create type bb_backtest_type as ( open_time timestamp without time zone, close_time timestamp without time zone, trade_duration interval, trade_type buy_sell, open numeric(10,6), close numeric(10,6), profit numeric(10,6) ); 
 
-create or replace function bolinger_band_cur(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone, todt timestamp without time zone) returns refcursor  as $$
+create or replace function bollinger_band_cur(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone, todt timestamp without time zone) returns refcursor  as $$
 declare
 	c refcursor;
 begin
- 	 open c for with t2 as ( with t as ( select *, ( high + low + close ) / 3 as TP from candlestick(tbl, n, unit, fromdt, todt) )
+ 	 open c for with t2 as ( with t as ( select *, ( high + low + close ) / 3 as TP from public.candlestick(tbl, n, unit, fromdt, todt) )
  	  select  dt, open, close, high, low,  (avg(TP) over w + num_stddevs * stddev(TP) over w)::numeric(10,6) as BOLU,
  	  (avg(TP) over w - 2 * stddev(TP) over w)::numeric(10,6) as BOLD  from t window w as  ( rows periods preceding ) ) 
  		 select close > bolu as above, close < bold as below, * from t2;
@@ -18,13 +18,13 @@ begin
 end;
 $$ language 'plpgsql';
 
-CREATE OR REPLACE FUNCTION bolinger_band(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY')  RETURNS setof bb_type
+CREATE OR REPLACE FUNCTION bollinger_band(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY')  RETURNS setof bb_type
 as $$
 declare
 	gl_row record;
 	c refcursor;
 begin
-	select * from bolinger_band_cur(tbl, n, unit, periods, num_stddevs, fromdt, todt) into c;
+	select * from public.bollinger_band_cur(tbl, n, unit, periods, num_stddevs, fromdt, todt) into c;
 	LOOP
 		fetch next from c into gl_row;
 		return next gl_row;
@@ -33,7 +33,7 @@ begin
 end;
 $$ language plpgsql;
 
-create or replace function bolinger_backtest(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY') returns setof bb_backtest_type as $$
+create or replace function bollinger_backtest(tbl text, n int, unit text, periods int, num_stddevs int, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY') returns setof bb_backtest_type as $$
 declare
 	gl_row record;
 	bb_cur refcursor;
@@ -47,7 +47,7 @@ declare
 	bs buy_sell;
 begin
 	select false into trade_open;
-	select * from bolinger_band_cur(tbl, n, unit, periods, num_stddevs, fromdt, todt) into bb_cur;
+	select * from public.bollinger_band_cur(tbl, n, unit, periods, num_stddevs, fromdt, todt) into bb_cur;
 	LOOP	
 		fetch next from bb_cur into gl_row;
 
@@ -81,7 +81,7 @@ begin
 end;
 $$ language plpgsql;
 
-CREATE OR REPLACE FUNCTION bolinger_mv(tbl text, tf text, fromdt timestamp without time zone default '-INFINITY', todt timestamp without time zone default 'INFINITY') RETURNS setof bb_type
+CREATE OR REPLACE FUNCTION bollinger_mv(tbl text, tf text, fromdt timestamp without time zone default '-INFINITY', todt timestamp without time zone default 'INFINITY') RETURNS setof bb_type
 as $$
 declare
 	f text;
@@ -92,7 +92,7 @@ declare
 begin
 	select '' into u;	select '' into qs;
 	for y in 2010..2022 LOOP
-		select tbl || '_' || y || '_bolinger' || tf into key;
+		select tbl || '_' || y || '_bollinger' || tf into key;
 		--raise info 'key: %', key;
 		qs = format(qs || u || 'select * from %I', key );
 		select ' union ' into u;

@@ -6,7 +6,7 @@ as $$
 begin
 return query
 select *, max(high) over fractal_window < high as fractal_high, min(low) over fractal_window > low as fractal_low 
-	from candlestick(tbl, periods, unit, fromdt, todt)
+	from public.candlestick(tbl, periods, unit, fromdt, todt)
 	window 	fractal_window  as (rows between 2 preceding and 2 following exclude current row);
 end;
 $$
