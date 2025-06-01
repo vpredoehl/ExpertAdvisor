@@ -2,9 +2,11 @@ do $code$
 declare
 	f text;
 	qs text;
+	qs2 text;
 	oid int;
 	tbl text;
 	key text;
+	ispopulated boolean;
 	pair cursor(key text) for select tablename from pg_tables  where tablename like key order by 1;
 begin
 	FOR y in 2000..2030 LOOP
@@ -15,43 +17,73 @@ begin
 		raise info 'f: %, tbl: %', f, tbl;
 		qs = format('refresh materialized view %I_bollinger1m', tbl);
 		begin
-			raise info 'executing: %', qs;
-			execute  qs;
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger1m''', tbl);
+			execute qs2 into ispopulated;
+			raise notice '%_bollinger1m ispopulated: %', tbl, ispopulated;	
+			if ispopulated is not true then
+				raise info 'executing: %', qs;
+				execute  qs;
+			end if;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
 		qs = format('refresh materialized view %I_bollinger5m', tbl);
 		begin
-			raise info 'executing: %', qs;
-			execute  qs;
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger15m''', tbl);
+			execute qs2 into ispopulated;
+			raise notice '%_bollinger15m ispopulated: %', tbl, ispopulated;	
+			if ispopulated is not true then
+				raise info 'executing: %', qs;
+				execute  qs;
+			end if;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
 		qs = format('refresh materialized view %I_bollinger15m', tbl);
 		begin
-			raise info 'executing: %', qs;
-			execute  qs;
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger15m''', tbl);
+			execute qs2 into ispopulated;
+			raise notice '%_bollinger15m ispopulated: %', tbl, ispopulated;	
+			if ispopulated is not true then
+				raise info 'executing: %', qs;
+				execute  qs;
+			end if;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
 		qs = format('refresh materialized view %I_bollinger1hr', tbl);
 		begin
-			raise info 'executing: %', qs;
-			execute  qs;
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger1hr''', tbl);
+			execute qs2 into ispopulated;
+			raise notice '%_bollinger1hr ispopulated: %', tbl, ispopulated;	
+			if ispopulated is not true then
+				raise info 'executing: %', qs;
+				execute  qs;
+			end if;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
 		qs = format('refresh materialized view %I_bollinger4hr', tbl);
 		begin
-			raise info 'executing: %', qs;
-			execute  qs;
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger4hr''', tbl);
+			execute qs2 into ispopulated;
+			raise notice '%_bollinger4hr ispopulated: %', tbl, ispopulated;	
+			if ispopulated is not true then
+				raise info 'executing: %', qs;
+				execute  qs;
+			end if;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
 		qs = format('refresh materialized view %I_bollinger1day', tbl);
 		begin
-			raise info 'executing: %', qs;
-			execute  qs;
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger1day''', tbl);
+			execute qs2 into ispopulated;
+			raise notice '%_bollinger1day ispopulated: %', tbl, ispopulated;	
+			if ispopulated is not true then
+				raise info 'executing: %', qs;
+				execute  qs;
+			end if;
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;

@@ -3,6 +3,7 @@ declare
 	f text;
 	qs text;
 	qs2 text;
+	oid int;
 	tbl text;
 	key text;
 	ispopulated boolean;
@@ -14,11 +15,11 @@ begin
 	LOOP
 		select substring(f::text, 2, 11) into tbl;
 		raise info 'f: %, tbl: %', f, tbl;
-		qs = format('refresh materialized view %I_fractal1m', tbl);
+		qs = format('refresh materialized view %I_candlestick1m', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1m''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal1m ispopulated: %', tbl, ispopulated;	
+			raise notice '%_candlestick1m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -26,11 +27,11 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal5m', tbl);
+		qs = format('refresh materialized view %I_candlestick5m', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal5m''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick5m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fracta5m ispopulated: %', tbl, ispopulated;	
+			raise notice '%_candlestick5m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -38,11 +39,11 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal15m', tbl);
+		qs = format('refresh materialized view %I_candlestick15m', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal15m''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick15m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal15m ispopulated: %', tbl, ispopulated;	
+			raise notice '%_candlestick15m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -50,11 +51,11 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal1hr', tbl);
+		qs = format('refresh materialized view %I_candlestick1hr', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1hr''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal1hr ispopulated: %', tbl, ispopulated;	
+			raise notice '%_candlestick1hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -62,11 +63,11 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal4hr', tbl);
+		qs = format('refresh materialized view %I_candlestick4hr', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal4hr''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick4hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal4hr ispopulated: %', tbl, ispopulated;	
+			raise notice '%_candlestick4hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -74,11 +75,11 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		qs = format('refresh materialized view %I_fractal1day', tbl);
+		qs = format('refresh materialized view %I_candlestick1day', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1day''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal1day ispopulated: %', tbl, ispopulated;	
+			raise notice '%_candlestick1day ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
