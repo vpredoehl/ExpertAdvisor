@@ -19,7 +19,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_candlestick1m ispopulated: %', tbl, ispopulated;	
+			raise info '%_candlestick1m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -31,7 +31,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick5m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_candlestick5m ispopulated: %', tbl, ispopulated;	
+			raise info '%_candlestick5m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -43,7 +43,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick15m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_candlestick15m ispopulated: %', tbl, ispopulated;	
+			raise info '%_candlestick15m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -55,7 +55,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_candlestick1hr ispopulated: %', tbl, ispopulated;	
+			raise info '%_candlestick1hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -67,7 +67,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick4hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_candlestick4hr ispopulated: %', tbl, ispopulated;	
+			raise info '%_candlestick4hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -79,7 +79,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_candlestick1day ispopulated: %', tbl, ispopulated;	
+			raise info '%_candlestick1day ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;

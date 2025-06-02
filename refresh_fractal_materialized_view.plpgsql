@@ -18,7 +18,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal1m ispopulated: %', tbl, ispopulated;	
+			raise info '% fractal1m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -30,7 +30,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal5m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fracta5m ispopulated: %', tbl, ispopulated;	
+			raise info '% fracta5m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -42,7 +42,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal15m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal15m ispopulated: %', tbl, ispopulated;	
+			raise info '% fractal15m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -54,7 +54,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal1hr ispopulated: %', tbl, ispopulated;	
+			raise info '% fractal1hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -66,7 +66,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal4hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal4hr ispopulated: %', tbl, ispopulated;	
+			raise info '% fractal4hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -78,7 +78,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_fractal1day''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '% fractal1day ispopulated: %', tbl, ispopulated;	
+			raise info '% fractal1day ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;

@@ -19,7 +19,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger1m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_bollinger1m ispopulated: %', tbl, ispopulated;	
+			raise info '%_bollinger1m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -31,7 +31,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger15m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_bollinger15m ispopulated: %', tbl, ispopulated;	
+			raise info '%_bollinger15m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -43,7 +43,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger15m''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_bollinger15m ispopulated: %', tbl, ispopulated;	
+			raise info '%_bollinger15m ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -55,7 +55,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger1hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_bollinger1hr ispopulated: %', tbl, ispopulated;	
+			raise info '%_bollinger1hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -67,7 +67,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger4hr''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_bollinger4hr ispopulated: %', tbl, ispopulated;	
+			raise info '%_bollinger4hr ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
@@ -79,7 +79,7 @@ begin
 		begin
 			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_bollinger1day''', tbl);
 			execute qs2 into ispopulated;
-			raise notice '%_bollinger1day ispopulated: %', tbl, ispopulated;	
+			raise info '%_bollinger1day ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then
 				raise info 'executing: %', qs;
 				execute  qs;
