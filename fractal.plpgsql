@@ -1,5 +1,6 @@
 drop type fractal_type cascade;
 create type fractal_type as ( ts timestamp without time zone, open numeric(10,6), close numeric(10,6), hi numeric(10,6), lo numeric(10,6), vol integer, target numeric(10,6), fractal_high bool, fractal_low bool );
+
 create or replace function fractal(tbl text, periods int, unit text, fromdt timestamp without time zone default '-INFINITY', todt timestamp without time zone default 'INFINITY') 
 returns setof fractal_type
 as $$
@@ -36,6 +37,41 @@ begin
 	exception when others then 
 		raise notice '% %', SQLERRM, SQLSTATE;
 	end;
+end;
+$$ language 'plpgsql'
+PARALLEL SAFE;
+
+create or replace function current_high(tbl text, periods int, unit text, ts timestamp without time zone ) returns fractal_type
+as $$
+declare
+	qsh text;
+	h fractal_type;
+	l fractal_type;
+begin
+	qsh = format('select * from fractal(%L, %L, %L) where ts < %L and fractal_high is true order by ts desc limit 1;',tbl, periods, unit, ts);
+	begin
+		execute qsh into h;
+	exception when others then
+		raise notice '% %', SQLERRM, SQLSTATE;
+	end;
+	return h;
+end;
+$$ language 'plpgsql'
+PARALLEL SAFE;
+
+create or replace function current_low(tbl text, periods int, unit text, ts timestamp without time zone ) returns fractal_type
+as $$
+declare
+	qsl text;
+	l fractal_type;
+begin
+	qsl = format('select * from fractal(%L, %L, %L) where ts < %L and fractal_low is true order by ts desc limit 1;',tbl, periods, unit, ts);
+	begin
+		execute qsl into l;
+	exception when others then
+		raise notice '% %', SQLERRM, SQLSTATE;
+	end;
+	return l;
 end;
 $$ language 'plpgsql'
 PARALLEL SAFE;
