@@ -1,0 +1,134 @@
+-- find View\ Report/ -name '*.txt' -not -empty -print -exec cat {} \; > view_report.txt
+
+do $code$
+declare
+	f text;
+	qs text;
+	tbl text;
+	key text;
+	pair cursor(key text) for select tablename from pg_tables  where tablename like key  order by tablename;
+begin
+	FOR y in 2000..2030 LOOP
+	select substring('''%' || y || '%''',2,6) into key;
+	FOR f in pair(key)
+	LOOP
+		select substring(f::text, 2, 11) into tbl;
+		raise info 'f: %, tbl: %', f, tbl;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_candlestick1m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_candlestick5m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick5m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_candlestick15m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick15m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_candlestick1hr  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1hr.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_candlestick4hr  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick4hr.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_candlestick1day  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1day.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+
+
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_fractal1m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_fractal5m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick5m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_fractal15m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick15m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_fractal1hr  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1hr.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_fractal4hr  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick4hr.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_fractal1day  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1day.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_bollinger1m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_bollinger5m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick5m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_bollinger15m  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick15m.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_bollinger1hr  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1hr.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_bollinger4hr  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick4hr.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+		qs = format('copy ( with t as ( select date_part(''year'', dt) as year, date_part(''month'', dt) as month, max(date_part(''day'',dt)) as max_date from %I_bollinger1day  group by 1,2 order by 1,2 ) select * from t where max_date < 28 ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I_candlestick1day.txt'';', tbl, tbl);
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+
+	END LOOP;
+	END LOOP;
+end $code$
+language 'plpgsql';
+
+
