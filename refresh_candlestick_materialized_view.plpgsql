@@ -77,7 +77,7 @@ begin
 		end;
 		qs = format('refresh materialized view %I_candlestick1day', tbl);
 		begin
-			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1m''', tbl);
+			qs2 = format('select ispopulated from pg_matviews where matviewname like ''%I_candlestick1day''', tbl);
 			execute qs2 into ispopulated;
 			raise info '%_candlestick1day ispopulated: %', tbl, ispopulated;	
 			if ispopulated is not true then

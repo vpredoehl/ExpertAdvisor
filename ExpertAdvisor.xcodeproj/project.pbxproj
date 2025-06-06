@@ -333,20 +333,17 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "";
 				LIBRARY_SEARCH_PATHS = (
-					/usr/local/lib,
-					/usr/local/pgsql/lib,
+					/opt/homebrew/lib,
+					"/opt/homebrew/lib/postgresql@17",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
-				OTHER_LDFLAGS = (
-					"-lc++experimental",
-					"-lpqxx",
-				);
+				OTHER_LDFLAGS = "-lpqxx";
 				SDKROOT = macosx;
-				SYSTEM_HEADER_SEARCH_PATHS = /usr/local/include/;
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1";
+				SYSTEM_HEADER_SEARCH_PATHS = "";
+				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/include/c++/v1/experimental";
 			};
 			name = Debug;
@@ -400,19 +397,16 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "";
 				LIBRARY_SEARCH_PATHS = (
-					/usr/local/lib,
-					/usr/local/pgsql/lib,
+					/opt/homebrew/lib,
+					"/opt/homebrew/lib/postgresql@17",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
-				OTHER_LDFLAGS = (
-					"-lc++experimental",
-					"-lpqxx",
-				);
+				OTHER_LDFLAGS = "-lpqxx";
 				SDKROOT = macosx;
-				SYSTEM_HEADER_SEARCH_PATHS = /usr/local/include/;
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1";
+				SYSTEM_HEADER_SEARCH_PATHS = "";
+				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/include/c++/v1/experimental";
 			};
 			name = Release;
@@ -426,13 +420,13 @@
 				DEVELOPMENT_TEAM = X674V92M37;
 				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				OTHER_LDFLAGS = (
-					"-lc++fs",
 					"-lpqxx",
+					"-lfs",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
-				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
+				SYSTEM_HEADER_SEARCH_PATHS = /opt/homebrew/include/;
+				USER_HEADER_SEARCH_PATHS = "";
+				Xanalyzer = "~/Library/Developer/Toolchains/LLVM20.1.6.xctoolchain/usr/include/";
 			};
 			name = Debug;
 		};
@@ -446,13 +440,13 @@
 				GCC_OPTIMIZATION_LEVEL = fast;
 				MACOSX_DEPLOYMENT_TARGET = 10.15;
 				OTHER_LDFLAGS = (
-					"-lc++fs",
 					"-lpqxx",
+					"-lfs",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SYSTEM_HEADER_SEARCH_PATHS = "/usr/local/include/ /usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
-				USER_HEADER_SEARCH_PATHS = "/usr/local/include/c++/v1 ";
-				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
+				SYSTEM_HEADER_SEARCH_PATHS = /opt/homebrew/include/;
+				USER_HEADER_SEARCH_PATHS = "";
+				Xanalyzer = "~/Library/Developer/Toolchains/LLVM20.1.6.xctoolchain/usr/include/";
 			};
 			name = Release;
 		};
