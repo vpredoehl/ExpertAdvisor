@@ -1,13 +1,13 @@
 drop type ema_type cascade;
 create type ema_type as ( date timestamp without time zone, ema numeric(10,6));
 
-create or replace function ema( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof ema_type
+create or replace function ema( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY' ) returns setof ema_type
 as $$
 begin
-	return query execute 'with t as ( select row_number() over () as rn, ema_aux::numeric(10,6) from ema_aux(''' || tbl || ''', ' || n::text || ', ''' || unit || ''',' ||  num_periods::text || ', ''' || fromdt || ''', ''' || todt || '''))  
+	return query execute 'with t as ( select row_number() over () as rn, ema_aux::numeric(10,6) from public.ema_aux(''' || tbl || ''', ' || n::text || ', ''' || unit || ''',' ||  num_periods::text || ', ''' || fromdt || ''', ''' || todt || '''))  
 select dt, ema_aux from t
 inner join
-( select row_number() over () - ' || (num_periods - 1)::text || ' as rn, dt from candlestick(''' || tbl || ''',' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') offset ' || (num_periods - 1)::text || ' ) as temp
+( select row_number() over () - ' || (num_periods - 1)::text || ' as rn, dt from public.candlestick(''' || tbl || ''',' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') offset ' || (num_periods - 1)::text || ' ) as temp
 using(rn);';
 end;
 $$ language 'plpgsql';
@@ -22,10 +22,10 @@ declare
 begin
 	select 2.0 / ( num_periods + 1 ) into weighted_multipler;
 	-- raise info 'weighted_multipler: %', weighted_multipler;
-	execute 'select avg(close) over ( rows ' || (num_periods - 1)::text || ' preceding ) from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') order by dt asc offset ' || (num_periods - 1)::text || ' limit 1;' into ema_yesterday;
+	execute 'select avg(close) over ( rows ' || (num_periods - 1)::text || ' preceding ) from public.candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') order by dt asc offset ' || (num_periods - 1)::text || ' limit 1;' into ema_yesterday;
 	return next ema_yesterday;
 
-	for row in execute 'select close  from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') order by dt asc offset ' || num_periods::text || ';'
+	for row in execute 'select close  from public.candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''', ''' || fromdt || ''', ''' || todt || ''') order by dt asc offset ' || num_periods::text || ';'
 loop
 	-- raise info 'close: % / ema_yesterday: %', row.close, ema_yesterday;
 	select (row.close - ema_yesterday) * weighted_multipler + ema_yesterday into ema;
@@ -42,6 +42,6 @@ create type sma_type as ( date timestamp without time zone, sma numeric(10,6));
 create or replace function sma( tbl text, n int, unit text, num_periods int, fromdt timestamp without time zone, todt timestamp without time zone ) returns setof sma_type
 as $$
 begin
-	return query execute 'select dt, avg(close) over ( rows ' || (num_periods - 1)::text || ' preceding )::numeric(10,6) as sma from candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''',' ||  ' ''' || fromdt || ''', ''' || todt || ''');';
+	return query execute 'select dt, avg(close) over ( rows ' || (num_periods - 1)::text || ' preceding )::numeric(10,6) as sma from public.candlestick(''' || tbl || ''', ' || n::text || ', ''' || unit || ''',' ||  ' ''' || fromdt || ''', ''' || todt || ''');';
 end;
 $$ language 'plpgsql';

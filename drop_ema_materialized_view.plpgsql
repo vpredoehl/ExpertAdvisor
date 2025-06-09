@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+begin
+	FOR f in select matviewname from pg_matviews  where matviewname like '%ema200%'  order by 1
+	LOOP
+		qs = format('drop materialized view %I', f);
+		--raise info 'executing: %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
+
