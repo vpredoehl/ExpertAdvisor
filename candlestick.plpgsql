@@ -46,21 +46,37 @@ declare
 	p text;
 begin
 	-- look for a materialized view
-	if fromdt != '-INFINITY' and todt != 'INFINITY' then
+	select substring(tbl,position('.' in tbl) + 1,6) into p;
+	--raise info 'p: %', p;
+	if position( 'rmp' in tbl ) != 0 then
+		begin	
+			select case
+	     			when unit = 'minute' then n::text || 'm'	
+	     			when unit = 'hour' then n::text|| 'hr'	
+		     			else n::text || unit
+				end into tf;			
+			--raise info 'using rmp: p %, tf %, fromdt %, todt %',p,tf,fromdt,todt;
+			return query select * from public.candlestick_mv(p,tf,fromdt,todt);
+			return;
+		exception when others then
+			raise notice 'rmp: % %', SQLERRM, SQLSTATE;
+		end; 
+	elsif fromdt != '-INFINITY' and todt != 'INFINITY' then
 		begin
 			select case
-		     		when unit = 'minute' then n::text || 'min'	
+		     		when unit = 'minute' then n::text || 'm'	
 		     		when unit = 'hour' then n::text|| 'hr'	
 		     		else n::text || unit
 			end into tf;			
-			select substring(tbl,1,6) into p;
-			--raise info 'tf: %, p: %', tf, p;
+			--raise info 'using candlestick_mv  tf: %, p: %', tf, p;
 			return query select * from public.candlestick_mv(p,tf,fromdt,todt);
+			return;
 		exception when others then
-			raise notice '% %', SQLERRM, SQLSTATE;
+			raise notice 'INFINITY: % %', SQLERRM, SQLSTATE;
 		end; 
 	end if;
 	-- no view found
+	raise info 'No suitable materialized view found';
 	select * from public.candlestick_cur(tbl, n, unit, fromdt, todt) into c;
 	LOOP
 		fetch next from c into gl_row;
@@ -87,22 +103,32 @@ declare
 	e int;
 	has_table boolean;
 begin
-	select '' into u;	select '' into qs;
-	select date_part('year', fromdt) into b;
-	select date_part('year',todt) into e;
+	select '' into u;
+	select 'with t as ( ' into qs;
+	begin
+		select date_part('year', fromdt) into b;
+	exception when numeric_value_out_of_range then
+		select 2000 into b;
+	end;
+	begin
+		select date_part('year', todt) into b;
+	exception when numeric_value_out_of_range then
+		select 2030 into e;
+	end;
+
 	for y in b..e LOOP
 		select tbl || '_' || y || '_candlestick' || tf into key;
 		qs2 = format('select exists(select matviewname from pg_matviews where matviewname = %L) ', key);
 		execute qs2 into has_table;
-		raise info 'key: %, has_table: %', key, has_table;
+		--raise info 'key: %, has_table: %', key, has_table;
 		CONTINUE WHEN has_table is false;
-		qs = format(qs || u || 'select * from %I', key );
+		qs = format(qs || u || 'select * from public.%I', key );
 		select ' union ' into u;
-		raise info 'qs: %', qs;
+		--raise info 'qs: %', qs;
 	END LOOP;
 	begin
-		u = format(' where dt between %L and %L', fromdt, todt);
-		raise info 'qs: %', qs || u;
+		u = format(' ) select * from t where dt between %L and %L', fromdt, todt);
+		--raise info 'qs: %', qs || u;
 		RETURN QUERY EXECUTE qs || u;
 	exception when others then 
 		raise notice '% %', SQLERRM, SQLSTATE;
