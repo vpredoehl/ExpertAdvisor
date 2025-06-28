@@ -8,6 +8,61 @@ begin
 	FOR tbl in select tablename from pg_tables  where  tablename like '%rmp%'  order by tablename
 	LOOP
 		raise info 'tbl: %', tbl;
+ 		qs = format('create materialized view %I_ema131m  tablespace view as select * from ema(''public.%I'', 1, ''minute'', 13) with no data;', tbl, tbl );
+		ind1 = format('create index %I_ema131m_idx on %I_ema131m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+ 		qs = format('create materialized view %I_ema135m  tablespace view as select * from ema(''public.%I'', 5, ''minute'', 13) with no data;', tbl, tbl );
+		ind1 = format('create index %I_ema135m_idx on %I_ema135m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+ 		qs = format('create materialized view %I_ema1315m  tablespace view as select * from ema(''public.%I'', 15, ''minute'', 13) with no data;', tbl, tbl );
+		ind1 = format('create index %I_ema1315m_idx on %I_ema1315m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+ 		qs = format('create materialized view %I_ema131hr  tablespace view as select * from ema(''public.%I'', 1, ''hour'', 13) with no data;', tbl, tbl );
+		ind1 = format('create index %I_ema131hr_idx on %I_ema131hr( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+ 		qs = format('create materialized view %I_ema134hr  tablespace view as select * from ema(''public.%I'', 4, ''hour'', 13) with no data;', tbl, tbl );
+		ind1 = format('create index %I_ema134hr_idx on %I_ema134hr( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+ 		qs = format('create materialized view %I_ema131day  tablespace view as select * from ema(''public.%I'', 1, ''day'', 13) with no data;', tbl, tbl );
+		ind1 = format('create index %I_ema131day_idx on %I_ema131day( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+
  		qs = format('create materialized view %I_ema201m  tablespace view as select * from ema(''public.%I'', 1, ''minute'', 20) with no data;', tbl, tbl );
 		ind1 = format('create index %I_ema201m_idx on %I_ema201m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
 		begin
@@ -62,7 +117,6 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		COMMIT;
 
  		qs = format('create materialized view %I_ema501m  tablespace view as select * from ema(''public.%I'', 1, ''minute'', 50) with no data;', tbl, tbl );
 		ind1 = format('create index %I_ema501m_idx on %I_ema501m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
@@ -118,7 +172,6 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		COMMIT;
 
  		qs = format('create materialized view %I_ema1001m  tablespace view as select * from ema(''public.%I'', 1, ''minute'', 100) with no data;', tbl, tbl );
 		ind1 = format('create index %I_ema1001m_idx on %I_ema1001m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
@@ -174,7 +227,6 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		COMMIT;
 
  		qs = format('create materialized view %I_ema2001m  tablespace view as select * from ema(''public.%I'', 1, ''minute'', 200) with no data;', tbl, tbl );
 		ind1 = format('create index %I_ema2001m_idx on %I_ema2001m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
@@ -230,7 +282,6 @@ begin
 		exception when others then 
 			raise notice '% %', SQLERRM, SQLSTATE;
 		end;
-		COMMIT;
 	END LOOP;
 end $code$
 language 'plpgsql';
