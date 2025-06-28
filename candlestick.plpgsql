@@ -111,7 +111,7 @@ begin
 		select 2000 into b;
 	end;
 	begin
-		select date_part('year', todt) into b;
+		select date_part('year', todt) into e;
 	exception when numeric_value_out_of_range then
 		select 2030 into e;
 	end;

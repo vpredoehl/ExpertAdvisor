@@ -2,3 +2,5 @@ DerivedData/*
 Build/*
 ratedata.gaincapital.com
 *.swp
+xcuserdata/
+
