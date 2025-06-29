@@ -44,6 +44,7 @@ declare
 	tf text;
 	qs text;
 	p text;
+	rc integer;
 begin
 	-- look for a materialized view
 	select substring(tbl,position('.' in tbl) + 1,6) into p;
@@ -57,7 +58,9 @@ begin
 				end into tf;			
 			--raise info 'using rmp: p %, tf %, fromdt %, todt %',p,tf,fromdt,todt;
 			return query select * from public.candlestick_mv(p,tf,fromdt,todt);
-			return;
+			GET DIAGNOSTICS rc = ROW_COUNT;
+			--raise info 'rc: %', rc;
+			if rc > 0 then return; end if;
 		exception when others then
 			raise notice 'rmp: % %', SQLERRM, SQLSTATE;
 		end; 
@@ -76,7 +79,7 @@ begin
 		end; 
 	end if;
 	-- no view found
-	raise info 'No suitable materialized view found';
+	raise info 'Calculating candlesticks: % % %', tbl, n, unit;
 	select * from public.candlestick_cur(tbl, n, unit, fromdt, todt) into c;
 	LOOP
 		fetch next from c into gl_row;
@@ -102,9 +105,12 @@ declare
 	b int;
 	e int;
 	has_table boolean;
+	hasview boolean;
 begin
 	select '' into u;
+	select false into hasview;
 	select 'with t as ( ' into qs;
+
 	begin
 		select date_part('year', fromdt) into b;
 	exception when numeric_value_out_of_range then
@@ -115,23 +121,25 @@ begin
 	exception when numeric_value_out_of_range then
 		select 2030 into e;
 	end;
-
+	--raise info 'b: %, e: %',b,e;
 	for y in b..e LOOP
 		select tbl || '_' || y || '_candlestick' || tf into key;
 		qs2 = format('select exists(select matviewname from pg_matviews where matviewname = %L) ', key);
 		execute qs2 into has_table;
 		--raise info 'key: %, has_table: %', key, has_table;
 		CONTINUE WHEN has_table is false;
+		select true into hasview;
 		qs = format(qs || u || 'select * from public.%I', key );
 		select ' union ' into u;
 		--raise info 'qs: %', qs;
 	END LOOP;
 	begin
+		if hasview = false then return; end if;
 		u = format(' ) select * from t where dt between %L and %L', fromdt, todt);
 		--raise info 'qs: %', qs || u;
 		RETURN QUERY EXECUTE qs || u;
 	exception when others then 
-		raise notice '% %', SQLERRM, SQLSTATE;
+		raise notice 'candlestick_mv: % %', SQLERRM, SQLSTATE;
 	end;
 end;
 $$ language 'plpgsql'
