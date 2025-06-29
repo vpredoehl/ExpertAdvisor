@@ -1,7 +1,7 @@
 drop type dc_type cascade;
-create type dc_type as ( dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), uc numeric(10,6), lc numeric(10,6), mc numeric(10,6) );
+create type dc_type as ( dt timestamp without time zone, open numeric(10,6), close numeric(10,6), high numeric(10,6), low numeric(10,6), vol integer, target numeric(10,6), uc numeric(10,6), lc numeric(10,6), mc numeric(10,6) );
 
-create function donchian_channel(tbl text, n int, unit text, periods int, fromdt timestamp without time zone, todt timestamp without time zone) returns setof dc_type as $$
+create function donchian_channel(tbl text, n int, unit text, periods int, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY') returns setof dc_type as $$
 begin
 	RETURN QUERY
 		with t as (
