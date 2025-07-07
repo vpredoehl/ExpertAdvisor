@@ -1,0 +1,18 @@
+do $code$
+declare
+	f text;
+	qs text;
+begin
+	FOR f in select viewname from pg_views  where viewname like '%dtr'  order by 1
+	LOOP
+		qs = format('drop view %I', f);
+		--raise info 'executing: %', qs;
+		begin
+			execute  qs;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
+

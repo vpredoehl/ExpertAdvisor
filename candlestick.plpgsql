@@ -73,7 +73,9 @@ begin
 			end into tf;			
 			--raise info 'using candlestick_mv  tf: %, p: %', tf, p;
 			return query select * from public.candlestick_mv(p,tf,fromdt,todt);
-			return;
+			GET DIAGNOSTICS rc = ROW_COUNT;
+			--raise info 'rc: %', rc;
+			if rc > 0 then return; end if;
 		exception when others then
 			raise notice 'INFINITY: % %', SQLERRM, SQLSTATE;
 		end; 

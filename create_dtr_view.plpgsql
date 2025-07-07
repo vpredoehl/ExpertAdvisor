@@ -1,0 +1,25 @@
+do $code$
+declare
+	tbl text;
+	qs text;
+	ind1 text;
+	pair text;
+begin
+	FOR tbl in select tablename from pg_tables  where  tablename like '%rmp%'  order by tablename
+	LOOP
+		select substring(tbl,1,6) into pair;
+		raise info 'tbl: %', tbl;
+ 		qs = format('create or replace view %I_dtr as select dt, abs(open - close ) as dtr  from candlestick(%L,1,''day'') order by dt',pair,tbl);
+		--ind1 = format('create index %I_ema131m_idx on %I_ema131m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+		begin
+			raise info 'executing: %', qs;
+			execute  qs;
+			--execute ind1;
+		exception when others then 
+			raise notice '% %', SQLERRM, SQLSTATE;
+		end;
+	END LOOP;
+end $code$
+language 'plpgsql';
+
+
