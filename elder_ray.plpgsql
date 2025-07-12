@@ -5,15 +5,29 @@ CREATE OR REPLACE FUNCTION elder_ray(tbl text, n int, unit text, fromdt timestam
 as $$
 DECLARE
 	tf text;
+	has_emaview boolean;
+	qs text;
 BEGIN
 	select case
 		when unit='minute' then 'm'
 		when unit='hour' then 'hr'
 		else unit 
 	       end into tf;
-return query execute 'with t as ( select * from ' || tbl || 'rmp_ema13' || n::text || tf
-	|| ' join candlestick_mv(''' || tbl || ''',''' || n::text || tf || ''', ''' || fromdt::text || ''', ''' || todt::text || ''' ) on date = dt ) '
-	|| ' select date, (high - ema)::numeric(10,6) as bulls, (low - ema)::numeric(10,6) as bears from t';
+	qs = format('select exists(select viewname from pg_views where viewname = %L)', tbl || 'rmp_ema13' || n::text || unit);
+	execute qs into has_emaview;
+	raise info 'has_emaview: %, %', has_emaview, qs;
+	if has_emaview = false then
+		qs = format('with t as ( select * from ema(%L, %L, %L, 13, %L, %L)'
+			|| ' join candlestick(''' || tbl || 'rmp'',' || n::text || ', ''' || unit || ''', ''' || fromdt::text || ''', ''' || todt::text || ''' ) on date = dt ) '
+			|| ' select date, (high - ema)::numeric(10,6) as bulls, (low - ema)::numeric(10,6) as bears from t', tbl || 'rmp', n, unit, fromdt, todt);
+		raise info 'qs: %', qs;
+		return query execute qs;
+	else	
+		-- use ema view
+		return query execute 'with t as ( select * from ' || tbl || 'rmp_ema13' || n::text || tf
+			|| ' join candlestick_mv(''' || tbl || ''',''' || n::text || tf || ''', ''' || fromdt::text || ''', ''' || todt::text || ''' ) on date = dt ) '
+			|| ' select date, (high - ema)::numeric(10,6) as bulls, (low - ema)::numeric(10,6) as bears from t';
+	END IF;
 END;
 $$ language 'plpgsql';
 
