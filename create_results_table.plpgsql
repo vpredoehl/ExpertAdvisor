@@ -1,0 +1,66 @@
+create table trendsplitter ( open_dt timestamp without time zone,
+	close_dt timestamp without time zone,
+	sym char(6),
+ 	open numeric(10,6),
+ 	close numeric(10,6),
+ 	pips float, duration text,
+	profitable_duration interval,
+	drawdown float,
+	risk_rewards float,
+ 	max_pips float,
+ 	min_pips float,
+ 	missed_pips float );
+
+CREATE OR REPLACE FUNCTION duration_to_interval(tc TEXT, fps INT DEFAULT 30)
+RETURNS INTERVAL AS $$
+DECLARE
+  hh INT := split_part(tc, ':', 1)::int;
+  mm INT := split_part(tc, ':', 2)::int;
+  ss INT := split_part(tc, ':', 3)::int;
+  ff INT := split_part(tc, ':', 4)::int;
+BEGIN
+  RETURN make_interval(hours := hh, mins := mm, secs := ss + ff::float / fps);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION interval_to_verbose(i INTERVAL)
+RETURNS TEXT AS $$
+BEGIN
+  RETURN 
+    EXTRACT(hour FROM i)::int || 'h ' ||
+    EXTRACT(minute FROM i)::int || 'm ' ||
+    FLOOR(EXTRACT(second FROM i))::int || 's';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION timecode_to_verbose(tc TEXT, fps INT DEFAULT 30)
+RETURNS TEXT AS $$
+DECLARE
+  hh INT := split_part(tc, ':', 1)::int;
+  mm INT := split_part(tc, ':', 2)::int;
+  ss INT := split_part(tc, ':', 3)::int;
+  ff INT := split_part(tc, ':', 4)::int;
+  i INTERVAL;
+  parts TEXT := '';
+BEGIN
+  -- Convert timecode to interval
+  i := make_interval(hours := hh, mins := mm, secs := ss + ff::float / fps);
+
+  -- Build verbose string, conditionally including parts
+  IF EXTRACT(hour FROM i)::int > 0 THEN
+    parts := parts || EXTRACT(hour FROM i)::int || 'h ';
+  END IF;
+
+  IF EXTRACT(minute FROM i)::int > 0 THEN
+    parts := parts || EXTRACT(minute FROM i)::int || 'm ';
+  END IF;
+
+  IF FLOOR(EXTRACT(second FROM i))::int > 0 THEN
+    parts := parts || FLOOR(EXTRACT(second FROM i))::int || 's';
+  END IF;
+
+  -- Trim and return
+  RETURN trim(both ' ' FROM parts);
+END;
+$$ LANGUAGE plpgsql;
+
