@@ -2,11 +2,10 @@ do $code$
 declare
 	f text;
 	qs text;
-	oid int;
 begin
-	FOR f in select tablename from pg_tables  where tablename like '%2023%'  order by tablename
+	FOR f in select tablename from pg_tables  where tablename like '%2025%'  order by tablename
 	LOOP
- 		qs = format('copy ( with t3 as ( with t2 as ( with t as ( select distinct date_trunc(''day'', time) as dd  from %I order by 1) select dd as d2, lag(dd,1) over () as d1  from t) select  d2, d2 - d1 as df from t2 ) select d2, df from t3 where df > ''2 days'' ) to ''/Volumes/Developer USB/ExpertAdvisor/check_%I.txt''', f, f);
+ 		qs = format('copy ( with t3 as ( with t2 as ( with t as ( select distinct date_trunc(''day'', time) as dd  from %I order by 1) select dd as d2, lag(dd,1) over () as d1  from t) select  d2, d2 - d1 as df from t2 ) select d2, df from t3 where df > ''2 days'' ) to ''/Volumes/Developer/ExpertAdvisor/View Report/check_%I.txt''', f, f);
 		raise info 'checking: %', f;
 		begin
 			execute  qs;
