@@ -29,8 +29,8 @@ istream& operator>>(istream& i, PriceTP &t)
 {
     struct tm ct;
     
-    i >> std::get_time(&ct, "%F %R:%S");
-    t = time_point_cast<minutes>(std::chrono::system_clock::from_time_t(mktime(&ct)));
+    i >> std::get_time(&ct, "%F %T:%S");
+    t = time_point_cast<seconds>(std::chrono::system_clock::from_time_t(mktime(&ct)));
     return i;
 }
 

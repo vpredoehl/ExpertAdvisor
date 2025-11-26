@@ -12,7 +12,7 @@
 #include <chrono>
 #include <string>
 
-using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::minutes>;
+using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>;
 
 struct PricePoint
 {

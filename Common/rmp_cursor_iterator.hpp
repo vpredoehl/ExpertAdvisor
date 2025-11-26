@@ -98,10 +98,16 @@ struct rmp_forward_iterator
         return false;
     }
 
+    auto operator++(int) -> rmp_forward_iterator
+    {
+        rmp_forward_iterator tmp(*this);
+        ++(*this);
+        return tmp;
+    }
     auto operator++() -> rmp_forward_iterator
     {
         if(isSTLEnd)    throw std::range_error { "Can't advance rmp_forward_iterator past end" };
-        return { cur, false };
+        return { cur, isSTLEnd = !ReadPP() };
     }
 
 private:
