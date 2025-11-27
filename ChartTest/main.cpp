@@ -83,23 +83,7 @@ int main(int argc, const char * argv[])
     pqxx::result tables = w.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { argv[1] }, toDate { argv[2] };
     std::vector<TestTimeFrame> testParams;
-    
-    try
-    {
-        for(auto t : tables)
-        {
-            std::string rawPriceTableName { t[0].c_str() };
-            std::string query ="select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;";
-            rmp_cursor_stream cur { w, query, rawPriceTableName + "_stream" };
-            rmp_forward_iterator cb = cur.cbegin(), ce = cur.cend();
-
-            while(cb != ce) std::cout << *(cb++) << std::endl;
-        }
-    }
-    catch(pqxx::failure e)  {   std::cout << "pqxx::failure: " << e.what() << std::endl; return 1;   }
-
-    return 0;
-    
+        
         // get time frame tests from command line
     for(auto t = 3; t < argc; ++t)
     {
