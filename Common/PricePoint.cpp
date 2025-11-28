@@ -62,7 +62,7 @@ ostream& operator<<(ostream& o, PricePoint pp)
 }
 ostream& operator<<(ostream& o, CandlestickRow row)
 {
-    o << "\tTime: " << row.time << "\tOpen: " << setw(10) << row.open << "\tClose: " << setw(10) << row.close << "\tHigh: " << setw(10) << row.high << "\tLow: " << setw(10) << row.low << std::endl;
+    o << "\tTime: " << row.time << "\tOpen: " << setw(10) << row.open << "\tClose: " << setw(10) << row.close << "\tHigh: " << setw(10) << row.high << "\tLow: " << setw(10) << row.low;
     return o;
 }
 ostream& operator<<(ostream& o, RawMarketPrice rmp)
