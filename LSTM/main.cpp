@@ -6,12 +6,14 @@
 //  Copyright © 2025 Vincent Predoehl. All rights reserved.
 //
 
-#include "DiskIO.hpp"
 #include "db_cursor_iterator.hpp"
 
 #include <iostream>
 #include <string>
 #include <pqxx/pqxx>
+
+const std::string dbName = "forex";
+
 
 int main(int argc, const char * argv[])
 {

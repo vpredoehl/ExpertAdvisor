@@ -31,13 +31,7 @@ struct CandlestickRow
 {
     float open, close, high, low;
     PriceTP time;
-    
-    
 };
-
-#include <list>
-using RawMarketPrice = std::list<PricePoint>;
-
 
 std::istream& operator>>(std::istream&, PriceTP&);
 std::istream& operator>>(std::istream&, PricePoint&);
@@ -45,7 +39,6 @@ std::istream& operator>>(std::istream&, PricePoint&);
 std::ostream& operator<<(std::ostream&, PriceTP);
 std::ostream& operator<<(std::ostream&, PricePoint);
 std::ostream& operator<<(std::ostream&, CandlestickRow);
-std::ostream& operator<<(std::ostream&, RawMarketPrice);
 
 
 

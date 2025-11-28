@@ -6,7 +6,7 @@
 //  Copyright © 2018 Vincent Predoehl. All rights reserved.
 //
 
-#include "CandleStick.hpp"
+#include "PricePoint.hpp"
 #include <iomanip>
 
 using namespace std::chrono;
@@ -27,27 +27,6 @@ istream& operator>>(istream& i, PriceTP &t)
     return i;
 }
 
-istream& operator>>(istream& i, PricePoint &t)
-{
-    using std::getline;
-    PriceTP ct;
-    float bid,ask;
-    char year[5], month[3], day[3], hour[3], min[3], sec[3], nano[4];
-
-
-    i.get(year, 5); i.get(month, 3);    i.get(day, 3);  i.ignore(std::numeric_limits<std::streamsize>::max(),' ');
-    i.get(hour, 3);    i.get(min, 3);    i.get(sec, 3); i.get(nano,4); i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-
-    std::istringstream dateTime { std::string { year } + "-" + std::string { month } + "-" + std::string { day }
-        + " " + std::string { hour } + ":" + std::string { min } + ":" + std::string { sec } + "." + std::string { nano }  };
-
-    dateTime >> ct;
-    i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-    i >> ask;
-    i.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
-    t = PricePoint { ct, bid, ask };
-    return i;
-}
 
 ostream& operator<<(ostream& o, PriceTP t)
 {
@@ -63,11 +42,5 @@ ostream& operator<<(ostream& o, PricePoint pp)
 ostream& operator<<(ostream& o, CandlestickRow row)
 {
     o << "\tTime: " << row.time << "\tOpen: " << setw(10) << row.open << "\tClose: " << setw(10) << row.close << "\tHigh: " << setw(10) << row.high << "\tLow: " << setw(10) << row.low;
-    return o;
-}
-ostream& operator<<(ostream& o, RawMarketPrice rmp)
-{
-    o << "size: " << rmp.size() << std::endl;
-    std::for_each(rmp.begin(), rmp.end(), [&o](PricePoint pp)   {   o << pp << endl;    });
     return o;
 }

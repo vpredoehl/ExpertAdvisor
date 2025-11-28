@@ -10,33 +10,6 @@
 #include <iostream>
 
 
-rmp_result_block::rmp_result_block(db_cursor *cur, pqxx::result::difference_type idx)
-: pqxx::result { cur->retrieve(idx, idx + block_size) }
-{
-    fromIdx = idx;
-}
-
-template<>
-auto db_cursor_iterator<PricePoint>::ExractPP() const -> PricePoint
-{
-    if(blk == nullptr || !blk->IsCached(idx))
-            // requested index is not cached - retrieve new block
-        blk = std::make_shared<rmp_result_block>(cur, idx);
-
-    auto row = blk->cbegin() + idx - blk->fromIdx;
-
-    if(row["time"].c_str() == nullptr) return PricePoint();
-
-    auto bid { row["bid"] }, ask { row["ask"] };
-    std::istringstream time { row["time"].c_str() };
-
-    time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
-    return pp;
-}
-
-template<>
-auto db_cursor_iterator<PricePoint>::operator++() -> db_cursor_iterator      {   return { cur, ++idx, idx == cur->size() }; }
-
 template<>
 bool db_forward_iterator<PricePoint>::ReadPP()
 {
