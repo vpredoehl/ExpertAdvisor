@@ -16,7 +16,7 @@ CandleStick::CandleStick(PriceTP t, ChartCandle::const_iterator s, ChartCandle::
     time = t;
 }
 
-CandlePrice::CandlePrice(rmp_forward_iterator s, rmp_forward_iterator e)
+CandlePrice::CandlePrice(rmp_forward_iterator<PricePoint> s, rmp_forward_iterator<PricePoint> e)
     // s - start of input range
     // e - end of range ( including last price point ), not like the STL end() which is one past the last
 : open { *s }, close { *e }

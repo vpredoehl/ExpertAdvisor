@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		080C8C5B219B702700840B79 /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
 		0820370422B43B0D0025307B /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
 		082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
@@ -19,7 +18,6 @@
 		084426762ED8DD46002DEB21 /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
 		084426772ED8DD46002DEB21 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		084426782ED8DD46002DEB21 /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
-		0844267B2ED8DD46002DEB21 /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
 		084426882ED8E2F5002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
@@ -27,7 +25,6 @@
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
 		086FD5A623AAD7C300C59E03 /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
 		08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
-		08FF18FA21A223BF005439FA /* libpq.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 080C8C5A219B702700840B79 /* libpq.tbd */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -61,14 +58,13 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		080C8C5A219B702700840B79 /* libpq.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpq.tbd; path = usr/lib/libpq.tbd; sourceTree = SDKROOT; };
 		0820370222B43B0D0025307B /* rmp_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = rmp_cursor.cpp; path = Common/rmp_cursor.cpp; sourceTree = SOURCE_ROOT; };
 		0820370322B43B0D0025307B /* rmp_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = rmp_cursor_iterator.hpp; path = Common/rmp_cursor_iterator.hpp; sourceTree = SOURCE_ROOT; };
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
-		0831355B22CAFED90089B824 /* create_index.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = create_index.pgsql; sourceTree = SOURCE_ROOT; };
 		084426802ED8DD46002DEB21 /* LSTM */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM; sourceTree = BUILT_PRODUCTS_DIR; };
 		084426892ED8E755002DEB21 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
+		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505592047962100A0B88F /* ExpertAdvisor */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ExpertAdvisor; sourceTree = BUILT_PRODUCTS_DIR; };
 		0845055C2047962100A0B88F /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
@@ -88,7 +84,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0844267B2ED8DD46002DEB21 /* libpq.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,7 +91,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				080C8C5B219B702700840B79 /* libpq.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -104,7 +98,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				08FF18FA21A223BF005439FA /* libpq.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -114,7 +107,6 @@
 		080C8C59219B702600840B79 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				080C8C5A219B702700840B79 /* libpq.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -153,9 +145,9 @@
 		0896002C22A86B1E0093513A /* plpgsql */ = {
 			isa = PBXGroup;
 			children = (
-				0831355B22CAFED90089B824 /* create_index.pgsql */,
 				0896002E22A86B8A0093513A /* rmp_cursor.pgsql */,
 				0896002D22A86B8A0093513A /* ee.pgsql */,
+				0844268B2ED94F86002DEB21 /* candlestick.plpgsql */,
 			);
 			path = plpgsql;
 			sourceTree = "<group>";

@@ -34,22 +34,6 @@ istream& operator>>(istream& i, PriceTP &t)
     return i;
 }
 
-//istream& operator>>(istream& i, PricePoint &t)
-//{
-//    using std::getline;
-//    PriceTP ct;
-//    float bid,ask;
-//
-//    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-//    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-//    getline(i, lastParsedSym, ',');
-//    i >> ct;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-//    i >> bid;    i.ignore(std::numeric_limits<std::streamsize>::max(),',');
-//    i >> ask;
-//    t = PricePoint { ct, bid, ask };
-//    return i;
-//}
-
 istream& operator>>(istream& i, PricePoint &t)
 {
     using std::getline;

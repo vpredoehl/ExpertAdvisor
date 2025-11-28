@@ -16,7 +16,8 @@ rmp_result_block::rmp_result_block(rmp_cursor *cur, pqxx::result::difference_typ
     fromIdx = idx;
 }
 
-auto rmp_cursor_iterator::ExractPP() const -> PricePoint
+template<>
+auto rmp_cursor_iterator<PricePoint>::ExractPP() const -> PricePoint
 {
     if(blk == nullptr || !blk->IsCached(idx))
             // requested index is not cached - retrieve new block
@@ -33,10 +34,11 @@ auto rmp_cursor_iterator::ExractPP() const -> PricePoint
     return pp;
 }
 
-auto rmp_cursor_iterator::operator++() -> rmp_cursor_iterator      {   return { cur, ++idx, idx == cur->size() }; }
+template<>
+auto rmp_cursor_iterator<PricePoint>::operator++() -> rmp_cursor_iterator      {   return { cur, ++idx, idx == cur->size() }; }
 
-thread_local unsigned long rmp_forward_iterator::magic = 0;
-rmp_forward_iterator::rmp_forward_iterator(rmp_cursor_stream *c, bool end)
+template<> thread_local unsigned long rmp_forward_iterator<PricePoint>::magic = 0;
+template<> rmp_forward_iterator<PricePoint>::rmp_forward_iterator(rmp_cursor_stream *c, bool end)
     : cur { c }
 {
     if(!(isSTLEnd = end))
@@ -46,7 +48,8 @@ rmp_forward_iterator::rmp_forward_iterator(rmp_cursor_stream *c, bool end)
     }
 }
 
-bool rmp_forward_iterator::ReadPP()
+template<>
+bool rmp_forward_iterator<PricePoint>::ReadPP()
 {
     pqxx::result r;
     bool lineRead = *cur >> r;

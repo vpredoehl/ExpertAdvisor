@@ -30,9 +30,10 @@ struct rmp_result_block :  pqxx::result
     auto retrieve(pqxx::result::difference_type idx) -> PricePoint;
 };
 
+template<typename T>
 struct rmp_cursor_iterator
 {
-    using value_type = PricePoint;
+    using value_type = T;
     using iterator_category = std::random_access_iterator_tag;
     using difference_type = signed long;
 
@@ -44,8 +45,8 @@ struct rmp_cursor_iterator
 
     rmp_cursor_iterator(rmp_cursor *c,difference_type posn, bool end) : cur { c }  {   isEnd = end;    idx = posn;   }
 
-    const PricePoint* operator->() const { ExractPP(); return &pp; }
-    const PricePoint operator*() const { return ExractPP(); }
+    const T* operator->() const { ExractPP(); return &pp; }
+    const T operator*() const { return ExractPP(); }
 
     bool operator>=(rmp_cursor_iterator i) const { return ExractPP().time >= i.ExractPP().time; }
     bool operator!=(rmp_cursor_iterator i) const  {   return i.idx != idx;   }
@@ -54,14 +55,14 @@ struct rmp_cursor_iterator
     auto operator++() -> rmp_cursor_iterator;
 
 private:
-    mutable PricePoint pp;
+    mutable T pp;
 
-    auto ExractPP() const -> PricePoint;
+    auto ExractPP() const -> T;
 };
 
-template<> struct std::iterator_traits<rmp_cursor_iterator>
+template<typename T> struct std::iterator_traits<rmp_cursor_iterator<T>>
 {
-    using value_type = rmp_cursor_iterator::value_type;
+    using value_type = rmp_cursor_iterator<T>::value_type;
     using iterator_category = std::random_access_iterator_tag;
 };
 
@@ -74,21 +75,23 @@ struct rmp_cursor :  Cursor
 
     auto size() -> Cursor::size_type { return Cursor::size(); }
 
-    auto cbegin() -> rmp_cursor_iterator {   return { this, 0, false }; }
-    auto cend()  -> rmp_cursor_iterator {  return { this, static_cast<difference_type>(Cursor::size()), true };  }
+    auto cbegin() -> rmp_cursor_iterator<PricePoint> {   return { this, 0, false }; }
+    auto cend()  -> rmp_cursor_iterator<PricePoint> {  return { this, static_cast<difference_type>(Cursor::size()), true };  }
 };
 
 struct rmp_cursor_stream;
+
+template<typename T>
 struct rmp_forward_iterator
 {
-    using value_type = PricePoint;
+    using value_type = T;
     using iterator_category = std::forward_iterator_tag;
     using difference_type = signed long;
 
     rmp_forward_iterator(rmp_cursor_stream *c, bool end);
 
-    const PricePoint operator*() const    {   return pp;  }
-    const PricePoint* operator->() const    {   return &pp;  }
+    const T operator*() const    {   return pp;  }
+    const T* operator->() const    {   return &pp;  }
 
     bool operator!=(rmp_forward_iterator i) const  {   return !operator==(i);   }
     bool operator==(rmp_forward_iterator i) const
@@ -114,16 +117,19 @@ private:
     thread_local static unsigned long magic;
     unsigned long uniqID;
     rmp_cursor_stream *cur;
-    PricePoint pp;
+    T pp;
     bool isSTLEnd;
 
     bool ReadPP();  // returns true if row was read
 };
-template<> struct std::iterator_traits<rmp_forward_iterator>
+template<typename T> struct std::iterator_traits<rmp_forward_iterator<T>>
 {
-    using value_type = rmp_forward_iterator::value_type;
+    using value_type = typename rmp_forward_iterator<T>::value_type;
     using iterator_category = std::forward_iterator_tag;
 };
+
+template<> rmp_forward_iterator<PricePoint>::rmp_forward_iterator(rmp_cursor_stream *c, bool end);
+template<> bool rmp_forward_iterator<PricePoint>::ReadPP();
 
 
 struct rmp_cursor_stream : public pqxx::icursorstream
@@ -131,8 +137,8 @@ struct rmp_cursor_stream : public pqxx::icursorstream
     rmp_cursor_stream(pqxx::work &w, std::string query, std::string curName)
     : pqxx::icursorstream { static_cast<pqxx::transaction_base&>(w), query, curName } {}
 
-    auto cbegin() -> rmp_forward_iterator { return { this, false }; }
-    auto cend() -> rmp_forward_iterator   {   return { this, true }; }
+    auto cbegin() -> rmp_forward_iterator<PricePoint> { return { this, false }; }
+    auto cend() -> rmp_forward_iterator<PricePoint>   {   return { this, true }; }
 };
 
 #endif /* ResultIter_hpp */

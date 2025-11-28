@@ -29,11 +29,21 @@ int main(int argc, const char * argv[])
             rmp_cursor_stream cur { w, query, rawPriceTableName + "_stream" };
             rmp_forward_iterator cb = cur.cbegin(), ce = cur.cend();
 
-            std::cout << "Showing table: " << rawPriceTableName << std::endl;
-            while(cb != ce) std::cout << *(cb++) << std::endl;
+//            std::cout << "Showing table: " << rawPriceTableName << std::endl;
+//            while(cb != ce) std::cout << *(cb++) << std::endl;
+            
+//            candlestick('audcadrmp',15,'2019-06-01','2019-06-03') limit 10;
+            
+            query ="select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" +  fromDate + "', '" + toDate + "') order by dt;";
+            rmp_cursor_stream cs_cur { w, query, rawPriceTableName + "_candlestick_stream" };
+            rmp_forward_iterator csb = cur.cbegin(), cse = cs_cur.cend();
+
+            while(csb != cse)
+                std::cout << *(csb++) << std::endl;
+
         }
     }
     catch(pqxx::failure e)  {   std::cout << "pqxx::failure: " << e.what() << std::endl; return 1;   }
-
+    
     return 0;
 }
