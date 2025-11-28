@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0820370422B43B0D0025307B /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
+		0820370422B43B0D0025307B /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
@@ -15,7 +15,7 @@
 		08305975204E2A650066E86F /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		084426752ED8DD46002DEB21 /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
-		084426762ED8DD46002DEB21 /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
+		084426762ED8DD46002DEB21 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		084426772ED8DD46002DEB21 /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 		084426782ED8DD46002DEB21 /* Chart.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08305973204E2A650066E86F /* Chart.cpp */; };
 		084426882ED8E2F5002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08FA2DBB20A923C700383E57 /* main.cpp */; };
@@ -23,7 +23,7 @@
 		0845055D2047962100A0B88F /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845055C2047962100A0B88F /* main.cpp */; };
 		084505662048CAB900A0B88F /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0845056B204BC46900A0B88F /* CandleStick.cpp */; };
-		086FD5A623AAD7C300C59E03 /* rmp_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* rmp_cursor.cpp */; };
+		086FD5A623AAD7C300C59E03 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 08BF4E4320A9286600B6F81D /* DiskIO.cpp */; };
 /* End PBXBuildFile section */
 
@@ -58,8 +58,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		0820370222B43B0D0025307B /* rmp_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = rmp_cursor.cpp; path = Common/rmp_cursor.cpp; sourceTree = SOURCE_ROOT; };
-		0820370322B43B0D0025307B /* rmp_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = rmp_cursor_iterator.hpp; path = Common/rmp_cursor_iterator.hpp; sourceTree = SOURCE_ROOT; };
+		0820370222B43B0D0025307B /* db_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = db_cursor.cpp; path = Common/db_cursor.cpp; sourceTree = SOURCE_ROOT; };
+		0820370322B43B0D0025307B /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = db_cursor_iterator.hpp; path = Common/db_cursor_iterator.hpp; sourceTree = SOURCE_ROOT; };
 		08305973204E2A650066E86F /* Chart.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Chart.cpp; sourceTree = "<group>"; };
 		08305974204E2A650066E86F /* Chart.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Chart.hpp; sourceTree = "<group>"; };
 		084426802ED8DD46002DEB21 /* LSTM */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -167,7 +167,7 @@
 				0845056C204BC46900A0B88F /* CandleStick.hpp */,
 				08305974204E2A650066E86F /* Chart.hpp */,
 				08BF4E4420A9286600B6F81D /* DiskIO.hpp */,
-				0820370322B43B0D0025307B /* rmp_cursor_iterator.hpp */,
+				0820370322B43B0D0025307B /* db_cursor_iterator.hpp */,
 			);
 			path = Headers;
 			sourceTree = "<group>";
@@ -179,7 +179,7 @@
 				0845056B204BC46900A0B88F /* CandleStick.cpp */,
 				08305973204E2A650066E86F /* Chart.cpp */,
 				08BF4E4320A9286600B6F81D /* DiskIO.cpp */,
-				0820370222B43B0D0025307B /* rmp_cursor.cpp */,
+				0820370222B43B0D0025307B /* db_cursor.cpp */,
 				0896002C22A86B1E0093513A /* plpgsql */,
 			);
 			name = Source;
@@ -298,7 +298,7 @@
 				084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */,
 				084426752ED8DD46002DEB21 /* CandleStick.cpp in Sources */,
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
-				084426762ED8DD46002DEB21 /* rmp_cursor.cpp in Sources */,
+				084426762ED8DD46002DEB21 /* db_cursor.cpp in Sources */,
 				084426772ED8DD46002DEB21 /* DiskIO.cpp in Sources */,
 				084426782ED8DD46002DEB21 /* Chart.cpp in Sources */,
 			);
@@ -311,7 +311,7 @@
 				08305975204E2A650066E86F /* Chart.cpp in Sources */,
 				08BF4E4520A9286600B6F81D /* DiskIO.cpp in Sources */,
 				0845055D2047962100A0B88F /* main.cpp in Sources */,
-				086FD5A623AAD7C300C59E03 /* rmp_cursor.cpp in Sources */,
+				086FD5A623AAD7C300C59E03 /* db_cursor.cpp in Sources */,
 				0845056D204BC46900A0B88F /* CandleStick.cpp in Sources */,
 				084505662048CAB900A0B88F /* PricePoint.cpp in Sources */,
 			);
@@ -324,7 +324,7 @@
 				082BAC9320A93F760003EA86 /* PricePoint.cpp in Sources */,
 				082BAC9420A93F760003EA86 /* CandleStick.cpp in Sources */,
 				084426882ED8E2F5002DEB21 /* main.cpp in Sources */,
-				0820370422B43B0D0025307B /* rmp_cursor.cpp in Sources */,
+				0820370422B43B0D0025307B /* db_cursor.cpp in Sources */,
 				082BAC9220A93F3E0003EA86 /* DiskIO.cpp in Sources */,
 				082BAC9520A93F760003EA86 /* Chart.cpp in Sources */,
 			);

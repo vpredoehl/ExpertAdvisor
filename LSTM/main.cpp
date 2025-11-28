@@ -7,7 +7,7 @@
 //
 
 #include "DiskIO.hpp"
-#include "rmp_cursor_iterator.hpp"
+#include "db_cursor_iterator.hpp"
 
 #include <iostream>
 #include <string>
@@ -26,21 +26,19 @@ int main(int argc, const char * argv[])
         {
             std::string rawPriceTableName { t[0].c_str() };
             std::string query ="select * from " + rawPriceTableName + " where time between '" + fromDate + "' and '" + toDate + "' order by time;";
-            rmp_cursor_stream cur { w, query, rawPriceTableName + "_stream" };
-            rmp_forward_iterator cb = cur.cbegin(), ce = cur.cend();
+            db_cursor_stream<PricePoint> cur { w, query, rawPriceTableName + "_stream" };
+            db_forward_iterator cb = cur.cbegin(), ce = cur.cend();
 
 //            std::cout << "Showing table: " << rawPriceTableName << std::endl;
 //            while(cb != ce) std::cout << *(cb++) << std::endl;
             
-//            candlestick('audcadrmp',15,'2019-06-01','2019-06-03') limit 10;
-            
+                // print query for candlesticks
             query ="select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" +  fromDate + "', '" + toDate + "') order by dt;";
-            rmp_cursor_stream cs_cur { w, query, rawPriceTableName + "_candlestick_stream" };
-            rmp_forward_iterator csb = cur.cbegin(), cse = cs_cur.cend();
+            db_cursor_stream<CandlestickRow> cs_cur { w, query, rawPriceTableName + "_candlestick_stream" };
+            db_forward_iterator csb = cs_cur.cbegin(), cse = cs_cur.cend();
 
-            while(csb != cse)
-                std::cout << *(csb++) << std::endl;
-
+            std::cout << "Candlesticks for table: " << rawPriceTableName << std::endl;
+            while(csb != cse)   std::cout << *(csb++) << std::endl;
         }
     }
     catch(pqxx::failure e)  {   std::cout << "pqxx::failure: " << e.what() << std::endl; return 1;   }

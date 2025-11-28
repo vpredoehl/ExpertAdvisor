@@ -18,20 +18,20 @@ const auto block_size = 10000;
 
     // pqxx postgresql cursor iterator to be used with Chart template constructor
 
-class rmp_cursor;
+class db_cursor;
 
 struct rmp_result_block :  pqxx::result
 {
     pqxx::result::difference_type fromIdx;
 
-    rmp_result_block(rmp_cursor *cur, pqxx::result::difference_type idx);
+    rmp_result_block(db_cursor *cur, pqxx::result::difference_type idx);
 
     auto IsCached(pqxx::result::difference_type idx) {   return idx >= fromIdx && idx < fromIdx + block_size;   }
     auto retrieve(pqxx::result::difference_type idx) -> PricePoint;
 };
 
 template<typename T>
-struct rmp_cursor_iterator
+struct db_cursor_iterator
 {
     using value_type = T;
     using iterator_category = std::random_access_iterator_tag;
@@ -39,20 +39,20 @@ struct rmp_cursor_iterator
 
     mutable std::shared_ptr<rmp_result_block> blk;
 
-    rmp_cursor *cur;
+    db_cursor *cur;
     difference_type idx;
     bool isEnd;
 
-    rmp_cursor_iterator(rmp_cursor *c,difference_type posn, bool end) : cur { c }  {   isEnd = end;    idx = posn;   }
+    db_cursor_iterator(db_cursor *c,difference_type posn, bool end) : cur { c }  {   isEnd = end;    idx = posn;   }
 
     const T* operator->() const { ExractPP(); return &pp; }
     const T operator*() const { return ExractPP(); }
 
-    bool operator>=(rmp_cursor_iterator i) const { return ExractPP().time >= i.ExractPP().time; }
-    bool operator!=(rmp_cursor_iterator i) const  {   return i.idx != idx;   }
-    bool operator==(rmp_cursor_iterator i) const  {   return i.idx == idx;   }
+    bool operator>=(db_cursor_iterator i) const { return ExractPP().time >= i.ExractPP().time; }
+    bool operator!=(db_cursor_iterator i) const  {   return i.idx != idx;   }
+    bool operator==(db_cursor_iterator i) const  {   return i.idx == idx;   }
 
-    auto operator++() -> rmp_cursor_iterator;
+    auto operator++() -> db_cursor_iterator;
 
 private:
     mutable T pp;
@@ -60,54 +60,54 @@ private:
     auto ExractPP() const -> T;
 };
 
-template<typename T> struct std::iterator_traits<rmp_cursor_iterator<T>>
+template<typename T> struct std::iterator_traits<db_cursor_iterator<T>>
 {
-    using value_type = rmp_cursor_iterator<T>::value_type;
+    using value_type = db_cursor_iterator<T>::value_type;
     using iterator_category = std::random_access_iterator_tag;
 };
 
 using Cursor = pqxx::stateless_cursor<pqxx::cursor_base::read_only, pqxx::cursor_base::owned>;
-struct rmp_cursor :  Cursor
+struct db_cursor :  Cursor
 {
-    rmp_cursor(pqxx::work &w, std::string query, std::string curName,  unsigned long posn = 0)
+    db_cursor(pqxx::work &w, std::string query, std::string curName,  unsigned long posn = 0)
         : Cursor { static_cast<pqxx::transaction_base&>(w), query, curName, false } {}
 
 
     auto size() -> Cursor::size_type { return Cursor::size(); }
 
-    auto cbegin() -> rmp_cursor_iterator<PricePoint> {   return { this, 0, false }; }
-    auto cend()  -> rmp_cursor_iterator<PricePoint> {  return { this, static_cast<difference_type>(Cursor::size()), true };  }
+    auto cbegin() -> db_cursor_iterator<PricePoint> {   return { this, 0, false }; }
+    auto cend()  -> db_cursor_iterator<PricePoint> {  return { this, static_cast<difference_type>(Cursor::size()), true };  }
 };
 
-struct rmp_cursor_stream;
+template<typename T> struct db_cursor_stream;
 
 template<typename T>
-struct rmp_forward_iterator
+struct db_forward_iterator
 {
     using value_type = T;
     using iterator_category = std::forward_iterator_tag;
     using difference_type = signed long;
 
-    rmp_forward_iterator(rmp_cursor_stream *c, bool end);
+    db_forward_iterator(db_cursor_stream<T> *c, bool end);
 
     const T operator*() const    {   return pp;  }
     const T* operator->() const    {   return &pp;  }
 
-    bool operator!=(rmp_forward_iterator i) const  {   return !operator==(i);   }
-    bool operator==(rmp_forward_iterator i) const
+    bool operator!=(db_forward_iterator i) const  {   return !operator==(i);   }
+    bool operator==(db_forward_iterator i) const
     {
         if(isSTLEnd == i.isSTLEnd)  return true;
         if(!isSTLEnd && !i.isSTLEnd) return uniqID == i.uniqID;
         return false;
     }
 
-    auto operator++(int) -> rmp_forward_iterator
+    auto operator++(int) -> db_forward_iterator
     {
-        rmp_forward_iterator tmp(*this);
+        db_forward_iterator tmp(*this);
         ++(*this);
         return tmp;
     }
-    auto operator++() -> rmp_forward_iterator
+    auto operator++() -> db_forward_iterator
     {
         if(isSTLEnd)    throw std::range_error { "Can't advance rmp_forward_iterator past end" };
         return { cur, isSTLEnd = !ReadPP() };
@@ -116,29 +116,38 @@ struct rmp_forward_iterator
 private:
     thread_local static unsigned long magic;
     unsigned long uniqID;
-    rmp_cursor_stream *cur;
+    db_cursor_stream<T> *cur;
     T pp;
     bool isSTLEnd;
 
     bool ReadPP();  // returns true if row was read
 };
-template<typename T> struct std::iterator_traits<rmp_forward_iterator<T>>
+template<typename T> struct std::iterator_traits<db_forward_iterator<T>>
 {
-    using value_type = typename rmp_forward_iterator<T>::value_type;
+    using value_type = typename db_forward_iterator<T>::value_type;
     using iterator_category = std::forward_iterator_tag;
 };
 
-template<> rmp_forward_iterator<PricePoint>::rmp_forward_iterator(rmp_cursor_stream *c, bool end);
-template<> bool rmp_forward_iterator<PricePoint>::ReadPP();
-
-
-struct rmp_cursor_stream : public pqxx::icursorstream
+template<typename T> thread_local unsigned long db_forward_iterator<T>::magic = 0;
+template<> bool db_forward_iterator<PricePoint>::ReadPP();
+template<typename T> db_forward_iterator<T>::db_forward_iterator(db_cursor_stream<T> *c, bool end)
+    : cur { c }
 {
-    rmp_cursor_stream(pqxx::work &w, std::string query, std::string curName)
+    if(!(isSTLEnd = end))
+    {
+        uniqID = magic++;
+        isSTLEnd = !ReadPP();
+    }
+}
+
+template<typename T>
+struct db_cursor_stream : public pqxx::icursorstream
+{
+    db_cursor_stream(pqxx::work &w, std::string query, std::string curName)
     : pqxx::icursorstream { static_cast<pqxx::transaction_base&>(w), query, curName } {}
 
-    auto cbegin() -> rmp_forward_iterator<PricePoint> { return { this, false }; }
-    auto cend() -> rmp_forward_iterator<PricePoint>   {   return { this, true }; }
+    auto cbegin() -> db_forward_iterator<T> { return { this, false }; }
+    auto cend() -> db_forward_iterator<T>   {   return { this, true }; }
 };
 
 #endif /* ResultIter_hpp */

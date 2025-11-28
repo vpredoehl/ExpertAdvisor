@@ -13,15 +13,11 @@
 #include <string>
 
 using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>;
-
 struct PricePoint
 {
-    float bid, ask;
     PriceTP time;
+    float bid, ask;
 
-    PricePoint(PriceTP, float bid, float ask);
-    PricePoint() {}
-    
     auto operator<(PricePoint pp) const -> bool  {   return ask < pp.ask; }
     auto operator==(PricePoint pp) const -> bool    {   return bid == pp.bid && ask == pp.ask && time == pp.time;   }
 
@@ -29,6 +25,14 @@ struct PricePoint
 private:
 
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
+};
+
+struct CandlestickRow
+{
+    float open, close, high, low;
+    PriceTP time;
+    
+    
 };
 
 #include <list>
@@ -40,6 +44,7 @@ std::istream& operator>>(std::istream&, PricePoint&);
 
 std::ostream& operator<<(std::ostream&, PriceTP);
 std::ostream& operator<<(std::ostream&, PricePoint);
+std::ostream& operator<<(std::ostream&, CandlestickRow);
 std::ostream& operator<<(std::ostream&, RawMarketPrice);
 
 

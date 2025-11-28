@@ -11,13 +11,6 @@
 
 using namespace std::chrono;
 using std::string;
-
-PricePoint::PricePoint(PriceTP ct, float bid, float ask)
-{
-    time = ct;
-    PricePoint::bid = bid; PricePoint::ask = ask;
-}
-
 using std::istream;
 using std::ostream;
 using std::endl;
@@ -65,6 +58,11 @@ ostream& operator<<(ostream& o, PriceTP t)
 ostream& operator<<(ostream& o, PricePoint pp)
 {
     o << "\tTime: " << pp.time << "\tBid: " << setw(10) << pp.bid << "\tAsk: " << setw(10) << pp.ask;
+    return o;
+}
+ostream& operator<<(ostream& o, CandlestickRow row)
+{
+    o << "\tTime: " << row.time << "\tOpen: " << setw(10) << row.open << "\tClose: " << setw(10) << row.close << "\tHigh: " << setw(10) << row.high << "\tLow: " << setw(10) << row.low << std::endl;
     return o;
 }
 ostream& operator<<(ostream& o, RawMarketPrice rmp)
