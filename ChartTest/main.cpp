@@ -36,8 +36,8 @@ auto MakeTestCharts(std::string sym, std::string query, std::vector<TestTimeFram
 
     pqxx::connection c { "hostaddr=127.0.0.1 dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w { c };
-    db_cursor_stream cur { w, query, sym + "_stream" };
-    db_forward_iterator cb = cur.cbegin<PricePoint>(), ce = cur.cend<PricePoint>();
+    db_cursor_stream<PricePoint> cur { w, query, sym + "_stream" };
+    db_forward_iterator cb = cur.cbegin(), ce = cur.cend();
 
     for( auto tP : testParams )
     {
