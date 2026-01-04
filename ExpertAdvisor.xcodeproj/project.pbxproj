@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 48;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -137,7 +137,8 @@
 		084505512047962100A0B88F /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 1240;
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2620;
 				ORGANIZATIONNAME = "Vincent Predoehl";
 				TargetAttributes = {
 					084426722ED8DD46002DEB21 = {
@@ -185,20 +186,21 @@
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = X674V92M37;
+				DEAD_CODE_STRIPPING = YES;
 				LD_MAP_FILE_PATH = "";
 				LIBRARY_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/lib/,
 					"$(PROJECT_DIR)",
 					"$(inherited)",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				OTHER_LDFLAGS = (
 					"-lpq",
 					"-lpqxx",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
-				SYSTEM_HEADER_SEARCH_PATHS = /Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.3/include/;
+				SYSTEM_HEADER_SEARCH_PATHS = /Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include;
 				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
@@ -214,7 +216,7 @@
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = X674V92M37;
+				DEAD_CODE_STRIPPING = YES;
 				GCC_GENERATE_DEBUGGING_SYMBOLS = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = "DEBUG=0";
 				LD_MAP_FILE_PATH = "";
@@ -223,13 +225,14 @@
 					"$(PROJECT_DIR)",
 					"$(inherited)",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				OTHER_LDFLAGS = (
 					"-lpq",
 					"-lpqxx",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
-				SYSTEM_HEADER_SEARCH_PATHS = /Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.3/include/;
+				SYSTEM_HEADER_SEARCH_PATHS = /Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include;
 				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
@@ -270,9 +273,12 @@
 				CODE_SIGN_IDENTITY = "Mac Developer";
 				COMPILER_INDEX_STORE_ENABLE = NO;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 47QSNDWH88;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -298,6 +304,7 @@
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
 				OTHER_LDFLAGS = "-lpqxx";
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SYSTEM_HEADER_SEARCH_PATHS = "";
 				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/include/c++/v1/experimental";
@@ -339,9 +346,12 @@
 				CODE_SIGN_IDENTITY = "Mac Developer";
 				COMPILER_INDEX_STORE_ENABLE = NO;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 47QSNDWH88;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = fast;
@@ -361,6 +371,7 @@
 				OTHER_CPLUSPLUSFLAGS = "$(OTHER_CFLAGS)";
 				OTHER_LDFLAGS = "-lpqxx";
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SYSTEM_HEADER_SEARCH_PATHS = "";
 				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/include/c++/v1/experimental";
