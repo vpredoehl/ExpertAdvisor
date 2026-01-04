@@ -10,6 +10,7 @@
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
+		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -32,6 +33,8 @@
 		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
+		0851AB072F0A233A00C48FFE /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Tensor.hpp; path = LSTM/Tensor.hpp; sourceTree = SOURCE_ROOT; };
+		0851AB082F0A233A00C48FFE /* Tensor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Tensor.cpp; path = LSTM/Tensor.cpp; sourceTree = SOURCE_ROOT; };
 		0896002D22A86B8A0093513A /* ee.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = ee.pgsql; sourceTree = "<group>"; };
 		0896002E22A86B8A0093513A /* rmp_cursor.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = rmp_cursor.pgsql; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -94,6 +97,8 @@
 		08BF4E4820A933FB00B6F81D /* Headers */ = {
 			isa = PBXGroup;
 			children = (
+				0851AB072F0A233A00C48FFE /* Tensor.hpp */,
+				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				084505652048CAB900A0B88F /* PricePoint.hpp */,
 				0820370322B43B0D0025307B /* db_cursor_iterator.hpp */,
 			);
@@ -171,6 +176,7 @@
 			files = (
 				084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */,
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
+				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
