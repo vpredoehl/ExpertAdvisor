@@ -27,7 +27,7 @@ private:
     friend std::ostream& operator<<(std::ostream& o, PricePoint cs);
 };
 
-struct CandlestickRow
+struct Feature
 {
     float open, close, high, low;
     PriceTP time;
@@ -38,7 +38,7 @@ std::istream& operator>>(std::istream&, PricePoint&);
 
 std::ostream& operator<<(std::ostream&, PriceTP);
 std::ostream& operator<<(std::ostream&, PricePoint);
-std::ostream& operator<<(std::ostream&, CandlestickRow);
+std::ostream& operator<<(std::ostream&, Feature);
 
 
 

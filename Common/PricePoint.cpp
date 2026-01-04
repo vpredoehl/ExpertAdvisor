@@ -39,7 +39,7 @@ ostream& operator<<(ostream& o, PricePoint pp)
     o << "\tTime: " << pp.time << "\tBid: " << setw(10) << pp.bid << "\tAsk: " << setw(10) << pp.ask;
     return o;
 }
-ostream& operator<<(ostream& o, CandlestickRow row)
+ostream& operator<<(ostream& o, Feature row)
 {
     o << "\tTime: " << row.time << "\tOpen: " << setw(10) << row.open << "\tClose: " << setw(10) << row.close << "\tHigh: " << setw(10) << row.high << "\tLow: " << setw(10) << row.low;
     return o;

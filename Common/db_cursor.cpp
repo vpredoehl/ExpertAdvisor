@@ -28,7 +28,7 @@ bool db_forward_iterator<PricePoint>::ReadPP()
 
 
 template<>
-bool db_forward_iterator<CandlestickRow>::ReadPP()
+bool db_forward_iterator<Feature>::ReadPP()
 {
     pqxx::result r;
     bool lineRead = *cur >> r;
