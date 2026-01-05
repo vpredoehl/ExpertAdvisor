@@ -6,25 +6,14 @@
 //  Copyright © 2026 Vincent Predoehl. All rights reserved.
 //
 
+#include <iomanip>
+
 #include "Tensor.hpp"
 
-void Tensor::Add(Feature pp)
+using std::setw;
+
+std::ostream& operator<<(std::ostream& o, Window w)
 {
-    short posn = seq_size++ - 1;
-    
-    for(auto &w : window_seq)
-    {
-        w[posn] = pp;
-        if(posn-- == 0) // first window is complete
-        {
-            if(seq_size == window_size + 1)
-            {
-                b.push_back(window_seq.front());    // add window to batch
-                window_seq.pop_front();
-                window_seq.emplace_back(Window{});
-                seq_size = window_size;
-            }
-            break;
-        }
-    }
+    for(auto f : w)     o <<  setw(10) << f.open << setw(10) << f.close << setw(10) << f.high <<  setw(10) << f.low << std::endl;
+    return o;
 }

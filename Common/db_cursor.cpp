@@ -39,6 +39,7 @@ bool db_forward_iterator<Feature>::ReadPP()
         std::istringstream time { r[0]["dt"].c_str() };
 
         time >> pp.time;  open >> pp.open; close >> pp.close;   high >> pp.high;    low >> pp.low;
+        isValidPP = true;
     }
     return lineRead;
 }

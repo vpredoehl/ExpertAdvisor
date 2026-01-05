@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <string>
+#include <iostream>
 
 using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>;
 struct PricePoint

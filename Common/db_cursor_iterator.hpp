@@ -24,7 +24,7 @@ struct db_forward_iterator
     using iterator_category = std::forward_iterator_tag;
     using difference_type = signed long;
 
-    db_forward_iterator(db_cursor_stream<T> *c, bool end);
+    db_forward_iterator(db_cursor_stream<T> *c, bool end, bool = true);
 
     const T operator*() const    {   return pp;  }
     const T* operator->() const    {   return &pp;  }
@@ -46,10 +46,11 @@ struct db_forward_iterator
     auto operator++() -> db_forward_iterator
     {
         if(isSTLEnd)    throw std::range_error { "Can't advance rmp_forward_iterator past end" };
-        return { cur, isSTLEnd = !ReadPP() };
+        return { cur, isSTLEnd = !ReadPP(), false };
     }
 
 private:
+    inline static bool isValidPP = false;
     thread_local static unsigned long magic;
     unsigned long uniqID;
     db_cursor_stream<T> *cur;
@@ -66,13 +67,13 @@ template<typename T> struct std::iterator_traits<db_forward_iterator<T>>
 
 template<typename T> thread_local unsigned long db_forward_iterator<T>::magic = 0;
 template<> bool db_forward_iterator<PricePoint>::ReadPP();
-template<typename T> db_forward_iterator<T>::db_forward_iterator(db_cursor_stream<T> *c, bool end)
+template<typename T> db_forward_iterator<T>::db_forward_iterator(db_cursor_stream<T> *c, bool end, bool advance)
     : cur { c }
 {
     if(!(isSTLEnd = end))
     {
         uniqID = magic++;
-        isSTLEnd = !ReadPP();
+        if(advance || !isValidPP) isSTLEnd = !ReadPP();
     }
 }
 
@@ -82,8 +83,8 @@ struct db_cursor_stream : public pqxx::icursorstream
     db_cursor_stream(pqxx::work &w, std::string query, std::string curName)
     : pqxx::icursorstream { static_cast<pqxx::transaction_base&>(w), query, curName } {}
 
-    auto cbegin() -> db_forward_iterator<T> { return { this, false }; }
-    auto cend() -> db_forward_iterator<T>   {   return { this, true }; }
+    auto cbegin() -> db_forward_iterator<T> { return { this, false, false }; }
+    auto cend() -> db_forward_iterator<T>   {   return { this, true, false }; }
 };
 
 #endif /* ResultIter_hpp */

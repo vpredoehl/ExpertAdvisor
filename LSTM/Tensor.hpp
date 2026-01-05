@@ -12,30 +12,39 @@
 #include <array>
 #include <vector>
 #include <list>
+#include <ranges>
 
 
 #include "PricePoint.hpp"
 
-constexpr auto window_size = 5;
-
-using Window = std::array<Feature,window_size>;
-using Batch = std::vector<Window>;
+using Batch = std::vector<Feature>;
+using Window = std::ranges::subrange<Batch::const_iterator, Batch::const_iterator>;
 
 using std::string;
 using std::list;
+
+
+// sequence of features
+constexpr auto window_size = 5;
 
 class Tensor
 {
     string table;
     Batch b;
-    list<Window> window_seq { window_size };
-    short seq_size = 1;
+    short window_size;
     
 public:
-    Tensor(string name) : table { name }    {}
+    Tensor(string name, short ws) : table { name }, window_size { ws }    {}
     
-    void Add(Feature);  // adds feature to rolling sequence of feature windows
+    void Add(Feature f)   {   b.push_back(f);   }
+    
+    Batch::const_iterator begin() const  { return b.cbegin(); }
+    Batch::const_iterator end() const { return b.cend(); }
+    
+    auto GetWindow(long idx) const  {   return std::ranges::subrange(b.cbegin() + idx, b.cbegin() + idx + window_size); }
 };
+
+std::ostream& operator<<(std::ostream&, Window);
 
 
 #endif /* Tensor_hpp */
