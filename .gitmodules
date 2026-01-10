@@ -1,0 +1,3 @@
+[submodule "MetaNN"]
+	path = MetaNN
+	url = git@github.com:vpredoehl/MetaNN.git

@@ -13,6 +13,30 @@
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		08F4FCF42F11F5DF00260473 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 0870E4A32D698BBC0097085B;
+			remoteInfo = DataOpTest;
+		};
+		08F4FCF62F11F5DF00260473 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 08095D7B2DFCBD0A008D6698;
+			remoteInfo = LayerTest;
+		};
+		08F4FCF82F11F5DF00260473 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 08095D862DFCBECB008D6698;
+			remoteInfo = OtherTests;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		0844267C2ED8DD46002DEB21 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -37,6 +61,7 @@
 		0851AB082F0A233A00C48FFE /* Tensor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Tensor.cpp; path = LSTM/Tensor.cpp; sourceTree = SOURCE_ROOT; };
 		0896002D22A86B8A0093513A /* ee.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = ee.pgsql; sourceTree = "<group>"; };
 		0896002E22A86B8A0093513A /* rmp_cursor.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = rmp_cursor.pgsql; sourceTree = "<group>"; };
+		08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = MetaNNXC.xcodeproj; path = MetaNN/MetaNNXC.xcodeproj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -60,6 +85,7 @@
 		084505502047962100A0B88F = {
 			isa = PBXGroup;
 			children = (
+				08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */,
 				0896005022A8BA170093513A /* LSTM */,
 				08BF4E4A20A9343100B6F81D /* Source */,
 				08BF4E4820A933FB00B6F81D /* Headers */,
@@ -116,6 +142,16 @@
 			path = Common;
 			sourceTree = "<group>";
 		};
+		08F4FCB42F11F5DF00260473 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				08F4FCF52F11F5DF00260473 /* DataOpTest */,
+				08F4FCF72F11F5DF00260473 /* LayerTest */,
+				08F4FCF92F11F5DF00260473 /* OtherTests */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -162,12 +198,42 @@
 			mainGroup = 084505502047962100A0B88F;
 			productRefGroup = 0845055A2047962100A0B88F /* Products */;
 			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = 08F4FCB42F11F5DF00260473 /* Products */;
+					ProjectRef = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+				},
+			);
 			projectRoot = "";
 			targets = (
 				084426722ED8DD46002DEB21 /* LSTM */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXReferenceProxy section */
+		08F4FCF52F11F5DF00260473 /* DataOpTest */ = {
+			isa = PBXReferenceProxy;
+			fileType = "compiled.mach-o.executable";
+			path = DataOpTest;
+			remoteRef = 08F4FCF42F11F5DF00260473 /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		08F4FCF72F11F5DF00260473 /* LayerTest */ = {
+			isa = PBXReferenceProxy;
+			fileType = "compiled.mach-o.executable";
+			path = LayerTest;
+			remoteRef = 08F4FCF62F11F5DF00260473 /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		08F4FCF92F11F5DF00260473 /* OtherTests */ = {
+			isa = PBXReferenceProxy;
+			fileType = "compiled.mach-o.executable";
+			path = OtherTests;
+			remoteRef = 08F4FCF82F11F5DF00260473 /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+/* End PBXReferenceProxy section */
 
 /* Begin PBXSourcesBuildPhase section */
 		084426732ED8DD46002DEB21 /* Sources */ = {
