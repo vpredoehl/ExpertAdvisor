@@ -17,8 +17,8 @@
 
 #include "PricePoint.hpp"
 
-using Batch = std::vector<Feature>;
-using Window = std::ranges::subrange<Batch::const_iterator, Batch::const_iterator>;
+using DataSet = std::vector<Feature>;
+using Window = std::ranges::subrange<DataSet::const_iterator, DataSet::const_iterator>;
 
 using std::string;
 using std::list;
@@ -26,11 +26,12 @@ using std::list;
 
 // sequence of features
 constexpr auto window_size = 5;
+constexpr auto batch_size = 64;
 
 class Tensor
 {
     string table;
-    Batch b;
+    DataSet b;
     short window_size;
     
 public:
@@ -38,10 +39,16 @@ public:
     
     void Add(Feature f)   {   b.push_back(f);   }
     
-    Batch::const_iterator begin() const  { return b.cbegin(); }
-    Batch::const_iterator end() const { return b.cend(); }
+    DataSet::const_iterator begin() const  { return b.cbegin(); }
+    DataSet::const_iterator end() const { return b.cend(); }
     
     auto GetWindow(long idx) const  {   return std::ranges::subrange(b.cbegin() + idx, b.cbegin() + idx + window_size); }
+    auto GetWindow(DataSet::const_iterator iter) -> Window    {   return { iter, iter + window_size };  }
+    auto GetBatch(long idx ) const
+    {
+        auto batchIdx = b.cbegin() + idx * batch_size;
+        return std::ranges::subrange(batchIdx, batchIdx + batch_size);
+    }
 };
 
 std::ostream& operator<<(std::ostream&, Window);

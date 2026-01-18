@@ -256,9 +256,12 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_ENTITLEMENTS = "";
 				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 47QSNDWH88;
 				LD_MAP_FILE_PATH = "";
 				LIBRARY_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/lib/,
@@ -270,9 +273,13 @@
 					"-lpq",
 					"-lpqxx",
 				);
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
-				SYSTEM_HEADER_SEARCH_PATHS = /Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+				);
 				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
@@ -286,9 +293,12 @@
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_MODULE_DEBUGGING = NO;
 				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_ENTITLEMENTS = "";
 				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 47QSNDWH88;
 				GCC_GENERATE_DEBUGGING_SYMBOLS = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = "DEBUG=0";
 				LD_MAP_FILE_PATH = "";
@@ -302,9 +312,13 @@
 					"-lpq",
 					"-lpqxx",
 				);
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
-				SYSTEM_HEADER_SEARCH_PATHS = /Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+				);
 				USER_HEADER_SEARCH_PATHS = "";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
