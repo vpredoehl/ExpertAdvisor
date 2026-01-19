@@ -16,31 +16,20 @@
 
 #include "db_cursor_iterator.hpp"
 #include "Tensor.hpp"
+#include "LSTM.hpp"
 
 const std::string dbName = "forex";
-
-template <class Mat>
-void printMatrix(const char* name, const Mat& mat)
-{
-    std::cout << name << " (" << mat.Shape()[0] << " x " << mat.Shape()[1] << ")\n";
-    for (size_t i = 0; i < mat.Shape()[0]; ++i)
-    {
-        for (size_t j = 0; j < mat.Shape()[1]; ++j)
-        {
-            std::cout << mat(i, j) << (j + 1 == mat.Shape()[1] ? '\n' : ' ');
-        }
-    }
-    std::cout << std::endl;
-}
 
 
 int main(int argc, const char * argv[])
 {
-    pqxx::connection c { "hostaddr=192.168.2.10  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::connection c { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w { c };
     pqxx::result tables = w.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { argv[1] }, toDate { argv[2] };
     
+    EA::LSTM l { 1, 0 };
+    for ( auto m : l.param)   printMatrix("l", m);
 
     try
     {

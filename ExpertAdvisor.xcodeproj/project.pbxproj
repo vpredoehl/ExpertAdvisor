@@ -11,6 +11,7 @@
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
+		0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,14 +52,16 @@
 
 /* Begin PBXFileReference section */
 		0820370222B43B0D0025307B /* db_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = db_cursor.cpp; path = Common/db_cursor.cpp; sourceTree = SOURCE_ROOT; };
-		0820370322B43B0D0025307B /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = db_cursor_iterator.hpp; path = Common/db_cursor_iterator.hpp; sourceTree = SOURCE_ROOT; };
+		08403E922F1DD75E004742A5 /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Tensor.hpp; sourceTree = "<group>"; };
+		08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = db_cursor_iterator.hpp; sourceTree = "<group>"; };
+		08403E9A2F1DDA2F004742A5 /* LSTM.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = LSTM.hpp; sourceTree = "<group>"; };
 		084426802ED8DD46002DEB21 /* LSTM */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM; sourceTree = BUILT_PRODUCTS_DIR; };
 		084426892ED8E755002DEB21 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
-		0851AB072F0A233A00C48FFE /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = Tensor.hpp; path = LSTM/Tensor.hpp; sourceTree = SOURCE_ROOT; };
 		0851AB082F0A233A00C48FFE /* Tensor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Tensor.cpp; path = LSTM/Tensor.cpp; sourceTree = SOURCE_ROOT; };
+		0890B6A42F1DC54900CEDECF /* LSTM.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = LSTM.cpp; sourceTree = "<group>"; };
 		0896002D22A86B8A0093513A /* ee.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = ee.pgsql; sourceTree = "<group>"; };
 		0896002E22A86B8A0093513A /* rmp_cursor.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = rmp_cursor.pgsql; sourceTree = "<group>"; };
 		08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = MetaNNXC.xcodeproj; path = MetaNN/MetaNNXC.xcodeproj; sourceTree = "<group>"; };
@@ -116,6 +119,8 @@
 			isa = PBXGroup;
 			children = (
 				084426892ED8E755002DEB21 /* main.cpp */,
+				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
+				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
 			);
 			path = LSTM;
 			sourceTree = "<group>";
@@ -123,10 +128,10 @@
 		08BF4E4820A933FB00B6F81D /* Headers */ = {
 			isa = PBXGroup;
 			children = (
-				0851AB072F0A233A00C48FFE /* Tensor.hpp */,
-				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
+				08403E9A2F1DDA2F004742A5 /* LSTM.hpp */,
+				08403E922F1DD75E004742A5 /* Tensor.hpp */,
 				084505652048CAB900A0B88F /* PricePoint.hpp */,
-				0820370322B43B0D0025307B /* db_cursor_iterator.hpp */,
+				08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */,
 			);
 			path = Headers;
 			sourceTree = "<group>";
@@ -244,6 +249,7 @@
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
+				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -280,7 +286,7 @@
 					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 				);
-				USER_HEADER_SEARCH_PATHS = "";
+				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
 			name = Debug;
@@ -319,7 +325,7 @@
 					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 				);
-				USER_HEADER_SEARCH_PATHS = "";
+				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
 			name = Release;

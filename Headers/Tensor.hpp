@@ -13,7 +13,7 @@
 #include <vector>
 #include <list>
 #include <ranges>
-
+#include <iostream>
 
 #include "PricePoint.hpp"
 
@@ -52,6 +52,20 @@ public:
 };
 
 std::ostream& operator<<(std::ostream&, Window);
+
+template <class Mat>
+void printMatrix(const char* name, const Mat& mat)
+{
+    std::cout << name << " (" << mat.Shape()[0] << " x " << mat.Shape()[1] << ")\n";
+    for (size_t i = 0; i < mat.Shape()[0]; ++i)
+    {
+        for (size_t j = 0; j < mat.Shape()[1]; ++j)
+        {
+            std::cout << mat(i, j) << (j + 1 == mat.Shape()[1] ? '\n' : ' ');
+        }
+    }
+    std::cout << std::endl;
+}
 
 
 #endif /* Tensor_hpp */
