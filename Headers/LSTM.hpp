@@ -14,7 +14,7 @@
 
 using std::array;
 
-constexpr auto hidden_size = 64;
+constexpr auto hidden_size = 8;
 constexpr auto feature_size = 4;
 constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;

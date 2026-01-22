@@ -26,7 +26,7 @@ using std::list;
 
 // sequence of features
 constexpr auto window_size = 5;
-constexpr auto batch_size = 64;
+constexpr auto batch_size = 15;
 
 class Tensor
 {

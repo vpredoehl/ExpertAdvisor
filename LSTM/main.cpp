@@ -28,8 +28,6 @@ int main(int argc, const char * argv[])
     pqxx::result tables = w.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { argv[1] }, toDate { argv[2] };
     
-    EA::LSTM l { 1, 0 };
-    for ( auto m : l.param)   printMatrix("l", m);
 
     try
     {
@@ -45,10 +43,42 @@ int main(int argc, const char * argv[])
             Tensor t{ rawPriceTableName, 5 };
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
-
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> A(4, 4);
-            printMatrix("A", A);
+  
+            EA::LSTM l { 1, 0 };
+            Window w = t.GetWindow(0);
+            
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> w_feat(4, l.param[0].Shape()[0]);
+            {
+                const size_t rowsW = l.param[0].Shape()[0]; // n_out
+                for (size_t k = 0; k < 4; ++k)
+                {
+                    for (size_t j = 0; j < rowsW; ++j)
+                    {
+                        w_feat.SetValue(k, j, l.param[0](j, k));
+                    }
+                }
+            }
+            
+            for (const auto& f : w)
+            {
+                MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> feature(1, 4);
+                feature.SetValue(0, 0, f.open);
+                feature.SetValue(0, 1, f.close);
+                feature.SetValue(0, 2, f.high);
+                feature.SetValue(0, 3, f.low);
+                printMatrix("Feature", feature);
+                printMatrix("Param", l.param[0]);
+                // Compute (1x4) · (4xn_out) = (1xn_out) via Dot
+                auto outOp = MetaNN::Dot(feature, w_feat);
+                auto out = Evaluate(outOp);
+                printMatrix("Out", out);
+                std::cout << f << std::endl;
+                
+            }
+            break;
+            //            for ( auto m : l.param)   printMatrix("l", m);
         }
+
     }
     catch (const pqxx::broken_connection& e)
     {
