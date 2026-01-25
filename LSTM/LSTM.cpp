@@ -24,16 +24,14 @@ static inline float uniform_symmetric(float limit) {
 using namespace EA;
 
 LSTM::LSTM(float lt, float st)
-    : param{ n_out, 4 * n_in },
+    : param{ n_in, 4 * n_out },
       long_term(lt),
       short_term(st)
 {
     // Xavier/Glorot uniform initialization limit
     float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(n_out)));
 
-    for (int r = 0; r < n_out; ++r) {
-        for (int c = 0; c < 4 * n_in; ++c) {
-            param.SetValue(r, c, uniform_symmetric(limit));
-        }
-    }
+    for (int r = 0; r < n_in; ++r)
+        for (int c = 0; c < 4 * n_out; ++c)
+            param.SetValue(r, c, std::trunc(uniform_symmetric(limit) * 10));
 }

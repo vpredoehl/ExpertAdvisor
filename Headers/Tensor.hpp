@@ -17,7 +17,10 @@
 
 #include "PricePoint.hpp"
 
-using DataSet = std::vector<Feature>;
+#include "MetaNN/meta_nn.h"
+
+using FeatureMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
+using DataSet = std::vector<FeatureMatrix>;
 using Window = std::ranges::subrange<DataSet::const_iterator, DataSet::const_iterator>;
 
 using std::string;
@@ -37,7 +40,7 @@ class Tensor
 public:
     Tensor(string name, short ws) : table { name }, window_size { ws }    {}
     
-    void Add(Feature f)   {   b.push_back(f);   }
+    void Add(Feature f);
     
     DataSet::const_iterator begin() const  { return b.cbegin(); }
     DataSet::const_iterator end() const { return b.cend(); }
