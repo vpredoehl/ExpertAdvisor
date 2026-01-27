@@ -59,16 +59,15 @@ std::ostream& operator<<(std::ostream&, Window);
 template <class Mat>
 void printMatrix(const char* name, const Mat& mat)
 {
-    std::cout << name << " (" << mat.Shape()[0] << " x " << mat.Shape()[1] << ")\n";
-    for (size_t i = 0; i < mat.Shape()[0]; ++i)
-    {
-        for (size_t j = 0; j < mat.Shape()[1]; ++j)
-        {
-            std::cout << mat(i, j) << (j + 1 == mat.Shape()[1] ? '\n' : ' ');
-        }
-    }
+    // Materialize MetaNN expressions (e.g., Reshape) before element access
+    auto cm = MetaNN::Evaluate(mat);
+    std::cout << name << " (" << cm.Shape()[0] << " x " << cm.Shape()[1] << ")\n";
+    for (size_t i = 0; i < cm.Shape()[0]; ++i)
+        for (size_t j = 0; j < cm.Shape()[1]; ++j)
+            std::cout << cm(i, j) << (j + 1 == cm.Shape()[1] ? '\n' : ' ');
     std::cout << std::endl;
 }
 
 
 #endif /* Tensor_hpp */
+
