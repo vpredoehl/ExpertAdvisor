@@ -23,6 +23,8 @@
 
 #include <MetaNN/operation/math/sigmoid.h>
 #include <MetaNN/operation/math/tanh.h>
+#include <MetaNN/operation/tensor/reshape.h>
+#include <MetaNN/operation/tensor/slice.h>
 
 const std::string dbName = "forex";
 
@@ -88,44 +90,53 @@ int main(int argc, const char * argv[])
                         z.SetValue(0, featWidth + j, h_prev(0, j));
                     }
 
-                    // Compute (1 x n_in) · (n_in x 4*n_out) = (1 x 4*n_out)
-                    auto yOp = MetaNN::Dot(z, l.param);
-                    auto y = Evaluate(yOp);
-                    printMatrix("Y (concat gates)", y);
+                    // Compute (1 x n_in) · (n_in x 4*n_out) + bias lazily
+                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> bias(1, 4 * n_out);
+                    for (size_t j = 0; j < 4 * n_out; ++j) { bias.SetValue(0, j, 0.0f); }
 
-                    const size_t totalCols = y.Shape()[1];
-                    const size_t gateWidth = totalCols / 4;
+                    auto yExpr = MetaNN::Dot(z, l.param) + bias;
 
-                    // Split into four gates: i, f, g, o each (1 x n_out)
-                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> gate_i(1, gateWidth);
-                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> gate_f(1, gateWidth);
-                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> gate_g(1, gateWidth);
-                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> gate_o(1, gateWidth);
+                    // Build lazy gate splits and activations from yExpr
+                    const size_t gateWidth = yExpr.Shape()[1] / 4;
 
-                    for (size_t j = 0; j < gateWidth; ++j)
-                    {
-                        gate_i.SetValue(0, j, y(0, j));
-                        gate_f.SetValue(0, j, y(0, gateWidth + j));
-                        gate_g.SetValue(0, j, y(0, 2 * gateWidth + j));
-                        gate_o.SetValue(0, j, y(0, 3 * gateWidth + j));
-                    }
+                    // Reshape (1 x 4*n_out) -> (4 x n_out) so each row is one gate
+                    auto gates2D = MetaNN::Reshape(yExpr, MetaNN::Shape(4, gateWidth));
 
-                    printMatrix("Gate i", gate_i);
-                    printMatrix("Gate f", gate_f);
-                    printMatrix("Gate g", gate_g);
-                    printMatrix("Gate o", gate_o);
+                    // Slice rows and reshape back to (1 x n_out) for printing
+                    auto gate_i_expr = MetaNN::Reshape(gates2D[0], MetaNN::Shape(1, gateWidth));
+                    auto gate_f_expr = MetaNN::Reshape(gates2D[1], MetaNN::Shape(1, gateWidth));
+                    auto gate_g_expr = MetaNN::Reshape(gates2D[2], MetaNN::Shape(1, gateWidth));
+                    auto gate_o_expr = MetaNN::Reshape(gates2D[3], MetaNN::Shape(1, gateWidth));
 
-                    // Apply activations using MetaNN ops
-                    auto i_expr = MetaNN::Sigmoid(gate_i);
-                    auto f_expr = MetaNN::Sigmoid(gate_f);
-                    auto g_expr = MetaNN::Tanh(gate_g);
-                    auto o_expr = MetaNN::Sigmoid(gate_o);
+                    // Apply activations lazily
+                    auto i_expr = MetaNN::Sigmoid(gate_i_expr);
+                    auto f_expr = MetaNN::Sigmoid(gate_f_expr);
+                    auto g_expr = MetaNN::Tanh(gate_g_expr);
+                    auto o_expr = MetaNN::Sigmoid(gate_o_expr);
 
+                    // Register all and evaluate once
+                    auto yHandle = yExpr.EvalRegister();
+                    auto gi_h = gate_i_expr.EvalRegister();
+                    auto gf_h = gate_f_expr.EvalRegister();
+                    auto gg_h = gate_g_expr.EvalRegister();
+                    auto go_h = gate_o_expr.EvalRegister();
                     auto i_h = i_expr.EvalRegister();
                     auto f_h = f_expr.EvalRegister();
                     auto g_h = g_expr.EvalRegister();
                     auto o_h = o_expr.EvalRegister();
                     MetaNN::EvalPlan::Inst().Eval();
+
+                    const auto& y = yHandle.Data();
+                    printMatrix("Y (concat gates)", y);
+
+                    const auto& gate_i = gi_h.Data();
+                    const auto& gate_f = gf_h.Data();
+                    const auto& gate_g = gg_h.Data();
+                    const auto& gate_o = go_h.Data();
+                    printMatrix("Gate i", gate_i);
+                    printMatrix("Gate f", gate_f);
+                    printMatrix("Gate g", gate_g);
+                    printMatrix("Gate o", gate_o);
 
                     const auto& i_t = i_h.Data();
                     const auto& f_t = f_h.Data();
@@ -160,7 +171,6 @@ int main(int argc, const char * argv[])
                 }
             }
             break;
-            //            for ( auto m : l.param)   printMatrix("l", m);
         }
 
     }
