@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <cmath>
+#include <algorithm>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -24,6 +25,7 @@
 #include <MetaNN/operation/math/tanh.h>
 #include <MetaNN/operation/tensor/reshape.h>
 #include <MetaNN/operation/tensor/slice.h>
+#include "scalable_tensor.h"
 
 const std::string dbName = "forex";
 
@@ -65,18 +67,20 @@ int main(int argc, const char * argv[])
             {
                 printMatrix("Feature", f);
                 {
-                    // Build z_t = [x_t, h_{t-1}]
-                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> z(1, n_in);
                     const size_t featWidth = f.Shape()[1];
-                    // Copy feature part
-                    for (size_t j = 0; j < featWidth; ++j)
+                    // Concatenate [x_t, h_{t-1}] into a contiguous row without element-wise loops
+                    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> z(1, n_in);
                     {
-                        z.SetValue(0, j, f(0, j));
-                    }
-                    // Append previous hidden state
-                    for (size_t j = 0; j < hidden_size; ++j)
-                    {
-                        z.SetValue(0, featWidth + j, h_prev(0, j));
+                        auto low_z = MetaNN::LowerAccess(z);
+                        float* z_mem = low_z.MutableRawMemory();
+
+                        auto low_f = MetaNN::LowerAccess(f);
+                        const float* f_mem = low_f.RawMemory();
+                        std::copy(f_mem, f_mem + featWidth, z_mem);
+
+                        auto low_h = MetaNN::LowerAccess(h_prev);
+                        const float* h_mem = low_h.RawMemory();
+                        std::copy(h_mem, h_mem + hidden_size, z_mem + featWidth);
                     }
 
                     // Compute affine transform (no bias since it is zero)
