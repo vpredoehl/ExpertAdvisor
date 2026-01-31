@@ -33,12 +33,6 @@ const std::string dbName = "forex";
 #define LSTM_DEBUG_PRINTS 1
 #endif
 
-#if LSTM_DEBUG_PRINTS
-#define DBG_PRINT(name, mat) printMatrix(name, mat)
-#else
-#define DBG_PRINT(name, mat) ((void)0)
-#endif
-
 
 int main(int argc, const char * argv[])
 {
@@ -75,7 +69,9 @@ int main(int argc, const char * argv[])
             
             for (const auto& f : w)
             {
-                DBG_PRINT("Feature", f);
+#if LSTM_DEBUG_PRINTS
+                printMatrix("Feature", f);
+#endif
                 /*
                 Debugging guidance: You can comment out the following for quick structural checks:
                 - The affine transform and gates: lines from `auto yExpr = MetaNN::Dot(z, l.param);` down to the gate activation prints.
@@ -98,7 +94,9 @@ int main(int argc, const char * argv[])
                         const float* h_mem = low_h.RawMemory();
                         std::copy(h_mem, h_mem + hidden_size, z_mem + featWidth);
                     }
-                    DBG_PRINT("Concat z [x_t|h_{t-1}]", z);
+#if LSTM_DEBUG_PRINTS
+                    printMatrix("Concat z [x_t|h_{t-1}]", z);
+#endif
 
                     // Heavy compute: affine transform. Comment out along with subsequent gate logic if you only need to verify data flow.
                     auto yExpr = MetaNN::Dot(z, l.param);
@@ -125,15 +123,14 @@ int main(int argc, const char * argv[])
                         auto f_m = MetaNN::Reshape(f_h.Data(), MetaNN::Shape(1, gateWidth));
                         auto g_m = MetaNN::Reshape(g_h.Data(), MetaNN::Shape(1, gateWidth));
                         auto o_m = MetaNN::Reshape(o_h.Data(), MetaNN::Shape(1, gateWidth));
-                        DBG_PRINT("Gate i (input)", i_m);
-                        DBG_PRINT("Gate f (forget)", f_m);
-                        DBG_PRINT("Gate g (cell candidate)", g_m);
-                        DBG_PRINT("Gate o (output)", o_m);
+                        printMatrix("Gate i (input)", i_m);
+                        printMatrix("Gate f (forget)", f_m);
+                        printMatrix("Gate g (cell candidate)", g_m);
+                        printMatrix("Gate o (output)", o_m);
                     }
+                    printMatrix("h_prev", h_prev);
+                    printMatrix("c_prev", c_prev);
 #endif
-
-                    DBG_PRINT("h_prev", h_prev);
-                    DBG_PRINT("c_prev", c_prev);
 
                     // View c_prev as 1D
                     auto c_prev_1d = MetaNN::Reshape(c_prev, MetaNN::Shape(gateWidth));
@@ -149,11 +146,14 @@ int main(int argc, const char * argv[])
                     auto h_t_h = h_t_2d_expr.EvalRegister();
                     MetaNN::EvalPlan::Inst().Eval();
 
-                    // Materialize evaluated handles into concrete matrices for printing
-                    auto c_t_m = MetaNN::Reshape(c_t_h.Data(), MetaNN::Shape(1, gateWidth));
-                    auto h_t_m = MetaNN::Reshape(h_t_h.Data(), MetaNN::Shape(1, gateWidth));
-                    DBG_PRINT("c_t", c_t_m);
-                    DBG_PRINT("h_t", h_t_m);
+#if LSTM_DEBUG_PRINTS
+                    {
+                        auto c_t_m = MetaNN::Reshape(c_t_h.Data(), MetaNN::Shape(1, gateWidth));
+                        auto h_t_m = MetaNN::Reshape(h_t_h.Data(), MetaNN::Shape(1, gateWidth));
+                        printMatrix("c_t", c_t_m);
+                        printMatrix("h_t", h_t_m);
+                    }
+#endif
 
                     // Assign back to persistent states
                     c_prev = c_t_h.Data();
