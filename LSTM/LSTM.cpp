@@ -49,91 +49,98 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 
 void LSTM::CalculateBatch(short idx)
 {
-    Batch b = t.GetBatch(idx);
-    Window w = t.GetWindow(b);
-    
-    ResetPreviousState();
-    for(const auto& f_sample : w)
+    auto batch = t.GetBatch(idx);
+    // Slide a 5-step window across this 15-step batch
+    for (auto window_start = batch.begin(); window_start + window_size <= batch.end(); ++window_start)
     {
+        // Reset states for an independent window
+        ResetPreviousState();
+        // Build a 5-step window starting at 'start' using the const iterator overload
+        Window w = t.GetWindow(window_start);
+
+        for(const auto& f_sample : w)
+        {
 #if LSTM_DEBUG_PRINTS
                 printMatrix("Feature", f_sample);
 #endif
-        const size_t featWidth = f_sample.Shape()[1];
-        // Concatenate [x_t, h_{t-1}] into a contiguous row without element-wise loops
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> InputAndPrevHidden(1, n_in);
-        {
-            auto lowConcat = MetaNN::LowerAccess(InputAndPrevHidden);
-            float* concat_mem = lowConcat.MutableRawMemory();
+            const size_t featWidth = f_sample.Shape()[1];
+            // Concatenate [x_t, h_{t-1}] into a contiguous row without element-wise loops
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> InputAndPrevHidden(1, n_in);
+            {
+                auto lowConcat = MetaNN::LowerAccess(InputAndPrevHidden);
+                float* concat_mem = lowConcat.MutableRawMemory();
 
-            auto low_f = MetaNN::LowerAccess(f_sample);
-            const float* f_mem = low_f.RawMemory();
-            std::copy(f_mem, f_mem + featWidth, concat_mem);
+                auto low_f = MetaNN::LowerAccess(f_sample);
+                const float* f_mem = low_f.RawMemory();
+                std::copy(f_mem, f_mem + featWidth, concat_mem);
 
-            auto low_h = MetaNN::LowerAccess(prevHiddenState);
-            const float* h_mem = low_h.RawMemory();
-            std::copy(h_mem, h_mem + hidden_size, concat_mem + featWidth);
-        }
+                auto low_h = MetaNN::LowerAccess(prevHiddenState);
+                const float* h_mem = low_h.RawMemory();
+                std::copy(h_mem, h_mem + hidden_size, concat_mem + featWidth);
+            }
 #if LSTM_DEBUG_PRINTS
-        printMatrix("Concatenated [x_t|h_{t-1}]", InputAndPrevHidden);
+            printMatrix("Concatenated [x_t|h_{t-1}]", InputAndPrevHidden);
 #endif
-        auto yExpr = MetaNN::Dot(InputAndPrevHidden,  param) + bias;
+            auto yExpr = MetaNN::Dot(InputAndPrevHidden,  param) + bias;
 
-        // Split gates as a (4 x gateWidth) view
-        const size_t gateWidth = yExpr.Shape()[1] / 4;
-        auto gates2D = MetaNN::Reshape(yExpr, MetaNN::Shape(4, gateWidth));
+            // Split gates as a (4 x gateWidth) view
+            const size_t gateWidth = yExpr.Shape()[1] / 4;
+            auto gates2D = MetaNN::Reshape(yExpr, MetaNN::Shape(4, gateWidth));
 
-        // Gate activations directly on 1D slices
-        auto i = MetaNN::Sigmoid(gates2D[0]);
-        auto f = MetaNN::Sigmoid(gates2D[1]);
-        auto g = MetaNN::Tanh   (gates2D[2]);
-        auto o = MetaNN::Sigmoid(gates2D[3]);
+            // Gate activations directly on 1D slices
+            auto i = MetaNN::Sigmoid(gates2D[0]);
+            auto f = MetaNN::Sigmoid(gates2D[1]);
+            auto g = MetaNN::Tanh   (gates2D[2]);
+            auto o = MetaNN::Sigmoid(gates2D[3]);
 
-        // Debug: evaluate and print gate activations
+            // Debug: evaluate and print gate activations
 #if LSTM_DEBUG_PRINTS
-        {
-            auto inputGateHandle = i.EvalRegister();
-            auto forgetGateHandle = f.EvalRegister();
-            auto cellCandidateHandle = g.EvalRegister();
-            auto outputGateHandle = o.EvalRegister();
+            {
+                auto inputGateHandle = i.EvalRegister();
+                auto forgetGateHandle = f.EvalRegister();
+                auto cellCandidateHandle = g.EvalRegister();
+                auto outputGateHandle = o.EvalRegister();
+                MetaNN::EvalPlan::Inst().Eval();
+                auto inputGateMatrix = MetaNN::Reshape(inputGateHandle.Data(), MetaNN::Shape(1, gateWidth));
+                auto forgetGateMatrix = MetaNN::Reshape(forgetGateHandle.Data(), MetaNN::Shape(1, gateWidth));
+                auto cellCandidateMatrix = MetaNN::Reshape(cellCandidateHandle.Data(), MetaNN::Shape(1, gateWidth));
+                auto outputGateMatrix = MetaNN::Reshape(outputGateHandle.Data(), MetaNN::Shape(1, gateWidth));
+                printMatrix("Input gate (i)", inputGateMatrix);
+                printMatrix("Forget gate (f)", forgetGateMatrix);
+                printMatrix("Cell candidate (g)", cellCandidateMatrix);
+                printMatrix("Output gate (o)", outputGateMatrix);
+            }
+            printMatrix("Previous hidden state", prevHiddenState);
+            printMatrix("Previous cell state", prevCellState);
+#endif
+
+            // View previousCellState as 1D
+            auto previousCellState1D = MetaNN::Reshape(prevCellState, MetaNN::Shape(gateWidth));
+
+            // Vectorized LSTM updates
+            auto cellStateExpr = f * previousCellState1D + i * g;                 // 1D
+            auto hiddenStateExpr = o * MetaNN::Tanh(cellStateExpr);               // 1D
+
+            // Reshape results to (1 x gateWidth) and evaluate once
+            auto cellState2DExpr = MetaNN::Reshape(cellStateExpr, MetaNN::Shape(1, gateWidth));
+            auto hiddenState2DExpr = MetaNN::Reshape(hiddenStateExpr, MetaNN::Shape(1, gateWidth));
+            auto cellStateHandle = cellState2DExpr.EvalRegister();
+            auto hiddenStateHandle = hiddenState2DExpr.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
-            auto inputGateMatrix = MetaNN::Reshape(inputGateHandle.Data(), MetaNN::Shape(1, gateWidth));
-            auto forgetGateMatrix = MetaNN::Reshape(forgetGateHandle.Data(), MetaNN::Shape(1, gateWidth));
-            auto cellCandidateMatrix = MetaNN::Reshape(cellCandidateHandle.Data(), MetaNN::Shape(1, gateWidth));
-            auto outputGateMatrix = MetaNN::Reshape(outputGateHandle.Data(), MetaNN::Shape(1, gateWidth));
-            printMatrix("Input gate (i)", inputGateMatrix);
-            printMatrix("Forget gate (f)", forgetGateMatrix);
-            printMatrix("Cell candidate (g)", cellCandidateMatrix);
-            printMatrix("Output gate (o)", outputGateMatrix);
-        }
-        printMatrix("Previous hidden state", prevHiddenState);
-        printMatrix("Previous cell state", prevCellState);
-#endif
-
-        // View previousCellState as 1D
-        auto previousCellState1D = MetaNN::Reshape(prevCellState, MetaNN::Shape(gateWidth));
-
-        // Vectorized LSTM updates
-        auto cellStateExpr = f * previousCellState1D + i * g;                 // 1D
-        auto hiddenStateExpr = o * MetaNN::Tanh(cellStateExpr);               // 1D
-
-        // Reshape results to (1 x gateWidth) and evaluate once
-        auto cellState2DExpr = MetaNN::Reshape(cellStateExpr, MetaNN::Shape(1, gateWidth));
-        auto hiddenState2DExpr = MetaNN::Reshape(hiddenStateExpr, MetaNN::Shape(1, gateWidth));
-        auto cellStateHandle = cellState2DExpr.EvalRegister();
-        auto hiddenStateHandle = hiddenState2DExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
 
 #if LSTM_DEBUG_PRINTS
-        {
-            auto cellStateMatrix = MetaNN::Reshape(cellStateHandle.Data(), MetaNN::Shape(1, gateWidth));
-            auto hiddenStateMatrix = MetaNN::Reshape(hiddenStateHandle.Data(), MetaNN::Shape(1, gateWidth));
-            printMatrix("Cell state c_t", cellStateMatrix);
-            printMatrix("Hidden state h_t", hiddenStateMatrix);
-        }
+            {
+                auto cellStateMatrix = MetaNN::Reshape(cellStateHandle.Data(), MetaNN::Shape(1, gateWidth));
+                auto hiddenStateMatrix = MetaNN::Reshape(hiddenStateHandle.Data(), MetaNN::Shape(1, gateWidth));
+                printMatrix("Cell state c_t", cellStateMatrix);
+                printMatrix("Hidden state h_t", hiddenStateMatrix);
+            }
 #endif
 
-        // Assign back to persistent states
-        prevCellState = cellStateHandle.Data();
-        prevHiddenState = hiddenStateHandle.Data();
+            // Assign back to persistent states
+            prevCellState = cellStateHandle.Data();
+            prevHiddenState = hiddenStateHandle.Data();
+        }
     }
 }
+

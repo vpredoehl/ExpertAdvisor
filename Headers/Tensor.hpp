@@ -46,8 +46,7 @@ public:
     DataSet::const_iterator begin() const  { return b.cbegin(); }
     DataSet::const_iterator end() const { return b.cend(); }
     
-    auto GetWindow(long idx) const  {   return std::ranges::subrange(b.cbegin() + idx, b.cbegin() + idx + window_size); }
-    auto GetWindow(DataSet::const_iterator iter) -> Window    {   return { iter, iter + window_size };  }
+    auto GetWindow(DataSet::const_iterator iter) const -> Window    {   return { iter, iter + window_size };  }
     auto NumberOfBatches() const    {   return b.size() / batch_size;   }
     auto GetBatch(long idx) const
     {
@@ -72,4 +71,5 @@ void printMatrix(const char* name, const Mat& mat)
 
 
 #endif /* Tensor_hpp */
+
 
