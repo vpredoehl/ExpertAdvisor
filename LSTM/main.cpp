@@ -49,12 +49,12 @@ int main(int argc, const char * argv[])
             db_cursor_stream<Feature> cs_cur{ w, query, rawPriceTableName + "_candlestick_stream" };
             db_forward_iterator csb = cs_cur.cbegin(), cse = cs_cur.cend();
 
-            Tensor t{ rawPriceTableName, 5 };
+            Tensor t{ rawPriceTableName };
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
   
             EA::LSTM l { t, 1, 0 };
-            l.CalculateWindow(0);
+            for(auto batch_num = 0; batch_num < t.NumberOfBatches(); batch_num++)   l.CalculateBatch(batch_num);
             
             break;
         }

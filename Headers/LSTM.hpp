@@ -62,6 +62,15 @@ namespace EA
             assert(gateIndex < 4);
             return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
         }
+        inline void ResetPreviousState()
+        {
+            for (size_t j = 0; j < hidden_size; ++j)
+            {
+                prevHiddenState.SetValue(0, j, 0.0f);
+                prevCellState.SetValue(0, j, 0.0f);
+            }
+
+        }
 
         float long_term, short_term, in;
         FloatMatrixCPU param { n_in, 4 * n_out }; // Combined gate weights matrix with shape [n_in x 4*n_out]
@@ -70,7 +79,7 @@ namespace EA
         LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0);
         LSTM() = delete;
         
-        void CalculateWindow(short windowIdx);
+        void CalculateBatch(short windowIdx);
     };
 }
 

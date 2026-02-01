@@ -22,6 +22,7 @@
 using FeatureMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
 using DataSet = std::vector<FeatureMatrix>;
 using Window = std::ranges::subrange<DataSet::const_iterator, DataSet::const_iterator>;
+using Batch = Window;
 
 using std::string;
 using std::list;
@@ -35,10 +36,10 @@ class Tensor
 {
     string table;
     DataSet b;
-    short window_size;
     
 public:
-    Tensor(string name, short ws) : table { name }, window_size { ws }    {}
+    
+    Tensor(string name) : table { name }    {}
     
     void Add(Feature f);
     
@@ -47,7 +48,8 @@ public:
     
     auto GetWindow(long idx) const  {   return std::ranges::subrange(b.cbegin() + idx, b.cbegin() + idx + window_size); }
     auto GetWindow(DataSet::const_iterator iter) -> Window    {   return { iter, iter + window_size };  }
-    auto GetBatch(long idx ) const
+    auto NumberOfBatches() const    {   return b.size() / batch_size;   }
+    auto GetBatch(long idx) const
     {
         auto batchIdx = b.cbegin() + idx * batch_size;
         return std::ranges::subrange(batchIdx, batchIdx + batch_size);

@@ -42,19 +42,17 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     
         // initialize bias, previous hidden and previous cell state
     for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, 0.0f);
-    for (size_t j = 0; j < hidden_size; ++j)
-    {
-        prevHiddenState.SetValue(0, j, 0.0f);
-        prevCellState.SetValue(0, j, 0.0f);
-    }
-
+    ResetPreviousState();
+    
     long_term = lt; short_term = st;
 }
 
-void LSTM::CalculateWindow(short idx)
+void LSTM::CalculateBatch(short idx)
 {
-    Window w = t.GetWindow(idx);
+    Batch b = t.GetBatch(idx);
+    Window w = t.GetWindow(b);
     
+    ResetPreviousState();
     for(const auto& f_sample : w)
     {
 #if LSTM_DEBUG_PRINTS
