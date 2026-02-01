@@ -38,7 +38,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 
     for (int r = 0; r < n_in; ++r)
         for (int c = 0; c < 4 * n_out; ++c)
-            param.SetValue(r, c, std::trunc(uniform_symmetric(limit) * 10));
+            param.SetValue(r, c, uniform_symmetric(limit));
     
         // initialize bias, previous hidden and previous cell state
     for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, 0.0f);
