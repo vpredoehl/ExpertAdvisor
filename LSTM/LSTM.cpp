@@ -33,15 +33,15 @@ using namespace EA;
 LSTM::LSTM(const Tensor& tt, float lt, float st)
 : t { tt }
 {
-    // Xavier/Glorot uniform initialization limit
-    float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(n_out)));
-
+    // Deterministic constant initialization for verification
+    const float weightInit = 0.1f;
+    const float biasInit   = 0.0f; // used below when initializing bias
     for (int r = 0; r < n_in; ++r)
         for (int c = 0; c < 4 * n_out; ++c)
-            param.SetValue(r, c, std::trunc(uniform_symmetric(limit) * 10));
+            param.SetValue(r, c, weightInit);
     
         // initialize bias, previous hidden and previous cell state
-    for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, 0.0f);
+    for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, biasInit);
     for (size_t j = 0; j < hidden_size; ++j)
     {
         prevHiddenState.SetValue(0, j, 0.0f);
@@ -139,3 +139,4 @@ void LSTM::CalculateWindow(short idx)
         prevHiddenState = hiddenStateHandle.Data();
     }
 }
+
