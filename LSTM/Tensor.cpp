@@ -33,6 +33,6 @@ void Tensor::Add(Feature f)
     fm.SetValue(0, 1, f.close);
     fm.SetValue(0, 2, f.high);
     fm.SetValue(0, 3, f.low);
-    b.push_back(fm);
+    ds.push_back(fm);
 
 }

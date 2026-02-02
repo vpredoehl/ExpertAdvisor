@@ -54,7 +54,8 @@ int main(int argc, const char * argv[])
             while (csb != cse) t.Add(*csb++);
   
             EA::LSTM l { t, 1, 0 };
-            for(auto batch_num = 0; batch_num < t.NumberOfBatches(); batch_num++)   l.CalculateBatch(batch_num);
+            // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
+            t.ForEachBatch( [&](size_t bIdx) { l.CalculateBatch(bIdx);   } );
             
             break;
         }

@@ -68,7 +68,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 
 void LSTM::CalculateBatch(short idx)
 {
-    auto batch = t.GetBatch(idx);
+    auto batch = t.GetBatchClamped(idx);  // safe: handles trailing partial batches
     // Slide a 5-step window across this 15-step batch
     for (auto window_start = batch.begin(); window_start + window_size <= batch.end(); ++window_start)
     {
@@ -162,4 +162,5 @@ void LSTM::CalculateBatch(short idx)
         }
     }
 }
+
 
