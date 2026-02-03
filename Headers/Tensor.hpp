@@ -16,21 +16,11 @@
 #include <iostream>
 
 #include "PricePoint.hpp"
-
-#include "MetaNN/meta_nn.h"
-
-using FeatureMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
-using DataSet = std::vector<FeatureMatrix>;
-using Window = std::ranges::subrange<DataSet::const_iterator, DataSet::const_iterator>;
-using Batch = Window;
+#include "Params.hpp"
 
 using std::string;
 using std::list;
 
-
-// sequence of features
-constexpr auto window_size = 5;
-constexpr auto batch_size = 15;
 
 class Tensor
 {
@@ -60,7 +50,7 @@ public:
     void ForEachBatch(Func&& f) const
     {
         const size_t n = NumberOfBatchesIncludingRemainder();
-        for (size_t i = 0; i < n; ++i)  f(i);
+        for (size_t i = 0; i < n; ++i)  f(GetBatchClamped(i));
     }
 
     

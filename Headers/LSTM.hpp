@@ -13,12 +13,9 @@
 #include <array>
 #include <cassert>
 
-using std::array;
+#include "Params.hpp"
 
-constexpr auto hidden_size = 8;
-constexpr auto feature_size = 4;
-constexpr auto n_in = feature_size + hidden_size;
-constexpr auto n_out = hidden_size;
+using std::array;
 
 class Tensor;
 namespace EA
@@ -79,7 +76,7 @@ namespace EA
         LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0);
         LSTM() = delete;
         
-        void CalculateBatch(short windowIdx);
+        void CalculateBatch(std::ranges::subrange<DataSet::const_iterator>);
     };
 }
 
