@@ -13,7 +13,11 @@
 #include "Tensor.hpp"
 
 #ifndef LSTM_DEBUG_PRINTS
-#define LSTM_DEBUG_PRINTS 1
+#define LSTM_DEBUG_PRINTS 0
+#endif
+
+#ifndef LSTM_TRAINING_PROGRESS
+#define LSTM_TRAINING_PROGRESS 1
 #endif
 
 
@@ -33,7 +37,7 @@ using namespace EA;
 LSTM::LSTM(const Tensor& tt, float lt, float st)
 : t { tt }
 {
-#if 1
+#if 0
     // Deterministic constant initialization for verification
     const float weightInit = 0.1f;
     const float biasInit   = 0.0f; // used below when initializing bias
@@ -48,6 +52,10 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
         prevHiddenState.SetValue(0, j, 0.0f);
         prevCellState.SetValue(0, j, 0.0f);
     }
+    
+    // Initialize output head (small weights, zero bias)
+    for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
+    returnHeadBias.SetValue(0, 0, 0.0f);
 
     long_term = lt; short_term = st;
 #else
@@ -61,15 +69,23 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
         // initialize bias, previous hidden and previous cell state
     for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, 0.0f);
     ResetPreviousState();
-    
+
+    for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
+    returnHeadBias.SetValue(0, 0, 0.0f);
+
     long_term = lt; short_term = st;
 #endif
 }
 
 void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 {
+#if LSTM_TRAINING_PROGRESS
+    double runningLoss = 0.0;
+    size_t windowCount = 0;
+#endif
+
     // Slide a 5-step window across this 15-step batch
-    for (auto window_start = batch.begin(); window_start + window_size <= batch.end(); ++window_start)
+    for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
     {
         // Reset states for an independent window
         ResetPreviousState();
@@ -106,18 +122,18 @@ void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto gates2D = MetaNN::Reshape(yExpr, MetaNN::Shape(4, gateWidth));
 
             // Gate activations directly on 1D slices
-            auto i = MetaNN::Sigmoid(gates2D[0]);
-            auto f = MetaNN::Sigmoid(gates2D[1]);
-            auto g = MetaNN::Tanh   (gates2D[2]);
-            auto o = MetaNN::Sigmoid(gates2D[3]);
+            auto i_input = MetaNN::Sigmoid(gates2D[0]);
+            auto f_forget = MetaNN::Sigmoid(gates2D[1]);
+            auto g_cell_candidate = MetaNN::Tanh   (gates2D[2]);
+            auto o_output = MetaNN::Sigmoid(gates2D[3]);
 
             // Debug: evaluate and print gate activations
 #if LSTM_DEBUG_PRINTS
             {
-                auto inputGateHandle = i.EvalRegister();
-                auto forgetGateHandle = f.EvalRegister();
-                auto cellCandidateHandle = g.EvalRegister();
-                auto outputGateHandle = o.EvalRegister();
+                auto inputGateHandle = i_input.EvalRegister();
+                auto forgetGateHandle = f_forget.EvalRegister();
+                auto cellCandidateHandle = g_cell_candidate.EvalRegister();
+                auto outputGateHandle = o_output.EvalRegister();
                 MetaNN::EvalPlan::Inst().Eval();
                 auto inputGateMatrix = MetaNN::Reshape(inputGateHandle.Data(), MetaNN::Shape(1, gateWidth));
                 auto forgetGateMatrix = MetaNN::Reshape(forgetGateHandle.Data(), MetaNN::Shape(1, gateWidth));
@@ -136,8 +152,8 @@ void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto previousCellState1D = MetaNN::Reshape(prevCellState, MetaNN::Shape(gateWidth));
 
             // Vectorized LSTM updates
-            auto cellStateExpr = f * previousCellState1D + i * g;                 // 1D
-            auto hiddenStateExpr = o * MetaNN::Tanh(cellStateExpr);               // 1D
+            auto cellStateExpr = f_forget * previousCellState1D + i_input * g_cell_candidate;                 // 1D
+            auto hiddenStateExpr = o_output * MetaNN::Tanh(cellStateExpr);               // 1D
 
             // Reshape results to (1 x gateWidth) and evaluate once
             auto cellState2DExpr = MetaNN::Reshape(cellStateExpr, MetaNN::Shape(1, gateWidth));
@@ -159,7 +175,65 @@ void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             prevCellState = cellStateHandle.Data();
             prevHiddenState = hiddenStateHandle.Data();
         }
+
+        // ---- Head-only training for next-step return (regression) ----
+        // We need the last sample in the window and the next sample after the window
+        auto lastIt = window_start + (window_size - 1);
+        auto nextIt = window_start + window_size; // safe due to '<' in loop condition
+
+        // Evaluate to access element values
+        auto lastFeat  = MetaNN::Evaluate(*lastIt);
+        auto nextFeat  = MetaNN::Evaluate(*nextIt);
+        printMatrix("lastFeat", lastFeat);
+        printMatrix("nextFeat", nextFeat);
+
+        // Column index for close price in FeatureMatrix: open(0), close(1), high(2), low(3)
+        constexpr size_t closeCol = 1;
+        const float close_T    = lastFeat(0, closeCol);
+        const float close_next = nextFeat(0, closeCol);
+        const float y_target   = std::log(close_next) - std::log(close_T);
+
+        // Predict from last hidden state h_T
+        printMatrix("returnHeadWeight", returnHeadWeight);
+        printMatrix("returnHeadBias", returnHeadBias);
+        auto pred = MetaNN::Evaluate(MetaNN::Dot(prevHiddenState, returnHeadWeight) + returnHeadBias);
+        const float y_hat = pred(0, 0);
+
+        // Error and SGD update for head parameters
+        const float e = y_hat - y_target;
+
+#if LSTM_TRAINING_PROGRESS
+        runningLoss += 0.5 * static_cast<double>(e) * static_cast<double>(e);
+        ++windowCount;
+#endif
+
+        // Update returnHeadWeight: returnHeadWeight(i,0) -= lr * h_T(0,i) * e
+        auto hT = MetaNN::Evaluate(prevHiddenState);
+        printMatrix("hT", hT);
+        for (size_t i = 0; i < hidden_size; ++i)
+        {
+            const float grad = hT(0, i) * e;
+            const float cur  = returnHeadWeight(i, 0);
+            returnHeadWeight.SetValue(i, 0, cur - learningRate * grad);
+        }
+        // Update returnHeadBias: returnHeadBias -= lr * e
+        const float bcur = returnHeadBias(0, 0);
+        returnHeadBias.SetValue(0, 0, bcur - learningRate * e);
     }
+
+#if LSTM_TRAINING_PROGRESS
+    if (windowCount > 0) {
+        std::cout << "Batch MSE: " << (runningLoss / static_cast<double>(windowCount))
+                  << " (" << windowCount << " windows)" << std::endl;
+    }
+    // Print the current returnHeadWeight vector (hidden_size x 1)
+    std::cout << "returnHeadWeight: [";
+    for (size_t i = 0; i < hidden_size; ++i) {
+        std::cout << returnHeadWeight(i, 0);
+        if (i + 1 < hidden_size) std::cout << ", ";
+    }
+    std::cout << "]" << std::endl;
+#endif
 }
 
 

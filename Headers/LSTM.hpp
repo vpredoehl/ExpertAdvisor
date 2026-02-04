@@ -73,12 +73,23 @@ namespace EA
         FloatMatrixCPU param { n_in, 4 * n_out }; // Combined gate weights matrix with shape [n_in x 4*n_out]
         FloatMatrixCPU prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
         FloatMatrixCPU bias { 1, 4 * n_out };
+
+        // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
+        FloatMatrixCPU returnHeadWeight { hidden_size, 1 };
+        FloatMatrixCPU returnHeadBias { 1, 1 };
+
+        // Simple SGD learning rate for head-only training
+        float learningRate = 1e-3f;
+
         LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0);
         LSTM() = delete;
+
+        void SetLearningRate(float lr) { learningRate = lr; }
         
-        void CalculateBatch(std::ranges::subrange<DataSet::const_iterator>);
+        void CalculateBatch(const std::ranges::subrange<DataSet::const_iterator>);
     };
 }
 
 #endif /* LSTM_hpp */
+
 
