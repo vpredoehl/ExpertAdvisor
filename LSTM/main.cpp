@@ -55,7 +55,7 @@ int main(int argc, const char * argv[])
   
             EA::LSTM l { t, 1, 0 };
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
-            t.ForEachBatch( [&](auto b) { l.CalculateBatch(b);   } );
+            t.ForEachBatch( [&](auto b) {   float pc = l.CalculateBatch(b); std::cout << "predicted_close: " << pc << std::endl;   } );
             
             break;
         }

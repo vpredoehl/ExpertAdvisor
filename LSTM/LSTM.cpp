@@ -77,8 +77,9 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 #endif
 }
 
-void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
+float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 {
+    float predicted_close = 0;
 #if LSTM_TRAINING_PROGRESS
     double runningLoss = 0.0;
     size_t windowCount = 0;
@@ -191,34 +192,36 @@ void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         constexpr size_t closeCol = 1;
         const float close_T    = lastFeat(0, closeCol);
         const float close_next = nextFeat(0, closeCol);
-        const float y_target   = std::log(close_next) - std::log(close_T);
+        const float actual_next_step_return   = std::log(close_next) - std::log(close_T);
 
         // Predict from last hidden state h_T
         printMatrix("returnHeadWeight", returnHeadWeight);
         printMatrix("returnHeadBias", returnHeadBias);
         auto pred = MetaNN::Evaluate(MetaNN::Dot(prevHiddenState, returnHeadWeight) + returnHeadBias);
-        const float y_hat = pred(0, 0);
+        const float next_step_prediction = pred(0, 0);  // y_hat
+        predicted_close = std::exp(next_step_prediction) * close_T;
+
 
         // Error and SGD update for head parameters
-        const float e = y_hat - y_target;
+        const float err = next_step_prediction - actual_next_step_return;
 
 #if LSTM_TRAINING_PROGRESS
-        runningLoss += 0.5 * static_cast<double>(e) * static_cast<double>(e);
+        runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
         ++windowCount;
 #endif
 
         // Update returnHeadWeight: returnHeadWeight(i,0) -= lr * h_T(0,i) * e
-        auto hT = MetaNN::Evaluate(prevHiddenState);
-        printMatrix("hT", hT);
+        auto last_hidden_state = MetaNN::Evaluate(prevHiddenState);
+        printMatrix("last_hidden_state", last_hidden_state);
         for (size_t i = 0; i < hidden_size; ++i)
         {
-            const float grad = hT(0, i) * e;
+            const float grad = last_hidden_state(0, i) * err;
             const float cur  = returnHeadWeight(i, 0);
             returnHeadWeight.SetValue(i, 0, cur - learningRate * grad);
         }
         // Update returnHeadBias: returnHeadBias -= lr * e
         const float bcur = returnHeadBias(0, 0);
-        returnHeadBias.SetValue(0, 0, bcur - learningRate * e);
+        returnHeadBias.SetValue(0, 0, bcur - learningRate * err);
     }
 
 #if LSTM_TRAINING_PROGRESS
@@ -234,6 +237,7 @@ void LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     }
     std::cout << "]" << std::endl;
 #endif
+    return predicted_close;
 }
 
 

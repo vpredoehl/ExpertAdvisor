@@ -86,7 +86,7 @@ namespace EA
 
         void SetLearningRate(float lr) { learningRate = lr; }
         
-        void CalculateBatch(const std::ranges::subrange<DataSet::const_iterator>);
+        float CalculateBatch(const std::ranges::subrange<DataSet::const_iterator>);
     };
 }
 
