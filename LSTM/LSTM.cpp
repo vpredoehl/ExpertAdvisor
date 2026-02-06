@@ -204,10 +204,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         ++windowCount;
 #endif
 
-        // Gradient into head: y_hat = h_T * W_y + b_y
-        // dL/dW_y = h_T^T * err, dL/db_y = err, dL/dh_T = err * W_y^T
+        // Gradient into head using MetaNN
         auto last_hidden_state_eval = MetaNN::Evaluate(prevHiddenState);
-        // Keep existing head update (SGD)
         for (size_t i = 0; i < hidden_size; ++i)
         {
             const float grad_w = last_hidden_state_eval(0, i) * err;
@@ -217,28 +215,12 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const float bcur = returnHeadBias(0, 0);
         returnHeadBias.SetValue(0, 0, bcur - learningRate * err);
 
-        // Backprop signal into h_T
-        float d_h_T_vec_capacity = static_cast<float>(hidden_size);
-        (void)d_h_T_vec_capacity; // silence unused warning
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
-        {
-            auto low = MetaNN::LowerAccess(d_h);
-            float* mem = low.MutableRawMemory();
-            for (size_t i = 0; i < hidden_size; ++i)
-            {
-                mem[i] = err * returnHeadWeight(i, 0);
-            }
-        }
-        // Initialize d_c_T = 0
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c(1, hidden_size);
-        {
-            auto low = MetaNN::LowerAccess(d_c);
-            std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
-        }
+        // Backprop signal into h_T and c_T using MetaNN expressions
+        auto d_h = MetaNN::Evaluate(prevHiddenState * 0.0f + err * MetaNN::Transpose(returnHeadWeight));
+        auto d_c = MetaNN::Evaluate(prevHiddenState * 0.0f); // zeros like h
 
-        // To run BPTT we need the cached per-timestep forward values. Re-run the window to cache them.
-        struct StepCache
-        {
+        // Define a lightweight cache that stores only expressions and concatenated input
+        struct StepCacheExpr {
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> x;      // (1, input_size)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> h_prev; // (1, hidden_size)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> c_prev; // (1, hidden_size)
@@ -251,10 +233,10 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> concat; // (1, n_in)
         };
 
-        std::vector<StepCache> cache;
+        std::vector<StepCacheExpr> cache;
         cache.reserve(window_size);
 
-        // Recompute forward pass for caching
+        // Recompute forward pass for caching with deferred evaluation
         ResetPreviousState();
         {
             Window w2 = t.GetWindow(window_start);
@@ -272,29 +254,34 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
                     const float* h_mem = low_h.RawMemory();
                     std::copy(h_mem, h_mem + hidden_size, concat_mem + featWidth2);
                 }
-                auto yExpr2 = MetaNN::Dot(concat,  param) + bias;
-                const size_t gateWidth2 = yExpr2.Shape()[1] / 4;
+
+                auto yExpr2 = MetaNN::Dot(concat,  param) + bias;                 // (1, 4H)
+                const size_t gateWidth2 = yExpr2.Shape()[1] / 4;                   // H
                 auto gates2D_2 = MetaNN::Reshape(yExpr2, MetaNN::Shape(4, gateWidth2));
+
                 auto i_input2 = MetaNN::Sigmoid(gates2D_2[0]);
                 auto f_forget2 = MetaNN::Sigmoid(gates2D_2[1]);
                 auto g_cell_candidate2 = MetaNN::Tanh(gates2D_2[2]);
                 auto o_output2 = MetaNN::Sigmoid(gates2D_2[3]);
 
                 auto previousCellState1D_2 = MetaNN::Reshape(prevCellState, MetaNN::Shape(gateWidth2));
-                auto cellStateExpr2 = f_forget2 * previousCellState1D_2 + i_input2 * g_cell_candidate2;
-                auto hiddenStateExpr2 = o_output2 * MetaNN::Tanh(cellStateExpr2);
-                auto cellState2DExpr2 = MetaNN::Reshape(cellStateExpr2, MetaNN::Shape(1, gateWidth2));
-                auto hiddenState2DExpr2 = MetaNN::Reshape(hiddenStateExpr2, MetaNN::Shape(1, gateWidth2));
-                auto cHandle = cellState2DExpr2.EvalRegister();
-                auto hHandle = hiddenState2DExpr2.EvalRegister();
+                auto cellStateExpr2 = f_forget2 * previousCellState1D_2 + i_input2 * g_cell_candidate2;   // 1D
+                auto hiddenStateExpr2 = o_output2 * MetaNN::Tanh(cellStateExpr2);                          // 1D
+
+                auto c2 = MetaNN::Reshape(cellStateExpr2, MetaNN::Shape(1, gateWidth2));
+                auto h2 = MetaNN::Reshape(hiddenStateExpr2, MetaNN::Shape(1, gateWidth2));
+
+                // Register evaluation minimally to advance state
+                auto cHandle = c2.EvalRegister();
+                auto hHandle = h2.EvalRegister();
                 auto iHandle = i_input2.EvalRegister();
                 auto fHandle = f_forget2.EvalRegister();
                 auto gHandle = g_cell_candidate2.EvalRegister();
                 auto oHandle = o_output2.EvalRegister();
                 MetaNN::EvalPlan::Inst().Eval();
 
-                StepCache sc;
-                sc.x = MetaNN::Evaluate(f_sample2); // store x_t (1,input_size)
+                StepCacheExpr sc;
+                sc.x = MetaNN::Evaluate(f_sample2);
                 sc.h_prev = MetaNN::Evaluate(prevHiddenState);
                 sc.c_prev = MetaNN::Evaluate(prevCellState);
                 sc.i = MetaNN::Evaluate(MetaNN::Reshape(iHandle.Data(), MetaNN::Shape(1, gateWidth2)));
@@ -312,226 +299,150 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             }
         }
 
-        // Gradients for parameters over the window
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_param(n_in, 4 * hidden_size);
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_bias(1, 4 * hidden_size);
+        // Prepare accumulators for gradients as concrete zero matrices
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_param_expr(param.Shape()[0], param.Shape()[1]);
         {
-            auto lowW = MetaNN::LowerAccess(d_param);
-            std::fill(lowW.MutableRawMemory(), lowW.MutableRawMemory() + n_in * 4 * hidden_size, 0.0f);
-            auto lowB = MetaNN::LowerAccess(d_bias);
-            std::fill(lowB.MutableRawMemory(), lowB.MutableRawMemory() + 4 * hidden_size, 0.0f);
+            auto low = MetaNN::LowerAccess(d_param_expr);
+            std::fill(low.MutableRawMemory(), low.MutableRawMemory() + param.Shape()[0]*param.Shape()[1], 0.0f);
+        }
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_bias_expr(bias.Shape()[0], bias.Shape()[1]);
+        {
+            auto low = MetaNN::LowerAccess(d_bias_expr);
+            std::fill(low.MutableRawMemory(), low.MutableRawMemory() + bias.Shape()[0]*bias.Shape()[1], 0.0f);
         }
 
-        // Backward through time
+        // Backward through time using MetaNN elementwise ops
         for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
         {
             const auto& sc = cache[static_cast<size_t>(tstep)];
 
-            // h_t = o_t * tanh(c_t)
-            // dL/dc_t accumulates from two paths: from h_t and from future c_{t+1}
-            // From h_t path: dL/dc_t += d_h * o_t * (1 - tanh(c_t)^2)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> tanh_c(1, hidden_size);
-            {
-                auto low = MetaNN::LowerAccess(tanh_c);
-                auto lowc = MetaNN::LowerAccess(sc.c);
-                float* m = low.MutableRawMemory();
-                const float* cm = lowc.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    float th = std::tanh(cm[j]);
-                    m[j] = th;
-                }
-            }
+            // tanh(c_t)
+            auto tanh_c = MetaNN::Tanh(sc.c);
 
-            // dL/do = d_h * tanh(c_t) * o_t * (1 - o_t)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_o(1, hidden_size);
-            // dL/dc from h path
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c_from_h(1, hidden_size);
-            {
-                auto low_do = MetaNN::LowerAccess(d_o);
-                auto low_dc_h = MetaNN::LowerAccess(d_c_from_h);
-                auto low_dh = MetaNN::LowerAccess(d_h);
-                auto low_o = MetaNN::LowerAccess(sc.o);
-                auto low_tc = MetaNN::LowerAccess(tanh_c);
-                float* p_do = low_do.MutableRawMemory();
-                float* p_dc_h = low_dc_h.MutableRawMemory();
-                const float* p_dh = low_dh.RawMemory();
-                const float* p_o = low_o.RawMemory();
-                const float* p_tc = low_tc.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    p_do[j] = p_dh[j] * p_tc[j] * p_o[j] * (1.0f - p_o[j]);
-                    p_dc_h[j] = p_dh[j] * p_o[j] * (1.0f - p_tc[j] * p_tc[j]);
-                }
-            }
+            // d_o = d_h * tanh(c_t) * o * (1 - o)
+            auto d_o = d_h * tanh_c * sc.o * (1.0f - sc.o);
 
-            // c_t = f_t * c_{t-1} + i_t * g_t
-            // dL/di = d_c * g; dL/dg = d_c * i; dL/df = d_c * c_{t-1}
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_i(1, hidden_size);
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_f(1, hidden_size);
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_g(1, hidden_size);
-            {
-                auto low_di = MetaNN::LowerAccess(d_i);
-                auto low_df = MetaNN::LowerAccess(d_f);
-                auto low_dg = MetaNN::LowerAccess(d_g);
-                auto low_dc = MetaNN::LowerAccess(d_c);
-                auto low_dc_h = MetaNN::LowerAccess(d_c_from_h);
-                auto low_i = MetaNN::LowerAccess(sc.i);
-                auto low_f = MetaNN::LowerAccess(sc.f);
-                auto low_g = MetaNN::LowerAccess(sc.g);
-                auto low_cprev = MetaNN::LowerAccess(sc.c_prev);
-                float* p_di = low_di.MutableRawMemory();
-                float* p_df = low_df.MutableRawMemory();
-                float* p_dg = low_dg.MutableRawMemory();
-                const float* p_dc = low_dc.RawMemory();
-                const float* p_dc_h = low_dc_h.RawMemory();
-                const float* p_i = low_i.RawMemory();
-                const float* p_f = low_f.RawMemory();
-                const float* p_g = low_g.RawMemory();
-                const float* p_cprev = low_cprev.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    float dct = p_dc[j] + p_dc_h[j];
-                    p_di[j] = dct * p_g[j] * p_i[j] * (1.0f - p_i[j]);
-                    p_dg[j] = dct * p_i[j] * (1.0f - p_g[j] * p_g[j]);
-                    p_df[j] = dct * p_cprev[j] * p_f[j] * (1.0f - p_f[j]);
-                }
-            }
+            // d_c_from_h = d_h * o * (1 - tanh(c_t)^2)
+            auto d_c_from_h = d_h * sc.o * (1.0f - tanh_c * tanh_c);
 
-            // Accumulate gradient wrt bias: concat of [di, df, dg, do]
-            {
-                auto lowB = MetaNN::LowerAccess(d_bias);
-                float* pb = lowB.MutableRawMemory();
-                auto low_di = MetaNN::LowerAccess(d_i);
-                auto low_df = MetaNN::LowerAccess(d_f);
-                auto low_dg = MetaNN::LowerAccess(d_g);
-                auto low_do = MetaNN::LowerAccess(d_o);
-                const float* pdi = low_di.RawMemory();
-                const float* pdf = low_df.RawMemory();
-                const float* pdg = low_dg.RawMemory();
-                const float* pdo = low_do.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    pb[0 * hidden_size + j] += pdi[j];
-                    pb[1 * hidden_size + j] += pdf[j];
-                    pb[2 * hidden_size + j] += pdg[j];
-                    pb[3 * hidden_size + j] += pdo[j];
-                }
-            }
+            // total d_c contribution at this step will be added later
+            auto dct = d_c + d_c_from_h;
 
-            // Gradient wrt param: dW += concat^T * d_preact, where d_preact = [di, df, dg, do]
-            {
-                auto lowW = MetaNN::LowerAccess(d_param);
-                float* pW = lowW.MutableRawMemory();
-                auto lowConcat = MetaNN::LowerAccess(sc.concat);
-                const float* px = lowConcat.RawMemory(); // length n_in
-                auto low_di = MetaNN::LowerAccess(d_i);
-                auto low_df = MetaNN::LowerAccess(d_f);
-                auto low_dg = MetaNN::LowerAccess(d_g);
-                auto low_do = MetaNN::LowerAccess(d_o);
-                const float* pdi = low_di.RawMemory();
-                const float* pdf = low_df.RawMemory();
-                const float* pdg = low_dg.RawMemory();
-                const float* pdo = low_do.RawMemory();
-                for (size_t r = 0; r < n_in; ++r)
-                {
-                    for (size_t j = 0; j < hidden_size; ++j)
-                    {
-                        pW[r * (4 * hidden_size) + (0 * hidden_size + j)] += px[r] * pdi[j];
-                        pW[r * (4 * hidden_size) + (1 * hidden_size + j)] += px[r] * pdf[j];
-                        pW[r * (4 * hidden_size) + (2 * hidden_size + j)] += px[r] * pdg[j];
-                        pW[r * (4 * hidden_size) + (3 * hidden_size + j)] += px[r] * pdo[j];
-                    }
-                }
-            }
+            // d_i, d_g, d_f (pre-activation gradients)
+            auto d_i = dct * sc.g * sc.i * (1.0f - sc.i);
+            auto d_g = dct * sc.i * (1.0f - sc.g * sc.g);
+            auto d_f = dct * sc.c_prev * sc.f * (1.0f - sc.f);
 
-            // Propagate to previous hidden and cell for next iteration
-            // dL/dc_{t-1} = (d_c + d_c_from_h) * f_t
-            // dL/dh_{t-1} = d_preact * W_h (the part of param corresponding to previous hidden in concat)
+            // Reshape 1D gate gradients to (1, hidden_size) for packing
+            auto di2D = MetaNN::Reshape(d_i, MetaNN::Shape(1, hidden_size));
+            auto df2D = MetaNN::Reshape(d_f, MetaNN::Shape(1, hidden_size));
+            auto dg2D = MetaNN::Reshape(d_g, MetaNN::Shape(1, hidden_size));
+            auto do2D = MetaNN::Reshape(d_o, MetaNN::Shape(1, hidden_size));
+
+            // Pack [di df dg do] into (1, 4H)
+            // Concatenate along feature dimension without MetaNN::Concat (not available)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_pre(1, 4 * hidden_size);
             {
-                auto low = MetaNN::LowerAccess(d_pre);
-                float* p = low.MutableRawMemory();
-                auto low_di = MetaNN::LowerAccess(d_i);
-                auto low_df = MetaNN::LowerAccess(d_f);
-                auto low_dg = MetaNN::LowerAccess(d_g);
-                auto low_do = MetaNN::LowerAccess(d_o);
-                const float* pdi = low_di.RawMemory();
-                const float* pdf = low_df.RawMemory();
-                const float* pdg = low_dg.RawMemory();
-                const float* pdo = low_do.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    p[0 * hidden_size + j] = pdi[j];
-                    p[1 * hidden_size + j] = pdf[j];
-                    p[2 * hidden_size + j] = pdg[j];
-                    p[3 * hidden_size + j] = pdo[j];
-                }
-            }
+                // Evaluate expressions to concrete matrices before raw access
+                auto di_eval = MetaNN::Evaluate(di2D);
+                auto df_eval = MetaNN::Evaluate(df2D);
+                auto dg_eval = MetaNN::Evaluate(dg2D);
+                auto do_eval = MetaNN::Evaluate(do2D);
 
-            // d_h_prev = d_pre * W_h^T, where W_h are the last hidden_size rows of param (within concat)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h_prev(1, hidden_size);
-            {
-                auto low_dhp = MetaNN::LowerAccess(d_h_prev);
-                float* pdhp = low_dhp.MutableRawMemory();
-                std::fill(pdhp, pdhp + hidden_size, 0.0f);
-                // param shape: (n_in, 4*hidden_size) where n_in = input_size + hidden_size
-                // The last hidden_size entries in the concat correspond to h_{t-1}
                 auto low_pre = MetaNN::LowerAccess(d_pre);
-                const float* ppre = low_pre.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    float s = 0.0f;
-                    for (size_t g = 0; g < 4; ++g)
-                    {
-                        size_t col_base = g * hidden_size;
-                        size_t row = (n_in - hidden_size) + j;
-                        for (size_t k = 0; k < hidden_size; ++k)
-                        {
-                            s += ppre[col_base + k] * param(row, col_base + k);
-                        }
-                    }
-                    pdhp[j] = s;
-                }
+                float* pre_mem = low_pre.MutableRawMemory();
+
+                auto low_di = MetaNN::LowerAccess(di_eval);
+                auto low_df = MetaNN::LowerAccess(df_eval);
+                auto low_dg = MetaNN::LowerAccess(dg_eval);
+                auto low_do = MetaNN::LowerAccess(do_eval);
+
+                const float* di_mem = low_di.RawMemory();
+                const float* df_mem = low_df.RawMemory();
+                const float* dg_mem = low_dg.RawMemory();
+                const float* do_mem = low_do.RawMemory();
+
+                // Each is shape (1, hidden_size) in row-major contiguous storage
+                std::copy(di_mem, di_mem + hidden_size, pre_mem + 0 * hidden_size);
+                std::copy(df_mem, df_mem + hidden_size, pre_mem + 1 * hidden_size);
+                std::copy(dg_mem, dg_mem + hidden_size, pre_mem + 2 * hidden_size);
+                std::copy(do_mem, do_mem + hidden_size, pre_mem + 3 * hidden_size);
             }
 
-            // d_c_prev
+            // Accumulate bias gradient
             {
-                auto low_dc = MetaNN::LowerAccess(d_c);
-                auto low_dc_h = MetaNN::LowerAccess(d_c_from_h);
-                auto low_f = MetaNN::LowerAccess(sc.f);
-                float* pdc = low_dc.MutableRawMemory();
-                const float* pdc_h = low_dc_h.RawMemory();
-                const float* pf = low_f.RawMemory();
-                for (size_t j = 0; j < hidden_size; ++j)
-                {
-                    pdc[j] = (pdc[j] + pdc_h[j]) * pf[j];
+                auto low_dst = MetaNN::LowerAccess(d_bias_expr);
+                float* dst = low_dst.MutableRawMemory();
+                auto low_src = MetaNN::LowerAccess(d_pre);
+                const float* src = low_src.RawMemory();
+                const size_t len = 4 * hidden_size;
+                for (size_t j = 0; j < len; ++j) { dst[j] += src[j]; }
+            }
+
+            // Accumulate weight gradient: concat^T * d_pre
+            auto dW_t = MetaNN::Dot(MetaNN::Transpose(sc.concat), d_pre);
+            {
+                auto dW_eval = MetaNN::Evaluate(dW_t);
+                auto low_dst = MetaNN::LowerAccess(d_param_expr);
+                float* dst = low_dst.MutableRawMemory();
+                auto low_src = MetaNN::LowerAccess(dW_eval);
+                const float* src = low_src.RawMemory();
+                const size_t rows = param.Shape()[0];
+                const size_t cols = param.Shape()[1];
+                for (size_t r = 0; r < rows; ++r) {
+                    for (size_t c = 0; c < cols; ++c) {
+                        dst[r * cols + c] += src[r * cols + c];
+                    }
                 }
             }
 
-            // Set d_h for next step
-            d_h = d_h_prev;
+            // Propagate to previous hidden: use the part of W corresponding to h_prev (last hidden_size rows of concat)
+            // Extract W_h (the block of param that maps previous hidden state) without SubMatrix
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> W_h(hidden_size, 4 * hidden_size);
+            {
+                const size_t rows = param.Shape()[0];
+                const size_t cols = param.Shape()[1];
+                const size_t rowOffset = n_in - hidden_size; // starting row index for h_prev block
+                auto low_src = MetaNN::LowerAccess(param);
+                const float* src = low_src.RawMemory();
+                auto low_dst = MetaNN::LowerAccess(W_h);
+                float* dst = low_dst.MutableRawMemory();
+                // Copy last hidden_size rows from param into W_h
+                for (size_t r = 0; r < hidden_size; ++r) {
+                    const size_t srcRow = rowOffset + r;
+                    // source row begins at srcRow * cols, copy first 4*hidden_size columns
+                    const float* srcRowPtr = src + srcRow * cols;
+                    float* dstRowPtr = dst + r * (4 * hidden_size);
+                    std::copy(srcRowPtr, srcRowPtr + (4 * hidden_size), dstRowPtr);
+                }
+            }
+            // Now compute d_h_prev = d_pre (1 x 4H) * W_h^T (4H x H) -> (1 x H)
+            auto d_h_prev = MetaNN::Dot(d_pre, MetaNN::Transpose(W_h));
+            d_h = MetaNN::Evaluate(MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, hidden_size)));
+            // Propagate to previous cell
+            d_c = MetaNN::Evaluate(MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, hidden_size)));
         }
 
-        // Apply SGD to param and bias
+        // Removed:
+        // auto d_param_eval = d_param_expr.EvalRegister();
+        // auto d_bias_eval  = d_bias_expr.EvalRegister();
+        // MetaNN::EvalPlan::Inst().Eval();
+
+        // Apply SGD to param and bias using concrete matrices directly
+        for (size_t r = 0; r < n_in; ++r)
         {
-            // param = param - lr * d_param
-            for (size_t r = 0; r < n_in; ++r)
+            for (size_t c = 0; c < 4 * hidden_size; ++c)
             {
-                for (size_t c = 0; c < 4 * hidden_size; ++c)
-                {
-                    float cur = param(r, c);
-                    float grad = d_param(r, c);
-                    param.SetValue(r, c, cur - learningRate * grad);
-                }
+                float cur = param(r, c);
+                float grad = d_param_expr(r, c);
+                param.SetValue(r, c, cur - learningRate * grad);
             }
-            // bias update
-            for (size_t j = 0; j < 4 * hidden_size; ++j)
-            {
-                float cur = bias(0, j);
-                float grad = d_bias(0, j);
-                bias.SetValue(0, j, cur - learningRate * grad);
-            }
+        }
+        for (size_t j = 0; j < 4 * hidden_size; ++j)
+        {
+            float cur = bias(0, j);
+            float grad = d_bias_expr(0, j);
+            bias.SetValue(0, j, cur - learningRate * grad);
         }
     }
 
