@@ -95,6 +95,30 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     size_t windowCount = 0;
 #endif
 
+    // Accumulate head gradients across all windows in the batch
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headW_accum(hidden_size, 1);
+    {
+        auto low = MetaNN::LowerAccess(d_headW_accum);
+        std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f);
+    }
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum(1, 1);
+    {
+        auto low = MetaNN::LowerAccess(d_headB_accum);
+        std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f);
+    }
+
+    // Accumulate LSTM core gradients across all windows in the batch
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
+    {
+        auto low = MetaNN::LowerAccess(d_param_accum);
+        std::fill(low.MutableRawMemory(), low.MutableRawMemory() + param.Shape()[0] * param.Shape()[1], 0.0f);
+    }
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_bias_accum(bias.Shape()[0], bias.Shape()[1]);
+    {
+        auto low = MetaNN::LowerAccess(d_bias_accum);
+        std::fill(low.MutableRawMemory(), low.MutableRawMemory() + bias.Shape()[0] * bias.Shape()[1], 0.0f);
+    }
+
     // Slide a 5-step window across this 15-step batch
     for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
     {
@@ -244,26 +268,30 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Backprop signal into h_T uses a snapshot of head weights (and bias for completeness)
         auto headW_snapshot = MetaNN::Evaluate(returnHeadWeight);
         auto headB_snapshot = MetaNN::Evaluate(returnHeadBias);
-        auto d_h = MetaNN::Evaluate(err * MetaNN::Transpose(headW_snapshot));
-        auto d_c = MetaNN::Evaluate(prevHiddenState * 0.0f); // zeros like h
 
-        // Gradient into head using MetaNN (lazy expressions)
+        // Gradient into head using MetaNN (lazy expressions) - accumulate for batch update
         auto d_returnHeadWeight = MetaNN::Transpose(prevHiddenState) * err; // (H x 1)
         auto d_returnHeadWeight_eval = MetaNN::Evaluate(d_returnHeadWeight);
-        for (size_t i = 0; i < hidden_size; ++i)
         {
-            const float cur  = returnHeadWeight(i, 0);
-            const float grad_w = d_returnHeadWeight_eval(i, 0);
-            returnHeadWeight.SetValue(i, 0, cur - learningRate * grad_w);
+            auto low_acc = MetaNN::LowerAccess(d_headW_accum);
+            float* acc = low_acc.MutableRawMemory();
+            auto low_src = MetaNN::LowerAccess(d_returnHeadWeight_eval);
+            const float* src = low_src.RawMemory();
+            for (size_t i = 0; i < hidden_size; ++i) { acc[i] += src[i]; }
         }
-        // Bias gradient as a lazy expression with proper shape (1 x 1)
+        // Bias gradient as a lazy expression with proper shape (1 x 1) and accumulate
         auto d_returnHeadBias_expr = headB_snapshot * 0.0f + err;
         auto d_returnHeadBias_eval = MetaNN::Evaluate(d_returnHeadBias_expr);
-        const float bcur = returnHeadBias(0, 0);
-        const float grad_b = d_returnHeadBias_eval(0, 0);
-        returnHeadBias.SetValue(0, 0, bcur - learningRate * grad_b);
+        {
+            auto low_b_acc = MetaNN::LowerAccess(d_headB_accum);
+            float* bacc = low_b_acc.MutableRawMemory();
+            auto low_b_src = MetaNN::LowerAccess(d_returnHeadBias_eval);
+            const float* bsrc = low_b_src.RawMemory();
+            bacc[0] += bsrc[0];
+        }
 
-        // Removed second forward recomputation and StepCacheExpr definition
+        auto d_h = MetaNN::Evaluate(err * MetaNN::Transpose(headW_snapshot));
+        auto d_c = MetaNN::Evaluate(prevHiddenState * 0.0f); // zeros like h
 
         // Prepare accumulators for gradients as concrete zero matrices
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_param_expr(param.Shape()[0], param.Shape()[1]);
@@ -389,27 +417,58 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             d_c = MetaNN::Evaluate(MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, hidden_size)));
         }
 
-        // Removed:
-        // auto d_param_eval = d_param_expr.EvalRegister();
-        // auto d_bias_eval  = d_bias_expr.EvalRegister();
-        // MetaNN::EvalPlan::Inst().Eval();
-
-        // Apply SGD to param and bias using concrete matrices directly
-        for (size_t r = 0; r < n_in; ++r)
+        // Accumulate LSTM core gradients for batch update
         {
-            for (size_t c = 0; c < 4 * hidden_size; ++c)
-            {
-                float cur = param(r, c);
-                float grad = d_param_expr(r, c);
-                param.SetValue(r, c, cur - learningRate * grad);
+            auto low_dst = MetaNN::LowerAccess(d_param_accum);
+            float* dst = low_dst.MutableRawMemory();
+            auto low_src = MetaNN::LowerAccess(d_param_expr);
+            const float* src = low_src.RawMemory();
+            const size_t rows = param.Shape()[0];
+            const size_t cols = param.Shape()[1];
+            for (size_t r = 0; r < rows; ++r) {
+                for (size_t c = 0; c < cols; ++c) {
+                    dst[r * cols + c] += src[r * cols + c];
+                }
             }
         }
-        for (size_t j = 0; j < 4 * hidden_size; ++j)
         {
-            float cur = bias(0, j);
-            float grad = d_bias_expr(0, j);
-            bias.SetValue(0, j, cur - learningRate * grad);
+            auto low_dst = MetaNN::LowerAccess(d_bias_accum);
+            float* dst = low_dst.MutableRawMemory();
+            auto low_src = MetaNN::LowerAccess(d_bias_expr);
+            const float* src = low_src.RawMemory();
+            const size_t len = bias.Shape()[0] * bias.Shape()[1];
+            for (size_t j = 0; j < len; ++j) { dst[j] += src[j]; }
         }
+    }
+
+    // Apply accumulated LSTM core gradients once per batch
+    for (size_t r = 0; r < n_in; ++r)
+    {
+        for (size_t c = 0; c < 4 * hidden_size; ++c)
+        {
+            float cur = param(r, c);
+            float grad = d_param_accum(r, c);
+            param.SetValue(r, c, cur - learningRate * grad);
+        }
+    }
+    for (size_t j = 0; j < 4 * hidden_size; ++j)
+    {
+        float cur = bias(0, j);
+        float grad = d_bias_accum(0, j);
+        bias.SetValue(0, 0 + j, cur - learningRate * grad);
+    }
+
+    // Apply accumulated head gradients once per batch
+    for (size_t i = 0; i < hidden_size; ++i)
+    {
+        float cur = returnHeadWeight(i, 0);
+        float grad = d_headW_accum(i, 0);
+        returnHeadWeight.SetValue(i, 0, cur - learningRate * grad);
+    }
+    {
+        float bcur = returnHeadBias(0, 0);
+        float bgrad = d_headB_accum(0, 0);
+        returnHeadBias.SetValue(0, 0, bcur - learningRate * bgrad);
     }
 
 #if LSTM_TRAINING_PROGRESS
