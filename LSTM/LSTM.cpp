@@ -30,6 +30,44 @@
 #define LSTM_DPRINT(label, mat) do {} while(0)
 #endif
 
+#ifndef LSTM_MIXED_PRECISION
+#define LSTM_MIXED_PRECISION 0
+#endif
+
+#if LSTM_MIXED_PRECISION
+using AccumScalar = double;  // higher-precision accumulation
+#else
+using AccumScalar = float;   // default accumulation precision
+#endif
+
+#ifndef LSTM_USE_GRAD_CLIP
+#define LSTM_USE_GRAD_CLIP 0
+#endif
+#ifndef LSTM_GRAD_CLIP_THRESHOLD
+#define LSTM_GRAD_CLIP_THRESHOLD 1.0f
+#endif
+
+#ifndef LSTM_OPTIMIZER_SGD
+#define LSTM_OPTIMIZER_SGD 0
+#define LSTM_OPTIMIZER_MOMENTUM 1
+#define LSTM_OPTIMIZER_ADAM 2
+#endif
+#ifndef LSTM_OPTIMIZER
+#define LSTM_OPTIMIZER LSTM_OPTIMIZER_SGD
+#endif
+#ifndef LSTM_MOMENTUM
+#define LSTM_MOMENTUM 0.9f
+#endif
+#ifndef LSTM_ADAM_BETA1
+#define LSTM_ADAM_BETA1 0.9f
+#endif
+#ifndef LSTM_ADAM_BETA2
+#define LSTM_ADAM_BETA2 0.999f
+#endif
+#ifndef LSTM_ADAM_EPS
+#define LSTM_ADAM_EPS 1e-8f
+#endif
+
 
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
 static inline float uniform_between(float low, float high) {
@@ -95,25 +133,28 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     size_t windowCount = 0;
 #endif
 
+    // Count windows in this batch for gradient averaging
+    size_t windowsInBatch = 0;
+
     // Accumulate head gradients across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headW_accum(hidden_size, 1);
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_headW_accum(hidden_size, 1);
     {
         auto low = MetaNN::LowerAccess(d_headW_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f);
     }
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum(1, 1);
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_headB_accum(1, 1);
     {
         auto low = MetaNN::LowerAccess(d_headB_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f);
     }
 
     // Accumulate LSTM core gradients across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
     {
         auto low = MetaNN::LowerAccess(d_param_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + param.Shape()[0] * param.Shape()[1], 0.0f);
     }
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_bias_accum(bias.Shape()[0], bias.Shape()[1]);
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_bias_accum(bias.Shape()[0], bias.Shape()[1]);
     {
         auto low = MetaNN::LowerAccess(d_bias_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + bias.Shape()[0] * bias.Shape()[1], 0.0f);
@@ -264,6 +305,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
         ++windowCount;
 #endif
+        ++windowsInBatch;
 
         // Backprop signal into h_T uses a snapshot of head weights (and bias for completeness)
         auto headW_snapshot = MetaNN::Evaluate(returnHeadWeight);
@@ -274,20 +316,20 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto d_returnHeadWeight_eval = MetaNN::Evaluate(d_returnHeadWeight);
         {
             auto low_acc = MetaNN::LowerAccess(d_headW_accum);
-            float* acc = low_acc.MutableRawMemory();
+            AccumScalar* acc = low_acc.MutableRawMemory();
             auto low_src = MetaNN::LowerAccess(d_returnHeadWeight_eval);
             const float* src = low_src.RawMemory();
-            for (size_t i = 0; i < hidden_size; ++i) { acc[i] += src[i]; }
+            for (size_t i = 0; i < hidden_size; ++i) { acc[i] += static_cast<AccumScalar>(src[i]); }
         }
         // Bias gradient as a lazy expression with proper shape (1 x 1) and accumulate
         auto d_returnHeadBias_expr = headB_snapshot * 0.0f + err;
         auto d_returnHeadBias_eval = MetaNN::Evaluate(d_returnHeadBias_expr);
         {
             auto low_b_acc = MetaNN::LowerAccess(d_headB_accum);
-            float* bacc = low_b_acc.MutableRawMemory();
+            AccumScalar* bacc = low_b_acc.MutableRawMemory();
             auto low_b_src = MetaNN::LowerAccess(d_returnHeadBias_eval);
             const float* bsrc = low_b_src.RawMemory();
-            bacc[0] += bsrc[0];
+            bacc[0] += static_cast<AccumScalar>(bsrc[0]);
         }
 
         auto d_h = MetaNN::Evaluate(err * MetaNN::Transpose(headW_snapshot));
@@ -420,56 +462,283 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Accumulate LSTM core gradients for batch update
         {
             auto low_dst = MetaNN::LowerAccess(d_param_accum);
-            float* dst = low_dst.MutableRawMemory();
+            AccumScalar* dst = low_dst.MutableRawMemory();
             auto low_src = MetaNN::LowerAccess(d_param_expr);
             const float* src = low_src.RawMemory();
             const size_t rows = param.Shape()[0];
             const size_t cols = param.Shape()[1];
             for (size_t r = 0; r < rows; ++r) {
                 for (size_t c = 0; c < cols; ++c) {
-                    dst[r * cols + c] += src[r * cols + c];
+                    dst[r * cols + c] += static_cast<AccumScalar>(src[r * cols + c]);
                 }
             }
         }
         {
             auto low_dst = MetaNN::LowerAccess(d_bias_accum);
-            float* dst = low_dst.MutableRawMemory();
+            AccumScalar* dst = low_dst.MutableRawMemory();
             auto low_src = MetaNN::LowerAccess(d_bias_expr);
             const float* src = low_src.RawMemory();
             const size_t len = bias.Shape()[0] * bias.Shape()[1];
-            for (size_t j = 0; j < len; ++j) { dst[j] += src[j]; }
+            for (size_t j = 0; j < len; ++j) { dst[j] += static_cast<AccumScalar>(src[j]); }
         }
     }
+
+    // Average gradients by number of windows
+    const float lrScale = (windowsInBatch > 0) ? (learningRate / static_cast<float>(windowsInBatch)) : learningRate;
+
+#if LSTM_USE_GRAD_CLIP
+    // Global norm gradient clipping across all accumulated gradients
+    double sumsq = 0.0;
+    {
+        auto low = MetaNN::LowerAccess(d_param_accum);
+        const AccumScalar* p = low.RawMemory();
+        const size_t len = param.Shape()[0] * param.Shape()[1];
+        for (size_t i = 0; i < len; ++i) { double v = static_cast<double>(p[i]); sumsq += v * v; }
+    }
+    {
+        auto low = MetaNN::LowerAccess(d_bias_accum);
+        const AccumScalar* p = low.RawMemory();
+        const size_t len = bias.Shape()[0] * bias.Shape()[1];
+        for (size_t i = 0; i < len; ++i) { double v = static_cast<double>(p[i]); sumsq += v * v; }
+    }
+    {
+        auto low = MetaNN::LowerAccess(d_headW_accum);
+        const AccumScalar* p = low.RawMemory();
+        const size_t len = hidden_size;
+        for (size_t i = 0; i < len; ++i) { double v = static_cast<double>(p[i]); sumsq += v * v; }
+    }
+    {
+        auto low = MetaNN::LowerAccess(d_headB_accum);
+        const AccumScalar* p = low.RawMemory();
+        const size_t len = 1;
+        for (size_t i = 0; i < len; ++i) { double v = static_cast<double>(p[i]); sumsq += v * v; }
+    }
+    const double global_norm = std::sqrt(sumsq);
+    if (global_norm > static_cast<double>(LSTM_GRAD_CLIP_THRESHOLD))
+    {
+        const double scale = static_cast<double>(LSTM_GRAD_CLIP_THRESHOLD) / global_norm;
+        {
+            auto low = MetaNN::LowerAccess(d_param_accum);
+            AccumScalar* p = low.MutableRawMemory();
+            const size_t len = param.Shape()[0] * param.Shape()[1];
+            for (size_t i = 0; i < len; ++i) { p[i] = static_cast<AccumScalar>(static_cast<double>(p[i]) * scale); }
+        }
+        {
+            auto low = MetaNN::LowerAccess(d_bias_accum);
+            AccumScalar* p = low.MutableRawMemory();
+            const size_t len = bias.Shape()[0] * bias.Shape()[1];
+            for (size_t i = 0; i < len; ++i) { p[i] = static_cast<AccumScalar>(static_cast<double>(p[i]) * scale); }
+        }
+        {
+            auto low = MetaNN::LowerAccess(d_headW_accum);
+            AccumScalar* p = low.MutableRawMemory();
+            const size_t len = hidden_size;
+            for (size_t i = 0; i < len; ++i) { p[i] = static_cast<AccumScalar>(static_cast<double>(p[i]) * scale); }
+        }
+        {
+            auto low = MetaNN::LowerAccess(d_headB_accum);
+            AccumScalar* p = low.MutableRawMemory();
+            const size_t len = 1;
+            for (size_t i = 0; i < len; ++i) { p[i] = static_cast<AccumScalar>(static_cast<double>(p[i]) * scale); }
+        }
+    }
+#endif
+
+    // Initialize optimizer state (Momentum/Adam) once with correct shapes
+#if (LSTM_OPTIMIZER == LSTM_OPTIMIZER_MOMENTUM) || (LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM)
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> v_param(param.Shape()[0], param.Shape()[1]);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> v_bias(bias.Shape()[0], bias.Shape()[1]);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> v_headW(hidden_size, 1);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> v_headB(1, 1);
+    static bool opt_state_initialized = false;
+#if LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> m_param(param.Shape()[0], param.Shape()[1]);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> m_bias(bias.Shape()[0], bias.Shape()[1]);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> m_headW(hidden_size, 1);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> m_headB(1, 1);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> s_param(param.Shape()[0], param.Shape()[1]);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> s_bias(bias.Shape()[0], bias.Shape()[1]);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> s_headW(hidden_size, 1);
+    static MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> s_headB(1, 1);
+    static AccumScalar beta1_pow = static_cast<AccumScalar>(1);
+    static AccumScalar beta2_pow = static_cast<AccumScalar>(1);
+    static size_t adam_step = 0;
+#endif
+    if (!opt_state_initialized)
+    {
+        auto zeroFill = [](auto& mat)
+        {
+            auto low = MetaNN::LowerAccess(mat);
+            using ElemT = typename std::remove_reference<decltype(*low.MutableRawMemory())>::type;
+            std::fill(low.MutableRawMemory(), low.MutableRawMemory() + mat.Shape()[0] * mat.Shape()[1], static_cast<ElemT>(0));
+        };
+        zeroFill(v_param); zeroFill(v_bias); zeroFill(v_headW); zeroFill(v_headB);
+#if LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
+        zeroFill(m_param); zeroFill(m_bias); zeroFill(m_headW); zeroFill(m_headB);
+        zeroFill(s_param); zeroFill(s_bias); zeroFill(s_headW); zeroFill(s_headB);
+        beta1_pow = static_cast<AccumScalar>(1);
+        beta2_pow = static_cast<AccumScalar>(1);
+        adam_step = 0;
+#endif
+        opt_state_initialized = true;
+    }
+#if LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
+    // Advance Adam step and running powers for bias correction
+    adam_step += 1;
+    beta1_pow = beta1_pow * static_cast<AccumScalar>(LSTM_ADAM_BETA1);
+    beta2_pow = beta2_pow * static_cast<AccumScalar>(LSTM_ADAM_BETA2);
+#endif
+#endif
 
     // Apply accumulated LSTM core gradients once per batch
-    for (size_t r = 0; r < n_in; ++r)
+#if LSTM_OPTIMIZER == LSTM_OPTIMIZER_MOMENTUM
     {
-        for (size_t c = 0; c < 4 * hidden_size; ++c)
+        const AccumScalar mu = static_cast<AccumScalar>(LSTM_MOMENTUM);
+        for (size_t r = 0; r < n_in; ++r)
         {
-            float cur = param(r, c);
-            float grad = d_param_accum(r, c);
-            param.SetValue(r, c, cur - learningRate * grad);
+            for (size_t c = 0; c < 4 * hidden_size; ++c)
+            {
+                AccumScalar g = d_param_accum(r, c);
+                AccumScalar v = mu * v_param(r, c) + g;
+                v_param.SetValue(r, c, v);
+                float cur = param(r, c);
+                float upd = lrScale * static_cast<float>(v);
+                param.SetValue(r, c, cur - upd);
+            }
+        }
+        for (size_t j = 0; j < 4 * hidden_size; ++j)
+        {
+            AccumScalar g = d_bias_accum(0, j);
+            AccumScalar v = mu * v_bias(0, j) + g;
+            v_bias.SetValue(0, j, v);
+            float cur = bias(0, j);
+            float upd = lrScale * static_cast<float>(v);
+            bias.SetValue(0, j, cur - upd);
         }
     }
-    for (size_t j = 0; j < 4 * hidden_size; ++j)
+#elif LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
     {
-        float cur = bias(0, j);
-        float grad = d_bias_accum(0, j);
-        bias.SetValue(0, 0 + j, cur - learningRate * grad);
+        const AccumScalar beta1 = static_cast<AccumScalar>(LSTM_ADAM_BETA1);
+        const AccumScalar beta2 = static_cast<AccumScalar>(LSTM_ADAM_BETA2);
+        const AccumScalar eps = static_cast<AccumScalar>(LSTM_ADAM_EPS);
+        for (size_t r = 0; r < n_in; ++r)
+        {
+            for (size_t c = 0; c < 4 * hidden_size; ++c)
+            {
+                AccumScalar g = d_param_accum(r, c);
+                AccumScalar m = beta1 * m_param(r, c) + (static_cast<AccumScalar>(1) - beta1) * g;
+                AccumScalar s = beta2 * s_param(r, c) + (static_cast<AccumScalar>(1) - beta2) * g * g;
+                m_param.SetValue(r, c, m);
+                s_param.SetValue(r, c, s);
+                AccumScalar mhat = m / (static_cast<AccumScalar>(1) - beta1_pow);
+                AccumScalar vhat = s / (static_cast<AccumScalar>(1) - beta2_pow);
+                float upd = lrScale * static_cast<float>( mhat / (static_cast<AccumScalar>(std::sqrt(static_cast<double>(vhat))) + eps) );
+                float cur = param(r, c);
+                param.SetValue(r, c, cur - upd);
+            }
+        }
+        for (size_t j = 0; j < 4 * hidden_size; ++j)
+        {
+            AccumScalar g = d_bias_accum(0, j);
+            AccumScalar m = beta1 * m_bias(0, j) + (static_cast<AccumScalar>(1) - beta1) * g;
+            AccumScalar s = beta2 * s_bias(0, j) + (static_cast<AccumScalar>(1) - beta2) * g * g;
+            m_bias.SetValue(0, j, m);
+            s_bias.SetValue(0, j, s);
+            AccumScalar mhat = m / (static_cast<AccumScalar>(1) - beta1_pow);
+            AccumScalar vhat = s / (static_cast<AccumScalar>(1) - beta2_pow);
+            float upd = lrScale * static_cast<float>( mhat / (static_cast<AccumScalar>(std::sqrt(static_cast<double>(vhat))) + eps) );
+            float cur = bias(0, j);
+            bias.SetValue(0, j, cur - upd);
+        }
     }
+#else
+    {
+        for (size_t r = 0; r < n_in; ++r)
+        {
+            for (size_t c = 0; c < 4 * hidden_size; ++c)
+            {
+                float cur = param(r, c);
+                float grad = static_cast<float>(d_param_accum(r, c));
+                param.SetValue(r, c, cur - lrScale * grad);
+            }
+        }
+        for (size_t j = 0; j < 4 * hidden_size; ++j)
+        {
+            float cur = bias(0, j);
+            float grad = static_cast<float>(d_bias_accum(0, j));
+            bias.SetValue(0, j, cur - lrScale * grad);
+        }
+    }
+#endif
 
     // Apply accumulated head gradients once per batch
-    for (size_t i = 0; i < hidden_size; ++i)
+#if LSTM_OPTIMIZER == LSTM_OPTIMIZER_MOMENTUM
     {
-        float cur = returnHeadWeight(i, 0);
-        float grad = d_headW_accum(i, 0);
-        returnHeadWeight.SetValue(i, 0, cur - learningRate * grad);
+        const AccumScalar mu = static_cast<AccumScalar>(LSTM_MOMENTUM);
+        for (size_t i = 0; i < hidden_size; ++i)
+        {
+            AccumScalar g = d_headW_accum(i, 0);
+            AccumScalar v = mu * v_headW(i, 0) + g;
+            v_headW.SetValue(i, 0, v);
+            float cur = returnHeadWeight(i, 0);
+            float upd = lrScale * static_cast<float>(v);
+            returnHeadWeight.SetValue(i, 0, cur - upd);
+        }
+        {
+            AccumScalar g = d_headB_accum(0, 0);
+            AccumScalar v = mu * v_headB(0, 0) + g;
+            v_headB.SetValue(0, 0, v);
+            float bcur = returnHeadBias(0, 0);
+            float upd = lrScale * static_cast<float>(v);
+            returnHeadBias.SetValue(0, 0, bcur - upd);
+        }
     }
+#elif LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
     {
-        float bcur = returnHeadBias(0, 0);
-        float bgrad = d_headB_accum(0, 0);
-        returnHeadBias.SetValue(0, 0, bcur - learningRate * bgrad);
+        const AccumScalar beta1 = static_cast<AccumScalar>(LSTM_ADAM_BETA1);
+        const AccumScalar beta2 = static_cast<AccumScalar>(LSTM_ADAM_BETA2);
+        const AccumScalar eps = static_cast<AccumScalar>(LSTM_ADAM_EPS);
+        for (size_t i = 0; i < hidden_size; ++i)
+        {
+            AccumScalar g = d_headW_accum(i, 0);
+            AccumScalar m = beta1 * m_headW(i, 0) + (static_cast<AccumScalar>(1) - beta1) * g;
+            AccumScalar s = beta2 * s_headW(i, 0) + (static_cast<AccumScalar>(1) - beta2) * g * g;
+            m_headW.SetValue(i, 0, m);
+            s_headW.SetValue(i, 0, s);
+            AccumScalar mhat = m / (static_cast<AccumScalar>(1) - beta1_pow);
+            AccumScalar vhat = s / (static_cast<AccumScalar>(1) - beta2_pow);
+            float upd = lrScale * static_cast<float>( mhat / (static_cast<AccumScalar>(std::sqrt(static_cast<double>(vhat))) + eps) );
+            float cur = returnHeadWeight(i, 0);
+            returnHeadWeight.SetValue(i, 0, cur - upd);
+        }
+        {
+            AccumScalar g = d_headB_accum(0, 0);
+            AccumScalar m = beta1 * m_headB(0, 0) + (static_cast<AccumScalar>(1) - beta1) * g;
+            AccumScalar s = beta2 * s_headB(0, 0) + (static_cast<AccumScalar>(1) - beta2) * g * g;
+            m_headB.SetValue(0, 0, m);
+            s_headB.SetValue(0, 0, s);
+            AccumScalar mhat = m / (static_cast<AccumScalar>(1) - beta1_pow);
+            AccumScalar vhat = s / (static_cast<AccumScalar>(1) - beta2_pow);
+            float upd = lrScale * static_cast<float>( mhat / (static_cast<AccumScalar>(std::sqrt(static_cast<double>(vhat))) + eps) );
+            float bcur = returnHeadBias(0, 0);
+            returnHeadBias.SetValue(0, 0, bcur - upd);
+        }
     }
+#else
+    {
+        for (size_t i = 0; i < hidden_size; ++i)
+        {
+            float cur = returnHeadWeight(i, 0);
+            float grad = static_cast<float>(d_headW_accum(i, 0));
+            returnHeadWeight.SetValue(i, 0, cur - lrScale * grad);
+        }
+        {
+            float bcur = returnHeadBias(0, 0);
+            float bgrad = static_cast<float>(d_headB_accum(0, 0));
+            returnHeadBias.SetValue(0, 0, bcur - lrScale * bgrad);
+        }
+    }
+#endif
 
 #if LSTM_TRAINING_PROGRESS
     if (windowCount > 0) {
