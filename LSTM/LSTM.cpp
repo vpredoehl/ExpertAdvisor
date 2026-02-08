@@ -21,6 +21,16 @@
 #endif
 
 
+// Debug helpers: compile out debug code and prints when disabled
+#if LSTM_DEBUG_PRINTS
+#define LSTM_DEBUG(code) do { code } while(0)
+#define LSTM_DPRINT(label, mat) printMatrix(label, mat)
+#else
+#define LSTM_DEBUG(code) do {} while(0)
+#define LSTM_DPRINT(label, mat) do {} while(0)
+#endif
+
+
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
 static inline float uniform_between(float low, float high) {
     thread_local std::mt19937 rng{ std::random_device{}() };
@@ -90,14 +100,31 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     {
         // Reset states for an independent window
         ResetPreviousState();
+
+        struct StepCache
+        {
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> x;      // (1, input_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> h_prev; // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> c_prev; // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> i;      // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> f;      // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> g;      // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> o;      // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> c;      // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> h;      // (1, hidden_size)
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> concat; // (1, n_in)
+        };
+
+        std::vector<StepCache> cache;
+        cache.reserve(window_size);
+
         // Build a 5-step window starting at 'start' using the const iterator overload
         Window w = t.GetWindow(window_start);
 
         for(const auto& f_sample : w)
         {
-#if LSTM_DEBUG_PRINTS
-                printMatrix("Feature", f_sample);
-#endif
+            LSTM_DPRINT("Feature", f_sample);
+
             const size_t featWidth = f_sample.Shape()[1];
             // Concatenate [x_t, h_{t-1}] into a contiguous row without element-wise loops
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> InputAndPrevHidden(1, n_in);
@@ -113,9 +140,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
                 const float* h_mem = low_h.RawMemory();
                 std::copy(h_mem, h_mem + hidden_size, concat_mem + featWidth);
             }
-#if LSTM_DEBUG_PRINTS
-            printMatrix("Concatenated [x_t|h_{t-1}]", InputAndPrevHidden);
-#endif
+            LSTM_DPRINT("Concatenated [x_t|h_{t-1}]", InputAndPrevHidden);
+
             auto yExpr = MetaNN::Dot(InputAndPrevHidden,  param) + bias;
 
             // Split gates as a (4 x gateWidth) view
@@ -129,8 +155,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto o_output = MetaNN::Sigmoid(gates2D[3]);
 
             // Debug: evaluate and print gate activations
-#if LSTM_DEBUG_PRINTS
-            {
+            LSTM_DEBUG({
                 auto inputGateHandle = i_input.EvalRegister();
                 auto forgetGateHandle = f_forget.EvalRegister();
                 auto cellCandidateHandle = g_cell_candidate.EvalRegister();
@@ -140,14 +165,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
                 auto forgetGateMatrix = MetaNN::Reshape(forgetGateHandle.Data(), MetaNN::Shape(1, gateWidth));
                 auto cellCandidateMatrix = MetaNN::Reshape(cellCandidateHandle.Data(), MetaNN::Shape(1, gateWidth));
                 auto outputGateMatrix = MetaNN::Reshape(outputGateHandle.Data(), MetaNN::Shape(1, gateWidth));
-                printMatrix("Input gate (i)", inputGateMatrix);
-                printMatrix("Forget gate (f)", forgetGateMatrix);
-                printMatrix("Cell candidate (g)", cellCandidateMatrix);
-                printMatrix("Output gate (o)", outputGateMatrix);
-            }
-            printMatrix("Previous hidden state", prevHiddenState);
-            printMatrix("Previous cell state", prevCellState);
-#endif
+                LSTM_DPRINT("Input gate (i)", inputGateMatrix);
+                LSTM_DPRINT("Forget gate (f)", forgetGateMatrix);
+                LSTM_DPRINT("Cell candidate (g)", cellCandidateMatrix);
+                LSTM_DPRINT("Output gate (o)", outputGateMatrix);
+                LSTM_DPRINT("Previous hidden state", prevHiddenState);
+                LSTM_DPRINT("Previous cell state", prevCellState);
+            });
 
             // View previousCellState as 1D
             auto previousCellState1D = MetaNN::Reshape(prevCellState, MetaNN::Shape(gateWidth));
@@ -163,18 +187,31 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto hiddenStateHandle = hiddenState2DExpr.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
 
-#if LSTM_DEBUG_PRINTS
-            {
+            LSTM_DEBUG({
                 auto cellStateMatrix = MetaNN::Reshape(cellStateHandle.Data(), MetaNN::Shape(1, gateWidth));
                 auto hiddenStateMatrix = MetaNN::Reshape(hiddenStateHandle.Data(), MetaNN::Shape(1, gateWidth));
-                printMatrix("Cell state c_t", cellStateMatrix);
-                printMatrix("Hidden state h_t", hiddenStateMatrix);
-            }
-#endif
+                LSTM_DPRINT("Cell state c_t", cellStateMatrix);
+                LSTM_DPRINT("Hidden state h_t", hiddenStateMatrix);
+            });
 
-            // Assign back to persistent states
+            // Cache this step's intermediates BEFORE updating persistent states
+            StepCache sc;
+            sc.x = MetaNN::Evaluate(f_sample);
+            sc.h_prev = MetaNN::Evaluate(prevHiddenState);
+            sc.c_prev = MetaNN::Evaluate(MetaNN::Reshape(previousCellState1D, MetaNN::Shape(1, hidden_size)));
+            sc.i = MetaNN::Evaluate(MetaNN::Reshape(i_input, MetaNN::Shape(1, hidden_size)));
+            sc.f = MetaNN::Evaluate(MetaNN::Reshape(f_forget, MetaNN::Shape(1, hidden_size)));
+            sc.g = MetaNN::Evaluate(MetaNN::Reshape(g_cell_candidate, MetaNN::Shape(1, hidden_size)));
+            sc.o = MetaNN::Evaluate(MetaNN::Reshape(o_output, MetaNN::Shape(1, hidden_size)));
+            sc.c = MetaNN::Evaluate(cellStateHandle.Data());
+            sc.h = MetaNN::Evaluate(hiddenStateHandle.Data());
+            sc.concat = InputAndPrevHidden;
+
+            // Now update persistent states
             prevCellState = cellStateHandle.Data();
             prevHiddenState = hiddenStateHandle.Data();
+
+            cache.push_back(std::move(sc));
         }
 
         // ---- BPTT for next-step return (regression) ----
@@ -204,100 +241,29 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         ++windowCount;
 #endif
 
-        // Gradient into head using MetaNN
-        auto last_hidden_state_eval = MetaNN::Evaluate(prevHiddenState);
-        for (size_t i = 0; i < hidden_size; ++i)
-        {
-            const float grad_w = last_hidden_state_eval(0, i) * err;
-            const float cur  = returnHeadWeight(i, 0);
-            returnHeadWeight.SetValue(i, 0, cur - learningRate * grad_w);
-        }
-        const float bcur = returnHeadBias(0, 0);
-        returnHeadBias.SetValue(0, 0, bcur - learningRate * err);
-
-        // Backprop signal into h_T and c_T using MetaNN expressions
-        auto d_h = MetaNN::Evaluate(prevHiddenState * 0.0f + err * MetaNN::Transpose(returnHeadWeight));
+        // Backprop signal into h_T uses a snapshot of head weights (and bias for completeness)
+        auto headW_snapshot = MetaNN::Evaluate(returnHeadWeight);
+        auto headB_snapshot = MetaNN::Evaluate(returnHeadBias);
+        auto d_h = MetaNN::Evaluate(err * MetaNN::Transpose(headW_snapshot));
         auto d_c = MetaNN::Evaluate(prevHiddenState * 0.0f); // zeros like h
 
-        // Define a lightweight cache that stores only expressions and concatenated input
-        struct StepCacheExpr {
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> x;      // (1, input_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> h_prev; // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> c_prev; // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> i;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> f;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> g;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> o;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> c;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> h;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> concat; // (1, n_in)
-        };
-
-        std::vector<StepCacheExpr> cache;
-        cache.reserve(window_size);
-
-        // Recompute forward pass for caching with deferred evaluation
-        ResetPreviousState();
+        // Gradient into head using MetaNN (lazy expressions)
+        auto d_returnHeadWeight = MetaNN::Transpose(prevHiddenState) * err; // (H x 1)
+        auto d_returnHeadWeight_eval = MetaNN::Evaluate(d_returnHeadWeight);
+        for (size_t i = 0; i < hidden_size; ++i)
         {
-            Window w2 = t.GetWindow(window_start);
-            for (const auto& f_sample2 : w2)
-            {
-                const size_t featWidth2 = f_sample2.Shape()[1];
-                MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> concat(1, n_in);
-                {
-                    auto lowConcat = MetaNN::LowerAccess(concat);
-                    float* concat_mem = lowConcat.MutableRawMemory();
-                    auto low_f = MetaNN::LowerAccess(f_sample2);
-                    const float* f_mem = low_f.RawMemory();
-                    std::copy(f_mem, f_mem + featWidth2, concat_mem);
-                    auto low_h = MetaNN::LowerAccess(prevHiddenState);
-                    const float* h_mem = low_h.RawMemory();
-                    std::copy(h_mem, h_mem + hidden_size, concat_mem + featWidth2);
-                }
-
-                auto yExpr2 = MetaNN::Dot(concat,  param) + bias;                 // (1, 4H)
-                const size_t gateWidth2 = yExpr2.Shape()[1] / 4;                   // H
-                auto gates2D_2 = MetaNN::Reshape(yExpr2, MetaNN::Shape(4, gateWidth2));
-
-                auto i_input2 = MetaNN::Sigmoid(gates2D_2[0]);
-                auto f_forget2 = MetaNN::Sigmoid(gates2D_2[1]);
-                auto g_cell_candidate2 = MetaNN::Tanh(gates2D_2[2]);
-                auto o_output2 = MetaNN::Sigmoid(gates2D_2[3]);
-
-                auto previousCellState1D_2 = MetaNN::Reshape(prevCellState, MetaNN::Shape(gateWidth2));
-                auto cellStateExpr2 = f_forget2 * previousCellState1D_2 + i_input2 * g_cell_candidate2;   // 1D
-                auto hiddenStateExpr2 = o_output2 * MetaNN::Tanh(cellStateExpr2);                          // 1D
-
-                auto c2 = MetaNN::Reshape(cellStateExpr2, MetaNN::Shape(1, gateWidth2));
-                auto h2 = MetaNN::Reshape(hiddenStateExpr2, MetaNN::Shape(1, gateWidth2));
-
-                // Register evaluation minimally to advance state
-                auto cHandle = c2.EvalRegister();
-                auto hHandle = h2.EvalRegister();
-                auto iHandle = i_input2.EvalRegister();
-                auto fHandle = f_forget2.EvalRegister();
-                auto gHandle = g_cell_candidate2.EvalRegister();
-                auto oHandle = o_output2.EvalRegister();
-                MetaNN::EvalPlan::Inst().Eval();
-
-                StepCacheExpr sc;
-                sc.x = MetaNN::Evaluate(f_sample2);
-                sc.h_prev = MetaNN::Evaluate(prevHiddenState);
-                sc.c_prev = MetaNN::Evaluate(prevCellState);
-                sc.i = MetaNN::Evaluate(MetaNN::Reshape(iHandle.Data(), MetaNN::Shape(1, gateWidth2)));
-                sc.f = MetaNN::Evaluate(MetaNN::Reshape(fHandle.Data(), MetaNN::Shape(1, gateWidth2)));
-                sc.g = MetaNN::Evaluate(MetaNN::Reshape(gHandle.Data(), MetaNN::Shape(1, gateWidth2)));
-                sc.o = MetaNN::Evaluate(MetaNN::Reshape(oHandle.Data(), MetaNN::Shape(1, gateWidth2)));
-                sc.c = MetaNN::Evaluate(cHandle.Data());
-                sc.h = MetaNN::Evaluate(hHandle.Data());
-                sc.concat = concat;
-
-                prevCellState = sc.c;
-                prevHiddenState = sc.h;
-
-                cache.push_back(std::move(sc));
-            }
+            const float cur  = returnHeadWeight(i, 0);
+            const float grad_w = d_returnHeadWeight_eval(i, 0);
+            returnHeadWeight.SetValue(i, 0, cur - learningRate * grad_w);
         }
+        // Bias gradient as a lazy expression with proper shape (1 x 1)
+        auto d_returnHeadBias_expr = headB_snapshot * 0.0f + err;
+        auto d_returnHeadBias_eval = MetaNN::Evaluate(d_returnHeadBias_expr);
+        const float bcur = returnHeadBias(0, 0);
+        const float grad_b = d_returnHeadBias_eval(0, 0);
+        returnHeadBias.SetValue(0, 0, bcur - learningRate * grad_b);
+
+        // Removed second forward recomputation and StepCacheExpr definition
 
         // Prepare accumulators for gradients as concrete zero matrices
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_param_expr(param.Shape()[0], param.Shape()[1]);
