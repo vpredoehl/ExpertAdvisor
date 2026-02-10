@@ -61,6 +61,7 @@
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
 		084505652048CAB900A0B88F /* PricePoint.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PricePoint.hpp; sourceTree = "<group>"; };
 		0851AB082F0A233A00C48FFE /* Tensor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = Tensor.cpp; path = LSTM/Tensor.cpp; sourceTree = SOURCE_ROOT; };
+		086BEC082F397572009326B6 /* MatrixUtils.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = MatrixUtils.hpp; sourceTree = "<group>"; };
 		0890B6A42F1DC54900CEDECF /* LSTM.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = LSTM.cpp; sourceTree = "<group>"; };
 		0896002D22A86B8A0093513A /* ee.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = ee.pgsql; sourceTree = "<group>"; };
 		0896002E22A86B8A0093513A /* rmp_cursor.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = rmp_cursor.pgsql; sourceTree = "<group>"; };
@@ -129,6 +130,7 @@
 		08BF4E4820A933FB00B6F81D /* Headers */ = {
 			isa = PBXGroup;
 			children = (
+				086BEC082F397572009326B6 /* MatrixUtils.hpp */,
 				08B4021A2F31A8960032D23A /* Params.hpp */,
 				08403E9A2F1DDA2F004742A5 /* LSTM.hpp */,
 				08403E922F1DD75E004742A5 /* Tensor.hpp */,

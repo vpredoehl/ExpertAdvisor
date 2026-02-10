@@ -8,9 +8,11 @@
 
 #include <random>
 #include <cmath>
+#include <algorithm>
 
 #include "LSTM.hpp"
 #include "Tensor.hpp"
+#include "MatrixUtils.hpp"
 
 #ifndef LSTM_DEBUG_PRINTS
 #define LSTM_DEBUG_PRINTS 0
@@ -350,34 +352,30 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto dg2D = MetaNN::Reshape(d_g, MetaNN::Shape(1, hidden_size));
             auto do2D = MetaNN::Reshape(d_o, MetaNN::Shape(1, hidden_size));
 
-            // Pack [di df dg do] into (1, 4H)
-            // Concatenate along feature dimension without MetaNN::Concat (not available)
+            // Evaluate reshaped expressions to concrete matrices so we can take raw pointers
+            auto di2Dm = MetaNN::Evaluate(di2D);
+            auto df2Dm = MetaNN::Evaluate(df2D);
+            auto dg2Dm = MetaNN::Evaluate(dg2D);
+            auto do2Dm = MetaNN::Evaluate(do2D);
+
+            // Pack [di df dg do] into (1, 4H) manually (MetaNN has no Concat helper)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_pre(1, 4 * hidden_size);
             {
-                // Evaluate expressions to concrete matrices before raw access
-                auto di_eval = MetaNN::Evaluate(di2D);
-                auto df_eval = MetaNN::Evaluate(df2D);
-                auto dg_eval = MetaNN::Evaluate(dg2D);
-                auto do_eval = MetaNN::Evaluate(do2D);
+                auto low_dst = MetaNN::LowerAccess(d_pre);
+                float* dst = low_dst.MutableRawMemory();
 
-                auto low_pre = MetaNN::LowerAccess(d_pre);
-                float* pre_mem = low_pre.MutableRawMemory();
+                auto copyRow = [&](const MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>& src, size_t colOffset)
+                {
+                    auto low_src = MetaNN::LowerAccess(src);
+                    const float* s = low_src.RawMemory();
+                    // src is (1 x hidden_size): copy contiguous row into dst at offset
+                    std::copy(s, s + hidden_size, dst + colOffset);
+                };
 
-                auto low_di = MetaNN::LowerAccess(di_eval);
-                auto low_df = MetaNN::LowerAccess(df_eval);
-                auto low_dg = MetaNN::LowerAccess(dg_eval);
-                auto low_do = MetaNN::LowerAccess(do_eval);
-
-                const float* di_mem = low_di.RawMemory();
-                const float* df_mem = low_df.RawMemory();
-                const float* dg_mem = low_dg.RawMemory();
-                const float* do_mem = low_do.RawMemory();
-
-                // Each is shape (1, hidden_size) in row-major contiguous storage
-                std::copy(di_mem, di_mem + hidden_size, pre_mem + 0 * hidden_size);
-                std::copy(df_mem, df_mem + hidden_size, pre_mem + 1 * hidden_size);
-                std::copy(dg_mem, dg_mem + hidden_size, pre_mem + 2 * hidden_size);
-                std::copy(do_mem, do_mem + hidden_size, pre_mem + 3 * hidden_size);
+                copyRow(di2Dm, 0 * hidden_size);
+                copyRow(df2Dm, 1 * hidden_size);
+                copyRow(dg2Dm, 2 * hidden_size);
+                copyRow(do2Dm, 3 * hidden_size);
             }
 
             // Lazy accumulation into per-window gradient expressions
@@ -392,23 +390,21 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             }
 
             // Propagate to previous hidden: use the part of W corresponding to h_prev (last hidden_size rows of concat)
-            // Extract W_h (the block of param that maps previous hidden state) without SubMatrix
+            // Build W_h as a concrete (hidden_size x 4*hidden_size) block copied from the bottom of param
+            const size_t rowOffset = n_in - hidden_size;
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> W_h(hidden_size, 4 * hidden_size);
             {
-                const size_t rows = param.Shape()[0];
-                const size_t cols = param.Shape()[1];
-                const size_t rowOffset = n_in - hidden_size; // starting row index for h_prev block
                 auto low_src = MetaNN::LowerAccess(param);
-                const float* src = low_src.RawMemory();
                 auto low_dst = MetaNN::LowerAccess(W_h);
+                const float* src = low_src.RawMemory();
                 float* dst = low_dst.MutableRawMemory();
-                // Copy last hidden_size rows from param into W_h
-                for (size_t r = 0; r < hidden_size; ++r) {
+                const size_t srcCols = param.Shape()[1]; // 4 * hidden_size
+                for (size_t r = 0; r < hidden_size; ++r)
+                {
                     const size_t srcRow = rowOffset + r;
-                    // source row begins at srcRow * cols, copy first 4*hidden_size columns
-                    const float* srcRowPtr = src + srcRow * cols;
-                    float* dstRowPtr = dst + r * (4 * hidden_size);
-                    std::copy(srcRowPtr, srcRowPtr + (4 * hidden_size), dstRowPtr);
+                    const float* srcRowPtr = src + srcRow * srcCols;
+                    float* dstRowPtr = dst + r * srcCols;
+                    std::copy(srcRowPtr, srcRowPtr + srcCols, dstRowPtr);
                 }
             }
             // Now compute d_h_prev = d_pre (1 x 4H) * W_h^T (4H x H) -> (1 x H)
