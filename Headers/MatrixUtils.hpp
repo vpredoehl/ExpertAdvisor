@@ -132,5 +132,26 @@ MetaNN::Matrix<T, DevTag> TakeLeftCols(const MetaNN::Matrix<T, DevTag>& src,
     return SliceCols<T, DevTag>(src, /*colOffset*/ 0, colCount);
 }
 
+// View (no-copy): create a matrix referencing a contiguous range of rows.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> ViewRows(const MetaNN::Matrix<T, DevTag>& src,
+                                   size_t rowOffset,
+                                   size_t rowCount)
+{
+    const size_t cols = src.Shape()[1];
+    auto lowSrc = MetaNN::LowerAccess(src);
+    auto mem = lowSrc.SharedMemory().Shift(rowOffset * cols);
+    return MetaNN::Matrix<T, DevTag>(mem, MetaNN::Shape(rowCount, cols));
+}
+
+// Convenience: view the bottom N rows (no copy).
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> ViewBottomRows(const MetaNN::Matrix<T, DevTag>& src,
+                                         size_t rowCount)
+{
+    const size_t rows = src.Shape()[0];
+    return ViewRows<T, DevTag>(src, rows - rowCount, rowCount);
+}
+
 } // namespace NNUtils
 

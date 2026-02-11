@@ -361,7 +361,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
             // Propagate to previous hidden: use the part of W corresponding to h_prev (last hidden_size rows of concat)
             // Build W_h as a concrete (hidden_size x 4*hidden_size) block copied from the bottom of param
-            auto W_h = NNUtils::TakeBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
+            auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
 
             // Now compute d_h_prev = d_pre (1 x 4H) * W_h^T (4H x H) -> (1 x H)
             auto d_h_prev = MetaNN::Dot(d_pre, MetaNN::Transpose(W_h));
