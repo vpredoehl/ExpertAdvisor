@@ -503,80 +503,108 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 #if LSTM_OPTIMIZER == LSTM_OPTIMIZER_MOMENTUM
     {
         const AccumScalar mu = static_cast<AccumScalar>(LSTM_MOMENTUM);
-        for (size_t r = 0; r < n_in; ++r)
+        // Update velocity lazily
+        v_param = MetaNN::Evaluate(mu * v_param + d_param_accum);
+        v_bias  = MetaNN::Evaluate(mu * v_bias  + d_bias_accum);
+
+        // Convert accumulated velocities to float for application to float params
+        auto toFloat = [](const auto& src)
+            -> MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>
         {
-            for (size_t c = 0; c < 4 * hidden_size; ++c)
-            {
-                AccumScalar g = d_param_accum(r, c);
-                AccumScalar v = mu * v_param(r, c) + g;
-                v_param.SetValue(r, c, v);
-                float cur = param(r, c);
-                float upd = lrScale * static_cast<float>(v);
-                param.SetValue(r, c, cur - upd);
-            }
-        }
-        for (size_t j = 0; j < 4 * hidden_size; ++j)
-        {
-            AccumScalar g = d_bias_accum(0, j);
-            AccumScalar v = mu * v_bias(0, j) + g;
-            v_bias.SetValue(0, j, v);
-            float cur = bias(0, j);
-            float upd = lrScale * static_cast<float>(v);
-            bias.SetValue(0, j, cur - upd);
-        }
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> dst(src.Shape()[0], src.Shape()[1]);
+            auto lowSrc = MetaNN::LowerAccess(src);
+            auto lowDst = MetaNN::LowerAccess(dst);
+            const auto* s = lowSrc.RawMemory();
+            float* d = lowDst.MutableRawMemory();
+            const size_t len = src.Shape()[0] * src.Shape()[1];
+            for (size_t i = 0; i < len; ++i) d[i] = static_cast<float>(s[i]);
+            return dst;
+        };
+        auto v_param_f = toFloat(v_param);
+        auto v_bias_f  = toFloat(v_bias);
+
+        // Apply updates in a single lazy expression
+        param = MetaNN::Evaluate(param - lrScale * v_param_f);
+        bias  = MetaNN::Evaluate(bias  - lrScale * v_bias_f);
     }
 #elif LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
     {
         const AccumScalar beta1 = static_cast<AccumScalar>(LSTM_ADAM_BETA1);
         const AccumScalar beta2 = static_cast<AccumScalar>(LSTM_ADAM_BETA2);
-        const AccumScalar eps = static_cast<AccumScalar>(LSTM_ADAM_EPS);
-        for (size_t r = 0; r < n_in; ++r)
+        const AccumScalar eps   = static_cast<AccumScalar>(LSTM_ADAM_EPS);
+
+        // Update first and second moments lazily
+        m_param = MetaNN::Evaluate(beta1 * m_param + (static_cast<AccumScalar>(1) - beta1) * d_param_accum);
+        s_param = MetaNN::Evaluate(beta2 * s_param + (static_cast<AccumScalar>(1) - beta2) * (d_param_accum * d_param_accum));
+        m_bias  = MetaNN::Evaluate(beta1 * m_bias  + (static_cast<AccumScalar>(1) - beta1) * d_bias_accum);
+        s_bias  = MetaNN::Evaluate(beta2 * s_bias  + (static_cast<AccumScalar>(1) - beta2) * (d_bias_accum * d_bias_accum));
+
+        // Bias correction (matrix divided by scalar is supported lazily)
+        auto mhat_param = MetaNN::Evaluate(m_param / (static_cast<AccumScalar>(1) - beta1_pow));
+        auto vhat_param = MetaNN::Evaluate(s_param / (static_cast<AccumScalar>(1) - beta2_pow));
+        auto mhat_bias  = MetaNN::Evaluate(m_bias  / (static_cast<AccumScalar>(1) - beta1_pow));
+        auto vhat_bias  = MetaNN::Evaluate(s_bias  / (static_cast<AccumScalar>(1) - beta2_pow));
+
+        // Compute update = lrScale * mhat / (sqrt(vhat) + eps)
+        // If sqrt is not available as a MetaNN op, perform elementwise sqrt on concrete buffers,
+        // then apply the final param/bias updates lazily.
+        auto lowMhatP = MetaNN::LowerAccess(mhat_param);
+        auto lowVhatP = MetaNN::LowerAccess(vhat_param);
+        auto lowMhatB = MetaNN::LowerAccess(mhat_bias);
+        auto lowVhatB = MetaNN::LowerAccess(vhat_bias);
+
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> upd_param_f(n_in, 4 * hidden_size);
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> upd_bias_f(1, 4 * hidden_size);
         {
-            for (size_t c = 0; c < 4 * hidden_size; ++c)
+            auto dstP = MetaNN::LowerAccess(upd_param_f).MutableRawMemory();
+            const auto* mP = lowMhatP.RawMemory();
+            const auto* vP = lowVhatP.RawMemory();
+            const size_t lenP = static_cast<size_t>(n_in) * static_cast<size_t>(4 * hidden_size);
+            for (size_t i = 0; i < lenP; ++i)
             {
-                AccumScalar g = d_param_accum(r, c);
-                AccumScalar m = beta1 * m_param(r, c) + (static_cast<AccumScalar>(1) - beta1) * g;
-                AccumScalar s = beta2 * s_param(r, c) + (static_cast<AccumScalar>(1) - beta2) * g * g;
-                m_param.SetValue(r, c, m);
-                s_param.SetValue(r, c, s);
-                AccumScalar mhat = m / (static_cast<AccumScalar>(1) - beta1_pow);
-                AccumScalar vhat = s / (static_cast<AccumScalar>(1) - beta2_pow);
-                float upd = lrScale * static_cast<float>( mhat / (static_cast<AccumScalar>(std::sqrt(static_cast<double>(vhat))) + eps) );
-                float cur = param(r, c);
-                param.SetValue(r, c, cur - upd);
+                double denom = std::sqrt(static_cast<double>(vP[i])) + static_cast<double>(eps);
+                double upd   = static_cast<double>(lrScale) * static_cast<double>(mP[i]) / denom;
+                dstP[i] = static_cast<float>(upd);
             }
         }
-        for (size_t j = 0; j < 4 * hidden_size; ++j)
         {
-            AccumScalar g = d_bias_accum(0, j);
-            AccumScalar m = beta1 * m_bias(0, j) + (static_cast<AccumScalar>(1) - beta1) * g;
-            AccumScalar s = beta2 * s_bias(0, j) + (static_cast<AccumScalar>(1) - beta2) * g * g;
-            m_bias.SetValue(0, j, m);
-            s_bias.SetValue(0, j, s);
-            AccumScalar mhat = m / (static_cast<AccumScalar>(1) - beta1_pow);
-            AccumScalar vhat = s / (static_cast<AccumScalar>(1) - beta2_pow);
-            float upd = lrScale * static_cast<float>( mhat / (static_cast<AccumScalar>(std::sqrt(static_cast<double>(vhat))) + eps) );
-            float cur = bias(0, j);
-            bias.SetValue(0, j, cur - upd);
+            auto dstB = MetaNN::LowerAccess(upd_bias_f).MutableRawMemory();
+            const auto* mB = lowMhatB.RawMemory();
+            const auto* vB = lowVhatB.RawMemory();
+            const size_t lenB = static_cast<size_t>(4 * hidden_size);
+            for (size_t i = 0; i < lenB; ++i)
+            {
+                double denom = std::sqrt(static_cast<double>(vB[i])) + static_cast<double>(eps);
+                double upd   = static_cast<double>(lrScale) * static_cast<double>(mB[i]) / denom;
+                dstB[i] = static_cast<float>(upd);
+            }
         }
+
+        // Apply in a single lazy expression
+        param = MetaNN::Evaluate(param - upd_param_f);
+        bias  = MetaNN::Evaluate(bias  - upd_bias_f);
     }
 #else
     {
-        for (size_t r = 0; r < n_in; ++r)
+        // Convert accumulated gradients to float
+        auto toFloat = [](const auto& src)
+            -> MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>
         {
-            for (size_t c = 0; c < 4 * hidden_size; ++c)
-            {
-                float cur = param(r, c);
-                float grad = static_cast<float>(d_param_accum(r, c));
-                param.SetValue(r, c, cur - lrScale * grad);
-            }
-        }
-        for (size_t j = 0; j < 4 * hidden_size; ++j)
-        {
-            float cur = bias(0, j);
-            float grad = static_cast<float>(d_bias_accum(0, j));
-            bias.SetValue(0, j, cur - lrScale * grad);
-        }
+            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> dst(src.Shape()[0], src.Shape()[1]);
+            auto lowSrc = MetaNN::LowerAccess(src);
+            auto lowDst = MetaNN::LowerAccess(dst);
+            const auto* s = lowSrc.RawMemory();
+            float* d = lowDst.MutableRawMemory();
+            const size_t len = src.Shape()[0] * src.Shape()[1];
+            for (size_t i = 0; i < len; ++i) d[i] = static_cast<float>(s[i]);
+            return dst;
+        };
+        auto d_param_f = toFloat(d_param_accum);
+        auto d_bias_f  = toFloat(d_bias_accum);
+
+        // Apply in a single lazy expression
+        param = MetaNN::Evaluate(param - lrScale * d_param_f);
+        bias  = MetaNN::Evaluate(bias  - lrScale * d_bias_f);
     }
 #endif
 
