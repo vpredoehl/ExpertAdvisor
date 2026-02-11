@@ -55,4 +55,34 @@ MetaNN::Matrix<T, DevTag> ConcatCols(std::initializer_list<MetaNN::Matrix<T, Dev
     return out;
 }
 
+// Slice a contiguous range of rows [rowOffset, rowOffset + rowCount) from a matrix.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> SliceRows(const MetaNN::Matrix<T, DevTag>& src,
+                                    size_t rowOffset,
+                                    size_t rowCount)
+{
+    const size_t cols = src.Shape()[1];
+    MetaNN::Matrix<T, DevTag> out(rowCount, cols);
+    auto lowSrc = MetaNN::LowerAccess(src);
+    auto lowOut = MetaNN::LowerAccess(out);
+    const T* s = lowSrc.RawMemory();
+    T* d = lowOut.MutableRawMemory();
+    for (size_t r = 0; r < rowCount; ++r)
+    {
+        const T* srcRowPtr = s + (rowOffset + r) * cols;
+        T* dstRowPtr = d + r * cols;
+        std::copy(srcRowPtr, srcRowPtr + cols, dstRowPtr);
+    }
+    return out;
+}
+
+// Convenience: take the bottom N rows of a matrix.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> TakeBottomRows(const MetaNN::Matrix<T, DevTag>& src,
+                                         size_t rowCount)
+{
+    const size_t rows = src.Shape()[0];
+    return SliceRows<T, DevTag>(src, rows - rowCount, rowCount);
+}
+
 } // namespace NNUtils

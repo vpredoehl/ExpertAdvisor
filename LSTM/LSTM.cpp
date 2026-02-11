@@ -361,22 +361,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
             // Propagate to previous hidden: use the part of W corresponding to h_prev (last hidden_size rows of concat)
             // Build W_h as a concrete (hidden_size x 4*hidden_size) block copied from the bottom of param
-            const size_t rowOffset = n_in - hidden_size;
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> W_h(hidden_size, 4 * hidden_size);
-            {
-                auto low_src = MetaNN::LowerAccess(param);
-                auto low_dst = MetaNN::LowerAccess(W_h);
-                const float* src = low_src.RawMemory();
-                float* dst = low_dst.MutableRawMemory();
-                const size_t srcCols = param.Shape()[1]; // 4 * hidden_size
-                for (size_t r = 0; r < hidden_size; ++r)
-                {
-                    const size_t srcRow = rowOffset + r;
-                    const float* srcRowPtr = src + srcRow * srcCols;
-                    float* dstRowPtr = dst + r * srcCols;
-                    std::copy(srcRowPtr, srcRowPtr + srcCols, dstRowPtr);
-                }
-            }
+            auto W_h = NNUtils::TakeBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
+
             // Now compute d_h_prev = d_pre (1 x 4H) * W_h^T (4H x H) -> (1 x H)
             auto d_h_prev = MetaNN::Dot(d_pre, MetaNN::Transpose(W_h));
             d_h = MetaNN::Evaluate(MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, hidden_size)));
