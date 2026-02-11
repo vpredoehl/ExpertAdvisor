@@ -184,21 +184,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         {
             LSTM_DPRINT("Feature", f_sample);
 
-            const size_t featWidth = f_sample.Shape()[1];
-            // Concatenate [x_t, h_{t-1}] into a contiguous row without element-wise loops
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> InputAndPrevHidden(1, n_in);
-            {
-                auto lowConcat = MetaNN::LowerAccess(InputAndPrevHidden);
-                float* concat_mem = lowConcat.MutableRawMemory();
-
-                auto low_f = MetaNN::LowerAccess(f_sample);
-                const float* f_mem = low_f.RawMemory();
-                std::copy(f_mem, f_mem + featWidth, concat_mem);
-
-                auto low_h = MetaNN::LowerAccess(prevHiddenState);
-                const float* h_mem = low_h.RawMemory();
-                std::copy(h_mem, h_mem + hidden_size, concat_mem + featWidth);
-            }
+            // Replace manual concatenation with NNUtils::ConcatCols
+            auto InputAndPrevHidden = NNUtils::ConcatCols<float, MetaNN::DeviceTags::CPU>({ f_sample, prevHiddenState });
             LSTM_DPRINT("Concatenated [x_t|h_{t-1}]", InputAndPrevHidden);
 
             auto yExpr = MetaNN::Dot(InputAndPrevHidden,  param) + bias;
@@ -358,25 +345,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto dg2Dm = MetaNN::Evaluate(dg2D);
             auto do2Dm = MetaNN::Evaluate(do2D);
 
-            // Pack [di df dg do] into (1, 4H) manually (MetaNN has no Concat helper)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_pre(1, 4 * hidden_size);
-            {
-                auto low_dst = MetaNN::LowerAccess(d_pre);
-                float* dst = low_dst.MutableRawMemory();
-
-                auto copyRow = [&](const MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>& src, size_t colOffset)
-                {
-                    auto low_src = MetaNN::LowerAccess(src);
-                    const float* s = low_src.RawMemory();
-                    // src is (1 x hidden_size): copy contiguous row into dst at offset
-                    std::copy(s, s + hidden_size, dst + colOffset);
-                };
-
-                copyRow(di2Dm, 0 * hidden_size);
-                copyRow(df2Dm, 1 * hidden_size);
-                copyRow(dg2Dm, 2 * hidden_size);
-                copyRow(do2Dm, 3 * hidden_size);
-            }
+            // Replace manual packing with NNUtils::ConcatCols
+            auto d_pre = NNUtils::ConcatCols<float, MetaNN::DeviceTags::CPU>({ di2Dm, df2Dm, dg2Dm, do2Dm });
 
             // Lazy accumulation into per-window gradient expressions
             {
