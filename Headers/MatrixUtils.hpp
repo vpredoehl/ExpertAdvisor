@@ -85,4 +85,52 @@ MetaNN::Matrix<T, DevTag> TakeBottomRows(const MetaNN::Matrix<T, DevTag>& src,
     return SliceRows<T, DevTag>(src, rows - rowCount, rowCount);
 }
 
+// Slice a contiguous range of columns [colOffset, colOffset + colCount) from a matrix.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> SliceCols(const MetaNN::Matrix<T, DevTag>& src,
+                                    size_t colOffset,
+                                    size_t colCount)
+{
+    const size_t rows = src.Shape()[0];
+    const size_t srcCols = src.Shape()[1];
+    MetaNN::Matrix<T, DevTag> out(rows, colCount);
+    auto lowSrc = MetaNN::LowerAccess(src);
+    auto lowOut = MetaNN::LowerAccess(out);
+    const T* s = lowSrc.RawMemory();
+    T* d = lowOut.MutableRawMemory();
+    for (size_t r = 0; r < rows; ++r)
+    {
+        const T* srcPtr = s + r * srcCols + colOffset;
+        T* dstPtr = d + r * colCount;
+        std::copy(srcPtr, srcPtr + colCount, dstPtr);
+    }
+    return out;
+}
+
+// Convenience: take the rightmost N columns of a matrix.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> TakeRightCols(const MetaNN::Matrix<T, DevTag>& src,
+                                        size_t colCount)
+{
+    const size_t srcCols = src.Shape()[1];
+    return SliceCols<T, DevTag>(src, srcCols - colCount, colCount);
+}
+
+// Convenience: take the top N rows of a matrix.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> TakeTopRows(const MetaNN::Matrix<T, DevTag>& src,
+                                      size_t rowCount)
+{
+    return SliceRows<T, DevTag>(src, /*rowOffset*/ 0, rowCount);
+}
+
+// Convenience: take the leftmost N columns of a matrix.
+template <typename T, typename DevTag>
+MetaNN::Matrix<T, DevTag> TakeLeftCols(const MetaNN::Matrix<T, DevTag>& src,
+                                       size_t colCount)
+{
+    return SliceCols<T, DevTag>(src, /*colOffset*/ 0, colCount);
+}
+
 } // namespace NNUtils
+
