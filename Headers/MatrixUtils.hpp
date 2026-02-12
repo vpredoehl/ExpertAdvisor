@@ -3,6 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstddef>
+#include <type_traits>
 #include "Tensor.hpp"
 
 namespace NNUtils {
@@ -10,11 +11,11 @@ namespace NNUtils {
 // Concatenate matrices along columns.
 // All input parts must have the same number of rows. Typical use: concatenate 1xK_i row vectors.
 // Works for general R x K_i by copying per row.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> ConcatCols(std::initializer_list<MetaNN::Matrix<T, DevTag>> parts)
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> ConcatCols(std::initializer_list<MetaNN::Matrix<T, DevT>> parts)
 {
     // Evaluate and collect parts to ensure concrete matrices
-    std::vector<MetaNN::Matrix<T, DevTag>> mats;
+    std::vector<MetaNN::Matrix<T, DevT>> mats;
     mats.reserve(parts.size());
 
     size_t rows = 0;
@@ -32,7 +33,7 @@ MetaNN::Matrix<T, DevTag> ConcatCols(std::initializer_list<MetaNN::Matrix<T, Dev
         mats.push_back(std::move(m));
     }
 
-    MetaNN::Matrix<T, DevTag> out(rows, totalCols);
+    MetaNN::Matrix<T, DevT> out(rows, totalCols);
     auto lowOut = MetaNN::LowerAccess(out);
     T* outRaw = lowOut.MutableRawMemory();
 
@@ -56,13 +57,13 @@ MetaNN::Matrix<T, DevTag> ConcatCols(std::initializer_list<MetaNN::Matrix<T, Dev
 }
 
 // Slice a contiguous range of rows [rowOffset, rowOffset + rowCount) from a matrix.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> SliceRows(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> SliceRows(const MetaNN::Matrix<T, DevT>& src,
                                     size_t rowOffset,
                                     size_t rowCount)
 {
     const size_t cols = src.Shape()[1];
-    MetaNN::Matrix<T, DevTag> out(rowCount, cols);
+    MetaNN::Matrix<T, DevT> out(rowCount, cols);
     auto lowSrc = MetaNN::LowerAccess(src);
     auto lowOut = MetaNN::LowerAccess(out);
     const T* s = lowSrc.RawMemory();
@@ -77,23 +78,28 @@ MetaNN::Matrix<T, DevTag> SliceRows(const MetaNN::Matrix<T, DevTag>& src,
 }
 
 // Convenience: take the bottom N rows of a matrix.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> TakeBottomRows(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> TakeBottomRows(const MetaNN::Matrix<T, DevT>& src,
                                          size_t rowCount)
 {
     const size_t rows = src.Shape()[0];
-    return SliceRows<T, DevTag>(src, rows - rowCount, rowCount);
+    return SliceRows<T, DevT>(src, rows - rowCount, rowCount);
 }
 
 // Slice a contiguous range of columns [colOffset, colOffset + colCount) from a matrix.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> SliceCols(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> SliceCols(const MetaNN::Matrix<T, DevT>& src,
                                     size_t colOffset,
                                     size_t colCount)
 {
     const size_t rows = src.Shape()[0];
     const size_t srcCols = src.Shape()[1];
-    MetaNN::Matrix<T, DevTag> out(rows, colCount);
+    // Fast path: if taking all columns starting at 0, return a direct copy
+    if (colOffset == 0 && colCount == srcCols)
+    {
+        return src;
+    }
+    MetaNN::Matrix<T, DevT> out(rows, colCount);
     auto lowSrc = MetaNN::LowerAccess(src);
     auto lowOut = MetaNN::LowerAccess(out);
     const T* s = lowSrc.RawMemory();
@@ -108,49 +114,76 @@ MetaNN::Matrix<T, DevTag> SliceCols(const MetaNN::Matrix<T, DevTag>& src,
 }
 
 // Convenience: take the rightmost N columns of a matrix.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> TakeRightCols(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> TakeRightCols(const MetaNN::Matrix<T, DevT>& src,
                                         size_t colCount)
 {
     const size_t srcCols = src.Shape()[1];
-    return SliceCols<T, DevTag>(src, srcCols - colCount, colCount);
+    return SliceCols<T, DevT>(src, srcCols - colCount, colCount);
 }
 
 // Convenience: take the top N rows of a matrix.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> TakeTopRows(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> TakeTopRows(const MetaNN::Matrix<T, DevT>& src,
                                       size_t rowCount)
 {
-    return SliceRows<T, DevTag>(src, /*rowOffset*/ 0, rowCount);
+    return SliceRows<T, DevT>(src, /*rowOffset*/ 0, rowCount);
 }
 
 // Convenience: take the leftmost N columns of a matrix.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> TakeLeftCols(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> TakeLeftCols(const MetaNN::Matrix<T, DevT>& src,
                                        size_t colCount)
 {
-    return SliceCols<T, DevTag>(src, /*colOffset*/ 0, colCount);
+    return SliceCols<T, DevT>(src, /*colOffset*/ 0, colCount);
 }
 
 // View (no-copy): create a matrix referencing a contiguous range of rows.
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> ViewRows(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> ViewRows(const MetaNN::Matrix<T, DevT>& src,
                                    size_t rowOffset,
                                    size_t rowCount)
 {
     const size_t cols = src.Shape()[1];
     auto lowSrc = MetaNN::LowerAccess(src);
     auto mem = lowSrc.SharedMemory().Shift(rowOffset * cols);
-    return MetaNN::Matrix<T, DevTag>(mem, MetaNN::Shape(rowCount, cols));
+    return MetaNN::Matrix<T, DevT>(mem, MetaNN::Shape(rowCount, cols));
 }
 
 // Convenience: view the bottom N rows (no copy).
-template <typename T, typename DevTag>
-MetaNN::Matrix<T, DevTag> ViewBottomRows(const MetaNN::Matrix<T, DevTag>& src,
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> ViewBottomRows(const MetaNN::Matrix<T, DevT>& src,
                                          size_t rowCount)
 {
     const size_t rows = src.Shape()[0];
-    return ViewRows<T, DevTag>(src, rows - rowCount, rowCount);
+    return ViewRows<T, DevT>(src, rows - rowCount, rowCount);
+}
+
+// Generic matrix type cast helper: casts element type and device tag
+template <typename T, typename DevT, typename SrcMat>
+MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)
+{
+    // Ensure we operate on a concrete matrix to safely access raw memory
+    auto eval = MetaNN::Evaluate(src);
+    using EvalMat = decltype(eval);
+    using SrcElem = typename EvalMat::ElementType;
+    using SrcDev  = typename EvalMat::DeviceType;
+
+    // Fast path: if element and device types already match, return as-is
+    if constexpr (std::is_same_v<SrcElem, T> && std::is_same_v<SrcDev, DevT>)
+    {
+        return eval;
+    }
+
+    // Otherwise, cast element type and/or device by copying
+    MetaNN::Matrix<T, DevT> dst(eval.Shape()[0], eval.Shape()[1]);
+    auto lowSrc = MetaNN::LowerAccess(eval);
+    auto lowDst = MetaNN::LowerAccess(dst);
+    const auto* s = lowSrc.RawMemory();
+    T* d = lowDst.MutableRawMemory();
+    const size_t len = eval.Shape()[0] * eval.Shape()[1];
+    for (size_t i = 0; i < len; ++i) d[i] = static_cast<T>(s[i]);
+    return dst;
 }
 
 } // namespace NNUtils
