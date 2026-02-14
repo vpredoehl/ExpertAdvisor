@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <type_traits>
 #include "Tensor.hpp"
+#include <MetaNN/operation/tensor/slice.h>
 
 namespace NNUtils {
 
@@ -222,6 +223,19 @@ MetaNN::Matrix<T, DevT> ViewCols(const MetaNN::Matrix<T, DevT>& src, size_t colO
 {
     // Use SliceCols (copy) to obtain the requested column block.
     return SliceCols<T, DevT>(src, colOffset, colCount);
+}
+
+// View a contiguous block of columns, falling back to a concrete sliced copy when
+// a lazy MetaNN::Slice expression is unavailable in this build.
+template <typename Mat>
+auto ViewColsExpr(const Mat& src, size_t colOffset, size_t colCount)
+{
+    // Fallback: evaluate and return a concrete matrix with the requested columns.
+    using Decayed = std::decay_t<Mat>;
+    using T = typename Decayed::ElementType;
+    using Dev = typename Decayed::DeviceType;
+    auto eval = MetaNN::Evaluate(src);
+    return SliceCols<T, Dev>(eval, colOffset, colCount);
 }
 
 // Generic matrix type cast helper: casts element type and device tag

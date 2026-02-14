@@ -182,6 +182,10 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         std::vector<StepCache> cache;
         cache.reserve(window_size);
 
+        // Hoist forward weight views per window
+        auto W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
+        auto W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
+
         // Build a 5-step window starting at 'start' using the const iterator overload
         Window w = t.GetWindow(window_start);
 
@@ -190,9 +194,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             LSTM_DPRINT("Feature", f_sample);
 
             // Replace manual concatenation with separate dot products
-            auto W_x = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
-            auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
-            auto yExpr = MetaNN::Dot(f_sample,  W_x) + MetaNN::Dot(prevHiddenState, W_h) + bias;
+            auto yExpr = MetaNN::Dot(f_sample,  W_x_win) + MetaNN::Dot(prevHiddenState, W_h_win) + bias;
 
             // Debug prints for inputs instead of concatenated
             LSTM_DPRINT("x_t", f_sample);
@@ -349,6 +351,12 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto low=MetaNN::LowerAccess(db_o); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+hidden_size, AccumScalar(0));
         }
 
+        // Hoist gate column blocks lazily for this window
+        auto W_i_block = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 0 * hidden_size, hidden_size);
+        auto W_f_block = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 1 * hidden_size, hidden_size);
+        auto W_g_block = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 2 * hidden_size, hidden_size);
+        auto W_o_block = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 3 * hidden_size, hidden_size);
+
         // Backward through time using MetaNN elementwise ops
         for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
         {
@@ -426,12 +434,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             }
 
             // Propagate to previous hidden: compute d_h_prev via 4 block products, no concat
-            auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
-            auto W_i = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 0 * hidden_size, hidden_size);
-            auto W_f = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 1 * hidden_size, hidden_size);
-            auto W_g = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 2 * hidden_size, hidden_size);
-            auto W_o = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 3 * hidden_size, hidden_size);
-            auto d_h_prev = MetaNN::Dot(di2D, MetaNN::Transpose(W_i)) + MetaNN::Dot(df2D, MetaNN::Transpose(W_f)) + MetaNN::Dot(dg2D, MetaNN::Transpose(W_g)) + MetaNN::Dot(do2D, MetaNN::Transpose(W_o));
+            auto d_h_prev = MetaNN::Dot(di2D, MetaNN::Transpose(W_i_block)) + MetaNN::Dot(df2D, MetaNN::Transpose(W_f_block)) + MetaNN::Dot(dg2D, MetaNN::Transpose(W_g_block)) + MetaNN::Dot(do2D, MetaNN::Transpose(W_o_block));
             d_h = MetaNN::Evaluate(MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, hidden_size)));
             d_c = MetaNN::Evaluate(MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, hidden_size)));
         }
@@ -455,7 +458,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto lowD = MetaNN::LowerAccess(dst); auto* dptr = lowD.MutableRawMemory();
             auto lowS = MetaNN::LowerAccess(src); const auto* sptr = lowS.RawMemory();
             const size_t dstCols = dst.Shape()[1]; const size_t H = hidden_size;
-            for (size_t c=0; c<H; ++c) dptr[colOffset + c] += static_cast<AccumScalar>(sptr[c]);
+            for (size_t c = 0; c < H; ++c) dptr[colOffset + c] += static_cast<AccumScalar>(sptr[c]);
         };
         writeBias(d_bias_accum, 0*hidden_size, db_i);
         writeBias(d_bias_accum, 1*hidden_size, db_f);
