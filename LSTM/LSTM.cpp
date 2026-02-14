@@ -171,6 +171,11 @@ auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     auto c_1d = f_1d * c_prev_1d + i_1d * g_1d;
     auto h_1d = o_1d * MetaNN::Tanh(c_1d);
 
+    auto cprev_2d_handle = MetaNN::Reshape(c_prev_1d, MetaNN::Shape(1, H)).EvalRegister();
+    auto i_2d_handle = MetaNN::Reshape(i_1d, MetaNN::Shape(1, H)).EvalRegister();
+    auto f_2d_handle = MetaNN::Reshape(f_1d, MetaNN::Shape(1, H)).EvalRegister();
+    auto g_2d_handle = MetaNN::Reshape(g_1d, MetaNN::Shape(1, H)).EvalRegister();
+    auto o_2d_handle = MetaNN::Reshape(o_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto c_2d_handle = MetaNN::Reshape(c_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto h_2d_handle = MetaNN::Reshape(h_1d, MetaNN::Shape(1, H)).EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
@@ -178,11 +183,11 @@ auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     StepCache sc;
     sc.x      = x_t;
     sc.h_prev = prevHiddenState;
-    sc.c_prev = MetaNN::Evaluate(MetaNN::Reshape(c_prev_1d, MetaNN::Shape(1, H)));
-    sc.i      = MetaNN::Evaluate(MetaNN::Reshape(i_1d, MetaNN::Shape(1, H)));
-    sc.f      = MetaNN::Evaluate(MetaNN::Reshape(f_1d, MetaNN::Shape(1, H)));
-    sc.g      = MetaNN::Evaluate(MetaNN::Reshape(g_1d, MetaNN::Shape(1, H)));
-    sc.o      = MetaNN::Evaluate(MetaNN::Reshape(o_1d, MetaNN::Shape(1, H)));
+    sc.c_prev = cprev_2d_handle.Data();
+    sc.i      = i_2d_handle.Data();
+    sc.f      = f_2d_handle.Data();
+    sc.g      = g_2d_handle.Data();
+    sc.o      = o_2d_handle.Data();
     sc.c      = c_2d_handle.Data();
     sc.h      = h_2d_handle.Data();
 
@@ -197,8 +202,9 @@ auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
                              float target) const -> HeadLoss
 {
     auto pred = MetaNN::Dot(h_T, W) + b;
-    auto predEval = MetaNN::Evaluate(pred);
-    float y_hat = predEval(0, 0);
+    auto predHandle = pred.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    float y_hat = predHandle.Data()(0, 0);
     float err   = y_hat - target;
     return { y_hat, err };
 }
@@ -268,11 +274,12 @@ void EA::LSTM::backwardStep(const StepCache& sc,
 
     auto addBlock = [&](auto& dst, const auto& top, const auto& bot)
     {
-        auto topE = MetaNN::Evaluate(top);
-        auto botE = MetaNN::Evaluate(bot);
+        auto topH = top.EvalRegister();
+        auto botH = bot.EvalRegister();
+        MetaNN::EvalPlan::Inst().Eval();
         auto lowD = MetaNN::LowerAccess(dst);
-        auto lowT = MetaNN::LowerAccess(topE);
-        auto lowB = MetaNN::LowerAccess(botE);
+        auto lowT = MetaNN::LowerAccess(topH.Data());
+        auto lowB = MetaNN::LowerAccess(botH.Data());
         auto* dptr = lowD.MutableRawMemory();
         const auto* tptr = lowT.RawMemory();
         const auto* bptr = lowB.RawMemory();
@@ -286,9 +293,10 @@ void EA::LSTM::backwardStep(const StepCache& sc,
     addBlock(A.dW_o, dW_o_top, dW_o_bot);
 
     auto accBias = [&](auto& db, const auto& g2D){
-        auto e = MetaNN::Evaluate(g2D);
+        auto gH = g2D.EvalRegister();
+        MetaNN::EvalPlan::Inst().Eval();
         auto lowD = MetaNN::LowerAccess(db); auto* dptr = lowD.MutableRawMemory();
-        auto lowS = MetaNN::LowerAccess(e); const auto* sptr = lowS.RawMemory();
+        auto lowS = MetaNN::LowerAccess(gH.Data()); const auto* sptr = lowS.RawMemory();
         for (size_t c=0; c<H; ++c) dptr[c] += static_cast<AccumScalar>(sptr[c]);
     };
     accBias(A.db_i, di2D); accBias(A.db_f, df2D); accBias(A.db_g, dg2D); accBias(A.db_o, do2D);
@@ -297,8 +305,11 @@ void EA::LSTM::backwardStep(const StepCache& sc,
                   + MetaNN::Dot(df2D, MetaNN::Transpose(gb.W_f))
                   + MetaNN::Dot(dg2D, MetaNN::Transpose(gb.W_g))
                   + MetaNN::Dot(do2D, MetaNN::Transpose(gb.W_o));
-    d_h = MetaNN::Evaluate(MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, H)));
-    d_c = MetaNN::Evaluate(MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, H)));
+    auto dh_handle = MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, H)).EvalRegister();
+    auto dc_handle = MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, H)).EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    d_h = dh_handle.Data();
+    d_c = dc_handle.Data();
 }
 
 void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
@@ -531,8 +542,18 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             const size_t len = bias.Shape()[0] * bias.Shape()[1];
             for (size_t i = 0; i < len; ++i) { p[i] = static_cast<AccumScalar>(static_cast<double>(p[i]) * scale); }
         }
-        d_headW_accum_f = MetaNN::Evaluate(static_cast<float>(scale) * d_headW_accum_f);
-        d_headB_accum_f = MetaNN::Evaluate(static_cast<float>(scale) * d_headB_accum_f);
+        {
+            auto low = MetaNN::LowerAccess(d_headW_accum_f);
+            float* p = low.MutableRawMemory();
+            const size_t len = hidden_size;
+            for (size_t i = 0; i < len; ++i) { p[i] = static_cast<float>(static_cast<double>(p[i]) * scale); }
+        }
+        {
+            auto low = MetaNN::LowerAccess(d_headB_accum_f);
+            float* p = low.MutableRawMemory();
+            const size_t len = 1;
+            for (size_t i = 0; i < len; ++i) { p[i] = static_cast<float>(static_cast<double>(p[i]) * scale); }
+        }
     }
 #endif
 
@@ -588,8 +609,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const AccumScalar mu = static_cast<AccumScalar>(LSTM_MOMENTUM);
 
         // Update velocities lazily in AccumScalar precision
-        v_param = MetaNN::Evaluate(mu * v_param + d_param_accum);
-        v_bias = MetaNN::Evaluate(mu * v_bias + d_bias_accum);
+        {
+            auto vparamH = (mu * v_param + d_param_accum).EvalRegister();
+            auto vbiasH  = (mu * v_bias  + d_bias_accum).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            v_param = vparamH.Data();
+            v_bias  = vbiasH.Data();
+        }
 
         // Convert velocities to float and apply in a single lazy expression
         auto v_param_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(v_param);
@@ -598,8 +624,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         bias = MetaNN::Evaluate(bias - lrScale * v_bias_f);
 
         // Update velocities lazily in AccumScalar precision for head weights
-        v_headW = MetaNN::Evaluate(mu * v_headW + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f));
-        v_headB = MetaNN::Evaluate(mu * v_headB + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f));
+        {
+            auto vhWH = (mu * v_headW + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f)).EvalRegister();
+            auto vhBH = (mu * v_headB + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            v_headW = vhWH.Data();
+            v_headB = vhBH.Data();
+        }
 
         // Convert velocities to float and apply in a single lazy expression
         auto v_headW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(v_headW);
@@ -616,10 +647,17 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Convert accumulated gradients to AccumScalar and update first/second moments lazily for LSTM core
         auto g_param_acc = d_param_accum;
         auto g_bias_acc = d_bias_accum;
-        m_param = MetaNN::Evaluate(beta1 * m_param + (static_cast<AccumScalar>(1) - beta1) * g_param_acc);
-        s_param = MetaNN::Evaluate(beta2 * s_param + (static_cast<AccumScalar>(1) - beta2) * (g_param_acc * g_param_acc));
-        m_bias = MetaNN::Evaluate(beta1 * m_bias + (static_cast<AccumScalar>(1) - beta1) * g_bias_acc);
-        s_bias = MetaNN::Evaluate(beta2 * s_bias + (static_cast<AccumScalar>(1) - beta2) * (g_bias_acc * g_bias_acc));
+        {
+            auto mparamH = (beta1 * m_param + (static_cast<AccumScalar>(1) - beta1) * g_param_acc).EvalRegister();
+            auto sparamH = (beta2 * s_param + (static_cast<AccumScalar>(1) - beta2) * (g_param_acc * g_param_acc)).EvalRegister();
+            auto mbiasH  = (beta1 * m_bias + (static_cast<AccumScalar>(1) - beta1) * g_bias_acc).EvalRegister();
+            auto sbiasH  = (beta2 * s_bias + (static_cast<AccumScalar>(1) - beta2) * (g_bias_acc * g_bias_acc)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            m_param = mparamH.Data();
+            s_param = sparamH.Data();
+            m_bias  = mbiasH.Data();
+            s_bias  = sbiasH.Data();
+        }
 
         // Bias correction lazily for LSTM core
         auto mhat_param = m_param / (static_cast<AccumScalar>(1) - beta1_pow);
@@ -643,10 +681,17 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Convert head gradients to AccumScalar and update first/second moments lazily
         auto gW_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f);
         auto gB_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f);
-        m_headW = MetaNN::Evaluate(beta1 * m_headW + (static_cast<AccumScalar>(1) - beta1) * gW_acc);
-        s_headW = MetaNN::Evaluate(beta2 * s_headW + (static_cast<AccumScalar>(1) - beta2) * (gW_acc * gW_acc));
-        m_headB = MetaNN::Evaluate(beta1 * m_headB + (static_cast<AccumScalar>(1) - beta1) * gB_acc);
-        s_headB = MetaNN::Evaluate(beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc));
+        {
+            auto mWH = (beta1 * m_headW + (static_cast<AccumScalar>(1) - beta1) * gW_acc).EvalRegister();
+            auto sWH = (beta2 * s_headW + (static_cast<AccumScalar>(1) - beta2) * (gW_acc * gW_acc)).EvalRegister();
+            auto mBH = (beta1 * m_headB + (static_cast<AccumScalar>(1) - beta1) * gB_acc).EvalRegister();
+            auto sBH = (beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            m_headW = mWH.Data();
+            s_headW = sWH.Data();
+            m_headB = mBH.Data();
+            s_headB = sBH.Data();
+        }
 
         // Bias correction lazily
         auto mhatW = m_headW / (static_cast<AccumScalar>(1) - beta1_pow);
@@ -684,8 +729,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const AccumScalar mu = static_cast<AccumScalar>(LSTM_MOMENTUM);
 
         // Update velocities lazily in AccumScalar precision
-        v_headW = MetaNN::Evaluate(mu * v_headW + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f));
-        v_headB = MetaNN::Evaluate(mu * v_headB + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f));
+        {
+            auto vhWH = (mu * v_headW + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f)).EvalRegister();
+            auto vhBH = (mu * v_headB + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            v_headW = vhWH.Data();
+            v_headB = vhBH.Data();
+        }
 
         // Convert velocities to float and apply in a single lazy expression
         auto v_headW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(v_headW);
@@ -702,10 +752,17 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Convert head gradients to AccumScalar and update first/second moments lazily
         auto gW_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f);
         auto gB_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f);
-        m_headW = MetaNN::Evaluate(beta1 * m_headW + (static_cast<AccumScalar>(1) - beta1) * gW_acc);
-        s_headW = MetaNN::Evaluate(beta2 * s_headW + (static_cast<AccumScalar>(1) - beta2) * (gW_acc * gW_acc));
-        m_headB = MetaNN::Evaluate(beta1 * m_headB + (static_cast<AccumScalar>(1) - beta1) * gB_acc);
-        s_headB = MetaNN::Evaluate(beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc));
+        {
+            auto mWH = (beta1 * m_headW + (static_cast<AccumScalar>(1) - beta1) * gW_acc).EvalRegister();
+            auto sWH = (beta2 * s_headW + (static_cast<AccumScalar>(1) - beta2) * (gW_acc * gW_acc)).EvalRegister();
+            auto mBH = (beta1 * m_headB + (static_cast<AccumScalar>(1) - beta1) * gB_acc).EvalRegister();
+            auto sBH = (beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            m_headW = mWH.Data();
+            s_headW = sWH.Data();
+            m_headB = mBH.Data();
+            s_headB = sBH.Data();
+        }
 
         // Bias correction lazily
         auto mhatW = m_headW / (static_cast<AccumScalar>(1) - beta1_pow);
