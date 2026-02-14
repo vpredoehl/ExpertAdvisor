@@ -87,6 +87,9 @@ namespace EA
         void SetLearningRate(float lr) { learningRate = lr; }
         
         float CalculateBatch(const std::ranges::subrange<DataSet::const_iterator>);
+        // Inference-only helpers (forward pass, no training)
+        float PredictNextLogReturn(const Window& w, bool resetState = true);
+        float PredictNextClose(const Window& w, bool resetState = true);
 
     private:
         using AccumScalar = float;
@@ -100,6 +103,7 @@ namespace EA
         WindowWeights hoistWindowWeights() const;
         StepCache forwardStep(const FloatMatrixCPU& x_t, const WindowWeights& ww, const FloatMatrixCPU& bias, FloatMatrixCPU& prevHiddenState, FloatMatrixCPU& prevCellState, FloatMatrixCPU& xh_concat) const;
         HeadLoss predictAndLoss(const FloatMatrixCPU& h_T, const FloatMatrixCPU& W, const FloatMatrixCPU& b, float target) const;
+        float predictOnly(const FloatMatrixCPU& h_T, const FloatMatrixCPU& W, const FloatMatrixCPU& b) const;
         void accumulateHeadGrads(FloatMatrixCPU& dW_accum, FloatMatrixCPU& dB_accum, const FloatMatrixCPU& h_T, float err) const;
         GateBlocks hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const;
         void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;

@@ -217,6 +217,16 @@ auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
     return { y_hat, err };
 }
 
+float EA::LSTM::predictOnly(const FloatMatrixCPU& h_T,
+                            const FloatMatrixCPU& W,
+                            const FloatMatrixCPU& b) const
+{
+    auto pred = MetaNN::Dot(h_T, W) + b;
+    auto predHandle = pred.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    return predHandle.Data()(0, 0);
+}
+
 void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
                                    FloatMatrixCPU& dB_accum,
                                    const FloatMatrixCPU& h_T,
@@ -803,6 +813,57 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     printMatrix("returnHeadWeight", MetaNN::Transpose(returnHeadWeight) );
 #endif
     return predicted_close;
+}
+
+float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
+{
+    if (resetState) {
+        ResetPreviousState();
+    }
+
+    // Prepare views and concat buffer
+    auto ww = hoistWindowWeights();
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+    // Forward through the window
+    for (const auto& f_sample : w)
+    {
+        (void)forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
+    }
+
+    // Predict next-step log return from the last hidden state
+    return predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
+}
+
+float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
+{
+    // We need the last close in the window to convert log return to price
+    constexpr size_t closeCol = 1;
+
+    // If we need to reset, do it before we take the last close value
+    if (resetState) {
+        ResetPreviousState();
+    }
+
+    // Capture last close from the provided window
+    float close_T = 0.0f;
+    for (const auto& f_sample : w) {
+        close_T = f_sample(0, closeCol);
+    }
+
+    // Prepare views and concat buffer
+    auto ww = hoistWindowWeights();
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+
+    // Forward through the window
+    for (const auto& f_sample : w)
+    {
+        (void)forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
+    }
+
+    // Predict log return and convert to price
+    float y_hat = predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
+    float predicted_close_next = std::exp(y_hat) * close_T;
+    return predicted_close_next;
 }
 
 
