@@ -208,6 +208,22 @@ MetaNN::Matrix<T, DevT> ViewBottomRows(const MetaNN::Matrix<T, DevT>& src,
     return ViewRows<T, DevT>(src, rows - rowCount, rowCount);
 }
 
+// Convenience: view the top N rows (no copy).
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> ViewTopRows(const MetaNN::Matrix<T, DevT>& src, size_t rowCount)
+{
+    return ViewRows<T, DevT>(src, /*rowOffset*/ 0, rowCount);
+}
+
+// View a contiguous block of columns. If MetaNN does not support strided column views,
+// fall back to a slicing copy to produce a concrete matrix with the requested columns.
+template <typename T, typename DevT>
+MetaNN::Matrix<T, DevT> ViewCols(const MetaNN::Matrix<T, DevT>& src, size_t colOffset, size_t colCount)
+{
+    // Use SliceCols (copy) to obtain the requested column block.
+    return SliceCols<T, DevT>(src, colOffset, colCount);
+}
+
 // Generic matrix type cast helper: casts element type and device tag
 template <typename T, typename DevT, typename SrcMat>
 MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)

@@ -176,7 +176,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> o;      // (1, hidden_size)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> c;      // (1, hidden_size)
             MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> h;      // (1, hidden_size)
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> concat; // (1, n_in)
+            // Removed concat: no longer used
         };
 
         std::vector<StepCache> cache;
@@ -189,11 +189,14 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         {
             LSTM_DPRINT("Feature", f_sample);
 
-            // Replace manual concatenation with NNUtils::ConcatCols
-            auto InputAndPrevHidden = NNUtils::ConcatCols<float, MetaNN::DeviceTags::CPU>({ f_sample, prevHiddenState });
-            LSTM_DPRINT("Concatenated [x_t|h_{t-1}]", InputAndPrevHidden);
+            // Replace manual concatenation with separate dot products
+            auto W_x = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
+            auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
+            auto yExpr = MetaNN::Dot(f_sample,  W_x) + MetaNN::Dot(prevHiddenState, W_h) + bias;
 
-            auto yExpr = MetaNN::Dot(InputAndPrevHidden,  param) + bias;
+            // Debug prints for inputs instead of concatenated
+            LSTM_DPRINT("x_t", f_sample);
+            LSTM_DPRINT("h_{t-1}", prevHiddenState);
 
             // Split gates as a (4 x gateWidth) view
             const size_t gateWidth = yExpr.Shape()[1] / 4;
@@ -247,16 +250,16 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
             // Cache this step's intermediates BEFORE updating persistent states
             StepCache sc;
-            sc.x = MetaNN::Evaluate(f_sample);
-            sc.h_prev = MetaNN::Evaluate(prevHiddenState);
+            sc.x = f_sample;
+            sc.h_prev = prevHiddenState;
             sc.c_prev = MetaNN::Evaluate(MetaNN::Reshape(previousCellState1D, MetaNN::Shape(1, hidden_size)));
             sc.i = MetaNN::Evaluate(MetaNN::Reshape(i_input, MetaNN::Shape(1, hidden_size)));
             sc.f = MetaNN::Evaluate(MetaNN::Reshape(f_forget, MetaNN::Shape(1, hidden_size)));
             sc.g = MetaNN::Evaluate(MetaNN::Reshape(g_cell_candidate, MetaNN::Shape(1, hidden_size)));
             sc.o = MetaNN::Evaluate(MetaNN::Reshape(o_output, MetaNN::Shape(1, hidden_size)));
-            sc.c = MetaNN::Evaluate(cellStateHandle.Data());
-            sc.h = MetaNN::Evaluate(hiddenStateHandle.Data());
-            sc.concat = InputAndPrevHidden;
+            sc.c = cellStateHandle.Data();
+            sc.h = hiddenStateHandle.Data();
+            // Removed sc.concat because concatenation not used anymore
 
             // Now update persistent states
             prevCellState = cellStateHandle.Data();
@@ -271,8 +274,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto nextIt = window_start + window_size; // safe due to '<' in loop condition
 
         // Evaluate to access element values
-        auto lastFeat  = MetaNN::Evaluate(*lastIt);
-        auto nextFeat  = MetaNN::Evaluate(*nextIt);
+        auto lastFeat  = *lastIt;
+        auto nextFeat  = *nextIt;
         // Column index for close price in FeatureMatrix: open(0), close(1), high(2), low(3)
         constexpr size_t closeCol = 1;
         const float close_T    = lastFeat(0, closeCol);
@@ -280,8 +283,9 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
         // At this point, prevHiddenState/prevCellState hold the final h_T and c_T after processing the window.
         // Predict next-step log return from last hidden state h_T
-        auto pred = MetaNN::Evaluate(MetaNN::Dot(prevHiddenState, returnHeadWeight) + returnHeadBias);
-        const float next_step_prediction = pred(0, 0);  // y_hat
+        auto pred = MetaNN::Dot(prevHiddenState, returnHeadWeight) + returnHeadBias;
+        auto predEval = MetaNN::Evaluate(pred);
+        const float next_step_prediction = predEval(0, 0);  // y_hat
         const float actual_next_step_return   = std::log(close_next) - std::log(close_T);
         predicted_close = std::exp(next_step_prediction) * close_T;
 
@@ -314,10 +318,36 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
         }
 
-        // Stack per-step contributions and reduce once at window end
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> stackConcat(window_size, n_in);
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> stackPre(window_size, 4 * hidden_size);
-        size_t rowIdx = 0;
+        // Gate-wise accumulators (n_in x H) and (1 x H)
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_i(param.Shape()[0], hidden_size);
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_f(param.Shape()[0], hidden_size);
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_g(param.Shape()[0], hidden_size);
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_o(param.Shape()[0], hidden_size);
+        {
+            auto low=MetaNN::LowerAccess(dW_i); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+param.Shape()[0]*hidden_size, AccumScalar(0));
+        }
+        {
+            auto low=MetaNN::LowerAccess(dW_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+param.Shape()[0]*hidden_size, AccumScalar(0));
+        }
+        {
+            auto low=MetaNN::LowerAccess(dW_g); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+param.Shape()[0]*hidden_size, AccumScalar(0));
+        }
+        {
+            auto low=MetaNN::LowerAccess(dW_o); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+param.Shape()[0]*hidden_size, AccumScalar(0));
+        }
+        MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> db_i(1, hidden_size), db_f(1, hidden_size), db_g(1, hidden_size), db_o(1, hidden_size);
+        {
+            auto low=MetaNN::LowerAccess(db_i); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+hidden_size, AccumScalar(0));
+        }
+        {
+            auto low=MetaNN::LowerAccess(db_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+hidden_size, AccumScalar(0));
+        }
+        {
+            auto low=MetaNN::LowerAccess(db_g); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+hidden_size, AccumScalar(0));
+        }
+        {
+            auto low=MetaNN::LowerAccess(db_o); std::fill(low.MutableRawMemory(), low.MutableRawMemory()+hidden_size, AccumScalar(0));
+        }
 
         // Backward through time using MetaNN elementwise ops
         for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
@@ -347,78 +377,90 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto dg2D = MetaNN::Reshape(d_g, MetaNN::Shape(1, hidden_size));
             auto do2D = MetaNN::Reshape(d_o, MetaNN::Shape(1, hidden_size));
 
-            // Concatenate gate gradients without pre-materializing; ConcatCols will evaluate internally
-            auto d_pre = NNUtils::ConcatCols<float, MetaNN::DeviceTags::CPU>( di2D, df2D, dg2D, do2D );
-
-            // Collect per-step contributions into stacked matrices
+            // Accumulate parameter and bias grads per gate
             {
-                // copy sc.concat (1 x n_in) into row rowIdx of stackConcat
-                auto lowSrc = MetaNN::LowerAccess(sc.concat);
-                auto lowDst = MetaNN::LowerAccess(stackConcat);
-                const float* src = lowSrc.RawMemory();
-                float* dst = lowDst.MutableRawMemory();
-                std::copy(src, src + n_in, dst + rowIdx * n_in);
+                // Outer products: [x_t | h_{t-1}] replaced by two blocks
+                // Top block from x_t
+                auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), di2D);
+                auto dW_f_top = MetaNN::Dot(MetaNN::Transpose(sc.x), df2D);
+                auto dW_g_top = MetaNN::Dot(MetaNN::Transpose(sc.x), dg2D);
+                auto dW_o_top = MetaNN::Dot(MetaNN::Transpose(sc.x), do2D);
+                // Bottom block from h_prev
+                auto dW_i_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), di2D);
+                auto dW_f_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), df2D);
+                auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dg2D);
+                auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), do2D);
+                // Write into accumulators (convert to float and add)
+                auto addBlock = [&](auto& dst, const auto& top, const auto& bot){
+                    auto topE = MetaNN::Evaluate(top);
+                    auto botE = MetaNN::Evaluate(bot);
+                    // copy into dst: first input_size rows from topE, then hidden_size rows from botE
+                    auto lowD = MetaNN::LowerAccess(dst);
+                    auto lowT = MetaNN::LowerAccess(topE);
+                    auto lowB = MetaNN::LowerAccess(botE);
+                    auto* dptr = lowD.MutableRawMemory();
+                    const auto* tptr = lowT.RawMemory();
+                    const auto* bptr = lowB.RawMemory();
+                    // dst shape: (n_in x H)
+                    const size_t H = hidden_size;
+                    const size_t I = param.Shape()[0] - hidden_size;
+                    for (size_t r=0; r<I; ++r) {
+                        for (size_t c=0; c<H; ++c) dptr[r*H + c] += static_cast<AccumScalar>(tptr[r*H + c]);
+                    }
+                    for (size_t r=0; r<hidden_size; ++r) {
+                        for (size_t c=0; c<H; ++c) dptr[(I+r)*H + c] += static_cast<AccumScalar>(bptr[r*H + c]);
+                    }
+                };
+                addBlock(dW_i, dW_i_top, dW_i_bot);
+                addBlock(dW_f, dW_f_top, dW_f_bot);
+                addBlock(dW_g, dW_g_top, dW_g_bot);
+                addBlock(dW_o, dW_o_top, dW_o_bot);
+                // Bias accumulators
+                auto accBias = [&](auto& db, const auto& g2D){
+                    auto e = MetaNN::Evaluate(g2D);
+                    auto lowD = MetaNN::LowerAccess(db); auto* dptr = lowD.MutableRawMemory();
+                    auto lowS = MetaNN::LowerAccess(e); const auto* sptr = lowS.RawMemory();
+                    for (size_t c=0; c<hidden_size; ++c) dptr[c] += static_cast<AccumScalar>(sptr[c]);
+                };
+                accBias(db_i, di2D); accBias(db_f, df2D); accBias(db_g, dg2D); accBias(db_o, do2D);
             }
-            {
-                // d_pre is concrete from ConcatCols; copy (1 x 4H) into row rowIdx of stackPre
-                auto lowSrc = MetaNN::LowerAccess(d_pre);
-                auto lowDst = MetaNN::LowerAccess(stackPre);
-                const float* src = lowSrc.RawMemory();
-                float* dst = lowDst.MutableRawMemory();
-                const size_t cols = 4 * hidden_size;
-                std::copy(src, src + cols, dst + rowIdx * cols);
-            }
-            ++rowIdx;
 
-            // Propagate to previous hidden: use the part of W corresponding to h_prev (last hidden_size rows of concat)
-            // Build W_h as a concrete (hidden_size x 4*hidden_size) block copied from the bottom of param
+            // Propagate to previous hidden: compute d_h_prev via 4 block products, no concat
             auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
-
-            // Now compute d_h_prev = d_pre (1 x 4H) * W_h^T (4H x H) -> (1 x H)
-            auto d_h_prev = MetaNN::Dot(d_pre, MetaNN::Transpose(W_h));
+            auto W_i = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 0 * hidden_size, hidden_size);
+            auto W_f = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 1 * hidden_size, hidden_size);
+            auto W_g = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 2 * hidden_size, hidden_size);
+            auto W_o = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h, 3 * hidden_size, hidden_size);
+            auto d_h_prev = MetaNN::Dot(di2D, MetaNN::Transpose(W_i)) + MetaNN::Dot(df2D, MetaNN::Transpose(W_f)) + MetaNN::Dot(dg2D, MetaNN::Transpose(W_g)) + MetaNN::Dot(do2D, MetaNN::Transpose(W_o));
             d_h = MetaNN::Evaluate(MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, hidden_size)));
-            // Propagate to previous cell
             d_c = MetaNN::Evaluate(MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, hidden_size)));
         }
 
-        // Reduce stacked contributions once per window
-        auto d_param_expr = MetaNN::Evaluate(MetaNN::Dot(MetaNN::Transpose(stackConcat), stackPre));
-        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_bias_expr(1, 4 * hidden_size);
-        {
-            auto lowDst = MetaNN::LowerAccess(d_bias_expr);
-            float* dst = lowDst.MutableRawMemory();
-            std::fill(dst, dst + 4 * hidden_size, 0.0f);
-            auto lowSrc = MetaNN::LowerAccess(stackPre);
-            const float* src = lowSrc.RawMemory();
-            const size_t cols = 4 * hidden_size;
-            for (size_t r = 0; r < rowIdx; ++r) {
-                const float* row = src + r * cols;
-                for (size_t c = 0; c < cols; ++c) dst[c] += row[c];
-            }
-        }
-
-        // Accumulate LSTM core gradients for batch update
-        {
-            auto low_dst = MetaNN::LowerAccess(d_param_accum);
-            AccumScalar* dst = low_dst.MutableRawMemory();
-            auto low_src = MetaNN::LowerAccess(d_param_expr);
-            const float* src = low_src.RawMemory();
-            const size_t rows = param.Shape()[0];
-            const size_t cols = param.Shape()[1];
-            for (size_t r = 0; r < rows; ++r) {
-                for (size_t c = 0; c < cols; ++c) {
-                    dst[r * cols + c] += static_cast<AccumScalar>(src[r * cols + c]);
+        // Merge gate-wise accumulators into combined d_param_accum (n_in x 4H) and d_bias_accum (1 x 4H)
+        auto writeCols = [&](auto& dst, size_t colOffset, const auto& src){
+            auto lowD = MetaNN::LowerAccess(dst); auto* dptr = lowD.MutableRawMemory();
+            auto lowS = MetaNN::LowerAccess(src); const auto* sptr = lowS.RawMemory();
+            const size_t rows = dst.Shape()[0]; const size_t dstCols = dst.Shape()[1]; const size_t H = hidden_size;
+            for (size_t r=0; r<rows; ++r) {
+                for (size_t c=0; c<H; ++c) {
+                    dptr[r*dstCols + (colOffset + c)] += static_cast<AccumScalar>(sptr[r*H + c]);
                 }
             }
-        }
-        {
-            auto low_dst = MetaNN::LowerAccess(d_bias_accum);
-            AccumScalar* dst = low_dst.MutableRawMemory();
-            auto low_src = MetaNN::LowerAccess(d_bias_expr);
-            const float* src = low_src.RawMemory();
-            const size_t len = bias.Shape()[0] * bias.Shape()[1];
-            for (size_t j = 0; j < len; ++j) { dst[j] += static_cast<AccumScalar>(src[j]); }
-        }
+        };
+        writeCols(d_param_accum, 0*hidden_size, dW_i);
+        writeCols(d_param_accum, 1*hidden_size, dW_f);
+        writeCols(d_param_accum, 2*hidden_size, dW_g);
+        writeCols(d_param_accum, 3*hidden_size, dW_o);
+        auto writeBias = [&](auto& dst, size_t colOffset, const auto& src){
+            auto lowD = MetaNN::LowerAccess(dst); auto* dptr = lowD.MutableRawMemory();
+            auto lowS = MetaNN::LowerAccess(src); const auto* sptr = lowS.RawMemory();
+            const size_t dstCols = dst.Shape()[1]; const size_t H = hidden_size;
+            for (size_t c=0; c<H; ++c) dptr[colOffset + c] += static_cast<AccumScalar>(sptr[c]);
+        };
+        writeBias(d_bias_accum, 0*hidden_size, db_i);
+        writeBias(d_bias_accum, 1*hidden_size, db_f);
+        writeBias(d_bias_accum, 2*hidden_size, db_g);
+        writeBias(d_bias_accum, 3*hidden_size, db_o);
     }
 
     // Head gradients already accumulated in concrete matrices: d_headW_accum_f and d_headB_accum_f
@@ -560,10 +602,10 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         s_bias = MetaNN::Evaluate(beta2 * s_bias + (static_cast<AccumScalar>(1) - beta2) * (g_bias_acc * g_bias_acc));
 
         // Bias correction lazily for LSTM core
-        auto mhat_param = MetaNN::Evaluate(m_param / (static_cast<AccumScalar>(1) - beta1_pow));
-        auto vhat_param = MetaNN::Evaluate(s_param / (static_cast<AccumScalar>(1) - beta2_pow));
-        auto mhat_bias = MetaNN::Evaluate(m_bias / (static_cast<AccumScalar>(1) - beta1_pow));
-        auto vhat_bias = MetaNN::Evaluate(s_bias / (static_cast<AccumScalar>(1) - beta2_pow));
+        auto mhat_param = m_param / (static_cast<AccumScalar>(1) - beta1_pow);
+        auto vhat_param = s_param / (static_cast<AccumScalar>(1) - beta2_pow);
+        auto mhat_bias = m_bias / (static_cast<AccumScalar>(1) - beta1_pow);
+        auto vhat_bias = s_bias / (static_cast<AccumScalar>(1) - beta2_pow);
 
         // Convert to float to match parameter types and compute updates lazily for LSTM core
         auto mhat_param_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhat_param);
@@ -571,8 +613,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto mhat_bias_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhat_bias);
         auto vhat_bias_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhat_bias);
 
-        auto upd_param_f = MetaNN::Evaluate(lrScale * mhat_param_f / (MetaNN::Sqrt(vhat_param_f) + static_cast<float>(eps)));
-        auto upd_bias_f = MetaNN::Evaluate(lrScale * mhat_bias_f / (MetaNN::Sqrt(vhat_bias_f) + static_cast<float>(eps)));
+        auto upd_param_f = lrScale * mhat_param_f / (MetaNN::Sqrt(vhat_param_f) + static_cast<float>(eps));
+        auto upd_bias_f = lrScale * mhat_bias_f / (MetaNN::Sqrt(vhat_bias_f) + static_cast<float>(eps));
 
         // Apply updates lazily for LSTM core
         param = MetaNN::Evaluate(param - upd_param_f);
@@ -587,18 +629,18 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         s_headB = MetaNN::Evaluate(beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc));
 
         // Bias correction lazily
-        auto mhatW = MetaNN::Evaluate(m_headW / (static_cast<AccumScalar>(1) - beta1_pow));
-        auto vhatW = MetaNN::Evaluate(s_headW / (static_cast<AccumScalar>(1) - beta2_pow));
-        auto mhatB = MetaNN::Evaluate(m_headB / (static_cast<AccumScalar>(1) - beta1_pow));
-        auto vhatB = MetaNN::Evaluate(s_headB / (static_cast<AccumScalar>(1) - beta2_pow));
+        auto mhatW = m_headW / (static_cast<AccumScalar>(1) - beta1_pow);
+        auto vhatW = s_headW / (static_cast<AccumScalar>(1) - beta2_pow);
+        auto mhatB = m_headB / (static_cast<AccumScalar>(1) - beta1_pow);
+        auto vhatB = s_headB / (static_cast<AccumScalar>(1) - beta2_pow);
 
         // Convert to float to match parameter types and compute updates lazily
         auto mhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatW);
         auto vhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatW);
         auto mhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatB);
         auto vhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatB);
-        auto updW = MetaNN::Evaluate(lrScale * mhatW_f / (MetaNN::Sqrt(vhatW_f) + static_cast<float>(eps)));
-        auto updB = MetaNN::Evaluate(lrScale * mhatB_f / (MetaNN::Sqrt(vhatB_f) + static_cast<float>(eps)));
+        auto updW = lrScale * mhatW_f / (MetaNN::Sqrt(vhatW_f) + static_cast<float>(eps));
+        auto updB = lrScale * mhatB_f / (MetaNN::Sqrt(vhatB_f) + static_cast<float>(eps));
 
         // Apply in a single lazy expression
         returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - updW);
@@ -646,18 +688,18 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         s_headB = MetaNN::Evaluate(beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc));
 
         // Bias correction lazily
-        auto mhatW = MetaNN::Evaluate(m_headW / (static_cast<AccumScalar>(1) - beta1_pow));
-        auto vhatW = MetaNN::Evaluate(s_headW / (static_cast<AccumScalar>(1) - beta2_pow));
-        auto mhatB = MetaNN::Evaluate(m_headB / (static_cast<AccumScalar>(1) - beta1_pow));
-        auto vhatB = MetaNN::Evaluate(s_headB / (static_cast<AccumScalar>(1) - beta2_pow));
+        auto mhatW = m_headW / (static_cast<AccumScalar>(1) - beta1_pow);
+        auto vhatW = s_headW / (static_cast<AccumScalar>(1) - beta2_pow);
+        auto mhatB = m_headB / (static_cast<AccumScalar>(1) - beta1_pow);
+        auto vhatB = s_headB / (static_cast<AccumScalar>(1) - beta2_pow);
 
         // Convert to float to match parameter types and compute updates lazily
         auto mhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatW);
         auto vhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatW);
         auto mhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatB);
         auto vhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatB);
-        auto updW = MetaNN::Evaluate(lrScale * mhatW_f / (MetaNN::Sqrt(vhatW_f) + static_cast<float>(eps)));
-        auto updB = MetaNN::Evaluate(lrScale * mhatB_f / (MetaNN::Sqrt(vhatB_f) + static_cast<float>(eps)));
+        auto updW = lrScale * mhatW_f / (MetaNN::Sqrt(vhatW_f) + static_cast<float>(eps));
+        auto updB = lrScale * mhatB_f / (MetaNN::Sqrt(vhatB_f) + static_cast<float>(eps));
 
         // Apply in a single lazy expression
         returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - updW);
