@@ -10,14 +10,14 @@
 #define Params_h
 
 
-constexpr auto hidden_size = 8;
+constexpr auto hidden_size = 64;
 constexpr auto feature_size = 4;
 constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;
 
 // sequence of features
-constexpr auto window_size = 5;
-constexpr auto batch_size = 15;
+constexpr auto window_size = 64;
+constexpr auto batch_size = 128;
 
 #include <vector>
 #include "MetaNN/meta_nn.h"

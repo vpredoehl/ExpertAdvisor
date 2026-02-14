@@ -143,9 +143,9 @@ struct EA::LSTM::GateAccumulators {
 auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
     WindowWeights ww;
-    ww.W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(this->param, this->param.Shape()[0] - hidden_size);
-    ww.W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(this->param, hidden_size);
-    ww.W_cat   = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(this->param, 0, static_cast<size_t>(n_in + hidden_size));
+    ww.W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
+    ww.W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
+    ww.W_cat   = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in + hidden_size));
     return ww;
 }
 
@@ -433,15 +433,12 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         cache.reserve(window_size);
 
         // Hoist forward weight views per window (surgically extracted)
-        auto ww = this->hoistWindowWeights();
+        auto ww = hoistWindowWeights();
 
         // Build a 5-step window starting at 'start' using the const iterator overload
         Window w = t.GetWindow(window_start);
 
-        for(const auto& f_sample : w)
-        {
-            cache.push_back(this->forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat));
-        }
+        for(const auto& f_sample : w)   cache.push_back(forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat));
 
         // ---- BPTT for next-step return (regression) ----
         // We need the last sample in the window and the next sample after the window
@@ -457,7 +454,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const float close_next = nextFeat(0, closeCol);
 
         const float target_log_return = std::log(close_next) - std::log(close_T);
-        auto head = this->predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, target_log_return);
+        auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, target_log_return);
         predicted_close = std::exp(head.y_hat) * close_T;
         const float err = head.err;
 
@@ -467,7 +464,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 #endif
         ++windowsInBatch;
 
-        this->accumulateHeadGrads(d_headW_accum_f, d_headB_accum_f, prevHiddenState, err);
+        accumulateHeadGrads(d_headW_accum_f, d_headB_accum_f, prevHiddenState, err);
 
         // Initialize d_h directly from head weights (no Evaluate) and d_c as zeros
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
@@ -489,17 +486,15 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
             MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size)
         };
-        this->zeroGateAccumulators(G, param.Shape()[0], hidden_size);
+        zeroGateAccumulators(G, param.Shape()[0], hidden_size);
 
-        auto gb = this->hoistGateBlocks(ww.W_h_win, hidden_size);
+        auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
 
         // Backward through time using MetaNN elementwise ops
         for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
-        {
-            this->backwardStep(cache[static_cast<size_t>(tstep)], gb, d_h, d_c, G);
-        }
+            backwardStep(cache[static_cast<size_t>(tstep)], gb, d_h, d_c, G);
 
-        this->mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
+        mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
     }
 
     // Head gradients already accumulated in concrete matrices: d_headW_accum_f and d_headB_accum_f
@@ -804,12 +799,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
                   << " (" << windowCount << " windows)" << std::endl;
     }
     // Print the current returnHeadWeight vector (hidden_size x 1)
-    std::cout << "returnHeadWeight: [";
-    for (size_t i = 0; i < hidden_size; ++i) {
-        std::cout << returnHeadWeight(i, 0);
-        if (i + 1 < hidden_size) std::cout << ", ";
-    }
-    std::cout << "]" << std::endl;
+    std::cout << "returnHeadBias: [" << returnHeadBias(0, 0) << "]" << std::endl;
+    printMatrix("returnHeadWeight", MetaNN::Transpose(returnHeadWeight) );
 #endif
     return predicted_close;
 }

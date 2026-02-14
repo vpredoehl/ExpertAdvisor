@@ -59,10 +59,11 @@ int main(int argc, const char * argv[])
             {
                 float pc = l.CalculateBatch(b);
                 auto lastFeat = b.end();
-                printMatrix("lastFeat", *lastFeat);
-                std::cout << "lastFeat" << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
+//                printMatrix("lastFeat: ", *lastFeat);
+//                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
             } );
-            
+            printMatrix("params", l.param);
+
             break;
         }
 
