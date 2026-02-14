@@ -140,12 +140,12 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     size_t windowsInBatch = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-//    auto d_headW_acc_expr = returnHeadWeight * 0.0f; // (H x 1), lazy
-//    auto d_headB_acc_expr = returnHeadBias * 0.0f;   // (1 x 1), lazy
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headW_accum_f(hidden_size, 1);
     { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
+
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
 
     // Accumulate LSTM core gradients across all windows in the batch
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
@@ -185,6 +185,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Hoist forward weight views per window
         auto W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
         auto W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
+        auto W_cat = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in + hidden_size));
 
         // Build a 5-step window starting at 'start' using the const iterator overload
         Window w = t.GetWindow(window_start);
@@ -193,8 +194,9 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         {
             LSTM_DPRINT("Feature", f_sample);
 
-            // Replace manual concatenation with separate dot products
-            auto yExpr = MetaNN::Dot(f_sample,  W_x_win) + MetaNN::Dot(prevHiddenState, W_h_win) + bias;
+            // Single-GEMM path: build [x_t | h_{t-1}] without allocating and multiply once
+            NNUtils::ConcatColsInto(xh_concat, f_sample, prevHiddenState); // (1 x (n_in + hidden_size))
+            auto yExpr = MetaNN::Dot(xh_concat, W_cat) + bias;
 
             // Debug prints for inputs instead of concatenated
             LSTM_DPRINT("x_t", f_sample);
@@ -298,20 +300,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         ++windowsInBatch;
 
         // Accumulate head gradients across windows (in-place, no snapshots)
-        {
-            for (size_t i = 0; i < hidden_size; ++i) {
-                d_headW_accum_f.SetValue(i, 0, d_headW_accum_f(i, 0) + prevHiddenState(0, i) * err);
-            }
-            d_headB_accum_f.SetValue(0, 0, d_headB_accum_f(0, 0) + err);
-        }
+        for (size_t i = 0; i < hidden_size; ++i)    d_headW_accum_f.SetValue(i, 0, d_headW_accum_f(i, 0) + prevHiddenState(0, i) * err);
+        d_headB_accum_f.SetValue(0, 0, d_headB_accum_f(0, 0) + err);
 
         // Initialize d_h directly from head weights (no Evaluate) and d_c as zeros
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
-        {
-            for (size_t i = 0; i < hidden_size; ++i) {
-                d_h.SetValue(0, i, err * returnHeadWeight(i, 0));
-            }
-        }
+        for (size_t i = 0; i < hidden_size; ++i)    d_h.SetValue(0, i, err * returnHeadWeight(i, 0));
+
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c(1, hidden_size);
         {
             auto low = MetaNN::LowerAccess(d_c);
@@ -397,7 +392,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
                 auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dg2D);
                 auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), do2D);
                 // Write into accumulators (convert to float and add)
-                auto addBlock = [&](auto& dst, const auto& top, const auto& bot){
+                auto addBlock = [&](auto& dst, const auto& top, const auto& bot)
+                {
                     auto topE = MetaNN::Evaluate(top);
                     auto botE = MetaNN::Evaluate(bot);
                     // copy into dst: first input_size rows from topE, then hidden_size rows from botE
@@ -422,7 +418,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
                 addBlock(dW_g, dW_g_top, dW_g_bot);
                 addBlock(dW_o, dW_o_top, dW_o_bot);
                 // Bias accumulators
-                auto accBias = [&](auto& db, const auto& g2D){
+                auto accBias = [&](auto& db, const auto& g2D)
+                {
                     auto e = MetaNN::Evaluate(g2D);
                     auto lowD = MetaNN::LowerAccess(db); auto* dptr = lowD.MutableRawMemory();
                     auto lowS = MetaNN::LowerAccess(e); const auto* sptr = lowS.RawMemory();
@@ -438,21 +435,21 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         }
 
         // Merge gate-wise accumulators into combined d_param_accum (n_in x 4H) and d_bias_accum (1 x 4H)
-        auto writeCols = [&](auto& dst, size_t colOffset, const auto& src){
+        auto writeCols = [&](auto& dst, size_t colOffset, const auto& src)
+        {
             auto lowD = MetaNN::LowerAccess(dst); auto* dptr = lowD.MutableRawMemory();
             auto lowS = MetaNN::LowerAccess(src); const auto* sptr = lowS.RawMemory();
             const size_t rows = dst.Shape()[0]; const size_t dstCols = dst.Shape()[1]; const size_t H = hidden_size;
-            for (size_t r=0; r<rows; ++r) {
-                for (size_t c=0; c<H; ++c) {
+            for (size_t r=0; r<rows; ++r)
+                for (size_t c=0; c<H; ++c)
                     dptr[r*dstCols + (colOffset + c)] += static_cast<AccumScalar>(sptr[r*H + c]);
-                }
-            }
         };
         writeCols(d_param_accum, 0*hidden_size, dW_i);
         writeCols(d_param_accum, 1*hidden_size, dW_f);
         writeCols(d_param_accum, 2*hidden_size, dW_g);
         writeCols(d_param_accum, 3*hidden_size, dW_o);
-        auto writeBias = [&](auto& dst, size_t colOffset, const auto& src){
+        auto writeBias = [&](auto& dst, size_t colOffset, const auto& src)
+        {
             auto lowD = MetaNN::LowerAccess(dst); auto* dptr = lowD.MutableRawMemory();
             auto lowS = MetaNN::LowerAccess(src); const auto* sptr = lowS.RawMemory();
             const size_t dstCols = dst.Shape()[1]; const size_t H = hidden_size;
