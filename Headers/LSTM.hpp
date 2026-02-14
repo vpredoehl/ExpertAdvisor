@@ -87,6 +87,24 @@ namespace EA
         void SetLearningRate(float lr) { learningRate = lr; }
         
         float CalculateBatch(const std::ranges::subrange<DataSet::const_iterator>);
+
+    private:
+        using AccumScalar = float;
+
+        struct WindowWeights;
+        struct StepCache;
+        struct HeadLoss;
+        struct GateBlocks;
+        struct GateAccumulators;
+
+        WindowWeights hoistWindowWeights() const;
+        StepCache forwardStep(const FloatMatrixCPU& x_t, const WindowWeights& ww, const FloatMatrixCPU& bias, FloatMatrixCPU& prevHiddenState, FloatMatrixCPU& prevCellState, FloatMatrixCPU& xh_concat) const;
+        HeadLoss predictAndLoss(const FloatMatrixCPU& h_T, const FloatMatrixCPU& W, const FloatMatrixCPU& b, float target) const;
+        void accumulateHeadGrads(FloatMatrixCPU& dW_accum, FloatMatrixCPU& dB_accum, const FloatMatrixCPU& h_T, float err) const;
+        GateBlocks hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const;
+        void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
+        void backwardStep(const StepCache& sc, const GateBlocks& gb, FloatMatrixCPU& d_h, FloatMatrixCPU& d_c, GateAccumulators& A) const;
+        void mergeGateAccumulators(const GateAccumulators& A, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_param_accum, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_bias_accum, size_t H) const;
     };
 }
 
