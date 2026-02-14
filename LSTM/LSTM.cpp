@@ -200,15 +200,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             LSTM_DPRINT("x_t", f_sample);
             LSTM_DPRINT("h_{t-1}", prevHiddenState);
 
-            // Split gates as a (4 x gateWidth) view
+            // Split gates without copies using zero-copy views, then compute activations on 1D views
             const size_t gateWidth = yExpr.Shape()[1] / 4;
-            auto gates2D = MetaNN::Reshape(yExpr, MetaNN::Shape(4, gateWidth));
-
-            // Gate activations directly on 1D slices
-            auto i_input = MetaNN::Sigmoid(gates2D[0]);
-            auto f_forget = MetaNN::Sigmoid(gates2D[1]);
-            auto g_cell_candidate = MetaNN::Tanh   (gates2D[2]);
-            auto o_output = MetaNN::Sigmoid(gates2D[3]);
+            auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yExpr);
+            auto i_input = MetaNN::Sigmoid(MetaNN::Reshape(i2D, MetaNN::Shape(gateWidth)));
+            auto f_forget = MetaNN::Sigmoid(MetaNN::Reshape(f2D, MetaNN::Shape(gateWidth)));
+            auto g_cell_candidate = MetaNN::Tanh(MetaNN::Reshape(g2D, MetaNN::Shape(gateWidth)));
+            auto o_output = MetaNN::Sigmoid(MetaNN::Reshape(o2D, MetaNN::Shape(gateWidth)));
 
             // Debug: evaluate and print gate activations
             LSTM_DEBUG({
