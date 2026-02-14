@@ -22,6 +22,10 @@
 #define LSTM_TRAINING_PROGRESS 1
 #endif
 
+#ifndef LSTM_INFERENCE_ONLY
+// Set to 1 to compile out training logic and run forward-only inference paths
+#define LSTM_INFERENCE_ONLY 0
+#endif
 
 // Debug helpers: compile out debug code and prints when disabled
 #if LSTM_DEBUG_PRINTS
@@ -405,21 +409,23 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 {
     float predicted_close = 0;
-#if LSTM_TRAINING_PROGRESS
+#if LSTM_TRAINING_PROGRESS && !LSTM_INFERENCE_ONLY
     double runningLoss = 0.0;
     size_t windowCount = 0;
 #endif
 
-    // Count windows in this batch for gradient averaging
+#if !LSTM_INFERENCE_ONLY
     size_t windowsInBatch = 0;
+#endif
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+
+#if !LSTM_INFERENCE_ONLY
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headW_accum_f(hidden_size, 1);
     { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
-
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
 
     // Accumulate LSTM core gradients across all windows in the batch
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
@@ -432,6 +438,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto low = MetaNN::LowerAccess(d_bias_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + bias.Shape()[0] * bias.Shape()[1], 0.0f);
     }
+#endif
 
     // Slide a 5-step window across this 15-step batch
     for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
@@ -468,10 +475,11 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         predicted_close = std::exp(head.y_hat) * close_T;
         const float err = head.err;
 
-#if LSTM_TRAINING_PROGRESS
+#if !LSTM_INFERENCE_ONLY
+    #if LSTM_TRAINING_PROGRESS
         runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
         ++windowCount;
-#endif
+    #endif
         ++windowsInBatch;
 
         accumulateHeadGrads(d_headW_accum_f, d_headB_accum_f, prevHiddenState, err);
@@ -505,8 +513,10 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             backwardStep(cache[static_cast<size_t>(tstep)], gb, d_h, d_c, G);
 
         mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
+#endif
     }
 
+#if !LSTM_INFERENCE_ONLY
     // Head gradients already accumulated in concrete matrices: d_headW_accum_f and d_headB_accum_f
 
     // Average gradients by number of windows
@@ -802,8 +812,9 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScale * d_headB_accum_f);
     }
 #endif
+#endif
 
-#if LSTM_TRAINING_PROGRESS
+#if LSTM_TRAINING_PROGRESS && !LSTM_INFERENCE_ONLY
     if (windowCount > 0) {
         std::cout << "Batch MSE: " << (runningLoss / static_cast<double>(windowCount))
                   << " (" << windowCount << " windows)" << std::endl;
@@ -865,5 +876,6 @@ float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     float predicted_close_next = std::exp(y_hat) * close_T;
     return predicted_close_next;
 }
+
 
 
