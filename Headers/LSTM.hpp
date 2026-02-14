@@ -70,7 +70,7 @@ namespace EA
         }
 
         float long_term, short_term, in;
-        FloatMatrixCPU param { n_in, 4 * n_out }; // Combined gate weights matrix with shape [n_in x 4*n_out]
+        FloatMatrixCPU param { static_cast<size_t>(n_in + hidden_size), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
         FloatMatrixCPU prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
         FloatMatrixCPU bias { 1, 4 * n_out };
 
@@ -109,5 +109,4 @@ namespace EA
 }
 
 #endif /* LSTM_hpp */
-
 

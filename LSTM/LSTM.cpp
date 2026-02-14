@@ -157,8 +157,16 @@ auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
                            FloatMatrixCPU& xh_concat) const -> StepCache
 {
     // Build [x_t | h_{t-1}] and compute all gates in one GEMM
-    NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
-    auto yExpr = MetaNN::Dot(xh_concat, ww.W_cat) + bias;
+    {
+        const size_t expectedCols = x_t.Shape()[1] + prevHiddenState.Shape()[1];
+        if (xh_concat.Shape()[0] != 1 || xh_concat.Shape()[1] != expectedCols) {
+            xh_concat = FloatMatrixCPU(1, expectedCols);
+        }
+        NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+    }
+    const size_t K = xh_concat.Shape()[1];
+    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(ww.W_cat, 0, K);
+    auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
 
     const size_t H = prevHiddenState.Shape()[1];
     auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yExpr);
@@ -348,7 +356,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     // Deterministic constant initialization for verification
     const float weightInit = 0.1f;
     const float biasInit   = 0.0f; // used below when initializing bias
-    for (int r = 0; r < n_in; ++r)
+    for (int r = 0; r < n_in + hidden_size; ++r)
         for (int c = 0; c < 4 * n_out; ++c)
             param.SetValue(r, c, weightInit);
     
@@ -369,7 +377,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     // Xavier/Glorot uniform initialization limit
     float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(n_out)));
 
-    for (int r = 0; r < n_in; ++r)
+    for (int r = 0; r < n_in + hidden_size; ++r)
         for (int c = 0; c < 4 * n_out; ++c)
             param.SetValue(r, c, uniform_symmetric(limit));
     
