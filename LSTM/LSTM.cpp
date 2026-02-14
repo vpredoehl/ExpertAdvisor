@@ -140,8 +140,12 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     size_t windowsInBatch = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-    auto d_headW_acc_expr = returnHeadWeight * 0.0f; // (H x 1), lazy
-    auto d_headB_acc_expr = returnHeadBias * 0.0f;   // (1 x 1), lazy
+//    auto d_headW_acc_expr = returnHeadWeight * 0.0f; // (H x 1), lazy
+//    auto d_headB_acc_expr = returnHeadBias * 0.0f;   // (1 x 1), lazy
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headW_accum_f(hidden_size, 1);
+    { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum_f(1, 1);
+    { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
     // Accumulate LSTM core gradients across all windows in the batch
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
@@ -289,20 +293,31 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 #endif
         ++windowsInBatch;
 
-        // Backprop signal into h_T uses a snapshot of head weights (and bias for completeness)
-        auto headW_snapshot = MetaNN::Evaluate(returnHeadWeight);
-        auto headB_snapshot = MetaNN::Evaluate(returnHeadBias);
+        // Accumulate head gradients across windows (in-place, no snapshots)
+        {
+            for (size_t i = 0; i < hidden_size; ++i) {
+                d_headW_accum_f.SetValue(i, 0, d_headW_accum_f(i, 0) + prevHiddenState(0, i) * err);
+            }
+            d_headB_accum_f.SetValue(0, 0, d_headB_accum_f(0, 0) + err);
+        }
 
-        // Lazy head gradient accumulation across windows (expressions)
-        d_headW_acc_expr = d_headW_acc_expr + MetaNN::Transpose(prevHiddenState) * err; // lazy
-        d_headB_acc_expr = d_headB_acc_expr + (returnHeadBias * 0.0f + err);            // lazy
+        // Initialize d_h directly from head weights (no Evaluate) and d_c as zeros
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
+        {
+            for (size_t i = 0; i < hidden_size; ++i) {
+                d_h.SetValue(0, i, err * returnHeadWeight(i, 0));
+            }
+        }
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c(1, hidden_size);
+        {
+            auto low = MetaNN::LowerAccess(d_c);
+            std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
+        }
 
-        auto d_h = MetaNN::Evaluate(err * MetaNN::Transpose(headW_snapshot));
-        auto d_c = MetaNN::Evaluate(prevHiddenState * 0.0f); // zeros like h
-
-        // Lazy per-window accumulators for LSTM core gradients (expressions)
-        auto d_param_expr_acc = param * 0.0f;  // lazy, matches shape (n_in x 4H)
-        auto d_bias_expr_acc  = bias  * 0.0f;  // lazy, matches shape (1 x 4H)
+        // Stack per-step contributions and reduce once at window end
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> stackConcat(window_size, n_in);
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> stackPre(window_size, 4 * hidden_size);
+        size_t rowIdx = 0;
 
         // Backward through time using MetaNN elementwise ops
         for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
@@ -332,19 +347,28 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             auto dg2D = MetaNN::Reshape(d_g, MetaNN::Shape(1, hidden_size));
             auto do2D = MetaNN::Reshape(d_o, MetaNN::Shape(1, hidden_size));
 
-            // Evaluate reshaped expressions to concrete matrices so we can take raw pointers
-            auto di2Dm = MetaNN::Evaluate(di2D);
-            auto df2Dm = MetaNN::Evaluate(df2D);
-            auto dg2Dm = MetaNN::Evaluate(dg2D);
-            auto do2Dm = MetaNN::Evaluate(do2D);
+            // Concatenate gate gradients without pre-materializing; ConcatCols will evaluate internally
+            auto d_pre = NNUtils::ConcatCols<float, MetaNN::DeviceTags::CPU>( di2D, df2D, dg2D, do2D );
 
-            // Replace manual packing with NNUtils::ConcatCols
-            auto d_pre = NNUtils::ConcatCols<float, MetaNN::DeviceTags::CPU>({ di2Dm, df2Dm, dg2Dm, do2Dm });
-
-            // Lazy accumulation into per-window gradient expressions
-            d_bias_expr_acc  = d_bias_expr_acc  + d_pre;   // lazy
-            auto dW_t = MetaNN::Dot(MetaNN::Transpose(sc.concat), d_pre); // (n_in x 4H)
-            d_param_expr_acc = d_param_expr_acc + dW_t;    // lazy
+            // Collect per-step contributions into stacked matrices
+            {
+                // copy sc.concat (1 x n_in) into row rowIdx of stackConcat
+                auto lowSrc = MetaNN::LowerAccess(sc.concat);
+                auto lowDst = MetaNN::LowerAccess(stackConcat);
+                const float* src = lowSrc.RawMemory();
+                float* dst = lowDst.MutableRawMemory();
+                std::copy(src, src + n_in, dst + rowIdx * n_in);
+            }
+            {
+                // d_pre is concrete from ConcatCols; copy (1 x 4H) into row rowIdx of stackPre
+                auto lowSrc = MetaNN::LowerAccess(d_pre);
+                auto lowDst = MetaNN::LowerAccess(stackPre);
+                const float* src = lowSrc.RawMemory();
+                float* dst = lowDst.MutableRawMemory();
+                const size_t cols = 4 * hidden_size;
+                std::copy(src, src + cols, dst + rowIdx * cols);
+            }
+            ++rowIdx;
 
             // Propagate to previous hidden: use the part of W corresponding to h_prev (last hidden_size rows of concat)
             // Build W_h as a concrete (hidden_size x 4*hidden_size) block copied from the bottom of param
@@ -357,9 +381,21 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             d_c = MetaNN::Evaluate(MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, hidden_size)));
         }
 
-        // Evaluate per-window gradient accumulators once
-        auto d_param_expr = MetaNN::Evaluate(d_param_expr_acc);
-        auto d_bias_expr  = MetaNN::Evaluate(d_bias_expr_acc);
+        // Reduce stacked contributions once per window
+        auto d_param_expr = MetaNN::Evaluate(MetaNN::Dot(MetaNN::Transpose(stackConcat), stackPre));
+        MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_bias_expr(1, 4 * hidden_size);
+        {
+            auto lowDst = MetaNN::LowerAccess(d_bias_expr);
+            float* dst = lowDst.MutableRawMemory();
+            std::fill(dst, dst + 4 * hidden_size, 0.0f);
+            auto lowSrc = MetaNN::LowerAccess(stackPre);
+            const float* src = lowSrc.RawMemory();
+            const size_t cols = 4 * hidden_size;
+            for (size_t r = 0; r < rowIdx; ++r) {
+                const float* row = src + r * cols;
+                for (size_t c = 0; c < cols; ++c) dst[c] += row[c];
+            }
+        }
 
         // Accumulate LSTM core gradients for batch update
         {
@@ -385,9 +421,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         }
     }
 
-    // Evaluate lazy head accumulators once per batch
-    auto d_headW_accum_f = MetaNN::Evaluate(d_headW_acc_expr); // (H x 1), float
-    auto d_headB_accum_f = MetaNN::Evaluate(d_headB_acc_expr); // (1 x 1), float
+    // Head gradients already accumulated in concrete matrices: d_headW_accum_f and d_headB_accum_f
 
     // Average gradients by number of windows
     const float lrScale = (windowsInBatch > 0) ? (learningRate / static_cast<float>(windowsInBatch)) : learningRate;

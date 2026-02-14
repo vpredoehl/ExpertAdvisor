@@ -8,6 +8,55 @@
 
 namespace NNUtils {
 
+// Works for general R x K_i by copying per row.
+template <typename T, typename DevT, typename... Parts>
+MetaNN::Matrix<T, DevT> ConcatCols(Parts&&... parts)
+{
+    // Evaluate and collect parts to ensure concrete matrices, even for heterogeneous expressions
+    std::vector<MetaNN::Matrix<T, DevT>> mats;
+    mats.reserve(sizeof...(Parts));
+    auto collect = [&](auto&& p)
+    {
+        mats.push_back(MetaNN::Evaluate(std::forward<decltype(p)>(p)));
+    };
+    (collect(std::forward<Parts>(parts)), ...);
+
+    size_t rows = 0;
+    size_t totalCols = 0;
+    bool first = true;
+    for (const auto& m : mats)
+    {
+        if (first)
+        {
+            rows = m.Shape()[0];
+            first = false;
+        }
+        totalCols += m.Shape()[1];
+    }
+
+    MetaNN::Matrix<T, DevT> out(rows, totalCols);
+    auto lowOut = MetaNN::LowerAccess(out);
+    T* outRaw = lowOut.MutableRawMemory();
+
+    // Copy per row to correctly handle R > 1
+    for (size_t r = 0; r < rows; ++r)
+    {
+        size_t colOffset = 0;
+        for (const auto& m : mats)
+        {
+            const size_t cols = m.Shape()[1];
+            auto lowM = MetaNN::LowerAccess(m);
+            const T* src = lowM.RawMemory();
+            // Row-major layout: row r starts at r * cols
+            std::copy(src + r * cols, src + r * cols + cols,
+                      outRaw + r * totalCols + colOffset);
+            colOffset += cols;
+        }
+    }
+
+    return out;
+}
+
 // Concatenate matrices along columns.
 // All input parts must have the same number of rows. Typical use: concatenate 1xK_i row vectors.
 // Works for general R x K_i by copying per row.
