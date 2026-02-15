@@ -144,7 +144,7 @@ struct EA::LSTM::GateAccumulators {
 
 // Member function definitions moved to EA::LSTM
 
-auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
+inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
     WindowWeights ww;
     ww.W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
@@ -153,7 +153,7 @@ auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
     return ww;
 }
 
-auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
+inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
                            const WindowWeights& ww,
                            const FloatMatrixCPU& bias,
                            FloatMatrixCPU& prevHiddenState,
@@ -208,7 +208,7 @@ auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     return sc;
 }
 
-auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
+inline auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
                              const FloatMatrixCPU& W,
                              const FloatMatrixCPU& b,
                              float target) const -> HeadLoss
@@ -231,7 +231,7 @@ float EA::LSTM::predictOnly(const FloatMatrixCPU& h_T,
     return predHandle.Data()(0, 0);
 }
 
-void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
+inline void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
                                    FloatMatrixCPU& dB_accum,
                                    const FloatMatrixCPU& h_T,
                                    float err) const
@@ -243,7 +243,7 @@ void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
     dB_accum.SetValue(0, 0, dB_accum(0, 0) + err);
 }
 
-auto EA::LSTM::hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const -> GateBlocks
+inline auto EA::LSTM::hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const -> GateBlocks
 {
     GateBlocks gb;
     gb.W_i = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 0 * H, H);
@@ -253,7 +253,7 @@ auto EA::LSTM::hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const ->
     return gb;
 }
 
-void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const
+inline void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const
 {
     auto zfill = [&](auto& m){
         auto low = MetaNN::LowerAccess(m);
@@ -263,7 +263,7 @@ void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) 
     zfill(A.db_i); zfill(A.db_f); zfill(A.db_g); zfill(A.db_o);
 }
 
-void EA::LSTM::backwardStep(const StepCache& sc,
+inline void EA::LSTM::backwardStep(const StepCache& sc,
                             const GateBlocks& gb,
                             FloatMatrixCPU& d_h,
                             FloatMatrixCPU& d_c,
@@ -334,7 +334,7 @@ void EA::LSTM::backwardStep(const StepCache& sc,
     d_c = dc_handle.Data();
 }
 
-void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
+inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_param_accum,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_bias_accum,
                                      size_t H) const

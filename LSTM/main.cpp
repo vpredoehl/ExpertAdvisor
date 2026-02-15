@@ -20,6 +20,7 @@
 #include "db_cursor_iterator.hpp"
 #include "Tensor.hpp"
 #include "LSTM.hpp"
+#include "PgModelIO.hpp"
 
 #include <MetaNN/operation/math/sigmoid.h>
 #include <MetaNN/operation/math/tanh.h>
@@ -63,6 +64,24 @@ int main(int argc, const char * argv[])
 //                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
             } );
             printMatrix("params", l.param);
+
+            // Persist trained model parameters to DB
+            try {
+                // Create a new model entry and save all parameters
+                long long modelId = DBIO::PgModelIO::createModel(w, rawPriceTableName + "-model", "trained parameters");
+                DBIO::PgModelIO::saveAll(w, modelId, l);
+                w.commit();
+                std::cout << "Saved model with model_id=" << modelId << std::endl;
+
+                // Example: load back into a fresh LSTM instance (optional verification)
+                EA::LSTM l2{ t, 1, 0 };
+                pqxx::work w2{ c };
+                DBIO::PgModelIO::loadAll(w2, modelId, l2);
+                w2.commit();
+                printMatrix("loaded params", l2.param);
+            } catch (const std::exception& e) {
+                std::cerr << "Model save/load error: " << e.what() << std::endl;
+            }
 
             break;
         }

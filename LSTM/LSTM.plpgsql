@@ -1,0 +1,106 @@
+-- Run this once to create the database
+CREATE DATABASE "LSTM";
+
+\c LSTM
+
+-- Model registry (for multiple saved models/versions)
+CREATE TABLE IF NOT EXISTS model (
+    model_id      BIGSERIAL PRIMARY KEY,
+    name          TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    comment       TEXT
+);
+
+-- Generic matrix storage for any parameter
+-- One row per element (row, col), with dimension metadata per parameter name
+CREATE TABLE IF NOT EXISTS matrix (
+    model_id      BIGINT NOT NULL REFERENCES model(model_id) ON DELETE CASCADE,
+    param_name    TEXT   NOT NULL,       -- e.g., 'param', 'bias', 'returnHeadWeight', 'returnHeadBias'
+    n_rows        INT    NOT NULL,
+    n_cols        INT    NOT NULL,
+    row_idx       INT    NOT NULL,       -- 0-based index
+    col_idx       INT    NOT NULL,       -- 0-based index
+    value         DOUBLE PRECISION NOT NULL,
+
+    CONSTRAINT matrix_pk PRIMARY KEY (model_id, param_name, row_idx, col_idx),
+
+    -- Ensure dimensions are consistent for a given (model_id, param_name).
+    CONSTRAINT matrix_dims_consistent CHECK (row_idx >= 0 AND row_idx < n_rows AND col_idx >= 0 AND col_idx < n_cols)
+);
+
+-- Optional: enforce consistent n_rows/n_cols per (model_id, param_name)
+-- via a partial unique index on the (model_id, param_name, n_rows, n_cols) combination.
+-- This prevents mixing different shapes under the same param_name for a model.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_matrix_shape
+ON matrix (model_id, param_name, n_rows, n_cols);
+
+CREATE OR REPLACE VIEW vw_param AS
+SELECT * FROM matrix WHERE param_name = 'param';
+
+CREATE OR REPLACE VIEW vw_bias AS
+SELECT * FROM matrix WHERE param_name = 'bias';
+
+CREATE OR REPLACE VIEW vw_return_head_weight AS
+SELECT * FROM matrix WHERE param_name = 'returnHeadWeight';
+
+CREATE OR REPLACE VIEW vw_return_head_bias AS
+SELECT * FROM matrix WHERE param_name = 'returnHeadBias';
+
+-- Upsert a single element (row_idx, col_idx) for a given parameter
+CREATE OR REPLACE FUNCTION upsert_matrix_element(
+    p_model_id   BIGINT,
+    p_param_name TEXT,
+    p_n_rows     INT,
+    p_n_cols     INT,
+    p_row_idx    INT,
+    p_col_idx    INT,
+    p_value      DOUBLE PRECISION
+) RETURNS VOID AS $$
+BEGIN
+    INSERT INTO matrix (model_id, param_name, n_rows, n_cols, row_idx, col_idx, value)
+    VALUES (p_model_id, p_param_name, p_n_rows, p_n_cols, p_row_idx, p_col_idx, p_value)
+    ON CONFLICT (model_id, param_name, row_idx, col_idx) DO UPDATE
+      SET value = EXCLUDED.value,
+          n_rows = EXCLUDED.n_rows,
+          n_cols = EXCLUDED.n_cols;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Replace a parameter (delete existing entries for that param, then insert)
+CREATE OR REPLACE PROCEDURE replace_parameter(
+    p_model_id   BIGINT,
+    p_param_name TEXT,
+    p_n_rows     INT,
+    p_n_cols     INT,
+    p_values     DOUBLE PRECISION[]  -- flattened row-major array, length must be n_rows * n_cols
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    total INT := p_n_rows * p_n_cols;
+    idx   INT;
+    r     INT;
+    c     INT;
+BEGIN
+    IF array_length(p_values, 1) IS DISTINCT FROM total THEN
+        RAISE EXCEPTION 'replace_parameter: length of p_values (%) does not match n_rows*n_cols (%)',
+            array_length(p_values, 1), total;
+    END IF;
+
+    -- Clear existing entries for this parameter
+    DELETE FROM matrix WHERE model_id = p_model_id AND param_name = p_param_name;
+
+    -- Insert new entries
+    idx := 1;
+    FOR r IN 0..(p_n_rows - 1) LOOP
+        FOR c IN 0..(p_n_cols - 1) LOOP
+            INSERT INTO matrix (model_id, param_name, n_rows, n_cols, row_idx, col_idx, value)
+            VALUES (p_model_id, p_param_name, p_n_rows, p_n_cols, r, c, p_values[idx]);
+            idx := idx + 1;
+        END LOOP;
+    END LOOP;
+END;
+$$;
+
+INSERT INTO model (name, comment) VALUES ('baseline-lstm', 'First trained run')
+RETURNING model_id;
