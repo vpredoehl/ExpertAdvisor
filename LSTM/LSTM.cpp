@@ -827,7 +827,35 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     return predicted_close;
 }
 
-float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
+inline std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
+{
+    if (resetAtStart) ResetPreviousState();
+    std::vector<float> preds;
+    preds.reserve(batch.end() - batch.begin());
+    for (auto it = batch.begin(); it + window_size < batch.end(); ++it)
+    {
+        auto w = t.GetWindow(it);
+        preds.push_back(PredictNextLogReturn(w, /*resetState=*/false));
+    }
+    return preds;
+}
+
+std::vector<float> EA::LSTM::RollingPredictNextClose(const Window& batch, bool resetAtStart)
+{
+    if (resetAtStart) ResetPreviousState();
+    std::vector<float> preds;
+    preds.reserve(batch.end() - batch.begin());
+    for (auto it = batch.begin(); it + window_size < batch.end(); ++it)
+    {
+        auto w = t.GetWindow(it);
+        preds.push_back(PredictNextClose(w, /*resetState=*/false));
+    }
+    return preds;
+}
+
+
+
+inline float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
 {
     if (resetState) {
         ResetPreviousState();
@@ -837,40 +865,30 @@ float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
     auto ww = hoistWindowWeights();
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
     // Forward through the window
-    for (const auto& f_sample : w)
-    {
-        (void)forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
-    }
+    for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
 
     // Predict next-step log return from the last hidden state
     return predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 }
 
-float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
+inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 {
     // We need the last close in the window to convert log return to price
     constexpr size_t closeCol = 1;
 
     // If we need to reset, do it before we take the last close value
-    if (resetState) {
-        ResetPreviousState();
-    }
+    if (resetState) ResetPreviousState();
 
     // Capture last close from the provided window
     float close_T = 0.0f;
-    for (const auto& f_sample : w) {
-        close_T = f_sample(0, closeCol);
-    }
+    for (const auto& f_sample : w)  close_T = f_sample(0, closeCol);
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
 
     // Forward through the window
-    for (const auto& f_sample : w)
-    {
-        (void)forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
-    }
+    for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
 
     // Predict log return and convert to price
     float y_hat = predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);

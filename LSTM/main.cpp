@@ -84,11 +84,15 @@ int main(int argc, const char * argv[])
             std::cout << "LSTM_LOAD_LATEST=0; using default-initialized parameters" << std::endl;
 #endif
 
+            
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             t.ForEachBatch( [&](auto b)
             {
-                float pc = l.CalculateBatch(b);
-                auto lastFeat = b.end();
+//                for(auto& w : b)
+                auto predsClose = l.RollingPredictNextClose(b, /*resetAtStart=*/true);
+                return;
+//                float pc = l.CalculateBatch(b);
+//                auto lastFeat = b.end();
 //                printMatrix("lastFeat: ", *lastFeat);
 //                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
             } );
