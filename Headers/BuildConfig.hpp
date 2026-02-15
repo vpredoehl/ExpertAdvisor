@@ -5,25 +5,12 @@
 // (Preprocessor Macros) as needed.
 
 // 1: compile out training logic and run forward-only inference paths
-#ifndef LSTM_INFERENCE_ONLY
-#define LSTM_INFERENCE_ONLY 1
-#endif
+constexpr bool inference_only = true;
+constexpr bool save_enable = true;
 
-// 1: load latest model from DB at startup; 0: start from scratch
-#ifndef LSTM_LOAD_LATEST
-#define LSTM_LOAD_LATEST 1
-#endif
+// true: load latest model from DB at startup; false: start from scratch
+constexpr bool load_latest = true;
 
-// Default: enable save in training builds, disable in inference-only builds
-#ifndef LSTM_SAVE_ENABLE
-  #if LSTM_INFERENCE_ONLY
-    #define LSTM_SAVE_ENABLE 0
-  #else
-    #define LSTM_SAVE_ENABLE 1
-  #endif
-#endif
 
 // 1: overwrite the loaded/latest model_id when saving; 0: create a new model snapshot
-#ifndef LSTM_SAVE_OVERWRITE
-#define LSTM_SAVE_OVERWRITE 1
-#endif
+constexpr bool save_overwrite = true;
