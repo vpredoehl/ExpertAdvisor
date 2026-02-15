@@ -88,6 +88,12 @@ int main(int argc, const char * argv[])
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             t.ForEachBatch( [&](auto b)
             {
+#if LSTM_INFERENCE_ONLY == 0
+                float pc = l.CalculateBatch(b);
+//                auto lastFeat = b.end();
+//                printMatrix("lastFeat: ", *lastFeat);
+//                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
+#else
                 // Rolling predictions for next-step log return (movement) over this batch (Window)
                 auto predsLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
 
@@ -110,6 +116,27 @@ int main(int argc, const char * argv[])
                     predMove.push_back(pred_close_next - close_T);
                     actualMove.push_back(close_next - close_T);
                 }
+
+                // Debug stats to check scaling/units
+                auto printStats = [](const char* label, const std::vector<float>& v)
+                {
+                    if (v.empty()) { std::cout << label << ": (empty)\n"; return; }
+                    double sum = 0.0, sumsq = 0.0; float vmin = v.front(), vmax = v.front();
+                    for (float x : v) { sum += x; sumsq += static_cast<double>(x) * static_cast<double>(x); vmin = std::min(vmin, x); vmax = std::max(vmax, x); }
+                    double mean = sum / static_cast<double>(v.size());
+                    double var  = std::max(0.0, sumsq / static_cast<double>(v.size()) - mean * mean);
+                    double stdv = std::sqrt(var);
+                    std::cout << label << ": n=" << v.size()
+                              << " mean=" << mean
+                              << " std="  << stdv
+                              << " min="  << vmin
+                              << " max="  << vmax << std::endl;
+                };
+
+                // pred_raw is in log-return space; pred_final is price movement (delta close)
+                printStats("eval: pred_raw (log-return)", predsLogRet);
+                printStats("eval: pred_final (price delta)", predMove);
+                printStats("eval: act_move (price delta)", actualMove);
 
                 // Compare: print a few samples and compute MAE + direction accuracy for price movement
                 size_t N = std::min(predMove.size(), actualMove.size());
@@ -199,6 +226,7 @@ int main(int argc, const char * argv[])
 #else
                 (void)l; // unused in inference-only save-disabled builds
                 std::cout << "LSTM_SAVE_ENABLE=0; skipping model save" << std::endl;
+#endif
 #endif
             }
             catch (const std::exception& e) { std::cerr << "Model save/load error: " << e.what() << std::endl;    }

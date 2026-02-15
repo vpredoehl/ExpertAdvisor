@@ -25,5 +25,5 @@
 
 // 1: overwrite the loaded/latest model_id when saving; 0: create a new model snapshot
 #ifndef LSTM_SAVE_OVERWRITE
-#define LSTM_SAVE_OVERWRITE 0
+#define LSTM_SAVE_OVERWRITE 1
 #endif

@@ -9,6 +9,8 @@
 #include <random>
 #include <cmath>
 #include <algorithm>
+#include <limits>
+#include <iostream>
 
 #include "LSTM.hpp"
 #include "Tensor.hpp"
@@ -441,6 +443,16 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     }
 #endif
 
+#if !LSTM_INFERENCE_ONLY
+    // Debug stats for training targets (log returns) and sample predictions
+    double y_sum = 0.0, y_sumsq = 0.0;
+    float y_min = std::numeric_limits<float>::infinity();
+    float y_max = -std::numeric_limits<float>::infinity();
+    size_t y_count = 0;
+    std::vector<float> yhat_samples;
+    std::vector<float> ydenorm_samples; // predicted price delta (predicted_close - close_T)
+#endif
+
     // Slide a 5-step window across this 15-step batch
     for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
     {
@@ -475,6 +487,20 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, target_log_return);
         predicted_close = std::exp(head.y_hat) * close_T;
         const float err = head.err;
+
+#if !LSTM_INFERENCE_ONLY
+        // Accumulate training target statistics and sample predictions for debugging
+        y_sum += static_cast<double>(target_log_return);
+        y_sumsq += static_cast<double>(target_log_return) * static_cast<double>(target_log_return);
+        y_min = std::min(y_min, target_log_return);
+        y_max = std::max(y_max, target_log_return);
+        ++y_count;
+        if (yhat_samples.size() < 10)
+        {
+            yhat_samples.push_back(head.y_hat);
+            ydenorm_samples.push_back(predicted_close - close_T);
+        }
+#endif
 
 #if !LSTM_INFERENCE_ONLY
     #if LSTM_TRAINING_PROGRESS
@@ -516,6 +542,26 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
 #endif
     }
+
+#if !LSTM_INFERENCE_ONLY
+    if (y_count > 0)
+    {
+        double y_mean = y_sum / static_cast<double>(y_count);
+        double y_var  = std::max(0.0, y_sumsq / static_cast<double>(y_count) - y_mean * y_mean);
+        double y_std  = std::sqrt(y_var);
+        std::cout << "train: target_log_return stats n=" << y_count
+                  << " mean=" << y_mean
+                  << " std="  << y_std
+                  << " min="  << y_min
+                  << " max="  << y_max << std::endl;
+        std::cout << "train: pred_raw (log-return) samples:";
+        for (float v : yhat_samples) std::cout << ' ' << v;
+        std::cout << std::endl;
+        std::cout << "train: pred_final (price delta) samples:";
+        for (float v : ydenorm_samples) std::cout << ' ' << v;
+        std::cout << std::endl;
+    }
+#endif
 
 #if !LSTM_INFERENCE_ONLY
     // Head gradients already accumulated in concrete matrices: d_headW_accum_f and d_headB_accum_f
@@ -895,6 +941,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     float predicted_close_next = std::exp(y_hat) * close_T;
     return predicted_close_next;
 }
+
 
 
 
