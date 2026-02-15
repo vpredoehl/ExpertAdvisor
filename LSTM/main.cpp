@@ -10,6 +10,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <optional>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -30,6 +31,33 @@
 
 const std::string dbName = "forex";
 const std::string dbModelName = "LSTM";
+
+#ifndef LSTM_INFERENCE_ONLY
+#define LSTM_INFERENCE_ONLY 0
+#endif
+
+#ifndef LSTM_LOAD_LATEST
+// 1: load latest model from DB at startup; 0: start from scratch
+#define LSTM_LOAD_LATEST 1
+#endif
+
+#ifndef LSTM_SAVE_ENABLE
+// Default: enable save in training builds, disable in inference-only builds
+#ifdef LSTM_INFERENCE_ONLY
+  #if LSTM_INFERENCE_ONLY
+    #define LSTM_SAVE_ENABLE 0
+  #else
+    #define LSTM_SAVE_ENABLE 1
+  #endif
+#else
+  #define LSTM_SAVE_ENABLE 1
+#endif
+#endif
+
+#ifndef LSTM_SAVE_OVERWRITE
+// 1: overwrite the loaded/latest model_id when saving; 0: create a new model snapshot
+#define LSTM_SAVE_OVERWRITE 1
+#endif
 
 
 int main(int argc, const char * argv[])
@@ -58,8 +86,30 @@ int main(int argc, const char * argv[])
             while (csb != cse) t.Add(*csb++);
   
             EA::LSTM l { t, 1, 0 };
-            try {   DBIO::PgModelIO::loadAll(w_LSTM, 1, l); }
-            catch(std::exception& e)    {   std::cout << e.what() << " using default params" << std::endl;    }
+
+            // Track whether we started from scratch (no model loaded)
+            std::optional<long long> loadedModelId;
+            bool startedFromScratch = true;
+
+            // Optionally load the latest model parameters from the LSTM DB
+#if LSTM_LOAD_LATEST
+            try
+            {
+                pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
+                if (!r.empty() && !r[0][0].is_null())
+                {
+                    loadedModelId = r[0][0].as<long long>();
+                    DBIO::PgModelIO::loadAll(w_LSTM, *loadedModelId, l);
+                    startedFromScratch = false;
+                    std::cout << "Loaded model_id=" << *loadedModelId << std::endl;
+                }
+                else {  std::cout << "No models found; using default-initialized parameters" << std::endl;  }
+            }
+            catch (const std::exception& e) {   std::cout << "Load latest failed: " << e.what() << "; using default params" << std::endl;   }
+#else
+            std::cout << "LSTM_LOAD_LATEST=0; using default-initialized parameters" << std::endl;
+#endif
+
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             t.ForEachBatch( [&](auto b)
             {
@@ -73,12 +123,43 @@ int main(int argc, const char * argv[])
             // Persist trained model parameters to DB
             try
             {
-                // Use a dedicated read-write transaction on the LSTM database to save
+#if LSTM_SAVE_ENABLE
+                // Ensure this transaction is read-write for saving
+                w_LSTM.exec("SET TRANSACTION READ WRITE;");
 
-                long long modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                long long modelId = -1;
+                if (startedFromScratch)
+                {
+                    // Always create a new snapshot when starting from scratch
+                    modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                    std::cout << "Created new model_id=" << modelId << " (started from scratch)" << std::endl;
+                }
+                else
+                {
+                #if LSTM_SAVE_OVERWRITE
+                    if (loadedModelId.has_value())
+                    {
+                        modelId = *loadedModelId;
+                        std::cout << "Overwriting existing model_id=" << modelId << std::endl;
+                    }
+                    else
+                    {
+                        modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                        std::cout << "Created new model_id=" << modelId << " (no prior model to overwrite)" << std::endl;
+                    }
+                #else
+                    // Create a new snapshot when saving (do not overwrite existing)
+                    modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                    std::cout << "Created new model_id=" << modelId << std::endl;
+                #endif
+                }
                 DBIO::PgModelIO::saveAll(w_LSTM, modelId, l);
                 w_LSTM.commit();
                 std::cout << "Saved model with model_id=" << modelId << std::endl;
+#else
+                (void)l; // unused in inference-only save-disabled builds
+                std::cout << "LSTM_SAVE_ENABLE=0; skipping model save" << std::endl;
+#endif
             }
             catch (const std::exception& e) { std::cerr << "Model save/load error: " << e.what() << std::endl;    }
 
