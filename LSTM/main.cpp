@@ -88,15 +88,45 @@ int main(int argc, const char * argv[])
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             t.ForEachBatch( [&](auto b)
             {
-//                for(auto& w : b)
+                // Rolling predictions for next close over this batch (Window)
                 auto predsClose = l.RollingPredictNextClose(b, /*resetAtStart=*/true);
-                return;
-//                float pc = l.CalculateBatch(b);
-//                auto lastFeat = b.end();
-//                printMatrix("lastFeat: ", *lastFeat);
-//                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
+
+                // Build ground-truth next closes aligned with each sliding window in the batch
+                std::vector<float> actualNextClose;
+                actualNextClose.reserve(predsClose.size());
+                constexpr size_t closeCol = 1; // open(0), close(1), high(2), low(3)
+                for (auto it = b.begin(); it + window_size < b.end(); ++it)
+                {
+                    auto nextIt = it + window_size; // the sample immediately after the window
+                    float close_next = (*nextIt)(0, closeCol);
+                    actualNextClose.push_back(close_next);
+                }
+
+                // Compare: print a few samples and compute MAE for the batch
+                size_t N = std::min(predsClose.size(), actualNextClose.size());
+                const size_t toPrint = std::min<size_t>(N, 10);
+                for (size_t i = 0; i < toPrint; ++i)
+                {
+                    std::cout << "i=" << i
+                              << " predicted_close=" << predsClose[i]
+                              << " actual_close=" << actualNextClose[i]
+                              << " diff=" << (predsClose[i] - actualNextClose[i])
+                              << " error: " << (predsClose[i] - actualNextClose[i]) / actualNextClose[i] * 100 << "%"
+                              << std::endl;
+                }
+                double mae = 0.0;
+                for (size_t i = 0; i < N; ++i) mae += std::abs(static_cast<double>(predsClose[i]) - static_cast<double>(actualNextClose[i]));
+                if (N > 0)
+                {
+                    std::cout << "Batch MAE (close): " << (mae / static_cast<double>(N))
+                              << " over " << N << " predictions" << std::endl;
+                }
+                //                float pc = l.CalculateBatch(b);
+                //                auto lastFeat = b.end();
+                //                printMatrix("lastFeat: ", *lastFeat);
+                //                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
             } );
-            printMatrix("params", l.param);
+//            printMatrix("params", l.param);
 
             // Persist trained model parameters to DB
             try
