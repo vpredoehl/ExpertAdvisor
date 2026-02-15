@@ -13,18 +13,19 @@
 #include "LSTM.hpp"
 #include "Tensor.hpp"
 #include "MatrixUtils.hpp"
+#include "BuildConfig.hpp"
 
 #ifndef LSTM_DEBUG_PRINTS
 #define LSTM_DEBUG_PRINTS 0
 #endif
 
 #ifndef LSTM_TRAINING_PROGRESS
-#define LSTM_TRAINING_PROGRESS 1
+#define LSTM_TRAINING_PROGRESS 0
 #endif
 
 #ifndef LSTM_INFERENCE_ONLY
 // Set to 1 to compile out training logic and run forward-only inference paths
-#define LSTM_INFERENCE_ONLY 0
+#define LSTM_INFERENCE_ONLY 1
 #endif
 
 // Debug helpers: compile out debug code and prints when disabled
@@ -876,6 +877,7 @@ float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     float predicted_close_next = std::exp(y_hat) * close_T;
     return predicted_close_next;
 }
+
 
 
 

@@ -22,6 +22,7 @@
 #include "Tensor.hpp"
 #include "LSTM.hpp"
 #include "PgModelIO.hpp"
+#include "BuildConfig.hpp"
 
 #include <MetaNN/operation/math/sigmoid.h>
 #include <MetaNN/operation/math/tanh.h>
@@ -31,33 +32,6 @@
 
 const std::string dbName = "forex";
 const std::string dbModelName = "LSTM";
-
-#ifndef LSTM_INFERENCE_ONLY
-#define LSTM_INFERENCE_ONLY 0
-#endif
-
-#ifndef LSTM_LOAD_LATEST
-// 1: load latest model from DB at startup; 0: start from scratch
-#define LSTM_LOAD_LATEST 0
-#endif
-
-#ifndef LSTM_SAVE_ENABLE
-// Default: enable save in training builds, disable in inference-only builds
-#ifdef LSTM_INFERENCE_ONLY
-  #if LSTM_INFERENCE_ONLY
-    #define LSTM_SAVE_ENABLE 0
-  #else
-    #define LSTM_SAVE_ENABLE 1
-  #endif
-#else
-  #define LSTM_SAVE_ENABLE 1
-#endif
-#endif
-
-#ifndef LSTM_SAVE_OVERWRITE
-// 1: overwrite the loaded/latest model_id when saving; 0: create a new model snapshot
-#define LSTM_SAVE_OVERWRITE 1
-#endif
 
 
 int main(int argc, const char * argv[])

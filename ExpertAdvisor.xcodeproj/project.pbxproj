@@ -68,6 +68,7 @@
 		08B33AE22F4160490015F9CF /* LSTM.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = LSTM.plpgsql; sourceTree = "<group>"; };
 		08B33AE62F4161610015F9CF /* PgModelIO.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PgModelIO.hpp; sourceTree = "<group>"; };
 		08B33AE72F41633D0015F9CF /* LSTM-usage.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = "LSTM-usage.plpgsql"; sourceTree = "<group>"; };
+		08B33BDE2F4185280015F9CF /* BuildConfig.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = BuildConfig.hpp; sourceTree = "<group>"; };
 		08B4021A2F31A8960032D23A /* Params.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Params.hpp; sourceTree = "<group>"; };
 		08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = MetaNNXC.xcodeproj; path = MetaNN/MetaNNXC.xcodeproj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -135,6 +136,7 @@
 		08BF4E4820A933FB00B6F81D /* Headers */ = {
 			isa = PBXGroup;
 			children = (
+				08B33BDE2F4185280015F9CF /* BuildConfig.hpp */,
 				086BEC082F397572009326B6 /* MatrixUtils.hpp */,
 				08B4021A2F31A8960032D23A /* Params.hpp */,
 				08403E9A2F1DDA2F004742A5 /* LSTM.hpp */,
