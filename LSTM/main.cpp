@@ -29,25 +29,28 @@
 #include "scalable_tensor.h"
 
 const std::string dbName = "forex";
+const std::string dbModelName = "LSTM";
 
 
 int main(int argc, const char * argv[])
 {
-    pqxx::connection c { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
-    pqxx::work w { c };
-    pqxx::result tables = w.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
+    pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::connection c_LSTM { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
+    pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { argv[1] }, toDate { argv[2] };
     
 
+    w_LSTM.exec("SET TRANSACTION READ WRITE;");
     try
     {
-        pqxx::result tables = w.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
+        pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
         std::string fromDate{ argv[1] }, toDate{ argv[2] };
         for (auto tbl : tables)
         {
             std::string rawPriceTableName{ tbl[0].c_str() };
             std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
-            db_cursor_stream<Feature> cs_cur{ w, query, rawPriceTableName + "_candlestick_stream" };
+            db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_forward_iterator csb = cs_cur.cbegin(), cse = cs_cur.cend();
 
             Tensor t{ rawPriceTableName };
@@ -55,6 +58,8 @@ int main(int argc, const char * argv[])
             while (csb != cse) t.Add(*csb++);
   
             EA::LSTM l { t, 1, 0 };
+            try {   DBIO::PgModelIO::loadAll(w_LSTM, 1, l); }
+            catch(std::exception& e)    {   std::cout << e.what() << " using default params" << std::endl;    }
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             t.ForEachBatch( [&](auto b)
             {
@@ -66,22 +71,16 @@ int main(int argc, const char * argv[])
             printMatrix("params", l.param);
 
             // Persist trained model parameters to DB
-            try {
-                // Create a new model entry and save all parameters
-                long long modelId = DBIO::PgModelIO::createModel(w, rawPriceTableName + "-model", "trained parameters");
-                DBIO::PgModelIO::saveAll(w, modelId, l);
-                w.commit();
-                std::cout << "Saved model with model_id=" << modelId << std::endl;
+            try
+            {
+                // Use a dedicated read-write transaction on the LSTM database to save
 
-                // Example: load back into a fresh LSTM instance (optional verification)
-                EA::LSTM l2{ t, 1, 0 };
-                pqxx::work w2{ c };
-                DBIO::PgModelIO::loadAll(w2, modelId, l2);
-                w2.commit();
-                printMatrix("loaded params", l2.param);
-            } catch (const std::exception& e) {
-                std::cerr << "Model save/load error: " << e.what() << std::endl;
+                long long modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                DBIO::PgModelIO::saveAll(w_LSTM, modelId, l);
+                w_LSTM.commit();
+                std::cout << "Saved model with model_id=" << modelId << std::endl;
             }
+            catch (const std::exception& e) { std::cerr << "Model save/load error: " << e.what() << std::endl;    }
 
             break;
         }

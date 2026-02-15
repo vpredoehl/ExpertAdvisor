@@ -116,6 +116,8 @@
 				0896002E22A86B8A0093513A /* rmp_cursor.pgsql */,
 				0896002D22A86B8A0093513A /* ee.pgsql */,
 				0844268B2ED94F86002DEB21 /* candlestick.plpgsql */,
+				08B33AE22F4160490015F9CF /* LSTM.plpgsql */,
+				08B33AE72F41633D0015F9CF /* LSTM-usage.plpgsql */,
 			);
 			path = plpgsql;
 			sourceTree = "<group>";
@@ -126,9 +128,6 @@
 				084426892ED8E755002DEB21 /* main.cpp */,
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
-				08B33AE22F4160490015F9CF /* LSTM.plpgsql */,
-				08B33AE72F41633D0015F9CF /* LSTM-usage.plpgsql */,
-				08B33AE62F4161610015F9CF /* PgModelIO.hpp */,
 			);
 			path = LSTM;
 			sourceTree = "<group>";
@@ -142,6 +141,7 @@
 				08403E922F1DD75E004742A5 /* Tensor.hpp */,
 				084505652048CAB900A0B88F /* PricePoint.hpp */,
 				08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */,
+				08B33AE62F4161610015F9CF /* PgModelIO.hpp */,
 			);
 			path = Headers;
 			sourceTree = "<group>";

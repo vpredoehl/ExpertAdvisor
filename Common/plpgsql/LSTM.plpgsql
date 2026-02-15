@@ -1,6 +1,8 @@
 -- Run this once to create the database
 CREATE DATABASE "LSTM";
 
+grant connect on database "LSTM" to pqxx;
+
 \c LSTM
 
 -- Model registry (for multiple saved models/versions)
@@ -27,6 +29,20 @@ CREATE TABLE IF NOT EXISTS matrix (
     -- Ensure dimensions are consistent for a given (model_id, param_name).
     CONSTRAINT matrix_dims_consistent CHECK (row_idx >= 0 AND row_idx < n_rows AND col_idx >= 0 AND col_idx < n_cols)
 );
+
+-- Allow the role to use the public schema
+GRANT USAGE ON SCHEMA public TO pqxx;
+
+-- Grant DML on your model tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE model, matrix TO pqxx;
+
+-- Grant usage/select on the sequence backing model.model_id (BIGSERIAL)
+-- Check the exact sequence name with: \d model
+GRANT USAGE, SELECT ON SEQUENCE model_model_id_seq TO pqxx;
+
+-- (Optional) If you also want to be safe for any other sequences used in the schema:
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO pqxx;
+
 
 -- Optional: enforce consistent n_rows/n_cols per (model_id, param_name)
 -- via a partial unique index on the (model_id, param_name, n_rows, n_cols) combination.
