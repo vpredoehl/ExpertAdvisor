@@ -38,7 +38,7 @@ const std::string dbModelName = "LSTM";
 
 #ifndef LSTM_LOAD_LATEST
 // 1: load latest model from DB at startup; 0: start from scratch
-#define LSTM_LOAD_LATEST 1
+#define LSTM_LOAD_LATEST 0
 #endif
 
 #ifndef LSTM_SAVE_ENABLE
@@ -130,9 +130,26 @@ int main(int argc, const char * argv[])
                 long long modelId = -1;
                 if (startedFromScratch)
                 {
-                    // Always create a new snapshot when starting from scratch
+                #if LSTM_SAVE_OVERWRITE
+                    // Overwrite the latest model if one exists; otherwise create a new snapshot
+                    try {
+                        pqxx::result rLatest = w_LSTM.exec("SELECT max(model_id) FROM model;");
+                        if (!rLatest.empty() && !rLatest[0][0].is_null()) {
+                            modelId = rLatest[0][0].as<long long>();
+                            std::cout << "Overwriting latest model_id=" << modelId << " (started from scratch, overwrite enabled)" << std::endl;
+                        } else {
+                            modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                            std::cout << "Created new model_id=" << modelId << " (no existing model to overwrite)" << std::endl;
+                        }
+                    } catch (const std::exception& e) {
+                        std::cout << "Fetch latest model_id failed (" << e.what() << "); creating new snapshot" << std::endl;
+                        modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                    }
+                #else
+                    // Create a new snapshot when saving (do not overwrite existing)
                     modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
                     std::cout << "Created new model_id=" << modelId << " (started from scratch)" << std::endl;
+                #endif
                 }
                 else
                 {
