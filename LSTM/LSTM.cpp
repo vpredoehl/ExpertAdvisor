@@ -827,7 +827,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     return predicted_close;
 }
 
-inline std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
+std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
 {
     if (resetAtStart) ResetPreviousState();
     std::vector<float> preds;

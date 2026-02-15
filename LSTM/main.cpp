@@ -88,43 +88,58 @@ int main(int argc, const char * argv[])
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             t.ForEachBatch( [&](auto b)
             {
-                // Rolling predictions for next close over this batch (Window)
-                auto predsClose = l.RollingPredictNextClose(b, /*resetAtStart=*/true);
+                // Rolling predictions for next-step log return (movement) over this batch (Window)
+                auto predsLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
 
-                // Build ground-truth next closes aligned with each sliding window in the batch
-                std::vector<float> actualNextClose;
-                actualNextClose.reserve(predsClose.size());
+                // Convert predicted log returns to predicted price movement (delta close), and build actual movements
+                std::vector<float> predMove;   // predicted close_next - close_T
+                std::vector<float> actualMove; // actual   close_next - close_T
+                predMove.reserve(predsLogRet.size());
+                actualMove.reserve(predsLogRet.size());
                 constexpr size_t closeCol = 1; // open(0), close(1), high(2), low(3)
+
+                size_t idx = 0;
                 for (auto it = b.begin(); it + window_size < b.end(); ++it)
                 {
-                    auto nextIt = it + window_size; // the sample immediately after the window
-                    float close_next = (*nextIt)(0, closeCol);
-                    actualNextClose.push_back(close_next);
+                    float close_T    = (*(it + (window_size - 1)))(0, closeCol);
+                    float close_next = (*(it + window_size))(0, closeCol);
+
+                    float y_hat = predsLogRet[idx++];
+                    float pred_close_next = std::exp(y_hat) * close_T;
+
+                    predMove.push_back(pred_close_next - close_T);
+                    actualMove.push_back(close_next - close_T);
                 }
 
-                // Compare: print a few samples and compute MAE for the batch
-                size_t N = std::min(predsClose.size(), actualNextClose.size());
+                // Compare: print a few samples and compute MAE + direction accuracy for price movement
+                size_t N = std::min(predMove.size(), actualMove.size());
                 const size_t toPrint = std::min<size_t>(N, 10);
                 for (size_t i = 0; i < toPrint; ++i)
                 {
+                    double diff = static_cast<double>(predMove[i]) - static_cast<double>(actualMove[i]);
+                    double pctErr = (actualMove[i] != 0.0f) ? (diff / static_cast<double>(actualMove[i]) * 100.0) : 0.0;
                     std::cout << "i=" << i
-                              << " predicted_close=" << predsClose[i]
-                              << " actual_close=" << actualNextClose[i]
-                              << " diff=" << (predsClose[i] - actualNextClose[i])
-                              << " error: " << (predsClose[i] - actualNextClose[i]) / actualNextClose[i] * 100 << "%"
+                              << " pred_move=" << predMove[i]
+                              << " act_move=" << actualMove[i]
+                              << " diff=" << diff
+                              << " pct_err=" << pctErr << "%"
                               << std::endl;
                 }
                 double mae = 0.0;
-                for (size_t i = 0; i < N; ++i) mae += std::abs(static_cast<double>(predsClose[i]) - static_cast<double>(actualNextClose[i]));
+                size_t correctDir = 0;
+                for (size_t i = 0; i < N; ++i)
+                {
+                    mae += std::abs(static_cast<double>(predMove[i]) - static_cast<double>(actualMove[i]));
+                    bool predUp = predMove[i] >= 0.0f;
+                    bool actUp  = actualMove[i] >= 0.0f;
+                    if (predUp == actUp) ++correctDir;
+                }
                 if (N > 0)
                 {
-                    std::cout << "Batch MAE (close): " << (mae / static_cast<double>(N))
-                              << " over " << N << " predictions" << std::endl;
+                    std::cout << "Batch MAE (price movement): " << (mae / static_cast<double>(N))
+                              << " | Direction accuracy: " << (static_cast<double>(correctDir) / static_cast<double>(N) * 100.0)
+                              << "% over " << N << " predictions" << std::endl;
                 }
-                //                float pc = l.CalculateBatch(b);
-                //                auto lastFeat = b.end();
-                //                printMatrix("lastFeat: ", *lastFeat);
-                //                std::cout << "lastFeat: " << (*lastFeat)(0,1) << "  predicted_close: " << pc << std::endl;
             } );
 //            printMatrix("params", l.param);
 
