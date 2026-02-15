@@ -5,7 +5,11 @@
 // (Preprocessor Macros) as needed.
 
 // 1: compile out training logic and run forward-only inference paths
-constexpr bool inference_only = true;
+#ifndef LSTM_INFERENCE_ONLY
+#define LSTM_INFERENCE_ONLY 0
+#endif
+
+constexpr bool inference_only = false;
 constexpr bool save_enable = true;
 
 // true: load latest model from DB at startup; false: start from scratch

@@ -70,6 +70,20 @@ namespace EA
 
         }
 
+        // Target mapping metadata (persisted via PgModelIO)
+        enum class TargetType : int { LogReturn = 0, PercentReturn = 1 };
+
+        // How the head's scalar output maps to the target used for training/inference
+        // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
+        // where raw is either log-return or percent-return depending on targetType
+        // If targetUseZScore == true, training target was normalized as (t - targetMean)/targetStd
+        TargetType targetType = TargetType::PercentReturn; // default to percent return
+        float      targetScale = 100.0f;                   // default to 100x pct
+        float      targetBias  = 0.0f;                     // default no bias
+        bool       targetUseZScore = false;                // default: not normalized
+        float      targetMean = 0.0f;                      // z-score mean (if used)
+        float      targetStd  = 1.0f;                      // z-score std  (if used)
+
         float long_term, short_term, in;
         FloatMatrixCPU param { static_cast<size_t>(n_in + hidden_size), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
         FloatMatrixCPU prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };

@@ -34,12 +34,25 @@
 
 static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
 {
-    // 1) Get raw head outputs in log-return space (as trained)
-    auto predsLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
+    // 1) Get raw head outputs sequence (as trained)
+    auto predsRaw = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
 
-    // 2) Build ground-truth relative moves for comparison
+    // 2) Transform raw head outputs back to raw return according to metadata
+    //    If model was trained with z-score on the target, invert it first.
+    std::vector<float> predRel; predRel.reserve(predsRaw.size());
+    for (float yhat : predsRaw)
+    {
+        float t = l.targetUseZScore ? (yhat * l.targetStd + l.targetMean) : yhat;
+        float raw = (t - l.targetBias) / std::max(l.targetScale, 1e-12f);
+        if (l.targetType == EA::LSTM::TargetType::LogReturn)
+            predRel.push_back(std::exp(raw) - 1.0f);  // convert log-return to percent move
+        else
+            predRel.push_back(raw);                    // already percent move (fraction)
+    }
+
+    // 3) Build ground-truth relative moves for comparison
     std::vector<float> actRel; // (close_next - close_T) / close_T
-    actRel.reserve(predsLogRet.size());
+    actRel.reserve(predRel.size());
     constexpr size_t closeCol = 1;
     for (auto it = b.begin(); it + window_size < b.end(); ++it)
     {
@@ -48,97 +61,50 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
         actRel.push_back((close_next - close_T) / close_T);
     }
 
-    // 3) Evaluate candidate inverse mappings on relative move
-    auto corr = [](const auto& a, const auto& b){
-        if (a.empty() || b.empty() || a.size() != b.size()) return 0.0;
-        double meanA=0, meanB=0; size_t N=a.size();
-        for (size_t i=0;i<N;++i){ meanA+=a[i]; meanB+=b[i]; }
-        meanA/=N; meanB/=N;
-        double num=0, denA=0, denB=0;
-        for (size_t i=0;i<N;++i){ double da=a[i]-meanA, db=b[i]-meanB; num+=da*db; denA+=da*da; denB+=db*db; }
-        return (denA>0 && denB>0) ? (num / std::sqrt(denA*denB)) : 0.0;
+    // 4) Print prediction distribution stats to diagnose saturation
+    auto stats = [](const auto& v){
+        struct S { double min, max, mean, std, uniq; } s{};
+        if (v.empty()) return s;
+        double mn = std::numeric_limits<double>::infinity();
+        double mx = -std::numeric_limits<double>::infinity();
+        double sum = 0.0, sumsq = 0.0;
+        std::unordered_map<long long, int> buckets;
+        buckets.reserve(v.size());
+        for (float x : v)
+        {
+            mn = std::min(mn, static_cast<double>(x));
+            mx = std::max(mx, static_cast<double>(x));
+            sum += x; sumsq += static_cast<double>(x) * static_cast<double>(x);
+            // simple bucketing by rounding to 1e-6
+            long long key = static_cast<long long>(std::llround(static_cast<double>(x) * 1e6));
+            ++buckets[key];
+        }
+        double n = static_cast<double>(v.size());
+        double mean = sum / n;
+        double var = std::max(0.0, sumsq / n - mean * mean);
+        s.min = mn; s.max = mx; s.mean = mean; s.std = std::sqrt(var); s.uniq = static_cast<double>(buckets.size());
+        return s;
     };
-    auto mae = [](const auto& a, const auto& b){
-        if (a.empty() || b.empty() || a.size() != b.size()) return std::numeric_limits<double>::infinity();
-        double s=0; for (size_t i=0;i<a.size();++i) s += std::abs((double)a[i] - (double)b[i]); return s/a.size();
-    };
 
-    enum class TargetType { LogReturn, PercentReturn };
-    struct Candidate { const char* name; TargetType type; float scale; float bias; std::vector<float> predRel; double mae; double corr; };
-    std::vector<Candidate> cands;
-    cands.reserve(4);
+    auto s_raw = stats(predsRaw);
+    auto s_rel = stats(predRel);
+    std::cout << "pred_raw stats: min=" << s_raw.min << " max=" << s_raw.max
+              << " mean=" << s_raw.mean << " std=" << s_raw.std
+              << " uniq~=" << s_raw.uniq << std::endl;
+    std::cout << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
+              << " mean=" << s_rel.mean << " std=" << s_rel.std
+              << " uniq~=" << s_rel.uniq << std::endl;
 
-    // A) Assume head predicted 100 * log-return
-    {
-        Candidate c{"100x logret", TargetType::LogReturn, 100.0f, 0.0f, {}, 0.0, 0.0};
-        c.predRel.reserve(predsLogRet.size());
-        for (float yhat : predsLogRet) c.predRel.push_back(std::exp(yhat / 100.0f) - 1.0f);
-        c.mae  = mae(actRel, c.predRel);
-        c.corr = corr(actRel, c.predRel);
-        cands.push_back(std::move(c));
-    }
-    // B) Assume head predicted raw log-return
-    {
-        Candidate c{"1x logret", TargetType::LogReturn, 1.0f, 0.0f, {}, 0.0, 0.0};
-        c.predRel.reserve(predsLogRet.size());
-        for (float yhat : predsLogRet) c.predRel.push_back(std::exp(yhat) - 1.0f);
-        c.mae  = mae(actRel, c.predRel);
-        c.corr = corr(actRel, c.predRel);
-        cands.push_back(std::move(c));
-    }
-    // C) Assume head predicted 100 * percent return
-    {
-        Candidate c{"100x pct", TargetType::PercentReturn, 100.0f, 0.0f, {}, 0.0, 0.0};
-        c.predRel.reserve(predsLogRet.size());
-        for (float yhat : predsLogRet) c.predRel.push_back(yhat / 100.0f);
-        c.mae  = mae(actRel, c.predRel);
-        c.corr = corr(actRel, c.predRel);
-        cands.push_back(std::move(c));
-    }
-    // D) Assume head predicted raw percent return (fraction)
-    {
-        Candidate c{"1x pct", TargetType::PercentReturn, 1.0f, 0.0f, {}, 0.0, 0.0};
-        c.predRel.reserve(predsLogRet.size());
-        for (float yhat : predsLogRet) c.predRel.push_back(yhat);
-        c.mae  = mae(actRel, c.predRel);
-        c.corr = corr(actRel, c.predRel);
-        cands.push_back(std::move(c));
-    }
-
-    // 4) Pick best by MAE (break ties by higher correlation)
-    auto best = std::min_element(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b){
-        if (a.mae == b.mae) return a.corr > b.corr; // prefer higher correlation on tie
-        return a.mae < b.mae;
-    });
-
-    if (best != cands.end())
-    {
-        std::cout << "Auto-selected target mapping: " << best->name
-                  << "  (MAE=" << best->mae << ", corr=" << best->corr << ")" << std::endl;
-        // Configure model's target transform for downstream PredictNextClose
-        // Skipped: EA::LSTM does not expose SetTargetTransform/TargetType in this build.
-        // We will continue using the locally selected TargetType (best->type) and scale to invert predictions below.
-        (void)best; // suppress unused warning if configuration is skipped
-    }
-
-    // 5) Using the selected mapping, compute price movement metrics (predicted vs actual)
-    std::vector<float> predMove; predMove.reserve(predsLogRet.size());
-    std::vector<float> actualMove; actualMove.reserve(predsLogRet.size());
+    // 5) Using the mapping, compute price movement metrics (predicted vs actual)
+    std::vector<float> predMove; predMove.reserve(predRel.size());
+    std::vector<float> actualMove; actualMove.reserve(predRel.size());
     size_t idx = 0;
     for (auto it = b.begin(); it + window_size < b.end(); ++it)
     {
         float close_T    = (*(it + (window_size - 1)))(0, closeCol);
         float close_next = (*(it + window_size))(0, closeCol);
-        float yhat = predsLogRet[idx++];
-
-        // Invert affine transform: target_raw = (yhat - bias) / scale
-        float target_raw = (yhat - 0.0f) / std::max(best->scale, 1e-12f);
-        float pred_close_next = 0.0f;
-        if (best->type == TargetType::LogReturn)
-            pred_close_next = std::exp(target_raw) * close_T;
-        else
-            pred_close_next = close_T * (1.0f + target_raw);
-
+        float rel = predRel[idx++];
+        float pred_close_next = close_T * (1.0f + rel);
         predMove.push_back(pred_close_next - close_T);
         actualMove.push_back(close_next - close_T);
     }
@@ -288,7 +254,13 @@ int main(int argc, const char * argv[])
                     w_LSTM.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                 }
-                else std::cout << "save_enabled=false; skipping model save" << std::endl;
+                else
+                    if constexpr (!(save_enable && !inference_only))
+                        std::cout << "save_enable=false; skipping model save" << std::endl;
+                    else if constexpr (inference_only)
+                        std::cout << "inference_only=true; skipping model save" << std::endl;
+                    else
+                        std::cout << "skipping model save (unknown reason)" << std::endl;
             }
             catch (const std::exception& e) { std::cerr << "Model save/load error: " << e.what() << std::endl;    }
 

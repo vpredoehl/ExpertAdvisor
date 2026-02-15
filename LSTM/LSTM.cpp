@@ -25,10 +25,6 @@
 #define LSTM_TRAINING_PROGRESS 0
 #endif
 
-#ifndef LSTM_INFERENCE_ONLY
-// Set to 1 to compile out training logic and run forward-only inference paths
-#define LSTM_INFERENCE_ONLY 1
-#endif
 
 // Debug helpers: compile out debug code and prints when disabled
 #if LSTM_DEBUG_PRINTS
@@ -483,17 +479,27 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const float close_T    = lastFeat(0, closeCol);
         const float close_next = nextFeat(0, closeCol);
 
-        const float target_log_return = std::log(close_next) - std::log(close_T);
-        auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, target_log_return);
-        predicted_close = std::exp(head.y_hat) * close_T;
+        const float raw_logret = std::log(close_next) - std::log(close_T);
+        const float raw_pct    = (close_next - close_T) / close_T;
+        const float raw        = (targetType == TargetType::LogReturn) ? raw_logret : raw_pct;
+        // Apply affine and optional z-score normalization to build training target t
+        float t = raw * targetScale + targetBias;
+        if (targetUseZScore) t = (t - targetMean) / std::max(targetStd, 1e-12f);
+        auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, t);
+        // For debugging predicted_close, invert mapping
+        float t_inv = head.y_hat;
+        if (targetUseZScore) t_inv = head.y_hat * targetStd + targetMean;
+        float raw_inv = (t_inv - targetBias) / std::max(targetScale, 1e-12f);
+        predicted_close = (targetType == TargetType::LogReturn) ? (std::exp(raw_inv) * close_T)
+                                                                : (close_T * (1.0f + raw_inv));
         const float err = head.err;
 
 #if !LSTM_INFERENCE_ONLY
         // Accumulate training target statistics and sample predictions for debugging
-        y_sum += static_cast<double>(target_log_return);
-        y_sumsq += static_cast<double>(target_log_return) * static_cast<double>(target_log_return);
-        y_min = std::min(y_min, target_log_return);
-        y_max = std::max(y_max, target_log_return);
+        y_sum += static_cast<double>(t);
+        y_sumsq += static_cast<double>(t) * static_cast<double>(t);
+        y_min = std::min(y_min, t);
+        y_max = std::max(y_max, t);
         ++y_count;
         if (yhat_samples.size() < 10)
         {
@@ -692,21 +698,6 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto v_bias_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(v_bias);
         param = MetaNN::Evaluate(param - lrScale * v_param_f);
         bias = MetaNN::Evaluate(bias - lrScale * v_bias_f);
-
-        // Update velocities lazily in AccumScalar precision for head weights
-        {
-            auto vhWH = (mu * v_headW + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f)).EvalRegister();
-            auto vhBH = (mu * v_headB + NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f)).EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            v_headW = vhWH.Data();
-            v_headB = vhBH.Data();
-        }
-
-        // Convert velocities to float and apply in a single lazy expression
-        auto v_headW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(v_headW);
-        auto v_headB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(v_headB);
-        returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - lrScale * v_headW_f);
-        returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScale * v_headB_f);
     }
 #elif LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
     {
@@ -747,39 +738,6 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Apply updates lazily for LSTM core
         param = MetaNN::Evaluate(param - upd_param_f);
         bias = MetaNN::Evaluate(bias - upd_bias_f);
-
-        // Convert head gradients to AccumScalar and update first/second moments lazily
-        auto gW_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f);
-        auto gB_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f);
-        {
-            auto mWH = (beta1 * m_headW + (static_cast<AccumScalar>(1) - beta1) * gW_acc).EvalRegister();
-            auto sWH = (beta2 * s_headW + (static_cast<AccumScalar>(1) - beta2) * (gW_acc * gW_acc)).EvalRegister();
-            auto mBH = (beta1 * m_headB + (static_cast<AccumScalar>(1) - beta1) * gB_acc).EvalRegister();
-            auto sBH = (beta2 * s_headB + (static_cast<AccumScalar>(1) - beta2) * (gB_acc * gB_acc)).EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            m_headW = mWH.Data();
-            s_headW = sWH.Data();
-            m_headB = mBH.Data();
-            s_headB = sBH.Data();
-        }
-
-        // Bias correction lazily
-        auto mhatW = m_headW / (static_cast<AccumScalar>(1) - beta1_pow);
-        auto vhatW = s_headW / (static_cast<AccumScalar>(1) - beta2_pow);
-        auto mhatB = m_headB / (static_cast<AccumScalar>(1) - beta1_pow);
-        auto vhatB = s_headB / (static_cast<AccumScalar>(1) - beta2_pow);
-
-        // Convert to float to match parameter types and compute updates lazily
-        auto mhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatW);
-        auto vhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatW);
-        auto mhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatB);
-        auto vhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatB);
-        auto updW = lrScale * mhatW_f / (MetaNN::Sqrt(vhatW_f) + static_cast<float>(eps));
-        auto updB = lrScale * mhatB_f / (MetaNN::Sqrt(vhatB_f) + static_cast<float>(eps));
-
-        // Apply in a single lazy expression
-        returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - updW);
-        returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - updB);
     }
 #else
     {
@@ -914,7 +872,19 @@ inline float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
     for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
 
     // Predict next-step log return from the last hidden state
-    return predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
+    float y_hat = predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
+    // Invert normalization if used: t = y_hat * std + mean
+    float t = y_hat;
+    if (targetUseZScore)
+        t = y_hat * targetStd + targetMean;
+    else
+        t = y_hat;
+    // Invert affine to raw return
+    float raw = (t - targetBias) / std::max(targetScale, 1e-12f);
+    if (targetType == TargetType::LogReturn)
+        return raw; // already log-return
+    else
+        return std::log(1.0f + raw); // convert percent return to log-return
 }
 
 inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
@@ -938,9 +908,19 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 
     // Predict log return and convert to price
     float y_hat = predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
-    float predicted_close_next = std::exp(y_hat) * close_T;
+    // Invert optional z-score normalization
+    float t = targetUseZScore ? (y_hat * targetStd + targetMean) : y_hat;
+    // Invert affine
+    float raw = (t - targetBias) / std::max(targetScale, 1e-12f);
+    float predicted_close_next = 0.0f;
+    if (targetType == TargetType::LogReturn)
+        predicted_close_next = std::exp(raw) * close_T;
+    else
+        predicted_close_next = close_T * (1.0f + raw);
     return predicted_close_next;
 }
+
+
 
 
 

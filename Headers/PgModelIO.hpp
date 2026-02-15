@@ -104,6 +104,21 @@ public:
         saveParameter(w, modelId, "bias",             lstm.bias);
         saveParameter(w, modelId, "returnHeadWeight", lstm.returnHeadWeight);
         saveParameter(w, modelId, "returnHeadBias",   lstm.returnHeadBias);
+        saveTargetMeta(w, modelId, lstm);
+    }
+
+    // Save target mapping metadata as a 1x6 matrix in order:
+    // [type(int), scale, bias, useZ(0/1), mean, std]
+    static void saveTargetMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
+    {
+        MatCPU<float> meta(1, 6);
+        meta.SetValue(0, 0, static_cast<float>(static_cast<int>(lstm.targetType)));
+        meta.SetValue(0, 1, lstm.targetScale);
+        meta.SetValue(0, 2, lstm.targetBias);
+        meta.SetValue(0, 3, lstm.targetUseZScore ? 1.0f : 0.0f);
+        meta.SetValue(0, 4, lstm.targetMean);
+        meta.SetValue(0, 5, lstm.targetStd);
+        saveParameter(w, modelId, "target_meta", meta);
     }
 
     struct ParamDims { int n_rows; int n_cols; };
@@ -151,8 +166,30 @@ public:
         lstm.bias             = loadParameterMatrix<float>(w, modelId, "bias");
         lstm.returnHeadWeight = loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
         lstm.returnHeadBias   = loadParameterMatrix<float>(w, modelId, "returnHeadBias");
+        (void)tryLoadTargetMeta(w, modelId, lstm);
+    }
+
+    static bool tryLoadTargetMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)
+    {
+        try {
+            auto dims = loadParameterDims(w, modelId, "target_meta");
+            if (dims.n_rows != 1 || dims.n_cols != 6) return false;
+            auto vals = loadParameterValues(w, modelId, "target_meta");
+            if (vals.size() != 6) return false;
+            int typeInt = static_cast<int>(vals[0]);
+            lstm.targetType = (typeInt == 0) ? EA::LSTM::TargetType::LogReturn : EA::LSTM::TargetType::PercentReturn;
+            lstm.targetScale = static_cast<float>(vals[1]);
+            lstm.targetBias  = static_cast<float>(vals[2]);
+            lstm.targetUseZScore = (vals[3] != 0.0);
+            lstm.targetMean  = static_cast<float>(vals[4]);
+            lstm.targetStd   = static_cast<float>(vals[5]);
+            return true;
+        } catch (...) {
+            return false;
+        }
     }
 };
 
 } // namespace DBIO
 #pragma clang diagnostic pop
+
