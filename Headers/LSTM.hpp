@@ -9,10 +9,21 @@
 #ifndef LSTM_hpp
 #define LSTM_hpp
 
+#ifndef LSTM_TRAINING_ASSERTS
+#define LSTM_TRAINING_ASSERTS 1
+#endif
+
+#if LSTM_TRAINING_ASSERTS
+#include <cassert>
+#include <iostream>
+#define LSTM_ASSERT(cond, msg) do { if(!(cond)) { std::cerr << "[LSTM_ASSERT] " << __FILE__ << ":" << __LINE__ << ": " << (msg) << std::endl; assert(cond); } } while(0)
+#else
+#define LSTM_ASSERT(cond, msg) do {} while(0)
+#endif
+
 #include <MetaNN/meta_nn.h>
 #include <array>
 #include <vector>
-#include <cassert>
 
 #include "Params.hpp"
 
@@ -53,15 +64,17 @@ namespace EA
         const ::Tensor& t;
     public:
         inline GateMatrixView gateMatrix(size_t gateIndex) {
-            assert(gateIndex < 4);
+            LSTM_ASSERT(gateIndex < 4, "gateMatrix: gateIndex must be < 4");
             return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
         }
         inline ConstGateMatrixView gateMatrix(size_t gateIndex) const {
-            assert(gateIndex < 4);
+            LSTM_ASSERT(gateIndex < 4, "gateMatrix const: gateIndex must be < 4");
             return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
         }
         inline void ResetPreviousState()
         {
+            LSTM_ASSERT(prevHiddenState.Shape()[0] == 1 && prevHiddenState.Shape()[1] == hidden_size, "prevHiddenState shape mismatch");
+            LSTM_ASSERT(prevCellState.Shape()[0] == 1 && prevCellState.Shape()[1] == hidden_size, "prevCellState shape mismatch");
             for (size_t j = 0; j < hidden_size; ++j)
             {
                 prevHiddenState.SetValue(0, j, 0.0f);

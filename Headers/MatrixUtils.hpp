@@ -9,6 +9,7 @@
 #include <cstring>
 #include "Tensor.hpp"
 #include <MetaNN/operation/tensor/slice.h>
+#include "LSTM.hpp"
 
 namespace NNUtils {
 
@@ -92,6 +93,15 @@ inline void ConcatColsInto(MetaNN::Matrix<T, DevT>& out, Parts&&... parts)
     assert(out.Shape()[1] == colsCheck && "ConcatColsInto: output has incorrect column count");
 #endif
 
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(!mats.empty(), "ConcatColsInto: no parts provided");
+    size_t rowsCheck2 = mats[0].Shape()[0];
+    size_t colsSum2 = 0;
+    for (const auto& m : mats) { colsSum2 += m.Shape()[1]; }
+    LSTM_ASSERT(out.Shape()[0] == rowsCheck2, "ConcatColsInto: output rows mismatch");
+    LSTM_ASSERT(out.Shape()[1] == colsSum2, "ConcatColsInto: output cols mismatch");
+#endif
+
     FillConcatCols(out, mats);
 }
 
@@ -119,6 +129,15 @@ inline void ConcatColsInto(MetaNN::Matrix<T, DevT>& out,
     }
     assert(out.Shape()[0] == rowsCheck && "ConcatColsInto: output has incorrect row count");
     assert(out.Shape()[1] == colsCheck && "ConcatColsInto: output has incorrect column count");
+#endif
+
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(!mats.empty(), "ConcatColsInto(init_list): no parts provided");
+    size_t rowsCheck2 = mats[0].Shape()[0];
+    size_t colsSum2 = 0;
+    for (const auto& m : mats) { colsSum2 += m.Shape()[1]; }
+    LSTM_ASSERT(out.Shape()[0] == rowsCheck2, "ConcatColsInto(init_list): output rows mismatch");
+    LSTM_ASSERT(out.Shape()[1] == colsSum2, "ConcatColsInto(init_list): output cols mismatch");
 #endif
 
     FillConcatCols(out, mats);
@@ -203,6 +222,9 @@ MetaNN::Matrix<T, DevT> SliceRows(const MetaNN::Matrix<T, DevT>& src,
                                     size_t rowOffset,
                                     size_t rowCount)
 {
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(rowOffset + rowCount <= src.Shape()[0], "SliceRows: row range out of bounds");
+#endif
     const size_t cols = src.Shape()[1];
     MetaNN::Matrix<T, DevT> out(rowCount, cols);
     auto lowSrc = MetaNN::LowerAccess(src);
@@ -233,6 +255,9 @@ MetaNN::Matrix<T, DevT> SliceCols(const MetaNN::Matrix<T, DevT>& src,
                                     size_t colOffset,
                                     size_t colCount)
 {
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(colOffset + colCount <= src.Shape()[1], "SliceCols: col range out of bounds");
+#endif
     const size_t rows = src.Shape()[0];
     const size_t srcCols = src.Shape()[1];
     // Fast path: if taking all columns starting at 0, return a direct copy
@@ -285,6 +310,9 @@ MetaNN::Matrix<T, DevT> ViewRows(const MetaNN::Matrix<T, DevT>& src,
                                    size_t rowOffset,
                                    size_t rowCount)
 {
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(rowOffset + rowCount <= src.Shape()[0], "ViewRows: row range out of bounds");
+#endif
     const size_t cols = src.Shape()[1];
     auto lowSrc = MetaNN::LowerAccess(src);
     auto mem = lowSrc.SharedMemory().Shift(rowOffset * cols);
@@ -312,6 +340,9 @@ MetaNN::Matrix<T, DevT> ViewTopRows(const MetaNN::Matrix<T, DevT>& src, size_t r
 template <typename T, typename DevT>
 MetaNN::Matrix<T, DevT> ViewCols(const MetaNN::Matrix<T, DevT>& src, size_t colOffset, size_t colCount)
 {
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(colOffset + colCount <= src.Shape()[1], "ViewCols: col range out of bounds");
+#endif
     // Use SliceCols (copy) to obtain the requested column block.
     return SliceCols<T, DevT>(src, colOffset, colCount);
 }
@@ -339,6 +370,10 @@ auto SplitGatesRowExpr(const Mat& y)
     assert(y.Shape()[0] == 1 && "SplitGatesRowExpr expects a (1 x 4H) matrix");
     assert(y.Shape()[1] % 4 == 0 && "SplitGatesRowExpr: columns must be divisible by 4");
     #endif
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(y.Shape()[0] == 1, "SplitGatesRowExpr expects (1 x 4H)");
+    LSTM_ASSERT(y.Shape()[1] % 4 == 0, "SplitGatesRowExpr: columns must be divisible by 4");
+#endif
     const size_t H = y.Shape()[1] / 4;
     auto gates2D = MetaNN::Reshape(y, MetaNN::Shape(4, H));
     // Each gates2D[k] is a 1D view of length H; reshape to (1 x H)
@@ -358,6 +393,9 @@ auto SplitGatesBatchExpr(const Mat& Y)
     #ifndef NDEBUG
     assert(W % 4 == 0 && "SplitGatesBatchExpr: columns must be divisible by 4");
     #endif
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(W % 4 == 0, "SplitGatesBatchExpr: columns must be divisible by 4");
+#endif
     const size_t H = W / 4;
     // Reshape to (4, B, H) so indexing the first dimension yields (B x H) gate views
     auto Y3 = MetaNN::Reshape(Y, MetaNN::Shape(4, B, H));
@@ -396,5 +434,6 @@ MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)
 }
 
 } // namespace NNUtils
+
 
 

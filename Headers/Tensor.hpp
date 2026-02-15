@@ -17,6 +17,8 @@
 
 #include "PricePoint.hpp"
 #include "Params.hpp"
+#include "LSTM.hpp"   // for LSTM_TRAINING_ASSERTS
+
 
 using std::string;
 using std::list;
@@ -40,6 +42,9 @@ public:
         if (startIndex > ds.size()) startIndex = ds.size();
         size_t endIndex = startIndex + batch_size;
         if (endIndex > ds.size()) endIndex = ds.size();
+#if LSTM_TRAINING_ASSERTS
+        LSTM_ASSERT(startIndex <= endIndex && endIndex <= ds.size(), "GetBatchClamped: invalid range");
+#endif
         auto startIt = ds.cbegin() + startIndex;
         auto endIt = ds.cbegin() + endIndex;
         return std::ranges::subrange(startIt, endIt);
@@ -50,6 +55,9 @@ public:
     void ForEachBatch(Func&& f) const
     {
         const size_t n = NumberOfBatchesIncludingRemainder();
+#if LSTM_TRAINING_ASSERTS
+        LSTM_ASSERT(n == NumberOfBatchesIncludingRemainder(), "ForEachBatch: n mismatch");
+#endif
         for (size_t i = 0; i < n; ++i)  f(GetBatchClamped(i));
     }
 
@@ -61,10 +69,22 @@ public:
     DataSet::const_iterator begin() const  { return ds.cbegin(); }
     DataSet::const_iterator end() const { return ds.cend(); }
     
-    auto GetWindow(DataSet::const_iterator iter) const -> Window    {   return { iter, iter + window_size };  }
+    auto GetWindow(DataSet::const_iterator iter) const -> Window
+    {
+#if LSTM_TRAINING_ASSERTS
+        LSTM_ASSERT(iter >= ds.cbegin() && iter <= ds.cend(), "GetWindow: iterator out of bounds");
+        LSTM_ASSERT(static_cast<size_t>(ds.cend() - iter) >= window_size, "GetWindow: not enough elements for window");
+#endif
+        return { iter, iter + window_size };
+    }
     size_t NumberOfBatches() const    {   return ds.size() / batch_size;   }
     auto GetBatch(long idx) const
     {
+#if LSTM_TRAINING_ASSERTS
+        LSTM_ASSERT(idx >= 0, "GetBatch: negative index");
+        size_t start = static_cast<size_t>(idx) * batch_size;
+        LSTM_ASSERT(start + batch_size <= ds.size(), "GetBatch: out of range");
+#endif
         auto batchIdx = ds.cbegin() + idx * batch_size;
         return std::ranges::subrange(batchIdx, batchIdx + batch_size);
     }
@@ -85,5 +105,4 @@ void printMatrix(const char* name, const Mat& mat)
 }
 
 #endif /* Tensor_hpp */
-
 
