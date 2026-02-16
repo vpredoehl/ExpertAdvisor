@@ -73,6 +73,16 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_ADAM_EPS 1e-8f
 #endif
 
+#ifndef LSTM_HEAD_LR_MULT
+#define LSTM_HEAD_LR_MULT 5.0f
+#endif
+#ifndef LSTM_CORE_GRAD_SCALE
+#define LSTM_CORE_GRAD_SCALE 5.0f
+#endif
+#ifndef LSTM_WEIGHT_DECAY
+#define LSTM_WEIGHT_DECAY 0.0f
+#endif
+
 
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
 static inline float uniform_between(float low, float high) {
@@ -420,7 +430,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
         // Add positive bias to forget gate block [H .. 2H)
         const size_t H = hidden_size;
         for (size_t j = H; j < 2 * H; ++j) {
-            bias.SetValue(0, j, bias(0, j) + 1.0f);
+            bias.SetValue(0, j, bias(0, j) + 2.0f);
         }
     }
     ResetPreviousState();
@@ -556,7 +566,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
         // Initialize d_h directly from head weights (no Evaluate) and d_c as zeros
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
-        for (size_t i = 0; i < hidden_size; ++i)    d_h.SetValue(0, i, err * returnHeadWeight(i, 0));
+        for (size_t i = 0; i < hidden_size; ++i)    d_h.SetValue(0, i, (err * returnHeadWeight(i, 0)) * LSTM_CORE_GRAD_SCALE);
 
         MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c(1, hidden_size);
         {
@@ -611,6 +621,49 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
     // Average gradients by number of windows
     const float lrScale = (windowsInBatch > 0) ? (learningRate / static_cast<float>(windowsInBatch)) : learningRate;
+
+    const float lrScaleHead = lrScale * LSTM_HEAD_LR_MULT;
+
+    // Optional L2 weight decay added to accumulated gradients
+    if (LSTM_WEIGHT_DECAY > 0.0f)
+    {
+        const float wd = LSTM_WEIGHT_DECAY;
+        // Core param decay: d_param_accum += wd * param (cast to AccumScalar)
+        {
+            auto lowD = MetaNN::LowerAccess(d_param_accum);
+            auto lowP = MetaNN::LowerAccess(param);
+            auto* dptr = lowD.MutableRawMemory();
+            const float* pptr = lowP.RawMemory();
+            const size_t len = param.Shape()[0] * param.Shape()[1];
+            for (size_t i = 0; i < len; ++i) dptr[i] += static_cast<AccumScalar>(wd * pptr[i]);
+        }
+        // Core bias decay: d_bias_accum += wd * bias
+        {
+            auto lowD = MetaNN::LowerAccess(d_bias_accum);
+            auto lowB = MetaNN::LowerAccess(bias);
+            auto* dptr = lowD.MutableRawMemory();
+            const float* bptr = lowB.RawMemory();
+            const size_t len = bias.Shape()[0] * bias.Shape()[1];
+            for (size_t i = 0; i < len; ++i) dptr[i] += static_cast<AccumScalar>(wd * bptr[i]);
+        }
+        // Head decay: d_headW_accum_f += wd * returnHeadWeight; d_headB_accum_f += wd * returnHeadBias
+        {
+            auto lowD = MetaNN::LowerAccess(d_headW_accum_f);
+            auto lowW = MetaNN::LowerAccess(returnHeadWeight);
+            float* dptr = lowD.MutableRawMemory();
+            const float* wptr = lowW.RawMemory();
+            const size_t len = hidden_size * 1;
+            for (size_t i = 0; i < len; ++i) dptr[i] += wd * wptr[i];
+        }
+        {
+            auto lowD = MetaNN::LowerAccess(d_headB_accum_f);
+            auto lowB = MetaNN::LowerAccess(returnHeadBias);
+            float* dptr = lowD.MutableRawMemory();
+            const float* bptr = lowB.RawMemory();
+            const size_t len = 1;
+            for (size_t i = 0; i < len; ++i) dptr[i] += wd * bptr[i];
+        }
+    }
 
 #if LSTM_USE_GRAD_CLIP
     // Global norm gradient clipping across all accumulated gradients
@@ -838,8 +891,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
 
 
-        returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - lrScale * v_headW_f);
-        returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScale * v_headB_f);
+        returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - lrScaleHead * v_headW_f);
+        returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScaleHead * v_headB_f);
     }
 #elif LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
     {
@@ -895,7 +948,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             for (size_t i = 0; i < len; ++i)
             {
                 float denom = std::sqrt(vptr[i]) + eps_f;
-                uptr[i] = lrScale * (mptr[i] / denom);
+                uptr[i] = lrScaleHead * (mptr[i] / denom);
             }
             return upd;
         };
@@ -912,8 +965,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
 
 
-        returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - lrScale * d_headW_accum_f);
-        returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScale * d_headB_accum_f);
+        returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - lrScaleHead * d_headW_accum_f);
+        returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScaleHead * d_headB_accum_f);
     }
 #endif
 #endif
@@ -1024,6 +1077,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 
     return predicted_close_next;
 }
+
 
 
 
