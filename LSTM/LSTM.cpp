@@ -36,7 +36,7 @@
 #endif
 
 #ifndef LSTM_MIXED_PRECISION
-#define LSTM_MIXED_PRECISION 0
+#define LSTM_MIXED_PRECISION 1
 #endif
 
 #if LSTM_MIXED_PRECISION
@@ -416,10 +416,17 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     
         // initialize bias, previous hidden and previous cell state
     for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, 0.0f);
+    {
+        // Add positive bias to forget gate block [H .. 2H)
+        const size_t H = hidden_size;
+        for (size_t j = H; j < 2 * H; ++j) {
+            bias.SetValue(0, j, bias(0, j) + 1.0f);
+        }
+    }
     ResetPreviousState();
 
-    for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
-    returnHeadBias.SetValue(0, 0, 0.0f);
+    for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.05f);
+    returnHeadBias.SetValue(0, 0, 1e-3f);
 
     long_term = lt; short_term = st;
 #endif
@@ -469,11 +476,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     std::vector<float> ydenorm_samples; // predicted price delta (predicted_close - close_T)
 #endif
 
+    ResetPreviousState();
+
     // Slide a 5-step window across this 15-step batch
     for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
     {
         // Reset states for an independent window
-        ResetPreviousState();
+        // Removed per-window ResetPreviousState();
 
         std::vector<StepCache> cache;
         cache.reserve(window_size);
@@ -1015,6 +1024,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 
     return predicted_close_next;
 }
+
 
 
 
