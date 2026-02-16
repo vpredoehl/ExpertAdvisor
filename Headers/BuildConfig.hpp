@@ -6,11 +6,12 @@
 
 // 1: compile out training logic and run forward-only inference paths
 #ifndef LSTM_INFERENCE_ONLY
-#define LSTM_INFERENCE_ONLY 0
+#define LSTM_INFERENCE_ONLY 1
 #endif
 
-constexpr bool inference_only = false;
+constexpr bool inference_only = true;
 constexpr bool save_enable = true;
+constexpr bool reset_state_per_window = true;
 
 // true: load latest model from DB at startup; false: start from scratch
     //not needed to be set for inference_only = true
@@ -19,3 +20,4 @@ constexpr bool load_latest = false;
 
 // 1: overwrite the loaded/latest model_id when saving; 0: create a new model snapshot
 constexpr bool save_overwrite = false;
+

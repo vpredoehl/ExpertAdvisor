@@ -22,7 +22,15 @@
 #endif
 
 #ifndef LSTM_TRAINING_PROGRESS
-#define LSTM_TRAINING_PROGRESS 0
+#define LSTM_TRAINING_PROGRESS 1
+#endif
+
+#ifndef LSTM_SAT_DEBUG
+#define LSTM_SAT_DEBUG 0
+#endif
+
+#ifndef LSTM_RESET_STATE_PER_WINDOW
+#define LSTM_RESET_STATE_PER_WINDOW 1
 #endif
 
 
@@ -46,7 +54,7 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_USE_GRAD_CLIP
-#define LSTM_USE_GRAD_CLIP 0
+#define LSTM_USE_GRAD_CLIP 1
 #endif
 #ifndef LSTM_GRAD_CLIP_THRESHOLD
 #define LSTM_GRAD_CLIP_THRESHOLD 1.0f
@@ -74,7 +82,7 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_HEAD_LR_MULT
-#define LSTM_HEAD_LR_MULT 5.0f
+#define LSTM_HEAD_LR_MULT 15.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
 #define LSTM_CORE_GRAD_SCALE 5.0f
@@ -158,7 +166,7 @@ inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
     WindowWeights ww;
     ww.W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
     ww.W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
-    ww.W_cat   = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in + hidden_size));
+    ww.W_cat   = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in));
     return ww;
 }
 
@@ -399,7 +407,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     // Deterministic constant initialization for verification
     const float weightInit = 0.1f;
     const float biasInit   = 0.0f; // used below when initializing bias
-    for (int r = 0; r < n_in + hidden_size; ++r)
+    for (int r = 0; r < n_in; ++r)
         for (int c = 0; c < 4 * n_out; ++c)
             param.SetValue(r, c, weightInit);
     
@@ -420,7 +428,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     // Xavier/Glorot uniform initialization limit
     float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(n_out)));
 
-    for (int r = 0; r < n_in + hidden_size; ++r)
+    for (int r = 0; r < n_in; ++r)
         for (int c = 0; c < 4 * n_out; ++c)
             param.SetValue(r, c, uniform_symmetric(limit));
     
@@ -430,7 +438,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
         // Add positive bias to forget gate block [H .. 2H)
         const size_t H = hidden_size;
         for (size_t j = H; j < 2 * H; ++j) {
-            bias.SetValue(0, j, bias(0, j) + 2.0f);
+            bias.SetValue(0, j, bias(0, j) + 1.0f);
         }
     }
     ResetPreviousState();
@@ -452,6 +460,10 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
 #if !LSTM_INFERENCE_ONLY
     size_t windowsInBatch = 0;
+#endif
+
+#if !LSTM_INFERENCE_ONLY
+    size_t skippedWindows = 0;
 #endif
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
@@ -491,8 +503,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     // Slide a 5-step window across this 15-step batch
     for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
     {
-        // Reset states for an independent window
-        // Removed per-window ResetPreviousState();
+        // Reset states for an independent window when enabled
+        if constexpr (reset_state_per_window) ResetPreviousState();
 
         std::vector<StepCache> cache;
         cache.reserve(window_size);
@@ -504,6 +516,34 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         Window w = t.GetWindow(window_start);
 
         for(const auto& f_sample : w)   cache.push_back(forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat));
+
+#if LSTM_SAT_DEBUG
+        {
+            auto l2norm = [](const auto& m){
+                auto low = MetaNN::LowerAccess(m);
+                const float* p = low.RawMemory();
+                const size_t len = m.Shape()[0] * m.Shape()[1];
+                double s = 0.0;
+                for (size_t i = 0; i < len; ++i) { double v = static_cast<double>(p[i]); s += v * v; }
+                return std::sqrt(s);
+            };
+            auto meanAll = [](const auto& m){
+                auto low = MetaNN::LowerAccess(m);
+                const float* p = low.RawMemory();
+                const size_t len = m.Shape()[0] * m.Shape()[1];
+                double s = 0.0;
+                for (size_t i = 0; i < len; ++i) s += static_cast<double>(p[i]);
+                return (len > 0) ? (s / static_cast<double>(len)) : 0.0;
+            };
+            const auto& last = cache.back();
+            std::cout << "sat: ||h_T||=" << l2norm(prevHiddenState)
+                      << " ||c_T||=" << l2norm(prevCellState)
+                      << " gate_means i=" << meanAll(last.i)
+                      << " f=" << meanAll(last.f)
+                      << " g=" << meanAll(last.g)
+                      << " o=" << meanAll(last.o) << std::endl;
+        }
+#endif
 
         // ---- BPTT for next-step return (regression) ----
         // We need the last sample in the window and the next sample after the window
@@ -518,6 +558,14 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const float close_T    = lastFeat(0, closeCol);
         const float close_next = nextFeat(0, closeCol);
 
+        // Validate close values before computing returns
+        if (!std::isfinite(close_T) || !std::isfinite(close_next) || close_T <= 0.0f || close_next <= 0.0f)
+        {
+#if !LSTM_INFERENCE_ONLY
+            ++skippedWindows;
+#endif
+            continue; // skip this window
+        }
 
 
         const float raw_logret = std::log(close_next) - std::log(close_T);
@@ -530,7 +578,23 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         float t = raw * targetScale + targetBias;
         if (targetUseZScore) t = (t - targetMean) / std::max(targetStd, 1e-12f);
 
-
+        // Validate computed target; skip window if invalid
+        if (!std::isfinite(raw))
+        {
+#if !LSTM_INFERENCE_ONLY
+            ++skippedWindows;
+#endif
+            continue;
+        }
+        if (!std::isfinite(t))
+        {
+#if !LSTM_INFERENCE_ONLY
+            ++skippedWindows;
+#endif
+            continue;
+        }
+        // Optional safety clamp to avoid extreme outliers from destabilizing training
+        t = std::clamp(t, -10.0f, 10.0f);
 
         auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, t);
         // For debugging predicted_close, invert mapping
@@ -613,6 +677,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         std::cout << "train: pred_final (price delta) samples:";
         for (float v : ydenorm_samples) std::cout << ' ' << v;
         std::cout << std::endl;
+        std::cout << "train: skipped_windows=" << skippedWindows << std::endl;
     }
 #endif
 
@@ -620,9 +685,13 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
     // Head gradients already accumulated in concrete matrices: d_headW_accum_f and d_headB_accum_f
 
     // Average gradients by number of windows
-    const float lrScale = (windowsInBatch > 0) ? (learningRate / static_cast<float>(windowsInBatch)) : learningRate;
-
-    const float lrScaleHead = lrScale * LSTM_HEAD_LR_MULT;
+    // Learning rate scaling: For Adam, do not average by windowsInBatch; for others, keep averaging
+    float lrScaleCore = learningRate;
+    float lrScaleHead = learningRate * LSTM_HEAD_LR_MULT;
+#if LSTM_OPTIMIZER != LSTM_OPTIMIZER_ADAM
+    lrScaleCore = (windowsInBatch > 0) ? (learningRate / static_cast<float>(windowsInBatch)) : learningRate;
+    lrScaleHead = lrScaleCore * LSTM_HEAD_LR_MULT;
+#endif
 
     // Optional L2 weight decay added to accumulated gradients
     if (LSTM_WEIGHT_DECAY > 0.0f)
@@ -789,8 +858,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
 
 
-        param = MetaNN::Evaluate(param - lrScale * v_param_f);
-        bias = MetaNN::Evaluate(bias - lrScale * v_bias_f);
+        param = MetaNN::Evaluate(param - lrScaleCore * v_param_f);
+        bias = MetaNN::Evaluate(bias - lrScaleCore * v_bias_f);
     }
 #elif LSTM_OPTIMIZER == LSTM_OPTIMIZER_ADAM
     {
@@ -846,7 +915,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             for (size_t i = 0; i < len; ++i)
             {
                 float denom = std::sqrt(vptr[i]) + eps_f;
-                uptr[i] = lrScale * (mptr[i] / denom);
+                uptr[i] = lrScaleCore * (mptr[i] / denom);
             }
             return upd;
         };
@@ -866,8 +935,8 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 
 
         // Apply in a single lazy expression
-        param = MetaNN::Evaluate(param - lrScale * d_param_f);
-        bias  = MetaNN::Evaluate(bias  - lrScale * d_bias_f);
+        param = MetaNN::Evaluate(param - lrScaleCore * d_param_f);
+        bias  = MetaNN::Evaluate(bias  - lrScaleCore * d_bias_f);
     }
 #endif
 
@@ -1077,6 +1146,9 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 
     return predicted_close_next;
 }
+
+
+
 
 
 

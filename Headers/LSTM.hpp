@@ -98,7 +98,7 @@ namespace EA
         float      targetStd  = 1.0f;                      // z-score std  (if used)
 
         float long_term, short_term, in;
-        FloatMatrixCPU param { static_cast<size_t>(n_in + hidden_size), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
+        FloatMatrixCPU param { static_cast<size_t>(n_in), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
         FloatMatrixCPU prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
         FloatMatrixCPU bias { 1, 4 * n_out };
 
