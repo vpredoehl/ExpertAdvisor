@@ -6,10 +6,10 @@
 
 // 1: compile out training logic and run forward-only inference paths
 #ifndef LSTM_INFERENCE_ONLY
-#define LSTM_INFERENCE_ONLY 1
+#define LSTM_INFERENCE_ONLY 0
 #endif
 
-constexpr bool inference_only = true;
+constexpr bool inference_only = false;
 constexpr bool save_enable = true;
 constexpr bool reset_state_per_window = true;
 

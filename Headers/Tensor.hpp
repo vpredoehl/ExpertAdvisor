@@ -15,17 +15,19 @@
 #include <ranges>
 #include <iostream>
 
-#include "PricePoint.hpp"
 #include "Params.hpp"
 #include "LSTM.hpp"   // for LSTM_TRAINING_ASSERTS
-
 
 using std::string;
 using std::list;
 
+using PriceTP = std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>;
+struct Feature;
 
 class Tensor
 {
+    bool has_prev_close = false;
+    float prev_close = 0.0f;
     string table;
     DataSet ds;
     

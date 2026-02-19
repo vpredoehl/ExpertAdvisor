@@ -57,7 +57,7 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_USE_GRAD_CLIP 1
 #endif
 #ifndef LSTM_GRAD_CLIP_THRESHOLD
-#define LSTM_GRAD_CLIP_THRESHOLD 1.0f
+#define LSTM_GRAD_CLIP_THRESHOLD 10.0f
 #endif
 
 #ifndef LSTM_OPTIMIZER_SGD
@@ -550,30 +550,39 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto lastIt = window_start + (window_size - 1);
         auto nextIt = window_start + window_size; // safe due to '<' in loop condition
 
-        // Evaluate to access element values
-        auto lastFeat  = *lastIt;
-        auto nextFeat  = *nextIt;
-        // Column index for close price in FeatureMatrix: open(0), close(1), high(2), low(3)
-        constexpr size_t closeCol = 1;
-        const float close_T    = lastFeat(0, closeCol);
-        const float close_next = nextFeat(0, closeCol);
+        // Removed unused lastFeat assignment:
+        // auto lastFeat  = *lastIt;
 
-        // Validate close values before computing returns
-        if (!std::isfinite(close_T) || !std::isfinite(close_next) || close_T <= 0.0f || close_next <= 0.0f)
+        auto nextFeat  = *nextIt;
+
+        // ======== Replaced block starts here ========
+        // Column index for close feature: c_t = log(close_t / close_{t-1})
+        constexpr size_t closeCol = 1;
+
+        // Ground-truth next-step log-return is simply the next sample's close feature
+        const float y_true = nextFeat(0, closeCol);
+
+        // Validate y_true; skip unrealistic or non-finite values
+        if (!std::isfinite(y_true) || std::abs(y_true) > 0.05f) // >5% per minute is extreme for FX
         {
 #if !LSTM_INFERENCE_ONLY
             ++skippedWindows;
 #endif
-            continue; // skip this window
+            std::cout << "BAD c_next(logret)=" << y_true << "\n";
+            continue;
         }
 
+        // Optional percent move debug from log-return
+        {
+            float pct = std::exp(y_true) - 1.0f;
+            if (std::abs(pct) > 0.01f) // >1% per minute is already big for AUDCAD
+                std::cout << "BIG pct=" << pct << " y_true=" << y_true << "\n";
+        }
 
-        const float raw_logret = std::log(close_next) - std::log(close_T);
-        const float raw_pct    = (close_next - close_T) / close_T;
+        // Map to training raw target depending on configured targetType
+        const float raw = (targetType == TargetType::LogReturn) ? y_true
+                                                                : (std::exp(y_true) - 1.0f);
 
-
-
-        const float raw        = (targetType == TargetType::LogReturn) ? raw_logret : raw_pct;
         // Apply affine and optional z-score normalization to build training target t
         float t = raw * targetScale + targetBias;
         if (targetUseZScore) t = (t - targetMean) / std::max(targetStd, 1e-12f);
@@ -597,13 +606,21 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         t = std::clamp(t, -10.0f, 10.0f);
 
         auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, t);
-        // For debugging predicted_close, invert mapping
+
+        // Invert mapping for debug: recover predicted raw return
         float t_inv = head.y_hat;
         if (targetUseZScore) t_inv = head.y_hat * targetStd + targetMean;
         float raw_inv = (t_inv - targetBias) / std::max(targetScale, 1e-12f);
-        predicted_close = (targetType == TargetType::LogReturn) ? (std::exp(raw_inv) * close_T)
-                                                                : (close_T * (1.0f + raw_inv));
+
+        // Convert to a consistent predicted log-return and percent move for debugging
+        float pred_logret = (targetType == TargetType::LogReturn) ? raw_inv : std::log(1.0f + raw_inv);
+        float pred_pct    = std::exp(pred_logret) - 1.0f;
+
+        // Reuse return value to carry predicted log-return (caller ignores it during training)
+        predicted_close = pred_logret;
+
         const float err = head.err;
+        // ======== Replaced block ends here ========
 
 #if !LSTM_INFERENCE_ONLY
         // Accumulate training target statistics and sample predictions for debugging
@@ -614,8 +631,9 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         ++y_count;
         if (yhat_samples.size() < 10)
         {
-            yhat_samples.push_back(head.y_hat);
-            ydenorm_samples.push_back(predicted_close - close_T);
+            // Store predicted log-return and predicted percent move samples
+            yhat_samples.push_back(pred_logret);
+            ydenorm_samples.push_back(pred_pct);
         }
 #endif
 
@@ -674,7 +692,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         std::cout << "train: pred_raw (log-return) samples:";
         for (float v : yhat_samples) std::cout << ' ' << v;
         std::cout << std::endl;
-        std::cout << "train: pred_final (price delta) samples:";
+        std::cout << "train: pred_pct (relative move) samples:";
         for (float v : ydenorm_samples) std::cout << ' ' << v;
         std::cout << std::endl;
         std::cout << "train: skipped_windows=" << skippedWindows << std::endl;
@@ -762,6 +780,11 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         for (size_t i = 0; i < len; ++i) { double v = static_cast<double>(p[i]); sumsq += v * v; }
     }
     const double global_norm = std::sqrt(sumsq);
+    std::cout << "clip: global_norm=" << global_norm
+              << " thr=" << LSTM_GRAD_CLIP_THRESHOLD
+              << (global_norm > LSTM_GRAD_CLIP_THRESHOLD ? " CLIPPED" : " ok")
+              << std::endl;
+
     if (global_norm > static_cast<double>(LSTM_GRAD_CLIP_THRESHOLD))
     {
         const double scale = static_cast<double>(LSTM_GRAD_CLIP_THRESHOLD) / global_norm;
@@ -1113,15 +1136,8 @@ inline float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
 
 inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 {
-    // We need the last close in the window to convert log return to price
-    constexpr size_t closeCol = 1;
-
-    // If we need to reset, do it before we take the last close value
+    // Minimal inference fix: return predicted relative move (fraction), not a price.
     if (resetState) ResetPreviousState();
-
-    // Capture last close from the provided window
-    float close_T = 0.0f;
-    for (const auto& f_sample : w)  close_T = f_sample(0, closeCol);
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
@@ -1130,22 +1146,21 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     // Forward through the window
     for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
 
-    // Predict log return and convert to price
+    // Predict next-step return from the last hidden state
     float y_hat = predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
     // Invert optional z-score normalization
     float t = targetUseZScore ? (y_hat * targetStd + targetMean) : y_hat;
     // Invert affine
     float raw = (t - targetBias) / std::max(targetScale, 1e-12f);
-    float predicted_close_next = 0.0f;
+
+    // Return predicted relative move (fraction)
     if (targetType == TargetType::LogReturn)
-        predicted_close_next = std::exp(raw) * close_T;
+        return std::exp(raw) - 1.0f; // convert log-return to percent move
     else
-        predicted_close_next = close_T * (1.0f + raw);
-
-
-
-    return predicted_close_next;
+        return raw; // already percent move
 }
+
+
 
 
 

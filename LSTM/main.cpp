@@ -50,15 +50,15 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
             predRel.push_back(raw);                    // already percent move (fraction)
     }
 
-    // 3) Build ground-truth relative moves for comparison
-    std::vector<float> actRel; // (close_next - close_T) / close_T
+    // 3) Build ground-truth relative moves for comparison from feature log-return
+    std::vector<float> actRel; // percent move derived from log-return
     actRel.reserve(predRel.size());
     constexpr size_t closeCol = 1;
     for (auto it = b.begin(); it + window_size < b.end(); ++it)
     {
-        float close_T    = (*(it + (window_size - 1)))(0, closeCol);
-        float close_next = (*(it + window_size))(0, closeCol);
-        actRel.push_back((close_next - close_T) / close_T);
+        float next_logret = (*(it + window_size))(0, closeCol);
+        float pct = std::exp(next_logret) - 1.0f;
+        actRel.push_back(pct);
     }
 
     // 4) Print prediction distribution stats to diagnose saturation
@@ -95,28 +95,17 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
               << " mean=" << s_rel.mean << " std=" << s_rel.std
               << " uniq~=" << s_rel.uniq << std::endl;
 
-    // 5) Using the mapping, compute price movement metrics (predicted vs actual)
-    std::vector<float> predMove; predMove.reserve(predRel.size());
-    std::vector<float> actualMove; actualMove.reserve(predRel.size());
-    size_t idx = 0;
-    for (auto it = b.begin(); it + window_size < b.end(); ++it)
-    {
-        float close_T    = (*(it + (window_size - 1)))(0, closeCol);
-        float close_next = (*(it + window_size))(0, closeCol);
-        float rel = predRel[idx++];
-        float pred_close_next = close_T * (1.0f + rel);
-        predMove.push_back(pred_close_next - close_T);
-        actualMove.push_back(close_next - close_T);
-    }
-
+    // 5) Compare predicted vs actual relative moves directly (fractions)
+    std::vector<float> predMove = predRel; // alias copy
+    std::vector<float> actualMove = actRel; // alias copy
     size_t N = std::min(predMove.size(), actualMove.size());
     const size_t toPrint = std::min<size_t>(N, 10);
     for (size_t i = 0; i < toPrint; ++i)
     {
         double diff = static_cast<double>(predMove[i]) - static_cast<double>(actualMove[i]);
         std::cout << "i=" << i
-                  << " pred_move=" << predMove[i]
-                  << " act_move=" << actualMove[i]
+                  << " pred_rel=" << predMove[i]
+                  << " act_rel=" << actualMove[i]
                   << " diff=" << diff
                   << std::endl;
     }
@@ -128,7 +117,7 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     }
     if (N > 0)
     {
-        std::cout << "Batch MAE (price movement): " << (maeMove / static_cast<double>(N))
+        std::cout << "Batch MAE (relative move fraction): " << (maeMove / static_cast<double>(N))
                   << " | Direction accuracy: " << (static_cast<double>(correctDir) / static_cast<double>(N) * 100.0)
                   << "% over " << N << " predictions" << std::endl;
     }
