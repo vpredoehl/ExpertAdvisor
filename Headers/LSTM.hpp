@@ -96,6 +96,8 @@ namespace EA
         bool       targetUseZScore = false;                // default: not normalized
         float      targetMean = 0.0f;                      // z-score mean (if used)
         float      targetStd  = 1.0f;                      // z-score std  (if used)
+        // Feature scaling factor applied in Tensor::Add (e.g., log-return * 1000)
+        inline static constexpr float kFeatScale = 1000.0f;
 
         float long_term, short_term, in;
         FloatMatrixCPU param { static_cast<size_t>(n_in), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]

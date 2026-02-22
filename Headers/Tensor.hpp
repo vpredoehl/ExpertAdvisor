@@ -30,6 +30,7 @@ class Tensor
     float prev_close = 0.0f;
     string table;
     DataSet ds;
+    std::vector<float> raw_close;
     
 public:
     // Number of full batches (size divisible by batch_size)
@@ -90,6 +91,9 @@ public:
         auto batchIdx = ds.cbegin() + idx * batch_size;
         return std::ranges::subrange(batchIdx, batchIdx + batch_size);
     }
+
+    float RawCloseAtIterator(DataSet::const_iterator it) const;
+
 };
 
 std::ostream& operator<<(std::ostream&, Window);

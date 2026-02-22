@@ -94,7 +94,7 @@ using AccumScalar = float;   // default accumulation precision
 
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
 static inline float uniform_between(float low, float high) {
-    thread_local std::mt19937 rng{ std::random_device{}() };
+    thread_local std::mt19937 rng{ 42 };// std::random_device{}() };
     std::uniform_real_distribution<float> dist(low, high);
     return dist(rng);
 }
@@ -178,21 +178,64 @@ inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
                            FloatMatrixCPU& xh_concat) const -> StepCache
 {
     // Build [x_t | h_{t-1}] and compute all gates in one GEMM
+#if LSTM_DEBUG_PRINTS
+    printMatrix("x_t", x_t);
+#endif
     {
         const size_t expectedCols = x_t.Shape()[1] + prevHiddenState.Shape()[1];
         if (xh_concat.Shape()[0] != 1 || xh_concat.Shape()[1] != expectedCols) {
             xh_concat = FloatMatrixCPU(1, expectedCols);
         }
         NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+#if LSTM_DEBUG_PRINTS
+        auto X = MetaNN::Evaluate(x_t);
+        auto H = MetaNN::Evaluate(prevHiddenState);
+        auto C = MetaNN::Evaluate(xh_concat);
+        const size_t Ix = X.Shape()[1];
+        const size_t Ih = H.Shape()[1];
+        
+        for (size_t j = 0; j < Ix; ++j)
+            LSTM_ASSERT(std::fabs(C(0, j) - X(0, j)) < 1e-6f, "Concat: X mismatch");
+        
+        for (size_t j = 0; j < Ih; ++j)
+            LSTM_ASSERT(std::fabs(C(0, Ix + j) - H(0, j)) < 1e-6f, "Concat: H mismatch");
+#endif
     }
 
 
     const size_t K = xh_concat.Shape()[1];
     auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(ww.W_cat, 0, K);
     auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
+#if LSTM_DEBUG_PRINTS
+    auto yHandle = yExpr.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    std::cout << "bias(0,64): " << bias(0,64) << std::endl
+        << "yExpr(0,64) : " << yHandle.Data()(0,64) << std::endl
+        << "yExpr(0,0) : " << yHandle.Data()(0,0) << std::endl
+        << "yExpr(0,128) : " << yHandle.Data()(0,128) << std::endl
+        << "yExpr(0,192) : " << yHandle.Data()(0,192) << std::endl;
+#endif
 
     const size_t H = prevHiddenState.Shape()[1];
     auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yExpr);
+#if LSTM_DEBUG_PRINTS
+{
+    auto yHandle = yExpr.EvalRegister();
+
+    auto iHandle = i2D.EvalRegister();
+    auto fHandle = f2D.EvalRegister();
+    auto gHandle = g2D.EvalRegister();
+    auto oHandle = o2D.EvalRegister();
+
+    MetaNN::EvalPlan::Inst().Eval();
+
+    std::cout
+        << "y(0,0)="   << yHandle.Data()(0,0)   << "  i(0,0)=" << iHandle.Data()(0,0) << "\n"
+        << "y(0,64)="  << yHandle.Data()(0,64)  << "  f(0,0)=" << fHandle.Data()(0,0) << "\n"
+        << "y(0,128)=" << yHandle.Data()(0,128) << "  g(0,0)=" << gHandle.Data()(0,0) << "\n"
+        << "y(0,192)=" << yHandle.Data()(0,192) << "  o(0,0)=" << oHandle.Data()(0,0) << "\n";
+}
+#endif
     auto i_1d = MetaNN::Sigmoid(MetaNN::Reshape(i2D, MetaNN::Shape(H)));
     auto f_1d = MetaNN::Sigmoid(MetaNN::Reshape(f2D, MetaNN::Shape(H)));
     auto g_1d = MetaNN::Tanh   (MetaNN::Reshape(g2D, MetaNN::Shape(H)));
@@ -212,6 +255,15 @@ inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     auto c_2d_handle = MetaNN::Reshape(c_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto h_2d_handle = MetaNN::Reshape(h_1d, MetaNN::Shape(1, H)).EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
+    
+#if LSTM_DEBUG_PRINTS
+    std::cout << "i_2d_handle.Data()(0,0): " << i_2d_handle.Data()(0,0) << std::endl;
+    std::cout << "f_2d_handle.Data()(0,0): " << f_2d_handle.Data()(0,0) << std::endl;
+    std::cout << "g_2d_handle.Data()(0,0): " << g_2d_handle.Data()(0,0) << std::endl;
+    std::cout << "o_2d_handle.Data()(0,0): " << o_2d_handle.Data()(0,0) << std::endl;
+    std::cout << "c_2d_handle.Data()(0,0): " << c_2d_handle.Data()(0,0) << std::endl;
+    std::cout << "h_2d_handle.Data()(0,0): " << h_2d_handle.Data()(0,0) << std::endl;
+#endif
 
     StepCache sc;
     sc.x      = x_t;
@@ -242,9 +294,6 @@ inline auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
     MetaNN::EvalPlan::Inst().Eval();
     float y_hat = predHandle.Data()(0, 0);
     float err   = y_hat - target;
-
-
-
     return { y_hat, err };
 }
 
@@ -268,11 +317,22 @@ inline void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
                                    const FloatMatrixCPU& h_T,
                                    float err) const
 {
+#if LSTM_DEBUG_PRINTS
+    std::cout << "err: " << err << std::endl;
+    std::cout << "h_T(0,0): " << h_T(0,0) << std::endl;
+    std::cout << "dW_accum(0,0): " << dW_accum(0,0) << std::endl;
+    std::cout << "dB_accum(0,0): " << dB_accum(0,0) << std::endl;
+#endif
     const size_t H = h_T.Shape()[1];
     for (size_t i = 0; i < H; ++i) {
         dW_accum.SetValue(i, 0, dW_accum(i, 0) + h_T(0, i) * err);
     }
     dB_accum.SetValue(0, 0, dB_accum(0, 0) + err);
+    
+#if LSTM_DEBUG_PRINTS
+    std::cout << "AFTER dW_accum(0,0): " << dW_accum(0,0) << std::endl;
+    std::cout << "AFTER dB_accum(0,0): " << dB_accum(0,0) << std::endl;
+#endif
 }
 
 inline auto EA::LSTM::hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const -> GateBlocks
@@ -445,7 +505,14 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 
     for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.05f);
     returnHeadBias.SetValue(0, 0, 1e-3f);
-
+    
+#if LSTM_DEBUG_PRINTS
+    std::cout << "returnHeadWeight [ rows, cols ] = [ " << returnHeadWeight.Shape()[0] << "," << returnHeadWeight.Shape()[1] << " ]" << std::endl
+        << "returnHeadWeight(0,0): " << returnHeadWeight(0,0) << std::endl
+    << "returnHeadBias(0,0): " << returnHeadBias(0,0) << std::endl
+        << "   returnHeadWeight(1,0): " << returnHeadWeight(1,0) << std::endl
+        << "   returnHeadWeight(hidden_size-1,0)" << returnHeadWeight(hidden_size-1,0) << std::endl;
+#endif
     long_term = lt; short_term = st;
 #endif
 }
@@ -515,8 +582,15 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Build a 5-step window starting at 'start' using the const iterator overload
         Window w = t.GetWindow(window_start);
 
-        for(const auto& f_sample : w)   cache.push_back(forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat));
-
+        for(const auto& f_sample : w)
+        {
+#if LSTM_DEBUG_PRINTS
+            static int t = 0;
+            int this_t;
+            std::cout << "t: " << (this_t = t++) << std::endl;
+#endif
+            cache.push_back(forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat));
+        }
 #if LSTM_SAT_DEBUG
         {
             auto l2norm = [](const auto& m){
@@ -559,29 +633,47 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Column index for close feature: c_t = log(close_t / close_{t-1})
         constexpr size_t closeCol = 1;
 
+#if LSTM_DEBUG_PRINTS
         // Ground-truth next-step log-return is simply the next sample's close feature
-        const float y_true = nextFeat(0, closeCol);
+        std::cout << "nextFeat rows=" << nextFeat.Shape()[0]
+                  << " cols=" << nextFeat.Shape()[1] << "\n";
+
+        for (size_t r = 0; r < nextFeat.Shape()[0]; ++r)
+            std::cout << "nextFeat(" << r << ",0)=" << nextFeat(r,0) << "\n";
+#endif
+        
+        const float y_true_scaled = nextFeat(0, closeCol);
+        const float y_true_logret = y_true_scaled / EA::LSTM::kFeatScale;
+
+        if (std::isfinite(y_true_logret) && std::abs(y_true_logret) > 0.2f)
+        {
+            float close_t   = t.RawCloseAtIterator(lastIt);
+            float close_tp1 = t.RawCloseAtIterator(nextIt);
+            std::cout << "ALERT: |c_next|>0.2 raw_close_t=" << close_t
+                      << " raw_close_t+1=" << close_tp1
+                      << " c_next=" << y_true_logret << std::endl;
+        }
 
         // Validate y_true; skip unrealistic or non-finite values
-        if (!std::isfinite(y_true) || std::abs(y_true) > 0.05f) // >5% per minute is extreme for FX
+        if (!std::isfinite(y_true_logret) || std::abs(y_true_logret) > 0.05f) // >5% per minute is extreme for FX
         {
 #if !LSTM_INFERENCE_ONLY
             ++skippedWindows;
 #endif
-            std::cout << "BAD c_next(logret)=" << y_true << "\n";
+            std::cout << "BAD c_next(logret)=" << y_true_logret << "\n";
             continue;
         }
 
         // Optional percent move debug from log-return
         {
-            float pct = std::exp(y_true) - 1.0f;
+            float pct = std::exp(y_true_logret) - 1.0f;
             if (std::abs(pct) > 0.01f) // >1% per minute is already big for AUDCAD
-                std::cout << "BIG pct=" << pct << " y_true=" << y_true << "\n";
+                std::cout << "BIG pct=" << pct << " y_true=" << y_true_logret << "\n";
         }
 
         // Map to training raw target depending on configured targetType
-        const float raw = (targetType == TargetType::LogReturn) ? y_true
-                                                                : (std::exp(y_true) - 1.0f);
+        const float raw = (targetType == TargetType::LogReturn) ? y_true_logret
+                                                                : (std::exp(y_true_logret) - 1.0f);
 
         // Apply affine and optional z-score normalization to build training target t
         float t = raw * targetScale + targetBias;
@@ -605,6 +697,10 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         // Optional safety clamp to avoid extreme outliers from destabilizing training
         t = std::clamp(t, -10.0f, 10.0f);
 
+#if LSTM_DEBUG_PRINTS
+        std::cout << "returnHeadWeight(0,0): " << returnHeadWeight(0,0) << std::endl;
+        std::cout << "returnHeadBias(0,0): " << returnHeadBias(0,0) << std::endl;
+#endif
         auto head = predictAndLoss(prevHiddenState, returnHeadWeight, returnHeadBias, t);
 
         // Invert mapping for debug: recover predicted raw return
@@ -678,7 +774,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 #endif
     }
 
-#if !LSTM_INFERENCE_ONLY
+#if !LSTM_INFERENCE_ONLY && LSTM_DEBUG_PRINTS
     if (y_count > 0)
     {
         double y_mean = y_sum / static_cast<double>(y_count);
@@ -946,8 +1042,22 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         auto upd_bias_f  = computeAdamUpdate(mhat_bias_f,  vhat_bias_f,  bias.Shape()[0],  bias.Shape()[1]);
 
         // Apply updates lazily for LSTM core
+#if LSTM_DEBUG_PRINTS
+        std::cout << "before…" << std::endl;
+        std::cout << "param(0,0): " << param(0,0) << std::endl;
+        std::cout << "param(0,64): " << param(0,64) << std::endl;
+        std::cout << "upd_param_f(0,0): " << upd_param_f(0,0) << "\n";
+        std::cout << "upd_param_f(0,64): " << upd_param_f(0,64) << "\n";
+#endif
         param = MetaNN::Evaluate(param - upd_param_f);
         bias = MetaNN::Evaluate(bias - upd_bias_f);
+#if LSTM_DEBUG_PRINTS
+        std::cout << "after…" << std::endl;
+        std::cout << "param(0,0): " << param(0,0) << std::endl;
+        std::cout << "param(0,64): " << param(0,64) << std::endl;
+        std::cout << "upd_param_f(0,0): " << upd_param_f(0,0) << "\n";
+        std::cout << "upd_param_f(0,64): " << upd_param_f(0,64) << "\n";
+#endif
     }
 #else
     {
@@ -991,7 +1101,7 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const AccumScalar beta1 = static_cast<AccumScalar>(LSTM_ADAM_BETA1);
         const AccumScalar beta2 = static_cast<AccumScalar>(LSTM_ADAM_BETA2);
         const AccumScalar eps = static_cast<AccumScalar>(LSTM_ADAM_EPS);
-
+        
         // Convert head gradients to AccumScalar and update first/second moments lazily
         auto gW_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headW_accum_f);
         auto gB_acc = NNUtils::CastMatrix<AccumScalar, MetaNN::DeviceTags::CPU>(d_headB_accum_f);
@@ -1006,21 +1116,21 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             m_headB = mBH.Data();
             s_headB = sBH.Data();
         }
-
+        
         // Bias correction lazily
         auto mhatW = m_headW / (static_cast<AccumScalar>(1) - beta1_pow);
         auto vhatW = s_headW / (static_cast<AccumScalar>(1) - beta2_pow);
         auto mhatB = m_headB / (static_cast<AccumScalar>(1) - beta1_pow);
         auto vhatB = s_headB / (static_cast<AccumScalar>(1) - beta2_pow);
-
+        
         // Convert to float to match parameter types and compute updates lazily
         auto mhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatW);
         auto vhatW_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatW);
         auto mhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(mhatB);
         auto vhatB_f = NNUtils::CastMatrix<float, MetaNN::DeviceTags::CPU>(vhatB);
-
-
-
+        
+        
+        
         auto computeAdamUpdateHead = [&](const auto& m_expr, const auto& v_expr, size_t rows, size_t cols)
         {
             auto mH = m_expr.EvalRegister();
@@ -1046,17 +1156,25 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         };
         auto updW = computeAdamUpdateHead(mhatW_f, vhatW_f, hidden_size, 1);
         auto updB = computeAdamUpdateHead(mhatB_f, vhatB_f, 1, 1);
-
+        
         // Apply in a single lazy expression
+#if LSTM_DEBUG_PRINTS
+        float y_hat_pre  = predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias); // BEFORE updates
+#endif
         returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - updW);
         returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - updB);
+#if LSTM_DEBUG_PRINTS
+    // Post-update prediction on the SAME final hidden state used for the last window
+        std::cout << "PRE y_hat: " << y_hat_pre << "  POST y_hat: " << predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias) << "\n";
+        std::cout << "updW(0,0): " << updW(0,0) << "\n";
+        std::cout << "updB(0,0): " << updB(0,0) << "\n";
+        std::cout << "AFTER UPDATE returnHeadWeight(0,0): " << returnHeadWeight(0,0) << "\n";
+        std::cout << "AFTER UPDATE returnHeadBias(0,0): "   << returnHeadBias(0,0)   << "\n";
+#endif
     }
 #else
     {
         // Fully lazy SGD update for head
-
-
-
         returnHeadWeight = MetaNN::Evaluate(returnHeadWeight - lrScaleHead * d_headW_accum_f);
         returnHeadBias   = MetaNN::Evaluate(returnHeadBias   - lrScaleHead * d_headB_accum_f);
     }
@@ -1064,13 +1182,12 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
 #endif
 
 #if LSTM_TRAINING_PROGRESS && !LSTM_INFERENCE_ONLY
-    if (windowCount > 0) {
-        std::cout << "Batch MSE: " << (runningLoss / static_cast<double>(windowCount))
-                  << " (" << windowCount << " windows)" << std::endl;
-    }
+    if (windowCount > 0) std::cout << "Batch MSE: " << (runningLoss / static_cast<double>(windowCount)) << " (" << windowCount << " windows)" << std::endl;
     // Print the current returnHeadWeight vector (hidden_size x 1)
     std::cout << "returnHeadBias: [" << returnHeadBias(0, 0) << "]" << std::endl;
-    printMatrix("returnHeadWeight", MetaNN::Transpose(returnHeadWeight) );
+    std::cout << "returnHeadWeight(0,0): " << returnHeadWeight(0,0)
+              << " (1,0): " << returnHeadWeight(1,0)
+              << " (63,0): " << returnHeadWeight(63,0) << "\n";
 #endif
     return predicted_close;
 }
@@ -1159,6 +1276,11 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     else
         return raw; // already percent move
 }
+
+
+
+
+
 
 
 
