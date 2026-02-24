@@ -29,15 +29,6 @@ std::ostream& operator<<(std::ostream& o, Window w)
     return o;
 }
 
-//void Tensor::Add(Feature f)
-//{
-//    FeatureMatrix fm(1,feature_size);
-//    fm.SetValue(0, 0, f.open);
-//    fm.SetValue(0, 1, f.close);
-//    fm.SetValue(0, 2, f.high);
-//    fm.SetValue(0, 3, f.low);
-//    ds.push_back(fm);
-
 void Tensor::Add(Feature f)
 {
     FeatureMatrix fm(1, feature_size);
@@ -53,8 +44,6 @@ void Tensor::Add(Feature f)
         raw_close.push_back(f.close);
         return;
     }
-
-    constexpr float kFeatureScale = 1000.0f;
 
     const float ref = prev_close;
     const float o = std::log(f.open  / ref) * kFeatureScale;

@@ -17,10 +17,6 @@
 #include "MatrixUtils.hpp"
 #include "BuildConfig.hpp"
 
-#ifndef LSTM_DEBUG_PRINTS
-#define LSTM_DEBUG_PRINTS 0
-#endif
-
 #ifndef LSTM_TRAINING_PROGRESS
 #define LSTM_TRAINING_PROGRESS 1
 #endif
@@ -716,8 +712,6 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         predicted_close = pred_logret;
 
         const float err = head.err;
-        // ======== Replaced block ends here ========
-
 #if !LSTM_INFERENCE_ONLY
         // Accumulate training target statistics and sample predictions for debugging
         y_sum += static_cast<double>(t);
@@ -731,9 +725,6 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
             yhat_samples.push_back(pred_logret);
             ydenorm_samples.push_back(pred_pct);
         }
-#endif
-
-#if !LSTM_INFERENCE_ONLY
     #if LSTM_TRAINING_PROGRESS
         runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
         ++windowCount;

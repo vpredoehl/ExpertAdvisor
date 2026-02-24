@@ -34,35 +34,8 @@
 
 static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
 {
-    // 1) Get raw head outputs sequence (as trained)
-    auto predsRaw = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
-
-    // 2) Transform raw head outputs back to raw return according to metadata
-    //    If model was trained with z-score on the target, invert it first.
-    std::vector<float> predRel; predRel.reserve(predsRaw.size());
-    for (float yhat : predsRaw)
+    auto stats = [](const auto& v)
     {
-        float t = l.targetUseZScore ? (yhat * l.targetStd + l.targetMean) : yhat;
-        float raw = (t - l.targetBias) / std::max(l.targetScale, 1e-12f);
-        if (l.targetType == EA::LSTM::TargetType::LogReturn)
-            predRel.push_back(std::exp(raw) - 1.0f);  // convert log-return to percent move
-        else
-            predRel.push_back(raw);                    // already percent move (fraction)
-    }
-
-    // 3) Build ground-truth relative moves for comparison from feature log-return
-    std::vector<float> actRel; // percent move derived from log-return
-    actRel.reserve(predRel.size());
-    constexpr size_t closeCol = 1;
-    for (auto it = b.begin(); it + window_size < b.end(); ++it)
-    {
-        float next_logret = (*(it + window_size))(0, closeCol);
-        float pct = std::exp(next_logret) - 1.0f;
-        actRel.push_back(pct);
-    }
-
-    // 4) Print prediction distribution stats to diagnose saturation
-    auto stats = [](const auto& v){
         struct S { double min, max, mean, std, uniq; } s{};
         if (v.empty()) return s;
         double mn = std::numeric_limits<double>::infinity();
@@ -86,7 +59,45 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
         return s;
     };
 
-    auto s_raw = stats(predsRaw);
+    // 1) Get predicted log-returns (already de-normalized / de-affined inside PredictNextLogReturn)
+    auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
+    
+    std::cout << "predLogRet samples: ";
+    for (size_t i = 0; i < std::min<size_t>(10, predLogRet.size()); ++i) std::cout << predLogRet[i] << " ";
+    std::cout << "\n";
+    
+    // 2) Convert predicted log-return -> relative move fraction
+    std::vector<float> predRel; predRel.reserve(predLogRet.size());
+    for (float logret : predLogRet) predRel.push_back(std::exp(logret) - 1.0f);
+
+    // 3) Build ground-truth relative moves for comparison from feature log-return
+    constexpr size_t closeCol = 1;
+    size_t gtOutliers = 0;
+    std::vector<float> actRel, actLogRet; // percent move derived from log-return
+    actRel.reserve(predRel.size()); actLogRet.reserve(predRel.size());
+    for (auto it = b.begin(); it + window_size < b.end(); ++it)
+    {
+        const float v_scaled = (*(it + window_size))(0, closeCol);
+        const float v_unscaled = v_scaled / kFeatureScale;   // <-- MUST unscale to raw log-return
+        
+        if(std::fabs(v_unscaled) > 0.02f)    gtOutliers++;  // 2% log-return is already huge for many FX horizons
+        if (actRel.size() < 5)   std::cout << "GT raw feature v_logret=" << v_unscaled << " exp(v_logret)-1=" << (std::exp(v_unscaled) - 1.0f) << std::endl;
+        actLogRet.push_back(v_unscaled);                    // <-- MUST be this exact v
+        actRel.push_back(std::exp(v_unscaled) - 1.0f);      // <-- derived from same v
+        if (actRel.size() < 10) std::cout << "GT v_logret=" << v_unscaled
+                      << " sign=" << (v_unscaled>=0 ? "+" : "-")
+                      << " abs=" << std::fabs(v_unscaled) << std::endl;
+    }
+    auto s_gt = stats(actLogRet);
+    std::cout << "actLogRet stats: min=" << s_gt.min << " max=" << s_gt.max
+              << " mean=" << s_gt.mean << " std=" << s_gt.std
+              << " uniq~=" << s_gt.uniq << std::endl << "GT outliers |v|>0.02: " << gtOutliers
+              << " of " << actLogRet.size() << std::endl;
+    assert(predRel.size() == actRel.size());    // DEBUG
+
+
+    // 4) Print prediction distribution stats to diagnose saturation
+    auto s_raw = stats(predLogRet);
     auto s_rel = stats(predRel);
     std::cout << "pred_raw stats: min=" << s_raw.min << " max=" << s_raw.max
               << " mean=" << s_raw.mean << " std=" << s_raw.std
@@ -97,9 +108,19 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
 
     // 5) Compare predicted vs actual relative moves directly (fractions)
     std::vector<float> predMove = predRel; // alias copy
+    
+    // DIAG: sign flip test (set to 1 to test)
+    #if 0
+        for (auto& x : predMove) x = -x;
+    #endif
+
     std::vector<float> actualMove = actRel; // alias copy
     size_t N = std::min(predMove.size(), actualMove.size());
     const size_t toPrint = std::min<size_t>(N, 10);
+
+//#if LSTM_DEBUG_PRINTS
+    const size_t M = std::min<size_t>(5, std::min(predLogRet.size(), actLogRet.size()));
+    for (size_t i = 0; i < M; ++i)  std::cout << "align i=" << i << " predLogRet=" << predLogRet[i]  << " actLogRet(unscaled)=" << actLogRet[i] << " actRel=" << (std::exp(actLogRet[i]) - 1.0f) << "\n";
     for (size_t i = 0; i < toPrint; ++i)
     {
         double diff = static_cast<double>(predMove[i]) - static_cast<double>(actualMove[i]);
@@ -109,18 +130,41 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
                   << " diff=" << diff
                   << std::endl;
     }
-    double maeMove = 0.0; size_t correctDir = 0;
+//#endif
+    double maeMove = 0.0;
+    size_t correctDir = 0;
+    size_t acted = 0;
+
+    // Ignore tiny predictions (no-signal zone)
+    const float predThr = 1e-4f;
+    const float actThr  = 1e-4f;   // optional: ignore tiny true moves too
+
     for (size_t i = 0; i < N; ++i)
     {
-        maeMove += std::abs(static_cast<double>(predMove[i]) - static_cast<double>(actualMove[i]));
-        bool predUp = predMove[i] >= 0.0f; bool actUp = actualMove[i] >= 0.0f; if (predUp == actUp) ++correctDir;
+        maeMove += std::abs(static_cast<double>(predMove[i]) -
+                            static_cast<double>(actualMove[i]));
+
+        if (std::fabs(predMove[i]) < predThr) continue;
+        if (std::fabs(actualMove[i]) < actThr) continue;
+
+        ++acted;
+
+        bool predUp = predMove[i] >= 0.0f;
+        bool actUp  = actualMove[i] >= 0.0f;
+        if (predUp == actUp) ++correctDir;
     }
-    if (N > 0)
-    {
-        std::cout << "Batch MAE (relative move fraction): " << (maeMove / static_cast<double>(N))
-                  << " | Direction accuracy: " << (static_cast<double>(correctDir) / static_cast<double>(N) * 100.0)
-                  << "% over " << N << " predictions" << std::endl;
-    }
+
+    if (N > 0)  std::cout << "Batch MAE (relative move fraction): "
+                  << (maeMove / static_cast<double>(N))
+                  << " | Direction accuracy: "
+                  << (acted ? (static_cast<double>(correctDir) /
+                               static_cast<double>(acted) * 100.0)
+                            : 0.0)
+                  << "% over " << acted << " acted (of " << N << ")"
+                  << " predThr=" << predThr
+                  << " actThr=" << actThr
+                  << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
+                  << std::endl;
 }
 
 
@@ -186,7 +230,6 @@ int main(int argc, const char * argv[])
                     float pc = l.CalculateBatch(b);
                 }
             } );
-//            printMatrix("params", l.param);
 
             // Persist trained model parameters to DB
             try

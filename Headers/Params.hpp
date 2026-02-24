@@ -19,6 +19,8 @@ constexpr auto n_out = hidden_size;
 constexpr auto window_size = 64;
 constexpr auto batch_size = 128;
 
+constexpr float kFeatureScale = 1000.0f;
+
 #include <vector>
 #include "MetaNN/meta_nn.h"
 
