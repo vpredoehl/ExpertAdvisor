@@ -9,6 +9,8 @@
 #define LSTM_INFERENCE_ONLY 0
 #endif
 
+#define LSTM_DEBUG_PRINTS 0
+
 constexpr bool inference_only = false;
 constexpr bool save_enable = true;
 constexpr bool reset_state_per_window = true;
