@@ -90,8 +90,8 @@ namespace EA
         // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
         // where raw is either log-return or percent-return depending on targetType
         // If targetUseZScore == true, training target was normalized as (t - targetMean)/targetStd
-        TargetType targetType = TargetType::PercentReturn; // default to percent return
-        float      targetScale = 100.0f;                   // default to 100x pct
+        TargetType targetType = TargetType::LogReturn; // default to percent return
+        float      targetScale = 1.0f;                   // default to 100x pct
         float      targetBias  = 0.0f;                     // default no bias
         bool       targetUseZScore = false;                // default: not normalized
         float      targetMean = 0.0f;                      // z-score mean (if used)

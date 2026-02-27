@@ -641,35 +641,35 @@ float LSTM::CalculateBatch(std::ranges::subrange<DataSet::const_iterator> batch)
         const float y_true_scaled = nextFeat(0, closeCol);
         const float y_true_logret = y_true_scaled / EA::LSTM::kFeatScale;
 
-        if (std::isfinite(y_true_logret) && std::abs(y_true_logret) > 0.2f)
+        if (std::isfinite(y_true_logret) && std::abs(y_true_logret) > 0.01f)
         {
             float close_t   = t.RawCloseAtIterator(lastIt);
             float close_tp1 = t.RawCloseAtIterator(nextIt);
-            std::cout << "ALERT: |c_next|>0.2 raw_close_t=" << close_t
+            std::cout << "ALERT: |c_next|>0.01 raw_close_t=" << close_t
                       << " raw_close_t+1=" << close_tp1
                       << " c_next=" << y_true_logret << std::endl;
         }
 
-        // Validate y_true; skip unrealistic or non-finite values
-        if (!std::isfinite(y_true_logret) || std::abs(y_true_logret) > 0.05f) // >5% per minute is extreme for FX
+        // Validate y_true; skip non-finite, clamp extreme outliers
+        if (!std::isfinite(y_true_logret))
         {
 #if !LSTM_INFERENCE_ONLY
             ++skippedWindows;
 #endif
-            std::cout << "BAD c_next(logret)=" << y_true_logret << "\n";
+            float close_t   = t.RawCloseAtIterator(lastIt);
+            float close_tp1 = t.RawCloseAtIterator(nextIt);
+            std::cout << "BAD c_next(logret)=" << y_true_logret << " raw_close_t=" << close_t << " raw_close_t+1=" << close_tp1 << std::endl;
             continue;
         }
 
-        // Optional percent move debug from log-return
-        {
-            float pct = std::exp(y_true_logret) - 1.0f;
-            if (std::abs(pct) > 0.01f) // >1% per minute is already big for AUDCAD
-                std::cout << "BIG pct=" << pct << " y_true=" << y_true_logret << "\n";
-        }
+        // clamp instead of skipping
+        float y_true_logret_used = y_true_logret;
+        if (std::abs(y_true_logret_used) > c_next_threshold)    y_true_logret_used = std::copysign(c_next_threshold, y_true_logret_used);
+            // optionally increment a clamped counter
 
         // Map to training raw target depending on configured targetType
-        const float raw = (targetType == TargetType::LogReturn) ? y_true_logret
-                                                                : (std::exp(y_true_logret) - 1.0f);
+        const float raw = (targetType == TargetType::LogReturn) ? y_true_logret_used
+                                                                : (std::exp(y_true_logret_used) - 1.0f);
 
         // Apply affine and optional z-score normalization to build training target t
         float t = raw * targetScale + targetBias;
@@ -1267,6 +1267,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     else
         return raw; // already percent move
 }
+
 
 
 
