@@ -57,12 +57,20 @@
             isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
+            argument = "2010-01-01 2025-01-01"
+            isEnabled = "YES">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "2025-05-17 2025-07-23"
+            isEnabled = "NO">
+         </CommandLineArgument>
+         <CommandLineArgument
             argument = "2020-01-01 2025-01-01"
             isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
             argument = "2024-01-01 2025-01-01"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
