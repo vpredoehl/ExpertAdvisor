@@ -92,13 +92,13 @@ namespace EA
         }
 
         // Target mapping metadata (persisted via PgModelIO)
-        enum class TargetType : int { LogReturn = 0, PercentReturn = 1, RelativeMove = PercentReturn };
+        enum class TargetType : int { LogReturn = 0, PercentReturn = 1, RelativeMove = PercentReturn, BinaryReturn };
 
         // How the head's scalar output maps to the target used for training/inference
         // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
         // where raw is either log-return or percent-return depending on targetType
         // If targetUseZScore == true, training target was normalized as (t - targetMean)/targetStd
-        TargetType targetType = TargetType::LogReturn; // default to logreturn
+        TargetType targetType = TargetType::BinaryReturn; // default to logreturn
         float      targetScale = 1.0f;                   // default to 100x pct
         float      targetBias  = 0.0f;                     // default no bias
         bool       targetUseZScore = false;                // default: not normalized

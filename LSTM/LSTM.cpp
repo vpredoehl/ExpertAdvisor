@@ -703,8 +703,16 @@ std::tuple<float, size_t, size_t> LSTM::CalculateBatch(Window batch)
             // optionally increment a clamped counter
 
         // Map to training raw target depending on configured targetType
-        const float raw = (targetType == TargetType::LogReturn) ? y_true_logret_used
-                                                                : (std::exp(y_true_logret_used) - 1.0f);
+        // REPLACED HERE: explicit branching for BinaryReturn type
+        float raw;
+        switch(targetType)
+        {
+            case TargetType::LogReturn: raw = y_true_logret_used;   break;
+            case TargetType::PercentReturn: raw = std::exp(y_true_logret_used) - 1.0f;  break;
+            case TargetType::BinaryReturn:  raw = (y_true_logret_used >= 0.0f ? 1.0f : -1.0f);  break;  // Binary target: +1 for up (>= 0), -1 for down
+            default:
+                raw = y_true_logret_used; // fallback
+        }
 
         // Apply affine and optional z-score normalization to build training target t
         float t = raw * targetScale + targetBias;
@@ -740,8 +748,32 @@ std::tuple<float, size_t, size_t> LSTM::CalculateBatch(Window batch)
         float raw_inv = (t_inv - targetBias) / std::max(targetScale, 1e-12f);
 
         // Convert to a consistent predicted log-return and percent move for debugging
-        float pred_logret = (targetType == TargetType::LogReturn) ? raw_inv : std::log(1.0f + raw_inv);
-        float pred_pct    = std::exp(pred_logret) - 1.0f;
+        // REPLACED HERE: explicit switch for BinaryReturn type
+        float pred_logret;
+        float pred_pct;
+        switch (targetType)
+        {
+            case TargetType::LogReturn:
+                pred_logret = raw_inv;
+                pred_pct    = std::exp(pred_logret) - 1.0f;
+                break;
+            case TargetType::PercentReturn:
+                pred_logret = std::log(1.0f + raw_inv);
+                pred_pct    = raw_inv;
+                break;
+            case TargetType::BinaryReturn:
+            {
+                const float pred_sign = (raw_inv >= 0.0f ? 1.0f : -1.0f);
+                (void)pred_sign; // suppress unused warning in non-debug builds
+                pred_logret = 0.0f;
+                pred_pct    = 0.0f;
+                break;
+            }
+            default:
+                pred_logret = raw_inv;
+                pred_pct    = std::exp(pred_logret) - 1.0f;
+                break;
+        }
 
         // Reuse return value to carry predicted log-return (caller ignores it during training)
         predicted_close = pred_logret;
@@ -935,12 +967,13 @@ inline float EA::LSTM::PredictNextLogReturn(const Window& w, bool resetState)
     // Invert affine to raw return
     float raw = (t - targetBias) / std::max(targetScale, 1e-12f);
 
-
-
-    if (targetType == TargetType::LogReturn)
-        return raw; // already log-return
-    else
-        return std::log(1.0f + raw); // convert percent return to log-return
+    // REPLACED HERE: explicit switch return for BinaryReturn type
+    switch (targetType)
+    {
+        case TargetType::PercentReturn: return std::log(1.0f + raw); // convert percent return to log-return
+        case TargetType::BinaryReturn:  return (raw >= 0.0f ? 1.0f : -1.0f); // up/down classification
+        case TargetType::LogReturn: default:     return raw; // already log-return
+    }
 }
 
 inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
@@ -962,10 +995,13 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     // Invert affine
     float raw = (t - targetBias) / std::max(targetScale, 1e-12f);
 
-    // Return predicted relative move (fraction)
-    if (targetType == TargetType::LogReturn)
-        return std::exp(raw) - 1.0f; // convert log-return to percent move
-    else
-        return raw; // already percent move
+    // REPLACED HERE: explicit switch return for BinaryReturn type
+    switch (targetType)
+    {
+        case TargetType::LogReturn: return std::exp(raw) - 1.0f; // convert log-return to percent move
+        case TargetType::BinaryReturn:  return (raw >= 0.0f ? 1.0f : -1.0f); // up/down classification
+        case TargetType::PercentReturn: default: return raw; // already percent move
+    }
 }
+
 
