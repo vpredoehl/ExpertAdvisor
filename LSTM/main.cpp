@@ -25,6 +25,10 @@
 #include "PgModelIO.hpp"
 #include "BuildConfig.hpp"
 
+#ifndef EARLY_STOP_PATIENCE
+#define EARLY_STOP_PATIENCE 10
+#endif
+
 #include <MetaNN/operation/math/sigmoid.h>
 #include <MetaNN/operation/math/tanh.h>
 #include <MetaNN/operation/tensor/reshape.h>
@@ -78,7 +82,7 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     for (auto it = b.begin(); it + window_size < b.end(); ++it)
     {
         const float v_scaled = (*(it + window_size))(0, closeCol);
-        const float v_unscaled = v_scaled / kFeatureScale;   // <-- MUST unscale to raw log-return
+        const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;   // <-- MUST unscale to raw log-return
         
         if(std::fabs(v_unscaled) > 0.02f)    gtOutliers++;  // 2% log-return is already huge for many FX horizons
         if (actRel.size() < 5)   std::cout << "GT raw feature v_logret=" << v_unscaled << " exp(v_logret)-1=" << (std::exp(v_unscaled) - 1.0f) << std::endl;
@@ -102,6 +106,9 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     std::cout << "pred_raw stats: min=" << s_raw.min << " max=" << s_raw.max
               << " mean=" << s_raw.mean << " std=" << s_raw.std
               << " uniq~=" << s_raw.uniq << std::endl;
+    std::cout << "std ratio (pred_raw/actLogRet): " << (s_gt.std > 0.0 ? (s_raw.std / s_gt.std) : 0.0) << std::endl;
+    std::cout << "means: pred_raw=" << s_raw.mean << " actLogRet=" << s_gt.mean << std::endl;
+
     std::cout << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
               << " mean=" << s_rel.mean << " std=" << s_rel.std
               << " uniq~=" << s_rel.uniq << std::endl;
@@ -117,6 +124,25 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     std::vector<float> actualMove = actRel; // alias copy
     size_t N = std::min(predMove.size(), actualMove.size());
     const size_t toPrint = std::min<size_t>(N, 10);
+
+    // Direction accuracy in log-return domain with an acted threshold
+    size_t actedLog = 0;
+    size_t correctLog = 0;
+    const float actedThrLog = 2e-4;
+    for (size_t i = 0; i < N && i < predLogRet.size() && i < actLogRet.size(); ++i)
+    {
+        if (std::fabs(predLogRet[i]) < actedThrLog) continue; // only act on confident predictions
+        ++actedLog;
+        bool predUp = predLogRet[i] >= 0.0f;
+        bool actUp  = actLogRet[i]  >= 0.0f;
+        if (predUp == actUp) ++correctLog;
+    }
+    double accLog = actedLog ? (static_cast<double>(correctLog) / static_cast<double>(actedLog) * 100.0) : 0.0;
+    double covLog = N ? (static_cast<double>(actedLog) / static_cast<double>(N) * 100.0) : 0.0;
+    std::cout << "Direction accuracy (log-return): " << accLog
+              << "% over " << actedLog << " acted (of " << N << ")"
+              << " thr=" << actedThrLog
+              << " coverage=" << covLog << "%" << std::endl;
 
 //#if LSTM_DEBUG_PRINTS
     const size_t M = std::min<size_t>(5, std::min(predLogRet.size(), actLogRet.size()));
@@ -189,11 +215,12 @@ int main(int argc, const char * argv[])
         for (auto tbl : tables)
         {
             std::string rawPriceTableName{ tbl[0].c_str() };
-            std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
+            std::string query = "select * from candlestick('" + rawPriceTableName + "', 4, 'hour', '" + fromDate + "', '" + toDate + "') order by dt;";
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_forward_iterator csb = cs_cur.cbegin(), cse = cs_cur.cend();
-
             Tensor t{ rawPriceTableName };
+            
+            std::cout << "Candlestick query: " << query << "\n";
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
   
@@ -222,12 +249,40 @@ int main(int argc, const char * argv[])
 
             
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
+            std::cout << std::setprecision(15);
+            for(auto e = 0; e < epoch_count; e++)
             t.ForEachBatch( [&](auto b)
             {
                 if constexpr (inference_only)   ProcessBatchPredict(l, b);
                 else
                 {
-                    float pc = l.CalculateBatch(b);
+                    auto l2 = [](const auto& m){
+                        auto low = MetaNN::LowerAccess(m);
+                        const float* p = low.RawMemory();
+                        size_t len = m.Shape()[0]*m.Shape()[1];
+                        double s=0; for(size_t i=0;i<len;++i){ double v=p[i]; s += v*v; }
+                        return std::sqrt(s);
+                    };
+
+                    double p0 = l2(l.param);
+                    double b0 = l2(l.bias);
+                    double hw0 = l2(l.returnHeadWeight);
+                    double hb0 = l2(l.returnHeadBias);
+
+                    auto [ pc, _, _]  = l.CalculateBatch(b);
+
+                    double p1 = l2(l.param);
+                    double b1 = l2(l.bias);
+                    double hw1 = l2(l.returnHeadWeight);
+                    double hb1 = l2(l.returnHeadBias);
+
+                    std::cout << "epoch " << (e+1)
+                              << " loss=" << pc
+                              << " ||param|| " << p0  << " -> " << p1
+                              << " ||bias|| "  << b0  << " -> " << b1
+                              << " ||headW|| " << hw0 << " -> " << hw1
+                              << " ||headB|| " << hb0 << " -> " << hb1
+                              << "\n";
                 }
             } );
 

@@ -9,21 +9,29 @@
 #ifndef LSTM_hpp
 #define LSTM_hpp
 
+// LSTM.hpp
 #ifndef LSTM_TRAINING_ASSERTS
 #define LSTM_TRAINING_ASSERTS 1
 #endif
 
 #if LSTM_TRAINING_ASSERTS
-#include <cassert>
+#include <cstdlib>
 #include <iostream>
-#define LSTM_ASSERT(cond, msg) do { if(!(cond)) { std::cerr << "[LSTM_ASSERT] " << __FILE__ << ":" << __LINE__ << ": " << (msg) << std::endl; assert(cond); } } while(0)
+
+#define LSTM_ASSERT(cond, msg) do {                                      \
+    if (!(cond)) {                                                       \
+        std::cerr << "[LSTM_ASSERT] " << __FILE__ << ":" << __LINE__     \
+                  << ": " << (msg) << std::endl;                         \
+        std::abort(); /* or __builtin_trap(); */                         \
+    }                                                                    \
+} while (0)
 #else
 #define LSTM_ASSERT(cond, msg) do {} while(0)
 #endif
-
 #include <MetaNN/meta_nn.h>
 #include <array>
 #include <vector>
+#include <tuple>
 
 #include "Params.hpp"
 
@@ -84,13 +92,13 @@ namespace EA
         }
 
         // Target mapping metadata (persisted via PgModelIO)
-        enum class TargetType : int { LogReturn = 0, PercentReturn = 1 };
+        enum class TargetType : int { LogReturn = 0, PercentReturn = 1, RelativeMove = PercentReturn };
 
         // How the head's scalar output maps to the target used for training/inference
         // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
         // where raw is either log-return or percent-return depending on targetType
         // If targetUseZScore == true, training target was normalized as (t - targetMean)/targetStd
-        TargetType targetType = TargetType::LogReturn; // default to percent return
+        TargetType targetType = TargetType::LogReturn; // default to logreturn
         float      targetScale = 1.0f;                   // default to 100x pct
         float      targetBias  = 0.0f;                     // default no bias
         bool       targetUseZScore = false;                // default: not normalized
@@ -109,14 +117,14 @@ namespace EA
         FloatMatrixCPU returnHeadBias { 1, 1 };
 
         // Simple SGD learning rate for head-only training
-        float learningRate = 1e-3f;
+        float learningRate = 1e-4f;
 
         LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0);
         LSTM() = delete;
 
         void SetLearningRate(float lr) { learningRate = lr; }
         
-        float CalculateBatch(const Window);
+        std::tuple<float, size_t, size_t> CalculateBatch(const Window);
         // Inference-only helpers (forward pass, no training)
         float PredictNextLogReturn(const Window& w, bool resetState = true);
         float PredictNextClose(const Window& w, bool resetState = true);

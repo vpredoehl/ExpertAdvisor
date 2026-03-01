@@ -18,6 +18,7 @@ constexpr auto n_out = hidden_size;
 // sequence of features
 constexpr auto window_size = 64;
 constexpr auto batch_size = 128;
+constexpr auto epoch_count = 100;
 
 constexpr float kFeatureScale = 1000.0f;
 constexpr float c_next_threshold = 0.02f;   // skip window threshold .02-.03
