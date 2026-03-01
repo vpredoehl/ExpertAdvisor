@@ -66,9 +66,11 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     // 1) Get predicted log-returns (already de-normalized / de-affined inside PredictNextLogReturn)
     auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
     
+#if LSTM_DEBUG_PRINTS
     std::cout << "predLogRet samples: ";
     for (size_t i = 0; i < std::min<size_t>(10, predLogRet.size()); ++i) std::cout << predLogRet[i] << " ";
     std::cout << "\n";
+#endif
     
     // 2) Convert predicted log-return -> relative move fraction
     std::vector<float> predRel; predRel.reserve(predLogRet.size());
@@ -85,21 +87,22 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
         const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;   // <-- MUST unscale to raw log-return
         
         if(std::fabs(v_unscaled) > 0.02f)    gtOutliers++;  // 2% log-return is already huge for many FX horizons
-        if (actRel.size() < 5)   std::cout << "GT raw feature v_logret=" << v_unscaled << " exp(v_logret)-1=" << (std::exp(v_unscaled) - 1.0f) << std::endl;
+//        if (actRel.size() < 5)   std::cout << "GT raw feature v_logret=" << v_unscaled << " exp(v_logret)-1=" << (std::exp(v_unscaled) - 1.0f) << std::endl;
         actLogRet.push_back(v_unscaled);                    // <-- MUST be this exact v
         actRel.push_back(std::exp(v_unscaled) - 1.0f);      // <-- derived from same v
-        if (actRel.size() < 10) std::cout << "GT v_logret=" << v_unscaled
-                      << " sign=" << (v_unscaled>=0 ? "+" : "-")
-                      << " abs=" << std::fabs(v_unscaled) << std::endl;
+//        if (actRel.size() < 10) std::cout << "GT v_logret=" << v_unscaled
+//                      << " sign=" << (v_unscaled>=0 ? "+" : "-")
+//                      << " abs=" << std::fabs(v_unscaled) << std::endl;
     }
     auto s_gt = stats(actLogRet);
-    std::cout << "actLogRet stats: min=" << s_gt.min << " max=" << s_gt.max
-              << " mean=" << s_gt.mean << " std=" << s_gt.std
-              << " uniq~=" << s_gt.uniq << std::endl << "GT outliers |v|>0.02: " << gtOutliers
-              << " of " << actLogRet.size() << std::endl;
+//    std::cout << "actLogRet stats: min=" << s_gt.min << " max=" << s_gt.max
+//              << " mean=" << s_gt.mean << " std=" << s_gt.std
+//              << " uniq~=" << s_gt.uniq << std::endl << "GT outliers |v|>0.02: " << gtOutliers
+//              << " of " << actLogRet.size() << std::endl;
     assert(predRel.size() == actRel.size());    // DEBUG
 
 
+//#if LSTM_DEBUG_PRINTS
     // 4) Print prediction distribution stats to diagnose saturation
     auto s_raw = stats(predLogRet);
     auto s_rel = stats(predRel);
@@ -112,7 +115,8 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     std::cout << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
               << " mean=" << s_rel.mean << " std=" << s_rel.std
               << " uniq~=" << s_rel.uniq << std::endl;
-
+//#endif
+    
     // 5) Compare predicted vs actual relative moves directly (fractions)
     std::vector<float> predMove = predRel; // alias copy
     
@@ -149,12 +153,18 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     for (size_t i = 0; i < M; ++i)  std::cout << "align i=" << i << " predLogRet=" << predLogRet[i]  << " actLogRet(unscaled)=" << actLogRet[i] << " actRel=" << (std::exp(actLogRet[i]) - 1.0f) << "\n";
     for (size_t i = 0; i < toPrint; ++i)
     {
-        double diff = static_cast<double>(predMove[i]) - static_cast<double>(actualMove[i]);
+        auto sgn = [](float x){ return (x > 0) - (x < 0); };
+        int sp = sgn(predMove[i]);
+        int sa = sgn(actualMove[i]);
         std::cout << "i=" << i
-                  << " pred_rel=" << predMove[i]
-                  << " act_rel=" << actualMove[i]
-                  << " diff=" << diff
-                  << std::endl;
+            << " pred_rel=" << predMove[i]
+            << " act_rel=" << actualMove[i]
+            << " sp=" << sp
+            << " sa=" << sa
+            << " match=" << (sp == sa)
+            << " |pred|=" << std::abs(predMove[i])
+            << " |act|=" << std::abs(actualMove[i])
+            << "\n";
     }
 //#endif
     double maeMove = 0.0;
