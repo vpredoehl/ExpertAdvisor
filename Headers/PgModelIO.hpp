@@ -104,6 +104,8 @@ public:
         saveParameter(w, modelId, "bias",             lstm.bias);
         saveParameter(w, modelId, "returnHeadWeight", lstm.returnHeadWeight);
         saveParameter(w, modelId, "returnHeadBias",   lstm.returnHeadBias);
+        saveParameter(w, modelId, "returnHeadDirWeight", lstm.returnHeadDirWeight);
+        saveParameter(w, modelId, "returnHeadDirBias",   lstm.returnHeadDirBias);
         saveTargetMeta(w, modelId, lstm);
     }
 
@@ -166,6 +168,9 @@ public:
         lstm.bias             = loadParameterMatrix<float>(w, modelId, "bias");
         lstm.returnHeadWeight = loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
         lstm.returnHeadBias   = loadParameterMatrix<float>(w, modelId, "returnHeadBias");
+        // Try to load binary classification head if present (backward compatible)
+        try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
+        try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
         (void)tryLoadTargetMeta(w, modelId, lstm);
     }
 
@@ -177,7 +182,12 @@ public:
             auto vals = loadParameterValues(w, modelId, "target_meta");
             if (vals.size() != 6) return false;
             int typeInt = static_cast<int>(vals[0]);
-            lstm.targetType = (typeInt == 0) ? EA::LSTM::TargetType::LogReturn : EA::LSTM::TargetType::PercentReturn;
+            switch (typeInt) {
+                case 0: lstm.targetType = EA::LSTM::TargetType::LogReturn; break;
+                case 1: lstm.targetType = EA::LSTM::TargetType::PercentReturn; break;
+                case 2: lstm.targetType = EA::LSTM::TargetType::BinaryReturn; break;
+                default: return false; // unknown type, fail to load meta
+            }
             lstm.targetScale = static_cast<float>(vals[1]);
             lstm.targetBias  = static_cast<float>(vals[2]);
             lstm.targetUseZScore = (vals[3] != 0.0);

@@ -63,7 +63,7 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
         return s;
     };
 
-    // 1) Get predicted log-returns (already de-normalized / de-affined inside PredictNextLogReturn)
+    // 1) Get predicted log-returns (already de-normalized / de-affined inside PredictNextReturn)
     auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
     
 #if LSTM_DEBUG_PRINTS
@@ -77,7 +77,6 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     for (float logret : predLogRet) predRel.push_back(std::exp(logret) - 1.0f);
 
     // 3) Build ground-truth relative moves for comparison from feature log-return
-    constexpr size_t closeCol = 1;
     size_t gtOutliers = 0;
     std::vector<float> actRel, actLogRet; // percent move derived from log-return
     actRel.reserve(predRel.size()); actLogRet.reserve(predRel.size());

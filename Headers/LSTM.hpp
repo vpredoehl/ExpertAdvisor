@@ -150,8 +150,12 @@ namespace EA
         FloatMatrixCPU bias { 1, 4 * n_out };
 
         // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
-        FloatMatrixCPU returnHeadWeight { hidden_size, 1 }, returnHeadDirWeight { hidden_size, 1 };
-        FloatMatrixCPU returnHeadBias { 1, 1 }, returnHeadDirBias { 1, 1 };
+        FloatMatrixCPU returnHeadWeight { hidden_size, 1 };
+        FloatMatrixCPU returnHeadBias { 1, 1 };
+        // Binary classification head (direction): p = sigmoid(h_T · returnHeadDirWeight + returnHeadDirBias)
+        FloatMatrixCPU returnHeadDirWeight { hidden_size, 1 };
+        FloatMatrixCPU returnHeadDirBias { 1, 1 };
+
         // Simple SGD learning rate for head-only training
         float learningRate = 1e-4f;
 
@@ -162,7 +166,7 @@ namespace EA
         
         std::tuple<float, size_t, size_t> CalculateBatch(const Window);
         // Inference-only helpers (forward pass, no training)
-        float PredictNextLogReturn(const Window& w, bool resetState = true);
+        float PredictNextReturn(const Window& w, bool resetState = true);
         float PredictNextClose(const Window& w, bool resetState = true);
 
         std::vector<float> RollingPredictNextLogReturn(const Window& batch, bool resetAtStart = true);
@@ -190,4 +194,5 @@ namespace EA
 }
 
 #endif /* LSTM_hpp */
+
 

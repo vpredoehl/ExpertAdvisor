@@ -23,6 +23,10 @@ constexpr auto epoch_count = 100;
 constexpr float kFeatureScale = 1000.0f;
 constexpr float c_next_threshold = 0.02f;   // skip window threshold .02-.03
 
+// Column index for close feature: c_t = log(close_t / close_{t-1})
+constexpr size_t closeCol = 1;
+
+
 #include <vector>
 #include "MetaNN/meta_nn.h"
 
