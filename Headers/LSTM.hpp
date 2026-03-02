@@ -43,8 +43,10 @@ namespace EA
     class LSTM
     {
         using FloatMatrixCPU = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
+        const ::Tensor& t;
 
-        struct GateMatrixView {
+        struct GateMatrixView
+        {
             FloatMatrixCPU& m;
             size_t colOffset;
             inline size_t rows() const { return static_cast<size_t>(n_out); }
@@ -54,7 +56,8 @@ namespace EA
             inline void SetValue(size_t r, size_t c, float v) { m.SetValue(c, colOffset + r, v); }
         };
 
-        struct ConstGateMatrixView {
+        struct ConstGateMatrixView
+        {
             const FloatMatrixCPU& m;
             size_t colOffset;
             inline size_t rows() const { return static_cast<size_t>(n_out); }
@@ -68,14 +71,48 @@ namespace EA
         {
             return 0;
         }
+        float PredictLogReturnFromH(const FloatMatrixCPU& h)
+        {
+            // y = h^T W + b
+            // MetaNN expressions are lazy; evaluate and extract scalar
+            auto expr = Dot(h, returnHeadWeight) + returnHeadBias; // 1x1 tensor
+            auto yMat = Evaluate(expr);
+            LSTM_ASSERT(yMat.Shape()[0] == 1 && yMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
+            return yMat(0, 0);
+        }
+        float PredictDirLogitFromH(const FloatMatrixCPU& h)
+        {
+            auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // logit
+            auto zMat = Evaluate(z);
+            LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
+            return zMat(0,0);
+        }
+        float DirLossAndGrad(float z, int t01, float& dL_dz)
+        {
+            // stable softplus
+            auto softplus = [](float x)
+            {
+                if (x > 20.f) return x;         // avoid overflow
+                if (x < -20.f) return std::exp(x);
+                return std::log1p(std::exp(x));
+            };
+
+            float sp = softplus(z);
+            float L  = sp - float(t01) * z;
+            float p  = 1.0f / (1.0f + std::exp(-z));
+            dL_dz    = p - float(t01);
+            return L;
+        }
         
-        const ::Tensor& t;
+        static float Sigmoid(float z) { return 1.0f / (1.0f + std::exp(-z)); }
     public:
-        inline GateMatrixView gateMatrix(size_t gateIndex) {
+        inline GateMatrixView gateMatrix(size_t gateIndex)
+        {
             LSTM_ASSERT(gateIndex < 4, "gateMatrix: gateIndex must be < 4");
             return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
         }
-        inline ConstGateMatrixView gateMatrix(size_t gateIndex) const {
+        inline ConstGateMatrixView gateMatrix(size_t gateIndex) const
+        {
             LSTM_ASSERT(gateIndex < 4, "gateMatrix const: gateIndex must be < 4");
             return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
         }
@@ -113,9 +150,8 @@ namespace EA
         FloatMatrixCPU bias { 1, 4 * n_out };
 
         // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
-        FloatMatrixCPU returnHeadWeight { hidden_size, 1 };
-        FloatMatrixCPU returnHeadBias { 1, 1 };
-
+        FloatMatrixCPU returnHeadWeight { hidden_size, 1 }, returnHeadDirWeight { hidden_size, 1 };
+        FloatMatrixCPU returnHeadBias { 1, 1 }, returnHeadDirBias { 1, 1 };
         // Simple SGD learning rate for head-only training
         float learningRate = 1e-4f;
 

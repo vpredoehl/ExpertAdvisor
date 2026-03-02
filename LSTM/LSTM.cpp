@@ -103,69 +103,11 @@ static inline float uniform_symmetric(float limit) {
     return uniform_between(-limit, limit);
 }
 
-using namespace EA;
-
-
-namespace {
-    using FloatMatrixCPU = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
-
-    template <typename Mat>
-    void zeroFill(Mat& m)
-    {
-        auto low = MetaNN::LowerAccess(m);
-        using ElemT = std::remove_reference_t<decltype(*low.MutableRawMemory())>;
-        std::fill(low.MutableRawMemory(), low.MutableRawMemory() + m.Shape()[0] * m.Shape()[1], static_cast<ElemT>(0));
-    }
-
-    template<typename MatP, typename MatG>
-    void SGDUpdate(MatP& P, const MatG& G, float lr)
-    {
-        auto pAcc = MetaNN::LowerAccess(P);
-        auto gAcc = MetaNN::LowerAccess(G);
-
-        const size_t rows = P.Shape()[0];
-        const size_t cols = P.Shape()[1];
-
-        auto* p = pAcc.MutableRawMemory();
-        const auto* g = gAcc.RawMemory();
-
-        for (size_t r = 0; r < rows; ++r)
-            for (size_t c = 0; c < cols; ++c)
-                p[r * cols + c] -= lr * g[r * cols + c];
-    }
 }
-
-// Moving helper structs and functions into EA::LSTM scope
-
-using FloatMatrixCPU = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
-
-// Struct definitions inside EA::LSTM
-
-struct EA::LSTM::WindowWeights {
-    FloatMatrixCPU W_cat;   // (n_in + H) x (4H)
-    FloatMatrixCPU W_x_win; // top block (n_in x 4H)
-    FloatMatrixCPU W_h_win; // bottom block (H x 4H)
-};
-
-struct EA::LSTM::StepCache {
-    FloatMatrixCPU x;      // (1, input_size)
-    FloatMatrixCPU h_prev; // (1, hidden_size)
-    FloatMatrixCPU c_prev; // (1, hidden_size)
-    FloatMatrixCPU i;      // (1, hidden_size)
-    FloatMatrixCPU f;      // (1, hidden_size)
-    FloatMatrixCPU g;      // (1, hidden_size)
-    FloatMatrixCPU o;      // (1, hidden_size)
-    FloatMatrixCPU c;      // (1, hidden_size)
-    FloatMatrixCPU h;      // (1, hidden_size)
-};
-
 struct EA::LSTM::HeadLoss { float y_hat; float err; };
-
-struct EA::LSTM::GateBlocks {
-    FloatMatrixCPU W_i, W_f, W_g, W_o; // (H x H)
-};
-
-struct EA::LSTM::GateAccumulators {
+struct EA::LSTM::GateBlocks {   FloatMatrixCPU W_i, W_f, W_g, W_o;  }; // (H x H)
+struct EA::LSTM::GateAccumulators
+{
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_i;
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_f;
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_g;
@@ -176,6 +118,53 @@ struct EA::LSTM::GateAccumulators {
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> db_o;
 };
 
+template <typename Mat>
+void zeroFill(Mat& m)
+{
+    auto low = MetaNN::LowerAccess(m);
+    using ElemT = std::remove_reference_t<decltype(*low.MutableRawMemory())>;
+    std::fill(low.MutableRawMemory(), low.MutableRawMemory() + m.Shape()[0] * m.Shape()[1], static_cast<ElemT>(0));
+}
+
+template<typename MatP, typename MatG>
+void SGDUpdate(MatP& P, const MatG& G, float lr)
+{
+    auto pAcc = MetaNN::LowerAccess(P);
+    auto gAcc = MetaNN::LowerAccess(G);
+
+    const size_t rows = P.Shape()[0];
+    const size_t cols = P.Shape()[1];
+
+    auto* p = pAcc.MutableRawMemory();
+    const auto* g = gAcc.RawMemory();
+
+    for (size_t r = 0; r < rows; ++r)
+        for (size_t c = 0; c < cols; ++c)
+            p[r * cols + c] -= lr * g[r * cols + c];
+}
+
+// Moving helper structs and functions into EA::LSTM scope
+// Struct definitions inside EA::LSTM
+
+struct EA::LSTM::WindowWeights
+{
+    FloatMatrixCPU W_cat;   // (n_in + H) x (4H)
+    FloatMatrixCPU W_x_win; // top block (n_in x 4H)
+    FloatMatrixCPU W_h_win; // bottom block (H x 4H)
+};
+
+struct EA::LSTM::StepCache
+{
+    FloatMatrixCPU x;      // (1, input_size)
+    FloatMatrixCPU h_prev; // (1, hidden_size)
+    FloatMatrixCPU c_prev; // (1, hidden_size)
+    FloatMatrixCPU i;      // (1, hidden_size)
+    FloatMatrixCPU f;      // (1, hidden_size)
+    FloatMatrixCPU g;      // (1, hidden_size)
+    FloatMatrixCPU o;      // (1, hidden_size)
+    FloatMatrixCPU c;      // (1, hidden_size)
+    FloatMatrixCPU h;      // (1, hidden_size)
+};
 
 // Member function definitions moved to EA::LSTM
 
@@ -476,9 +465,7 @@ inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
     writeBias(d_bias_accum, 3*H, A.db_o);
 }
 
-
-
-LSTM::LSTM(const Tensor& tt, float lt, float st)
+EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 : t { tt }
 {
 #if 0
@@ -521,8 +508,16 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
     }
     ResetPreviousState();
 
-    for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
-    returnHeadBias.SetValue(0, 0, 0.0f);
+    switch(targetType)
+    {
+        case TargetType::PercentReturn: case TargetType::LogReturn:
+            for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
+            returnHeadBias.SetValue(0, 0, 0.0f);
+            break;
+        case TargetType::BinaryReturn:
+            for (size_t i = 0; i < hidden_size; ++i) returnHeadDirWeight.SetValue(i, 0, 0.01f);
+            returnHeadDirBias.SetValue(0, 0, 0.0f);
+    }
     
 #if LSTM_DEBUG_PRINTS
     std::cout << "returnHeadWeight [ rows, cols ] = [ " << returnHeadWeight.Shape()[0] << "," << returnHeadWeight.Shape()[1] << " ]" << std::endl
@@ -535,7 +530,7 @@ LSTM::LSTM(const Tensor& tt, float lt, float st)
 #endif
 }
 
-std::tuple<float, size_t, size_t> LSTM::CalculateBatch(Window batch)
+std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
     double sse = 0.0;
     size_t mseCount = 0;

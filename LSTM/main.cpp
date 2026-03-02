@@ -279,7 +279,7 @@ int main(int argc, const char * argv[])
                     double hw0 = l2(l.returnHeadWeight);
                     double hb0 = l2(l.returnHeadBias);
 
-                    auto [ pc, _, _]  = l.CalculateBatch(b);
+                    auto [ loss, _, _]  = l.CalculateBatch(b);
 
                     double p1 = l2(l.param);
                     double b1 = l2(l.bias);
@@ -287,7 +287,7 @@ int main(int argc, const char * argv[])
                     double hb1 = l2(l.returnHeadBias);
 
                     std::cout << "epoch " << (e+1)
-                              << " loss=" << pc
+                              << " loss=" << loss
                               << " ||param|| " << p0  << " -> " << p1
                               << " ||bias|| "  << b0  << " -> " << b1
                               << " ||headW|| " << hw0 << " -> " << hw1
