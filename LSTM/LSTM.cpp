@@ -563,6 +563,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headDirW_accum_f(hidden_size, 1);
+    { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headDirB_accum_f(1, 1);
+    { auto low = MetaNN::LowerAccess(d_headDirB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
+
     // LSTM core gradient accumulators across all windows in the batch
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
     {
@@ -589,10 +594,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t count_abs_gt_threshold = 0;
 
     // Per-batch predicted/actual log-return stats
-    double pred_sum = 0.0, pred_sumsq = 0.0;
-    double act_sum = 0.0, act_sumsq = 0.0;
-    double max_abs_pred_logret = 0.0;
-    size_t count_pred_abs_gt_thresh = 0;
     const float pred_action_threshold = 1e-3f; // threshold for |predLogRet|
 #endif
 
@@ -737,7 +738,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             ++windowsInBatch;
 #endif
 #if !LSTM_INFERENCE_ONLY
-            accumulateHeadGrads(d_headW_accum_f, d_headB_accum_f, prevHiddenState, err);
+            accumulateHeadGrads(d_headDirW_accum_f, d_headDirB_accum_f, prevHiddenState, err);
 #endif
 
             // Backprop into core: use the binary head weights
@@ -872,6 +873,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
     if (windowsInBatch > 0)
     {
+        double pred_sum = 0.0, pred_sumsq = 0.0;
+        double act_sum = 0.0, act_sumsq = 0.0;
+        double max_abs_pred_logret = 0.0;
+        size_t count_pred_abs_gt_thresh = 0;
+
         const double pred_mean = pred_sum / static_cast<double>(windowsInBatch);
         const double pred_var  = std::max(0.0, pred_sumsq / static_cast<double>(windowsInBatch) - pred_mean * pred_mean);
         const double pred_std  = std::sqrt(pred_var);
@@ -904,6 +910,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
         const auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
 
+        const auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
+        const auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
+
         // Scale learning rate by number of windows so batch size doesn't change step size
         const float invN = 1.0f / static_cast<float>(windowCount);
 
@@ -913,8 +922,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         SGDUpdate(param, d_param_f, lrCore);
         SGDUpdate(bias,  d_bias_f,  lrCore);
         if (targetType == TargetType::BinaryReturn) {
-            SGDUpdate(returnHeadDirWeight, d_headW_f, lrHead);
-            SGDUpdate(returnHeadDirBias,   d_headB_f, lrHead);
+            SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
+            SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
         } else {
             SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
             SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
@@ -1020,6 +1029,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 

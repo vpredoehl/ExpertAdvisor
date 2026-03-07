@@ -80,9 +80,9 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     size_t gtOutliers = 0;
     std::vector<float> actRel, actLogRet; // percent move derived from log-return
     actRel.reserve(predRel.size()); actLogRet.reserve(predRel.size());
-    for (auto it = b.begin(); it + window_size < b.end(); ++it)
+    for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
     {
-        const float v_scaled = (*(it + window_size))(0, closeCol);
+        const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
         const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;   // <-- MUST unscale to raw log-return
         
         if(std::fabs(v_unscaled) > 0.02f)    gtOutliers++;  // 2% log-return is already huge for many FX horizons
@@ -277,6 +277,8 @@ int main(int argc, const char * argv[])
                     double b0 = l2(l.bias);
                     double hw0 = l2(l.returnHeadWeight);
                     double hb0 = l2(l.returnHeadBias);
+                    double dhw0 = l2(l.returnHeadDirWeight);
+                    double dhb0 = l2(l.returnHeadDirBias);
 
                     auto [ loss, _, _]  = l.CalculateBatch(b);
 
@@ -284,14 +286,15 @@ int main(int argc, const char * argv[])
                     double b1 = l2(l.bias);
                     double hw1 = l2(l.returnHeadWeight);
                     double hb1 = l2(l.returnHeadBias);
+                    double dhw1 = l2(l.returnHeadDirWeight);
+                    double dhb1 = l2(l.returnHeadDirBias);
 
                     std::cout << "epoch " << (e+1)
                               << " loss=" << loss
                               << " ||param|| " << p0  << " -> " << p1
-                              << " ||bias|| "  << b0  << " -> " << b1
-                              << " ||headW|| " << hw0 << " -> " << hw1
-                              << " ||headB|| " << hb0 << " -> " << hb1
-                              << "\n";
+                              << " ||bias|| "  << b0  << " -> " << b1;
+                    if (l.targetType == EA::LSTM::TargetType::BinaryReturn) std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
+                    else std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                 }
             } );
 

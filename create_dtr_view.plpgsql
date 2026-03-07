@@ -9,8 +9,7 @@ begin
 	LOOP
 		select substring(tbl,1,6) into pair;
 		raise info 'tbl: %', tbl;
- 		qs = format('create or replace view %I_dtr as select dt, abs(open - close ) as dtr  from candlestick(%L,1,''day'') order by dt',pair,tbl);
-		--ind1 = format('create index %I_ema131m_idx on %I_ema131m( date ) include ( ema )  tablespace candlestick_index',tbl,tbl);
+ 		qs = format('create or replace view %I_dtr as select dt::date, high - low as dtr  from candlestick(%L,1,''day'') order by dt',pair,tbl);
 		begin
 			raise info 'executing: %', qs;
 			execute  qs;
