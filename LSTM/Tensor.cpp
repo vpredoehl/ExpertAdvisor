@@ -116,7 +116,7 @@ void Tensor::Add(Feature f)
 
     // Time-of-day cyclical features (sin/cos)
     constexpr double twoPi = 2 * std::numbers::pi;  // 6.28318530717958647692;
-    const int cycSec = time_cycle_seconds(kTimeCycle);
+    const int cycSec = time_cycle_seconds(candle_duration);
     long long epochSec = std::chrono::duration_cast<std::chrono::seconds>(f.time.time_since_epoch()).count();
     int secInCycle = (cycSec > 0) ? static_cast<int>(epochSec % cycSec) : 0;
     double phase = (cycSec > 0) ? (twoPi * (static_cast<double>(secInCycle) / static_cast<double>(cycSec))) : 0.0;
@@ -124,6 +124,8 @@ void Tensor::Add(Feature f)
     float cos_t = static_cast<float>(std::cos(phase));
     fm.SetValue(0, 8, sin_t);
     fm.SetValue(0, 9, cos_t);
+    
+    printMatrix("fm: ", fm);
 
     prev_close = f.close;
     ds.push_back(fm);
