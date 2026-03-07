@@ -233,7 +233,7 @@ int main(int argc, const char * argv[])
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
   
-            EA::LSTM l { t, 1, 0 };
+            thread_local EA::LSTM l { t, 1, 0 };
 
             // Track whether we started from scratch (no model loaded)
             std::optional<long long> loadedModelId;

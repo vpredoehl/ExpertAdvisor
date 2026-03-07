@@ -287,11 +287,18 @@
 					/Volumes/Darwin/homebrew/lib/,
 					"$(PROJECT_DIR)",
 					"$(inherited)",
+					/opt/homebrew/opt/libomp/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-Xpreprocessor",
+					"-fopenmp",
+				);
 				OTHER_LDFLAGS = (
 					"-lpq",
 					"-lpqxx",
+					"-lomp",
 				);
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -299,6 +306,7 @@
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					/opt/homebrew/opt/libomp/include,
 				);
 				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
@@ -326,11 +334,18 @@
 					/Volumes/Darwin/homebrew/lib/,
 					"$(PROJECT_DIR)",
 					"$(inherited)",
+					/opt/homebrew/opt/libomp/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-Xpreprocessor",
+					"-fopenmp",
+				);
 				OTHER_LDFLAGS = (
 					"-lpq",
 					"-lpqxx",
+					"-lomp",
 				);
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -338,6 +353,7 @@
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					/opt/homebrew/opt/libomp/include,
 				);
 				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";

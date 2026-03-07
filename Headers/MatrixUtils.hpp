@@ -417,10 +417,7 @@ MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)
     using SrcDev  = typename EvalMat::DeviceType;
 
     // Fast path: if element and device types already match, return as-is
-    if constexpr (std::is_same_v<SrcElem, T> && std::is_same_v<SrcDev, DevT>)
-    {
-        return eval;
-    }
+    if constexpr (std::is_same_v<SrcElem, T> && std::is_same_v<SrcDev, DevT>)   return eval;
 
     // Otherwise, cast element type and/or device by copying
     MetaNN::Matrix<T, DevT> dst(eval.Shape()[0], eval.Shape()[1]);
@@ -429,6 +426,7 @@ MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)
     const auto* s = lowSrc.RawMemory();
     T* d = lowDst.MutableRawMemory();
     const size_t len = eval.Shape()[0] * eval.Shape()[1];
+#pragma omp parallel for
     for (size_t i = 0; i < len; ++i) d[i] = static_cast<T>(s[i]);
     return dst;
 }
