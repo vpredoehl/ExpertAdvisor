@@ -14,7 +14,6 @@
 #include <list>
 #include <ranges>
 #include <iostream>
-#include <thread>
 
 #include "Params.hpp"
 #include "LSTM.hpp"   // for LSTM_TRAINING_ASSERTS
@@ -62,9 +61,7 @@ public:
 #if LSTM_TRAINING_ASSERTS
         LSTM_ASSERT(n == NumberOfBatchesIncludingRemainder(), "ForEachBatch: n mismatch");
 #endif
-        std::vector<std::thread> threads;
-        for (size_t i = 0; i < n; ++i)  threads.emplace_back([&,i] {  f(GetBatchClamped(i)); });
-//        for (size_t i = 0; i < n; ++i)  f(GetBatchClamped(i));
+        for (size_t i = 0; i < n; ++i)  f(GetBatchClamped(i));
     }
 
     
