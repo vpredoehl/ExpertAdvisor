@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <cmath>
+#include <ctime>
 #include <numbers>
 
 #include "Tensor.hpp"
@@ -45,6 +46,8 @@ void Tensor::Add(Feature f)
         fm.SetValue(0, 7, 0.0f);
         fm.SetValue(0, 8, 0.0f);
         fm.SetValue(0, 9, 0.0f);
+        fm.SetValue(0, 10, 0.0f);
+        fm.SetValue(0, 11, 0.0f);
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(fm);
@@ -124,9 +127,20 @@ void Tensor::Add(Feature f)
     float cos_t = static_cast<float>(std::cos(phase));
     fm.SetValue(0, 8, sin_t);
     fm.SetValue(0, 9, cos_t);
-    
-    printMatrix("fm: ", fm);
 
+    // Day-of-week cyclical features (sin/cos)
+    const int weekSec = 7 * 24 * 60 * 60;
+    auto tp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(f.time);
+    std::time_t t = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    int secOfWeek = tm.tm_wday * 24 * 60 * 60 + tm.tm_hour * 60 * 60 + tm.tm_min * 60 + tm.tm_sec;
+    double phase_w = twoPi * (static_cast<double>(secOfWeek) / static_cast<double>(weekSec));
+    float sin_w = static_cast<float>(std::sin(phase_w));
+    float cos_w = static_cast<float>(std::cos(phase_w));
+    fm.SetValue(0, 10, sin_w);
+    fm.SetValue(0, 11, cos_w);
+    
     prev_close = f.close;
     ds.push_back(fm);
     raw_close.push_back(f.close);
