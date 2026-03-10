@@ -12,9 +12,49 @@
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
+		08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
+		08A334DD2F5FCBBC00BE2DCE /* liblibMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */; };
+		08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
+		08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
+		08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		08A334CB2F5FCBAC00BE2DCE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 1;
+			remoteGlobalIDString = 08A32F9F2F5FC20900BE2DCE;
+			remoteInfo = MetaNN;
+		};
+		08A334CD2F5FCBAC00BE2DCE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 1;
+			remoteGlobalIDString = 08A331D42F5FCA0200BE2DCE;
+			remoteInfo = libMetaNN;
+		};
+		08A334D52F5FCBAC00BE2DCE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 08A32B532F5D2B9F00BE2DCE;
+			remoteInfo = MetalSwiftTest;
+		};
+		08A334D72F5FCBAC00BE2DCE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 08A32FA02F5FC20900BE2DCE;
+			remoteInfo = MetaNN;
+		};
+		08A334D92F5FCBAC00BE2DCE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 08A331D52F5FCA0200BE2DCE;
+			remoteInfo = libMetaNN;
+		};
 		08F4FCF42F11F5DF00260473 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */;
@@ -65,6 +105,10 @@
 		0890B6A42F1DC54900CEDECF /* LSTM.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = LSTM.cpp; sourceTree = "<group>"; };
 		0896002D22A86B8A0093513A /* ee.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = ee.pgsql; sourceTree = "<group>"; };
 		0896002E22A86B8A0093513A /* rmp_cursor.pgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = rmp_cursor.pgsql; sourceTree = "<group>"; };
+		08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; path = libMetalBuffer.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		08A334DE2F5FCBD700BE2DCE /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalPerformanceShaders.framework; path = System/Library/Frameworks/MetalPerformanceShaders.framework; sourceTree = SDKROOT; };
+		08A334E22F5FCBE600BE2DCE /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		08B33AE22F4160490015F9CF /* LSTM.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = LSTM.plpgsql; sourceTree = "<group>"; };
 		08B33AE62F4161610015F9CF /* PgModelIO.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = PgModelIO.hpp; sourceTree = "<group>"; };
 		08B33AE72F41633D0015F9CF /* LSTM-usage.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = "LSTM-usage.plpgsql"; sourceTree = "<group>"; };
@@ -79,6 +123,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */,
+				08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */,
+				08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */,
+				08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */,
+				08A334DD2F5FCBBC00BE2DCE /* liblibMetaNN.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,6 +137,10 @@
 		080C8C59219B702600840B79 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				08A334E22F5FCBE600BE2DCE /* Foundation.framework */,
+				08A334DE2F5FCBD700BE2DCE /* Metal.framework */,
+				08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */,
+				08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -167,6 +220,9 @@
 				08F4FCF52F11F5DF00260473 /* DataOpTest */,
 				08F4FCF72F11F5DF00260473 /* LayerTest */,
 				08F4FCF92F11F5DF00260473 /* OtherTests */,
+				08A334D62F5FCBAC00BE2DCE /* MetalSwiftTest */,
+				08A334D82F5FCBAC00BE2DCE /* MetaNN.metallib */,
+				08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -185,6 +241,8 @@
 			buildRules = (
 			);
 			dependencies = (
+				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 			);
 			name = LSTM;
 			productName = ChartTest;
@@ -231,6 +289,27 @@
 /* End PBXProject section */
 
 /* Begin PBXReferenceProxy section */
+		08A334D62F5FCBAC00BE2DCE /* MetalSwiftTest */ = {
+			isa = PBXReferenceProxy;
+			fileType = "compiled.mach-o.executable";
+			path = MetalSwiftTest;
+			remoteRef = 08A334D52F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		08A334D82F5FCBAC00BE2DCE /* MetaNN.metallib */ = {
+			isa = PBXReferenceProxy;
+			fileType = "archive.metal-library";
+			path = MetaNN.metallib;
+			remoteRef = 08A334D72F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */ = {
+			isa = PBXReferenceProxy;
+			fileType = archive.ar;
+			path = liblibMetaNN.a;
+			remoteRef = 08A334D92F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
 		08F4FCF52F11F5DF00260473 /* DataOpTest */ = {
 			isa = PBXReferenceProxy;
 			fileType = "compiled.mach-o.executable";
@@ -268,6 +347,19 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = MetaNN;
+			targetProxy = 08A334CB2F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+		};
+		08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = libMetaNN;
+			targetProxy = 08A334CD2F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0844267E2ED8DD46002DEB21 /* Debug */ = {

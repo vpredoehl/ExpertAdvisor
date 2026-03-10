@@ -80,7 +80,7 @@ constexpr size_t closeCol = 1;
 #include <vector>
 #include "MetaNN/meta_nn.h"
 
-using FeatureMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
+using FeatureMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>;
 using DataSet = std::vector<FeatureMatrix>;
 using Window = std::ranges::subrange<DataSet::const_iterator, DataSet::const_iterator>;
 using Batch = Window;

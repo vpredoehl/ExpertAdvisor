@@ -42,12 +42,12 @@ namespace EA
 {
     class LSTM
     {
-        using FloatMatrixCPU = MetaNN::Matrix<float, MetaNN::DeviceTags::CPU>;
+        using FloatMatrixGPU = MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>;
         const ::Tensor& t;
 
         struct GateMatrixView
         {
-            FloatMatrixCPU& m;
+            FloatMatrixGPU& m;
             size_t colOffset;
             inline size_t rows() const { return static_cast<size_t>(n_out); }
             inline size_t cols() const { return static_cast<size_t>(n_in); }
@@ -58,7 +58,7 @@ namespace EA
 
         struct ConstGateMatrixView
         {
-            const FloatMatrixCPU& m;
+            const FloatMatrixGPU& m;
             size_t colOffset;
             inline size_t rows() const { return static_cast<size_t>(n_out); }
             inline size_t cols() const { return static_cast<size_t>(n_in); }
@@ -71,7 +71,7 @@ namespace EA
         {
             return 0;
         }
-        float PredictLogReturnFromH(const FloatMatrixCPU& h)
+        float PredictLogReturnFromH(const FloatMatrixGPU& h)
         {
             // y = h^T W + b
             // MetaNN expressions are lazy; evaluate and extract scalar
@@ -80,7 +80,7 @@ namespace EA
             LSTM_ASSERT(yMat.Shape()[0] == 1 && yMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
             return yMat(0, 0);
         }
-        float PredictDirLogitFromH(const FloatMatrixCPU& h)
+        float PredictDirLogitFromH(const FloatMatrixGPU& h)
         {
             auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // logit
             auto zMat = Evaluate(z);
@@ -145,16 +145,16 @@ namespace EA
         inline static constexpr float kFeatScale = 1000.0f;
 
         float long_term, short_term, in;
-        FloatMatrixCPU param { static_cast<size_t>(n_in), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
-        FloatMatrixCPU prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
-        FloatMatrixCPU bias { 1, 4 * n_out };
+        FloatMatrixGPU param { static_cast<size_t>(n_in), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
+        FloatMatrixGPU prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
+        FloatMatrixGPU bias { 1, 4 * n_out };
 
         // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
-        FloatMatrixCPU returnHeadWeight { hidden_size, 1 };
-        FloatMatrixCPU returnHeadBias { 1, 1 };
+        FloatMatrixGPU returnHeadWeight { hidden_size, 1 };
+        FloatMatrixGPU returnHeadBias { 1, 1 };
         // Binary classification head (direction): p = sigmoid(h_T · returnHeadDirWeight + returnHeadDirBias)
-        FloatMatrixCPU returnHeadDirWeight { hidden_size, 1 };
-        FloatMatrixCPU returnHeadDirBias { 1, 1 };
+        FloatMatrixGPU returnHeadDirWeight { hidden_size, 1 };
+        FloatMatrixGPU returnHeadDirBias { 1, 1 };
 
         // Simple SGD learning rate for head-only training
         float learningRate = 1e-4f;
@@ -182,14 +182,14 @@ namespace EA
         struct GateAccumulators;
 
         WindowWeights hoistWindowWeights() const;
-        StepCache forwardStep(const FloatMatrixCPU& x_t, const WindowWeights& ww, const FloatMatrixCPU& bias, FloatMatrixCPU& prevHiddenState, FloatMatrixCPU& prevCellState, FloatMatrixCPU& xh_concat) const;
-        HeadLoss predictAndLoss(const FloatMatrixCPU& h_T, const FloatMatrixCPU& W, const FloatMatrixCPU& b, float target) const;
-        float predictOnly(const FloatMatrixCPU& h_T, const FloatMatrixCPU& W, const FloatMatrixCPU& b) const;
-        void accumulateHeadGrads(FloatMatrixCPU& dW_accum, FloatMatrixCPU& dB_accum, const FloatMatrixCPU& h_T, float err) const;
-        GateBlocks hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const;
+        StepCache forwardStep(const FloatMatrixGPU& x_t, const WindowWeights& ww, const FloatMatrixGPU& bias, FloatMatrixGPU& prevHiddenState, FloatMatrixGPU& prevCellState, FloatMatrixGPU& xh_concat) const;
+        HeadLoss predictAndLoss(const FloatMatrixGPU& h_T, const FloatMatrixGPU& W, const FloatMatrixGPU& b, float target) const;
+        float predictOnly(const FloatMatrixGPU& h_T, const FloatMatrixGPU& W, const FloatMatrixGPU& b) const;
+        void accumulateHeadGrads(FloatMatrixGPU& dW_accum, FloatMatrixGPU& dB_accum, const FloatMatrixGPU& h_T, float err) const;
+        GateBlocks hoistGateBlocks(const FloatMatrixGPU& W_h_win, size_t H) const;
         void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
-        void backwardStep(const StepCache& sc, const GateBlocks& gb, FloatMatrixCPU& d_h, FloatMatrixCPU& d_c, GateAccumulators& A) const;
-        void mergeGateAccumulators(const GateAccumulators& A, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_param_accum, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_bias_accum, size_t H) const;
+        void backwardStep(const StepCache& sc, const GateBlocks& gb, FloatMatrixGPU& d_h, FloatMatrixGPU& d_c, GateAccumulators& A) const;
+        void mergeGateAccumulators(const GateAccumulators& A, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_param_accum, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum, size_t H) const;
     };
 }
 

@@ -104,17 +104,17 @@ static inline float uniform_symmetric(float limit) {
 }
 
 struct EA::LSTM::HeadLoss { float y_hat; float err; };
-struct EA::LSTM::GateBlocks {   FloatMatrixCPU W_i, W_f, W_g, W_o;  }; // (H x H)
+struct EA::LSTM::GateBlocks {   FloatMatrixGPU W_i, W_f, W_g, W_o;  }; // (H x H)
 struct EA::LSTM::GateAccumulators
 {
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_i;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_f;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_g;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> dW_o;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> db_i;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> db_f;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> db_g;
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> db_o;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> dW_i;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> dW_f;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> dW_g;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> dW_o;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> db_i;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> db_f;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> db_g;
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> db_o;
 };
 
 template <typename Mat>
@@ -147,41 +147,40 @@ void SGDUpdate(MatP& P, const MatG& G, float lr)
 
 struct EA::LSTM::WindowWeights
 {
-    FloatMatrixCPU W_cat;   // (n_in + H) x (4H)
-    FloatMatrixCPU W_x_win; // top block (n_in x 4H)
-    FloatMatrixCPU W_h_win; // bottom block (H x 4H)
+    FloatMatrixGPU W_cat;   // (n_in + H) x (4H)
+    FloatMatrixGPU W_x_win; // top block (n_in x 4H)
+    FloatMatrixGPU W_h_win; // bottom block (H x 4H)
 };
 
 struct EA::LSTM::StepCache
 {
-    FloatMatrixCPU x;      // (1, input_size)
-    FloatMatrixCPU h_prev; // (1, hidden_size)
-    FloatMatrixCPU c_prev; // (1, hidden_size)
-    FloatMatrixCPU i;      // (1, hidden_size)
-    FloatMatrixCPU f;      // (1, hidden_size)
-    FloatMatrixCPU g;      // (1, hidden_size)
-    FloatMatrixCPU o;      // (1, hidden_size)
-    FloatMatrixCPU c;      // (1, hidden_size)
-    FloatMatrixCPU h;      // (1, hidden_size)
+    FloatMatrixGPU x;      // (1, input_size)
+    FloatMatrixGPU h_prev; // (1, hidden_size)
+    FloatMatrixGPU c_prev; // (1, hidden_size)
+    FloatMatrixGPU i;      // (1, hidden_size)
+    FloatMatrixGPU f;      // (1, hidden_size)
+    FloatMatrixGPU g;      // (1, hidden_size)
+    FloatMatrixGPU o;      // (1, hidden_size)
+    FloatMatrixGPU c;      // (1, hidden_size)
+    FloatMatrixGPU h;      // (1, hidden_size)
 };
 
 // Member function definitions moved to EA::LSTM
 
 inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
-    WindowWeights ww;
-    ww.W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
-    ww.W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
-    ww.W_cat   = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in));
-    return ww;
+    const auto W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::Metal>(param, param.Shape()[0] - hidden_size);
+    const auto W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::Metal>(param, hidden_size);
+    const auto W_cat   = param; // full (n_in + H) x (4H) matrix; dynamic row views taken later
+    return WindowWeights{ W_cat, W_x_win, W_h_win };
 }
 
-inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
+inline auto EA::LSTM::forwardStep(const FloatMatrixGPU& x_t,
                            const WindowWeights& ww,
-                           const FloatMatrixCPU& bias,
-                           FloatMatrixCPU& prevHiddenState,
-                           FloatMatrixCPU& prevCellState,
-                           FloatMatrixCPU& xh_concat) const -> StepCache
+                           const FloatMatrixGPU& bias,
+                           FloatMatrixGPU& prevHiddenState,
+                           FloatMatrixGPU& prevCellState,
+                           FloatMatrixGPU& xh_concat) const -> StepCache
 {
     // Build [x_t | h_{t-1}] and compute all gates in one GEMM
 #if LSTM_DEBUG_PRINTS
@@ -190,7 +189,7 @@ inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     {
         const size_t expectedCols = x_t.Shape()[1] + prevHiddenState.Shape()[1];
         if (xh_concat.Shape()[0] != 1 || xh_concat.Shape()[1] != expectedCols) {
-            xh_concat = FloatMatrixCPU(1, expectedCols);
+            xh_concat = FloatMatrixGPU(1, expectedCols);
         }
         NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
 #if LSTM_DEBUG_PRINTS
@@ -210,7 +209,7 @@ inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
 
 
     const size_t K = xh_concat.Shape()[1];
-    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(ww.W_cat, 0, K);
+    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
     auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
 #if LSTM_DEBUG_PRINTS
     auto yHandle = yExpr.EvalRegister();
@@ -271,25 +270,26 @@ inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     std::cout << "h_2d_handle.Data()(0,0): " << h_2d_handle.Data()(0,0) << std::endl;
 #endif
 
-    StepCache sc;
-    sc.x      = x_t;
-    sc.h_prev = prevHiddenState;
-    sc.c_prev = cprev_2d_handle.Data();
-    sc.i      = i_2d_handle.Data();
-    sc.f      = f_2d_handle.Data();
-    sc.g      = g_2d_handle.Data();
-    sc.o      = o_2d_handle.Data();
-    sc.c      = c_2d_handle.Data();
-    sc.h      = h_2d_handle.Data();
+    StepCache sc{
+        x_t,
+        prevHiddenState,
+        cprev_2d_handle.Data(),
+        i_2d_handle.Data(),
+        f_2d_handle.Data(),
+        g_2d_handle.Data(),
+        o_2d_handle.Data(),
+        c_2d_handle.Data(),
+        h_2d_handle.Data()
+    };
 
     prevCellState   = sc.c;
     prevHiddenState = sc.h;
     return sc;
 }
 
-inline auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
-                             const FloatMatrixCPU& W,
-                             const FloatMatrixCPU& b,
+inline auto EA::LSTM::predictAndLoss(const FloatMatrixGPU& h_T,
+                             const FloatMatrixGPU& W,
+                             const FloatMatrixGPU& b,
                              float target) const -> HeadLoss
 {
     auto logits = MetaNN::Dot(h_T, W) + b;
@@ -312,9 +312,9 @@ inline auto EA::LSTM::predictAndLoss(const FloatMatrixCPU& h_T,
     }
 }
 
-float EA::LSTM::predictOnly(const FloatMatrixCPU& h_T,
-                            const FloatMatrixCPU& W,
-                            const FloatMatrixCPU& b) const
+float EA::LSTM::predictOnly(const FloatMatrixGPU& h_T,
+                            const FloatMatrixGPU& W,
+                            const FloatMatrixGPU& b) const
 {
     auto logits = MetaNN::Dot(h_T, W) + b;
     if (targetType == TargetType::BinaryReturn)
@@ -332,9 +332,9 @@ float EA::LSTM::predictOnly(const FloatMatrixCPU& h_T,
     }
 }
 
-inline void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
-                                   FloatMatrixCPU& dB_accum,
-                                   const FloatMatrixCPU& h_T,
+inline void EA::LSTM::accumulateHeadGrads(FloatMatrixGPU& dW_accum,
+                                   FloatMatrixGPU& dB_accum,
+                                   const FloatMatrixGPU& h_T,
                                    float err) const
 {
 #if LSTM_DEBUG_PRINTS
@@ -355,16 +355,13 @@ inline void EA::LSTM::accumulateHeadGrads(FloatMatrixCPU& dW_accum,
 #endif
 }
 
-inline auto EA::LSTM::hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) const -> GateBlocks
+inline auto EA::LSTM::hoistGateBlocks(const FloatMatrixGPU& W_h_win, size_t H) const -> GateBlocks
 {
-
-
-    GateBlocks gb;
-    gb.W_i = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 0 * H, H);
-    gb.W_f = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 1 * H, H);
-    gb.W_g = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 2 * H, H);
-    gb.W_o = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 3 * H, H);
-    return gb;
+    const auto W_i = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 0 * H, H);
+    const auto W_f = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 1 * H, H);
+    const auto W_g = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 2 * H, H);
+    const auto W_o = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 3 * H, H);
+    return GateBlocks{ W_i, W_f, W_g, W_o };
 }
 
 inline void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const
@@ -379,8 +376,8 @@ inline void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, siz
 
 inline void EA::LSTM::backwardStep(const StepCache& sc,
                             const GateBlocks& gb,
-                            FloatMatrixCPU& d_h,
-                            FloatMatrixCPU& d_c,
+                            FloatMatrixGPU& d_h,
+                            FloatMatrixGPU& d_c,
                             GateAccumulators& A) const
 {
     const size_t H = d_h.Shape()[1];
@@ -452,8 +449,8 @@ inline void EA::LSTM::backwardStep(const StepCache& sc,
 }
 
 inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
-                                     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_param_accum,
-                                     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>& d_bias_accum,
+                                     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_param_accum,
+                                     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum,
                                      size_t H) const
 {
     auto writeCols = [&](auto& dst, size_t colOffset, const auto& src){
@@ -554,27 +551,27 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t skippedWindows = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
 
 #if !LSTM_INFERENCE_ONLY
     // Head gradient accumulators across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headW_accum_f(hidden_size, 1);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headW_accum_f(hidden_size, 1);
     { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headB_accum_f(1, 1);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headDirW_accum_f(hidden_size, 1);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, 1);
     { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_headDirB_accum_f(1, 1);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headDirB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
     // LSTM core gradient accumulators across all windows in the batch
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_param_accum(param.Shape()[0], param.Shape()[1]);
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> d_param_accum(param.Shape()[0], param.Shape()[1]);
     {
         auto low = MetaNN::LowerAccess(d_param_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + param.Shape()[0] * param.Shape()[1], static_cast<AccumScalar>(0));
     }
-    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU> d_bias_accum(bias.Shape()[0], bias.Shape()[1]);
+    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> d_bias_accum(bias.Shape()[0], bias.Shape()[1]);
     {
         auto low = MetaNN::LowerAccess(d_bias_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + bias.Shape()[0] * bias.Shape()[1], static_cast<AccumScalar>(0));
@@ -742,25 +739,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 
             // Backprop into core: use the binary head weights
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
+            MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_h(1, hidden_size);
             for (size_t i = 0; i < hidden_size; ++i)
                 d_h.SetValue(0, i, (err * returnHeadDirWeight(i, 0)) * LSTM_CORE_GRAD_SCALE);
 
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c(1, hidden_size);
+            MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_c(1, hidden_size);
             {
                 auto low = MetaNN::LowerAccess(d_c);
                 std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
             }
 
             GateAccumulators G {
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size)
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
             };
             zeroGateAccumulators(G, param.Shape()[0], hidden_size);
 
@@ -817,25 +814,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             accumulateHeadGrads(d_headW_accum_f, d_headB_accum_f, prevHiddenState, err);
 #endif
 
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_h(1, hidden_size);
+            MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_h(1, hidden_size);
             for (size_t i = 0; i < hidden_size; ++i)
                 d_h.SetValue(0, i, (err * returnHeadWeight(i, 0)) * LSTM_CORE_GRAD_SCALE);
 
-            MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> d_c(1, hidden_size);
+            MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_c(1, hidden_size);
             {
                 auto low = MetaNN::LowerAccess(d_c);
                 std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
             }
 
             GateAccumulators G {
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(param.Shape()[0], hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size),
-                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::CPU>(1, hidden_size)
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
             };
             zeroGateAccumulators(G, param.Shape()[0], hidden_size);
             auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
@@ -970,7 +967,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
     // Forward through the window
     for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
 
@@ -1005,7 +1002,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
 
     // Forward through the window
     for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
@@ -1029,6 +1026,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 

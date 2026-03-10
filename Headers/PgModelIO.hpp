@@ -19,7 +19,7 @@ namespace DBIO
 
 // Convenience alias
 template <typename T>
-using MatCPU = MetaNN::Matrix<T, MetaNN::DeviceTags::CPU>;
+using MatCPU = MetaNN::Matrix<T, MetaNN::DeviceTags::Metal>;
 
 // Flatten to row-major vector<double>
 template <typename T>
