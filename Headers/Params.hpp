@@ -57,7 +57,7 @@ inline constexpr int prediction_horizon_for(CandleTF tf)
 
 
 constexpr auto hidden_size = 64;
-constexpr auto feature_size = 12;
+constexpr auto feature_size = 14;
 constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;
 

@@ -31,6 +31,38 @@ std::ostream& operator<<(std::ostream& o, Window w)
     return o;
 }
 
+//std::vector<float> Tensor::rolling_mean(const std::vector<float>& data, size_t window)
+//{
+//    float sum = 0.0f;
+//    std::vector<float> result(data.size(), 0.0f);
+//
+//    if (window == 0 || data.empty())    return result;
+//
+//
+//    for (size_t i = 0; i < data.size(); ++i)
+//    {
+//        sum += data[i];
+//
+//        if (i >= window)    sum -= data[i - window];
+//
+//        if (i >= window - 1)    result[i] = sum / window;
+//        else                    result[i] = sum / (i + 1);  // partial window at start
+//    }
+//
+//    return result;
+//}
+//
+//float Tensor::rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window)
+//{
+//    size_t start = (idx >= window - 1) ? idx - window + 1 : 0;
+//    float sum = 0.0f;
+//    size_t count = 0;
+//
+//#pragma openmp parallel for
+//    for (size_t i = start; i <= idx; ++i)   {   sum += data[i]; count++;    }
+//    return sum / count;
+//}
+
 void Tensor::Add(Feature f)
 {
     FeatureMatrix fm(1, feature_size);
@@ -48,6 +80,8 @@ void Tensor::Add(Feature f)
         fm.SetValue(0, 9, 0.0f);
         fm.SetValue(0, 10, 0.0f);
         fm.SetValue(0, 11, 0.0f);
+        fm.SetValue(0, 12, 0.0f);
+        fm.SetValue(0, 13, 0.0f);
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(fm);
@@ -66,11 +100,17 @@ void Tensor::Add(Feature f)
     fm.SetValue(0, 2, h);
     fm.SetValue(0, 3, l);
 
-    const float body = c - o;
+    const float body = std::log(c / o); //( c - o ) / o;
     fm.SetValue(0, 4, body);
 
-    const float range = h - l;
+    const float range = std::log(h / l );   // h - l;
     fm.SetValue(0, 5, range);
+    
+    const float upper_wick = (h - std::max(o, c)) / c;
+    fm.SetValue(0, 12, upper_wick);
+    
+    const float lower_wick = (std::min(o, c) - l) / c;
+    fm.SetValue(0,13,lower_wick);
 
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;
@@ -145,6 +185,7 @@ void Tensor::Add(Feature f)
     ds.push_back(fm);
     raw_close.push_back(f.close);
 }
+
 float Tensor::RawCloseAtIterator(DataSet::const_iterator it) const
 {
 #if LSTM_TRAINING_ASSERTS

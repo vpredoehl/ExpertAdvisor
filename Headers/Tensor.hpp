@@ -26,12 +26,30 @@ struct Feature;
 
 class Tensor
 {
+    class RollingMean
+    {
+        float sum = 0.0f;
+        size_t window;
+        std::deque<float> q;
+
+    public:
+        RollingMean(size_t w) : window(w) {}
+        float update(float x)
+        {
+            sum += x;
+            q.push_back(x);
+            if (q.size() > window)  {   sum -= q.front();   q.pop_front();}
+            return sum / q.size();
+        }
+    };
     bool has_prev_close = false;
     float prev_close = 0.0f;
     string table;
     DataSet ds;
     std::vector<float> raw_close;
     
+//    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
+//    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
 public:
     // Number of full batches (size divisible by batch_size)
     // Number of batches including a trailing partial batch
