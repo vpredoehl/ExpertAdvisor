@@ -591,7 +591,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t count_abs_gt_threshold = 0;
 
     // Per-batch predicted/actual log-return stats
-    const float pred_action_threshold = 1e-3f; // threshold for |predLogRet|
 #endif
 
     ResetPreviousState();
@@ -874,6 +873,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         double act_sum = 0.0, act_sumsq = 0.0;
         double max_abs_pred_logret = 0.0;
         size_t count_pred_abs_gt_thresh = 0;
+        const float pred_action_threshold = 1e-3f; // threshold for |predLogRet|
 
         const double pred_mean = pred_sum / static_cast<double>(windowsInBatch);
         const double pred_var  = std::max(0.0, pred_sumsq / static_cast<double>(windowsInBatch) - pred_mean * pred_mean);

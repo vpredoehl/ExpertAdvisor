@@ -256,7 +256,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 2630;
 				ORGANIZATIONNAME = "Vincent Predoehl";
 				TargetAttributes = {
 					084426722ED8DD46002DEB21 = {
@@ -381,7 +381,7 @@
 					"$(inherited)",
 					/opt/homebrew/opt/libomp/lib,
 				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-Xpreprocessor",
@@ -428,7 +428,7 @@
 					"$(inherited)",
 					/opt/homebrew/opt/libomp/lib,
 				);
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-Xpreprocessor",
