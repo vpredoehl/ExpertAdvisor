@@ -20,7 +20,7 @@ using std::setw;
 
 std::ostream& operator<<(std::ostream& o, Window w)
 {
-    for(auto f : w)
+    for (const auto& f : w)
     {
         float open = f.Shape()[0];
         float close = f.Shape()[0];
@@ -68,23 +68,11 @@ void Tensor::Add(Feature f)
     FeatureMatrix fm(1, feature_size);
 
     if (!has_prev_close) {
-        fm.SetValue(0, 0, 0.0f);
-        fm.SetValue(0, 1, 0.0f);
-        fm.SetValue(0, 2, 0.0f);
-        fm.SetValue(0, 3, 0.0f);
-        fm.SetValue(0, 4, 0.0f);
-        fm.SetValue(0, 5, 0.0f);
-        fm.SetValue(0, 6, 0.0f);
-        fm.SetValue(0, 7, 0.0f);
-        fm.SetValue(0, 8, 0.0f);
-        fm.SetValue(0, 9, 0.0f);
-        fm.SetValue(0, 10, 0.0f);
-        fm.SetValue(0, 11, 0.0f);
-        fm.SetValue(0, 12, 0.0f);
-        fm.SetValue(0, 13, 0.0f);
+        auto low = MetaNN::LowerAccess(fm);
+        std::fill(low.MutableRawMemory(), low.MutableRawMemory() + feature_size, 0.0f);
         has_prev_close = true;
         prev_close = f.close;
-        ds.push_back(fm);
+        ds.push_back(std::move(fm));
         raw_close.push_back(f.close);
         return;
     }
@@ -95,19 +83,26 @@ void Tensor::Add(Feature f)
     const float h = std::log(f.high  / ref) * kFeatureScale;
     const float l = std::log(f.low   / ref) * kFeatureScale;
 
-    fm.SetValue(0, 0, o);
-    fm.SetValue(0, 1, c);
-    fm.SetValue(0, 2, h);
-    fm.SetValue(0, 3, l);
+    auto low = MetaNN::LowerAccess(fm);
+    float* p = low.MutableRawMemory();
+    p[0] = o;
+    p[1] = c;
+    p[2] = h;
+    p[3] = l;
 
-    const float body = std::log(c / o); //( c - o ) / o;
-    fm.SetValue(0, 4, body);
+    const float body = c - o;
+    p[4] = body;
 
-    const float range = std::log(h / l );   // h - l;
-    fm.SetValue(0, 5, range);
+    const float range =  h - l;
+    p[5] = range;
     
-    const float upper_wick = (h - std::max(o, c)) / c;
-    fm.SetValue(0, 12, upper_wick);
+    const float denom = std::max(range, 1e-6f);
+
+    const float upper_wick = (h - std::max(o, c)) / denom;
+    p[12] = upper_wick;
+
+    const float lower_wick = (std::min(o, c) - l) / denom;
+    p[13] = lower_wick;
     
     const float lower_wick = (std::min(o, c) - l) / c;
     fm.SetValue(0,13,lower_wick);
@@ -138,7 +133,7 @@ void Tensor::Add(Feature f)
         vol_scaled = static_cast<float>(std::sqrt(var) * kFeatureScale);
     }
     else vol_scaled = 0.0f;
-    fm.SetValue(0, 6, vol_scaled);
+    p[6] = vol_scaled;
 
     // Rolling cumulative log return over lookback (including current)
     double sumRet = 0.0;
@@ -155,7 +150,7 @@ void Tensor::Add(Feature f)
     double r_cur2 = std::log(static_cast<double>(f.close) / static_cast<double>(ref));
     sumRet += r_cur2; ++countRet;
     float roll_ret_scaled = static_cast<float>(sumRet * kFeatureScale);
-    fm.SetValue(0, 7, roll_ret_scaled);
+    p[7] = roll_ret_scaled;
 
     // Time-of-day cyclical features (sin/cos)
     constexpr double twoPi = 2 * std::numbers::pi;  // 6.28318530717958647692;
@@ -165,8 +160,8 @@ void Tensor::Add(Feature f)
     double phase = (cycSec > 0) ? (twoPi * (static_cast<double>(secInCycle) / static_cast<double>(cycSec))) : 0.0;
     float sin_t = static_cast<float>(std::sin(phase));
     float cos_t = static_cast<float>(std::cos(phase));
-    fm.SetValue(0, 8, sin_t);
-    fm.SetValue(0, 9, cos_t);
+    p[8] = sin_t;
+    p[9] = cos_t;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;
@@ -178,11 +173,11 @@ void Tensor::Add(Feature f)
     double phase_w = twoPi * (static_cast<double>(secOfWeek) / static_cast<double>(weekSec));
     float sin_w = static_cast<float>(std::sin(phase_w));
     float cos_w = static_cast<float>(std::cos(phase_w));
-    fm.SetValue(0, 10, sin_w);
-    fm.SetValue(0, 11, cos_w);
+    p[10] = sin_w;
+    p[11] = cos_w;
     
     prev_close = f.close;
-    ds.push_back(fm);
+    ds.push_back(std::move(fm));
     raw_close.push_back(f.close);
 }
 

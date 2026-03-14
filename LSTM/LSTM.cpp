@@ -344,10 +344,18 @@ inline void EA::LSTM::accumulateHeadGrads(FloatMatrixGPU& dW_accum,
     std::cout << "dB_accum(0,0): " << dB_accum(0,0) << std::endl;
 #endif
     const size_t H = h_T.Shape()[1];
-    for (size_t i = 0; i < H; ++i) {
-        dW_accum.SetValue(i, 0, dW_accum(i, 0) + h_T(0, i) * err);
-    }
-    dB_accum.SetValue(0, 0, dB_accum(0, 0) + err);
+    // Evaluate h_T once and then perform contiguous updates to avoid repeated buffer operations
+    auto h_eval = MetaNN::Evaluate(h_T);
+    auto lowH = MetaNN::LowerAccess(h_eval);
+    const float* hptr = lowH.RawMemory();
+
+    auto lowW = MetaNN::LowerAccess(dW_accum);
+    float* wptr = lowW.MutableRawMemory();
+    for (size_t i = 0; i < H; ++i)  wptr[i] += hptr[i] * err;
+
+    auto lowB = MetaNN::LowerAccess(dB_accum);
+    float* bptr = lowB.MutableRawMemory();
+    bptr[0] += err;
     
 #if LSTM_DEBUG_PRINTS
     std::cout << "AFTER dW_accum(0,0): " << dW_accum(0,0) << std::endl;
@@ -503,30 +511,56 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
     // Xavier/Glorot uniform initialization limit
     float limit = std::sqrt(6.0f / (static_cast<float>(n_in) + static_cast<float>(n_out)));
 
-    for (int r = 0; r < n_in; ++r)
-        for (int c = 0; c < 4 * n_out; ++c)
-            param.SetValue(r, c, uniform_symmetric(.01));//(limit));
+    {
+        auto low = MetaNN::LowerAccess(param);
+        float* p = low.MutableRawMemory();
+        const size_t cols = static_cast<size_t>(4 * n_out);
+        for (int r = 0; r < n_in; ++r)
+        {
+            const size_t rowOff = static_cast<size_t>(r) * cols;
+            for (size_t c = 0; c < cols; ++c) p[rowOff + c] = uniform_symmetric(0.01f);
+        }
+    }
     
-        // initialize bias, previous hidden and previous cell state
-    for (size_t j = 0; j < 4 * n_out; ++j) bias.SetValue(0, j, 0.0f);
+    {
+        auto low = MetaNN::LowerAccess(bias);
+        float* bp = low.MutableRawMemory();
+        std::fill(bp, bp + static_cast<size_t>(4 * n_out), 0.0f);
+    }
     {
         // Add positive bias to forget gate block [H .. 2H)
         const size_t H = hidden_size;
-        for (size_t j = H; j < 2 * H; ++j) {
-            bias.SetValue(0, j, bias(0, j) + 1.0f);
-        }
+        auto low = MetaNN::LowerAccess(bias);
+        float* bp = low.MutableRawMemory();
+        for (size_t j = H; j < 2 * H; ++j) bp[j] += 1.0f;
     }
     ResetPreviousState();
 
     switch(targetType)
     {
         case TargetType::PercentReturn: case TargetType::LogReturn:
-            for (size_t i = 0; i < hidden_size; ++i) returnHeadWeight.SetValue(i, 0, 0.01f);
-            returnHeadBias.SetValue(0, 0, 0.0f);
+            {
+                auto lowW = MetaNN::LowerAccess(returnHeadWeight);
+                float* wp = lowW.MutableRawMemory();
+                std::fill(wp, wp + hidden_size, 0.01f);
+            }
+            {
+                auto lowB = MetaNN::LowerAccess(returnHeadBias);
+                float* bp = lowB.MutableRawMemory();
+                bp[0] = 0.0f;
+            }
             break;
         case TargetType::BinaryReturn:
-            for (size_t i = 0; i < hidden_size; ++i) returnHeadDirWeight.SetValue(i, 0, 0.01f);
-            returnHeadDirBias.SetValue(0, 0, 0.0f);
+            {
+                auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
+                float* wp = lowW.MutableRawMemory();
+                std::fill(wp, wp + hidden_size, 0.01f);
+            }
+            {
+                auto lowB = MetaNN::LowerAccess(returnHeadDirBias);
+                float* bp = lowB.MutableRawMemory();
+                bp[0] = 0.0f;
+            }
     }
     
 #if LSTM_DEBUG_PRINTS
@@ -739,8 +773,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             // Backprop into core: use the binary head weights
             MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_h(1, hidden_size);
-            for (size_t i = 0; i < hidden_size; ++i)
-                d_h.SetValue(0, i, (err * returnHeadDirWeight(i, 0)) * LSTM_CORE_GRAD_SCALE);
+            {
+                auto lowDh = MetaNN::LowerAccess(d_h);
+                float* dhp = lowDh.MutableRawMemory();
+                auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
+                const float* wp = lowW.RawMemory();
+                const float scale = err * LSTM_CORE_GRAD_SCALE;
+                for (size_t i = 0; i < hidden_size; ++i)    dhp[i] = scale * wp[i];
+            }
 
             MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_c(1, hidden_size);
             {
@@ -814,8 +854,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 
             MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_h(1, hidden_size);
-            for (size_t i = 0; i < hidden_size; ++i)
-                d_h.SetValue(0, i, (err * returnHeadWeight(i, 0)) * LSTM_CORE_GRAD_SCALE);
+            {
+                auto lowDh = MetaNN::LowerAccess(d_h);
+                float* dhp = lowDh.MutableRawMemory();
+                auto lowW = MetaNN::LowerAccess(returnHeadWeight);
+                const float* wp = lowW.RawMemory();
+                const float scale = err * LSTM_CORE_GRAD_SCALE;
+                for (size_t i = 0; i < hidden_size; ++i)    dhp[i] = scale * wp[i];
+            }
 
             MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_c(1, hidden_size);
             {
@@ -1026,10 +1072,4 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
-
-
-
-
-
-
 
