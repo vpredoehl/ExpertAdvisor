@@ -107,6 +107,12 @@ void Tensor::Add(Feature f)
     const float lower_wick = (std::min(o, c) - l) / c;
     fm.SetValue(0,13,lower_wick);
 
+    const float upper_wick = (h - std::max(o, c)) / denom;
+    fm.SetValue(0, 12, upper_wick);
+
+    const float lower_wick = (std::min(o, c) - l) / denom;
+    fm.SetValue(0, 13, lower_wick);
+    
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;
     size_t count = 0;
