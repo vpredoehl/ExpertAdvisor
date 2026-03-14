@@ -100,18 +100,20 @@ void Tensor::Add(Feature f)
     fm.SetValue(0, 2, h);
     fm.SetValue(0, 3, l);
 
-    const float body = std::log(c / o); //( c - o ) / o;
+    const float body = c - o;
     fm.SetValue(0, 4, body);
 
-    const float range = std::log(h / l );   // h - l;
+    const float range =  h - l;
     fm.SetValue(0, 5, range);
     
-    const float upper_wick = (h - std::max(o, c)) / c;
-    fm.SetValue(0, 12, upper_wick);
-    
-    const float lower_wick = (std::min(o, c) - l) / c;
-    fm.SetValue(0,13,lower_wick);
+    const float denom = std::max(range, 1e-6f);
 
+    const float upper_wick = (h - std::max(o, c)) / denom;
+    fm.SetValue(0, 12, upper_wick);
+
+    const float lower_wick = (std::min(o, c) - l) / denom;
+    fm.SetValue(0, 13, lower_wick);
+    
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;
     size_t count = 0;

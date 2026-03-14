@@ -13,7 +13,7 @@
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 		08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
-		08A334DD2F5FCBBC00BE2DCE /* liblibMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */; };
+		08A334DD2F5FCBBC00BE2DCE /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
 		08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
 		08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
 		08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
@@ -95,7 +95,7 @@
 		08403E922F1DD75E004742A5 /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Tensor.hpp; sourceTree = "<group>"; };
 		08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = db_cursor_iterator.hpp; sourceTree = "<group>"; };
 		08403E9A2F1DDA2F004742A5 /* LSTM.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = LSTM.hpp; sourceTree = "<group>"; };
-		084426802ED8DD46002DEB21 /* LSTM */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM; sourceTree = BUILT_PRODUCTS_DIR; };
+		084426802ED8DD46002DEB21 /* LSTM Debug */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "LSTM Debug"; sourceTree = BUILT_PRODUCTS_DIR; };
 		084426892ED8E755002DEB21 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
@@ -127,7 +127,7 @@
 				08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */,
 				08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */,
 				08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */,
-				08A334DD2F5FCBBC00BE2DCE /* liblibMetaNN.a in Frameworks */,
+				08A334DD2F5FCBBC00BE2DCE /* libMetaNN.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,7 +160,7 @@
 		0845055A2047962100A0B88F /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				084426802ED8DD46002DEB21 /* LSTM */,
+				084426802ED8DD46002DEB21 /* LSTM Debug */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -222,7 +222,7 @@
 				08F4FCF92F11F5DF00260473 /* OtherTests */,
 				08A334D62F5FCBAC00BE2DCE /* MetalSwiftTest */,
 				08A334D82F5FCBAC00BE2DCE /* MetaNN.metallib */,
-				08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */,
+				08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -230,9 +230,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		084426722ED8DD46002DEB21 /* LSTM */ = {
+		084426722ED8DD46002DEB21 /* LSTM Debug */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM" */;
+			buildConfigurationList = 0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM Debug" */;
 			buildPhases = (
 				084426732ED8DD46002DEB21 /* Sources */,
 				0844267A2ED8DD46002DEB21 /* Frameworks */,
@@ -244,9 +244,9 @@
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 			);
-			name = LSTM;
+			name = "LSTM Debug";
 			productName = ChartTest;
-			productReference = 084426802ED8DD46002DEB21 /* LSTM */;
+			productReference = 084426802ED8DD46002DEB21 /* LSTM Debug */;
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
@@ -283,7 +283,7 @@
 			);
 			projectRoot = "";
 			targets = (
-				084426722ED8DD46002DEB21 /* LSTM */,
+				084426722ED8DD46002DEB21 /* LSTM Debug */,
 			);
 		};
 /* End PBXProject section */
@@ -299,14 +299,14 @@
 		08A334D82F5FCBAC00BE2DCE /* MetaNN.metallib */ = {
 			isa = PBXReferenceProxy;
 			fileType = "archive.metal-library";
-			path = MetaNN.metallib;
+			path = MetaNN_metal.metallib;
 			remoteRef = 08A334D72F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */ = {
+		08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */ = {
 			isa = PBXReferenceProxy;
 			fileType = archive.ar;
-			path = liblibMetaNN.a;
+			path = libMetaNN.a;
 			remoteRef = 08A334D92F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
@@ -595,7 +595,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM" */ = {
+		0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM Debug" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0844267E2ED8DD46002DEB21 /* Debug */,
