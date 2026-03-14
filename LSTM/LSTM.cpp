@@ -169,11 +169,12 @@ struct EA::LSTM::StepCache
 
 inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
-    WindowWeights ww;
-    ww.W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size);
-    ww.W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size);
-    ww.W_cat   = NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in));
-    return ww;
+    // Construct WindowWeights without default-constructing members
+    return WindowWeights{
+        /*W_cat*/   NNUtils::ViewRows<float, MetaNN::DeviceTags::CPU>(param, 0, static_cast<size_t>(n_in)),
+        /*W_x_win*/ NNUtils::ViewTopRows<float, MetaNN::DeviceTags::CPU>(param, param.Shape()[0] - hidden_size),
+        /*W_h_win*/ NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::CPU>(param, hidden_size)
+    };
 }
 
 inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
@@ -271,16 +272,17 @@ inline auto EA::LSTM::forwardStep(const FloatMatrixCPU& x_t,
     std::cout << "h_2d_handle.Data()(0,0): " << h_2d_handle.Data()(0,0) << std::endl;
 #endif
 
-    StepCache sc;
-    sc.x      = x_t;
-    sc.h_prev = prevHiddenState;
-    sc.c_prev = cprev_2d_handle.Data();
-    sc.i      = i_2d_handle.Data();
-    sc.f      = f_2d_handle.Data();
-    sc.g      = g_2d_handle.Data();
-    sc.o      = o_2d_handle.Data();
-    sc.c      = c_2d_handle.Data();
-    sc.h      = h_2d_handle.Data();
+    StepCache sc{
+        x_t,
+        prevHiddenState,
+        cprev_2d_handle.Data(),
+        i_2d_handle.Data(),
+        f_2d_handle.Data(),
+        g_2d_handle.Data(),
+        o_2d_handle.Data(),
+        c_2d_handle.Data(),
+        h_2d_handle.Data()
+    };
 
     prevCellState   = sc.c;
     prevHiddenState = sc.h;
@@ -359,12 +361,12 @@ inline auto EA::LSTM::hoistGateBlocks(const FloatMatrixCPU& W_h_win, size_t H) c
 {
 
 
-    GateBlocks gb;
-    gb.W_i = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 0 * H, H);
-    gb.W_f = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 1 * H, H);
-    gb.W_g = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 2 * H, H);
-    gb.W_o = NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 3 * H, H);
-    return gb;
+    return GateBlocks{
+        NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 0 * H, H),
+        NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 1 * H, H),
+        NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 2 * H, H),
+        NNUtils::ViewCols<float, MetaNN::DeviceTags::CPU>(W_h_win, 3 * H, H)
+    };
 }
 
 inline void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const
@@ -1029,6 +1031,8 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
+
 
 
 
