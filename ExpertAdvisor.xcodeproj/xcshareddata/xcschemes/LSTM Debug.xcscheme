@@ -16,8 +16,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "084426722ED8DD46002DEB21"
-               BuildableName = "LSTM"
-               BlueprintName = "LSTM"
+               BuildableName = "LSTM_Debug"
+               BlueprintName = "LSTM Debug"
                ReferencedContainer = "container:ExpertAdvisor.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -46,32 +46,20 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "084426722ED8DD46002DEB21"
-            BuildableName = "LSTM"
-            BlueprintName = "LSTM"
+            BuildableName = "LSTM_Debug"
+            BlueprintName = "LSTM Debug"
             ReferencedContainer = "container:ExpertAdvisor.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
          <CommandLineArgument
-            argument = "2017-05-17 2017-07-23"
-            isEnabled = "NO">
-         </CommandLineArgument>
-         <CommandLineArgument
-            argument = "2010-01-01 2025-01-01"
+            argument = "2010-01-01 2010-01-10"
             isEnabled = "YES">
-         </CommandLineArgument>
-         <CommandLineArgument
-            argument = "2020-01-01 2025-01-01"
-            isEnabled = "NO">
-         </CommandLineArgument>
-         <CommandLineArgument
-            argument = "2024-01-01 2025-01-01"
-            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
-      buildConfiguration = "Debug"
+      buildConfiguration = "Release"
       shouldUseLaunchSchemeArgsEnv = "YES"
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
@@ -81,8 +69,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "084426722ED8DD46002DEB21"
-            BuildableName = "LSTM"
-            BlueprintName = "LSTM"
+            BuildableName = "LSTM_Debug"
+            BlueprintName = "LSTM Debug"
             ReferencedContainer = "container:ExpertAdvisor.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -91,7 +79,7 @@
       buildConfiguration = "Debug">
    </AnalyzeAction>
    <ArchiveAction
-      buildConfiguration = "Debug"
+      buildConfiguration = "Release"
       revealArchiveInOrganizer = "YES">
    </ArchiveAction>
 </Scheme>

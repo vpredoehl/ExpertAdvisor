@@ -65,6 +65,10 @@ std::ostream& operator<<(std::ostream& o, Window w)
 
 void Tensor::Add(Feature f)
 {
+    // Reduce reallocations by reserving capacity in chunks
+    if (ds.size() == ds.capacity()) ds.reserve(ds.size() + 4096);
+    if (raw_close.size() == raw_close.capacity())   raw_close.reserve(raw_close.size() + 4096);
+
     FeatureMatrix fm(1, feature_size);
 
     if (!has_prev_close) {
@@ -103,10 +107,7 @@ void Tensor::Add(Feature f)
 
     const float lower_wick = (std::min(o, c) - l) / denom;
     p[13] = lower_wick;
-    
-    const float lower_wick = (std::min(o, c) - l) / c;
-    fm.SetValue(0,13,lower_wick);
-
+        
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;
     size_t count = 0;

@@ -13,10 +13,21 @@
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 		08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
-		08A334DD2F5FCBBC00BE2DCE /* liblibMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */; };
+		08A334DD2F5FCBBC00BE2DCE /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
 		08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
 		08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
 		08A334E32F5FCBE600BE2DCE /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
+
+		0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
+		0A1000022F70000100AAA001 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
+		0A1000032F70000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
+		0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
+		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
+		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
+		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
+		0A1000082F70000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
+		0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
+		0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -88,6 +99,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 		};
+
+		0A10000D2F70000100AAA001 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -95,7 +116,7 @@
 		08403E922F1DD75E004742A5 /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Tensor.hpp; sourceTree = "<group>"; };
 		08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = db_cursor_iterator.hpp; sourceTree = "<group>"; };
 		08403E9A2F1DDA2F004742A5 /* LSTM.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = LSTM.hpp; sourceTree = "<group>"; };
-		084426802ED8DD46002DEB21 /* LSTM */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM; sourceTree = BUILT_PRODUCTS_DIR; };
+		084426802ED8DD46002DEB21 /* LSTM Debug */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM_Debug; sourceTree = BUILT_PRODUCTS_DIR; };
 		084426892ED8E755002DEB21 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		0844268B2ED94F86002DEB21 /* candlestick.plpgsql */ = {isa = PBXFileReference; lastKnownFileType = text; path = candlestick.plpgsql; sourceTree = SOURCE_ROOT; };
 		084505642048CAB900A0B88F /* PricePoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricePoint.cpp; sourceTree = "<group>"; };
@@ -116,6 +137,8 @@
 		08B33BEA2F4213DB0015F9CF /* Answers.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Answers.txt; sourceTree = SOURCE_ROOT; };
 		08B4021A2F31A8960032D23A /* Params.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Params.hpp; sourceTree = "<group>"; };
 		08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = MetaNNXC.xcodeproj; path = MetaNN/MetaNNXC.xcodeproj; sourceTree = "<group>"; };
+
+		0A10000B2F70000100AAA001 /* LSTM Release */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM_Release; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -127,7 +150,20 @@
 				08A334E02F5FCBD700BE2DCE /* Metal.framework in Frameworks */,
 				08A334E12F5FCBD700BE2DCE /* MetalPerformanceShaders.framework in Frameworks */,
 				08A334DC2F5FCBBC00BE2DCE /* libMetalBuffer.a in Frameworks */,
-				08A334DD2F5FCBBC00BE2DCE /* liblibMetaNN.a in Frameworks */,
+				08A334DD2F5FCBBC00BE2DCE /* libMetaNN.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+		0A10000C2F70000100AAA001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */,
+				0A1000082F70000100AAA001 /* Metal.framework in Frameworks */,
+				0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */,
+				0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */,
+				0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,7 +196,8 @@
 		0845055A2047962100A0B88F /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				084426802ED8DD46002DEB21 /* LSTM */,
+				084426802ED8DD46002DEB21 /* LSTM Debug */,
+				0A10000B2F70000100AAA001 /* LSTM Release */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -222,7 +259,7 @@
 				08F4FCF92F11F5DF00260473 /* OtherTests */,
 				08A334D62F5FCBAC00BE2DCE /* MetalSwiftTest */,
 				08A334D82F5FCBAC00BE2DCE /* MetaNN.metallib */,
-				08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */,
+				08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -230,9 +267,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		084426722ED8DD46002DEB21 /* LSTM */ = {
+		084426722ED8DD46002DEB21 /* LSTM Debug */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM" */;
+			buildConfigurationList = 0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM Debug" */;
 			buildPhases = (
 				084426732ED8DD46002DEB21 /* Sources */,
 				0844267A2ED8DD46002DEB21 /* Frameworks */,
@@ -244,9 +281,29 @@
 				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
 			);
-			name = LSTM;
-			productName = ChartTest;
-			productReference = 084426802ED8DD46002DEB21 /* LSTM */;
+			name = "LSTM Debug";
+			productName = LSTM_Debug;
+			productReference = 084426802ED8DD46002DEB21 /* LSTM Debug */;
+			productType = "com.apple.product-type.tool";
+		};
+
+		0A10000F2F70000100AAA001 /* LSTM Release */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0A1000122F70000100AAA001 /* Build configuration list for PBXNativeTarget "LSTM Release" */;
+			buildPhases = (
+				0A10000E2F70000100AAA001 /* Sources */,
+				0A10000C2F70000100AAA001 /* Frameworks */,
+				0A10000D2F70000100AAA001 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				08A334CC2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+				08A334CE2F5FCBAC00BE2DCE /* PBXTargetDependency */,
+			);
+			name = "LSTM Release";
+			productName = LSTM_Release;
+			productReference = 0A10000B2F70000100AAA001 /* LSTM Release */;
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
@@ -260,6 +317,9 @@
 				ORGANIZATIONNAME = "Vincent Predoehl";
 				TargetAttributes = {
 					084426722ED8DD46002DEB21 = {
+						ProvisioningStyle = Automatic;
+					};
+					0A10000F2F70000100AAA001 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -283,7 +343,8 @@
 			);
 			projectRoot = "";
 			targets = (
-				084426722ED8DD46002DEB21 /* LSTM */,
+				084426722ED8DD46002DEB21 /* LSTM Debug */,
+				0A10000F2F70000100AAA001 /* LSTM Release */,
 			);
 		};
 /* End PBXProject section */
@@ -299,14 +360,14 @@
 		08A334D82F5FCBAC00BE2DCE /* MetaNN.metallib */ = {
 			isa = PBXReferenceProxy;
 			fileType = "archive.metal-library";
-			path = MetaNN.metallib;
+			path = MetaNN_metal.metallib;
 			remoteRef = 08A334D72F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
-		08A334DA2F5FCBAC00BE2DCE /* liblibMetaNN.a */ = {
+		08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */ = {
 			isa = PBXReferenceProxy;
 			fileType = archive.ar;
-			path = liblibMetaNN.a;
+			path = libMetaNN.a;
 			remoteRef = 08A334D92F5FCBAC00BE2DCE /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
@@ -346,6 +407,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+
+		0A10000E2F70000100AAA001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */,
+				0A1000022F70000100AAA001 /* main.cpp in Sources */,
+				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
+				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
+				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -372,8 +446,20 @@
 				CODE_SIGN_IDENTITY = "-";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
-				DEAD_CODE_STRIPPING = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 47QSNDWH88;
+				ENABLE_TESTABILITY = YES;
+				EXECUTABLE_NAME = "$(PRODUCT_NAME)";
+				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"LSTM_BUILD=1",
+					"LSTM_TARGET_DEBUG=1",
+					"$(inherited)",
+				);
 				LD_MAP_FILE_PATH = "";
 				LIBRARY_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/lib/,
@@ -382,6 +468,8 @@
 					/opt/homebrew/opt/libomp/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = YES;
+				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-Xpreprocessor",
@@ -392,8 +480,13 @@
 					"-lpqxx",
 					"-lomp",
 				);
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert.lstm-debug;
+				PRODUCT_NAME = LSTM_Debug;
+				SDKROOT = macosx;
+				STRIP_INSTALLED_PRODUCT = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
+				STRIP_INSTALLED_PRODUCT = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
@@ -417,10 +510,20 @@
 				CODE_SIGN_IDENTITY = "-";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 47QSNDWH88;
-				GCC_GENERATE_DEBUGGING_SYMBOLS = NO;
-				GCC_PREPROCESSOR_DEFINITIONS = "DEBUG=0";
+				ENABLE_TESTABILITY = NO;
+				EXECUTABLE_NAME = "$(PRODUCT_NAME)";
+				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
+				GCC_OPTIMIZATION_LEVEL = fast;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+					"LSTM_BUILD=1",
+					"LSTM_TARGET_DEBUG=1",
+					"$(inherited)",
+				);
 				LD_MAP_FILE_PATH = "";
 				LIBRARY_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/lib/,
@@ -429,6 +532,8 @@
 					/opt/homebrew/opt/libomp/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				ONLY_ACTIVE_ARCH = NO;
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-Xpreprocessor",
@@ -439,8 +544,9 @@
 					"-lpqxx",
 					"-lomp",
 				);
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert.lstm-debug;
+				PRODUCT_NAME = LSTM_Debug;
+				SDKROOT = macosx;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
@@ -592,23 +698,152 @@
 			};
 			name = Release;
 		};
+
+		0A1000102F70000100AAA001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 47QSNDWH88;
+				ENABLE_TESTABILITY = YES;
+				EXECUTABLE_NAME = "$(PRODUCT_NAME)";
+				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"LSTM_BUILD=1",
+					"LSTM_TARGET_RELEASE=1",
+					"$(inherited)",
+				);
+				LD_MAP_FILE_PATH = "";
+				LIBRARY_SEARCH_PATHS = (
+					/Volumes/Darwin/homebrew/lib/,
+					"$(PROJECT_DIR)",
+					"$(inherited)",
+					/opt/homebrew/opt/libomp/lib,
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-Xpreprocessor",
+					"-fopenmp",
+				);
+				OTHER_LDFLAGS = (
+					"-lpq",
+					"-lpqxx",
+					"-lomp",
+				);
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert.lstm-release;
+				PRODUCT_NAME = LSTM_Release;
+				SDKROOT = macosx;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					/opt/homebrew/opt/libomp/include,
+				);
+				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
+				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
+			};
+			name = Debug;
+		};
+		0A1000112F70000100AAA001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_STANDARD_LIBRARY_HARDENING = fast;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_MODULE_DEBUGGING = NO;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_IDENTITY = "-";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 47QSNDWH88;
+				ENABLE_TESTABILITY = NO;
+				EXECUTABLE_NAME = "$(PRODUCT_NAME)";
+				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
+				GCC_OPTIMIZATION_LEVEL = fast;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"NDEBUG=1",
+					"LSTM_BUILD=1",
+					"LSTM_TARGET_RELEASE=1",
+					"$(inherited)",
+				);
+				LD_MAP_FILE_PATH = "";
+				LIBRARY_SEARCH_PATHS = (
+					/Volumes/Darwin/homebrew/lib/,
+					"$(PROJECT_DIR)",
+					"$(inherited)",
+					/opt/homebrew/opt/libomp/lib,
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				ONLY_ACTIVE_ARCH = NO;
+				OTHER_CPLUSPLUSFLAGS = (
+					"$(OTHER_CFLAGS)",
+					"-Xpreprocessor",
+					"-fopenmp",
+				);
+				OTHER_LDFLAGS = (
+					"-lpq",
+					"-lpqxx",
+					"-lomp",
+				);
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.ea.Expert.lstm-release;
+				PRODUCT_NAME = LSTM_Release;
+				SDKROOT = macosx;
+				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
+				SYSTEM_HEADER_SEARCH_PATHS = (
+					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					/opt/homebrew/opt/libomp/include,
+				);
+				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
+				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM" */ = {
+		0844267D2ED8DD46002DEB21 /* Build configuration list for PBXNativeTarget "LSTM Debug" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0844267E2ED8DD46002DEB21 /* Debug */,
 				0844267F2ED8DD46002DEB21 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		084505542047962100A0B88F /* Build configuration list for PBXProject "ExpertAdvisor" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0845055E2047962100A0B88F /* Debug */,
 				0845055F2047962100A0B88F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+
+		0A1000122F70000100AAA001 /* Build configuration list for PBXNativeTarget "LSTM Release" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A1000102F70000100AAA001 /* Debug */,
+				0A1000112F70000100AAA001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
