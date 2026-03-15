@@ -215,6 +215,10 @@ int main(int argc, const char * argv[])
     pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { argv[1] }, toDate { argv[2] };
     
+    std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
+    std::cout << "window_size=" << window_size << '\n';
+    std::cout << "prediction_horizon=" << prediction_horizon << '\n';
+    std::cout << "c_next_threshold=" << c_next_threshold << '\n';
 
     w_LSTM.exec("SET TRANSACTION READ WRITE;");
     try

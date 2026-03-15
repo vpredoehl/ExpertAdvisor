@@ -62,14 +62,14 @@ constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;
 
 // sequence of features
-constexpr CandleTF candle_duration = CandleTF::Hr4; // default cycle
-constexpr auto window_size = window_size_for(candle_duration);
+constexpr CandleTF candle_duration = CandleTF::m15; // default cycle
+constexpr auto window_size = 64;//window_size_for(candle_duration);
 constexpr auto batch_size = 256;
 constexpr auto epoch_count = 100;
-constexpr auto prediction_horizon = prediction_horizon_for(candle_duration);
+constexpr auto prediction_horizon = 16;//prediction_horizon_for(candle_duration);
 
 constexpr float kFeatureScale = 1000.0f;
-constexpr float c_next_threshold = c_next_threshold_for(candle_duration);
+constexpr float c_next_threshold = .0008f;  //c_next_threshold_for(candle_duration);
 
 constexpr size_t rolling_vol_lookback = 32;
 constexpr size_t rolling_ret_lookback = 32;

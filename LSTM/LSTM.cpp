@@ -584,6 +584,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t windowsInBatch = 0;
     size_t skippedWindows = 0;
 
+    // Class counts for BinaryReturn targets
+    size_t up_count = 0;
+    size_t down_count = 0;
+    size_t zero_count = 0;
+
     // Lazy head gradient accumulators (expressions) across all windows in the batch
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
 
@@ -630,7 +635,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     ResetPreviousState();
 
     // Slide a 5-step window across this 15-step batch
-    for (auto window_start = batch.begin(); window_start + window_size < batch.end(); ++window_start)
+    for (auto window_start = batch.begin();
+         window_start + window_size + prediction_horizon - 1 < batch.end();
+         ++window_start)
     {
         // Reset states for an independent window when enabled
         if constexpr (reset_state_per_window) ResetPreviousState();
@@ -681,15 +688,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         }
 #endif
 
-        // ---- BPTT for next-step return (regression) ----
-        // We need the last sample in the window and the next sample after the window
-        auto lastIt = window_start + (window_size - 1);
-        auto nextIt = window_start + window_size; // safe due to '<' in loop condition
+        // ---- BPTT for future-horizon return target ----
+        // Use the last sample in the window as the reference point and a future sample
+        // `prediction_horizon` bars ahead as the target.
+        auto lastIt   = window_start + (window_size - 1);
+        auto targetIt = lastIt + prediction_horizon; // safe due to loop condition
 
-        // Removed unused lastFeat assignment:
-        // auto lastFeat  = *lastIt;
+        auto nextFeat = *targetIt;
 
-        auto nextFeat  = *nextIt;
+        // Precompute raw closes at the reference bar and target bar
+        float close_t      = t.RawCloseAtIterator(lastIt);
+        float close_target = t.RawCloseAtIterator(targetIt);
+
 #if LSTM_DEBUG_PRINTS
         // Ground-truth next-step log-return is simply the next sample's close feature
         std::cout << "nextFeat rows=" << nextFeat.Shape()[0]
@@ -710,15 +720,20 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             if (abs_y > c_next_threshold) ++count_abs_gt_threshold;
         }
 #endif
+#if !LSTM_INFERENCE_ONLY
+        if (targetType == TargetType::BinaryReturn)
+        {
+            if (close_target > close_t)      ++up_count;
+            else if (close_target < close_t) ++down_count;
+            else                             ++zero_count;
+        }
+#endif
 
         if (std::isfinite(y_true_logret) && std::abs(y_true_logret) > 0.01f)
-        {
-            float close_t   = t.RawCloseAtIterator(lastIt);
-            float close_tp1 = t.RawCloseAtIterator(nextIt);
+            // Removed local redecl here: use outer close_t and close_target
             std::cout << "ALERT: |c_next|>0.01 raw_close_t=" << close_t
-                      << " raw_close_t+1=" << close_tp1
+                      << " raw_close_target=" << close_target
                       << " c_next=" << y_true_logret << std::endl;
-        }
 
         // Validate y_true; skip non-finite, clamp extreme outliers
         if (!std::isfinite(y_true_logret))
@@ -726,9 +741,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #if !LSTM_INFERENCE_ONLY
             ++skippedWindows;
 #endif
-            float close_t   = t.RawCloseAtIterator(lastIt);
-            float close_tp1 = t.RawCloseAtIterator(nextIt);
-            std::cout << "BAD c_next(logret)=" << y_true_logret << " raw_close_t=" << close_t << " raw_close_t+1=" << close_tp1 << std::endl;
+            // Removed local redecl here: use outer close_t and close_target
+            std::cout << "BAD c_next(logret)=" << y_true_logret << " raw_close_t=" << close_t << " raw_close_target=" << close_target << std::endl;
             continue;
         }
 
@@ -742,8 +756,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         if (targetType == TargetType::BinaryReturn)
         {
-            // Binary target: up (>=0) -> 1, down (<0) -> 0
-            const float y_bin = (y_true_logret >= 0.0f) ? 1.0f : 0.0f;
+            // Binary target: up (> current close) -> 1, otherwise -> 0
+            const float y_bin = (close_target > close_t) ? 1.0f : 0.0f;
 
             auto head = predictAndLoss(prevHiddenState, returnHeadDirWeight, returnHeadDirBias, y_bin);
 
@@ -761,10 +775,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             y_max = std::max(y_max, y_bin);
             ++y_count;
             if (yhat_samples.size() < 10) yhat_samples.push_back(p);
-    #if LSTM_TRAINING_PROGRESS
-            runningLoss += ce;
+            #if LSTM_TRAINING_PROGRESS
+                    runningLoss += ce;
+            #endif
             ++windowCount;
-    #endif
             ++windowsInBatch;
 #endif
 #if !LSTM_INFERENCE_ONLY
@@ -808,7 +822,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
 #endif
         }
-        else
+        else //here
         {
             // Regression path (original)
             const float raw = (targetType == TargetType::LogReturn) ? y_true_logret_used
@@ -845,8 +859,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             }
     #if LSTM_TRAINING_PROGRESS
             runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
-            ++windowCount;
     #endif
+            ++windowCount;
             ++windowsInBatch;
 #endif
 #if !LSTM_INFERENCE_ONLY
@@ -888,6 +902,21 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
         }
     }
+
+#if !LSTM_INFERENCE_ONLY
+    // Per-batch diagnostics
+    std::cout << "batch_count=" << windowCount << "\n";
+    double loss_value = 0.0;
+#if LSTM_TRAINING_PROGRESS
+    loss_value = (windowCount > 0) ? (runningLoss / static_cast<double>(windowCount)) : 0.0;
+#else
+    loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
+#endif
+    std::cout << "loss_value=" << loss_value << "\n";
+    if (targetType == TargetType::BinaryReturn) std::cout << "up_count=" << up_count
+                  << " down_count=" << down_count
+                  << " zero_count=" << zero_count << "\n";
+#endif
 
 #if !LSTM_INFERENCE_ONLY && LSTM_DEBUG_PRINTS
     if (y_count > 0)
@@ -1022,7 +1051,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
         : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 
-    if (targetType == TargetType::BinaryReturn) return (y_hat >= 0.5f) ? 1.0f : -1.0f;
+    if (targetType == TargetType::BinaryReturn) return (y_hat >= 0.5f) ? 1.0f : 0.0f;
 
     // Invert normalization if used: t = y_hat * std + mean
     float t = y_hat;
@@ -1058,7 +1087,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
         : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 
-    if (targetType == TargetType::BinaryReturn) return (y_hat >= 0.5f) ? 1.0f : -1.0f;
+    if (targetType == TargetType::BinaryReturn) return (y_hat >= 0.5f) ? 1.0f : 0.0f;
 
     // Invert optional z-score normalization
     float t = targetUseZScore ? (y_hat * targetStd + targetMean) : y_hat;
