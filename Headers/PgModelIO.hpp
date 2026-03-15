@@ -19,36 +19,36 @@ namespace DBIO
 
 // Convenience alias
 template <typename T>
-using MatCPU = MetaNN::Matrix<T, MetaNN::DeviceTags::Metal>;
+using MatGPU = MetaNN::Matrix<T, MetaNN::DeviceTags::Metal>;
 
 // Flatten to row-major vector<double>
 template <typename T>
-inline std::vector<double> flattenRowMajor(const MatCPU<T>& m)
+inline std::vector<double> flattenRowMajor(const MatGPU<T>& m)
 {
     const size_t rows = m.Shape()[0];
     const size_t cols = m.Shape()[1];
     std::vector<double> out;
-    out.reserve(rows * cols);
+    out.resize(rows * cols);
 
-    auto mm = MetaNN::Evaluate(m);
-    for (size_t r = 0; r < rows; ++r)
-        for (size_t c = 0; c < cols; ++c)
-            out.push_back(static_cast<double>(mm(r, c)));
+    auto eval = MetaNN::Evaluate(m);
+    auto low  = MetaNN::LowerAccess(eval);
+    const T* src = low.RawMemory();
+    for (size_t i = 0; i < rows * cols; ++i)    out[i] = static_cast<double>(src[i]);
     return out;
 }
 
 // Reconstruct from row-major vector<double> into Matrix<T>
 template <typename T = float>
-inline MatCPU<T> fromFlatRowMajor(const std::vector<double>& vals, size_t rows, size_t cols)
+inline MatGPU<T> fromFlatRowMajor(const std::vector<double>& vals, size_t rows, size_t cols)
 {
     if (vals.size() != rows * cols)
         throw std::runtime_error("fromFlatRowMajor: size mismatch with rows*cols");
 
-    MatCPU<T> m(rows, cols);
-    size_t idx = 0;
-    for (size_t r = 0; r < rows; ++r)
-        for (size_t c = 0; c < cols; ++c)
-            m.SetValue(r, c, static_cast<T>(vals[idx++]));
+    MatGPU<T> m(rows, cols);
+    auto low = MetaNN::LowerAccess(m);
+    T* p = low.MutableRawMemory();
+    const size_t N = rows * cols;
+    for (size_t i = 0; i < N; ++i) p[i] = static_cast<T>(vals[i]);
     return m;
 }
 
@@ -85,7 +85,7 @@ public:
     static void saveParameter(pqxx::work& w,
                               long long modelId,
                               const std::string& paramName,
-                              const MatCPU<T>& mat)
+                              const MatGPU<T>& mat)
     {
         const int n_rows = static_cast<int>(mat.Shape()[0]);
         const int n_cols = static_cast<int>(mat.Shape()[1]);
@@ -107,20 +107,72 @@ public:
         saveParameter(w, modelId, "returnHeadDirWeight", lstm.returnHeadDirWeight);
         saveParameter(w, modelId, "returnHeadDirBias",   lstm.returnHeadDirBias);
         saveTargetMeta(w, modelId, lstm);
+        saveModelMeta(w, modelId, lstm);
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:
     // [type(int), scale, bias, useZ(0/1), mean, std]
     static void saveTargetMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
     {
-        MatCPU<float> meta(1, 6);
-        meta.SetValue(0, 0, static_cast<float>(static_cast<int>(lstm.targetType)));
-        meta.SetValue(0, 1, lstm.targetScale);
-        meta.SetValue(0, 2, lstm.targetBias);
-        meta.SetValue(0, 3, lstm.targetUseZScore ? 1.0f : 0.0f);
-        meta.SetValue(0, 4, lstm.targetMean);
-        meta.SetValue(0, 5, lstm.targetStd);
+        MatGPU<float> meta(1, 6);
+        {
+            auto low = MetaNN::LowerAccess(meta);
+            float* p = low.MutableRawMemory();
+            p[0] = static_cast<float>(static_cast<int>(lstm.targetType));
+            p[1] = lstm.targetScale;
+            p[2] = lstm.targetBias;
+            p[3] = lstm.targetUseZScore ? 1.0f : 0.0f;
+            p[4] = lstm.targetMean;
+            p[5] = lstm.targetStd;
+        }
         saveParameter(w, modelId, "target_meta", meta);
+    }
+
+    // Save minimal model metadata as a 1x3 matrix: [schemaVersion, n_in, hidden_size]
+    static void saveModelMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
+    {
+        // Derive hidden_size and n_in from param shape to avoid accessing private members
+        const size_t rows = lstm.param.Shape()[0];
+        const size_t cols = lstm.param.Shape()[1];
+        const size_t hidden_size = cols / 4;
+        const size_t n_in = rows - hidden_size;
+
+        MatGPU<float> meta(1, 3);
+        {
+            auto low = MetaNN::LowerAccess(meta);
+            float* p = low.MutableRawMemory();
+            p[0] = 1.0f; // schemaVersion
+            p[1] = static_cast<float>(n_in);
+            p[2] = static_cast<float>(hidden_size);
+        }
+        saveParameter(w, modelId, "model_meta", meta);
+    }
+
+    // Try to load minimal model metadata and validate against current parameter shapes
+    static bool tryLoadModelMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
+    {
+        try {
+            auto dims = loadParameterDims(w, modelId, "model_meta");
+            if (dims.n_rows != 1 || dims.n_cols != 3) return false;
+            auto vals = loadParameterValues(w, modelId, "model_meta");
+            if (vals.size() != 3) return false;
+
+            const int schemaVersion = static_cast<int>(vals[0]);
+            if (schemaVersion != 1) throw std::runtime_error("model_meta: unsupported schemaVersion");
+
+            // Derive from current param
+            const size_t rows = lstm.param.Shape()[0];
+            const size_t cols = lstm.param.Shape()[1];
+            const size_t hidden_size = cols / 4;
+            const size_t n_in = rows - hidden_size;
+
+            const int n_in_db = static_cast<int>(vals[1]);
+            const int h_db    = static_cast<int>(vals[2]);
+            if (n_in_db != static_cast<int>(n_in) || h_db != static_cast<int>(hidden_size))
+                throw std::runtime_error("model_meta mismatch: n_in/hidden_size differ from persisted values");
+            return true;
+        }
+        catch (...) { return false;   }
     }
 
     struct ParamDims { int n_rows; int n_cols; };
@@ -152,7 +204,7 @@ public:
     }
 
     template <typename T = float>
-    static MatCPU<T> loadParameterMatrix(pqxx::work& w,
+    static MatGPU<T> loadParameterMatrix(pqxx::work& w,
                                          long long modelId,
                                          const std::string& paramName)
     {
@@ -172,6 +224,7 @@ public:
         try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
         try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
         (void)tryLoadTargetMeta(w, modelId, lstm);
+        (void)tryLoadModelMeta(w, modelId, lstm);
     }
 
     static bool tryLoadTargetMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)
@@ -194,9 +247,8 @@ public:
             lstm.targetMean  = static_cast<float>(vals[4]);
             lstm.targetStd   = static_cast<float>(vals[5]);
             return true;
-        } catch (...) {
-            return false;
         }
+        catch (...) { return false;   }
     }
 };
 
