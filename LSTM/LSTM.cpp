@@ -216,6 +216,26 @@ inline auto EA::LSTM::GatherRows(const std::vector<EAMatrix>& rows) -> EAMatrix
     return out;
 }
 
+inline auto EA::LSTM::RepeatRows(const EAMatrix& row, size_t B) -> EAMatrix
+{
+    if (B == 0) return EAMatrix(0, row.Shape()[1]);
+
+    const size_t cols = row.Shape()[1];
+    EAMatrix out(B, cols);
+
+    auto rowEval = MetaNN::Evaluate(row);
+    auto lowRow = MetaNN::LowerAccess(rowEval);
+    const float* src = lowRow.RawMemory();
+
+    auto lowOut = MetaNN::LowerAccess(out);
+    float* dst = lowOut.MutableRawMemory();
+
+    for (size_t b = 0; b < B; ++b)
+        std::copy(src, src + cols, dst + b * cols);
+
+    return out;
+}
+
 inline auto EA::LSTM::SliceRows(const EAMatrix& src, size_t row0, size_t rowCount) -> EAMatrix
 {
     const size_t cols = src.Shape()[1];
@@ -249,7 +269,9 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
                                        EAMatrix& xh_concat) const -> BatchStepCache
 {
     const size_t B = x_t.Shape()[0];
-    const size_t expectedCols = x_t.Shape()[1] + prevHiddenState.Shape()[1];
+    const size_t H = prevHiddenState.Shape()[1];
+    const size_t expectedCols = x_t.Shape()[1] + H;
+
     if (xh_concat.Shape()[0] != B || xh_concat.Shape()[1] != expectedCols)
         xh_concat = EAMatrix(B, expectedCols);
 
@@ -257,11 +279,23 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 
     const size_t K = xh_concat.Shape()[1];
     auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
-    auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
 
-    const size_t H = prevHiddenState.Shape()[1];
-    auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yExpr);
+    auto affine = MetaNN::Dot(xh_concat, W_cat_dyn);
+    auto affineH = affine.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
 
+    const EAMatrix biasBatch = RepeatRows(bias, B);
+    auto yExpr = affineH.Data() + biasBatch;
+    auto yH = yExpr.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    const EAMatrix yMat = yH.Data();
+
+    const size_t H4 = H;
+    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(yMat, 0 * H4, H4);
+    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(yMat, 1 * H4, H4);
+    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(yMat, 2 * H4, H4);
+    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(yMat, 3 * H4, H4);
+    
     auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
     auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
     auto gH = MetaNN::Tanh(g2D).EvalRegister();
@@ -274,8 +308,10 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     auto o = oH.Data();
 
     auto cExpr = f * prevCellState + i * g;
-    auto hExpr = o * MetaNN::Tanh(cExpr);
     auto cH = cExpr.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+
+    auto hExpr = o * MetaNN::Tanh(cH.Data());
     auto hH = hExpr.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
 

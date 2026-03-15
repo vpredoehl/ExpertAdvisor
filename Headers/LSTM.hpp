@@ -202,6 +202,7 @@ private:
     static EAMatrix GatherRows(const std::vector<EAMatrix>& rows);
     static EAMatrix SliceRows(const EAMatrix& src, size_t row0, size_t rowCount);
     static void ScatterRows(EAMatrix& dst, const EAMatrix& src, size_t row0);
+    static auto RepeatRows(const EAMatrix& row, size_t B) -> EAMatrix;
 };
 }
 
