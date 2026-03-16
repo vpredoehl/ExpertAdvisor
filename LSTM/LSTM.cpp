@@ -190,6 +190,57 @@ struct EA::LSTM::WindowBatch
 
 // Member function definitions moved to EA::LSTM
 
+inline auto EA::LSTM::BuildHeadDhBatch(const std::vector<float>& errs,
+                                       const EAMatrix& headW,
+                                       float scale) const -> EAMatrix
+{
+    const size_t B = errs.size();
+    const size_t H = headW.Shape()[0];
+
+    EAMatrix d_h(B, H);
+    auto lowDh = MetaNN::LowerAccess(d_h);
+    float* dhp = lowDh.MutableRawMemory();
+
+    auto lowW = MetaNN::LowerAccess(headW);
+    const float* wp = lowW.RawMemory();
+
+    for (size_t b = 0; b < B; ++b)
+    {
+        const float s = errs[b] * scale;
+        for (size_t i = 0; i < H; ++i)
+            dhp[b * H + i] = s * wp[i];
+    }
+    return d_h;
+}
+
+inline void EA::LSTM::AccumulateHeadGradsBatch(EAMatrix& dW_accum,
+                                               EAMatrix& dB_accum,
+                                               const EAMatrix& h_batch,
+                                               const std::vector<float>& errs) const
+{
+    const size_t B = h_batch.Shape()[0];
+    const size_t H = h_batch.Shape()[1];
+
+    auto h_eval = MetaNN::Evaluate(h_batch);
+    auto lowH = MetaNN::LowerAccess(h_eval);
+    const float* hptr = lowH.RawMemory();
+
+    auto lowW = MetaNN::LowerAccess(dW_accum);
+    float* wptr = lowW.MutableRawMemory();
+
+    auto lowB = MetaNN::LowerAccess(dB_accum);
+    float* bptr = lowB.MutableRawMemory();
+
+    for (size_t b = 0; b < B; ++b)
+    {
+        const float err = errs[b];
+        const float* hrow = hptr + b * H;
+        for (size_t i = 0; i < H; ++i)
+            wptr[i] += hrow[i] * err;
+        bptr[0] += err;
+    }
+}
+
 inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
     const auto W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::Metal>(param, param.Shape()[0] - hidden_size);
@@ -613,6 +664,123 @@ inline void EA::LSTM::backwardStep(const StepCache& sc,
 
 }
 
+inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
+                                        const GateBlocks& gb,
+                                        EAMatrix& d_h,
+                                        EAMatrix& d_c,
+                                        GateAccumulators& A) const
+{
+    const size_t B = d_h.Shape()[0];
+    const size_t H = d_h.Shape()[1];
+
+    auto tanh_c = MetaNN::Tanh(sc.c);
+
+    auto d_o = d_h * tanh_c * sc.o * (1.0f - sc.o);
+    auto d_c_from_h = d_h * sc.o * (1.0f - tanh_c * tanh_c);
+    auto dct = d_c + d_c_from_h;
+
+    auto d_i = dct * sc.g * sc.i * (1.0f - sc.i);
+    auto d_g = dct * sc.i * (1.0f - sc.g * sc.g);
+    auto d_f = dct * sc.c_prev * sc.f * (1.0f - sc.f);
+
+    auto diH = d_i.EvalRegister();
+    auto dfH = d_f.EvalRegister();
+    auto dgH = d_g.EvalRegister();
+    auto doH = d_o.EvalRegister();
+    auto dctH = dct.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+
+    const EAMatrix di = diH.Data();
+    const EAMatrix df = dfH.Data();
+    const EAMatrix dg = dgH.Data();
+    const EAMatrix dO = doH.Data();
+    const EAMatrix dctM = dctH.Data();
+
+    auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), di);
+    auto dW_f_top = MetaNN::Dot(MetaNN::Transpose(sc.x), df);
+    auto dW_g_top = MetaNN::Dot(MetaNN::Transpose(sc.x), dg);
+    auto dW_o_top = MetaNN::Dot(MetaNN::Transpose(sc.x), dO);
+
+    auto dW_i_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), di);
+    auto dW_f_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), df);
+    auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dg);
+    auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dO);
+
+    auto dW_i_topH = dW_i_top.EvalRegister();
+    auto dW_f_topH = dW_f_top.EvalRegister();
+    auto dW_g_topH = dW_g_top.EvalRegister();
+    auto dW_o_topH = dW_o_top.EvalRegister();
+
+    auto dW_i_botH = dW_i_bot.EvalRegister();
+    auto dW_f_botH = dW_f_bot.EvalRegister();
+    auto dW_g_botH = dW_g_bot.EvalRegister();
+    auto dW_o_botH = dW_o_bot.EvalRegister();
+
+    auto dh_prev_expr = MetaNN::Dot(di, MetaNN::Transpose(gb.W_i))
+                      + MetaNN::Dot(df, MetaNN::Transpose(gb.W_f))
+                      + MetaNN::Dot(dg, MetaNN::Transpose(gb.W_g))
+                      + MetaNN::Dot(dO, MetaNN::Transpose(gb.W_o));
+    auto dh_prevH = dh_prev_expr.EvalRegister();
+
+    auto dc_prev_expr = dctM * sc.f;
+    auto dc_prevH = dc_prev_expr.EvalRegister();
+
+    MetaNN::EvalPlan::Inst().Eval();
+
+    auto addBlock = [&](auto& dst, const EAMatrix& top, const EAMatrix& bot)
+    {
+        auto lowD = MetaNN::LowerAccess(dst);
+        auto* dptr = lowD.MutableRawMemory();
+
+        auto lowT = MetaNN::LowerAccess(top);
+        const auto* tptr = lowT.RawMemory();
+
+        auto lowB = MetaNN::LowerAccess(bot);
+        const auto* bptr = lowB.RawMemory();
+
+        const size_t rows = dst.Shape()[0];
+        const size_t cols = dst.Shape()[1];
+        const size_t I = rows - H;
+
+        for (size_t r = 0; r < I; ++r)
+            for (size_t c = 0; c < H; ++c)
+                dptr[r * cols + c] += static_cast<AccumScalar>(tptr[r * H + c]);
+
+        for (size_t r = 0; r < H; ++r)
+            for (size_t c = 0; c < H; ++c)
+                dptr[(I + r) * cols + c] += static_cast<AccumScalar>(bptr[r * H + c]);
+    };
+
+    addBlock(A.dW_i, dW_i_topH.Data(), dW_i_botH.Data());
+    addBlock(A.dW_f, dW_f_topH.Data(), dW_f_botH.Data());
+    addBlock(A.dW_g, dW_g_topH.Data(), dW_g_botH.Data());
+    addBlock(A.dW_o, dW_o_topH.Data(), dW_o_botH.Data());
+
+    auto addBias = [&](auto& db, const EAMatrix& g2D)
+    {
+        auto lowD = MetaNN::LowerAccess(db);
+        auto* dptr = lowD.MutableRawMemory();
+
+        auto lowG = MetaNN::LowerAccess(g2D);
+        const auto* gptr = lowG.RawMemory();
+
+        for (size_t c = 0; c < H; ++c)
+        {
+            AccumScalar s = 0;
+            for (size_t b = 0; b < B; ++b)
+                s += static_cast<AccumScalar>(gptr[b * H + c]);
+            dptr[c] += s;
+        }
+    };
+
+    addBias(A.db_i, di);
+    addBias(A.db_f, df);
+    addBias(A.db_g, dg);
+    addBias(A.db_o, dO);
+
+    d_h = dh_prevH.Data();
+    d_c = dc_prevH.Data();
+}
 inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_param_accum,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum,
@@ -869,6 +1037,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             auto x_t_batch = GatherRows(rows);
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat));
         }
+// start
+        std::vector<float> errs(B, 0.0f);
 
         for (size_t b = 0; b < B; ++b)
         {
@@ -890,8 +1060,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto head = predictAndLoss(h_last, returnHeadDirWeight, returnHeadDirBias, target);
                 const float p = head.y_hat;
                 const float err = head.err;
+                errs[b] = err;
+
                 const double p_clamped = std::clamp(static_cast<double>(p), 1e-12, 1.0 - 1e-12);
-                const double ce = -(static_cast<double>(target) * std::log(p_clamped) + (1.0 - static_cast<double>(target)) * std::log(1.0 - p_clamped));
+                const double ce = -(static_cast<double>(target) * std::log(p_clamped)
+                                  + (1.0 - static_cast<double>(target)) * std::log(1.0 - p_clamped));
                 sse += ce;
                 ++mseCount;
 #if !LSTM_INFERENCE_ONLY
@@ -906,60 +1079,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     #endif
                 ++windowCount;
                 ++windowsInBatch;
-                accumulateHeadGrads(d_headDirW_accum_f, d_headDirB_accum_f, h_last, err);
-#endif
-
-                MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_h(1, hidden_size);
-                {
-                    auto lowDh = MetaNN::LowerAccess(d_h);
-                    float* dhp = lowDh.MutableRawMemory();
-                    auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
-                    const float* wp = lowW.RawMemory();
-                    const float scale = err * LSTM_CORE_GRAD_SCALE;
-                    for (size_t i = 0; i < hidden_size; ++i) dhp[i] = scale * wp[i];
-                }
-
-                MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_c(1, hidden_size);
-                {
-                    auto low = MetaNN::LowerAccess(d_c);
-                    std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
-                }
-
-                GateAccumulators G {
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
-                };
-                zeroGateAccumulators(G, param.Shape()[0], hidden_size);
-                auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
-                for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
-                {
-                    StepCache sc{
-                        SliceRows(cache[static_cast<size_t>(tstep)].x, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].h_prev, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].c_prev, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].i, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].f, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].g, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].o, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].c, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].h, b, 1)
-                    };
-                    backwardStep(sc, gb, d_h, d_c, G);
-                }
-#if !LSTM_INFERENCE_ONLY
-                mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
 #endif
             }
             else
             {
                 auto head = predictAndLoss(h_last, returnHeadWeight, returnHeadBias, target);
                 const float err = head.err;
+                errs[b] = err;
+
                 sse += static_cast<double>(err) * static_cast<double>(err);
                 ++mseCount;
 #if !LSTM_INFERENCE_ONLY
@@ -974,57 +1101,64 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     #endif
                 ++windowCount;
                 ++windowsInBatch;
-                accumulateHeadGrads(d_headW_accum_f, d_headB_accum_f, h_last, err);
-#endif
-
-                MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_h(1, hidden_size);
-                {
-                    auto lowDh = MetaNN::LowerAccess(d_h);
-                    float* dhp = lowDh.MutableRawMemory();
-                    auto lowW = MetaNN::LowerAccess(returnHeadWeight);
-                    const float* wp = lowW.RawMemory();
-                    const float scale = err * LSTM_CORE_GRAD_SCALE;
-                    for (size_t i = 0; i < hidden_size; ++i) dhp[i] = scale * wp[i];
-                }
-
-                MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_c(1, hidden_size);
-                {
-                    auto low = MetaNN::LowerAccess(d_c);
-                    std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f);
-                }
-
-                GateAccumulators G {
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
-                    MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
-                };
-                zeroGateAccumulators(G, param.Shape()[0], hidden_size);
-                auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
-                for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
-                {
-                    StepCache sc{
-                        SliceRows(cache[static_cast<size_t>(tstep)].x, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].h_prev, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].c_prev, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].i, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].f, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].g, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].o, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].c, b, 1),
-                        SliceRows(cache[static_cast<size_t>(tstep)].h, b, 1)
-                    };
-                    backwardStep(sc, gb, d_h, d_c, G);
-                }
-#if !LSTM_INFERENCE_ONLY
-                mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
 #endif
             }
         }
+
+#if !LSTM_INFERENCE_ONLY
+        if (targetType == TargetType::BinaryReturn)
+        {
+            AccumulateHeadGradsBatch(d_headDirW_accum_f, d_headDirB_accum_f, h_batch, errs);
+
+            EAMatrix d_h_batch = BuildHeadDhBatch(errs, returnHeadDirWeight, LSTM_CORE_GRAD_SCALE);
+            EAMatrix d_c_batch(B, hidden_size);
+            zeroFill(d_c_batch);
+
+            GateAccumulators G {
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
+            };
+            zeroGateAccumulators(G, param.Shape()[0], hidden_size);
+
+            auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
+            for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
+                backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G);
+
+            mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
+        }
+        else
+        {
+            AccumulateHeadGradsBatch(d_headW_accum_f, d_headB_accum_f, h_batch, errs);
+
+            EAMatrix d_h_batch = BuildHeadDhBatch(errs, returnHeadWeight, LSTM_CORE_GRAD_SCALE);
+            EAMatrix d_c_batch(B, hidden_size);
+            zeroFill(d_c_batch);
+
+            GateAccumulators G {
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(param.Shape()[0], hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size),
+                MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
+            };
+            zeroGateAccumulators(G, param.Shape()[0], hidden_size);
+
+            auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
+            for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
+                backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G);
+
+            mergeGateAccumulators(G, d_param_accum, d_bias_accum, hidden_size);
+        }
+#endif
     }
 
 #if !LSTM_INFERENCE_ONLY
