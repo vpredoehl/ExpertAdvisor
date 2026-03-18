@@ -1040,69 +1040,89 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 // start
         std::vector<float> errs(B, 0.0f);
 
-        for (size_t b = 0; b < B; ++b)
+        // Batched head forward and loss on (B, H)
+        if (targetType == TargetType::BinaryReturn)
         {
-            const float close_t = wb.close_t[b];
-            const float close_target = wb.close_target[b];
-            const float target = wb.targets[b];
+            // z = h_batch · W + b (broadcast)
+            auto z0 = MetaNN::Dot(h_batch, returnHeadDirWeight);
+            auto z0H = z0.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
 
-            if (targetType == TargetType::BinaryReturn)
+            auto pH = MetaNN::Sigmoid(z0H.Data() + RepeatRows(returnHeadDirBias, B)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            EAMatrix pMat = pH.Data();
+
+            for (size_t b = 0; b < B; ++b)
             {
-                if (close_target > close_t)      ++up_count;
-                else if (close_target < close_t) ++down_count;
-                else                             ++zero_count;
-            }
-
-            auto h_last = SliceRows(h_batch, b, 1);
-
-            if (targetType == TargetType::BinaryReturn)
-            {
-                auto head = predictAndLoss(h_last, returnHeadDirWeight, returnHeadDirBias, target);
-                const float p = head.y_hat;
-                const float err = head.err;
-                errs[b] = err;
+                const float p = pMat(b, 0);
+                const float target = wb.targets[b];
+                errs[b] = p - target; // dL/dz for BCE with sigmoid
 
                 const double p_clamped = std::clamp(static_cast<double>(p), 1e-12, 1.0 - 1e-12);
                 const double ce = -(static_cast<double>(target) * std::log(p_clamped)
                                   + (1.0 - static_cast<double>(target)) * std::log(1.0 - p_clamped));
                 sse += ce;
                 ++mseCount;
-#if !LSTM_INFERENCE_ONLY
+
+                // Class counts for diagnostics
+                const float close_t = wb.close_t[b];
+                const float close_target = wb.close_target[b];
+                if (close_target > close_t)      ++up_count;
+                else if (close_target < close_t) ++down_count;
+                else                              ++zero_count;
+
+    #if !LSTM_INFERENCE_ONLY
                 y_sum   += static_cast<double>(target);
                 y_sumsq += static_cast<double>(target) * static_cast<double>(target);
                 y_min = std::min(y_min, target);
                 y_max = std::max(y_max, target);
                 ++y_count;
                 if (yhat_samples.size() < 10) yhat_samples.push_back(p);
-    #if LSTM_TRAINING_PROGRESS
+        #if LSTM_TRAINING_PROGRESS
                 runningLoss += ce;
+        #endif
     #endif
-                ++windowCount;
-                ++windowsInBatch;
-#endif
             }
-            else
+    #if !LSTM_INFERENCE_ONLY
+            windowCount += B;
+            windowsInBatch += B;
+    #endif
+        }
+        else
+        {
+            auto y0 = MetaNN::Dot(h_batch, returnHeadWeight);
+            auto y0H = y0.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+
+            auto yH = (y0H.Data() + RepeatRows(returnHeadBias, B)).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            EAMatrix yMat = yH.Data();
+
+            for (size_t b = 0; b < B; ++b)
             {
-                auto head = predictAndLoss(h_last, returnHeadWeight, returnHeadBias, target);
-                const float err = head.err;
+                const float y_hat = yMat(b, 0);
+                const float target = wb.targets[b];
+                const float err = y_hat - target;
                 errs[b] = err;
 
                 sse += static_cast<double>(err) * static_cast<double>(err);
                 ++mseCount;
-#if !LSTM_INFERENCE_ONLY
+    #if !LSTM_INFERENCE_ONLY
                 y_sum += static_cast<double>(target);
                 y_sumsq += static_cast<double>(target) * static_cast<double>(target);
                 y_min = std::min(y_min, target);
                 y_max = std::max(y_max, target);
                 ++y_count;
-                if (yhat_samples.size() < 10) yhat_samples.push_back(head.y_hat);
-    #if LSTM_TRAINING_PROGRESS
+                if (yhat_samples.size() < 10) yhat_samples.push_back(y_hat);
+        #if LSTM_TRAINING_PROGRESS
                 runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
+        #endif
     #endif
-                ++windowCount;
-                ++windowsInBatch;
-#endif
             }
+    #if !LSTM_INFERENCE_ONLY
+            windowCount += B;
+            windowsInBatch += B;
+    #endif
         }
 
 #if !LSTM_INFERENCE_ONLY
@@ -1359,4 +1379,5 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
