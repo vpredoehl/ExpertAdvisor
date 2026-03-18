@@ -267,7 +267,7 @@ inline auto EA::LSTM::GatherRows(const std::vector<EAMatrix>& rows) -> EAMatrix
     return out;
 }
 
-inline auto EA::LSTM::RepeatRows(const EAMatrix& row, size_t B) -> EAMatrix
+inline auto EA::LSTM::RepeatRows(const EAMatrix& row, size_t B) const -> EAMatrix
 {
     if (B == 0) return EAMatrix(0, row.Shape()[1]);
 
@@ -1379,5 +1379,6 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 

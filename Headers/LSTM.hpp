@@ -197,16 +197,20 @@ private:
     GateBlocks hoistGateBlocks(const EAMatrix& W_h_win, size_t H) const;
     void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
     void backwardStep(const StepCache& sc, const GateBlocks& gb, EAMatrix& d_h, EAMatrix& d_c, GateAccumulators& A) const;
-    inline void backwardStepBatch(const BatchStepCache& sc,const GateBlocks& gb,EAMatrix& d_h,EAMatrix& d_c,GateAccumulators& A) const;
+    
+    // Batched helpers
+    EAMatrix RepeatRows(const EAMatrix& row, size_t B) const;
+    EAMatrix BuildHeadDhBatch(const std::vector<float>& errs, const EAMatrix& headW, float scale) const;
+    void AccumulateHeadGradsBatch(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_batch, const std::vector<float>& errs) const;
+    EAMatrix SliceRows(const EAMatrix& src, size_t row0, size_t rowCount);
+
+    // Batched backward through time
+    void backwardStepBatch(const BatchStepCache& sc, const GateBlocks& gb, EAMatrix& d_h, EAMatrix& d_c, GateAccumulators& A) const;
+    
     void mergeGateAccumulators(const GateAccumulators& A, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_param_accum, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum, size_t H) const;
     
-    auto BuildHeadDhBatch(const std::vector<float>& errs,const EAMatrix& headW,float scale) const -> EAMatrix;
-    void AccumulateHeadGradsBatch(EAMatrix& dW_accum,EAMatrix& dB_accum,const EAMatrix& h_batch,const std::vector<float>& errs) const;
-    
     static EAMatrix GatherRows(const std::vector<EAMatrix>& rows);
-    static EAMatrix SliceRows(const EAMatrix& src, size_t row0, size_t rowCount);
     static void ScatterRows(EAMatrix& dst, const EAMatrix& src, size_t row0);
-    static auto RepeatRows(const EAMatrix& row, size_t B) -> EAMatrix;
 };
 }
 
