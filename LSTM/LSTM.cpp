@@ -91,7 +91,7 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_HEAD_WEIGHT_DECAY 1e-4f
 #endif
 
-constexpr size_t kMinibatchWindows = 32;
+constexpr size_t mini_batch_windows = 128;
 
 
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
@@ -287,8 +287,16 @@ inline auto EA::LSTM::RepeatRows(const EAMatrix& row, size_t B) const -> EAMatri
     return out;
 }
 
-inline auto EA::LSTM::SliceRows(const EAMatrix& src, size_t row0, size_t rowCount) -> EAMatrix
+// NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
+// Prefer keeping tensors in batched (B, *) form and using GatherRows/RepeatRows/ViewRows with
+// forwardStepBatch/backwardStepBatch and batched heads.
+[[deprecated("Avoid SliceRows in training hot path; use batched views/ops instead")]] inline auto EA::LSTM::SliceRows(const EAMatrix& src, size_t row0, size_t rowCount) -> EAMatrix
 {
+#if !LSTM_INFERENCE_ONLY
+    // SliceRows is poison for throughput in training hot path. Use batched (B, *) ops instead.
+    // This assert helps catch accidental use during training builds.
+    LSTM_ASSERT(false, "SliceRows() should not be used in training path; refactor to batched ops.");
+#endif
     const size_t cols = src.Shape()[1];
     EAMatrix out(rowCount, cols);
     auto srcEval = MetaNN::Evaluate(src);
@@ -781,6 +789,7 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     d_h = dh_prevH.Data();
     d_c = dc_prevH.Data();
 }
+
 inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_param_accum,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum,
@@ -915,7 +924,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t zero_count = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(kMinibatchWindows, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(mini_batch_windows, static_cast<size_t>(n_in + hidden_size));
 
 #if !LSTM_INFERENCE_ONLY
     // Head gradient accumulators across all windows in the batch
@@ -1008,9 +1017,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         allStarts.push_back(window_start);
     }
 
-    for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += kMinibatchWindows)
+    for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += mini_batch_windows)
     {
-        const size_t batchEnd = std::min(batchBase + kMinibatchWindows, allStarts.size());
+        const size_t batchEnd = std::min(batchBase + mini_batch_windows, allStarts.size());
         WindowBatch wb = buildWindowBatch(allStarts[batchBase], allStarts[batchEnd - 1] + 1);
         const size_t B = wb.windows.size();
         if (B == 0) continue;
@@ -1379,6 +1388,8 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
+
 
 
 
