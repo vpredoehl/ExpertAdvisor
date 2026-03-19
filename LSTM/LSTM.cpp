@@ -354,6 +354,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     if (scratch.affine.Shape()[0] != B || scratch.affine.Shape()[1] != gateCols)
         scratch.affine = EAMatrix(B, gateCols);
     if (scratch.bias_batch.Shape()[0] != B || scratch.bias_batch.Shape()[1] != gateCols)
+        scratch.bias_batch = EAMatrix(B, gateCols);
         scratch.bias_batch = RepeatRows(bias, B);
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
@@ -385,10 +386,18 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         scratch.affine = affineH.Data();
     }
 
-    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 0 * H, H);
-    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 1 * H, H);
-    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 2 * H, H);
-    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 3 * H, H);
+    // Ensure bias is added: y = affine + bias (broadcasted as B x 4H)
+    {
+        auto yExpr = scratch.affine + scratch.bias_batch;
+        auto yH = yExpr.EvalRegister();
+        MetaNN::EvalPlan::Inst().Eval();
+        scratch.y = yH.Data();
+    }
+
+    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 0 * H, H);
+    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 1 * H, H);
+    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 2 * H, H);
+    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 3 * H, H);
 
     {
         auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
@@ -1455,6 +1464,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
