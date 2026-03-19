@@ -182,6 +182,7 @@ private:
     struct GateAccumulators;
     struct BatchStepCache;
     struct WindowBatch;
+    struct ForwardBatchScratch;
     
     WindowWeights hoistWindowWeights() const;
     StepCache forwardStep(const EAMatrix& x_t, const WindowWeights& ww, const EAMatrix& bias, EAMatrix& prevHiddenState, EAMatrix& prevCellState, EAMatrix& xh_concat) const;
@@ -190,7 +191,8 @@ private:
                                     const EAMatrix& bias,
                                     EAMatrix& prevHiddenState,
                                     EAMatrix& prevCellState,
-                                    EAMatrix& xh_concat) const;
+                                    EAMatrix& xh_concat,
+                                    ForwardBatchScratch& scratch) const;
     HeadLoss predictAndLoss(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b, float target) const;
     float predictOnly(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b) const;
     void accumulateHeadGrads(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_T, float err) const;
