@@ -1116,28 +1116,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         cache.reserve(window_size);
 
         // Pre-materialize minibatch inputs once in time-major layout: (window_size * B, n_in)
-        EAMatrix x_batch_all(window_size * B, static_cast<size_t>(n_in));
-        {
-            auto lowDst = MetaNN::LowerAccess(x_batch_all);
-            float* dst = lowDst.MutableRawMemory();
-            const size_t F = static_cast<size_t>(n_in);
-
-            for (size_t tstep = 0; tstep < window_size; ++tstep)
-                for (size_t b = 0; b < B; ++b)
-                {
-                    const auto& rowMat = wb.windows[b][tstep];
-                    auto rowEval = MetaNN::Evaluate(rowMat);
-                    auto lowRow = MetaNN::LowerAccess(rowEval);
-                    const float* src = lowRow.RawMemory();
-
-                    const size_t rowIndex = tstep * B + b;
-                    std::copy(src, src + F, dst + rowIndex * F);
-                }
-        }
-
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
-            auto x_t_batch = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(x_batch_all, tstep * B, B);
+            std::vector<EAMatrix> rows;
+            rows.reserve(B);
+            for (size_t b = 0; b < B; ++b)
+                rows.push_back(wb.windows[b][tstep]);
+
+            auto x_t_batch = GatherRows(rows);
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
         }
 
