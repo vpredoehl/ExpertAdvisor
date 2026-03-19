@@ -354,7 +354,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     if (scratch.affine.Shape()[0] != B || scratch.affine.Shape()[1] != gateCols)
         scratch.affine = EAMatrix(B, gateCols);
     if (scratch.bias_batch.Shape()[0] != B || scratch.bias_batch.Shape()[1] != gateCols)
-        scratch.bias_batch = EAMatrix(B, gateCols);
+        scratch.bias_batch = RepeatRows(bias, B);
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
     if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
@@ -381,8 +381,6 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         MetaNN::EvalPlan::Inst().Eval();
         scratch.affine = affineH.Data();
     }
-
-    scratch.bias_batch = RepeatRows(bias, B);
 
     {
         auto yExpr = scratch.affine + scratch.bias_batch;
@@ -1447,6 +1445,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
