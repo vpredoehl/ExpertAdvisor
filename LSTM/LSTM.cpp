@@ -1043,10 +1043,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             rows.reserve(B);
             for (size_t b = 0; b < B; ++b)
                 rows.push_back(wb.windows[b][tstep]);
+
             auto x_t_batch = GatherRows(rows);
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat));
         }
-// start
+
         std::vector<float> errs(B, 0.0f);
 
         // Batched head forward and loss on (B, H)
@@ -1388,6 +1389,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
