@@ -373,26 +373,22 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
 
     const size_t K = xh_concat.Shape()[1];
-    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
+    const size_t rowsW = ww.W_cat.Shape()[0];
+    EAMatrix xh_used = (K == rowsW)
+        ? xh_concat
+        : NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(xh_concat, 0, rowsW);
 
     {
-        auto affineExpr = MetaNN::Dot(xh_concat, W_cat_dyn);
+        auto affineExpr = MetaNN::Dot(xh_used, ww.W_cat);
         auto affineH = affineExpr.EvalRegister();
         MetaNN::EvalPlan::Inst().Eval();
         scratch.affine = affineH.Data();
     }
 
-    {
-        auto yExpr = scratch.affine + scratch.bias_batch;
-        auto yH = yExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.y = yH.Data();
-    }
-
-    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 0 * H, H);
-    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 1 * H, H);
-    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 2 * H, H);
-    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 3 * H, H);
+    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 0 * H, H);
+    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 1 * H, H);
+    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 2 * H, H);
+    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.affine, 3 * H, H);
 
     {
         auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
@@ -409,14 +405,10 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     {
         auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
         auto cH = cExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.c = cH.Data();
-    }
-
-    {
-        auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
+        auto hExpr = scratch.o * MetaNN::Tanh(cExpr);
         auto hH = hExpr.EvalRegister();
         MetaNN::EvalPlan::Inst().Eval();
+        scratch.c = cH.Data();
         scratch.h = hH.Data();
     }
 
@@ -471,8 +463,11 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 
 
     const size_t K = xh_concat.Shape()[1];
-    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
-    auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
+    const size_t rowsW = ww.W_cat.Shape()[0];
+    EAMatrix xh_used = (K == rowsW)
+        ? xh_concat
+        : NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(xh_concat, 0, rowsW);
+    auto yExpr = MetaNN::Dot(xh_used, ww.W_cat) + bias;
 #if LSTM_DEBUG_PRINTS
     auto yHandle = yExpr.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
@@ -1111,14 +1106,29 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::vector<BatchStepCache> cache;
         cache.reserve(window_size);
 
+        // Pre-materialize minibatch inputs once in time-major layout: (window_size * B, n_in)
+        EAMatrix x_batch_all(window_size * B, static_cast<size_t>(n_in));
+        {
+            auto lowDst = MetaNN::LowerAccess(x_batch_all);
+            float* dst = lowDst.MutableRawMemory();
+            const size_t F = static_cast<size_t>(n_in);
+
+            for (size_t tstep = 0; tstep < window_size; ++tstep)
+                for (size_t b = 0; b < B; ++b)
+                {
+                    const auto& rowMat = wb.windows[b][tstep];
+                    auto rowEval = MetaNN::Evaluate(rowMat);
+                    auto lowRow = MetaNN::LowerAccess(rowEval);
+                    const float* src = lowRow.RawMemory();
+
+                    const size_t rowIndex = tstep * B + b;
+                    std::copy(src, src + F, dst + rowIndex * F);
+                }
+        }
+
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
-            std::vector<EAMatrix> rows;
-            rows.reserve(B);
-            for (size_t b = 0; b < B; ++b)
-                rows.push_back(wb.windows[b][tstep]);
-
-            auto x_t_batch = GatherRows(rows);
+            auto x_t_batch = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(x_batch_all, tstep * B, B);
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
         }
 
@@ -1445,6 +1455,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
