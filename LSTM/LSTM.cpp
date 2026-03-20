@@ -402,10 +402,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         scratch.y = yH.Data();
     }
 
-    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 0 * H, H);
-    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 1 * H, H);
-    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 2 * H, H);
-    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 3 * H, H);
+    auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesBatchExpr(scratch.y);
 
     {
         auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
