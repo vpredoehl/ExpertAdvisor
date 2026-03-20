@@ -353,9 +353,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 
     if (scratch.affine.Shape()[0] != B || scratch.affine.Shape()[1] != gateCols)
         scratch.affine = EAMatrix(B, gateCols);
-    if (scratch.bias_batch.Shape()[0] != B || scratch.bias_batch.Shape()[1] != gateCols)
-        scratch.bias_batch = EAMatrix(B, gateCols);
-        scratch.bias_batch = RepeatRows(bias, B);
+    scratch.bias_batch = RepeatRows(bias, B);
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
     if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
@@ -374,21 +372,10 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
 
     const size_t K = xh_concat.Shape()[1];
-    const size_t rowsW = ww.W_cat.Shape()[0];
-    EAMatrix xh_used = (K == rowsW)
-        ? xh_concat
-        : NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(xh_concat, 0, rowsW);
+    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
 
     {
-        auto affineExpr = MetaNN::Dot(xh_used, ww.W_cat);
-        auto affineH = affineExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.affine = affineH.Data();
-    }
-
-    // Ensure bias is added: y = affine + bias (broadcasted as B x 4H)
-    {
-        auto yExpr = scratch.affine + scratch.bias_batch;
+        auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + scratch.bias_batch;
         auto yH = yExpr.EvalRegister();
         MetaNN::EvalPlan::Inst().Eval();
         scratch.y = yH.Data();
@@ -414,10 +401,14 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     {
         auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
         auto cH = cExpr.EvalRegister();
-        auto hExpr = scratch.o * MetaNN::Tanh(cExpr);
-        auto hH = hExpr.EvalRegister();
         MetaNN::EvalPlan::Inst().Eval();
         scratch.c = cH.Data();
+    }
+
+    {
+        auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
+        auto hH = hExpr.EvalRegister();
+        MetaNN::EvalPlan::Inst().Eval();
         scratch.h = hH.Data();
     }
 
@@ -472,11 +463,8 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 
 
     const size_t K = xh_concat.Shape()[1];
-    const size_t rowsW = ww.W_cat.Shape()[0];
-    EAMatrix xh_used = (K == rowsW)
-        ? xh_concat
-        : NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(xh_concat, 0, rowsW);
-    auto yExpr = MetaNN::Dot(xh_used, ww.W_cat) + bias;
+    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
+    auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
 #if LSTM_DEBUG_PRINTS
     auto yHandle = yExpr.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
@@ -681,34 +669,20 @@ inline void EA::LSTM::backwardStep(const StepCache& sc,
     auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dg2D);
     auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), do2D);
 
-    auto addBlock = [&](auto& dst, const auto& top, const auto& bot)
-    {
-        auto topH = top.EvalRegister();
-        auto botH = bot.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        auto lowD = MetaNN::LowerAccess(dst);
-        auto lowT = MetaNN::LowerAccess(topH.Data());
-        auto lowB = MetaNN::LowerAccess(botH.Data());
-        auto* dptr = lowD.MutableRawMemory();
-        const auto* tptr = lowT.RawMemory();
-        const auto* bptr = lowB.RawMemory();
-        const size_t I = dst.Shape()[0] - H;
-        for (size_t r=0; r<I; ++r) for (size_t c=0; c<H; ++c) dptr[r*H + c] += static_cast<AccumScalar>(tptr[r*H + c]);
-        for (size_t r=0; r<H; ++r) for (size_t c=0; c<H; ++c) dptr[(I+r)*H + c] += static_cast<AccumScalar>(bptr[r*H + c]);
-    };
-    addBlock(A.dW_i, dW_i_top, dW_i_bot);
-    addBlock(A.dW_f, dW_f_top, dW_f_bot);
-    addBlock(A.dW_g, dW_g_top, dW_g_bot);
-    addBlock(A.dW_o, dW_o_top, dW_o_bot);
+    // Pre-register all gate weight grads and gate 2D tensors
+    auto dW_i_topH = dW_i_top.EvalRegister();
+    auto dW_f_topH = dW_f_top.EvalRegister();
+    auto dW_g_topH = dW_g_top.EvalRegister();
+    auto dW_o_topH = dW_o_top.EvalRegister();
+    auto dW_i_botH = dW_i_bot.EvalRegister();
+    auto dW_f_botH = dW_f_bot.EvalRegister();
+    auto dW_g_botH = dW_g_bot.EvalRegister();
+    auto dW_o_botH = dW_o_bot.EvalRegister();
 
-    auto accBias = [&](auto& db, const auto& g2D){
-        auto gH = g2D.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        auto lowD = MetaNN::LowerAccess(db); auto* dptr = lowD.MutableRawMemory();
-        auto lowS = MetaNN::LowerAccess(gH.Data()); const auto* sptr = lowS.RawMemory();
-        for (size_t c=0; c<H; ++c) dptr[c] += static_cast<AccumScalar>(sptr[c]);
-    };
-    accBias(A.db_i, di2D); accBias(A.db_f, df2D); accBias(A.db_g, dg2D); accBias(A.db_o, do2D);
+    auto di2DH = di2D.EvalRegister();
+    auto df2DH = df2D.EvalRegister();
+    auto dg2DH = dg2D.EvalRegister();
+    auto do2DH = do2D.EvalRegister();
 
     auto d_h_prev = MetaNN::Dot(di2D, MetaNN::Transpose(gb.W_i))
                   + MetaNN::Dot(df2D, MetaNN::Transpose(gb.W_f))
@@ -716,7 +690,37 @@ inline void EA::LSTM::backwardStep(const StepCache& sc,
                   + MetaNN::Dot(do2D, MetaNN::Transpose(gb.W_o));
     auto dh_handle = MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, H)).EvalRegister();
     auto dc_handle = MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, H)).EvalRegister();
+
     MetaNN::EvalPlan::Inst().Eval();
+
+    auto addBlock = [&](auto& dst, const EAMatrix& top, const EAMatrix& bot)
+    {
+        auto lowD = MetaNN::LowerAccess(dst);
+        auto* dptr = lowD.MutableRawMemory();
+        auto lowT = MetaNN::LowerAccess(top);
+        auto lowB = MetaNN::LowerAccess(bot);
+        const auto* tptr = lowT.RawMemory();
+        const auto* bptr = lowB.RawMemory();
+        const size_t I = dst.Shape()[0] - H;
+        for (size_t r=0; r<I; ++r) for (size_t c=0; c<H; ++c) dptr[r*H + c] += static_cast<AccumScalar>(tptr[r * H + c]);
+        for (size_t r=0; r<H; ++r) for (size_t c=0; c<H; ++c) dptr[(I+r)*H + c] += static_cast<AccumScalar>(bptr[r * H + c]);
+    };
+
+    addBlock(A.dW_i, dW_i_topH.Data(), dW_i_botH.Data());
+    addBlock(A.dW_f, dW_f_topH.Data(), dW_f_botH.Data());
+    addBlock(A.dW_g, dW_g_topH.Data(), dW_g_botH.Data());
+    addBlock(A.dW_o, dW_o_topH.Data(), dW_o_botH.Data());
+
+    auto accBias = [&](auto& db, const EAMatrix& g2DMat){
+        auto lowD = MetaNN::LowerAccess(db); auto* dptr = lowD.MutableRawMemory();
+        auto lowS = MetaNN::LowerAccess(g2DMat); const auto* sptr = lowS.RawMemory();
+        for (size_t c=0; c<H; ++c) dptr[c] += static_cast<AccumScalar>(sptr[c]);
+    };
+    accBias(A.db_i, di2DH.Data());
+    accBias(A.db_f, df2DH.Data());
+    accBias(A.db_g, dg2DH.Data());
+    accBias(A.db_o, do2DH.Data());
+
     d_h = dh_handle.Data();
     d_c = dc_handle.Data();
 
@@ -1115,7 +1119,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::vector<BatchStepCache> cache;
         cache.reserve(window_size);
 
-        // Pre-materialize minibatch inputs once in time-major layout: (window_size * B, n_in)
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
             std::vector<EAMatrix> rows;
@@ -1132,12 +1135,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         // Batched head forward and loss on (B, H)
         if (targetType == TargetType::BinaryReturn)
         {
-            // z = h_batch · W + b (broadcast)
-            auto z0 = MetaNN::Dot(h_batch, returnHeadDirWeight);
-            auto z0H = z0.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-
-            auto pH = MetaNN::Sigmoid(z0H.Data() + RepeatRows(returnHeadDirBias, B)).EvalRegister();
+            // combine into single evaluation barrier for efficiency
+            auto pH = MetaNN::Sigmoid(MetaNN::Dot(h_batch, returnHeadDirWeight) + RepeatRows(returnHeadDirBias, B)).EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix pMat = pH.Data();
 
@@ -1179,11 +1178,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         }
         else
         {
-            auto y0 = MetaNN::Dot(h_batch, returnHeadWeight);
-            auto y0H = y0.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-
-            auto yH = (y0H.Data() + RepeatRows(returnHeadBias, B)).EvalRegister();
+            // combine into single evaluation barrier for efficiency
+            auto yH = (MetaNN::Dot(h_batch, returnHeadWeight) + RepeatRows(returnHeadBias, B)).EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix yMat = yH.Data();
 
