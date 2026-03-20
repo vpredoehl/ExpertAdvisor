@@ -737,36 +737,31 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
 
     auto tanh_c = MetaNN::Tanh(sc.c);
 
-    auto d_o = d_h * tanh_c * sc.o * (1.0f - sc.o);
-    auto d_c_from_h = d_h * sc.o * (1.0f - tanh_c * tanh_c);
-    auto dct = d_c + d_c_from_h;
+    // Gate gradients (expressions)
+    auto d_o_expr = d_h * tanh_c * sc.o * (1.0f - sc.o);
+    auto d_c_from_h_expr = d_h * sc.o * (1.0f - tanh_c * tanh_c);
+    auto dct_expr = d_c + d_c_from_h_expr;
 
-    auto d_i = dct * sc.g * sc.i * (1.0f - sc.i);
-    auto d_g = dct * sc.i * (1.0f - sc.g * sc.g);
-    auto d_f = dct * sc.c_prev * sc.f * (1.0f - sc.f);
+    auto d_i_expr = dct_expr * sc.g * sc.i * (1.0f - sc.i);
+    auto d_g_expr = dct_expr * sc.i * (1.0f - sc.g * sc.g);
+    auto d_f_expr = dct_expr * sc.c_prev * sc.f * (1.0f - sc.f);
 
-    auto diH = d_i.EvalRegister();
-    auto dfH = d_f.EvalRegister();
-    auto dgH = d_g.EvalRegister();
-    auto doH = d_o.EvalRegister();
-    auto dctH = dct.EvalRegister();
-    MetaNN::EvalPlan::Inst().Eval();
+    auto diH = d_i_expr.EvalRegister();
+    auto dfH = d_f_expr.EvalRegister();
+    auto dgH = d_g_expr.EvalRegister();
+    auto doH = d_o_expr.EvalRegister();
+    auto dctH = dct_expr.EvalRegister();
 
-    const EAMatrix di = diH.Data();
-    const EAMatrix df = dfH.Data();
-    const EAMatrix dg = dgH.Data();
-    const EAMatrix dO = doH.Data();
-    const EAMatrix dctM = dctH.Data();
+    // Weight gradients (expressions)
+    auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_i_expr);
+    auto dW_f_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_f_expr);
+    auto dW_g_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_g_expr);
+    auto dW_o_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_o_expr);
 
-    auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), di);
-    auto dW_f_top = MetaNN::Dot(MetaNN::Transpose(sc.x), df);
-    auto dW_g_top = MetaNN::Dot(MetaNN::Transpose(sc.x), dg);
-    auto dW_o_top = MetaNN::Dot(MetaNN::Transpose(sc.x), dO);
-
-    auto dW_i_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), di);
-    auto dW_f_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), df);
-    auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dg);
-    auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dO);
+    auto dW_i_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_i_expr);
+    auto dW_f_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_f_expr);
+    auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_g_expr);
+    auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_o_expr);
 
     auto dW_i_topH = dW_i_top.EvalRegister();
     auto dW_f_topH = dW_f_top.EvalRegister();
@@ -778,16 +773,23 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     auto dW_g_botH = dW_g_bot.EvalRegister();
     auto dW_o_botH = dW_o_bot.EvalRegister();
 
-    auto dh_prev_expr = MetaNN::Dot(di, MetaNN::Transpose(gb.W_i))
-                      + MetaNN::Dot(df, MetaNN::Transpose(gb.W_f))
-                      + MetaNN::Dot(dg, MetaNN::Transpose(gb.W_g))
-                      + MetaNN::Dot(dO, MetaNN::Transpose(gb.W_o));
+    // Recurrent gradients (expressions)
+    auto dh_prev_expr = MetaNN::Dot(d_i_expr, MetaNN::Transpose(gb.W_i))
+                      + MetaNN::Dot(d_f_expr, MetaNN::Transpose(gb.W_f))
+                      + MetaNN::Dot(d_g_expr, MetaNN::Transpose(gb.W_g))
+                      + MetaNN::Dot(d_o_expr, MetaNN::Transpose(gb.W_o));
     auto dh_prevH = dh_prev_expr.EvalRegister();
 
-    auto dc_prev_expr = dctM * sc.f;
+    auto dc_prev_expr = dct_expr * sc.f;
     auto dc_prevH = dc_prev_expr.EvalRegister();
 
+    // Evaluate all expressions in a single barrier
     MetaNN::EvalPlan::Inst().Eval();
+
+    const EAMatrix di = diH.Data();
+    const EAMatrix df = dfH.Data();
+    const EAMatrix dg = dgH.Data();
+    const EAMatrix dO = doH.Data();
 
     auto addBlock = [&](auto& dst, const EAMatrix& top, const EAMatrix& bot)
     {
