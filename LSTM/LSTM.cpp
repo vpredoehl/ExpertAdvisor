@@ -302,6 +302,25 @@ inline auto EA::LSTM::RepeatRows(const EAMatrix& row, size_t B) const -> EAMatri
     return out;
 }
 
+inline void EA::LSTM::RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t B) const
+{
+    const size_t cols = row.Shape()[1];
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(out.Shape()[0] == B, "RepeatRowsInto: output row count mismatch");
+    LSTM_ASSERT(out.Shape()[1] == cols, "RepeatRowsInto: output col count mismatch");
+#endif
+
+    auto rowEval = MetaNN::Evaluate(row);
+    auto lowRow = MetaNN::LowerAccess(rowEval);
+    const float* src = lowRow.RawMemory();
+
+    auto lowOut = MetaNN::LowerAccess(out);
+    float* dst = lowOut.MutableRawMemory();
+
+    for (size_t b = 0; b < B; ++b)
+        std::copy(src, src + cols, dst + b * cols);
+}
+
 // NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
 // Prefer keeping tensors in batched (B, *) form and using GatherRows/RepeatRows/ViewRows with
 // forwardStepBatch/backwardStepBatch and batched heads.
@@ -353,7 +372,9 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 
     if (scratch.affine.Shape()[0] != B || scratch.affine.Shape()[1] != gateCols)
         scratch.affine = EAMatrix(B, gateCols);
-    scratch.bias_batch = RepeatRows(bias, B);
+    if (scratch.bias_batch.Shape()[0] != B || scratch.bias_batch.Shape()[1] != gateCols)
+        scratch.bias_batch = EAMatrix(B, gateCols);
+    RepeatRowsInto(scratch.bias_batch, bias, B);
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
     if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
@@ -966,6 +987,8 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 
 std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
+    EAMatrix head_bias_batch(mini_batch_windows, 1), head_dir_bias_batch(mini_batch_windows, 1);
+
     double sse = 0.0;
     size_t mseCount = 0;
     float predicted_close = 0;
@@ -1138,7 +1161,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         if (targetType == TargetType::BinaryReturn)
         {
             // combine into single evaluation barrier for efficiency
-            auto pH = MetaNN::Sigmoid(MetaNN::Dot(h_batch, returnHeadDirWeight) + RepeatRows(returnHeadDirBias, B)).EvalRegister();
+            if (head_dir_bias_batch.Shape()[0] != B || head_dir_bias_batch.Shape()[1] != 1)
+                head_dir_bias_batch = EAMatrix(B, 1);
+            RepeatRowsInto(head_dir_bias_batch, returnHeadDirBias, B);
+            auto pH = MetaNN::Sigmoid(MetaNN::Dot(h_batch, returnHeadDirWeight) + head_dir_bias_batch).EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix pMat = pH.Data();
 
@@ -1181,7 +1207,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         else
         {
             // combine into single evaluation barrier for efficiency
-            auto yH = (MetaNN::Dot(h_batch, returnHeadWeight) + RepeatRows(returnHeadBias, B)).EvalRegister();
+            if (head_bias_batch.Shape()[0] != B || head_bias_batch.Shape()[1] != 1)
+                head_bias_batch = EAMatrix(B, 1);
+            RepeatRowsInto(head_bias_batch, returnHeadBias, B);
+            auto yH = (MetaNN::Dot(h_batch, returnHeadWeight) + head_bias_batch).EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix yMat = yH.Data();
 
