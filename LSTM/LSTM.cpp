@@ -402,8 +402,10 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         scratch.y = yH.Data();
     }
 
-    auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesBatchExpr(scratch.y);
-
+    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 0 * H, H);
+    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 1 * H, H);
+    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 2 * H, H);
+    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 3 * H, H);
     {
         auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
         auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
@@ -768,7 +770,6 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     auto dfH = d_f_expr.EvalRegister();
     auto dgH = d_g_expr.EvalRegister();
     auto doH = d_o_expr.EvalRegister();
-    auto dctH = dct_expr.EvalRegister();
 
     // Weight gradients (expressions)
     auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_i_expr);
@@ -803,11 +804,6 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
 
     // Evaluate all expressions in a single barrier
     MetaNN::EvalPlan::Inst().Eval();
-
-    const EAMatrix di = diH.Data();
-    const EAMatrix df = dfH.Data();
-    const EAMatrix dg = dgH.Data();
-    const EAMatrix dO = doH.Data();
 
     auto addBlock = [&](auto& dst, const EAMatrix& top, const EAMatrix& bot)
     {
@@ -855,10 +851,10 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
         }
     };
 
-    addBias(A.db_i, di);
-    addBias(A.db_f, df);
-    addBias(A.db_g, dg);
-    addBias(A.db_o, dO);
+    addBias(A.db_i, diH.Data());
+    addBias(A.db_f, dfH.Data());
+    addBias(A.db_g, dgH.Data());
+    addBias(A.db_o, doH.Data());
 
     d_h = dh_prevH.Data();
     d_c = dc_prevH.Data();
@@ -1474,6 +1470,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
