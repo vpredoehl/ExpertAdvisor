@@ -200,6 +200,7 @@ private:
     void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
     void backwardStep(const StepCache& sc, const GateBlocks& gb, EAMatrix& d_h, EAMatrix& d_c, GateAccumulators& A) const;
     void RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t B) const;
+    auto BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t tstep) -> EAMatrix;
 
     // Batched helpers
     EAMatrix RepeatRows(const EAMatrix& row, size_t B) const;

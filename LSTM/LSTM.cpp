@@ -107,6 +107,8 @@ struct LSTMBatchProfile
     double gather_rows_us = 0.0;
     double gather_rows_contig_us = 0.0;
     double gather_rows_random_us = 0.0;
+    double x_t_batch_direct_us = 0.0;
+    double x_t_batch_bench_us = 0.0;
     size_t gather_rows_contig_calls = 0;
     size_t gather_rows_random_calls = 0;
     double head_repeat_rows_us = 0.0;
@@ -318,6 +320,26 @@ inline auto EA::LSTM::GatherRows(const std::vector<EAMatrix>& rows) -> EAMatrix
     for (size_t b = 0; b < B; ++b)
     {
         auto lowRow = MetaNN::LowerAccess(rows[b]); // NO Evaluate
+        const float* src = lowRow.RawMemory();
+        std::memcpy(dst + b * F, src, F * sizeof(float));
+    }
+    return out;
+}
+
+inline auto EA::LSTM::BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t tstep) -> EAMatrix
+{
+    if (wb.windows.empty()) return EAMatrix(0, 0);
+
+    const size_t B = wb.windows.size();
+    const size_t F = wb.windows.front()[tstep].Shape()[1];
+    EAMatrix out(B, F);
+
+    auto lowOut = MetaNN::LowerAccess(out);
+    float* dst = lowOut.MutableRawMemory();
+
+    for (size_t b = 0; b < B; ++b)
+    {
+        auto lowRow = MetaNN::LowerAccess(wb.windows[b][tstep]);
         const float* src = lowRow.RawMemory();
         std::memcpy(dst + b * F, src, F * sizeof(float));
     }
@@ -1193,19 +1215,20 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
-            std::vector<EAMatrix> rows;
+            EAMatrix x_t_batch(1,1);
 #if LSTM_BATCH_PROFILE
+            {
+                LSTMScopedProfileTimer timer(profile.x_t_batch_direct_us);
+                x_t_batch = BuildBatchAtTimestepDirect(wb, tstep);
+            }
+
             std::vector<EAMatrix> rows_contig;
             std::vector<EAMatrix> rows_random;
             std::vector<size_t> random_indices(B);
             {
                 LSTMScopedProfileTimer timer(profile.rows_vector_us);
-                rows.reserve(B);
                 rows_contig.reserve(B);
                 rows_random.reserve(B);
-
-                for (size_t b = 0; b < B; ++b)
-                    rows.push_back(wb.windows[b][tstep]);
 
                 for (size_t i = 0; i < B; ++i)
                     rows_contig.push_back(wb.windows[i][tstep]);
@@ -1215,29 +1238,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 for (size_t i = 0; i < B; ++i)
                     rows_random.push_back(wb.windows[random_indices[i]][tstep]);
             }
-#else
-            rows.reserve(B);
-            for (size_t b = 0; b < B; ++b)
-                rows.push_back(wb.windows[b][tstep]);
-#endif
 
-#if LSTM_BATCH_PROFILE
             profile.total_row_vectors += 1;
-            profile.total_rows_gathered += rows.size();
-            if (!rows.empty())
-                profile.total_features_gathered += rows.size() * rows.front().Shape()[1];
-#endif
+            profile.total_rows_gathered += B;
+            if (B > 0)
+                profile.total_features_gathered += B * x_t_batch.Shape()[1];
 
-            EAMatrix x_t_batch(1,1);
-#if LSTM_BATCH_PROFILE
-            {
-                LSTMScopedProfileTimer timer(profile.gather_rows_us);
-                x_t_batch = GatherRows(rows);
-            }
-#else
-            x_t_batch = GatherRows(rows);
-#endif
-#if LSTM_BATCH_PROFILE
             {
                 EAMatrix bench_contig(1,1);
                 LSTMScopedProfileTimer timer(profile.gather_rows_contig_us);
@@ -1250,6 +1256,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 bench_random = GatherRows(rows_random);
                 ++profile.gather_rows_random_calls;
             }
+            {
+                std::vector<EAMatrix> rows_bench;
+                rows_bench.reserve(B);
+                for (size_t b = 0; b < B; ++b)
+                    rows_bench.push_back(wb.windows[b][tstep]);
+                EAMatrix gather_bench(1,1);
+                LSTMScopedProfileTimer timer(profile.x_t_batch_bench_us);
+                gather_bench = GatherRows(rows_bench);
+                profile.gather_rows_us += profile.x_t_batch_bench_us;
+            }
+#else
+            x_t_batch = BuildBatchAtTimestepDirect(wb, tstep);
 #endif
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
         }
@@ -1395,18 +1413,22 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #if !LSTM_INFERENCE_ONLY
     // Per-batch diagnostics
 //#if LSTM_BATCH_PROFILE
+//#if LSTM_BATCH_PROFILE
 #if LSTM_BATCH_PROFILE
     {
-        const double assembly_us = profile.build_window_batch_us + profile.rows_vector_us + profile.gather_rows_us + profile.head_repeat_rows_us;
-        const double gather_share = (assembly_us > 0.0) ? (100.0 * profile.gather_rows_us / assembly_us) : 0.0;
+        const double assembly_us = profile.build_window_batch_us + profile.rows_vector_us + profile.x_t_batch_direct_us + profile.head_repeat_rows_us;
+        const double gather_share = (assembly_us > 0.0) ? (100.0 * profile.x_t_batch_direct_us / assembly_us) : 0.0;
         const double rows_share = (assembly_us > 0.0) ? (100.0 * profile.rows_vector_us / assembly_us) : 0.0;
         const double build_share = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
         const double repeat_share = (assembly_us > 0.0) ? (100.0 * profile.head_repeat_rows_us / assembly_us) : 0.0;
         const double ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.gather_rows_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
+            ? (profile.x_t_batch_direct_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
             : 0.0;
         const double ns_per_feature = (profile.total_features_gathered > 0)
-            ? (profile.gather_rows_us * 1000.0 / static_cast<double>(profile.total_features_gathered))
+            ? (profile.x_t_batch_direct_us * 1000.0 / static_cast<double>(profile.total_features_gathered))
+            : 0.0;
+        const double direct_vs_gather = (profile.x_t_batch_bench_us > 0.0)
+            ? (profile.x_t_batch_direct_us / profile.x_t_batch_bench_us)
             : 0.0;
         const double contig_ns_per_row = (profile.total_rows_gathered > 0)
             ? (profile.gather_rows_contig_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
@@ -1422,7 +1444,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
                   << " rows_vector_us=" << profile.rows_vector_us
+                  << " x_t_batch_direct_us=" << profile.x_t_batch_direct_us
                   << " gather_rows_us=" << profile.gather_rows_us
+                  << " x_t_batch_bench_us=" << profile.x_t_batch_bench_us
                   << " gather_rows_contig_us=" << profile.gather_rows_contig_us
                   << " gather_rows_random_us=" << profile.gather_rows_random_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
@@ -1432,6 +1456,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " repeat_pct=" << repeat_share
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
+                  << " direct_vs_gather=" << direct_vs_gather
                   << " contig_ns_per_row=" << contig_ns_per_row
                   << " random_ns_per_row=" << random_ns_per_row
                   << " random_vs_contig=" << random_vs_contig
