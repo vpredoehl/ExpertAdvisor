@@ -100,17 +100,6 @@ using AccumScalar = float;   // default accumulation precision
 
 constexpr size_t mini_batch_windows = 128;
 
-struct LSTMBatchProfile
-{
-    double build_window_batch_us = 0.0;
-    double x_t_batch_direct_us = 0.0;
-    double head_repeat_rows_us = 0.0;
-    size_t mini_batches = 0;
-    size_t total_windows = 0;
-    size_t total_rows_gathered = 0;
-    size_t total_features_gathered = 0;
-};
-
 struct LSTMScopedProfileTimer
 {
     std::chrono::steady_clock::time_point t0;
@@ -152,6 +141,22 @@ struct EA::LSTM::GateAccumulators
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> db_g;
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> db_o;
 };
+
+struct EA::LSTM::LSTMBatchProfile
+{
+    double build_window_batch_us = 0.0;
+    double x_t_batch_direct_us = 0.0;
+    double lower_access_us = 0.0;
+    double memcpy_us = 0.0;
+    double row_extract_us = 0.0;
+    double head_repeat_rows_us = 0.0;
+    size_t mini_batches = 0;
+    size_t total_windows = 0;
+    size_t total_rows_gathered = 0;
+    size_t total_features_gathered = 0;
+};
+
+
 
 template <typename Mat>
 void zeroFill(Mat& m)
@@ -318,7 +323,9 @@ inline auto EA::LSTM::GatherRows(const std::vector<EAMatrix>& rows) -> EAMatrix
     return out;
 }
 
-inline auto EA::LSTM::BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t tstep) -> EAMatrix
+inline auto EA::LSTM::BuildBatchAtTimestepDirect(const WindowBatch& wb,
+                                                 size_t tstep,
+                                                 LSTMBatchProfile* profile) -> EAMatrix
 {
     if (wb.windows.empty()) return EAMatrix(0, 0);
 
@@ -331,9 +338,33 @@ inline auto EA::LSTM::BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t t
 
     for (size_t b = 0; b < B; ++b)
     {
-        auto lowRow = MetaNN::LowerAccess(wb.windows[b][tstep]);
-        const float* src = lowRow.RawMemory();
-        std::memcpy(dst + b * F, src, F * sizeof(float));
+#if LSTM_BATCH_PROFILE
+        if (profile)
+        {
+            auto t0 = std::chrono::steady_clock::now();
+            auto row = wb.windows[b][tstep];
+            auto t1 = std::chrono::steady_clock::now();
+            profile->row_extract_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
+
+            auto t2 = std::chrono::steady_clock::now();
+            auto lowRow = MetaNN::LowerAccess(row);
+            auto t3 = std::chrono::steady_clock::now();
+            profile->lower_access_us += std::chrono::duration<double, std::micro>(t3 - t2).count();
+
+            const float* src = lowRow.RawMemory();
+            auto t4 = std::chrono::steady_clock::now();
+            std::memcpy(dst + b * F, src, F * sizeof(float));
+            auto t5 = std::chrono::steady_clock::now();
+            profile->memcpy_us += std::chrono::duration<double, std::micro>(t5 - t4).count();
+        }
+        else
+#endif
+        {
+            auto row = wb.windows[b][tstep];
+            auto lowRow = MetaNN::LowerAccess(row);
+            const float* src = lowRow.RawMemory();
+            std::memcpy(dst + b * F, src, F * sizeof(float));
+        }
     }
     return out;
 }
@@ -1209,13 +1240,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #if LSTM_BATCH_PROFILE
             {
                 LSTMScopedProfileTimer timer(profile.x_t_batch_direct_us);
-                x_t_batch = BuildBatchAtTimestepDirect(wb, tstep);
+                x_t_batch = BuildBatchAtTimestepDirect(wb, tstep, &profile);
             }
             profile.total_rows_gathered += B;
             if (B > 0)
                 profile.total_features_gathered += B * x_t_batch.Shape()[1];
 #else
-            x_t_batch = BuildBatchAtTimestepDirect(wb, tstep);
+            x_t_batch = BuildBatchAtTimestepDirect(wb, tstep, nullptr);
 #endif
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
         }
@@ -1360,7 +1391,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
 #if !LSTM_INFERENCE_ONLY
     // Per-batch diagnostics
-#if LSTM_BATCH_PROFILE
+    #if LSTM_BATCH_PROFILE
     {
         const double assembly_us = profile.build_window_batch_us + profile.x_t_batch_direct_us + profile.head_repeat_rows_us;
         const double gather_share = (assembly_us > 0.0) ? (100.0 * profile.x_t_batch_direct_us / assembly_us) : 0.0;
@@ -1372,23 +1403,50 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double ns_per_feature = (profile.total_features_gathered > 0)
             ? (profile.x_t_batch_direct_us * 1000.0 / static_cast<double>(profile.total_features_gathered))
             : 0.0;
+        const double row_extract_pct = (profile.x_t_batch_direct_us > 0.0)
+            ? (100.0 * profile.row_extract_us / profile.x_t_batch_direct_us)
+            : 0.0;
+        const double lower_access_pct = (profile.x_t_batch_direct_us > 0.0)
+            ? (100.0 * profile.lower_access_us / profile.x_t_batch_direct_us)
+            : 0.0;
+        const double memcpy_pct = (profile.x_t_batch_direct_us > 0.0)
+            ? (100.0 * profile.memcpy_us / profile.x_t_batch_direct_us)
+            : 0.0;
+        const double row_extract_ns_per_row = (profile.total_rows_gathered > 0)
+            ? (profile.row_extract_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
+            : 0.0;
+        const double lower_access_ns_per_row = (profile.total_rows_gathered > 0)
+            ? (profile.lower_access_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
+            : 0.0;
+        const double memcpy_ns_per_row = (profile.total_rows_gathered > 0)
+            ? (profile.memcpy_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
+            : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
                   << " x_t_batch_direct_us=" << profile.x_t_batch_direct_us
+                  << " row_extract_us=" << profile.row_extract_us
+                  << " lower_access_us=" << profile.lower_access_us
+                  << " memcpy_us=" << profile.memcpy_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
                   << " gather_pct=" << gather_share
                   << " build_pct=" << build_share
                   << " repeat_pct=" << repeat_share
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
+                  << " row_extract_pct=" << row_extract_pct
+                  << " lower_access_pct=" << lower_access_pct
+                  << " memcpy_pct=" << memcpy_pct
+                  << " row_extract_ns_per_row=" << row_extract_ns_per_row
+                  << " lower_access_ns_per_row=" << lower_access_ns_per_row
+                  << " memcpy_ns_per_row=" << memcpy_ns_per_row
                   << " minibatches=" << profile.mini_batches
                   << " rows_gathered=" << profile.total_rows_gathered
                   << " features_gathered=" << profile.total_features_gathered
                   << "\n";
     }
-#endif
+    #endif
     std::cout << "batch_count=" << windowCount << "\n";
     double loss_value = 0.0;
 #if LSTM_TRAINING_PROGRESS
