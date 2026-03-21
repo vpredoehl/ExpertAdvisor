@@ -103,19 +103,11 @@ constexpr size_t mini_batch_windows = 128;
 struct LSTMBatchProfile
 {
     double build_window_batch_us = 0.0;
-    double rows_vector_us = 0.0;
-    double gather_rows_us = 0.0;
-    double gather_rows_contig_us = 0.0;
-    double gather_rows_random_us = 0.0;
     double x_t_batch_direct_us = 0.0;
-    double x_t_batch_bench_us = 0.0;
-    size_t gather_rows_contig_calls = 0;
-    size_t gather_rows_random_calls = 0;
     double head_repeat_rows_us = 0.0;
     size_t mini_batches = 0;
     size_t total_windows = 0;
     size_t total_rows_gathered = 0;
-    size_t total_row_vectors = 0;
     size_t total_features_gathered = 0;
 };
 
@@ -1183,9 +1175,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         allStarts.push_back(window_start);
     }
 
-#if LSTM_BATCH_PROFILE
-    std::mt19937 gather_bench_rng(42);
-#endif
+
 
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += mini_batch_windows)
     {
@@ -1221,51 +1211,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 LSTMScopedProfileTimer timer(profile.x_t_batch_direct_us);
                 x_t_batch = BuildBatchAtTimestepDirect(wb, tstep);
             }
-
-            std::vector<EAMatrix> rows_contig;
-            std::vector<EAMatrix> rows_random;
-            std::vector<size_t> random_indices(B);
-            {
-                LSTMScopedProfileTimer timer(profile.rows_vector_us);
-                rows_contig.reserve(B);
-                rows_random.reserve(B);
-
-                for (size_t i = 0; i < B; ++i)
-                    rows_contig.push_back(wb.windows[i][tstep]);
-
-                std::iota(random_indices.begin(), random_indices.end(), size_t{0});
-                std::shuffle(random_indices.begin(), random_indices.end(), gather_bench_rng);
-                for (size_t i = 0; i < B; ++i)
-                    rows_random.push_back(wb.windows[random_indices[i]][tstep]);
-            }
-
-            profile.total_row_vectors += 1;
             profile.total_rows_gathered += B;
             if (B > 0)
                 profile.total_features_gathered += B * x_t_batch.Shape()[1];
-
-            {
-                EAMatrix bench_contig(1,1);
-                LSTMScopedProfileTimer timer(profile.gather_rows_contig_us);
-                bench_contig = GatherRows(rows_contig);
-                ++profile.gather_rows_contig_calls;
-            }
-            {
-                EAMatrix bench_random(1,1);
-                LSTMScopedProfileTimer timer(profile.gather_rows_random_us);
-                bench_random = GatherRows(rows_random);
-                ++profile.gather_rows_random_calls;
-            }
-            {
-                std::vector<EAMatrix> rows_bench;
-                rows_bench.reserve(B);
-                for (size_t b = 0; b < B; ++b)
-                    rows_bench.push_back(wb.windows[b][tstep]);
-                EAMatrix gather_bench(1,1);
-                LSTMScopedProfileTimer timer(profile.x_t_batch_bench_us);
-                gather_bench = GatherRows(rows_bench);
-                profile.gather_rows_us += profile.x_t_batch_bench_us;
-            }
 #else
             x_t_batch = BuildBatchAtTimestepDirect(wb, tstep);
 #endif
@@ -1412,13 +1360,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
 #if !LSTM_INFERENCE_ONLY
     // Per-batch diagnostics
-//#if LSTM_BATCH_PROFILE
-//#if LSTM_BATCH_PROFILE
 #if LSTM_BATCH_PROFILE
     {
-        const double assembly_us = profile.build_window_batch_us + profile.rows_vector_us + profile.x_t_batch_direct_us + profile.head_repeat_rows_us;
+        const double assembly_us = profile.build_window_batch_us + profile.x_t_batch_direct_us + profile.head_repeat_rows_us;
         const double gather_share = (assembly_us > 0.0) ? (100.0 * profile.x_t_batch_direct_us / assembly_us) : 0.0;
-        const double rows_share = (assembly_us > 0.0) ? (100.0 * profile.rows_vector_us / assembly_us) : 0.0;
         const double build_share = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
         const double repeat_share = (assembly_us > 0.0) ? (100.0 * profile.head_repeat_rows_us / assembly_us) : 0.0;
         const double ns_per_row = (profile.total_rows_gathered > 0)
@@ -1427,43 +1372,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double ns_per_feature = (profile.total_features_gathered > 0)
             ? (profile.x_t_batch_direct_us * 1000.0 / static_cast<double>(profile.total_features_gathered))
             : 0.0;
-        const double direct_vs_gather = (profile.x_t_batch_bench_us > 0.0)
-            ? (profile.x_t_batch_direct_us / profile.x_t_batch_bench_us)
-            : 0.0;
-        const double contig_ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.gather_rows_contig_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
-            : 0.0;
-        const double random_ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.gather_rows_random_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
-            : 0.0;
-        const double random_vs_contig = (profile.gather_rows_contig_us > 0.0)
-            ? (profile.gather_rows_random_us / profile.gather_rows_contig_us)
-            : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
-                  << " rows_vector_us=" << profile.rows_vector_us
                   << " x_t_batch_direct_us=" << profile.x_t_batch_direct_us
-                  << " gather_rows_us=" << profile.gather_rows_us
-                  << " x_t_batch_bench_us=" << profile.x_t_batch_bench_us
-                  << " gather_rows_contig_us=" << profile.gather_rows_contig_us
-                  << " gather_rows_random_us=" << profile.gather_rows_random_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
                   << " gather_pct=" << gather_share
-                  << " rows_pct=" << rows_share
                   << " build_pct=" << build_share
                   << " repeat_pct=" << repeat_share
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
-                  << " direct_vs_gather=" << direct_vs_gather
-                  << " contig_ns_per_row=" << contig_ns_per_row
-                  << " random_ns_per_row=" << random_ns_per_row
-                  << " random_vs_contig=" << random_vs_contig
                   << " minibatches=" << profile.mini_batches
-                  << " contig_calls=" << profile.gather_rows_contig_calls
-                  << " random_calls=" << profile.gather_rows_random_calls
-                  << " row_vectors=" << profile.total_row_vectors
                   << " rows_gathered=" << profile.total_rows_gathered
                   << " features_gathered=" << profile.total_features_gathered
                   << "\n";
