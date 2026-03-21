@@ -473,68 +473,60 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 #if LSTM_BATCH_PROFILE
         if (profile)
         {
-            LSTMScopedProfileTimer timer(profile->gate_activation_us);
-            auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
-            auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
-            auto gH = MetaNN::Tanh(g2D).EvalRegister();
-            auto oH = MetaNN::Sigmoid(o2D).EvalRegister();
+            auto iExpr = MetaNN::Sigmoid(i2D);
+            auto fExpr = MetaNN::Sigmoid(f2D);
+            auto gExpr = MetaNN::Tanh(g2D);
+            auto oExpr = MetaNN::Sigmoid(o2D);
+
+            EAMatrix iMat(1,1), fMat(1,1), gMat(1,1), oMat(1,1), cMat(1,1), hMat(1,1);
+
+            {
+                LSTMScopedProfileTimer timer(profile->gate_activation_us);
+                auto iH = iExpr.EvalRegister();
+                auto fH = fExpr.EvalRegister();
+                auto gH = gExpr.EvalRegister();
+                auto oH = oExpr.EvalRegister();
+                auto cExpr = fExpr * prevCellState + iExpr * gExpr;
+                auto cH = cExpr.EvalRegister();
+                auto hExpr = oExpr * MetaNN::Tanh(cExpr);
+                auto hH = hExpr.EvalRegister();
+                MetaNN::EvalPlan::Inst().Eval();
+                iMat = iH.Data();
+                fMat = fH.Data();
+                gMat = gH.Data();
+                oMat = oH.Data();
+                cMat = cH.Data();
+                hMat = hH.Data();
+            }
+
+            scratch.i = iMat;
+            scratch.f = fMat;
+            scratch.g = gMat;
+            scratch.o = oMat;
+            scratch.c = cMat;
+            scratch.h = hMat;
+        }
+        else
+#endif
+        {
+            auto iExpr = MetaNN::Sigmoid(i2D);
+            auto fExpr = MetaNN::Sigmoid(f2D);
+            auto gExpr = MetaNN::Tanh(g2D);
+            auto oExpr = MetaNN::Sigmoid(o2D);
+            auto iH = iExpr.EvalRegister();
+            auto fH = fExpr.EvalRegister();
+            auto gH = gExpr.EvalRegister();
+            auto oH = oExpr.EvalRegister();
+            auto cExpr = fExpr * prevCellState + iExpr * gExpr;
+            auto cH = cExpr.EvalRegister();
+            auto hExpr = oExpr * MetaNN::Tanh(cExpr);
+            auto hH = hExpr.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             scratch.i = iH.Data();
             scratch.f = fH.Data();
             scratch.g = gH.Data();
             scratch.o = oH.Data();
-        }
-        else
-#endif
-        {
-            auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
-            auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
-            auto gH = MetaNN::Tanh(g2D).EvalRegister();
-            auto oH = MetaNN::Sigmoid(o2D).EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.i = iH.Data();
-            scratch.f = fH.Data();
-            scratch.g = gH.Data();
-            scratch.o = oH.Data();
-        }
-    }
-
-    {
-#if LSTM_BATCH_PROFILE
-        if (profile)
-        {
-            LSTMScopedProfileTimer timer(profile->cell_update_us);
-            auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
-            auto cH = cExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
             scratch.c = cH.Data();
-        }
-        else
-#endif
-        {
-            auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
-            auto cH = cExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.c = cH.Data();
-        }
-    }
-
-    {
-#if LSTM_BATCH_PROFILE
-        if (profile)
-        {
-            LSTMScopedProfileTimer timer(profile->hidden_update_us);
-            auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
-            auto hH = hExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.h = hH.Data();
-        }
-        else
-#endif
-        {
-            auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
-            auto hH = hExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
             scratch.h = hH.Data();
         }
     }
