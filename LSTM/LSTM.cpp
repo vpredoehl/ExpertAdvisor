@@ -19,6 +19,7 @@
 #include "Tensor.hpp"
 #include "MatrixUtils.hpp"
 #include "BuildConfig.hpp"
+#include <MetaNN/metal/metal_matmul.h>
 
 #ifndef LSTM_TRAINING_PROGRESS
 #define LSTM_TRAINING_PROGRESS 1
@@ -235,7 +236,6 @@ struct EA::LSTM::WindowBatch
 struct EA::LSTM::ForwardBatchScratch
 {
     EA::LSTM::EAMatrix affine;     // (B, 4H)
-    EA::LSTM::EAMatrix bias_batch; // (B, 4H)
     EA::LSTM::EAMatrix y;          // (B, 4H)
     EA::LSTM::EAMatrix i;          // (B, H)
     EA::LSTM::EAMatrix f;          // (B, H)
@@ -244,7 +244,7 @@ struct EA::LSTM::ForwardBatchScratch
     EA::LSTM::EAMatrix c;          // (B, H)
     EA::LSTM::EAMatrix h;          // (B, H)
 
-    ForwardBatchScratch() : affine(1,1), bias_batch(1,1), y(1,1), i(1,1), f(1,1), g(1,1), o(1,1), c(1,1), h(1,1)  {}
+    ForwardBatchScratch() : affine(1,1), y(1,1), i(1,1), f(1,1), g(1,1), o(1,1), c(1,1), h(1,1)  {}
 };
 
 // Member function definitions moved to EA::LSTM
@@ -401,19 +401,6 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 
     if (scratch.affine.Shape()[0] != B || scratch.affine.Shape()[1] != gateCols)
         scratch.affine = EAMatrix(B, gateCols);
-    if (scratch.bias_batch.Shape()[0] != B || scratch.bias_batch.Shape()[1] != gateCols)
-        scratch.bias_batch = EAMatrix(B, gateCols);
-#if LSTM_BATCH_PROFILE
-    if (profile)
-    {
-        LSTMScopedProfileTimer timer(profile->repeat_bias_us);
-        RepeatRowsInto(scratch.bias_batch, bias, B);
-    }
-    else
-#endif
-    {
-        RepeatRowsInto(scratch.bias_batch, bias, B);
-    }
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
     if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
@@ -449,18 +436,44 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         if (profile)
         {
             LSTMScopedProfileTimer timer(profile->dot_plus_bias_us);
-            auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + scratch.bias_batch;
-            auto yH = yExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.y = yH.Data();
+            auto lowA = MetaNN::LowerAccess(xh_concat);
+            auto lowB = MetaNN::LowerAccess(W_cat_dyn);
+            auto lowBias = MetaNN::LowerAccess(bias);
+            auto lowY = MetaNN::LowerAccess(scratch.y);
+
+            // Store shared memory views in local variables to avoid binding temporaries
+            auto aMem = lowA.SharedMemory();
+            auto bMem = lowB.SharedMemory();
+            auto biasMem = lowBias.SharedMemory();
+            auto yMem = lowY.SharedMemory();
+
+            MetaNN::NSMetalMatMul::MatMulBias(
+                aMem,
+                bMem,
+                biasMem,
+                yMem,
+                B, K, gateCols);
         }
         else
 #endif
         {
-            auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + scratch.bias_batch;
-            auto yH = yExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.y = yH.Data();
+            auto lowA = MetaNN::LowerAccess(xh_concat);
+            auto lowB = MetaNN::LowerAccess(W_cat_dyn);
+            auto lowBias = MetaNN::LowerAccess(bias);
+            auto lowY = MetaNN::LowerAccess(scratch.y);
+
+            // Store shared memory views in local variables to avoid binding temporaries
+            auto aMem = lowA.SharedMemory();
+            auto bMem = lowB.SharedMemory();
+            auto biasMem = lowBias.SharedMemory();
+            auto yMem = lowY.SharedMemory();
+
+            MetaNN::NSMetalMatMul::MatMulBias(
+                aMem,
+                bMem,
+                biasMem,
+                yMem,
+                B, K, gateCols);
         }
     }
 
@@ -1460,39 +1473,39 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double build_pct = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
         const double repeat_pct = (assembly_us > 0.0) ? (100.0 * profile.head_repeat_rows_us / assembly_us) : 0.0;
         const double ns_per_row = (profile.total_rows_processed > 0)
-            ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_rows_processed))
-            : 0.0;
+        ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_rows_processed))
+        : 0.0;
         const double ns_per_feature = (profile.total_features_processed > 0)
-            ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_features_processed))
-            : 0.0;
+        ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_features_processed))
+        : 0.0;
         const double get_window_pct_of_build = (profile.build_window_batch_us > 0.0)
-            ? (100.0 * profile.get_window_us / profile.build_window_batch_us)
-            : 0.0;
+        ? (100.0 * profile.get_window_us / profile.build_window_batch_us)
+        : 0.0;
         const double pack_copy_pct_of_build = (profile.build_window_batch_us > 0.0)
-            ? (100.0 * profile.pack_copy_us / profile.build_window_batch_us)
-            : 0.0;
+        ? (100.0 * profile.pack_copy_us / profile.build_window_batch_us)
+        : 0.0;
         const double get_window_us_per_window = (profile.total_windows_built > 0)
-            ? (profile.get_window_us / static_cast<double>(profile.total_windows_built))
-            : 0.0;
+        ? (profile.get_window_us / static_cast<double>(profile.total_windows_built))
+        : 0.0;
         const double pack_copy_us_per_window = (profile.total_windows_built > 0)
-            ? (profile.pack_copy_us / static_cast<double>(profile.total_windows_built))
-            : 0.0;
+        ? (profile.pack_copy_us / static_cast<double>(profile.total_windows_built))
+        : 0.0;
         const double repeat_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.repeat_bias_us / profile.forward_step_batches_us)
-            : 0.0;
+        ? (100.0 * profile.repeat_bias_us / profile.forward_step_batches_us)
+        : 0.0;
         const double concat_cols_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.concat_cols_us / profile.forward_step_batches_us)
-            : 0.0;
+        ? (100.0 * profile.concat_cols_us / profile.forward_step_batches_us)
+        : 0.0;
         const double dot_plus_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.dot_plus_bias_us / profile.forward_step_batches_us)
-            : 0.0;
+        ? (100.0 * profile.dot_plus_bias_us / profile.forward_step_batches_us)
+        : 0.0;
         const double gate_only_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.gate_only_us / profile.forward_step_batches_us)
-            : 0.0;
+        ? (100.0 * profile.gate_only_us / profile.forward_step_batches_us)
+        : 0.0;
         const double state_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.state_update_us / profile.forward_step_batches_us)
-            : 0.0;
-
+        ? (100.0 * profile.state_update_us / profile.forward_step_batches_us)
+        : 0.0;
+        
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
@@ -1523,6 +1536,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " windows_built=" << profile.total_windows_built
                   << " rows_processed=" << profile.total_rows_processed
                   << " features_processed=" << profile.total_features_processed
+                  << std::defaultfloat << std::setprecision(15)
                   << "\n";
     }
     #endif
@@ -1722,6 +1736,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
