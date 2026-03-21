@@ -152,9 +152,8 @@ struct EA::LSTM::LSTMBatchProfile
     double repeat_bias_us = 0.0;
     double concat_cols_us = 0.0;
     double dot_plus_bias_us = 0.0;
-    double gate_activation_us = 0.0;
-    double cell_update_us = 0.0;
-    double hidden_update_us = 0.0;
+    double gate_only_us = 0.0;
+    double state_update_us = 0.0;
     double head_repeat_rows_us = 0.0;
     size_t mini_batches = 0;
     size_t total_windows = 0;
@@ -478,33 +477,29 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
             auto gExpr = MetaNN::Tanh(g2D);
             auto oExpr = MetaNN::Sigmoid(o2D);
 
-            EAMatrix iMat(1,1), fMat(1,1), gMat(1,1), oMat(1,1), cMat(1,1), hMat(1,1);
-
             {
-                LSTMScopedProfileTimer timer(profile->gate_activation_us);
+                LSTMScopedProfileTimer timer(profile->gate_only_us);
                 auto iH = iExpr.EvalRegister();
                 auto fH = fExpr.EvalRegister();
                 auto gH = gExpr.EvalRegister();
                 auto oH = oExpr.EvalRegister();
-                auto cExpr = fExpr * prevCellState + iExpr * gExpr;
-                auto cH = cExpr.EvalRegister();
-                auto hExpr = oExpr * MetaNN::Tanh(cExpr);
-                auto hH = hExpr.EvalRegister();
                 MetaNN::EvalPlan::Inst().Eval();
-                iMat = iH.Data();
-                fMat = fH.Data();
-                gMat = gH.Data();
-                oMat = oH.Data();
-                cMat = cH.Data();
-                hMat = hH.Data();
+                scratch.i = iH.Data();
+                scratch.f = fH.Data();
+                scratch.g = gH.Data();
+                scratch.o = oH.Data();
             }
 
-            scratch.i = iMat;
-            scratch.f = fMat;
-            scratch.g = gMat;
-            scratch.o = oMat;
-            scratch.c = cMat;
-            scratch.h = hMat;
+            {
+                LSTMScopedProfileTimer timer(profile->state_update_us);
+                auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
+                auto cH = cExpr.EvalRegister();
+                auto hExpr = scratch.o * MetaNN::Tanh(cExpr);
+                auto hH = hExpr.EvalRegister();
+                MetaNN::EvalPlan::Inst().Eval();
+                scratch.c = cH.Data();
+                scratch.h = hH.Data();
+            }
         }
         else
 #endif
@@ -517,15 +512,17 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
             auto fH = fExpr.EvalRegister();
             auto gH = gExpr.EvalRegister();
             auto oH = oExpr.EvalRegister();
-            auto cExpr = fExpr * prevCellState + iExpr * gExpr;
-            auto cH = cExpr.EvalRegister();
-            auto hExpr = oExpr * MetaNN::Tanh(cExpr);
-            auto hH = hExpr.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             scratch.i = iH.Data();
             scratch.f = fH.Data();
             scratch.g = gH.Data();
             scratch.o = oH.Data();
+
+            auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
+            auto cH = cExpr.EvalRegister();
+            auto hExpr = scratch.o * MetaNN::Tanh(cExpr);
+            auto hH = hExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
             scratch.c = cH.Data();
             scratch.h = hH.Data();
         }
@@ -1489,14 +1486,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double dot_plus_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
             ? (100.0 * profile.dot_plus_bias_us / profile.forward_step_batches_us)
             : 0.0;
-        const double gate_activation_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.gate_activation_us / profile.forward_step_batches_us)
+        const double gate_only_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.gate_only_us / profile.forward_step_batches_us)
             : 0.0;
-        const double cell_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.cell_update_us / profile.forward_step_batches_us)
-            : 0.0;
-        const double hidden_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-            ? (100.0 * profile.hidden_update_us / profile.forward_step_batches_us)
+        const double state_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.state_update_us / profile.forward_step_batches_us)
             : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
@@ -1508,9 +1502,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " repeat_bias_us=" << profile.repeat_bias_us
                   << " concat_cols_us=" << profile.concat_cols_us
                   << " dot_plus_bias_us=" << profile.dot_plus_bias_us
-                  << " gate_activation_us=" << profile.gate_activation_us
-                  << " cell_update_us=" << profile.cell_update_us
-                  << " hidden_update_us=" << profile.hidden_update_us
+                  << " gate_only_us=" << profile.gate_only_us
+                  << " state_update_us=" << profile.state_update_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
@@ -1522,9 +1515,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " repeat_bias_pct_of_forward=" << repeat_bias_pct_of_forward
                   << " concat_cols_pct_of_forward=" << concat_cols_pct_of_forward
                   << " dot_plus_bias_pct_of_forward=" << dot_plus_bias_pct_of_forward
-                  << " gate_activation_pct_of_forward=" << gate_activation_pct_of_forward
-                  << " cell_update_pct_of_forward=" << cell_update_pct_of_forward
-                  << " hidden_update_pct_of_forward=" << hidden_update_pct_of_forward
+                  << " gate_only_pct_of_forward=" << gate_only_pct_of_forward
+                  << " state_update_pct_of_forward=" << state_update_pct_of_forward
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
                   << " minibatches=" << profile.mini_batches
