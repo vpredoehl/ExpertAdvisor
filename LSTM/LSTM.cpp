@@ -149,6 +149,12 @@ struct EA::LSTM::LSTMBatchProfile
     double pack_copy_us = 0.0;
     size_t total_windows_built = 0;
     double forward_step_batches_us = 0.0;
+    double repeat_bias_us = 0.0;
+    double concat_cols_us = 0.0;
+    double dot_plus_bias_us = 0.0;
+    double gate_activation_us = 0.0;
+    double cell_update_us = 0.0;
+    double hidden_update_us = 0.0;
     double head_repeat_rows_us = 0.0;
     size_t mini_batches = 0;
     size_t total_windows = 0;
@@ -383,7 +389,8 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
                                        EAMatrix& prevHiddenState,
                                        EAMatrix& prevCellState,
                                        EAMatrix& xh_concat,
-                                       ForwardBatchScratch& scratch) const -> BatchStepCache
+                                       ForwardBatchScratch& scratch,
+                                       LSTMBatchProfile* profile) const -> BatchStepCache
 {
     const size_t B = x_t.Shape()[0];
     const size_t H = prevHiddenState.Shape()[1];
@@ -397,7 +404,17 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         scratch.affine = EAMatrix(B, gateCols);
     if (scratch.bias_batch.Shape()[0] != B || scratch.bias_batch.Shape()[1] != gateCols)
         scratch.bias_batch = EAMatrix(B, gateCols);
-    RepeatRowsInto(scratch.bias_batch, bias, B);
+#if LSTM_BATCH_PROFILE
+    if (profile)
+    {
+        LSTMScopedProfileTimer timer(profile->repeat_bias_us);
+        RepeatRowsInto(scratch.bias_batch, bias, B);
+    }
+    else
+#endif
+    {
+        RepeatRowsInto(scratch.bias_batch, bias, B);
+    }
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
     if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
@@ -413,16 +430,39 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     if (scratch.h.Shape()[0] != B || scratch.h.Shape()[1] != H)
         scratch.h = EAMatrix(B, H);
 
-    NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+#if LSTM_BATCH_PROFILE
+    if (profile)
+    {
+        LSTMScopedProfileTimer timer(profile->concat_cols_us);
+        NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+    }
+    else
+#endif
+    {
+        NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+    }
 
     const size_t K = xh_concat.Shape()[1];
     auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
 
     {
-        auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + scratch.bias_batch;
-        auto yH = yExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.y = yH.Data();
+#if LSTM_BATCH_PROFILE
+        if (profile)
+        {
+            LSTMScopedProfileTimer timer(profile->dot_plus_bias_us);
+            auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + scratch.bias_batch;
+            auto yH = yExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.y = yH.Data();
+        }
+        else
+#endif
+        {
+            auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + scratch.bias_batch;
+            auto yH = yExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.y = yH.Data();
+        }
     }
 
     auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 0 * H, H);
@@ -430,29 +470,73 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 2 * H, H);
     auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 3 * H, H);
     {
-        auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
-        auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
-        auto gH = MetaNN::Tanh(g2D).EvalRegister();
-        auto oH = MetaNN::Sigmoid(o2D).EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.i = iH.Data();
-        scratch.f = fH.Data();
-        scratch.g = gH.Data();
-        scratch.o = oH.Data();
+#if LSTM_BATCH_PROFILE
+        if (profile)
+        {
+            LSTMScopedProfileTimer timer(profile->gate_activation_us);
+            auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
+            auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
+            auto gH = MetaNN::Tanh(g2D).EvalRegister();
+            auto oH = MetaNN::Sigmoid(o2D).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.i = iH.Data();
+            scratch.f = fH.Data();
+            scratch.g = gH.Data();
+            scratch.o = oH.Data();
+        }
+        else
+#endif
+        {
+            auto iH = MetaNN::Sigmoid(i2D).EvalRegister();
+            auto fH = MetaNN::Sigmoid(f2D).EvalRegister();
+            auto gH = MetaNN::Tanh(g2D).EvalRegister();
+            auto oH = MetaNN::Sigmoid(o2D).EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.i = iH.Data();
+            scratch.f = fH.Data();
+            scratch.g = gH.Data();
+            scratch.o = oH.Data();
+        }
     }
 
     {
-        auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
-        auto cH = cExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.c = cH.Data();
+#if LSTM_BATCH_PROFILE
+        if (profile)
+        {
+            LSTMScopedProfileTimer timer(profile->cell_update_us);
+            auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
+            auto cH = cExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.c = cH.Data();
+        }
+        else
+#endif
+        {
+            auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
+            auto cH = cExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.c = cH.Data();
+        }
     }
 
     {
-        auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
-        auto hH = hExpr.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        scratch.h = hH.Data();
+#if LSTM_BATCH_PROFILE
+        if (profile)
+        {
+            LSTMScopedProfileTimer timer(profile->hidden_update_us);
+            auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
+            auto hH = hExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.h = hH.Data();
+        }
+        else
+#endif
+        {
+            auto hExpr = scratch.o * MetaNN::Tanh(scratch.c);
+            auto hH = hExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.h = hH.Data();
+        }
     }
 
     BatchStepCache sc{
@@ -1232,11 +1316,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 if (tstep == 0 && B > 0)
                     profile.total_features_processed += B * window_size * x_t_batch.Shape()[1];
                 profile.total_rows_processed += B;
-                cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
+                cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch, &profile));
             }
 #else
             const EAMatrix& x_t_batch = wb.packed_steps[tstep];
-            cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
+            cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch, nullptr));
 #endif
         }
 
@@ -1404,6 +1488,24 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double pack_copy_us_per_window = (profile.total_windows_built > 0)
             ? (profile.pack_copy_us / static_cast<double>(profile.total_windows_built))
             : 0.0;
+        const double repeat_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.repeat_bias_us / profile.forward_step_batches_us)
+            : 0.0;
+        const double concat_cols_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.concat_cols_us / profile.forward_step_batches_us)
+            : 0.0;
+        const double dot_plus_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.dot_plus_bias_us / profile.forward_step_batches_us)
+            : 0.0;
+        const double gate_activation_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.gate_activation_us / profile.forward_step_batches_us)
+            : 0.0;
+        const double cell_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.cell_update_us / profile.forward_step_batches_us)
+            : 0.0;
+        const double hidden_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+            ? (100.0 * profile.hidden_update_us / profile.forward_step_batches_us)
+            : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
@@ -1411,6 +1513,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " get_window_us=" << profile.get_window_us
                   << " pack_copy_us=" << profile.pack_copy_us
                   << " forward_step_batches_us=" << profile.forward_step_batches_us
+                  << " repeat_bias_us=" << profile.repeat_bias_us
+                  << " concat_cols_us=" << profile.concat_cols_us
+                  << " dot_plus_bias_us=" << profile.dot_plus_bias_us
+                  << " gate_activation_us=" << profile.gate_activation_us
+                  << " cell_update_us=" << profile.cell_update_us
+                  << " hidden_update_us=" << profile.hidden_update_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
@@ -1419,6 +1527,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " pack_copy_pct_of_build=" << pack_copy_pct_of_build
                   << " get_window_us_per_window=" << get_window_us_per_window
                   << " pack_copy_us_per_window=" << pack_copy_us_per_window
+                  << " repeat_bias_pct_of_forward=" << repeat_bias_pct_of_forward
+                  << " concat_cols_pct_of_forward=" << concat_cols_pct_of_forward
+                  << " dot_plus_bias_pct_of_forward=" << dot_plus_bias_pct_of_forward
+                  << " gate_activation_pct_of_forward=" << gate_activation_pct_of_forward
+                  << " cell_update_pct_of_forward=" << cell_update_pct_of_forward
+                  << " hidden_update_pct_of_forward=" << hidden_update_pct_of_forward
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
                   << " minibatches=" << profile.mini_batches
