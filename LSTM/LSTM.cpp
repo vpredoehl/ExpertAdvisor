@@ -33,7 +33,7 @@
 #endif
 
 #ifndef LSTM_BATCH_PROFILE
-#define LSTM_BATCH_PROFILE 0
+#define LSTM_BATCH_PROFILE 1
 #endif
 
 
@@ -145,6 +145,9 @@ struct EA::LSTM::GateAccumulators
 struct EA::LSTM::LSTMBatchProfile
 {
     double build_window_batch_us = 0.0;
+    double get_window_us = 0.0;
+    double pack_copy_us = 0.0;
+    size_t total_windows_built = 0;
     double forward_step_batches_us = 0.0;
     double head_repeat_rows_us = 0.0;
     size_t mini_batches = 0;
@@ -1124,6 +1127,24 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
              window_start != last && window_start + window_size + prediction_horizon - 1 < batch.end();
              ++window_start, ++b)
         {
+#if LSTM_BATCH_PROFILE
+            auto t_get0 = std::chrono::steady_clock::now();
+            auto w = t.GetWindow(window_start);
+            auto t_get1 = std::chrono::steady_clock::now();
+            profile.get_window_us += std::chrono::duration<double, std::micro>(t_get1 - t_get0).count();
+            ++profile.total_windows_built;
+
+            auto t_pack0 = std::chrono::steady_clock::now();
+            for (size_t tstep = 0; tstep < window_size; ++tstep)
+            {
+                auto row = w[tstep];
+                auto lowRow = MetaNN::LowerAccess(row);
+                const float* src = lowRow.RawMemory();
+                std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
+            }
+            auto t_pack1 = std::chrono::steady_clock::now();
+            profile.pack_copy_us += std::chrono::duration<double, std::micro>(t_pack1 - t_pack0).count();
+#else
             auto w = t.GetWindow(window_start);
             for (size_t tstep = 0; tstep < window_size; ++tstep)
             {
@@ -1132,6 +1153,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 const float* src = lowRow.RawMemory();
                 std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
             }
+#endif
 
             auto lastIt   = window_start + (window_size - 1);
             auto targetIt = lastIt + prediction_horizon;
@@ -1370,18 +1392,37 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double ns_per_feature = (profile.total_features_processed > 0)
             ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_features_processed))
             : 0.0;
+        const double get_window_pct_of_build = (profile.build_window_batch_us > 0.0)
+            ? (100.0 * profile.get_window_us / profile.build_window_batch_us)
+            : 0.0;
+        const double pack_copy_pct_of_build = (profile.build_window_batch_us > 0.0)
+            ? (100.0 * profile.pack_copy_us / profile.build_window_batch_us)
+            : 0.0;
+        const double get_window_us_per_window = (profile.total_windows_built > 0)
+            ? (profile.get_window_us / static_cast<double>(profile.total_windows_built))
+            : 0.0;
+        const double pack_copy_us_per_window = (profile.total_windows_built > 0)
+            ? (profile.pack_copy_us / static_cast<double>(profile.total_windows_built))
+            : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
+                  << " get_window_us=" << profile.get_window_us
+                  << " pack_copy_us=" << profile.pack_copy_us
                   << " forward_step_batches_us=" << profile.forward_step_batches_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
                   << " repeat_pct=" << repeat_pct
+                  << " get_window_pct_of_build=" << get_window_pct_of_build
+                  << " pack_copy_pct_of_build=" << pack_copy_pct_of_build
+                  << " get_window_us_per_window=" << get_window_us_per_window
+                  << " pack_copy_us_per_window=" << pack_copy_us_per_window
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
                   << " minibatches=" << profile.mini_batches
+                  << " windows_built=" << profile.total_windows_built
                   << " rows_processed=" << profile.total_rows_processed
                   << " features_processed=" << profile.total_features_processed
                   << "\n";
