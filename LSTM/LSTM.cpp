@@ -146,6 +146,7 @@ struct EA::LSTM::LSTMBatchProfile
 {
     double build_window_batch_us = 0.0;
     double x_t_batch_direct_us = 0.0;
+    double pack_windows_us = 0.0;
     double lower_access_us = 0.0;
     double memcpy_us = 0.0;
     double row_extract_us = 0.0;
@@ -1234,20 +1235,61 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::vector<BatchStepCache> cache;
         cache.reserve(window_size);
 
-        for (size_t tstep = 0; tstep < window_size; ++tstep)
+        std::vector<EAMatrix> packed_steps;
+        packed_steps.reserve(window_size);
+        if (B > 0)
         {
-            EAMatrix x_t_batch(1,1);
+            const size_t F = wb.windows.front()[0].Shape()[1];
+            std::vector<float*> packed_step_ptrs;
+            packed_step_ptrs.reserve(window_size);
+
 #if LSTM_BATCH_PROFILE
             {
-                LSTMScopedProfileTimer timer(profile.x_t_batch_direct_us);
-                x_t_batch = BuildBatchAtTimestepDirect(wb, tstep, &profile);
+                LSTMScopedProfileTimer timer(profile.pack_windows_us);
+                for (size_t tstep = 0; tstep < window_size; ++tstep)
+                {
+                    packed_steps.emplace_back(B, F);
+                    auto lowPacked = MetaNN::LowerAccess(packed_steps.back());
+                    packed_step_ptrs.push_back(lowPacked.MutableRawMemory());
+                }
+
+                for (size_t b = 0; b < B; ++b)
+                {
+                    for (size_t tstep = 0; tstep < window_size; ++tstep)
+                    {
+                        auto row = wb.windows[b][tstep];
+                        auto lowRow = MetaNN::LowerAccess(row);
+                        const float* src = lowRow.RawMemory();
+                        std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
+                    }
+                }
             }
-            profile.total_rows_gathered += B;
-            if (B > 0)
-                profile.total_features_gathered += B * x_t_batch.Shape()[1];
+            profile.total_rows_gathered += B * window_size;
+            profile.total_features_gathered += B * window_size * F;
 #else
-            x_t_batch = BuildBatchAtTimestepDirect(wb, tstep, nullptr);
+            for (size_t tstep = 0; tstep < window_size; ++tstep)
+            {
+                packed_steps.emplace_back(B, F);
+                auto lowPacked = MetaNN::LowerAccess(packed_steps.back());
+                packed_step_ptrs.push_back(lowPacked.MutableRawMemory());
+            }
+
+            for (size_t b = 0; b < B; ++b)
+            {
+                for (size_t tstep = 0; tstep < window_size; ++tstep)
+                {
+                    auto row = wb.windows[b][tstep];
+                    auto lowRow = MetaNN::LowerAccess(row);
+                    const float* src = lowRow.RawMemory();
+                    std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
+                }
+            }
 #endif
+        }
+
+        for (size_t tstep = 0; tstep < window_size; ++tstep)
+        {
+            const EAMatrix& x_t_batch = packed_steps[tstep];
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch));
         }
 
@@ -1393,54 +1435,27 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     // Per-batch diagnostics
     #if LSTM_BATCH_PROFILE
     {
-        const double assembly_us = profile.build_window_batch_us + profile.x_t_batch_direct_us + profile.head_repeat_rows_us;
-        const double gather_share = (assembly_us > 0.0) ? (100.0 * profile.x_t_batch_direct_us / assembly_us) : 0.0;
-        const double build_share = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
-        const double repeat_share = (assembly_us > 0.0) ? (100.0 * profile.head_repeat_rows_us / assembly_us) : 0.0;
+        const double assembly_us = profile.build_window_batch_us + profile.pack_windows_us + profile.head_repeat_rows_us;
+        const double pack_pct = (assembly_us > 0.0) ? (100.0 * profile.pack_windows_us / assembly_us) : 0.0;
+        const double build_pct = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
+        const double repeat_pct = (assembly_us > 0.0) ? (100.0 * profile.head_repeat_rows_us / assembly_us) : 0.0;
         const double ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.x_t_batch_direct_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
+            ? (profile.pack_windows_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
             : 0.0;
         const double ns_per_feature = (profile.total_features_gathered > 0)
-            ? (profile.x_t_batch_direct_us * 1000.0 / static_cast<double>(profile.total_features_gathered))
-            : 0.0;
-        const double row_extract_pct = (profile.x_t_batch_direct_us > 0.0)
-            ? (100.0 * profile.row_extract_us / profile.x_t_batch_direct_us)
-            : 0.0;
-        const double lower_access_pct = (profile.x_t_batch_direct_us > 0.0)
-            ? (100.0 * profile.lower_access_us / profile.x_t_batch_direct_us)
-            : 0.0;
-        const double memcpy_pct = (profile.x_t_batch_direct_us > 0.0)
-            ? (100.0 * profile.memcpy_us / profile.x_t_batch_direct_us)
-            : 0.0;
-        const double row_extract_ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.row_extract_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
-            : 0.0;
-        const double lower_access_ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.lower_access_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
-            : 0.0;
-        const double memcpy_ns_per_row = (profile.total_rows_gathered > 0)
-            ? (profile.memcpy_us * 1000.0 / static_cast<double>(profile.total_rows_gathered))
+            ? (profile.pack_windows_us * 1000.0 / static_cast<double>(profile.total_features_gathered))
             : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
-                  << " x_t_batch_direct_us=" << profile.x_t_batch_direct_us
-                  << " row_extract_us=" << profile.row_extract_us
-                  << " lower_access_us=" << profile.lower_access_us
-                  << " memcpy_us=" << profile.memcpy_us
+                  << " pack_windows_us=" << profile.pack_windows_us
                   << " head_repeat_rows_us=" << profile.head_repeat_rows_us
-                  << " gather_pct=" << gather_share
-                  << " build_pct=" << build_share
-                  << " repeat_pct=" << repeat_share
+                  << " pack_pct=" << pack_pct
+                  << " build_pct=" << build_pct
+                  << " repeat_pct=" << repeat_pct
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
-                  << " row_extract_pct=" << row_extract_pct
-                  << " lower_access_pct=" << lower_access_pct
-                  << " memcpy_pct=" << memcpy_pct
-                  << " row_extract_ns_per_row=" << row_extract_ns_per_row
-                  << " lower_access_ns_per_row=" << lower_access_ns_per_row
-                  << " memcpy_ns_per_row=" << memcpy_ns_per_row
                   << " minibatches=" << profile.mini_batches
                   << " rows_gathered=" << profile.total_rows_gathered
                   << " features_gathered=" << profile.total_features_gathered
