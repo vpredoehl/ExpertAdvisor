@@ -130,7 +130,11 @@ static inline float uniform_symmetric(float limit) {
 }
 
 struct EA::LSTM::HeadLoss { float y_hat; float err; };
-struct EA::LSTM::GateBlocks {   EA::LSTM::EAMatrix W_i, W_f, W_g, W_o;  }; // (H x H)
+struct EA::LSTM::GateBlocks
+{
+    EA::LSTM::EAMatrix W_i, W_f, W_g, W_o; // individual recurrent gate blocks (H x H)
+    EA::LSTM::EAMatrix W_h_cat;            // full recurrent block (H x 4H)
+};
 struct EA::LSTM::GateAccumulators
 {
     MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal> dW_i;
@@ -784,8 +788,17 @@ inline auto EA::LSTM::hoistGateBlocks(const EAMatrix& W_h_win, size_t H) const -
     const auto W_f = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 1 * H, H);
     const auto W_g = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 2 * H, H);
     const auto W_o = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(W_h_win, 3 * H, H);
-    return GateBlocks{ W_i, W_f, W_g, W_o };
+    const auto W_h_cat = W_h_win;
+    return GateBlocks{ W_i, W_f, W_g, W_o, W_h_cat };
 }
+// Keep more of the batched backward path on Metal by fusing the recurrent-gate
+// gradient blocks into a single contiguous (B, 4H) matrix before the major GEMMs.
+// This reduces the number of separate gate-specific Dot() launches in the hot path:
+//   - one fused weight-gradient Dot for [x | h_prev]^T * d_gates
+//   - one fused bias-gradient Dot for 1^T * d_gates
+//   - one fused recurrent backprop Dot for d_gates * W_h^T
+// We still split/accumulate into the per-gate accumulator buffers afterward so the
+// rest of the optimizer path can remain unchanged.
 
 inline void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const
 {
@@ -911,91 +924,99 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     auto dfH = d_f_expr.EvalRegister();
     auto dgH = d_g_expr.EvalRegister();
     auto doH = d_o_expr.EvalRegister();
+    auto dc_prevH = (dct_expr * sc.f).EvalRegister();
 
-    // Weight gradients (expressions)
-    auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_i_expr);
-    auto dW_f_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_f_expr);
-    auto dW_g_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_g_expr);
-    auto dW_o_top = MetaNN::Dot(MetaNN::Transpose(sc.x), d_o_expr);
-
-    auto dW_i_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_i_expr);
-    auto dW_f_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_f_expr);
-    auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_g_expr);
-    auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), d_o_expr);
-
-    auto dW_i_topH = dW_i_top.EvalRegister();
-    auto dW_f_topH = dW_f_top.EvalRegister();
-    auto dW_g_topH = dW_g_top.EvalRegister();
-    auto dW_o_topH = dW_o_top.EvalRegister();
-
-    auto dW_i_botH = dW_i_bot.EvalRegister();
-    auto dW_f_botH = dW_f_bot.EvalRegister();
-    auto dW_g_botH = dW_g_bot.EvalRegister();
-    auto dW_o_botH = dW_o_bot.EvalRegister();
-
-    // Recurrent gradients (expressions)
-    auto dh_prev_expr = MetaNN::Dot(d_i_expr, MetaNN::Transpose(gb.W_i))
-                      + MetaNN::Dot(d_f_expr, MetaNN::Transpose(gb.W_f))
-                      + MetaNN::Dot(d_g_expr, MetaNN::Transpose(gb.W_g))
-                      + MetaNN::Dot(d_o_expr, MetaNN::Transpose(gb.W_o));
-    auto dh_prevH = dh_prev_expr.EvalRegister();
-
-    auto dc_prev_expr = dct_expr * sc.f;
-    auto dc_prevH = dc_prev_expr.EvalRegister();
-
-    // Evaluate all expressions in a single barrier
     MetaNN::EvalPlan::Inst().Eval();
 
-    auto addBlock = [&](auto& dst, const EAMatrix& top, const EAMatrix& bot)
+    const EAMatrix& d_i_mat = diH.Data();
+    const EAMatrix& d_f_mat = dfH.Data();
+    const EAMatrix& d_g_mat = dgH.Data();
+    const EAMatrix& d_o_mat = doH.Data();
+
+    // Pack all gate gradients into one contiguous (B, 4H) matrix so the major
+    // backward GEMMs can stay fused on the Metal path.
+    EAMatrix d_gates_batch(B, 4 * H);
+    {
+        auto lowDst = MetaNN::LowerAccess(d_gates_batch);
+        float* dst = lowDst.MutableRawMemory();
+
+        auto lowI = MetaNN::LowerAccess(d_i_mat);
+        auto lowF = MetaNN::LowerAccess(d_f_mat);
+        auto lowG = MetaNN::LowerAccess(d_g_mat);
+        auto lowO = MetaNN::LowerAccess(d_o_mat);
+
+        const float* iptr = lowI.RawMemory();
+        const float* fptr = lowF.RawMemory();
+        const float* gptr = lowG.RawMemory();
+        const float* optr = lowO.RawMemory();
+
+        for (size_t b = 0; b < B; ++b)
+        {
+            float* rowDst = dst + b * (4 * H);
+            std::memcpy(rowDst + 0 * H, iptr + b * H, H * sizeof(float));
+            std::memcpy(rowDst + 1 * H, fptr + b * H, H * sizeof(float));
+            std::memcpy(rowDst + 2 * H, gptr + b * H, H * sizeof(float));
+            std::memcpy(rowDst + 3 * H, optr + b * H, H * sizeof(float));
+        }
+    }
+
+    EAMatrix xh_concat_batch(B, sc.x.Shape()[1] + sc.h_prev.Shape()[1]);
+    NNUtils::ConcatColsInto(xh_concat_batch, sc.x, sc.h_prev);
+
+    EAMatrix ones_col(B, 1);
+    {
+        auto lowOnes = MetaNN::LowerAccess(ones_col);
+        std::fill(lowOnes.MutableRawMemory(), lowOnes.MutableRawMemory() + B, 1.0f);
+    }
+
+    auto dW_cat_expr = MetaNN::Dot(MetaNN::Transpose(xh_concat_batch), d_gates_batch);
+    auto db_cat_expr = MetaNN::Dot(MetaNN::Transpose(ones_col), d_gates_batch);
+    auto dh_prev_expr = MetaNN::Dot(d_gates_batch, MetaNN::Transpose(gb.W_h_cat));
+
+    auto dW_catH = dW_cat_expr.EvalRegister();
+    auto db_catH = db_cat_expr.EvalRegister();
+    auto dh_prevH = dh_prev_expr.EvalRegister();
+
+    MetaNN::EvalPlan::Inst().Eval();
+
+    auto addColsToGateAccum = [&](auto& dst, const EAMatrix& src, size_t colOffset)
     {
         auto lowD = MetaNN::LowerAccess(dst);
         auto* dptr = lowD.MutableRawMemory();
 
-        auto lowT = MetaNN::LowerAccess(top);
-        const auto* tptr = lowT.RawMemory();
-
-        auto lowB = MetaNN::LowerAccess(bot);
-        const auto* bptr = lowB.RawMemory();
+        auto lowS = MetaNN::LowerAccess(src);
+        const auto* sptr = lowS.RawMemory();
 
         const size_t rows = dst.Shape()[0];
-        const size_t cols = dst.Shape()[1];
-        const size_t I = rows - H;
+        const size_t dstCols = dst.Shape()[1];
+        const size_t srcCols = src.Shape()[1];
 
-        for (size_t r = 0; r < I; ++r)
+        for (size_t r = 0; r < rows; ++r)
             for (size_t c = 0; c < H; ++c)
-                dptr[r * cols + c] += static_cast<AccumScalar>(tptr[r * H + c]);
-
-        for (size_t r = 0; r < H; ++r)
-            for (size_t c = 0; c < H; ++c)
-                dptr[(I + r) * cols + c] += static_cast<AccumScalar>(bptr[r * H + c]);
+                dptr[r * dstCols + c] += static_cast<AccumScalar>(sptr[r * srcCols + (colOffset + c)]);
     };
 
-    addBlock(A.dW_i, dW_i_topH.Data(), dW_i_botH.Data());
-    addBlock(A.dW_f, dW_f_topH.Data(), dW_f_botH.Data());
-    addBlock(A.dW_g, dW_g_topH.Data(), dW_g_botH.Data());
-    addBlock(A.dW_o, dW_o_topH.Data(), dW_o_botH.Data());
+    addColsToGateAccum(A.dW_i, dW_catH.Data(), 0 * H);
+    addColsToGateAccum(A.dW_f, dW_catH.Data(), 1 * H);
+    addColsToGateAccum(A.dW_g, dW_catH.Data(), 2 * H);
+    addColsToGateAccum(A.dW_o, dW_catH.Data(), 3 * H);
 
-    auto addBias = [&](auto& db, const EAMatrix& g2D)
+    auto addBiasColsToGateAccum = [&](auto& dst, const EAMatrix& src, size_t colOffset)
     {
-        auto lowD = MetaNN::LowerAccess(db);
+        auto lowD = MetaNN::LowerAccess(dst);
         auto* dptr = lowD.MutableRawMemory();
 
-        auto lowG = MetaNN::LowerAccess(g2D);
-        const auto* gptr = lowG.RawMemory();
+        auto lowS = MetaNN::LowerAccess(src);
+        const auto* sptr = lowS.RawMemory();
 
         for (size_t c = 0; c < H; ++c)
-        {
-            AccumScalar s = 0;
-            for (size_t b = 0; b < B; ++b)
-                s += static_cast<AccumScalar>(gptr[b * H + c]);
-            dptr[c] += s;
-        }
+            dptr[c] += static_cast<AccumScalar>(sptr[colOffset + c]);
     };
 
-    addBias(A.db_i, diH.Data());
-    addBias(A.db_f, dfH.Data());
-    addBias(A.db_g, dgH.Data());
-    addBias(A.db_o, doH.Data());
+    addBiasColsToGateAccum(A.db_i, db_catH.Data(), 0 * H);
+    addBiasColsToGateAccum(A.db_f, db_catH.Data(), 1 * H);
+    addBiasColsToGateAccum(A.db_g, db_catH.Data(), 2 * H);
+    addBiasColsToGateAccum(A.db_o, db_catH.Data(), 3 * H);
 
     d_h = dh_prevH.Data();
     d_c = dc_prevH.Data();
