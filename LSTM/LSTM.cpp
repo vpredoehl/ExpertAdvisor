@@ -235,7 +235,6 @@ struct EA::LSTM::WindowBatch
 
 struct EA::LSTM::ForwardBatchScratch
 {
-    EA::LSTM::EAMatrix affine;     // (B, 4H)
     EA::LSTM::EAMatrix y;          // (B, 4H)
     EA::LSTM::EAMatrix i;          // (B, H)
     EA::LSTM::EAMatrix f;          // (B, H)
@@ -244,7 +243,7 @@ struct EA::LSTM::ForwardBatchScratch
     EA::LSTM::EAMatrix c;          // (B, H)
     EA::LSTM::EAMatrix h;          // (B, H)
 
-    ForwardBatchScratch() : affine(1,1), y(1,1), i(1,1), f(1,1), g(1,1), o(1,1), c(1,1), h(1,1)  {}
+    ForwardBatchScratch() : y(1,1), i(1,1), f(1,1), g(1,1), o(1,1), c(1,1), h(1,1)  {}
 };
 
 // Member function definitions moved to EA::LSTM
@@ -399,8 +398,6 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     if (xh_concat.Shape()[0] != B || xh_concat.Shape()[1] != expectedCols)
         xh_concat = EAMatrix(B, expectedCols);
 
-    if (scratch.affine.Shape()[0] != B || scratch.affine.Shape()[1] != gateCols)
-        scratch.affine = EAMatrix(B, gateCols);
     if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
         scratch.y = EAMatrix(B, gateCols);
     if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
@@ -593,23 +590,38 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 
     const size_t K = xh_concat.Shape()[1];
     auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
-    auto yExpr = MetaNN::Dot(xh_concat, W_cat_dyn) + bias;
+    const size_t H = prevHiddenState.Shape()[1];
+
+    EAMatrix yMat(1, 4 * H);
+    {
+        auto lowA = MetaNN::LowerAccess(xh_concat);
+        auto lowB = MetaNN::LowerAccess(W_cat_dyn);
+        auto lowBias = MetaNN::LowerAccess(bias);
+        auto lowY = MetaNN::LowerAccess(yMat);
+
+        auto aMem = lowA.SharedMemory();
+        auto bMem = lowB.SharedMemory();
+        auto biasMem = lowBias.SharedMemory();
+        auto yMem = lowY.SharedMemory();
+
+        MetaNN::NSMetalMatMul::MatMulBias(
+            aMem,
+            bMem,
+            biasMem,
+            yMem,
+            1, K, 4 * H);
+    }
 #if LSTM_DEBUG_PRINTS
-    auto yHandle = yExpr.EvalRegister();
-    MetaNN::EvalPlan::Inst().Eval();
     std::cout << "bias(0,64): " << bias(0,64) << std::endl
-        << "yExpr(0,64) : " << yHandle.Data()(0,64) << std::endl
-        << "yExpr(0,0) : " << yHandle.Data()(0,0) << std::endl
-        << "yExpr(0,128) : " << yHandle.Data()(0,128) << std::endl
-        << "yExpr(0,192) : " << yHandle.Data()(0,192) << std::endl;
+        << "yMat(0,64) : " << yMat(0,64) << std::endl
+        << "yMat(0,0) : " << yMat(0,0) << std::endl
+        << "yMat(0,128) : " << yMat(0,128) << std::endl
+        << "yMat(0,192) : " << yMat(0,192) << std::endl;
 #endif
 
-    const size_t H = prevHiddenState.Shape()[1];
-    auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yExpr);
+    auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yMat);
 #if LSTM_DEBUG_PRINTS
 {
-    auto yHandle = yExpr.EvalRegister();
-
     auto iHandle = i2D.EvalRegister();
     auto fHandle = f2D.EvalRegister();
     auto gHandle = g2D.EvalRegister();
@@ -618,10 +630,10 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
     MetaNN::EvalPlan::Inst().Eval();
 
     std::cout
-        << "y(0,0)="   << yHandle.Data()(0,0)   << "  i(0,0)=" << iHandle.Data()(0,0) << "\n"
-        << "y(0,64)="  << yHandle.Data()(0,64)  << "  f(0,0)=" << fHandle.Data()(0,0) << "\n"
-        << "y(0,128)=" << yHandle.Data()(0,128) << "  g(0,0)=" << gHandle.Data()(0,0) << "\n"
-        << "y(0,192)=" << yHandle.Data()(0,192) << "  o(0,0)=" << oHandle.Data()(0,0) << "\n";
+        << "y(0,0)="   << yMat(0,0)   << "  i(0,0)=" << iHandle.Data()(0,0) << "\n"
+        << "y(0,64)="  << yMat(0,64)  << "  f(0,0)=" << fHandle.Data()(0,0) << "\n"
+        << "y(0,128)=" << yMat(0,128) << "  g(0,0)=" << gHandle.Data()(0,0) << "\n"
+        << "y(0,192)=" << yMat(0,192) << "  o(0,0)=" << oHandle.Data()(0,0) << "\n";
 }
 #endif
     auto i_1d = MetaNN::Sigmoid(MetaNN::Reshape(i2D, MetaNN::Shape(H)));
