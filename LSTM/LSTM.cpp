@@ -749,6 +749,13 @@ float EA::LSTM::predictOnly(const EAMatrix& h_T,
                             const EAMatrix& b) const
 {
     auto logits = MetaNN::Dot(h_T, W) + b;
+    if (targetType == TargetType::BinaryReturn)
+    {
+        auto prob = MetaNN::Sigmoid(logits);
+        auto predH = prob.EvalRegister();
+        MetaNN::EvalPlan::Inst().Eval();
+        return predH.Data()(0, 0);
+    }
     auto predH = logits.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
     return predH.Data()(0, 0);
@@ -1150,7 +1157,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     double sse = 0.0;
     size_t mseCount = 0;
     float predicted_close = 0;
-    double runningLoss = 0.0;
     size_t windowCount = 0;
     size_t windowsInBatch = 0;
     size_t skippedWindows = 0;
@@ -1311,15 +1317,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             wb.close_t.push_back(close_t_local);
             wb.close_target.push_back(close_target_local);
 
-            if (targetType == TargetType::BinaryReturn)
-            {
-                // Option 1: Direction (existing behavior)
-                // wb.targets.push_back((close_target_local > close_t_local) ? 1.0f : 0.0f);
-
-                // Option 2: Magnitude-based target (recommended alternative)
-                float ret = (close_target_local - close_t_local) / std::max(close_t_local, 1e-12f);
-                wb.targets.push_back(ret);
-            }
+            if (targetType == TargetType::BinaryReturn) wb.targets.push_back((close_target_local > close_t_local) ? 1.0f : 0.0f);
             else
             {
                 float y_true_logret_used = y_true_logret;
@@ -1444,14 +1442,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             for (size_t b = 0; b < B; ++b)
             {
-                const float p = pptr[b];
+                const float logit = pptr[b];
                 const float target = wb.targets[b];
-                // If using magnitude targets, switch to regression-style error
-                errs[b] = p - target;
+                const float prob = 1.0f / (1.0f + std::exp(-logit));
+                errs[b] = prob - target;
 
-                // If using magnitude targets, use MSE instead of BCE
-                const double err_d = static_cast<double>(p - target);
-                sse += err_d * err_d;
+                const double logit_d = static_cast<double>(logit);
+                const double target_d = static_cast<double>(target);
+                const double max0 = std::max(logit_d, 0.0);
+                const double bce = max0 - logit_d * target_d + std::log1p(std::exp(-std::abs(logit_d)));
+                sse += bce;
                 ++mseCount;
 
                 // Class counts for diagnostics
@@ -1467,10 +1467,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 y_min = std::min(y_min, target);
                 y_max = std::max(y_max, target);
                 ++y_count;
-                if (yhat_samples.size() < 10) yhat_samples.push_back(p);
-#if LSTM_TRAINING_PROGRESS
-                runningLoss += 0.5 * err_d * err_d;
-#endif
+                if (yhat_samples.size() < 10) yhat_samples.push_back(prob);
 #endif
             }
     #if !LSTM_INFERENCE_ONLY
@@ -1542,9 +1539,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 y_max = std::max(y_max, target);
                 ++y_count;
                 if (yhat_samples.size() < 10) yhat_samples.push_back(y_hat);
-        #if LSTM_TRAINING_PROGRESS
-                runningLoss += 0.5 * static_cast<double>(err) * static_cast<double>(err);
-        #endif
     #endif
             }
     #if !LSTM_INFERENCE_ONLY
@@ -1664,11 +1658,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     #endif
     std::cout << "batch_count=" << windowCount << "\n";
     double loss_value = 0.0;
-#if LSTM_TRAINING_PROGRESS
-    loss_value = (windowCount > 0) ? (runningLoss / static_cast<double>(windowCount)) : 0.0;
-#else
     loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
-#endif
     std::cout << "loss_value=" << loss_value << "\n";
     if (targetType == TargetType::BinaryReturn) std::cout << "up_count=" << up_count
                   << " down_count=" << down_count
@@ -1694,7 +1684,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::cout << std::endl;
         std::cout << "train: skipped_windows=" << skippedWindows << std::endl;
     }
-    if (windowCount > 0) std::cout << "Batch MSE: " << (runningLoss / static_cast<double>(windowCount)) << " (" << windowCount << " windows)" << std::endl;
     std::cout << "batch: max_abs_y_true=" << max_abs_y_true
               << " count_abs_gt_0p01=" << count_abs_gt_0p01
               << " count_abs_gt_threshold=" << count_abs_gt_threshold << std::endl;
