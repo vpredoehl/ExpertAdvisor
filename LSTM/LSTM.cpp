@@ -99,7 +99,11 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_HEAD_WEIGHT_DECAY 1e-4f
 #endif
 
-constexpr size_t mini_batch_windows = 128;
+#ifndef MINI_BATCH_WINDOWS
+#define MINI_BATCH_WINDOWS 512
+#endif
+
+constexpr size_t mini_batch_windows = MINI_BATCH_WINDOWS;
 
 struct LSTMScopedProfileTimer
 {
@@ -282,8 +286,7 @@ inline void EA::LSTM::AccumulateHeadGradsBatch(EAMatrix& dW_accum,
     const size_t B = h_batch.Shape()[0];
     const size_t H = h_batch.Shape()[1];
 
-    auto h_eval = MetaNN::Evaluate(h_batch);
-    auto lowH = MetaNN::LowerAccess(h_eval);
+    auto lowH = MetaNN::LowerAccess(h_batch);
     const float* hptr = lowH.RawMemory();
 
     auto lowW = MetaNN::LowerAccess(dW_accum);
@@ -1229,6 +1232,24 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
     ResetPreviousState();
 
+    // Prebuild the batch rows into one contiguous (num_rows, F) tensor once so
+    // minibatch window assembly can memcpy directly from a contiguous source
+    // instead of repeatedly materializing overlapping windows via GetWindow().
+    const size_t batchRows = static_cast<size_t>(batch.end() - batch.begin());
+    const size_t featureCount = (batchRows > 0) ? static_cast<size_t>((*batch.begin()).Shape()[1]) : 0;
+    EAMatrix prebuilt_rows(batchRows, featureCount);
+    {
+        auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
+        float* dst = lowPrebuilt.MutableRawMemory();
+        size_t r = 0;
+        for (auto it = batch.begin(); it != batch.end(); ++it, ++r)
+        {
+            auto lowRow = MetaNN::LowerAccess(*it);
+            const float* src = lowRow.RawMemory();
+            std::memcpy(dst + r * featureCount, src, featureCount * sizeof(float));
+        }
+    }
+
     auto buildWindowBatch = [&](auto first, auto last) -> WindowBatch
     {
 #if LSTM_BATCH_PROFILE
@@ -1236,17 +1257,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
         WindowBatch wb;
 
-        size_t B_est = 0;
-        for (auto window_start = first;
-             window_start != last && window_start + window_size + prediction_horizon - 1 < batch.end();
-             ++window_start)
-        {
-            ++B_est;
-        }
-
+        const size_t B_est = static_cast<size_t>(last - first);
         if (B_est == 0) return wb;
 
-        const size_t F = static_cast<size_t>((*first).Shape()[1]);
+        const size_t F = featureCount;
         wb.packed_steps.reserve(window_size);
         std::vector<float*> packed_step_ptrs;
         packed_step_ptrs.reserve(window_size);
@@ -1264,46 +1278,35 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #warning "Insert prediction_horizon comment before targets loop"
         // NOTE: For faster learning and less noise, consider reducing prediction_horizon
         // to a shorter range (e.g., 1–4 timesteps) instead of larger horizons.
-        size_t b = 0;
-        for (auto window_start = first;
-             window_start != last && window_start + window_size + prediction_horizon - 1 < batch.end();
-             ++window_start, ++b)
-        {
-#if LSTM_BATCH_PROFILE
-            auto t_get0 = std::chrono::steady_clock::now();
-            auto w = t.GetWindow(window_start);
-            auto t_get1 = std::chrono::steady_clock::now();
-            profile.get_window_us += std::chrono::duration<double, std::micro>(t_get1 - t_get0).count();
-            ++profile.total_windows_built;
+        auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
+        const float* prebuilt_ptr = lowPrebuilt.RawMemory();
 
+        size_t b = 0;
+        for (auto it = first; it != last; ++it, ++b)
+        {
+            const size_t start = *it;
+#if LSTM_BATCH_PROFILE
+            ++profile.total_windows_built;
             auto t_pack0 = std::chrono::steady_clock::now();
+#endif
             for (size_t tstep = 0; tstep < window_size; ++tstep)
             {
-                auto row = w[tstep];
-                auto lowRow = MetaNN::LowerAccess(row);
-                const float* src = lowRow.RawMemory();
+                const float* src = prebuilt_ptr + (start + tstep) * F;
                 std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
             }
+#if LSTM_BATCH_PROFILE
             auto t_pack1 = std::chrono::steady_clock::now();
             profile.pack_copy_us += std::chrono::duration<double, std::micro>(t_pack1 - t_pack0).count();
-#else
-            auto w = t.GetWindow(window_start);
-            for (size_t tstep = 0; tstep < window_size; ++tstep)
-            {
-                auto row = w[tstep];
-                auto lowRow = MetaNN::LowerAccess(row);
-                const float* src = lowRow.RawMemory();
-                std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
-            }
 #endif
 
-            auto lastIt   = window_start + (window_size - 1);
-            auto targetIt = lastIt + prediction_horizon;
+            const size_t lastIdx   = start + (window_size - 1);
+            const size_t targetIdx = lastIdx + prediction_horizon;
+            const auto lastIt      = batch.begin() + static_cast<std::ptrdiff_t>(lastIdx);
+            const auto targetIt    = batch.begin() + static_cast<std::ptrdiff_t>(targetIdx);
             const float close_t_local      = t.RawCloseAtIterator(lastIt);
             const float close_target_local = t.RawCloseAtIterator(targetIt);
-            const auto nextFeat = *targetIt;
-            const float y_true_scaled = nextFeat(0, closeCol);
-            const float y_true_logret = y_true_scaled / EA::LSTM::kFeatScale;
+            const float y_true_scaled      = prebuilt_ptr[targetIdx * F + closeCol];
+            const float y_true_logret      = y_true_scaled / EA::LSTM::kFeatScale;
 
             wb.close_t.push_back(close_t_local);
             wb.close_target.push_back(close_target_local);
@@ -1334,12 +1337,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     };
 
     // Materialize overlapping windows, then process them in minibatches.
-    std::vector<decltype(batch.begin())> allStarts;
-    for (auto window_start = batch.begin();
-         window_start + window_size + prediction_horizon - 1 < batch.end();
-         ++window_start)
+    std::vector<size_t> allStarts;
+    for (size_t start = 0;
+         start + window_size + prediction_horizon - 1 < batchRows;
+         ++start)
     {
-        allStarts.push_back(window_start);
+        allStarts.push_back(start);
     }
 
 
@@ -1347,7 +1350,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += mini_batch_windows)
     {
         const size_t batchEnd = std::min(batchBase + mini_batch_windows, allStarts.size());
-        WindowBatch wb = buildWindowBatch(allStarts[batchBase], allStarts[batchEnd - 1] + 1);
+        WindowBatch wb = buildWindowBatch(allStarts.begin() + static_cast<std::ptrdiff_t>(batchBase),
+                                          allStarts.begin() + static_cast<std::ptrdiff_t>(batchEnd));
         const size_t B = wb.targets.size();
         if (B == 0) continue;
 #if LSTM_BATCH_PROFILE
@@ -1435,13 +1439,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     B, hidden_size, 1);
             }
 #endif
-            auto pH = head_logits_batch.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            EAMatrix pMat = pH.Data();
+            auto lowP = MetaNN::LowerAccess(head_logits_batch);
+            const float* pptr = lowP.RawMemory();
 
             for (size_t b = 0; b < B; ++b)
             {
-                const float p = pMat(b, 0);
+                const float p = pptr[b];
                 const float target = wb.targets[b];
                 // If using magnitude targets, switch to regression-style error
                 errs[b] = p - target;
@@ -1520,13 +1523,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     B, hidden_size, 1);
             }
 #endif
-            auto yH = head_logits_batch.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            EAMatrix yMat = yH.Data();
+            auto lowYLogits = MetaNN::LowerAccess(head_logits_batch);
+            const float* yptr = lowYLogits.RawMemory();
 
             for (size_t b = 0; b < B; ++b)
             {
-                const float y_hat = yMat(b, 0);
+                const float y_hat = yptr[b];
                 const float target = wb.targets[b];
                 const float err = y_hat - target;
                 errs[b] = err;
