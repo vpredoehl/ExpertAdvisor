@@ -155,7 +155,7 @@ struct EA::LSTM::LSTMBatchProfile
     double dot_plus_bias_us = 0.0;
     double gate_only_us = 0.0;
     double state_update_us = 0.0;
-    double head_repeat_rows_us = 0.0;
+    double head_affine_us = 0.0;
     size_t mini_batches = 0;
     size_t total_windows = 0;
     size_t total_rows_processed = 0;
@@ -1089,7 +1089,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 
 std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
-    EAMatrix head_bias_batch(mini_batch_windows, 1), head_dir_bias_batch(mini_batch_windows, 1);
+    EAMatrix head_logits_batch(mini_batch_windows, 1);
 
     double sse = 0.0;
     size_t mseCount = 0;
@@ -1332,17 +1332,49 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         if (targetType == TargetType::BinaryReturn)
         {
             // combine into single evaluation barrier for efficiency
-            if (head_dir_bias_batch.Shape()[0] != B || head_dir_bias_batch.Shape()[1] != 1)
-                head_dir_bias_batch = EAMatrix(B, 1);
+            if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != 1)
+                head_logits_batch = EAMatrix(B, 1);
 #if LSTM_BATCH_PROFILE
             {
-                LSTMScopedProfileTimer timer(profile.head_repeat_rows_us);
-                RepeatRowsInto(head_dir_bias_batch, returnHeadDirBias, B);
+                LSTMScopedProfileTimer timer(profile.head_affine_us);
+                auto lowA = MetaNN::LowerAccess(h_batch);
+                auto lowB = MetaNN::LowerAccess(returnHeadDirWeight);
+                auto lowBias = MetaNN::LowerAccess(returnHeadDirBias);
+                auto lowY = MetaNN::LowerAccess(head_logits_batch);
+
+                auto aMem = lowA.SharedMemory();
+                auto bMem = lowB.SharedMemory();
+                auto biasMem = lowBias.SharedMemory();
+                auto yMem = lowY.SharedMemory();
+
+                MetaNN::NSMetalMatMul::MatMulBias(
+                    aMem,
+                    bMem,
+                    biasMem,
+                    yMem,
+                    B, hidden_size, 1);
             }
 #else
-            RepeatRowsInto(head_dir_bias_batch, returnHeadDirBias, B);
+            {
+                auto lowA = MetaNN::LowerAccess(h_batch);
+                auto lowB = MetaNN::LowerAccess(returnHeadDirWeight);
+                auto lowBias = MetaNN::LowerAccess(returnHeadDirBias);
+                auto lowY = MetaNN::LowerAccess(head_logits_batch);
+
+                auto aMem = lowA.SharedMemory();
+                auto bMem = lowB.SharedMemory();
+                auto biasMem = lowBias.SharedMemory();
+                auto yMem = lowY.SharedMemory();
+
+                MetaNN::NSMetalMatMul::MatMulBias(
+                    aMem,
+                    bMem,
+                    biasMem,
+                    yMem,
+                    B, hidden_size, 1);
+            }
 #endif
-            auto pH = MetaNN::Sigmoid(MetaNN::Dot(h_batch, returnHeadDirWeight) + head_dir_bias_batch).EvalRegister();
+            auto pH = MetaNN::Sigmoid(head_logits_batch).EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix pMat = pH.Data();
 
@@ -1385,17 +1417,49 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         else
         {
             // combine into single evaluation barrier for efficiency
-            if (head_bias_batch.Shape()[0] != B || head_bias_batch.Shape()[1] != 1)
-                head_bias_batch = EAMatrix(B, 1);
+            if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != 1)
+                head_logits_batch = EAMatrix(B, 1);
 #if LSTM_BATCH_PROFILE
             {
-                LSTMScopedProfileTimer timer(profile.head_repeat_rows_us);
-                RepeatRowsInto(head_bias_batch, returnHeadBias, B);
+                LSTMScopedProfileTimer timer(profile.head_affine_us);
+                auto lowA = MetaNN::LowerAccess(h_batch);
+                auto lowB = MetaNN::LowerAccess(returnHeadWeight);
+                auto lowBias = MetaNN::LowerAccess(returnHeadBias);
+                auto lowY = MetaNN::LowerAccess(head_logits_batch);
+
+                auto aMem = lowA.SharedMemory();
+                auto bMem = lowB.SharedMemory();
+                auto biasMem = lowBias.SharedMemory();
+                auto yMem = lowY.SharedMemory();
+
+                MetaNN::NSMetalMatMul::MatMulBias(
+                    aMem,
+                    bMem,
+                    biasMem,
+                    yMem,
+                    B, hidden_size, 1);
             }
 #else
-            RepeatRowsInto(head_bias_batch, returnHeadBias, B);
+            {
+                auto lowA = MetaNN::LowerAccess(h_batch);
+                auto lowB = MetaNN::LowerAccess(returnHeadWeight);
+                auto lowBias = MetaNN::LowerAccess(returnHeadBias);
+                auto lowY = MetaNN::LowerAccess(head_logits_batch);
+
+                auto aMem = lowA.SharedMemory();
+                auto bMem = lowB.SharedMemory();
+                auto biasMem = lowBias.SharedMemory();
+                auto yMem = lowY.SharedMemory();
+
+                MetaNN::NSMetalMatMul::MatMulBias(
+                    aMem,
+                    bMem,
+                    biasMem,
+                    yMem,
+                    B, hidden_size, 1);
+            }
 #endif
-            auto yH = (MetaNN::Dot(h_batch, returnHeadWeight) + head_bias_batch).EvalRegister();
+            auto yH = head_logits_batch.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix yMat = yH.Data();
 
@@ -1468,10 +1532,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     // Per-batch diagnostics
     #if LSTM_BATCH_PROFILE
     {
-        const double assembly_us = profile.build_window_batch_us + profile.forward_step_batches_us + profile.head_repeat_rows_us;
+        const double assembly_us = profile.build_window_batch_us + profile.forward_step_batches_us + profile.head_affine_us;
         const double forward_pct = (assembly_us > 0.0) ? (100.0 * profile.forward_step_batches_us / assembly_us) : 0.0;
         const double build_pct = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
-        const double repeat_pct = (assembly_us > 0.0) ? (100.0 * profile.head_repeat_rows_us / assembly_us) : 0.0;
+        const double repeat_pct = (assembly_us > 0.0) ? (100.0 * profile.head_affine_us / assembly_us) : 0.0;
         const double ns_per_row = (profile.total_rows_processed > 0)
         ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_rows_processed))
         : 0.0;
@@ -1517,7 +1581,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " dot_plus_bias_us=" << profile.dot_plus_bias_us
                   << " gate_only_us=" << profile.gate_only_us
                   << " state_update_us=" << profile.state_update_us
-                  << " head_repeat_rows_us=" << profile.head_repeat_rows_us
+                  << " head_affine_us=" << profile.head_affine_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
                   << " repeat_pct=" << repeat_pct
