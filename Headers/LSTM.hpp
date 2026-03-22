@@ -194,6 +194,14 @@ private:
                                     EAMatrix& prevCellState,
                                     EAMatrix& xh_concat,
                                     ForwardBatchScratch& scratch, LSTMBatchProfile*) const;
+    void ComputeGateStateBatchFromContiguous(const EAMatrix& gates_batch,
+                                                              const EAMatrix& prevCellState,
+                                                              EAMatrix& gate_i_batch,
+                                                              EAMatrix& gate_f_batch,
+                                                              EAMatrix& gate_g_batch,
+                                                              EAMatrix& gate_o_batch,
+                                                              EAMatrix& c_batch,
+                                                              EAMatrix& h_batch) const;
     HeadLoss predictAndLoss(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b, float target) const;
     float predictOnly(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b) const;
     void accumulateHeadGrads(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_T, float err) const;

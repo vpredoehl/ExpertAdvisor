@@ -153,8 +153,7 @@ struct EA::LSTM::LSTMBatchProfile
     double repeat_bias_us = 0.0;
     double concat_cols_us = 0.0;
     double dot_plus_bias_us = 0.0;
-    double gate_only_us = 0.0;
-    double state_update_us = 0.0;
+    double gate_state_us = 0.0;
     double head_affine_us = 0.0;
     size_t mini_batches = 0;
     size_t total_windows = 0;
@@ -348,6 +347,96 @@ inline void EA::LSTM::RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t 
         std::copy(src, src + cols, dst + b * cols);
 }
 
+inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_batch,
+                                                          const EAMatrix& prevCellState,
+                                                          EAMatrix& gate_i_batch,
+                                                          EAMatrix& gate_f_batch,
+                                                          EAMatrix& gate_g_batch,
+                                                          EAMatrix& gate_o_batch,
+                                                          EAMatrix& c_batch,
+                                                          EAMatrix& h_batch) const
+{
+    const size_t B = gates_batch.Shape()[0];
+    const size_t W = gates_batch.Shape()[1];
+    const size_t H = W / 4;
+
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(W % 4 == 0, "ComputeGateStateBatchFromContiguous: gates width must be divisible by 4");
+    LSTM_ASSERT(prevCellState.Shape()[0] == B && prevCellState.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: prevCellState shape mismatch");
+    LSTM_ASSERT(gate_i_batch.Shape()[0] == B && gate_i_batch.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: gate_i_batch shape mismatch");
+    LSTM_ASSERT(gate_f_batch.Shape()[0] == B && gate_f_batch.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: gate_f_batch shape mismatch");
+    LSTM_ASSERT(gate_g_batch.Shape()[0] == B && gate_g_batch.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: gate_g_batch shape mismatch");
+    LSTM_ASSERT(gate_o_batch.Shape()[0] == B && gate_o_batch.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: gate_o_batch shape mismatch");
+    LSTM_ASSERT(c_batch.Shape()[0] == B && c_batch.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: c_batch shape mismatch");
+    LSTM_ASSERT(h_batch.Shape()[0] == B && h_batch.Shape()[1] == H,
+                "ComputeGateStateBatchFromContiguous: h_batch shape mismatch");
+#endif
+
+    auto lowY = MetaNN::LowerAccess(gates_batch);
+    const float* yptr = lowY.RawMemory();
+
+    auto lowCPrev = MetaNN::LowerAccess(prevCellState);
+    const float* cprev = lowCPrev.RawMemory();
+
+    auto lowI = MetaNN::LowerAccess(gate_i_batch);
+    float* iptr = lowI.MutableRawMemory();
+
+    auto lowF = MetaNN::LowerAccess(gate_f_batch);
+    float* fptr = lowF.MutableRawMemory();
+
+    auto lowG = MetaNN::LowerAccess(gate_g_batch);
+    float* gptr = lowG.MutableRawMemory();
+
+    auto lowO = MetaNN::LowerAccess(gate_o_batch);
+    float* optr = lowO.MutableRawMemory();
+
+    auto lowC = MetaNN::LowerAccess(c_batch);
+    float* cptr = lowC.MutableRawMemory();
+
+    auto lowH = MetaNN::LowerAccess(h_batch);
+    float* hptr = lowH.MutableRawMemory();
+
+    for (size_t b = 0; b < B; ++b)
+    {
+        const float* yrow = yptr + b * (4 * H);
+        const float* irow = yrow + 0 * H;
+        const float* frow = yrow + 1 * H;
+        const float* grow = yrow + 2 * H;
+        const float* orow = yrow + 3 * H;
+
+        const float* cprev_row = cprev + b * H;
+        float* iout = iptr + b * H;
+        float* fout = fptr + b * H;
+        float* gout = gptr + b * H;
+        float* oout = optr + b * H;
+        float* cout = cptr + b * H;
+        float* hout = hptr + b * H;
+
+        for (size_t j = 0; j < H; ++j)
+        {
+            const float i_val = 1.0f / (1.0f + std::exp(-irow[j]));
+            const float f_val = 1.0f / (1.0f + std::exp(-frow[j]));
+            const float g_val = std::tanh(grow[j]);
+            const float o_val = 1.0f / (1.0f + std::exp(-orow[j]));
+            const float c_val = f_val * cprev_row[j] + i_val * g_val;
+            const float h_val = o_val * std::tanh(c_val);
+
+            iout[j] = i_val;
+            fout[j] = f_val;
+            gout[j] = g_val;
+            oout[j] = o_val;
+            cout[j] = c_val;
+            hout[j] = h_val;
+        }
+    }
+}
+
 // NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
 // Prefer keeping tensors in batched (B, *) form and using GatherRows/RepeatRows/ViewRows with
 // forwardStepBatch/backwardStepBatch and batched heads.
@@ -474,57 +563,34 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 
-    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 0 * H, H);
-    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * H, H);
-    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 2 * H, H);
-    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 3 * H, H);
     {
-        auto iExpr = MetaNN::Sigmoid(i2D);
-        auto fExpr = MetaNN::Sigmoid(f2D);
-        auto gExpr = MetaNN::Tanh(g2D);
-        auto oExpr = MetaNN::Sigmoid(o2D);
-        auto cExpr = fExpr * prevCellState + iExpr * gExpr;
-        auto hExpr = oExpr * MetaNN::Tanh(cExpr);
-
 #if LSTM_BATCH_PROFILE
         if (profile)
         {
-            LSTMScopedProfileTimer timer(profile->gate_only_us);
-            auto iH = iExpr.EvalRegister();
-            auto fH = fExpr.EvalRegister();
-            auto gH = gExpr.EvalRegister();
-            auto oH = oExpr.EvalRegister();
-            auto cH = cExpr.EvalRegister();
-            auto hH = hExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.gate_i_batch = iH.Data();
-            scratch.gate_f_batch = fH.Data();
-            scratch.gate_g_batch = gH.Data();
-            scratch.gate_o_batch = oH.Data();
-            scratch.c = cH.Data();
-            scratch.h = hH.Data();
+            LSTMScopedProfileTimer timer(profile->gate_state_us);
+            ComputeGateStateBatchFromContiguous(
+                scratch.gates_batch,
+                prevCellState,
+                scratch.gate_i_batch,
+                scratch.gate_f_batch,
+                scratch.gate_g_batch,
+                scratch.gate_o_batch,
+                scratch.c,
+                scratch.h);
         }
         else
 #endif
         {
-            auto iH = iExpr.EvalRegister();
-            auto fH = fExpr.EvalRegister();
-            auto gH = gExpr.EvalRegister();
-            auto oH = oExpr.EvalRegister();
-            auto cH = cExpr.EvalRegister();
-            auto hH = hExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.gate_i_batch = iH.Data();
-            scratch.gate_f_batch = fH.Data();
-            scratch.gate_g_batch = gH.Data();
-            scratch.gate_o_batch = oH.Data();
-            scratch.c = cH.Data();
-            scratch.h = hH.Data();
+            ComputeGateStateBatchFromContiguous(
+                scratch.gates_batch,
+                prevCellState,
+                scratch.gate_i_batch,
+                scratch.gate_f_batch,
+                scratch.gate_g_batch,
+                scratch.gate_o_batch,
+                scratch.c,
+                scratch.h);
         }
-
-#if LSTM_BATCH_PROFILE
-        if (profile)    profile->state_update_us += 0.0;
-#endif
     }
 
     BatchStepCache sc{
@@ -1564,10 +1630,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         ? (100.0 * profile.dot_plus_bias_us / profile.forward_step_batches_us)
         : 0.0;
         const double gate_only_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-        ? (100.0 * profile.gate_only_us / profile.forward_step_batches_us)
-        : 0.0;
-        const double state_update_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-        ? (100.0 * profile.state_update_us / profile.forward_step_batches_us)
+        ? (100.0 * profile.gate_state_us / profile.forward_step_batches_us)
         : 0.0;
         
         std::cout << std::fixed << std::setprecision(3)
@@ -1579,8 +1642,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " repeat_bias_us=" << profile.repeat_bias_us
                   << " concat_cols_us=" << profile.concat_cols_us
                   << " dot_plus_bias_us=" << profile.dot_plus_bias_us
-                  << " gate_only_us=" << profile.gate_only_us
-                  << " state_update_us=" << profile.state_update_us
+                  << " gate_state_us=" << profile.gate_state_us
                   << " head_affine_us=" << profile.head_affine_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
@@ -1593,7 +1655,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " concat_cols_pct_of_forward=" << concat_cols_pct_of_forward
                   << " dot_plus_bias_pct_of_forward=" << dot_plus_bias_pct_of_forward
                   << " gate_only_pct_of_forward=" << gate_only_pct_of_forward
-                  << " state_update_pct_of_forward=" << state_update_pct_of_forward
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
                   << " minibatches=" << profile.mini_batches
