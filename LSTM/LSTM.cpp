@@ -347,6 +347,11 @@ inline void EA::LSTM::RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t 
         std::copy(src, src + cols, dst + b * cols);
 }
 
+// Keep gate/state computation on the Metal path.
+// The old implementation pulled gate buffers back to host memory and ran
+// sigmoid/tanh/cell-state updates in scalar CPU loops, which underfed the GPU.
+// This version slices the contiguous gate tensor into 4 column blocks and
+// evaluates the nonlinearities and recurrent state updates as MetaNN expressions.
 inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_batch,
                                                           const EAMatrix& prevCellState,
                                                           EAMatrix& gate_i_batch,
@@ -378,69 +383,40 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
                 "ComputeGateStateBatchFromContiguous: h_batch shape mismatch");
 #endif
 
-    auto lowY = MetaNN::LowerAccess(gates_batch);
-    const float* yptr = lowY.RawMemory();
+    auto i_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 0 * H, H);
+    auto f_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 1 * H, H);
+    auto g_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 2 * H, H);
+    auto o_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 3 * H, H);
 
-    auto lowCPrev = MetaNN::LowerAccess(prevCellState);
-    const float* cprev = lowCPrev.RawMemory();
+    auto i_expr = MetaNN::Sigmoid(i_pre);
+    auto f_expr = MetaNN::Sigmoid(f_pre);
+    auto g_expr = MetaNN::Tanh(g_pre);
+    auto o_expr = MetaNN::Sigmoid(o_pre);
+    auto c_expr = f_expr * prevCellState + i_expr * g_expr;
+    auto h_expr = o_expr * MetaNN::Tanh(c_expr);
 
-    auto lowI = MetaNN::LowerAccess(gate_i_batch);
-    float* iptr = lowI.MutableRawMemory();
+    auto i_handle = i_expr.EvalRegister();
+    auto f_handle = f_expr.EvalRegister();
+    auto g_handle = g_expr.EvalRegister();
+    auto o_handle = o_expr.EvalRegister();
+    auto c_handle = c_expr.EvalRegister();
+    auto h_handle = h_expr.EvalRegister();
 
-    auto lowF = MetaNN::LowerAccess(gate_f_batch);
-    float* fptr = lowF.MutableRawMemory();
+    MetaNN::EvalPlan::Inst().Eval();
 
-    auto lowG = MetaNN::LowerAccess(gate_g_batch);
-    float* gptr = lowG.MutableRawMemory();
-
-    auto lowO = MetaNN::LowerAccess(gate_o_batch);
-    float* optr = lowO.MutableRawMemory();
-
-    auto lowC = MetaNN::LowerAccess(c_batch);
-    float* cptr = lowC.MutableRawMemory();
-
-    auto lowH = MetaNN::LowerAccess(h_batch);
-    float* hptr = lowH.MutableRawMemory();
-
-    for (size_t b = 0; b < B; ++b)
-    {
-        const float* yrow = yptr + b * (4 * H);
-        const float* irow = yrow + 0 * H;
-        const float* frow = yrow + 1 * H;
-        const float* grow = yrow + 2 * H;
-        const float* orow = yrow + 3 * H;
-
-        const float* cprev_row = cprev + b * H;
-        float* iout = iptr + b * H;
-        float* fout = fptr + b * H;
-        float* gout = gptr + b * H;
-        float* oout = optr + b * H;
-        float* cout = cptr + b * H;
-        float* hout = hptr + b * H;
-
-        for (size_t j = 0; j < H; ++j)
-        {
-            const float i_val = 1.0f / (1.0f + std::exp(-irow[j]));
-            const float f_val = 1.0f / (1.0f + std::exp(-frow[j]));
-            const float g_val = std::tanh(grow[j]);
-            const float o_val = 1.0f / (1.0f + std::exp(-orow[j]));
-            const float c_val = f_val * cprev_row[j] + i_val * g_val;
-            const float h_val = o_val * std::tanh(c_val);
-
-            iout[j] = i_val;
-            fout[j] = f_val;
-            gout[j] = g_val;
-            oout[j] = o_val;
-            cout[j] = c_val;
-            hout[j] = h_val;
-        }
-    }
+    gate_i_batch = i_handle.Data();
+    gate_f_batch = f_handle.Data();
+    gate_g_batch = g_handle.Data();
+    gate_o_batch = o_handle.Data();
+    c_batch = c_handle.Data();
+    h_batch = h_handle.Data();
 }
 
 // NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
 // Prefer keeping tensors in batched (B, *) form and using GatherRows/RepeatRows/ViewRows with
 // forwardStepBatch/backwardStepBatch and batched heads.
-[[deprecated("Avoid SliceRows in training hot path; use batched views/ops instead")]] inline auto EA::LSTM::SliceRows(const EAMatrix& src, size_t row0, size_t rowCount) -> EAMatrix
+[[deprecated("Avoid SliceRows in training hot path; use batched views/ops instead")]]
+inline auto EA::LSTM::SliceRows(const EAMatrix& src, size_t row0, size_t rowCount) -> EAMatrix
 {
 #if !LSTM_INFERENCE_ONLY
     // SliceRows is poison for throughput in training hot path. Use batched (B, *) ops instead.
