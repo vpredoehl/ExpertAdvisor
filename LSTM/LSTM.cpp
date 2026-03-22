@@ -194,9 +194,9 @@ void SGDUpdate(MatP& P, const MatG& G, float lr)
 
 struct EA::LSTM::WindowWeights
 {
-    EA::LSTM::EAMatrix W_cat;   // (n_in + H) x (4H)
-    EA::LSTM::EAMatrix W_x_win; // top block (n_in x 4H)
-    EA::LSTM::EAMatrix W_h_win; // bottom block (H x 4H)
+    EA::LSTM::EAMatrix W_xh; // full (n_in + H) x (4H)
+    EA::LSTM::EAMatrix W_x;  // top block (n_in x 4H)
+    EA::LSTM::EAMatrix W_h;  // bottom block (H x 4H)
 };
 
 struct EA::LSTM::StepCache
@@ -235,15 +235,15 @@ struct EA::LSTM::WindowBatch
 
 struct EA::LSTM::ForwardBatchScratch
 {
-    EA::LSTM::EAMatrix y;          // (B, 4H)
-    EA::LSTM::EAMatrix i;          // (B, H)
-    EA::LSTM::EAMatrix f;          // (B, H)
-    EA::LSTM::EAMatrix g;          // (B, H)
-    EA::LSTM::EAMatrix o;          // (B, H)
+    EA::LSTM::EAMatrix gates_batch;          // (B, 4H)
+    EA::LSTM::EAMatrix gate_i_batch;          // (B, H)
+    EA::LSTM::EAMatrix gate_f_batch;          // (B, H)
+    EA::LSTM::EAMatrix gate_g_batch;          // (B, H)
+    EA::LSTM::EAMatrix gate_o_batch;          // (B, H)
     EA::LSTM::EAMatrix c;          // (B, H)
     EA::LSTM::EAMatrix h;          // (B, H)
 
-    ForwardBatchScratch() : y(1,1), i(1,1), f(1,1), g(1,1), o(1,1), c(1,1), h(1,1)  {}
+    ForwardBatchScratch() : gates_batch(1,1), gate_i_batch(1,1), gate_f_batch(1,1), gate_g_batch(1,1), gate_o_batch(1,1), c(1,1), h(1,1)  {}
 };
 
 // Member function definitions moved to EA::LSTM
@@ -301,10 +301,10 @@ inline void EA::LSTM::AccumulateHeadGradsBatch(EAMatrix& dW_accum,
 
 inline auto EA::LSTM::hoistWindowWeights() const -> WindowWeights
 {
-    const auto W_x_win = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::Metal>(param, param.Shape()[0] - hidden_size);
-    const auto W_h_win = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::Metal>(param, hidden_size);
-    const auto W_cat   = param; // full (n_in + H) x (4H) matrix; dynamic row views taken later
-    return WindowWeights{ W_cat, W_x_win, W_h_win };
+    const auto W_x = NNUtils::ViewTopRows<float, MetaNN::DeviceTags::Metal>(param, param.Shape()[0] - hidden_size);
+    const auto W_h = NNUtils::ViewBottomRows<float, MetaNN::DeviceTags::Metal>(param, hidden_size);
+    const auto W_xh = param; // full (n_in + H) x (4H) matrix; dynamic row views taken later
+    return WindowWeights{ W_xh, W_x, W_h };
 }
 
 
@@ -386,7 +386,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
                                        const EAMatrix& bias,
                                        EAMatrix& prevHiddenState,
                                        EAMatrix& prevCellState,
-                                       EAMatrix& xh_concat,
+                                       EAMatrix& xh_concat_batch,
                                        ForwardBatchScratch& scratch,
                                        LSTMBatchProfile* profile) const -> BatchStepCache
 {
@@ -395,48 +395,48 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     const size_t expectedCols = x_t.Shape()[1] + H;
     const size_t gateCols = 4 * H;
 
-    if (xh_concat.Shape()[0] != B || xh_concat.Shape()[1] != expectedCols)
-        xh_concat = EAMatrix(B, expectedCols);
+    if (xh_concat_batch.Shape()[0] != B || xh_concat_batch.Shape()[1] != expectedCols)
+        xh_concat_batch = EAMatrix(B, expectedCols);
 
-    if (scratch.y.Shape()[0] != B || scratch.y.Shape()[1] != gateCols)
-        scratch.y = EAMatrix(B, gateCols);
-    if (scratch.i.Shape()[0] != B || scratch.i.Shape()[1] != H)
-        scratch.i = EAMatrix(B, H);
-    if (scratch.f.Shape()[0] != B || scratch.f.Shape()[1] != H)
-        scratch.f = EAMatrix(B, H);
-    if (scratch.g.Shape()[0] != B || scratch.g.Shape()[1] != H)
-        scratch.g = EAMatrix(B, H);
-    if (scratch.o.Shape()[0] != B || scratch.o.Shape()[1] != H)
-        scratch.o = EAMatrix(B, H);
+    if (scratch.gates_batch.Shape()[0] != B || scratch.gates_batch.Shape()[1] != gateCols)
+        scratch.gates_batch = EAMatrix(B, gateCols);
+    if (scratch.gate_i_batch.Shape()[0] != B || scratch.gate_i_batch.Shape()[1] != H)
+        scratch.gate_i_batch = EAMatrix(B, H);
+    if (scratch.gate_f_batch.Shape()[0] != B || scratch.gate_f_batch.Shape()[1] != H)
+        scratch.gate_f_batch = EAMatrix(B, H);
+    if (scratch.gate_g_batch.Shape()[0] != B || scratch.gate_g_batch.Shape()[1] != H)
+        scratch.gate_g_batch = EAMatrix(B, H);
+    if (scratch.gate_o_batch.Shape()[0] != B || scratch.gate_o_batch.Shape()[1] != H)
+        scratch.gate_o_batch = EAMatrix(B, H);
     if (scratch.c.Shape()[0] != B || scratch.c.Shape()[1] != H)
         scratch.c = EAMatrix(B, H);
     if (scratch.h.Shape()[0] != B || scratch.h.Shape()[1] != H)
         scratch.h = EAMatrix(B, H);
 
-#if LSTM_BATCH_PROFILE
+    #if LSTM_BATCH_PROFILE
     if (profile)
     {
         LSTMScopedProfileTimer timer(profile->concat_cols_us);
-        NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+        NNUtils::ConcatColsInto(xh_concat_batch, x_t, prevHiddenState);
     }
     else
-#endif
+    #endif
     {
-        NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+        NNUtils::ConcatColsInto(xh_concat_batch, x_t, prevHiddenState);
     }
 
-    const size_t K = xh_concat.Shape()[1];
-    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
+    const size_t K = xh_concat_batch.Shape()[1];
+    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_xh, 0, K);
 
     {
 #if LSTM_BATCH_PROFILE
         if (profile)
         {
             LSTMScopedProfileTimer timer(profile->dot_plus_bias_us);
-            auto lowA = MetaNN::LowerAccess(xh_concat);
+            auto lowA = MetaNN::LowerAccess(xh_concat_batch);
             auto lowB = MetaNN::LowerAccess(W_cat_dyn);
             auto lowBias = MetaNN::LowerAccess(bias);
-            auto lowY = MetaNN::LowerAccess(scratch.y);
+            auto lowY = MetaNN::LowerAccess(scratch.gates_batch);
 
             // Store shared memory views in local variables to avoid binding temporaries
             auto aMem = lowA.SharedMemory();
@@ -454,10 +454,10 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         else
 #endif
         {
-            auto lowA = MetaNN::LowerAccess(xh_concat);
+            auto lowA = MetaNN::LowerAccess(xh_concat_batch);
             auto lowB = MetaNN::LowerAccess(W_cat_dyn);
             auto lowBias = MetaNN::LowerAccess(bias);
-            auto lowY = MetaNN::LowerAccess(scratch.y);
+            auto lowY = MetaNN::LowerAccess(scratch.gates_batch);
 
             // Store shared memory views in local variables to avoid binding temporaries
             auto aMem = lowA.SharedMemory();
@@ -474,78 +474,67 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 
-    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 0 * H, H);
-    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 1 * H, H);
-    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 2 * H, H);
-    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.y, 3 * H, H);
+    auto i2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 0 * H, H);
+    auto f2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * H, H);
+    auto g2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 2 * H, H);
+    auto o2D = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 3 * H, H);
     {
+        auto iExpr = MetaNN::Sigmoid(i2D);
+        auto fExpr = MetaNN::Sigmoid(f2D);
+        auto gExpr = MetaNN::Tanh(g2D);
+        auto oExpr = MetaNN::Sigmoid(o2D);
+        auto cExpr = fExpr * prevCellState + iExpr * gExpr;
+        auto hExpr = oExpr * MetaNN::Tanh(cExpr);
+
 #if LSTM_BATCH_PROFILE
         if (profile)
         {
-            auto iExpr = MetaNN::Sigmoid(i2D);
-            auto fExpr = MetaNN::Sigmoid(f2D);
-            auto gExpr = MetaNN::Tanh(g2D);
-            auto oExpr = MetaNN::Sigmoid(o2D);
-
-            {
-                LSTMScopedProfileTimer timer(profile->gate_only_us);
-                auto iH = iExpr.EvalRegister();
-                auto fH = fExpr.EvalRegister();
-                auto gH = gExpr.EvalRegister();
-                auto oH = oExpr.EvalRegister();
-                MetaNN::EvalPlan::Inst().Eval();
-                scratch.i = iH.Data();
-                scratch.f = fH.Data();
-                scratch.g = gH.Data();
-                scratch.o = oH.Data();
-            }
-
-            {
-                LSTMScopedProfileTimer timer(profile->state_update_us);
-                auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
-                auto cH = cExpr.EvalRegister();
-                auto hExpr = scratch.o * MetaNN::Tanh(cExpr);
-                auto hH = hExpr.EvalRegister();
-                MetaNN::EvalPlan::Inst().Eval();
-                scratch.c = cH.Data();
-                scratch.h = hH.Data();
-            }
-        }
-        else
-#endif
-        {
-            auto iExpr = MetaNN::Sigmoid(i2D);
-            auto fExpr = MetaNN::Sigmoid(f2D);
-            auto gExpr = MetaNN::Tanh(g2D);
-            auto oExpr = MetaNN::Sigmoid(o2D);
+            LSTMScopedProfileTimer timer(profile->gate_only_us);
             auto iH = iExpr.EvalRegister();
             auto fH = fExpr.EvalRegister();
             auto gH = gExpr.EvalRegister();
             auto oH = oExpr.EvalRegister();
-            MetaNN::EvalPlan::Inst().Eval();
-            scratch.i = iH.Data();
-            scratch.f = fH.Data();
-            scratch.g = gH.Data();
-            scratch.o = oH.Data();
-
-            auto cExpr = scratch.f * prevCellState + scratch.i * scratch.g;
             auto cH = cExpr.EvalRegister();
-            auto hExpr = scratch.o * MetaNN::Tanh(cExpr);
             auto hH = hExpr.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
+            scratch.gate_i_batch = iH.Data();
+            scratch.gate_f_batch = fH.Data();
+            scratch.gate_g_batch = gH.Data();
+            scratch.gate_o_batch = oH.Data();
             scratch.c = cH.Data();
             scratch.h = hH.Data();
         }
+        else
+#endif
+        {
+            auto iH = iExpr.EvalRegister();
+            auto fH = fExpr.EvalRegister();
+            auto gH = gExpr.EvalRegister();
+            auto oH = oExpr.EvalRegister();
+            auto cH = cExpr.EvalRegister();
+            auto hH = hExpr.EvalRegister();
+            MetaNN::EvalPlan::Inst().Eval();
+            scratch.gate_i_batch = iH.Data();
+            scratch.gate_f_batch = fH.Data();
+            scratch.gate_g_batch = gH.Data();
+            scratch.gate_o_batch = oH.Data();
+            scratch.c = cH.Data();
+            scratch.h = hH.Data();
+        }
+
+#if LSTM_BATCH_PROFILE
+        if (profile)    profile->state_update_us += 0.0;
+#endif
     }
 
     BatchStepCache sc{
         x_t,
         prevHiddenState,
         prevCellState,
-        scratch.i,
-        scratch.f,
-        scratch.g,
-        scratch.o,
+        scratch.gate_i_batch,
+        scratch.gate_f_batch,
+        scratch.gate_g_batch,
+        scratch.gate_o_batch,
         scratch.c,
         scratch.h
     };
@@ -560,7 +549,7 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
                            const EAMatrix& bias,
                            EAMatrix& prevHiddenState,
                            EAMatrix& prevCellState,
-                           EAMatrix& xh_concat) const -> StepCache
+                           EAMatrix& xh_concat_row) const -> StepCache
 {
     // Build [x_t | h_{t-1}] and compute all gates in one GEMM
 #if LSTM_DEBUG_PRINTS
@@ -568,14 +557,14 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 #endif
     {
         const size_t expectedCols = x_t.Shape()[1] + prevHiddenState.Shape()[1];
-        if (xh_concat.Shape()[0] != 1 || xh_concat.Shape()[1] != expectedCols) {
-            xh_concat = EAMatrix(1, expectedCols);
+        if (xh_concat_row.Shape()[0] != 1 || xh_concat_row.Shape()[1] != expectedCols) {
+            xh_concat_row = EAMatrix(1, expectedCols);
         }
-        NNUtils::ConcatColsInto(xh_concat, x_t, prevHiddenState);
+        NNUtils::ConcatColsInto(xh_concat_row, x_t, prevHiddenState);
 #if LSTM_DEBUG_PRINTS
         auto X = MetaNN::Evaluate(x_t);
         auto H = MetaNN::Evaluate(prevHiddenState);
-        auto C = MetaNN::Evaluate(xh_concat);
+        auto C = MetaNN::Evaluate(xh_concat_row);
         const size_t Ix = X.Shape()[1];
         const size_t Ih = H.Shape()[1];
         
@@ -587,14 +576,13 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 #endif
     }
 
-
-    const size_t K = xh_concat.Shape()[1];
-    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_cat, 0, K);
+    const size_t K = xh_concat_row.Shape()[1];
+    auto W_cat_dyn = NNUtils::ViewRows<float, MetaNN::DeviceTags::Metal>(ww.W_xh, 0, K);
     const size_t H = prevHiddenState.Shape()[1];
 
     EAMatrix yMat(1, 4 * H);
     {
-        auto lowA = MetaNN::LowerAccess(xh_concat);
+        auto lowA = MetaNN::LowerAccess(xh_concat_row);
         auto lowB = MetaNN::LowerAccess(W_cat_dyn);
         auto lowBias = MetaNN::LowerAccess(bias);
         auto lowY = MetaNN::LowerAccess(yMat);
@@ -1118,7 +1106,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t zero_count = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(mini_batch_windows, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(mini_batch_windows, static_cast<size_t>(n_in + hidden_size));
     EAMatrix h_batch(mini_batch_windows, hidden_size);
     EAMatrix c_batch(mini_batch_windows, hidden_size);
     EAMatrix d_h_batch(mini_batch_windows, hidden_size);
@@ -1330,11 +1318,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 if (tstep == 0 && B > 0)
                     profile.total_features_processed += B * window_size * x_t_batch.Shape()[1];
                 profile.total_rows_processed += B;
-                cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch, &profile));
+                cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, &profile));
             }
 #else
             const EAMatrix& x_t_batch = wb.packed_steps[tstep];
-            cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat, forward_scratch, nullptr));
+            cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, nullptr));
 #endif
         }
 
@@ -1514,7 +1502,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             zeroGateAccumulators(G_bin, param.Shape()[0], hidden_size);
 
-            auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
+            auto gb = hoistGateBlocks(ww.W_h, hidden_size);
             for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
 
@@ -1531,7 +1519,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             zeroGateAccumulators(G_reg, param.Shape()[0], hidden_size);
 
-            auto gb = hoistGateBlocks(ww.W_h_win, hidden_size);
+            auto gb = hoistGateBlocks(ww.W_h, hidden_size);
             for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_reg);
 
@@ -1547,7 +1535,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double assembly_us = profile.build_window_batch_us + profile.forward_step_batches_us + profile.head_affine_us;
         const double forward_pct = (assembly_us > 0.0) ? (100.0 * profile.forward_step_batches_us / assembly_us) : 0.0;
         const double build_pct = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
-        const double repeat_pct = (assembly_us > 0.0) ? (100.0 * profile.head_affine_us / assembly_us) : 0.0;
+        const double head_affine_pct = (assembly_us > 0.0) ? (100.0 * profile.head_affine_us / assembly_us) : 0.0;
         const double ns_per_row = (profile.total_rows_processed > 0)
         ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_rows_processed))
         : 0.0;
@@ -1596,7 +1584,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " head_affine_us=" << profile.head_affine_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
-                  << " repeat_pct=" << repeat_pct
+                  << " head_affine_pct=" << head_affine_pct
                   << " get_window_pct_of_build=" << get_window_pct_of_build
                   << " pack_copy_pct_of_build=" << pack_copy_pct_of_build
                   << " get_window_us_per_window=" << get_window_us_per_window
@@ -1753,9 +1741,9 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
     // Forward through the window
-    for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
+    for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
 
     // Predict next-step log return from the last hidden state
     float y_hat = (targetType == TargetType::BinaryReturn)
@@ -1788,10 +1776,10 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat(1, static_cast<size_t>(n_in + hidden_size));
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
 
     // Forward through the window
-    for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat);
+    for (const auto& f_sample : w)  forwardStep(f_sample, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
 
     // Predict next-step return from the last hidden state
     float y_hat = (targetType == TargetType::BinaryReturn)
