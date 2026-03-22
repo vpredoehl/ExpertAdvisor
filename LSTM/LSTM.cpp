@@ -89,7 +89,7 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_HEAD_LR_MULT 15.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
-#define LSTM_CORE_GRAD_SCALE 5.0f
+#define LSTM_CORE_GRAD_SCALE 20.0f
 #endif
 #ifndef LSTM_WEIGHT_DECAY
 #define LSTM_WEIGHT_DECAY 0.0f
@@ -766,19 +766,9 @@ float EA::LSTM::predictOnly(const EAMatrix& h_T,
                             const EAMatrix& b) const
 {
     auto logits = MetaNN::Dot(h_T, W) + b;
-    if (targetType == TargetType::BinaryReturn)
-    {
-        auto prob = MetaNN::Sigmoid(logits);
-        auto pH = prob.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        return pH.Data()(0, 0);
-    }
-    else
-    {
-        auto predH = logits.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        return predH.Data()(0, 0);
-    }
+    auto predH = logits.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    return predH.Data()(0, 0);
 }
 
 inline void EA::LSTM::accumulateHeadGrads(EAMatrix& dW_accum,
@@ -1274,6 +1264,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         wb.close_t.reserve(B_est);
         wb.close_target.reserve(B_est);
 
+#warning "Insert prediction_horizon comment before targets loop"
+        // NOTE: For faster learning and less noise, consider reducing prediction_horizon
+        // to a shorter range (e.g., 1–4 timesteps) instead of larger horizons.
         size_t b = 0;
         for (auto window_start = first;
              window_start != last && window_start + window_size + prediction_horizon - 1 < batch.end();
@@ -1320,7 +1313,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             if (targetType == TargetType::BinaryReturn)
             {
-                wb.targets.push_back((close_target_local > close_t_local) ? 1.0f : 0.0f);
+                // Option 1: Direction (existing behavior)
+                // wb.targets.push_back((close_target_local > close_t_local) ? 1.0f : 0.0f);
+
+                // Option 2: Magnitude-based target (recommended alternative)
+                float ret = (close_target_local - close_t_local) / std::max(close_t_local, 1e-12f);
+                wb.targets.push_back(ret);
             }
             else
             {
@@ -1440,7 +1438,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     B, hidden_size, 1);
             }
 #endif
-            auto pH = MetaNN::Sigmoid(head_logits_batch).EvalRegister();
+            auto pH = head_logits_batch.EvalRegister();
             MetaNN::EvalPlan::Inst().Eval();
             EAMatrix pMat = pH.Data();
 
@@ -1448,12 +1446,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 const float p = pMat(b, 0);
                 const float target = wb.targets[b];
-                errs[b] = p - target; // dL/dz for BCE with sigmoid
+                // If using magnitude targets, switch to regression-style error
+                errs[b] = p - target;
 
-                const double p_clamped = std::clamp(static_cast<double>(p), 1e-12, 1.0 - 1e-12);
-                const double ce = -(static_cast<double>(target) * std::log(p_clamped)
-                                  + (1.0 - static_cast<double>(target)) * std::log(1.0 - p_clamped));
-                sse += ce;
+                // If using magnitude targets, use MSE instead of BCE
+                const double err_d = static_cast<double>(p - target);
+                sse += err_d * err_d;
                 ++mseCount;
 
                 // Class counts for diagnostics
@@ -1463,17 +1461,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 else if (close_target < close_t) ++down_count;
                 else                              ++zero_count;
 
-    #if !LSTM_INFERENCE_ONLY
+#if !LSTM_INFERENCE_ONLY
                 y_sum   += static_cast<double>(target);
                 y_sumsq += static_cast<double>(target) * static_cast<double>(target);
                 y_min = std::min(y_min, target);
                 y_max = std::max(y_max, target);
                 ++y_count;
                 if (yhat_samples.size() < 10) yhat_samples.push_back(p);
-        #if LSTM_TRAINING_PROGRESS
-                runningLoss += ce;
-        #endif
-    #endif
+#if LSTM_TRAINING_PROGRESS
+                runningLoss += 0.5 * err_d * err_d;
+#endif
+#endif
             }
     #if !LSTM_INFERENCE_ONLY
             windowCount += B;
@@ -1748,8 +1746,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         // Scale learning rate by number of windows so batch size doesn't change step size
         const float invN = 1.0f / static_cast<float>(windowCount);
 
-        const float lrCore = learningRate * invN;
-        const float lrHead = learningRate * invN; // or a separate head LR if you want
+        const float lrCore = learningRate;
+        const float lrHead = learningRate * LSTM_HEAD_LR_MULT; // or a separate head LR if you want
 
         SGDUpdate(param, d_param_f, lrCore);
         SGDUpdate(bias,  d_bias_f,  lrCore);
@@ -1811,7 +1809,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
         : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 
-    if (targetType == TargetType::BinaryReturn) return (y_hat >= 0.5f) ? 1.0f : 0.0f;
+    if (targetType == TargetType::BinaryReturn) return y_hat;
 
     // Invert normalization if used: t = y_hat * std + mean
     float t = y_hat;
@@ -1847,7 +1845,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
         : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 
-    if (targetType == TargetType::BinaryReturn) return (y_hat >= 0.5f) ? 1.0f : 0.0f;
+    if (targetType == TargetType::BinaryReturn) return y_hat;
 
     // Invert optional z-score normalization
     float t = targetUseZScore ? (y_hat * targetStd + targetMean) : y_hat;
