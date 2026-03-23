@@ -354,11 +354,20 @@ inline void EA::LSTM::RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t 
         std::copy(src, src + cols, dst + b * cols);
 }
 
-// Keep gate/state computation on the Metal path.
-// The old implementation pulled gate buffers back to host memory and ran
-// sigmoid/tanh/cell-state updates in scalar CPU loops, which underfed the GPU.
-// This version slices the contiguous gate tensor into 4 column blocks and
-// evaluates the nonlinearities and recurrent state updates as MetaNN expressions.
+// Run gate activations and recurrent state updates through a single fused Metal
+// kernel instead of building multiple MetaNN expressions. The previous version
+// still required separate sigmoid/tanh/update expressions plus an EvalPlan sync,
+// which can fan out into multiple kernel launches and temporary tensors.
+//
+// The fused path must do all of the following in one pass over each (b, h):
+//   i = sigmoid(gates[b, h + 0*H])
+//   f = sigmoid(gates[b, h + 1*H])
+//   g = tanh   (gates[b, h + 2*H])
+//   o = sigmoid(gates[b, h + 3*H])
+//   c = f * prev_c + i * g
+//   h = o * tanh(c)
+// and write i/f/g/o/c/h directly to the output buffers needed by the next
+// timestep and backward pass.
 inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_batch,
                                                           const EAMatrix& prevCellState,
                                                           EAMatrix& gate_i_batch,
@@ -390,33 +399,35 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
                 "ComputeGateStateBatchFromContiguous: h_batch shape mismatch");
 #endif
 
-    auto i_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 0 * H, H);
-    auto f_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 1 * H, H);
-    auto g_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 2 * H, H);
-    auto o_pre = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(gates_batch, 3 * H, H);
+    auto lowGates = MetaNN::LowerAccess(gates_batch);
+    auto lowPrevC = MetaNN::LowerAccess(prevCellState);
+    auto lowI = MetaNN::LowerAccess(gate_i_batch);
+    auto lowF = MetaNN::LowerAccess(gate_f_batch);
+    auto lowG = MetaNN::LowerAccess(gate_g_batch);
+    auto lowO = MetaNN::LowerAccess(gate_o_batch);
+    auto lowC = MetaNN::LowerAccess(c_batch);
+    auto lowH = MetaNN::LowerAccess(h_batch);
 
-    auto i_expr = MetaNN::Sigmoid(i_pre);
-    auto f_expr = MetaNN::Sigmoid(f_pre);
-    auto g_expr = MetaNN::Tanh(g_pre);
-    auto o_expr = MetaNN::Sigmoid(o_pre);
-    auto c_expr = f_expr * prevCellState + i_expr * g_expr;
-    auto h_expr = o_expr * MetaNN::Tanh(c_expr);
+    auto gatesMem = lowGates.SharedMemory();
+    auto prevCMem = lowPrevC.SharedMemory();
+    auto iMem = lowI.SharedMemory();
+    auto fMem = lowF.SharedMemory();
+    auto gMem = lowG.SharedMemory();
+    auto oMem = lowO.SharedMemory();
+    auto cMem = lowC.SharedMemory();
+    auto hMem = lowH.SharedMemory();
 
-    auto i_handle = i_expr.EvalRegister();
-    auto f_handle = f_expr.EvalRegister();
-    auto g_handle = g_expr.EvalRegister();
-    auto o_handle = o_expr.EvalRegister();
-    auto c_handle = c_expr.EvalRegister();
-    auto h_handle = h_expr.EvalRegister();
-
-    MetaNN::EvalPlan::Inst().Eval();
-
-    gate_i_batch = i_handle.Data();
-    gate_f_batch = f_handle.Data();
-    gate_g_batch = g_handle.Data();
-    gate_o_batch = o_handle.Data();
-    c_batch = c_handle.Data();
-    h_batch = h_handle.Data();
+    MetaNN::NSMetalMatMul::GateStateFused(
+        gatesMem,
+        prevCMem,
+        iMem,
+        fMem,
+        gMem,
+        oMem,
+        cMem,
+        hMem,
+        B,
+        H);
 }
 
 // NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
@@ -484,6 +495,9 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         scratch.c = EAMatrix(B, H);
     if (scratch.h.Shape()[0] != B || scratch.h.Shape()[1] != H)
         scratch.h = EAMatrix(B, H);
+    // All gate/state outputs are kept as persistent batch buffers so the fused
+    // Metal kernel can write directly into them without intermediate expression
+    // materialization or host-visible staging.
 
     #if LSTM_BATCH_PROFILE
     if (profile)
@@ -1847,6 +1861,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 
