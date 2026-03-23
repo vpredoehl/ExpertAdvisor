@@ -161,7 +161,6 @@ struct EA::LSTM::LSTMBatchProfile
     double repeat_bias_us = 0.0;
     double concat_cols_us = 0.0;
     double dot_plus_bias_us = 0.0;
-    double gate_state_us = 0.0;
     double head_affine_us = 0.0;
     size_t mini_batches = 0;
     size_t total_windows = 0;
@@ -561,33 +560,15 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     }
 
     {
-#if LSTM_BATCH_PROFILE
-        if (profile)
-        {
-            LSTMScopedProfileTimer timer(profile->gate_state_us);
-            ComputeGateStateBatchFromContiguous(
-                scratch.gates_batch,
-                prevCellState,
-                scratch.gate_i_batch,
-                scratch.gate_f_batch,
-                scratch.gate_g_batch,
-                scratch.gate_o_batch,
-                scratch.c,
-                scratch.h);
-        }
-        else
-#endif
-        {
-            ComputeGateStateBatchFromContiguous(
-                scratch.gates_batch,
-                prevCellState,
-                scratch.gate_i_batch,
-                scratch.gate_f_batch,
-                scratch.gate_g_batch,
-                scratch.gate_o_batch,
-                scratch.c,
-                scratch.h);
-        }
+        ComputeGateStateBatchFromContiguous(
+            scratch.gates_batch,
+            prevCellState,
+            scratch.gate_i_batch,
+            scratch.gate_f_batch,
+            scratch.gate_g_batch,
+            scratch.gate_o_batch,
+            scratch.c,
+            scratch.h);
     }
 
     BatchStepCache sc{
@@ -1634,9 +1615,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double dot_plus_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
         ? (100.0 * profile.dot_plus_bias_us / profile.forward_step_batches_us)
         : 0.0;
-        const double gate_only_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-        ? (100.0 * profile.gate_state_us / profile.forward_step_batches_us)
-        : 0.0;
+        // const double gate_only_pct_of_forward = (profile.forward_step_batches_us > 0.0)
+        // ? (100.0 * profile.gate_state_us / profile.forward_step_batches_us)
+        // : 0.0;
         
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
@@ -1647,7 +1628,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " repeat_bias_us=" << profile.repeat_bias_us
                   << " concat_cols_us=" << profile.concat_cols_us
                   << " dot_plus_bias_us=" << profile.dot_plus_bias_us
-                  << " gate_state_us=" << profile.gate_state_us
                   << " head_affine_us=" << profile.head_affine_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
@@ -1659,7 +1639,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << " repeat_bias_pct_of_forward=" << repeat_bias_pct_of_forward
                   << " concat_cols_pct_of_forward=" << concat_cols_pct_of_forward
                   << " dot_plus_bias_pct_of_forward=" << dot_plus_bias_pct_of_forward
-                  << " gate_only_pct_of_forward=" << gate_only_pct_of_forward
+                  // << " gate_only_pct_of_forward=" << gate_only_pct_of_forward
                   << " ns_per_row=" << ns_per_row
                   << " ns_per_feature=" << ns_per_feature
                   << " minibatches=" << profile.mini_batches
@@ -1861,6 +1841,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 

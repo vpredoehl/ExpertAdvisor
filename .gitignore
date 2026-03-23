@@ -3,4 +3,6 @@ Build/*
 ratedata.gaincapital.com
 *.swp
 xcuserdata/
+*.txt
+*.plpgsql
 
