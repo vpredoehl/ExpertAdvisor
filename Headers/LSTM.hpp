@@ -157,7 +157,7 @@ public:
     EAMatrix returnHeadDirBias { 1, 1 };
     
     // Simple SGD learning rate for head-only training
-    float learningRate = 1e-4f;
+    float learningRate = 1e-3f / 3; // or /2 or /4
     
     LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0);
     LSTM() = delete;

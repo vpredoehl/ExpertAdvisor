@@ -86,10 +86,10 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_HEAD_LR_MULT
-#define LSTM_HEAD_LR_MULT 15.0f
+#define LSTM_HEAD_LR_MULT 5.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
-#define LSTM_CORE_GRAD_SCALE 20.0f
+#define LSTM_CORE_GRAD_SCALE 5.0f
 #endif
 #ifndef LSTM_WEIGHT_DECAY
 #define LSTM_WEIGHT_DECAY 0.0f
@@ -1733,8 +1733,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         // Scale learning rate by number of windows so batch size doesn't change step size
         const float invN = 1.0f / static_cast<float>(windowCount);
 
-        const float lrCore = learningRate;
-        const float lrHead = learningRate * LSTM_HEAD_LR_MULT; // or a separate head LR if you want
+        const float lrCore = learningRate * invN;
+        const float lrHead = learningRate * LSTM_HEAD_LR_MULT * invN; // or a separate head LR if you want
 
         SGDUpdate(param, d_param_f, lrCore);
         SGDUpdate(bias,  d_bias_f,  lrCore);
