@@ -170,12 +170,26 @@ struct EA::LSTM::LSTMBatchProfile
 
 
 
+
 template <typename Mat>
 void zeroFill(Mat& m)
 {
     auto low = MetaNN::LowerAccess(m);
     using ElemT = std::remove_reference_t<decltype(*low.MutableRawMemory())>;
     std::fill(low.MutableRawMemory(), low.MutableRawMemory() + m.Shape()[0] * m.Shape()[1], static_cast<ElemT>(0));
+}
+
+template <typename Mat>
+auto DeepMatrixCopy(const Mat& src) -> Mat
+{
+    Mat out(src.Shape()[0], src.Shape()[1]);
+    auto srcEval = MetaNN::Evaluate(src);
+    auto lowSrc = MetaNN::LowerAccess(srcEval);
+    auto lowOut = MetaNN::LowerAccess(out);
+    std::copy(lowSrc.RawMemory(),
+              lowSrc.RawMemory() + src.Shape()[0] * src.Shape()[1],
+              lowOut.MutableRawMemory());
+    return out;
 }
 
 template<typename MatP, typename MatG>
@@ -559,28 +573,19 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 
+    ComputeGateStateBatchFromContiguous(scratch.gates_batch,prevCellState,scratch.gate_i_batch,scratch.gate_f_batch,scratch.gate_g_batch,scratch.gate_o_batch,scratch.c,scratch.h);
+    MetaNN::NSMetalMatMul::WaitForAll();    // Ensure all Metal writes are completed before deep copies
+    BatchStepCache sc
     {
-        ComputeGateStateBatchFromContiguous(
-            scratch.gates_batch,
-            prevCellState,
-            scratch.gate_i_batch,
-            scratch.gate_f_batch,
-            scratch.gate_g_batch,
-            scratch.gate_o_batch,
-            scratch.c,
-            scratch.h);
-    }
-
-    BatchStepCache sc{
-        x_t,
-        prevHiddenState,
-        prevCellState,
-        scratch.gate_i_batch,
-        scratch.gate_f_batch,
-        scratch.gate_g_batch,
-        scratch.gate_o_batch,
-        scratch.c,
-        scratch.h
+        x_t,    // SHOULD THIS ALSO BE CLONED??
+        DeepMatrixCopy(prevHiddenState),
+        DeepMatrixCopy(prevCellState),
+        DeepMatrixCopy(scratch.gate_i_batch),
+        DeepMatrixCopy(scratch.gate_f_batch),
+        DeepMatrixCopy(scratch.gate_g_batch),
+        DeepMatrixCopy(scratch.gate_o_batch),
+        DeepMatrixCopy(scratch.c),
+        DeepMatrixCopy(scratch.h)
     };
 
     prevCellState = sc.c;
