@@ -176,7 +176,6 @@ private:
     using AccumScalar = float;
     
     struct WindowWeights;
-    struct StepCache;
     struct HeadLoss;
     struct GateBlocks;
     struct GateAccumulators;
@@ -186,7 +185,7 @@ private:
     struct LSTMBatchProfile;
     
     WindowWeights hoistWindowWeights() const;
-    StepCache forwardStep(const EAMatrix& x_t, const WindowWeights& ww, const EAMatrix& bias, EAMatrix& prevHiddenState, EAMatrix& prevCellState, EAMatrix& xh_concat) const;
+    void forwardStep(const EAMatrix& x_t, const WindowWeights& ww, const EAMatrix& bias, EAMatrix& prevHiddenState, EAMatrix& prevCellState, EAMatrix& xh_concat) const;
     BatchStepCache forwardStepBatch(const EAMatrix& x_t,
                                     const WindowWeights& ww,
                                     const EAMatrix& bias,
@@ -207,7 +206,6 @@ private:
     void accumulateHeadGrads(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_T, float err) const;
     GateBlocks hoistGateBlocks(const EAMatrix& W_h_win, size_t H) const;
     void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
-    void backwardStep(const StepCache& sc, const GateBlocks& gb, EAMatrix& d_h, EAMatrix& d_c, GateAccumulators& A) const;
     void RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t B) const;
     auto BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t tstep, LSTMBatchProfile*) -> EAMatrix;
 

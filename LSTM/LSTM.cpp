@@ -219,19 +219,6 @@ struct EA::LSTM::WindowWeights
     EA::LSTM::EAMatrix W_h;  // bottom block (H x 4H)
 };
 
-struct EA::LSTM::StepCache
-{
-    EA::LSTM::EAMatrix x;      // (1, input_size)
-    EA::LSTM::EAMatrix h_prev; // (1, hidden_size)
-    EA::LSTM::EAMatrix c_prev; // (1, hidden_size)
-    EA::LSTM::EAMatrix i;      // (1, hidden_size)
-    EA::LSTM::EAMatrix f;      // (1, hidden_size)
-    EA::LSTM::EAMatrix g;      // (1, hidden_size)
-    EA::LSTM::EAMatrix o;      // (1, hidden_size)
-    EA::LSTM::EAMatrix c;      // (1, hidden_size)
-    EA::LSTM::EAMatrix h;      // (1, hidden_size)
-};
-
 struct EA::LSTM::BatchStepCache
 {
     EA::LSTM::EAMatrix x;      // (B, input_size)
@@ -593,17 +580,14 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     return sc;
 }
 
-inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
+inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
                            const WindowWeights& ww,
                            const EAMatrix& bias,
                            EAMatrix& prevHiddenState,
                            EAMatrix& prevCellState,
-                           EAMatrix& xh_concat_row) const -> StepCache
+                           EAMatrix& xh_concat_row) const
 {
     // Build [x_t | h_{t-1}] and compute all gates in one GEMM
-#if LSTM_DEBUG_PRINTS
-    printMatrix("x_t", x_t);
-#endif
     {
         const size_t expectedCols = x_t.Shape()[1] + prevHiddenState.Shape()[1];
         if (xh_concat_row.Shape()[0] != 1 || xh_concat_row.Shape()[1] != expectedCols) {
@@ -648,7 +632,7 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
             yMem,
             1, K, 4 * H);
     }
-#if LSTM_DEBUG_PRINTS
+#if LSTM_DEBUG_INTERNAL_PRINTS
     std::cout << "bias(0,64): " << bias(0,64) << std::endl
         << "yMat(0,64) : " << yMat(0,64) << std::endl
         << "yMat(0,0) : " << yMat(0,0) << std::endl
@@ -657,7 +641,7 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 #endif
 
     auto [i2D, f2D, g2D, o2D] = NNUtils::SplitGatesRowExpr(yMat);
-#if LSTM_DEBUG_PRINTS
+#if LSTM_DEBUG_INTERNAL_PRINTS
 {
     auto iHandle = i2D.EvalRegister();
     auto fHandle = f2D.EvalRegister();
@@ -684,16 +668,17 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
 
 
 
+    auto c_2d_handle = MetaNN::Reshape(c_1d, MetaNN::Shape(1, H)).EvalRegister();
+    auto h_2d_handle = MetaNN::Reshape(h_1d, MetaNN::Shape(1, H)).EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    
+#if LSTM_DEBUG_INTERNAL_PRINTS
     auto cprev_2d_handle = MetaNN::Reshape(c_prev_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto i_2d_handle = MetaNN::Reshape(i_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto f_2d_handle = MetaNN::Reshape(f_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto g_2d_handle = MetaNN::Reshape(g_1d, MetaNN::Shape(1, H)).EvalRegister();
     auto o_2d_handle = MetaNN::Reshape(o_1d, MetaNN::Shape(1, H)).EvalRegister();
-    auto c_2d_handle = MetaNN::Reshape(c_1d, MetaNN::Shape(1, H)).EvalRegister();
-    auto h_2d_handle = MetaNN::Reshape(h_1d, MetaNN::Shape(1, H)).EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
-    
-#if LSTM_DEBUG_PRINTS
     std::cout << "i_2d_handle.Data()(0,0): " << i_2d_handle.Data()(0,0) << std::endl;
     std::cout << "f_2d_handle.Data()(0,0): " << f_2d_handle.Data()(0,0) << std::endl;
     std::cout << "g_2d_handle.Data()(0,0): " << g_2d_handle.Data()(0,0) << std::endl;
@@ -702,21 +687,9 @@ inline auto EA::LSTM::forwardStep(const EAMatrix& x_t,
     std::cout << "h_2d_handle.Data()(0,0): " << h_2d_handle.Data()(0,0) << std::endl;
 #endif
 
-    StepCache sc{
-        x_t,
-        prevHiddenState,
-        cprev_2d_handle.Data(),
-        i_2d_handle.Data(),
-        f_2d_handle.Data(),
-        g_2d_handle.Data(),
-        o_2d_handle.Data(),
-        c_2d_handle.Data(),
-        h_2d_handle.Data()
-    };
-
-    prevCellState   = sc.c;
-    prevHiddenState = sc.h;
-    return sc;
+    MetaNN::NSMetalMatMul::WaitForAll();
+    prevCellState   = DeepMatrixCopy(c_2d_handle.Data());   // sc.c;
+    prevHiddenState = DeepMatrixCopy(h_2d_handle.Data());   //sc.h;
 }
 
 inline auto EA::LSTM::predictAndLoss(const EAMatrix& h_T,
@@ -818,96 +791,6 @@ inline void EA::LSTM::zeroGateAccumulators(GateAccumulators& A, size_t rows, siz
     };
     zfill(A.dW_i); zfill(A.dW_f); zfill(A.dW_g); zfill(A.dW_o);
     zfill(A.db_i); zfill(A.db_f); zfill(A.db_g); zfill(A.db_o);
-}
-
-inline void EA::LSTM::backwardStep(const StepCache& sc,
-                            const GateBlocks& gb,
-                            EAMatrix& d_h,
-                            EAMatrix& d_c,
-                            GateAccumulators& A) const
-{
-    const size_t H = d_h.Shape()[1];
-
-
-
-    auto tanh_c = MetaNN::Tanh(sc.c);
-    auto d_o = d_h * tanh_c * sc.o * (1.0f - sc.o);
-    auto d_c_from_h = d_h * sc.o * (1.0f - tanh_c * tanh_c);
-    auto dct = d_c + d_c_from_h;
-
-    auto d_i = dct * sc.g * sc.i * (1.0f - sc.i);
-    auto d_g = dct * sc.i * (1.0f - sc.g * sc.g);
-    auto d_f = dct * sc.c_prev * sc.f * (1.0f - sc.f);
-
-    auto di2D = MetaNN::Reshape(d_i, MetaNN::Shape(1, H));
-    auto df2D = MetaNN::Reshape(d_f, MetaNN::Shape(1, H));
-    auto dg2D = MetaNN::Reshape(d_g, MetaNN::Shape(1, H));
-    auto do2D = MetaNN::Reshape(d_o, MetaNN::Shape(1, H));
-
-    auto dW_i_top = MetaNN::Dot(MetaNN::Transpose(sc.x), di2D);
-    auto dW_f_top = MetaNN::Dot(MetaNN::Transpose(sc.x), df2D);
-    auto dW_g_top = MetaNN::Dot(MetaNN::Transpose(sc.x), dg2D);
-    auto dW_o_top = MetaNN::Dot(MetaNN::Transpose(sc.x), do2D);
-    auto dW_i_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), di2D);
-    auto dW_f_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), df2D);
-    auto dW_g_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), dg2D);
-    auto dW_o_bot = MetaNN::Dot(MetaNN::Transpose(sc.h_prev), do2D);
-
-    // Pre-register all gate weight grads and gate 2D tensors
-    auto dW_i_topH = dW_i_top.EvalRegister();
-    auto dW_f_topH = dW_f_top.EvalRegister();
-    auto dW_g_topH = dW_g_top.EvalRegister();
-    auto dW_o_topH = dW_o_top.EvalRegister();
-    auto dW_i_botH = dW_i_bot.EvalRegister();
-    auto dW_f_botH = dW_f_bot.EvalRegister();
-    auto dW_g_botH = dW_g_bot.EvalRegister();
-    auto dW_o_botH = dW_o_bot.EvalRegister();
-
-    auto di2DH = di2D.EvalRegister();
-    auto df2DH = df2D.EvalRegister();
-    auto dg2DH = dg2D.EvalRegister();
-    auto do2DH = do2D.EvalRegister();
-
-    auto d_h_prev = MetaNN::Dot(di2D, MetaNN::Transpose(gb.W_i))
-                  + MetaNN::Dot(df2D, MetaNN::Transpose(gb.W_f))
-                  + MetaNN::Dot(dg2D, MetaNN::Transpose(gb.W_g))
-                  + MetaNN::Dot(do2D, MetaNN::Transpose(gb.W_o));
-    auto dh_handle = MetaNN::Reshape(d_h_prev, MetaNN::Shape(1, H)).EvalRegister();
-    auto dc_handle = MetaNN::Reshape((dct * sc.f), MetaNN::Shape(1, H)).EvalRegister();
-
-    MetaNN::EvalPlan::Inst().Eval();
-
-    auto addBlock = [&](auto& dst, const EAMatrix& top, const EAMatrix& bot)
-    {
-        auto lowD = MetaNN::LowerAccess(dst);
-        auto* dptr = lowD.MutableRawMemory();
-        auto lowT = MetaNN::LowerAccess(top);
-        auto lowB = MetaNN::LowerAccess(bot);
-        const auto* tptr = lowT.RawMemory();
-        const auto* bptr = lowB.RawMemory();
-        const size_t I = dst.Shape()[0] - H;
-        for (size_t r=0; r<I; ++r) for (size_t c=0; c<H; ++c) dptr[r*H + c] += static_cast<AccumScalar>(tptr[r * H + c]);
-        for (size_t r=0; r<H; ++r) for (size_t c=0; c<H; ++c) dptr[(I+r)*H + c] += static_cast<AccumScalar>(bptr[r * H + c]);
-    };
-
-    addBlock(A.dW_i, dW_i_topH.Data(), dW_i_botH.Data());
-    addBlock(A.dW_f, dW_f_topH.Data(), dW_f_botH.Data());
-    addBlock(A.dW_g, dW_g_topH.Data(), dW_g_botH.Data());
-    addBlock(A.dW_o, dW_o_topH.Data(), dW_o_botH.Data());
-
-    auto accBias = [&](auto& db, const EAMatrix& g2DMat){
-        auto lowD = MetaNN::LowerAccess(db); auto* dptr = lowD.MutableRawMemory();
-        auto lowS = MetaNN::LowerAccess(g2DMat); const auto* sptr = lowS.RawMemory();
-        for (size_t c=0; c<H; ++c) dptr[c] += static_cast<AccumScalar>(sptr[c]);
-    };
-    accBias(A.db_i, di2DH.Data());
-    accBias(A.db_f, df2DH.Data());
-    accBias(A.db_g, dg2DH.Data());
-    accBias(A.db_o, do2DH.Data());
-
-    d_h = dh_handle.Data();
-    d_c = dc_handle.Data();
-
 }
 
 inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,

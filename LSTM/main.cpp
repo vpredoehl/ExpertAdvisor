@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <tuple>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -36,7 +37,7 @@
 #include "scalable_tensor.h"
 
 
-static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
+static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
 {
     auto stats = [](const auto& v)
     {
@@ -86,22 +87,23 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
         const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;   // <-- MUST unscale to raw log-return
         
         if(std::fabs(v_unscaled) > 0.02f)    gtOutliers++;  // 2% log-return is already huge for many FX horizons
-//        if (actRel.size() < 5)   std::cout << "GT raw feature v_logret=" << v_unscaled << " exp(v_logret)-1=" << (std::exp(v_unscaled) - 1.0f) << std::endl;
         actLogRet.push_back(v_unscaled);                    // <-- MUST be this exact v
         actRel.push_back(std::exp(v_unscaled) - 1.0f);      // <-- derived from same v
-//        if (actRel.size() < 10) std::cout << "GT v_logret=" << v_unscaled
-//                      << " sign=" << (v_unscaled>=0 ? "+" : "-")
-//                      << " abs=" << std::fabs(v_unscaled) << std::endl;
     }
     auto s_gt = stats(actLogRet);
-//    std::cout << "actLogRet stats: min=" << s_gt.min << " max=" << s_gt.max
-//              << " mean=" << s_gt.mean << " std=" << s_gt.std
-//              << " uniq~=" << s_gt.uniq << std::endl << "GT outliers |v|>0.02: " << gtOutliers
-//              << " of " << actLogRet.size() << std::endl;
+#if LSTM_DEBUG_INTERNAL_PRINTS
+    std::cout << "actLogRet stats: min=" << s_gt.min << " max=" << s_gt.max
+              << " mean=" << s_gt.mean << " std=" << s_gt.std
+              << " uniq~=" << s_gt.uniq << std::endl << "GT outliers |v|>0.02: " << gtOutliers
+              << " of " << actLogRet.size() << std::endl;
+#endif
     assert(predRel.size() == actRel.size());    // DEBUG
+    if (predRel.empty() || actRel.empty())
+    {
+        return {0, 0, 0, 0.0, 0, 0};
+    }
 
 
-//#if LSTM_DEBUG_PRINTS
     // 4) Print prediction distribution stats to diagnose saturation
     auto s_raw = stats(predLogRet);
     auto s_rel = stats(predRel);
@@ -114,17 +116,10 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
     std::cout << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
               << " mean=" << s_rel.mean << " std=" << s_rel.std
               << " uniq~=" << s_rel.uniq << std::endl;
-//#endif
     
     // 5) Compare predicted vs actual relative moves directly (fractions)
-    std::vector<float> predMove = predRel; // alias copy
-    
-    // DIAG: sign flip test (set to 1 to test)
-    #if 0
-        for (auto& x : predMove) x = -x;
-    #endif
-
-    std::vector<float> actualMove = actRel; // alias copy
+    std::vector<float> predMove = predRel;
+    std::vector<float> actualMove = actRel;
     size_t N = std::min(predMove.size(), actualMove.size());
     const size_t toPrint = std::min<size_t>(N, 10);
 
@@ -147,7 +142,7 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
               << " thr=" << actedThrLog
               << " coverage=" << covLog << "%" << std::endl;
 
-//#if LSTM_DEBUG_PRINTS
+    #if LSTM_DEBUG_INTERNAL_PRINTS
     const size_t M = std::min<size_t>(5, std::min(predLogRet.size(), actLogRet.size()));
     for (size_t i = 0; i < M; ++i)  std::cout << "align i=" << i << " predLogRet=" << predLogRet[i]  << " actLogRet(unscaled)=" << actLogRet[i] << " actRel=" << (std::exp(actLogRet[i]) - 1.0f) << "\n";
     for (size_t i = 0; i < toPrint; ++i)
@@ -165,7 +160,7 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
             << " |act|=" << std::abs(actualMove[i])
             << "\n";
     }
-//#endif
+#endif
     double maeMove = 0.0;
     size_t correctDir = 0;
     size_t acted = 0;
@@ -191,7 +186,7 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
 
     if (N > 0)  std::cout << "Batch MAE (relative move fraction): "
                   << (maeMove / static_cast<double>(N))
-                  << " | Direction accuracy: "
+                  << " | Direction accuracy (relative move, thresholded): "
                   << (acted ? (static_cast<double>(correctDir) /
                                static_cast<double>(acted) * 100.0)
                             : 0.0)
@@ -200,6 +195,8 @@ static void ProcessBatchPredict(EA::LSTM& l, const Window& b)
                   << " actThr=" << actThr
                   << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
                   << std::endl;
+
+    return {correctLog, actedLog, N, maeMove, correctDir, acted};
 }
 
 
@@ -261,12 +258,27 @@ int main(int argc, const char * argv[])
             else    std::cout << "load_latest=false; using default-initialized parameters" << std::endl;
 
             
+            size_t totalCorrectLog = 0;
+            size_t totalActedLog = 0;
+            size_t totalWindows = 0;
+            double totalAbsErrMove = 0.0;
+            size_t totalCorrectDir = 0;
+            size_t totalActedDir = 0;
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             std::cout << std::setprecision(15);
             for(auto e = 0; e < epoch_count; e++)
             t.ForEachBatch( [&](auto b)
             {
-                if constexpr (inference_only)   ProcessBatchPredict(l, b);
+                if constexpr (inference_only)
+                {
+                    auto [correctLog, actedLog, windows, absErrMove, correctDir, actedDir] = ProcessBatchPredict(l, b);
+                    totalCorrectLog += correctLog;
+                    totalActedLog += actedLog;
+                    totalWindows += windows;
+                    totalAbsErrMove += absErrMove;
+                    totalCorrectDir += correctDir;
+                    totalActedDir += actedDir;
+                }
                 else
                 {
                     auto l2 = [](const auto& m){
@@ -301,6 +313,33 @@ int main(int argc, const char * argv[])
                     else std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                 }
             } );
+
+            if constexpr (inference_only)
+            {
+                const double overallAccLog = totalActedLog
+                    ? (static_cast<double>(totalCorrectLog) / static_cast<double>(totalActedLog) * 100.0)
+                    : 0.0;
+                const double overallCovLog = totalWindows
+                    ? (static_cast<double>(totalActedLog) / static_cast<double>(totalWindows) * 100.0)
+                    : 0.0;
+                const double overallMaeMove = totalWindows
+                    ? (totalAbsErrMove / static_cast<double>(totalWindows))
+                    : 0.0;
+                const double overallAccDir = totalActedDir
+                    ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalActedDir) * 100.0)
+                    : 0.0;
+                const double overallCovDir = totalWindows
+                    ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
+                    : 0.0;
+
+                std::cout << "Overall direction accuracy (log-return): " << overallAccLog
+                          << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
+                          << " coverage=" << overallCovLog << "%" << std::endl;
+                std::cout << "Overall MAE (relative move fraction): " << overallMaeMove
+                          << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
+                          << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
+                          << " coverage=" << overallCovDir << "%" << std::endl;
+            }
 
             // Persist trained model parameters to DB
             try

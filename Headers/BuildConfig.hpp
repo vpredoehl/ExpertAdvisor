@@ -10,6 +10,7 @@
 #endif
 
 #define LSTM_DEBUG_PRINTS 0
+#define LSTM_DEBUG_INTERNAL_PRINTS 0
 
 constexpr bool inference_only = (LSTM_INFERENCE_ONLY != 0);
 constexpr bool save_enable = true;

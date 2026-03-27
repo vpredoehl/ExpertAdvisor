@@ -5,4 +5,5 @@ ratedata.gaincapital.com
 xcuserdata/
 *.txt
 *.plpgsql
+.derived-data-log*
 
