@@ -86,7 +86,7 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_HEAD_LR_MULT
-#define LSTM_HEAD_LR_MULT 5.0f
+#define LSTM_HEAD_LR_MULT 1.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
 #define LSTM_CORE_GRAD_SCALE 5.0f
@@ -632,6 +632,7 @@ inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
             yMem,
             1, K, 4 * H);
     }
+    MetaNN::NSMetalMatMul::WaitForAll();
 #if LSTM_DEBUG_INTERNAL_PRINTS
     std::cout << "bias(0,64): " << bias(0,64) << std::endl
         << "yMat(0,64) : " << yMat(0,64) << std::endl
@@ -1291,12 +1292,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto biasMem = lowBias.SharedMemory();
                 auto yMem = lowY.SharedMemory();
 
-                MetaNN::NSMetalMatMul::MatMulBias(
-                    aMem,
-                    bMem,
-                    biasMem,
-                    yMem,
-                    B, hidden_size, 1);
+                MetaNN::NSMetalMatMul::MatMulBias(aMem,bMem,biasMem,yMem,B, hidden_size, 1);
             }
 #else
             {
@@ -1310,14 +1306,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto biasMem = lowBias.SharedMemory();
                 auto yMem = lowY.SharedMemory();
 
-                MetaNN::NSMetalMatMul::MatMulBias(
-                    aMem,
-                    bMem,
-                    biasMem,
-                    yMem,
-                    B, hidden_size, 1);
+                MetaNN::NSMetalMatMul::MatMulBias(aMem,bMem,biasMem,yMem,B, hidden_size, 1);
             }
 #endif
+            MetaNN::NSMetalMatMul::WaitForAll();    // wait for MatMulBias
             auto lowP = MetaNN::LowerAccess(head_logits_batch);
             const float* pptr = lowP.RawMemory();
 
@@ -1401,6 +1393,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     B, hidden_size, 1);
             }
 #endif
+            MetaNN::NSMetalMatMul::WaitForAll();
             auto lowYLogits = MetaNN::LowerAccess(head_logits_batch);
             const float* yptr = lowYLogits.RawMemory();
 
