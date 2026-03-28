@@ -225,7 +225,108 @@ struct EA::LSTM::LSTMBatchProfile
     size_t total_features_processed = 0;
 };
 
+#ifndef LSTM_EPOCH_BUCKETS
+#define LSTM_EPOCH_BUCKETS 1
+#endif
 
+namespace {
+#if LSTM_EPOCH_BUCKETS
+// Epoch-level aggregation counters for BinaryReturn bucket reporting
+static size_t g_epoch_up_count = 0;
+static size_t g_epoch_down_count = 0;
+static size_t g_epoch_zero_count = 0;
+
+static size_t g_epoch_bucket_40_45_total = 0;
+static size_t g_epoch_bucket_40_45_up = 0;
+static size_t g_epoch_bucket_45_50_total = 0;
+static size_t g_epoch_bucket_45_50_up = 0;
+static size_t g_epoch_bucket_50_55_total = 0;
+static size_t g_epoch_bucket_50_55_up = 0;
+static size_t g_epoch_bucket_55_60_total = 0;
+static size_t g_epoch_bucket_55_60_up = 0;
+static size_t g_epoch_bucket_60_70_total = 0;
+static size_t g_epoch_bucket_60_70_up = 0;
+static size_t g_epoch_bucket_70p_total = 0;
+static size_t g_epoch_bucket_70p_up = 0;
+
+inline void AccumulateEpochBuckets(size_t up_count, size_t down_count, size_t zero_count,
+                                   size_t b40t, size_t b40u, size_t b45t, size_t b45u,
+                                   size_t b50t, size_t b50u, size_t b55t, size_t b55u,
+                                   size_t b60t, size_t b60u, size_t b70t, size_t b70u)
+{
+    g_epoch_up_count += up_count;
+    g_epoch_down_count += down_count;
+    g_epoch_zero_count += zero_count;
+
+    g_epoch_bucket_40_45_total += b40t;
+    g_epoch_bucket_40_45_up += b40u;
+    g_epoch_bucket_45_50_total += b45t;
+    g_epoch_bucket_45_50_up += b45u;
+    g_epoch_bucket_50_55_total += b50t;
+    g_epoch_bucket_50_55_up += b50u;
+    g_epoch_bucket_55_60_total += b55t;
+    g_epoch_bucket_55_60_up += b55u;
+    g_epoch_bucket_60_70_total += b60t;
+    g_epoch_bucket_60_70_up += b60u;
+    g_epoch_bucket_70p_total += b70t;
+    g_epoch_bucket_70p_up += b70u;
+}
+
+inline void PrintAndResetEpochBuckets()
+{
+    auto bucketRate = [](size_t up, size_t total) -> double
+    {
+        return (total > 0) ? (static_cast<double>(up) / static_cast<double>(total)) : 0.0;
+    };
+    std::cout << "EPOCH_AGGREGATE_COUNTS\n";
+    std::cout << "up_count=" << g_epoch_up_count
+              << " down_count=" << g_epoch_down_count
+              << " zero_count=" << g_epoch_zero_count << "\n";
+
+    std::cout << "prob_bucket[0.40,0.45): total=" << g_epoch_bucket_40_45_total
+              << " up=" << g_epoch_bucket_40_45_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_40_45_up, g_epoch_bucket_40_45_total)
+              << "\n";
+    std::cout << "prob_bucket[0.45,0.50): total=" << g_epoch_bucket_45_50_total
+              << " up=" << g_epoch_bucket_45_50_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_45_50_up, g_epoch_bucket_45_50_total)
+              << "\n";
+    std::cout << "prob_bucket[0.50,0.55): total=" << g_epoch_bucket_50_55_total
+              << " up=" << g_epoch_bucket_50_55_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_50_55_up, g_epoch_bucket_50_55_total)
+              << "\n";
+    std::cout << "prob_bucket[0.55,0.60): total=" << g_epoch_bucket_55_60_total
+              << " up=" << g_epoch_bucket_55_60_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_55_60_up, g_epoch_bucket_55_60_total)
+              << "\n";
+    std::cout << "prob_bucket[0.60,0.70): total=" << g_epoch_bucket_60_70_total
+              << " up=" << g_epoch_bucket_60_70_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_60_70_up, g_epoch_bucket_60_70_total)
+              << "\n";
+    std::cout << "prob_bucket[0.70,1.00]: total=" << g_epoch_bucket_70p_total
+              << " up=" << g_epoch_bucket_70p_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_70p_up, g_epoch_bucket_70p_total)
+              << "\n";
+
+    // Reset counters
+    g_epoch_up_count = 0;
+    g_epoch_down_count = 0;
+    g_epoch_zero_count = 0;
+    g_epoch_bucket_40_45_total = 0;
+    g_epoch_bucket_40_45_up = 0;
+    g_epoch_bucket_45_50_total = 0;
+    g_epoch_bucket_45_50_up = 0;
+    g_epoch_bucket_50_55_total = 0;
+    g_epoch_bucket_50_55_up = 0;
+    g_epoch_bucket_55_60_total = 0;
+    g_epoch_bucket_55_60_up = 0;
+    g_epoch_bucket_60_70_total = 0;
+    g_epoch_bucket_60_70_up = 0;
+    g_epoch_bucket_70p_total = 0;
+    g_epoch_bucket_70p_up = 0;
+}
+#endif
+} // end anonymous namespace
 
 
 template <typename Mat>
@@ -317,7 +418,6 @@ struct EA::LSTM::WindowBatch
     std::vector<float> targets;
     std::vector<float> close_t;
     std::vector<float> close_target;
-    std::vector<size_t> kept_starts;
     size_t ignored_binary_count = 0;
 };
 
@@ -1024,6 +1124,8 @@ inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
     writeBias(d_bias_accum, 3*H, A.db_o);
 }
 
+
+
 EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 : t { tt }
 {
@@ -1133,6 +1235,20 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t up_count = 0;
     size_t down_count = 0;
     size_t zero_count = 0;
+
+    // Calibration buckets for BinaryReturn probabilities
+    size_t bucket_40_45_total = 0;
+    size_t bucket_40_45_up = 0;
+    size_t bucket_45_50_total = 0;
+    size_t bucket_45_50_up = 0;
+    size_t bucket_50_55_total = 0;
+    size_t bucket_50_55_up = 0;
+    size_t bucket_55_60_total = 0;
+    size_t bucket_55_60_up = 0;
+    size_t bucket_60_70_total = 0;
+    size_t bucket_60_70_up = 0;
+    size_t bucket_70p_total = 0;
+    size_t bucket_70p_up = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(effectiveMiniBatchWindows, static_cast<size_t>(n_in + hidden_size));
@@ -1247,7 +1363,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         wb.targets.reserve(B_est);
         wb.close_t.reserve(B_est);
         wb.close_target.reserve(B_est);
-        wb.kept_starts.reserve(B_est);
 
 #warning "Insert prediction_horizon comment before targets loop"
         // NOTE: For faster learning and less noise, consider reducing prediction_horizon
@@ -1294,7 +1409,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             wb.close_t.push_back(close_t_local);
             wb.close_target.push_back(close_target_local);
-            wb.kept_starts.push_back(start);
 
             if (targetType == TargetType::BinaryReturn)
                 wb.targets.push_back((y_true_logret > 0.0f) ? 1.0f : 0.0f);
@@ -1464,9 +1578,42 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 // Class counts for diagnostics
                 const float close_t = wb.close_t[b];
                 const float close_target = wb.close_target[b];
-                if (close_target > close_t)      ++up_count;
+                const bool actual_up = close_target > close_t;
+                if (actual_up)                   ++up_count;
                 else if (close_target < close_t) ++down_count;
-                else                              ++zero_count;
+                else                             ++zero_count;
+
+                // Calibration buckets for predicted P(up)
+                if (prob >= 0.40f && prob < 0.45f)
+                {
+                    ++bucket_40_45_total;
+                    if (actual_up) ++bucket_40_45_up;
+                }
+                else if (prob >= 0.45f && prob < 0.50f)
+                {
+                    ++bucket_45_50_total;
+                    if (actual_up) ++bucket_45_50_up;
+                }
+                else if (prob >= 0.50f && prob < 0.55f)
+                {
+                    ++bucket_50_55_total;
+                    if (actual_up) ++bucket_50_55_up;
+                }
+                else if (prob >= 0.55f && prob < 0.60f)
+                {
+                    ++bucket_55_60_total;
+                    if (actual_up) ++bucket_55_60_up;
+                }
+                else if (prob >= 0.60f && prob < 0.70f)
+                {
+                    ++bucket_60_70_total;
+                    if (actual_up) ++bucket_60_70_up;
+                }
+                else if (prob >= 0.70f)
+                {
+                    ++bucket_70p_total;
+                    if (actual_up) ++bucket_70p_up;
+                }
 
 #if !LSTM_INFERENCE_ONLY
                 y_sum   += static_cast<double>(target);
@@ -1481,6 +1628,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             windowCount += B;
             windowsInBatch += B;
     #endif
+
+#if LSTM_EPOCH_BUCKETS
+            AccumulateEpochBuckets(up_count, down_count, zero_count,
+                                  bucket_40_45_total, bucket_40_45_up,
+                                  bucket_45_50_total, bucket_45_50_up,
+                                  bucket_50_55_total, bucket_50_55_up,
+                                  bucket_55_60_total, bucket_55_60_up,
+                                  bucket_60_70_total, bucket_60_70_up,
+                                  bucket_70p_total, bucket_70p_up);
+#endif
         }
         else
         {
@@ -1764,9 +1921,43 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
     std::cout << "loss_value=" << loss_value << "\n";
     std::cout << "ignored_binary_windows=" << ignoredBinaryWindows << "\n";
-    if (targetType == TargetType::BinaryReturn) std::cout << "up_count=" << up_count
+    if (targetType == TargetType::BinaryReturn)
+    {
+        auto bucketRate = [](size_t up, size_t total) -> double
+        {
+            return (total > 0) ? (static_cast<double>(up) / static_cast<double>(total)) : 0.0;
+        };
+
+        std::cout << "up_count=" << up_count
                   << " down_count=" << down_count
                   << " zero_count=" << zero_count << "\n";
+
+        std::cout << "prob_bucket[0.40,0.45): total=" << bucket_40_45_total
+                  << " up=" << bucket_40_45_up
+                  << " up_rate=" << bucketRate(bucket_40_45_up, bucket_40_45_total)
+                  << "\n";
+        std::cout << "prob_bucket[0.45,0.50): total=" << bucket_45_50_total
+                  << " up=" << bucket_45_50_up
+                  << " up_rate=" << bucketRate(bucket_45_50_up, bucket_45_50_total)
+                  << "\n";
+        std::cout << "prob_bucket[0.50,0.55): total=" << bucket_50_55_total
+                  << " up=" << bucket_50_55_up
+                  << " up_rate=" << bucketRate(bucket_50_55_up, bucket_50_55_total)
+                  << "\n";
+        std::cout << "prob_bucket[0.55,0.60): total=" << bucket_55_60_total
+                  << " up=" << bucket_55_60_up
+                  << " up_rate=" << bucketRate(bucket_55_60_up, bucket_55_60_total)
+                  << "\n";
+        std::cout << "prob_bucket[0.60,0.70): total=" << bucket_60_70_total
+                  << " up=" << bucket_60_70_up
+                  << " up_rate=" << bucketRate(bucket_60_70_up, bucket_60_70_total)
+                  << "\n";
+        std::cout << "prob_bucket[0.70,1.00]: total=" << bucket_70p_total
+                  << " up=" << bucket_70p_up
+                  << " up_rate=" << bucketRate(bucket_70p_up, bucket_70p_total)
+                  << "\n";
+
+    }
 #endif
 
 #if !LSTM_INFERENCE_ONLY && LSTM_DEBUG_PRINTS
@@ -1970,6 +2161,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         #endif
     }
 #endif
+
+#if LSTM_EPOCH_BUCKETS
+    if (targetType == TargetType::BinaryReturn) {
+        // Print and reset epoch-aggregated bucket report.
+        PrintAndResetEpochBuckets();
+    }
+#endif
+
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
     return { mse, windowCount, skippedWindows + ignoredBinaryWindows };
 }
@@ -2069,6 +2268,7 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
 
 
 

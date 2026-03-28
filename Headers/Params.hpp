@@ -66,7 +66,7 @@ constexpr CandleTF candle_duration = CandleTF::m15; // default cycle
 constexpr auto window_size = 64;//window_size_for(candle_duration);
 constexpr auto batch_size = 256;
 constexpr auto epoch_count = 100;
-constexpr auto prediction_horizon = 16;//prediction_horizon_for(candle_duration);
+constexpr auto prediction_horizon = 4;//prediction_horizon_for(candle_duration);
 
 constexpr float kFeatureScale = 1000.0f;
 constexpr float c_next_threshold = .0012f;  //c_next_threshold_for(candle_duration);
