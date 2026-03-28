@@ -37,6 +37,32 @@
 #define LSTM_BATCH_PROFILE 1
 #endif
 
+#ifndef LSTM_DIAG
+#define LSTM_DIAG 1
+#endif
+
+#ifndef LSTM_DIAG_ONLY_FIRST_BATCH
+#define LSTM_DIAG_ONLY_FIRST_BATCH 1
+#endif
+
+template <typename Mat>
+static double FroNormEvalHost(const Mat& m)
+{
+    // Make sure any queued GPU work is finished before we read host-visible memory.
+    MetaNN::NSMetalMatMul::WaitForAll();
+    auto ev = MetaNN::Evaluate(m);
+    auto low = MetaNN::LowerAccess(ev);
+    const auto* p = low.RawMemory();
+    const size_t n = ev.Shape()[0] * ev.Shape()[1];
+    long double acc = 0.0L;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const long double v = static_cast<long double>(p[i]);
+        acc += v * v;
+    }
+    return std::sqrt(static_cast<double>(acc));
+}
+
 
 // Debug helpers: compile out debug code and prints when disabled
 #if LSTM_DEBUG_PRINTS
@@ -102,9 +128,13 @@ using AccumScalar = float;   // default accumulation precision
 #ifndef MINI_BATCH_WINDOWS
 #define MINI_BATCH_WINDOWS 512
 #endif
+#ifndef LSTM_MAX_MINI_BATCH_WINDOWS
+#define LSTM_MAX_MINI_BATCH_WINDOWS 64
+#endif
 
 constexpr size_t mini_batch_windows = MINI_BATCH_WINDOWS;
 
+const size_t effectiveMiniBatchWindows = std::max<size_t>(1, std::min<size_t>(mini_batch_windows, static_cast<size_t>(LSTM_MAX_MINI_BATCH_WINDOWS)));
 struct LSTMScopedProfileTimer
 {
     std::chrono::steady_clock::time_point t0;
@@ -218,6 +248,28 @@ struct EA::LSTM::WindowWeights
     EA::LSTM::EAMatrix W_x;  // top block (n_in x 4H)
     EA::LSTM::EAMatrix W_h;  // bottom block (H x 4H)
 };
+
+inline double L2Norm(const MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>& M)
+{
+    auto low = MetaNN::LowerAccess(M);
+    const float* p = low.RawMemory();
+    const size_t n = M.Shape()[0] * M.Shape()[1];
+    double s = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        s += static_cast<double>(p[i]) * static_cast<double>(p[i]);
+    return std::sqrt(s);
+}
+
+inline double L2NormAccum(const MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& M)
+{
+    auto low = MetaNN::LowerAccess(M);
+    const AccumScalar* p = low.RawMemory();
+    const size_t n = M.Shape()[0] * M.Shape()[1];
+    double s = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        s += static_cast<double>(p[i]) * static_cast<double>(p[i]);
+    return std::sqrt(s);
+}
 
 struct EA::LSTM::BatchStepCache
 {
@@ -1036,7 +1088,8 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 
 std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
-    const size_t effectiveMiniBatchWindows = std::max<size_t>(1, std::min<size_t>(mini_batch_windows, 64));
+    static size_t s_calcBatchCalls = 0;
+    const size_t calcBatchCallIdx = s_calcBatchCalls++;
     EAMatrix head_logits_batch(effectiveMiniBatchWindows, 1);
 
     double sse = 0.0;
@@ -1438,6 +1491,54 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
 
             mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
+            #if LSTM_DIAG
+                        if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                        {
+                            const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
+                            const double n_dparam = FroNormEvalHost(d_param_accum);
+                            const double n_dbias  = FroNormEvalHost(d_bias_accum);
+                            const double n_dheadW = FroNormEvalHost(d_headDirW_accum_f);
+                            const double n_dheadB = FroNormEvalHost(d_headDirB_accum_f);
+                            const double n_headW  = FroNormEvalHost(returnHeadDirWeight);
+                            const double n_headB  = FroNormEvalHost(returnHeadDirBias);
+
+                            const double n_mb_dparam = std::sqrt(
+                                std::pow(FroNormEvalHost(G_bin.dW_i), 2.0) +
+                                std::pow(FroNormEvalHost(G_bin.dW_f), 2.0) +
+                                std::pow(FroNormEvalHost(G_bin.dW_g), 2.0) +
+                                std::pow(FroNormEvalHost(G_bin.dW_o), 2.0));
+                            const double n_mb_dbias = std::sqrt(
+                                std::pow(FroNormEvalHost(G_bin.db_i), 2.0) +
+                                std::pow(FroNormEvalHost(G_bin.db_f), 2.0) +
+                                std::pow(FroNormEvalHost(G_bin.db_g), 2.0) +
+                                std::pow(FroNormEvalHost(G_bin.db_o), 2.0));
+
+                            EAMatrix d_headDirW_mb(hidden_size, 1);
+                            EAMatrix d_headDirB_mb(1, 1);
+                            zeroFill(d_headDirW_mb);
+                            zeroFill(d_headDirB_mb);
+                            AccumulateHeadGradsBatch(d_headDirW_mb, d_headDirB_mb, h_batch, errs);
+                            const double n_mb_dheadW = FroNormEvalHost(d_headDirW_mb);
+                            const double n_mb_dheadB = FroNormEvalHost(d_headDirB_mb);
+
+                            std::cout
+                                << "DIAG_MB"
+                                << ",calcBatchCall=" << calcBatchCallIdx
+                                << ",mb=" << mbIdx
+                                << ",B=" << B
+                                << ",mb_dparam=" << n_mb_dparam
+                                << ",mb_dbias="  << n_mb_dbias
+                                << ",mb_dHeadW=" << n_mb_dheadW
+                                << ",mb_dHeadB=" << n_mb_dheadB
+                                << ",dparam=" << n_dparam
+                                << ",dbias="  << n_dbias
+                                << ",dHeadW=" << n_dheadW
+                                << ",dHeadB=" << n_dheadB
+                                << ",headW="  << n_headW
+                                << ",headB="  << n_headB
+                                << "\n";
+                        }
+            #endif
         }
         else
         {
@@ -1455,6 +1556,54 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_reg);
 
             mergeGateAccumulators(G_reg, d_param_accum, d_bias_accum, hidden_size);
+            #if LSTM_DIAG
+                        if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                        {
+                            const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
+                            const double n_dparam = FroNormEvalHost(d_param_accum);
+                            const double n_dbias  = FroNormEvalHost(d_bias_accum);
+                            const double n_dheadW = FroNormEvalHost(d_headW_accum_f);
+                            const double n_dheadB = FroNormEvalHost(d_headB_accum_f);
+                            const double n_headW  = FroNormEvalHost(returnHeadWeight);
+                            const double n_headB  = FroNormEvalHost(returnHeadBias);
+
+                            const double n_mb_dparam = std::sqrt(
+                                std::pow(FroNormEvalHost(G_reg.dW_i), 2.0) +
+                                std::pow(FroNormEvalHost(G_reg.dW_f), 2.0) +
+                                std::pow(FroNormEvalHost(G_reg.dW_g), 2.0) +
+                                std::pow(FroNormEvalHost(G_reg.dW_o), 2.0));
+                            const double n_mb_dbias = std::sqrt(
+                                std::pow(FroNormEvalHost(G_reg.db_i), 2.0) +
+                                std::pow(FroNormEvalHost(G_reg.db_f), 2.0) +
+                                std::pow(FroNormEvalHost(G_reg.db_g), 2.0) +
+                                std::pow(FroNormEvalHost(G_reg.db_o), 2.0));
+
+                            EAMatrix d_headW_mb(hidden_size, 1);
+                            EAMatrix d_headB_mb(1, 1);
+                            zeroFill(d_headW_mb);
+                            zeroFill(d_headB_mb);
+                            AccumulateHeadGradsBatch(d_headW_mb, d_headB_mb, h_batch, errs);
+                            const double n_mb_dheadW = FroNormEvalHost(d_headW_mb);
+                            const double n_mb_dheadB = FroNormEvalHost(d_headB_mb);
+
+                            std::cout
+                                << "DIAG_MB"
+                                << ",calcBatchCall=" << calcBatchCallIdx
+                                << ",mb=" << mbIdx
+                                << ",B=" << B
+                                << ",mb_dparam=" << n_mb_dparam
+                                << ",mb_dbias="  << n_mb_dbias
+                                << ",mb_dHeadW=" << n_mb_dheadW
+                                << ",mb_dHeadB=" << n_mb_dheadB
+                                << ",dparam=" << n_dparam
+                                << ",dbias="  << n_dbias
+                                << ",dHeadW=" << n_dheadW
+                                << ",dHeadB=" << n_dheadB
+                                << ",headW="  << n_headW
+                                << ",headB="  << n_headB
+                                << "\n";
+                        }
+            #endif
         }
 #endif
     }
@@ -1609,16 +1758,84 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         const float lrCore = learningRate * invN;
         const float lrHead = learningRate * LSTM_HEAD_LR_MULT * invN; // or a separate head LR if you want
-
-        SGDUpdate(param, d_param_f, lrCore);
-        SGDUpdate(bias,  d_bias_f,  lrCore);
-        if (targetType == TargetType::BinaryReturn) {
-            SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
-            SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
-        } else {
-            SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
-            SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
-        }
+        
+        #if LSTM_DIAG
+                if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                {
+                    const double n_param = FroNormEvalHost(param);
+                    const double n_bias  = FroNormEvalHost(bias);
+                    const double n_headW = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(returnHeadDirWeight)
+                        : FroNormEvalHost(returnHeadWeight);
+                    const double n_headB = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(returnHeadDirBias)
+                        : FroNormEvalHost(returnHeadBias);
+        
+                    // Gradient norms (after Evaluate already below, but safe to compute here too)
+                   const double n_gparam = FroNormEvalHost(d_param_accum);
+                    const double n_gbias  = FroNormEvalHost(d_bias_accum);
+                    const double n_gheadW = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(d_headDirW_accum_f)
+                        : FroNormEvalHost(d_headW_accum_f);
+                    const double n_gheadB = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(d_headDirB_accum_f)
+                        : FroNormEvalHost(d_headB_accum_f);
+        
+                    std::cout
+                        << "DIAG_PREUPD"
+                        << ",calcBatchCall=" << calcBatchCallIdx
+                        << ",windowCount=" << windowCount
+                        << ",invN=" << invN
+                        << ",lrCore=" << lrCore
+                        << ",lrHead=" << lrHead
+                        << ",param=" << n_param
+                        << ",bias=" << n_bias
+                        << ",headW=" << n_headW
+                        << ",headB=" << n_headB
+                        << ",gParam=" << n_gparam
+                        << ",gBias=" << n_gbias
+                        << ",gHeadW=" << n_gheadW
+                        << ",gHeadB=" << n_gheadB
+                        << ",dParamStepApprox=" << (lrCore * n_gparam)
+                        << ",dBiasStepApprox=" << (lrCore * n_gbias)
+                        << ",dHeadStepApprox=" << (lrHead * n_gheadW)
+                        << ",dHeadBiasStepApprox=" << (lrHead * n_gheadB)
+                        << "\n";
+                }
+        #endif
+        #if !LSTM_DISABLE_UPDATES
+            SGDUpdate(param, d_param_f, lrCore);
+            SGDUpdate(bias,  d_bias_f,  lrCore);
+            if (targetType == TargetType::BinaryReturn) {
+                SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
+                SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
+            } else {
+                SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
+                SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
+            }
+        #endif
+#if LSTM_DIAG
+                if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                {
+                    const double n_param2 = FroNormEvalHost(param);
+                    const double n_bias2  = FroNormEvalHost(bias);
+                    const double n_headW2 = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(returnHeadDirWeight)
+                        : FroNormEvalHost(returnHeadWeight);
+                    const double n_headB2 = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(returnHeadDirBias)
+                        : FroNormEvalHost(returnHeadBias);
+        
+                    std::cout
+                        << "DIAG_POSTUPD"
+                        << ",calcBatchCall=" << calcBatchCallIdx
+                        << ",param=" << n_param2
+                        << ",bias=" << n_bias2
+                        << ",headW=" << n_headW2
+                        << ",headB=" << n_headB2
+                        << "\n";
+                }
+        #endif
     }
 #endif
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
