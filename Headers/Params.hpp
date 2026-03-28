@@ -69,7 +69,7 @@ constexpr auto epoch_count = 100;
 constexpr auto prediction_horizon = 16;//prediction_horizon_for(candle_duration);
 
 constexpr float kFeatureScale = 1000.0f;
-constexpr float c_next_threshold = .0008f;  //c_next_threshold_for(candle_duration);
+constexpr float c_next_threshold = .0012f;  //c_next_threshold_for(candle_duration);
 
 constexpr size_t rolling_vol_lookback = 32;
 constexpr size_t rolling_ret_lookback = 32;

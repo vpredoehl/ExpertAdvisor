@@ -156,7 +156,7 @@ using AccumScalar = float;   // default accumulation precision
 #define MINI_BATCH_WINDOWS 512
 #endif
 #ifndef LSTM_MAX_MINI_BATCH_WINDOWS
-#define LSTM_MAX_MINI_BATCH_WINDOWS 64
+#define LSTM_MAX_MINI_BATCH_WINDOWS 128
 #endif
 
 constexpr size_t mini_batch_windows = MINI_BATCH_WINDOWS;
@@ -317,6 +317,8 @@ struct EA::LSTM::WindowBatch
     std::vector<float> targets;
     std::vector<float> close_t;
     std::vector<float> close_target;
+    std::vector<size_t> kept_starts;
+    size_t ignored_binary_count = 0;
 };
 
 struct EA::LSTM::ForwardBatchScratch
@@ -1124,6 +1126,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t windowCount = 0;
     size_t windowsInBatch = 0;
     size_t skippedWindows = 0;
+    size_t ignoredBinaryWindows = 0;
     LSTMBatchProfile profile;
 
     // Class counts for BinaryReturn targets
@@ -1244,6 +1247,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         wb.targets.reserve(B_est);
         wb.close_t.reserve(B_est);
         wb.close_target.reserve(B_est);
+        wb.kept_starts.reserve(B_est);
 
 #warning "Insert prediction_horizon comment before targets loop"
         // NOTE: For faster learning and less noise, consider reducing prediction_horizon
@@ -1251,10 +1255,29 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
         const float* prebuilt_ptr = lowPrebuilt.RawMemory();
 
-        size_t b = 0;
-        for (auto it = first; it != last; ++it, ++b)
+        for (auto it = first; it != last; ++it)
         {
             const size_t start = *it;
+            const size_t lastIdx   = start + (window_size - 1);
+            const size_t targetIdx = lastIdx + prediction_horizon;
+            const auto lastIt      = batch.begin() + static_cast<std::ptrdiff_t>(lastIdx);
+            const auto targetIt    = batch.begin() + static_cast<std::ptrdiff_t>(targetIdx);
+            const float close_t_local      = t.RawCloseAtIterator(lastIt);
+            const float close_target_local = t.RawCloseAtIterator(targetIt);
+            const float y_true_scaled      = prebuilt_ptr[targetIdx * F + closeCol];
+            const float y_true_logret      = y_true_scaled / EA::LSTM::kFeatScale;
+
+            if (targetType == TargetType::BinaryReturn)
+            {
+                const float move_abs = std::fabs(y_true_logret);
+                if (!std::isfinite(move_abs) || move_abs <= c_next_threshold)
+                {
+                    ++wb.ignored_binary_count;
+                    continue;
+                }
+            }
+
+            const size_t b = wb.targets.size();
 #if LSTM_BATCH_PROFILE
             ++profile.total_windows_built;
             auto t_pack0 = std::chrono::steady_clock::now();
@@ -1269,19 +1292,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             profile.pack_copy_us += std::chrono::duration<double, std::micro>(t_pack1 - t_pack0).count();
 #endif
 
-            const size_t lastIdx   = start + (window_size - 1);
-            const size_t targetIdx = lastIdx + prediction_horizon;
-            const auto lastIt      = batch.begin() + static_cast<std::ptrdiff_t>(lastIdx);
-            const auto targetIt    = batch.begin() + static_cast<std::ptrdiff_t>(targetIdx);
-            const float close_t_local      = t.RawCloseAtIterator(lastIt);
-            const float close_target_local = t.RawCloseAtIterator(targetIt);
-            const float y_true_scaled      = prebuilt_ptr[targetIdx * F + closeCol];
-            const float y_true_logret      = y_true_scaled / EA::LSTM::kFeatScale;
-
             wb.close_t.push_back(close_t_local);
             wb.close_target.push_back(close_target_local);
+            wb.kept_starts.push_back(start);
 
-            if (targetType == TargetType::BinaryReturn) wb.targets.push_back((close_target_local > close_t_local) ? 1.0f : 0.0f);
+            if (targetType == TargetType::BinaryReturn)
+                wb.targets.push_back((y_true_logret > 0.0f) ? 1.0f : 0.0f);
             else
             {
                 float y_true_logret_used = y_true_logret;
@@ -1295,6 +1311,26 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 wb.targets.push_back(std::clamp(tval, -10.0f, 10.0f));
             }
         }
+
+        const size_t B_final = wb.targets.size();
+        if (B_final > 0 && B_final != B_est)
+        {
+            for (size_t tstep = 0; tstep < window_size; ++tstep)
+            {
+                EAMatrix compact(B_final, F);
+                auto lowSrc = MetaNN::LowerAccess(wb.packed_steps[tstep]);
+                auto lowDst = MetaNN::LowerAccess(compact);
+                std::memcpy(lowDst.MutableRawMemory(),
+                            lowSrc.RawMemory(),
+                            B_final * F * sizeof(float));
+                wb.packed_steps[tstep] = std::move(compact);
+            }
+        }
+        else if (B_final == 0)
+        {
+            wb.packed_steps.clear();
+        }
+
         return wb;
     };
 
@@ -1326,7 +1362,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         WindowBatch wb = buildWindowBatch(allStarts.begin() + static_cast<std::ptrdiff_t>(batchBase),
                                           allStarts.begin() + static_cast<std::ptrdiff_t>(batchEnd));
         const size_t B = wb.targets.size();
-        if (B == 0) continue;
+        ignoredBinaryWindows += wb.ignored_binary_count;
+        if (B == 0)
+        {
+            skippedWindows += wb.ignored_binary_count;
+            continue;
+        }
 #if LSTM_BATCH_PROFILE
         ++profile.mini_batches;
         profile.total_windows += B;
@@ -1722,6 +1763,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     double loss_value = 0.0;
     loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
     std::cout << "loss_value=" << loss_value << "\n";
+    std::cout << "ignored_binary_windows=" << ignoredBinaryWindows << "\n";
     if (targetType == TargetType::BinaryReturn) std::cout << "up_count=" << up_count
                   << " down_count=" << down_count
                   << " zero_count=" << zero_count << "\n";
@@ -1744,7 +1786,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::cout << "train: pred_pct (relative move) samples:";
         for (float v : ydenorm_samples) std::cout << ' ' << v;
         std::cout << std::endl;
-        std::cout << "train: skipped_windows=" << skippedWindows << std::endl;
+        std::cout << "train: skipped_windows=" << skippedWindows
+                  << " ignored_binary_windows=" << ignoredBinaryWindows << std::endl;
     }
     std::cout << "batch: max_abs_y_true=" << max_abs_y_true
               << " count_abs_gt_0p01=" << count_abs_gt_0p01
@@ -1928,7 +1971,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     }
 #endif
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
-    return { mse, windowCount, skippedWindows };
+    return { mse, windowCount, skippedWindows + ignoredBinaryWindows };
 }
 
 std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
