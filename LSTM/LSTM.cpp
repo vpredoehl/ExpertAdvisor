@@ -1035,11 +1035,11 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 
 std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
-    EAMatrix head_logits_batch(mini_batch_windows, 1);
+    const size_t effectiveMiniBatchWindows = std::max<size_t>(1, std::min<size_t>(mini_batch_windows, 64));
+    EAMatrix head_logits_batch(effectiveMiniBatchWindows, 1);
 
     double sse = 0.0;
     size_t mseCount = 0;
-    float predicted_close = 0;
     size_t windowCount = 0;
     size_t windowsInBatch = 0;
     size_t skippedWindows = 0;
@@ -1051,11 +1051,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t zero_count = 0;
 
     // Lazy head gradient accumulators (expressions) across all windows in the batch
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(mini_batch_windows, static_cast<size_t>(n_in + hidden_size));
-    EAMatrix h_batch(mini_batch_windows, hidden_size);
-    EAMatrix c_batch(mini_batch_windows, hidden_size);
-    EAMatrix d_h_batch(mini_batch_windows, hidden_size);
-    EAMatrix d_c_batch(mini_batch_windows, hidden_size);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(effectiveMiniBatchWindows, static_cast<size_t>(n_in + hidden_size));
+    EAMatrix h_batch(effectiveMiniBatchWindows, hidden_size);
+    EAMatrix c_batch(effectiveMiniBatchWindows, hidden_size);
+    EAMatrix d_h_batch(effectiveMiniBatchWindows, hidden_size);
+    EAMatrix d_c_batch(effectiveMiniBatchWindows, hidden_size);
     ForwardBatchScratch forward_scratch;
 
     GateAccumulators G_bin {
@@ -1226,11 +1226,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         allStarts.push_back(start);
     }
 
-
-
-    for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += mini_batch_windows)
+    for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
     {
-        const size_t batchEnd = std::min(batchBase + mini_batch_windows, allStarts.size());
+        const size_t batchEnd = std::min(batchBase + effectiveMiniBatchWindows, allStarts.size());
         WindowBatch wb = buildWindowBatch(allStarts.begin() + static_cast<std::ptrdiff_t>(batchBase),
                                           allStarts.begin() + static_cast<std::ptrdiff_t>(batchEnd));
         const size_t B = wb.targets.size();
