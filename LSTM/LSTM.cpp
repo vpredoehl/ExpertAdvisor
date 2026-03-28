@@ -45,6 +45,33 @@
 #define LSTM_DIAG_ONLY_FIRST_BATCH 1
 #endif
 
+// Frobenius norm of the difference between two matrices, evaluated on host
+template <typename Mat>
+static double FroNormDeltaHost(const Mat& a, const Mat& b)
+{
+    // Ensure any queued GPU work is finished before host reads
+    MetaNN::NSMetalMatMul::WaitForAll();
+
+    auto ea = MetaNN::Evaluate(a);
+    auto eb = MetaNN::Evaluate(b);
+    auto la = MetaNN::LowerAccess(ea);
+    auto lb = MetaNN::LowerAccess(eb);
+
+    const auto* pa = la.RawMemory();
+    const auto* pb = lb.RawMemory();
+
+    const size_t n = static_cast<size_t>(a.Shape()[0]) * static_cast<size_t>(a.Shape()[1]);
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(a.Shape()[0] == b.Shape()[0] && a.Shape()[1] == b.Shape()[1], "FroNormDeltaHost: shape mismatch");
+#endif
+    long double acc = 0.0L;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const long double dv = static_cast<long double>(pa[i]) - static_cast<long double>(pb[i]);
+        acc += dv * dv;
+    }
+    return std::sqrt(static_cast<double>(acc));
+}
 template <typename Mat>
 static double FroNormEvalHost(const Mat& m)
 {
@@ -1280,6 +1307,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         allStarts.push_back(start);
     }
 
+#if LSTM_DIAG
+        const bool diag_capture = (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0);
+        // Pre-update snapshots for true delta norms (compute unconditionally for simplicity)
+        EAMatrix param_before_snap = DeepMatrixCopy(param);
+        EAMatrix bias_before_snap  = DeepMatrixCopy(bias);
+        EAMatrix headW_before_snap = (targetType == TargetType::BinaryReturn)
+            ? DeepMatrixCopy(returnHeadDirWeight)
+            : DeepMatrixCopy(returnHeadWeight);
+        EAMatrix headB_before_snap = (targetType == TargetType::BinaryReturn)
+            ? DeepMatrixCopy(returnHeadDirBias)
+            : DeepMatrixCopy(returnHeadBias);
+#endif
+
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
     {
         const size_t batchEnd = std::min(batchBase + effectiveMiniBatchWindows, allStarts.size());
@@ -1780,14 +1820,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double n_gheadB = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(d_headDirB_accum_f)
                         : FroNormEvalHost(d_headB_accum_f);
-        
+
                     std::cout
                         << "DIAG_PREUPD"
                         << ",calcBatchCall=" << calcBatchCallIdx
-                        << ",windowCount=" << windowCount
-                        << ",invN=" << invN
-                        << ",lrCore=" << lrCore
-                        << ",lrHead=" << lrHead
                         << ",param=" << n_param
                         << ",bias=" << n_bias
                         << ",headW=" << n_headW
@@ -1796,10 +1832,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                         << ",gBias=" << n_gbias
                         << ",gHeadW=" << n_gheadW
                         << ",gHeadB=" << n_gheadB
-                        << ",dParamStepApprox=" << (lrCore * n_gparam)
-                        << ",dBiasStepApprox=" << (lrCore * n_gbias)
-                        << ",dHeadStepApprox=" << (lrHead * n_gheadW)
-                        << ",dHeadBiasStepApprox=" << (lrHead * n_gheadB)
                         << "\n";
                 }
         #endif
@@ -1825,6 +1857,22 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double n_headB2 = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(returnHeadDirBias)
                         : FroNormEvalHost(returnHeadBias);
+
+                    // True update magnitudes (Frobenius norms of parameter deltas)
+                    double d_param_delta = FroNormDeltaHost(param, param_before_snap);
+                    double d_bias_delta  = FroNormDeltaHost(bias,  bias_before_snap);
+                    double d_headW_delta = 0.0;
+                    double d_headB_delta = 0.0;
+                    if (targetType == TargetType::BinaryReturn)
+                    {
+                        d_headW_delta = FroNormDeltaHost(returnHeadDirWeight, headW_before_snap);
+                        d_headB_delta = FroNormDeltaHost(returnHeadDirBias,   headB_before_snap);
+                    }
+                    else
+                    {
+                        d_headW_delta = FroNormDeltaHost(returnHeadWeight, headW_before_snap);
+                        d_headB_delta = FroNormDeltaHost(returnHeadBias,   headB_before_snap);
+                    }
         
                     std::cout
                         << "DIAG_POSTUPD"
@@ -1833,6 +1881,47 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                         << ",bias=" << n_bias2
                         << ",headW=" << n_headW2
                         << ",headB=" << n_headB2
+                        << ",dParam=" << d_param_delta
+                        << ",dBias="  << d_bias_delta
+                        << ",dHeadW=" << d_headW_delta
+                        << ",dHeadB=" << d_headB_delta
+                        << "\n";
+
+                    // Combined CSV-friendly line with pre/post norms and deltas
+                    const double n_param_pre = FroNormEvalHost(param_before_snap);
+                    const double n_bias_pre  = FroNormEvalHost(bias_before_snap);
+                    const double n_headW_pre = FroNormEvalHost(headW_before_snap);
+                    const double n_headB_pre = FroNormEvalHost(headB_before_snap);
+
+                    // Gradient norms (recomputed here for a single-line summary)
+                    const double n_gparam2 = FroNormEvalHost(d_param_accum);
+                    const double n_gbias2  = FroNormEvalHost(d_bias_accum);
+                    const double n_gheadW2 = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(d_headDirW_accum_f)
+                        : FroNormEvalHost(d_headW_accum_f);
+                    const double n_gheadB2 = (targetType == TargetType::BinaryReturn)
+                        ? FroNormEvalHost(d_headDirB_accum_f)
+                        : FroNormEvalHost(d_headB_accum_f);
+
+                    std::cout
+                        << "DIAG_COMBINED"
+                        << ",calcBatchCall=" << calcBatchCallIdx
+                        << ",param_pre=" << n_param_pre
+                        << ",bias_pre="  << n_bias_pre
+                        << ",headW_pre=" << n_headW_pre
+                        << ",headB_pre=" << n_headB_pre
+                        << ",gParam="    << n_gparam2
+                        << ",gBias="     << n_gbias2
+                        << ",gHeadW="    << n_gheadW2
+                        << ",gHeadB="    << n_gheadB2
+                        << ",param_post=" << n_param2
+                        << ",bias_post="  << n_bias2
+                        << ",headW_post=" << n_headW2
+                        << ",headB_post=" << n_headB2
+                        << ",dParam="     << d_param_delta
+                        << ",dBias="      << d_bias_delta
+                        << ",dHeadW="     << d_headW_delta
+                        << ",dHeadB="     << d_headB_delta
                         << "\n";
                 }
         #endif
@@ -1937,6 +2026,9 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
+
+
+
 
 
 
