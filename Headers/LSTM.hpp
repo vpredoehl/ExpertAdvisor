@@ -44,13 +44,15 @@ namespace EA
 {
     using EAMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>;
     const ::Tensor& t;
+    int n_in = 0;
     
     struct GateMatrixView
     {
         EAMatrix& m;
         size_t colOffset;
+        size_t inputCols;
         inline size_t rows() const { return static_cast<size_t>(n_out); }
-        inline size_t cols() const { return static_cast<size_t>(n_in); }
+        inline size_t cols() const { return inputCols; }
         inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
         inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
         inline void SetValue(size_t r, size_t c, float v) { m.SetValue(c, colOffset + r, v); }
@@ -60,8 +62,9 @@ namespace EA
     {
         const EAMatrix& m;
         size_t colOffset;
+        size_t inputCols;
         inline size_t rows() const { return static_cast<size_t>(n_out); }
-        inline size_t cols() const { return static_cast<size_t>(n_in); }
+        inline size_t cols() const { return inputCols; }
         inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
         inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
     };
@@ -82,10 +85,17 @@ namespace EA
     }
     float PredictDirLogitFromH(const EAMatrix& h)
     {
-        auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // logit
+        auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // binary logit
         auto zMat = Evaluate(z);
-        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
+        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 1, "PredictDirLogitFromH: expected 1x1 result");
         return zMat(0,0);
+    }
+    std::array<float, 3> PredictDirLogits3ClassFromH(const EAMatrix& h)
+    {
+        auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // 1x3 logits
+        auto zMat = Evaluate(z);
+        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 3, "PredictDirLogits3ClassFromH: expected 1x3 result");
+        return { zMat(0,0), zMat(0,1), zMat(0,2) };
     }
     float DirLossAndGrad(float z, int t01, float& dL_dz)
     {
@@ -103,18 +113,38 @@ namespace EA
         dL_dz    = p - float(t01);
         return L;
     }
+
+    static inline int ClassFromLogReturn(float r, float threshold)
+    {
+        if (!std::isfinite(r)) return 1; // neutral
+        if (r > threshold)  return 2;    // up
+        if (r < -threshold) return 0;    // down
+        return 1;                        // neutral
+    }
+
+    static inline void Softmax3(const float* z, float* p)
+    {
+        const float m = std::max(z[0], std::max(z[1], z[2]));
+        const float e0 = std::exp(z[0] - m);
+        const float e1 = std::exp(z[1] - m);
+        const float e2 = std::exp(z[2] - m);
+        const float s = e0 + e1 + e2;
+        p[0] = e0 / s;
+        p[1] = e1 / s;
+        p[2] = e2 / s;
+    }
     
     static float Sigmoid(float z) { return 1.0f / (1.0f + std::exp(-z)); }
 public:
     inline GateMatrixView gateMatrix(size_t gateIndex)
     {
         LSTM_ASSERT(gateIndex < 4, "gateMatrix: gateIndex must be < 4");
-        return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
+        return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
     }
     inline ConstGateMatrixView gateMatrix(size_t gateIndex) const
     {
         LSTM_ASSERT(gateIndex < 4, "gateMatrix const: gateIndex must be < 4");
-        return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out) };
+        return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
     }
     inline void ResetPreviousState()
     {
@@ -129,7 +159,13 @@ public:
     }
     
     // Target mapping metadata (persisted via PgModelIO)
-    enum class TargetType : int { LogReturn = 0, PercentReturn = 1, RelativeMove = PercentReturn, BinaryReturn };
+    enum class TargetType : int {
+        LogReturn = 0,
+        PercentReturn = 1,
+        RelativeMove = PercentReturn,
+        BinaryReturn,
+        UpNeutralDownReturn
+    };
     
     // How the head's scalar output maps to the target used for training/inference
     // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
@@ -145,7 +181,7 @@ public:
     inline static constexpr float kFeatScale = 1000.0f;
     
     float long_term, short_term, in;
-    EAMatrix param { static_cast<size_t>(n_in), 4 * n_out }; // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out]
+    EAMatrix param;
     EAMatrix prevHiddenState { 1, hidden_size }, prevCellState { 1, hidden_size };
     EAMatrix bias { 1, 4 * n_out };
     
@@ -153,8 +189,8 @@ public:
     EAMatrix returnHeadWeight { hidden_size, 1 };
     EAMatrix returnHeadBias { 1, 1 };
     // Binary classification head (direction): p = sigmoid(h_T · returnHeadDirWeight + returnHeadDirBias)
-    EAMatrix returnHeadDirWeight { hidden_size, 1 };
-    EAMatrix returnHeadDirBias { 1, 1 };
+    EAMatrix returnHeadDirWeight { hidden_size, 3 };
+    EAMatrix returnHeadDirBias { 1, 3 };
     
     // Simple SGD learning rate for head-only training
     float learningRate = 1e-3f / 3; // or /2 or /4
@@ -177,6 +213,7 @@ private:
     
     struct WindowWeights;
     struct HeadLoss;
+    struct HeadLoss3Class;
     struct GateBlocks;
     struct GateAccumulators;
     struct BatchStepCache;
@@ -202,17 +239,25 @@ private:
                                                               EAMatrix& c_batch,
                                                               EAMatrix& h_batch) const;
     HeadLoss predictAndLoss(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b, float target) const;
+    HeadLoss3Class predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b, int targetClass) const;
     float predictOnly(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b) const;
     void accumulateHeadGrads(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_T, float err) const;
     GateBlocks hoistGateBlocks(const EAMatrix& W_h_win, size_t H) const;
     void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
     void RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t B) const;
     auto BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t tstep, LSTMBatchProfile*) -> EAMatrix;
-
+    float ComputeLookbackLogReturn(const Window& batch, size_t rowIdx, size_t lookbackBars) const;
+    size_t AppendMultiHorizonReturnFeatures(const Window& batch,
+                                            size_t rowIdx,
+                                            float* dst,
+                                            size_t dstOffset) const;
+    
     // Batched helpers
     EAMatrix RepeatRows(const EAMatrix& row, size_t B) const;
     EAMatrix BuildHeadDhBatch(const std::vector<float>& errs, const EAMatrix& headW, float scale) const;
+    EAMatrix BuildHeadDhBatch3Class(const EAMatrix& d_logits_batch, const EAMatrix& headW, float scale) const;
     void AccumulateHeadGradsBatch(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_batch, const std::vector<float>& errs) const;
+    void AccumulateHeadGradsBatch3Class(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_batch, const EAMatrix& d_logits_batch) const;
     EAMatrix SliceRows(const EAMatrix& src, size_t row0, size_t rowCount);
 
     // Batched backward through time
