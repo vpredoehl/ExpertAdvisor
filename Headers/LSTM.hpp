@@ -171,7 +171,7 @@ public:
     // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
     // where raw is either log-return or percent-return depending on targetType
     // If targetUseZScore == true, training target was normalized as (t - targetMean)/targetStd
-    TargetType targetType = TargetType::BinaryReturn; // default to logreturn
+    TargetType targetType = TargetType::UpNeutralDownReturn; // default to logreturn
     float      targetScale = 1.0f;                   // default to 100x pct
     float      targetBias  = 0.0f;                     // default no bias
     bool       targetUseZScore = false;                // default: not normalized
@@ -208,6 +208,8 @@ public:
     std::vector<float> RollingPredictNextLogReturn(const Window& batch, bool resetAtStart = true);
     std::vector<float> RollingPredictNextClose(const Window& batch, bool resetAtStart = true);
     
+    static void PrintAndResetEpochBuckets();
+
 private:
     using AccumScalar = float;
     
@@ -264,7 +266,7 @@ private:
     void backwardStepBatch(const BatchStepCache& sc, const GateBlocks& gb, EAMatrix& d_h, EAMatrix& d_c, GateAccumulators& A) const;
     
     void mergeGateAccumulators(const GateAccumulators& A, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_param_accum, MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum, size_t H) const;
-    
+
     static EAMatrix GatherRows(const std::vector<EAMatrix>& rows);
     static void ScatterRows(EAMatrix& dst, const EAMatrix& src, size_t row0);
 };

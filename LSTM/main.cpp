@@ -13,6 +13,9 @@
 #include <limits>
 #include <optional>
 #include <tuple>
+#include <unordered_map>
+#include <iomanip>
+#include <cassert>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -266,54 +269,59 @@ int main(int argc, const char * argv[])
             size_t totalActedDir = 0;
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             std::cout << std::setprecision(15);
-            for(auto e = 0; e < epoch_count; e++)
-            t.ForEachBatch( [&](auto b)
-            {
-                if constexpr (inference_only)
+                for(auto e = 0; e < epoch_count; e++)
                 {
-                    auto [correctLog, actedLog, windows, absErrMove, correctDir, actedDir] = ProcessBatchPredict(l, b);
-                    totalCorrectLog += correctLog;
-                    totalActedLog += actedLog;
-                    totalWindows += windows;
-                    totalAbsErrMove += absErrMove;
-                    totalCorrectDir += correctDir;
-                    totalActedDir += actedDir;
+                    t.ForEachBatch( [&](auto b)
+                                   {
+                        if constexpr (inference_only)
+                        {
+                            auto [correctLog, actedLog, windows, absErrMove, correctDir, actedDir] = ProcessBatchPredict(l, b);
+                            totalCorrectLog += correctLog;
+                            totalActedLog += actedLog;
+                            totalWindows += windows;
+                            totalAbsErrMove += absErrMove;
+                            totalCorrectDir += correctDir;
+                            totalActedDir += actedDir;
+                        }
+                        else
+                        {
+                            auto l2 = [](const auto& m){
+                                auto low = MetaNN::LowerAccess(m);
+                                const float* p = low.RawMemory();
+                                size_t len = m.Shape()[0]*m.Shape()[1];
+                                double s=0; for(size_t i=0;i<len;++i){ double v=p[i]; s += v*v; }
+                                return std::sqrt(s);
+                            };
+                            
+                            double p0 = l2(l.param);
+                            double b0 = l2(l.bias);
+                            double hw0 = l2(l.returnHeadWeight);
+                            double hb0 = l2(l.returnHeadBias);
+                            double dhw0 = l2(l.returnHeadDirWeight);
+                            double dhb0 = l2(l.returnHeadDirBias);
+                            
+                            auto [loss, _unused1, _unused2] = l.CalculateBatch(b);
+                            (void)_unused1; (void)_unused2;
+                            
+                            double p1 = l2(l.param);
+                            double b1 = l2(l.bias);
+                            double hw1 = l2(l.returnHeadWeight);
+                            double hb1 = l2(l.returnHeadBias);
+                            double dhw1 = l2(l.returnHeadDirWeight);
+                            double dhb1 = l2(l.returnHeadDirBias);
+                            
+                            std::cout << "epoch " << (e+1)
+                            << " loss=" << loss
+                            << " ||param|| " << p0  << " -> " << p1
+                            << " ||bias|| "  << b0  << " -> " << b1;
+                            if (l.targetType == EA::LSTM::TargetType::BinaryReturn) std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
+                            else std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
+                        }
+                    } );
+                    if (l.targetType == EA::LSTM::TargetType::BinaryReturn ||
+                        l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                        EA::LSTM::PrintAndResetEpochBuckets();
                 }
-                else
-                {
-                    auto l2 = [](const auto& m){
-                        auto low = MetaNN::LowerAccess(m);
-                        const float* p = low.RawMemory();
-                        size_t len = m.Shape()[0]*m.Shape()[1];
-                        double s=0; for(size_t i=0;i<len;++i){ double v=p[i]; s += v*v; }
-                        return std::sqrt(s);
-                    };
-
-                    double p0 = l2(l.param);
-                    double b0 = l2(l.bias);
-                    double hw0 = l2(l.returnHeadWeight);
-                    double hb0 = l2(l.returnHeadBias);
-                    double dhw0 = l2(l.returnHeadDirWeight);
-                    double dhb0 = l2(l.returnHeadDirBias);
-
-                    auto [ loss, _, _]  = l.CalculateBatch(b);
-
-                    double p1 = l2(l.param);
-                    double b1 = l2(l.bias);
-                    double hw1 = l2(l.returnHeadWeight);
-                    double hb1 = l2(l.returnHeadBias);
-                    double dhw1 = l2(l.returnHeadDirWeight);
-                    double dhb1 = l2(l.returnHeadDirBias);
-
-                    std::cout << "epoch " << (e+1)
-                              << " loss=" << loss
-                              << " ||param|| " << p0  << " -> " << p1
-                              << " ||bias|| "  << b0  << " -> " << b1;
-                    if (l.targetType == EA::LSTM::TargetType::BinaryReturn) std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
-                    else std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
-                }
-            } );
-
             if constexpr (inference_only)
             {
                 const double overallAccLog = totalActedLog

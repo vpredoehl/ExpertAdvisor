@@ -276,6 +276,29 @@ static size_t g_epoch_bucket_60_70_up = 0;
 static size_t g_epoch_bucket_70p_total = 0;
 static size_t g_epoch_bucket_70p_up = 0;
 
+// 3-class epoch aggregation counters
+
+static size_t g_epoch_3class_down_count = 0;
+static size_t g_epoch_3class_neutral_count = 0;
+static size_t g_epoch_3class_up_count = 0;
+static size_t g_epoch_3class_bucket_33_35_total = 0;
+static size_t g_epoch_3class_bucket_33_35_correct = 0;
+static size_t g_epoch_3class_bucket_35_40_total = 0;
+static size_t g_epoch_3class_bucket_35_40_correct = 0;
+
+static size_t g_epoch_3class_bucket_40_45_total = 0;
+static size_t g_epoch_3class_bucket_40_45_correct = 0;
+static size_t g_epoch_3class_bucket_45_50_total = 0;
+static size_t g_epoch_3class_bucket_45_50_correct = 0;
+static size_t g_epoch_3class_bucket_50_55_total = 0;
+static size_t g_epoch_3class_bucket_50_55_correct = 0;
+static size_t g_epoch_3class_bucket_55_60_total = 0;
+static size_t g_epoch_3class_bucket_55_60_correct = 0;
+static size_t g_epoch_3class_bucket_60_70_total = 0;
+static size_t g_epoch_3class_bucket_60_70_correct = 0;
+static size_t g_epoch_3class_bucket_70p_total = 0;
+static size_t g_epoch_3class_bucket_70p_correct = 0;
+
 inline void AccumulateEpochBuckets(size_t up_count, size_t down_count, size_t zero_count,
                                    size_t b40t, size_t b40u, size_t b45t, size_t b45u,
                                    size_t b50t, size_t b50u, size_t b55t, size_t b55u,
@@ -299,58 +322,32 @@ inline void AccumulateEpochBuckets(size_t up_count, size_t down_count, size_t ze
     g_epoch_bucket_70p_up += b70u;
 }
 
-inline void PrintAndResetEpochBuckets()
+inline void AccumulateEpochBuckets3Class(size_t down_count, size_t neutral_count, size_t up_count,
+                                         size_t bucket_33_35_total, size_t bucket_33_35_correct,
+                                         size_t bucket_35_40_total, size_t bucket_35_40_correct,
+                                         size_t b40t, size_t b40c, size_t b45t, size_t b45c,
+                                         size_t b50t, size_t b50c, size_t b55t, size_t b55c,
+                                         size_t b60t, size_t b60c, size_t b70t, size_t b70c)
 {
-    auto bucketRate = [](size_t up, size_t total) -> double
-    {
-        return (total > 0) ? (static_cast<double>(up) / static_cast<double>(total)) : 0.0;
-    };
-    std::cout << "EPOCH_AGGREGATE_COUNTS\n";
-    std::cout << "up_count=" << g_epoch_up_count
-              << " down_count=" << g_epoch_down_count
-              << " zero_count=" << g_epoch_zero_count << "\n";
-
-    std::cout << "prob_bucket[0.40,0.45): total=" << g_epoch_bucket_40_45_total
-              << " up=" << g_epoch_bucket_40_45_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_40_45_up, g_epoch_bucket_40_45_total)
-              << "\n";
-    std::cout << "prob_bucket[0.45,0.50): total=" << g_epoch_bucket_45_50_total
-              << " up=" << g_epoch_bucket_45_50_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_45_50_up, g_epoch_bucket_45_50_total)
-              << "\n";
-    std::cout << "prob_bucket[0.50,0.55): total=" << g_epoch_bucket_50_55_total
-              << " up=" << g_epoch_bucket_50_55_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_50_55_up, g_epoch_bucket_50_55_total)
-              << "\n";
-    std::cout << "prob_bucket[0.55,0.60): total=" << g_epoch_bucket_55_60_total
-              << " up=" << g_epoch_bucket_55_60_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_55_60_up, g_epoch_bucket_55_60_total)
-              << "\n";
-    std::cout << "prob_bucket[0.60,0.70): total=" << g_epoch_bucket_60_70_total
-              << " up=" << g_epoch_bucket_60_70_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_60_70_up, g_epoch_bucket_60_70_total)
-              << "\n";
-    std::cout << "prob_bucket[0.70,1.00]: total=" << g_epoch_bucket_70p_total
-              << " up=" << g_epoch_bucket_70p_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_70p_up, g_epoch_bucket_70p_total)
-              << "\n";
-
-    // Reset counters
-    g_epoch_up_count = 0;
-    g_epoch_down_count = 0;
-    g_epoch_zero_count = 0;
-    g_epoch_bucket_40_45_total = 0;
-    g_epoch_bucket_40_45_up = 0;
-    g_epoch_bucket_45_50_total = 0;
-    g_epoch_bucket_45_50_up = 0;
-    g_epoch_bucket_50_55_total = 0;
-    g_epoch_bucket_50_55_up = 0;
-    g_epoch_bucket_55_60_total = 0;
-    g_epoch_bucket_55_60_up = 0;
-    g_epoch_bucket_60_70_total = 0;
-    g_epoch_bucket_60_70_up = 0;
-    g_epoch_bucket_70p_total = 0;
-    g_epoch_bucket_70p_up = 0;
+    g_epoch_3class_down_count += down_count;
+    g_epoch_3class_neutral_count += neutral_count;
+    g_epoch_3class_up_count += up_count;
+    g_epoch_3class_bucket_33_35_total += bucket_33_35_total;
+    g_epoch_3class_bucket_33_35_correct += bucket_33_35_correct;
+    g_epoch_3class_bucket_35_40_total += bucket_35_40_total;
+    g_epoch_3class_bucket_35_40_correct += bucket_35_40_correct;
+    g_epoch_3class_bucket_40_45_total += b40t;
+    g_epoch_3class_bucket_40_45_correct += b40c;
+    g_epoch_3class_bucket_45_50_total += b45t;
+    g_epoch_3class_bucket_45_50_correct += b45c;
+    g_epoch_3class_bucket_50_55_total += b50t;
+    g_epoch_3class_bucket_50_55_correct += b50c;
+    g_epoch_3class_bucket_55_60_total += b55t;
+    g_epoch_3class_bucket_55_60_correct += b55c;
+    g_epoch_3class_bucket_60_70_total += b60t;
+    g_epoch_3class_bucket_60_70_correct += b60c;
+    g_epoch_3class_bucket_70p_total += b70t;
+    g_epoch_3class_bucket_70p_correct += b70c;
 }
 #endif
 } // end anonymous namespace
@@ -396,6 +393,7 @@ void SGDUpdate(MatP& P, const MatG& G, float lr)
 
 // Moving helper structs and functions into EA::LSTM scope
 // Struct definitions inside EA::LSTM
+
 
 struct EA::LSTM::WindowWeights
 {
@@ -462,6 +460,116 @@ struct EA::LSTM::ForwardBatchScratch
 };
 
 // Member function definitions moved to EA::LSTM
+
+void EA::LSTM::PrintAndResetEpochBuckets()
+{
+    auto bucketRate = [](size_t up, size_t total) -> double
+    {
+        return (total > 0) ? (static_cast<double>(up) / static_cast<double>(total)) : 0.0;
+    };
+    std::cout << "EPOCH_AGGREGATE_COUNTS\n";
+    std::cout << "up_count=" << g_epoch_up_count
+              << " down_count=" << g_epoch_down_count
+              << " zero_count=" << g_epoch_zero_count << "\n";
+
+    std::cout << "prob_bucket[0.40,0.45): total=" << g_epoch_bucket_40_45_total
+              << " up=" << g_epoch_bucket_40_45_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_40_45_up, g_epoch_bucket_40_45_total)
+              << "\n";
+    std::cout << "prob_bucket[0.45,0.50): total=" << g_epoch_bucket_45_50_total
+              << " up=" << g_epoch_bucket_45_50_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_45_50_up, g_epoch_bucket_45_50_total)
+              << "\n";
+    std::cout << "prob_bucket[0.50,0.55): total=" << g_epoch_bucket_50_55_total
+              << " up=" << g_epoch_bucket_50_55_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_50_55_up, g_epoch_bucket_50_55_total)
+              << "\n";
+    std::cout << "prob_bucket[0.55,0.60): total=" << g_epoch_bucket_55_60_total
+              << " up=" << g_epoch_bucket_55_60_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_55_60_up, g_epoch_bucket_55_60_total)
+              << "\n";
+    std::cout << "prob_bucket[0.60,0.70): total=" << g_epoch_bucket_60_70_total
+              << " up=" << g_epoch_bucket_60_70_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_60_70_up, g_epoch_bucket_60_70_total)
+              << "\n";
+    std::cout << "prob_bucket[0.70,1.00]: total=" << g_epoch_bucket_70p_total
+              << " up=" << g_epoch_bucket_70p_up
+              << " up_rate=" << bucketRate(g_epoch_bucket_70p_up, g_epoch_bucket_70p_total)
+              << "\n";
+
+    std::cout << "EPOCH_3CLASS_COUNTS\n";
+    std::cout << "down_count=" << g_epoch_3class_down_count
+              << " neutral_count=" << g_epoch_3class_neutral_count
+              << " up_count=" << g_epoch_3class_up_count << "\n";
+    std::cout << "3class_prob_bucket[0.33,0.35): total=" << g_epoch_3class_bucket_33_35_total
+              << " correct=" << g_epoch_3class_bucket_33_35_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_33_35_correct, g_epoch_3class_bucket_33_35_total)
+              << "\n";
+    std::cout << "3class_prob_bucket[0.35,0.40): total=" << g_epoch_3class_bucket_35_40_total
+              << " correct=" << g_epoch_3class_bucket_35_40_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_35_40_correct, g_epoch_3class_bucket_35_40_total)
+                  << "\n";
+    std::cout << "3class_prob_bucket[0.40,0.45): total=" << g_epoch_3class_bucket_40_45_total
+              << " correct=" << g_epoch_3class_bucket_40_45_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_40_45_correct, g_epoch_3class_bucket_40_45_total)
+              << "\n";
+    std::cout << "3class_prob_bucket[0.45,0.50): total=" << g_epoch_3class_bucket_45_50_total
+              << " correct=" << g_epoch_3class_bucket_45_50_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_45_50_correct, g_epoch_3class_bucket_45_50_total)
+              << "\n";
+    std::cout << "3class_prob_bucket[0.50,0.55): total=" << g_epoch_3class_bucket_50_55_total
+              << " correct=" << g_epoch_3class_bucket_50_55_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_50_55_correct, g_epoch_3class_bucket_50_55_total)
+              << "\n";
+    std::cout << "3class_prob_bucket[0.55,0.60): total=" << g_epoch_3class_bucket_55_60_total
+              << " correct=" << g_epoch_3class_bucket_55_60_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_55_60_correct, g_epoch_3class_bucket_55_60_total)
+              << "\n";
+    std::cout << "3class_prob_bucket[0.60,0.70): total=" << g_epoch_3class_bucket_60_70_total
+              << " correct=" << g_epoch_3class_bucket_60_70_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_60_70_correct, g_epoch_3class_bucket_60_70_total)
+              << "\n";
+    std::cout << "3class_prob_bucket[0.70,1.00]: total=" << g_epoch_3class_bucket_70p_total
+              << " correct=" << g_epoch_3class_bucket_70p_correct
+              << " acc=" << bucketRate(g_epoch_3class_bucket_70p_correct, g_epoch_3class_bucket_70p_total)
+              << "\n";
+
+    // Reset counters
+    g_epoch_up_count = 0;
+    g_epoch_down_count = 0;
+    g_epoch_zero_count = 0;
+    g_epoch_bucket_40_45_total = 0;
+    g_epoch_bucket_40_45_up = 0;
+    g_epoch_bucket_45_50_total = 0;
+    g_epoch_bucket_45_50_up = 0;
+    g_epoch_bucket_50_55_total = 0;
+    g_epoch_bucket_50_55_up = 0;
+    g_epoch_bucket_55_60_total = 0;
+    g_epoch_bucket_55_60_up = 0;
+    g_epoch_bucket_60_70_total = 0;
+    g_epoch_bucket_60_70_up = 0;
+    g_epoch_bucket_70p_total = 0;
+    g_epoch_bucket_70p_up = 0;
+    g_epoch_3class_down_count = 0;
+    g_epoch_3class_neutral_count = 0;
+    g_epoch_3class_up_count = 0;
+    g_epoch_3class_bucket_33_35_total = 0;
+    g_epoch_3class_bucket_33_35_correct = 0;
+    g_epoch_3class_bucket_35_40_total = 0;
+    g_epoch_3class_bucket_35_40_correct = 0;
+    g_epoch_3class_bucket_40_45_total = 0;
+    g_epoch_3class_bucket_40_45_correct = 0;
+    g_epoch_3class_bucket_45_50_total = 0;
+    g_epoch_3class_bucket_45_50_correct = 0;
+    g_epoch_3class_bucket_50_55_total = 0;
+    g_epoch_3class_bucket_50_55_correct = 0;
+    g_epoch_3class_bucket_55_60_total = 0;
+    g_epoch_3class_bucket_55_60_correct = 0;
+    g_epoch_3class_bucket_60_70_total = 0;
+    g_epoch_3class_bucket_60_70_correct = 0;
+    g_epoch_3class_bucket_70p_total = 0;
+    g_epoch_3class_bucket_70p_correct = 0;
+}
 
 inline auto EA::LSTM::BuildHeadDhBatch(const std::vector<float>& errs,
                                        const EAMatrix& headW,
@@ -1435,6 +1543,23 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t bucket_70p_total = 0;
     size_t bucket_70p_up = 0;
 
+    size_t bucket3_33_35_total = 0;
+    size_t bucket3_33_35_correct = 0;
+    size_t bucket3_35_40_total = 0;
+    size_t bucket3_35_40_correct = 0;
+    size_t bucket3_40_45_total = 0;
+    size_t bucket3_40_45_correct = 0;
+    size_t bucket3_45_50_total = 0;
+    size_t bucket3_45_50_correct = 0;
+    size_t bucket3_50_55_total = 0;
+    size_t bucket3_50_55_correct = 0;
+    size_t bucket3_55_60_total = 0;
+    size_t bucket3_55_60_correct = 0;
+    size_t bucket3_60_70_total = 0;
+    size_t bucket3_60_70_correct = 0;
+    size_t bucket3_70p_total = 0;
+    size_t bucket3_70p_correct = 0;
+
     // Lazy head gradient accumulators (expressions) across all windows in the batch
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_batch(effectiveMiniBatchWindows, static_cast<size_t>(n_in + hidden_size));
     EAMatrix h_batch(effectiveMiniBatchWindows, hidden_size);
@@ -1795,6 +1920,52 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 else if (cls == 1) ++neutral_count;
                 else ++up_count;
 
+                // 3-class probability bucket logic
+                const float max_prob = std::max(p[0], std::max(p[1], p[2]));
+                const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
+                const bool correct = (predClass == cls);
+
+                if (max_prob >= 0.33f && max_prob < 0.35f)
+                {
+                    ++bucket3_33_35_total;
+                    if (correct) ++bucket3_33_35_correct;
+                }
+                else if (max_prob >= 0.35f && max_prob < 0.40f)
+                {
+                    ++bucket3_35_40_total;
+                    if (correct) ++bucket3_35_40_correct;
+                }
+                else if (max_prob >= 0.40f && max_prob < 0.45f)
+                {
+                    ++bucket3_40_45_total;
+                    if (correct) ++bucket3_40_45_correct;
+                }
+                else if (max_prob >= 0.45f && max_prob < 0.50f)
+                {
+                    ++bucket3_45_50_total;
+                    if (correct) ++bucket3_45_50_correct;
+                }
+                else if (max_prob >= 0.50f && max_prob < 0.55f)
+                {
+                    ++bucket3_50_55_total;
+                    if (correct) ++bucket3_50_55_correct;
+                }
+                else if (max_prob >= 0.55f && max_prob < 0.60f)
+                {
+                    ++bucket3_55_60_total;
+                    if (correct) ++bucket3_55_60_correct;
+                }
+                else if (max_prob >= 0.60f && max_prob < 0.70f)
+                {
+                    ++bucket3_60_70_total;
+                    if (correct) ++bucket3_60_70_correct;
+                }
+                else if (max_prob >= 0.70f)
+                {
+                    ++bucket3_70p_total;
+                    if (correct) ++bucket3_70p_correct;
+                }
+
 #if !LSTM_INFERENCE_ONLY
                 y_sum += static_cast<double>(cls);
                 y_sumsq += static_cast<double>(cls) * static_cast<double>(cls);
@@ -1802,10 +1973,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 y_max = std::max(y_max, static_cast<float>(cls));
                 ++y_count;
                 if (yhat_samples.size() < 10)
-                {
-                    const int predCls = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
-                    yhat_samples.push_back(static_cast<float>(predCls));
-                }
+                    yhat_samples.push_back(static_cast<float>(predClass));
 #endif
             }
     #if !LSTM_INFERENCE_ONLY
@@ -1920,15 +2088,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             windowsInBatch += B;
     #endif
 
-#if LSTM_EPOCH_BUCKETS
-            AccumulateEpochBuckets(up_count, down_count, zero_count,
-                                  bucket_40_45_total, bucket_40_45_up,
-                                  bucket_45_50_total, bucket_45_50_up,
-                                  bucket_50_55_total, bucket_50_55_up,
-                                  bucket_55_60_total, bucket_55_60_up,
-                                  bucket_60_70_total, bucket_60_70_up,
-                                  bucket_70p_total, bucket_70p_up);
-#endif
         }
         else
         {
@@ -2518,10 +2677,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 
 #if LSTM_EPOCH_BUCKETS
-    if (targetType == TargetType::BinaryReturn) {
-        // Print and reset epoch-aggregated bucket report.
-        PrintAndResetEpochBuckets();
-    }
+    // Insert epoch-bucket aggregation here (moved from after PredictNextClose)
+    if (targetType == TargetType::BinaryReturn)
+        AccumulateEpochBuckets(up_count, down_count, zero_count,
+                               bucket_40_45_total, bucket_40_45_up,
+                               bucket_45_50_total, bucket_45_50_up,
+                               bucket_50_55_total, bucket_50_55_up,
+                               bucket_55_60_total, bucket_55_60_up,
+                               bucket_60_70_total, bucket_60_70_up,
+                               bucket_70p_total, bucket_70p_up);
+    else if (targetType == TargetType::UpNeutralDownReturn)
+        AccumulateEpochBuckets3Class(down_count, neutral_count, up_count,
+                                     bucket3_33_35_total, bucket3_33_35_correct,
+                                     bucket3_35_40_total, bucket3_35_40_correct,
+                                     bucket3_40_45_total, bucket3_40_45_correct,
+                                     bucket3_45_50_total, bucket3_45_50_correct,
+                                     bucket3_50_55_total, bucket3_50_55_correct,
+                                     bucket3_55_60_total, bucket3_55_60_correct,
+                                     bucket3_60_70_total, bucket3_60_70_correct,
+                                     bucket3_70p_total, bucket3_70p_correct);
 #endif
 
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
@@ -2682,25 +2856,5 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

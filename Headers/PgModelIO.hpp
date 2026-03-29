@@ -239,6 +239,7 @@ public:
                 case 0: lstm.targetType = EA::LSTM::TargetType::LogReturn; break;
                 case 1: lstm.targetType = EA::LSTM::TargetType::PercentReturn; break;
                 case 2: lstm.targetType = EA::LSTM::TargetType::BinaryReturn; break;
+                case 3: lstm.targetType = EA::LSTM::TargetType::UpNeutralDownReturn; break;
                 default: return false; // unknown type, fail to load meta
             }
             lstm.targetScale = static_cast<float>(vals[1]);
