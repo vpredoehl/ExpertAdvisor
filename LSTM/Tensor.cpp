@@ -78,6 +78,13 @@ void Tensor::Add(Feature f)
         prev_close = f.close;
         ds.push_back(std::move(fm));
         raw_close.push_back(f.close);
+
+        // Initialize EMA baselines on first sample
+        has_ema = true;
+        ema8 = f.close;
+        ema21 = f.close;
+        ema50 = f.close;
+
         return;
     }
 
@@ -99,15 +106,37 @@ void Tensor::Add(Feature f)
 
     const float range =  h - l;
     p[5] = range;
-    
+
     const float denom = std::max(range, 1e-6f);
+
+    // Update EMAs on raw close
+    if (!has_ema) {
+        has_ema = true;
+        ema8 = prev_close;
+        ema21 = prev_close;
+        ema50 = prev_close;
+    }
+    const float alpha8 = 2.0f / (8.0f + 1.0f);
+    const float alpha21 = 2.0f / (21.0f + 1.0f);
+    const float alpha50 = 2.0f / (50.0f + 1.0f);
+    ema8  = alpha8  * f.close + (1.0f - alpha8)  * ema8;
+    ema21 = alpha21 * f.close + (1.0f - alpha21) * ema21;
+    ema50 = alpha50 * f.close + (1.0f - alpha50) * ema50;
 
     const float upper_wick = (h - std::max(o, c)) / denom;
     p[12] = upper_wick;
 
     const float lower_wick = (std::min(o, c) - l) / denom;
     p[13] = lower_wick;
-        
+
+    // EMA-derived features: log distance close vs EMA (scaled)
+    const float log_ce8  = std::log(f.close / std::max(ema8, 1e-12f)) * kFeatureScale;
+    const float log_ce21 = std::log(f.close / std::max(ema21, 1e-12f)) * kFeatureScale;
+    const float log_ce50 = std::log(f.close / std::max(ema50, 1e-12f)) * kFeatureScale;
+    p[14] = log_ce8;
+    p[15] = log_ce21;
+    p[16] = log_ce50;
+
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;
     size_t count = 0;

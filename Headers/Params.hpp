@@ -57,7 +57,7 @@ inline constexpr int prediction_horizon_for(CandleTF tf)
 
 
 constexpr auto hidden_size = 64;
-constexpr auto feature_size = 14;
+constexpr auto feature_size = 17;
 //constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;
 
@@ -69,7 +69,7 @@ constexpr auto epoch_count = 100;
 constexpr auto prediction_horizon = 4;//prediction_horizon_for(candle_duration);
 
 constexpr float kFeatureScale = 1000.0f;
-constexpr float c_next_threshold = .0012f;  //c_next_threshold_for(candle_duration);
+constexpr float c_next_threshold = .0003f;  //c_next_threshold_for(candle_duration);
 
 constexpr size_t rolling_vol_lookback = 32;
 constexpr size_t rolling_ret_lookback = 32;
