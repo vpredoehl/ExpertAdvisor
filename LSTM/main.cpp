@@ -286,10 +286,13 @@ int main(int argc, const char * argv[])
                         else
                         {
                             auto l2 = [](const auto& m){
-                                auto low = MetaNN::LowerAccess(m);
+                                // Ensure we operate on a concrete, materialized matrix to avoid stale/lazy views
+                                auto cm = MetaNN::Evaluate(m);
+                                auto low = MetaNN::LowerAccess(cm);
                                 const float* p = low.RawMemory();
-                                size_t len = m.Shape()[0]*m.Shape()[1];
-                                double s=0; for(size_t i=0;i<len;++i){ double v=p[i]; s += v*v; }
+                                size_t len = cm.Shape()[0] * cm.Shape()[1];
+                                double s = 0;
+                                for (size_t i = 0; i < len; ++i) { double v = p[i]; s += v * v; }
                                 return std::sqrt(s);
                             };
                             
@@ -314,7 +317,7 @@ int main(int argc, const char * argv[])
                             << " loss=" << loss
                             << " ||param|| " << p0  << " -> " << p1
                             << " ||bias|| "  << b0  << " -> " << b1;
-                            if (l.targetType == EA::LSTM::TargetType::BinaryReturn) std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
+                            if (l.targetType == EA::LSTM::TargetType::BinaryReturn || l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn) std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
                             else std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                         }
                     } );

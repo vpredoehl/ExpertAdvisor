@@ -107,6 +107,16 @@ void Tensor::Add(Feature f)
     const float range =  h - l;
     p[5] = range;
 
+    // Range expansion: (high - low) / avg_range, use rolling mean of raw ranges
+    const float raw_range = f.high - f.low;
+    const float avg_range = rangeMean.update(raw_range);
+    const float range_expansion = (avg_range > 1e-12f ? raw_range / avg_range : 0.0f);
+    p[31] = range_expansion;
+
+    // Candle body strength: (close - open) / (high - low) in scaled log space
+    const float body_strength = (range != 0.0f ? (c - o) / range : 0.0f);
+    p[30] = body_strength;
+
     const float denom = std::max(range, 1e-6f);
 
     // Update EMAs on raw close
@@ -116,6 +126,10 @@ void Tensor::Add(Feature f)
         ema21 = prev_close;
         ema50 = prev_close;
     }
+    const float ema8_prev  = ema8;
+    const float ema21_prev = ema21;
+    const float ema50_prev = ema50;
+
     const float alpha8 = 2.0f / (8.0f + 1.0f);
     const float alpha21 = 2.0f / (21.0f + 1.0f);
     const float alpha50 = 2.0f / (50.0f + 1.0f);
@@ -123,19 +137,53 @@ void Tensor::Add(Feature f)
     ema21 = alpha21 * f.close + (1.0f - alpha21) * ema21;
     ema50 = alpha50 * f.close + (1.0f - alpha50) * ema50;
 
+    // Update ATR(14) on raw prices
+    const float tr = std::max({ f.high - f.low, std::fabs(f.high - prev_close), std::fabs(f.low - prev_close) });
+    const float alphaATR = 1.0f / 14.0f;
+    if (!has_atr) { has_atr = true; atr14 = tr; }
+    else { atr14 = alphaATR * tr + (1.0f - alphaATR) * atr14; }
+
     const float upper_wick = (h - std::max(o, c)) / denom;
     p[12] = upper_wick;
 
     const float lower_wick = (std::min(o, c) - l) / denom;
     p[13] = lower_wick;
 
-    // EMA-derived features: log distance close vs EMA (scaled)
-    const float log_ce8  = std::log(f.close / std::max(ema8, 1e-12f)) * kFeatureScale;
-    const float log_ce21 = std::log(f.close / std::max(ema21, 1e-12f)) * kFeatureScale;
-    const float log_ce50 = std::log(f.close / std::max(ema50, 1e-12f)) * kFeatureScale;
-    p[14] = log_ce8;
-    p[15] = log_ce21;
-    p[16] = log_ce50;
+    // EMA-derived features: normalized distance (scaled log space) by current candle range
+    const float ema8_s  = std::log(ema8  / ref) * kFeatureScale;
+    const float ema21_s = std::log(ema21 / ref) * kFeatureScale;
+    const float ema50_s = std::log(ema50 / ref) * kFeatureScale;
+    const float denom_range = std::max(range, 1e-6f);
+    p[14] = (c - ema8_s)  / denom_range;
+    p[15] = (c - ema21_s) / denom_range;
+    p[16] = (c - ema50_s) / denom_range;
+
+    // EMA slope (log space) normalized by current candle range
+    const float slopeLog8  = std::log(std::max(ema8,  1e-12f) / std::max(ema8_prev,  1e-12f)) * kFeatureScale;
+    const float slopeLog21 = std::log(std::max(ema21, 1e-12f) / std::max(ema21_prev, 1e-12f)) * kFeatureScale;
+    const float slopeLog50 = std::log(std::max(ema50, 1e-12f) / std::max(ema50_prev, 1e-12f)) * kFeatureScale;
+    p[24] = slopeLog8  / denom_range;
+    p[25] = slopeLog21 / denom_range;
+    p[26] = slopeLog50 / denom_range;
+
+    // EMA spread features normalized by current candle range (scaled log space)
+    p[17] = (ema8_s  - ema21_s) / denom_range;
+    p[18] = (ema21_s - ema50_s) / denom_range;
+
+    // ATR-normalized EMA distance features in raw price space
+    const float denom_atr = std::max(atr14, 1e-12f);
+    p[19] = (f.close - ema8)  / denom_atr;
+    p[20] = (f.close - ema21) / denom_atr;
+    p[21] = (f.close - ema50) / denom_atr;
+
+    // ATR-normalized EMA spread features in raw price space
+    p[22] = (ema8  - ema21) / denom_atr;
+    p[23] = (ema21 - ema50) / denom_atr;
+
+    // EMA slope in raw price space normalized by ATR
+    p[27] = (ema8  - ema8_prev)  / denom_atr;
+    p[28] = (ema21 - ema21_prev) / denom_atr;
+    p[29] = (ema50 - ema50_prev) / denom_atr;
 
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;

@@ -274,4 +274,3 @@ private:
 
 #endif /* LSTM_hpp */
 
-

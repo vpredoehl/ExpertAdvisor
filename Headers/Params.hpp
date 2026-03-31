@@ -57,7 +57,7 @@ inline constexpr int prediction_horizon_for(CandleTF tf)
 
 
 constexpr auto hidden_size = 64;
-constexpr auto feature_size = 17;
+constexpr auto feature_size = 32;
 //constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;
 
@@ -69,10 +69,24 @@ constexpr auto epoch_count = 100;
 constexpr auto prediction_horizon = 4;//prediction_horizon_for(candle_duration);
 
 constexpr float kFeatureScale = 1000.0f;
-constexpr float c_next_threshold = .0003f;  //c_next_threshold_for(candle_duration);
+constexpr float c_next_threshold = .0012f;  //c_next_threshold_for(candle_duration);
 
 constexpr size_t rolling_vol_lookback = 32;
 constexpr size_t rolling_ret_lookback = 32;
+// Class weights for 3-class direction loss: order (Down, Neutral, Up)
+// Adjust these to rebalance the contribution of each class to the total loss.
+constexpr float kClassWeightDown    = 5.0f;
+constexpr float kClassWeightNeutral = 1.0f;
+constexpr float kClassWeightUp      = 5.0f;
+
+// Utility to combine per-class losses using the weights above.
+// loss_total = w_up * loss_up + w_down * loss_down + w_neutral * loss_neutral
+inline constexpr float weighted_direction_loss(float lossDown, float lossNeutral, float lossUp)
+{
+    return kClassWeightDown * lossDown
+         + kClassWeightNeutral * lossNeutral
+         + kClassWeightUp * lossUp;
+}
 // Column index for close feature: c_t = log(close_t / close_{t-1})
 constexpr size_t closeCol = 1;
 

@@ -210,14 +210,7 @@ static inline float uniform_symmetric(float limit) {
 }
 
 struct EA::LSTM::HeadLoss { float y_hat; float err; };
-struct EA::LSTM::HeadLoss3Class
-{
-    float p_down;
-    float p_neutral;
-    float p_up;
-    int predicted_class;
-    float loss;
-};
+struct EA::LSTM::HeadLoss3Class  { float loss; EAMatrix d_logits; };
 struct EA::LSTM::GateBlocks
 {
     EA::LSTM::EAMatrix W_i, W_f, W_g, W_o; // individual recurrent gate blocks (H x H)
@@ -1135,21 +1128,48 @@ inline auto EA::LSTM::predictAndLoss(const EAMatrix& h_T,
     }
 }
 
-inline auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T,
-                                   const EAMatrix& W,
-                                   const EAMatrix& b,
-                                   int targetClass) const -> HeadLoss3Class
+auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, const EAMatrix& b, int targetClass) const -> HeadLoss3Class
 {
-    auto logits = MetaNN::Dot(h_T, W) + b;
-    auto zH = logits.EvalRegister();
-    MetaNN::EvalPlan::Inst().Eval();
-    const auto& zMat = zH.Data();
-    float z[3] = { zMat(0, 0), zMat(0, 1), zMat(0, 2) };
+    // Compute logits z = h_T · W + b (1x3)
+    auto z = Dot(h_T, W) + b;
+    auto zMat = Evaluate(z);
+    LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 3, "predictAndLoss3Class: expected 1x3 logits");
+    const float z0 = zMat(0,0), z1 = zMat(0,1), z2 = zMat(0,2);
+
+    // Softmax probabilities
     float p[3];
-    Softmax3(z, p);
-    const int pred = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
-    const float loss = -std::log(std::max(1e-12f, p[targetClass]));
-    return { p[0], p[1], p[2], pred, loss };
+    float zArr[3] = { z0, z1, z2 };
+    Softmax3(zArr, p);
+
+    // One-hot target
+    float y[3] = {0.f, 0.f, 0.f};
+    if (targetClass >= 0 && targetClass < 3) y[targetClass] = 1.f;
+
+    // Per-class cross-entropy components (unweighted)
+    // loss_k = - y_k * log(max(p_k, eps))
+    constexpr float eps = 1e-6f;
+    float lossDown    = - y[0] * std::log(std::max(p[0], eps));
+    float lossNeutral = - y[1] * std::log(std::max(p[1], eps));
+    float lossUp      = - y[2] * std::log(std::max(p[2], eps));
+
+    // Apply class weighting from Params.hpp
+    float L = weighted_direction_loss(lossDown, lossNeutral, lossUp);
+
+    // Gradient of loss w.r.t logits: w_k * (p_k - y_k)
+    float wDown = kClassWeightDown;
+    float wNeutral = kClassWeightNeutral;
+    float wUp = kClassWeightUp;
+    float dL_dz0 = wDown    * (p[0] - y[0]);
+    float dL_dz1 = wNeutral * (p[1] - y[1]);
+    float dL_dz2 = wUp      * (p[2] - y[2]);
+
+    // Package gradients into a 1x3 matrix for downstream accumulation
+    EAMatrix d_logits(1, 3);
+    d_logits.SetValue(0, 0, dL_dz0);
+    d_logits.SetValue(0, 1, dL_dz1);
+    d_logits.SetValue(0, 2, dL_dz2);
+
+    return HeadLoss3Class{ L, std::move(d_logits) };
 }
 
 float EA::LSTM::predictOnly(const EAMatrix& h_T,

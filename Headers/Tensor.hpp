@@ -12,6 +12,7 @@
 #include <array>
 #include <vector>
 #include <list>
+#include <deque>
 #include <ranges>
 #include <iostream>
 
@@ -47,11 +48,15 @@ class Tensor
     string table;
     DataSet ds;
     std::vector<float> raw_close;
+    RollingMean rangeMean{rolling_vol_lookback};
     // EMA state for various periods
     bool has_ema = false;
     float ema8 = 0.0f;
     float ema21 = 0.0f;
     float ema50 = 0.0f;
+    // ATR state
+    bool has_atr = false;
+    float atr14 = 0.0f;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
@@ -134,5 +139,3 @@ void printMatrix(const char* name, const Mat& mat)
 }
 
 #endif /* Tensor_hpp */
-
-
