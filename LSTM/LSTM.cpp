@@ -21,18 +21,6 @@
 #include "BuildConfig.hpp"
 #include <MetaNN/metal/metal_matmul.h>
 
-#ifndef LSTM_TRAINING_PROGRESS
-#define LSTM_TRAINING_PROGRESS 1
-#endif
-
-#ifndef LSTM_SAT_DEBUG
-#define LSTM_SAT_DEBUG 0
-#endif
-
-#ifndef LSTM_RESET_STATE_PER_WINDOW
-#define LSTM_RESET_STATE_PER_WINDOW 1
-#endif
-
 #ifndef LSTM_BATCH_PROFILE
 #define LSTM_BATCH_PROFILE 1
 #endif
@@ -210,7 +198,6 @@ static inline float uniform_symmetric(float limit) {
 }
 
 struct EA::LSTM::HeadLoss { float y_hat; float err; };
-struct EA::LSTM::HeadLoss3Class  { float loss; EAMatrix d_logits; };
 struct EA::LSTM::GateBlocks
 {
     EA::LSTM::EAMatrix W_i, W_f, W_g, W_o; // individual recurrent gate blocks (H x H)
@@ -1169,7 +1156,8 @@ auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, cons
     d_logits.SetValue(0, 1, dL_dz1);
     d_logits.SetValue(0, 2, dL_dz2);
 
-    return HeadLoss3Class{ L, std::move(d_logits) };
+    int predicted_class = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
+    return HeadLoss3Class{ L, std::move(d_logits), p[0], p[1], p[2], predicted_class };
 }
 
 float EA::LSTM::predictOnly(const EAMatrix& h_T,
@@ -1928,12 +1916,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 float p[3];
                 Softmax3(z, p);
                 const int cls = wb.classTargets[b];
+                const float classWeight = (cls == 0) ? kClassWeightDown
+                                         : (cls == 1) ? kClassWeightNeutral
+                                                      : kClassWeightUp;
 
-                dptr[b * 3 + 0] = p[0] - ((cls == 0) ? 1.0f : 0.0f);
-                dptr[b * 3 + 1] = p[1] - ((cls == 1) ? 1.0f : 0.0f);
-                dptr[b * 3 + 2] = p[2] - ((cls == 2) ? 1.0f : 0.0f);
+                dptr[b * 3 + 0] = kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
+                dptr[b * 3 + 1] = kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
+                dptr[b * 3 + 2] = kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
 
-                sse += -std::log(std::max(1e-12f, p[cls]));
+                sse += static_cast<double>(classWeight) *
+                       (-std::log(std::max(1e-12f, p[cls])));
                 ++mseCount;
 
                 if (cls == 0) ++down_count;

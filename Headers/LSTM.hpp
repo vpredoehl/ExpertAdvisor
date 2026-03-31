@@ -215,7 +215,7 @@ private:
     
     struct WindowWeights;
     struct HeadLoss;
-    struct HeadLoss3Class;
+    struct HeadLoss3Class { float loss; EAMatrix d_logits; float p_down; float p_neutral; float p_up; int predicted_class; };
     struct GateBlocks;
     struct GateAccumulators;
     struct BatchStepCache;
