@@ -441,6 +441,63 @@ struct EA::LSTM::ForwardBatchScratch
 
 // Member function definitions moved to EA::LSTM
 
+std::array<float, 3> EA::LSTM::PredictNextDirectionProbs(const Window& w, bool resetState)
+{
+    if (resetState)
+        ResetPreviousState();
+
+    auto ww = hoistWindowWeights();
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
+    const size_t baseFeatureCount = (w.begin() != w.end()) ? static_cast<size_t>((*w.begin()).Shape()[1]) : 0;
+    const size_t modelFeatureCount = static_cast<size_t>(n_in);
+    const bool useReturnFeatures = (kReturnFeatureCount > 0);
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(modelFeatureCount == baseFeatureCount + kReturnFeatureCount,
+                "PredictNextDirectionProbs: model input width must equal base features + enabled return features");
+#endif
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> model_row(1, modelFeatureCount);
+
+    size_t rowIdx = 0;
+    for (const auto& f_sample : w)
+    {
+        auto lowSrc = MetaNN::LowerAccess(f_sample);
+        const float* src = lowSrc.RawMemory();
+
+        auto lowDst = MetaNN::LowerAccess(model_row);
+        float* dst = lowDst.MutableRawMemory();
+
+        std::memcpy(dst, src, baseFeatureCount * sizeof(float));
+        if (useReturnFeatures)
+        {
+            const size_t appended = AppendMultiHorizonReturnFeatures(w, rowIdx, dst, baseFeatureCount);
+#if LSTM_TRAINING_ASSERTS
+            LSTM_ASSERT(appended == kReturnFeatureCount,
+                        "PredictNextDirectionProbs: appended return feature count mismatch");
+#endif
+        }
+
+        forwardStep(model_row, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
+        ++rowIdx;
+    }
+
+    auto logits = MetaNN::Dot(prevHiddenState, returnHeadDirWeight) + returnHeadDirBias;
+    auto predH = logits.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+
+    const auto& z = predH.Data();
+    float zz[3] = { z(0, 0), z(0, 1), z(0, 2) };
+    float p[3];
+    Softmax3(zz, p);
+
+    return { p[0], p[1], p[2] };
+}
+
+int EA::LSTM::PredictNextDirectionClass(const Window& w, bool resetState)
+{
+    const auto p = PredictNextDirectionProbs(w, resetState);
+    return (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
+}
+
 void EA::LSTM::PrintAndResetEpochBuckets()
 {
     auto bucketRate = [](size_t up, size_t total) -> double
@@ -1180,9 +1237,10 @@ float EA::LSTM::predictOnly(const EAMatrix& h_T,
         float zz[3] = { z(0, 0), z(0, 1), z(0, 2) };
         float p[3];
         Softmax3(zz, p);
-        return p[2] - p[0];
-    }
-    auto predH = logits.EvalRegister();
+
+        const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
+        return (predClass == 0) ? -1.0f : ((predClass == 1) ? 0.0f : 1.0f);
+    }    auto predH = logits.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
     return predH.Data()(0, 0);
 }
@@ -1748,6 +1806,43 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             const float y_true_scaled      = prebuilt_ptr[targetIdx * F + closeCol];
             const float y_true_logret      = y_true_scaled / EA::LSTM::kFeatScale;
 
+            bool keepWindow = true;
+            float binaryTarget = 0.0f;
+            float regressionTarget = 0.0f;
+            int classTarget = 1;
+
+            if (targetType == TargetType::UpNeutralDownReturn)
+            {
+                classTarget = ClassFromLogReturn(y_true_logret, c_next_threshold);
+            }
+            else if (targetType == TargetType::BinaryReturn)
+            {
+                if (!std::isfinite(y_true_logret) || std::abs(y_true_logret) <= c_next_threshold)
+                {
+                    keepWindow = false;
+                    ++ignoredBinaryWindows;
+                }
+                else
+                {
+                    binaryTarget = (y_true_logret > 0.0f) ? 1.0f : 0.0f;
+                }
+            }
+            else
+            {
+                float y_true_logret_used = y_true_logret;
+                if (std::isfinite(y_true_logret_used) && std::abs(y_true_logret_used) > c_next_threshold)
+                    y_true_logret_used = std::copysign(c_next_threshold, y_true_logret_used);
+
+                const float raw = (targetType == TargetType::LogReturn) ? y_true_logret_used
+                                                                        : (std::exp(y_true_logret_used) - 1.0f);
+                float tval = raw * targetScale + targetBias;
+                if (targetUseZScore) tval = (tval - targetMean) / std::max(targetStd, 1e-12f);
+                regressionTarget = std::clamp(tval, -10.0f, 10.0f);
+            }
+
+            if (!keepWindow)
+                continue;
+
             const size_t b = (targetType == TargetType::UpNeutralDownReturn)
                 ? wb.classTargets.size()
                 : wb.targets.size();
@@ -1770,23 +1865,15 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             if (targetType == TargetType::UpNeutralDownReturn)
             {
-                wb.classTargets.push_back(ClassFromLogReturn(y_true_logret, c_next_threshold));
+                wb.classTargets.push_back(classTarget);
             }
             else if (targetType == TargetType::BinaryReturn)
             {
-                wb.targets.push_back((y_true_logret > 0.0f) ? 1.0f : 0.0f);
+                wb.targets.push_back(binaryTarget);
             }
             else
             {
-                float y_true_logret_used = y_true_logret;
-                if (std::isfinite(y_true_logret_used) && std::abs(y_true_logret_used) > c_next_threshold)
-                    y_true_logret_used = std::copysign(c_next_threshold, y_true_logret_used);
-
-                const float raw = (targetType == TargetType::LogReturn) ? y_true_logret_used
-                                                                        : (std::exp(y_true_logret_used) - 1.0f);
-                float tval = raw * targetScale + targetBias;
-                if (targetUseZScore) tval = (tval - targetMean) / std::max(targetStd, 1e-12f);
-                wb.targets.push_back(std::clamp(tval, -10.0f, 10.0f));
+                wb.targets.push_back(regressionTarget);
             }
         }
 
@@ -2837,15 +2924,22 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         ++rowIdx;
     }
 
-    // Predict next-step log return from the last hidden state
+    // Predict from the last hidden state.
+    // For UpNeutralDownReturn, the inference API returns the most likely class encoded as:
+    //   -1.0f = down, 0.0f = neutral, 1.0f = up.
+    // Continuous return-valued outputs are only available for LogReturn/PercentReturn.
     float y_hat = (targetType == TargetType::BinaryReturn)
         ? predictOnly(prevHiddenState, returnHeadBinWeight, returnHeadBinBias)
         : ((targetType == TargetType::UpNeutralDownReturn)
             ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
             : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias));
 
-    if (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn) return y_hat;
-
+    if (targetType == TargetType::BinaryReturn) return y_hat;
+    if (targetType == TargetType::UpNeutralDownReturn)
+    {
+        LSTM_ASSERT(false, "PredictNextReturn() is not valid for UpNeutralDownReturn; use PredictNextDirectionClass() or PredictNextDirectionProbs().");
+        return 0.0f;
+    }
     // Invert normalization if used: t = y_hat * std + mean
     float t = y_hat;
     if (targetUseZScore)
@@ -2904,15 +2998,22 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         ++rowIdx;
     }
 
-    // Predict next-step return from the last hidden state
+    // Predict from the last hidden state.
+    // For UpNeutralDownReturn, the inference API returns the most likely class encoded as:
+    //   -1.0f = down, 0.0f = neutral, 1.0f = up.
+    // Relative-move outputs are only available for LogReturn/PercentReturn.
     float y_hat = (targetType == TargetType::BinaryReturn)
         ? predictOnly(prevHiddenState, returnHeadBinWeight, returnHeadBinBias)
         : ((targetType == TargetType::UpNeutralDownReturn)
             ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
             : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias));
 
-    if (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn) return y_hat;
-
+    if (targetType == TargetType::BinaryReturn) return y_hat;
+    if (targetType == TargetType::UpNeutralDownReturn)
+    {
+        LSTM_ASSERT(false, "PredictNextRelativeMove() is not valid for UpNeutralDownReturn; use PredictNextDirectionClass() or PredictNextDirectionProbs().");
+        return 0.0f;
+    }
     // Invert optional z-score normalization
     float t = targetUseZScore ? (y_hat * targetStd + targetMean) : y_hat;
     // Invert affine

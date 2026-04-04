@@ -256,6 +256,8 @@ private:
                                             size_t rowIdx,
                                             float* dst,
                                             size_t dstOffset) const;
+    int PredictNextDirectionClass(const Window& w, bool resetState);
+    std::array<float, 3> PredictNextDirectionProbs(const Window& w, bool resetState);
     
     // Batched helpers
     EAMatrix RepeatRows(const EAMatrix& row, size_t B) const;
