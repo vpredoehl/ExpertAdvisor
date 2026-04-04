@@ -83,35 +83,12 @@ namespace EA
         LSTM_ASSERT(yMat.Shape()[0] == 1 && yMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
         return yMat(0, 0);
     }
-    float PredictDirLogitFromH(const EAMatrix& h)
-    {
-        auto z = Dot(h, returnHeadBinWeight) + returnHeadBinBias;   // binary logit
-        auto zMat = Evaluate(z);
-        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 1, "PredictDirLogitFromH: expected 1x1 result");
-        return zMat(0,0);
-    }
     std::array<float, 3> PredictDirLogits3ClassFromH(const EAMatrix& h)
     {
         auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // 1x3 logits
         auto zMat = Evaluate(z);
         LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 3, "PredictDirLogits3ClassFromH: expected 1x3 result");
         return { zMat(0,0), zMat(0,1), zMat(0,2) };
-    }
-    float DirLossAndGrad(float z, int t01, float& dL_dz)
-    {
-        // stable softplus
-        auto softplus = [](float x)
-        {
-            if (x > 20.f) return x;         // avoid overflow
-            if (x < -20.f) return std::exp(x);
-            return std::log1p(std::exp(x));
-        };
-        
-        float sp = softplus(z);
-        float L  = sp - float(t01) * z;
-        float p  = 1.0f / (1.0f + std::exp(-z));
-        dL_dz    = p - float(t01);
-        return L;
     }
 
     static inline int ClassFromLogReturn(float r, float threshold)
@@ -163,15 +140,14 @@ public:
         LogReturn = 0,
         PercentReturn = 1,
         RelativeMove = PercentReturn,
-        BinaryReturn,
-        UpNeutralDownReturn
+        UpNeutralDownReturn = 2
     };
     
     // How the head's scalar output maps to the target used for training/inference
     // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias
     // where raw is either log-return or percent-return depending on targetType
     // If targetUseZScore == true, training target was normalized as (t - targetMean)/targetStd
-    TargetType targetType = TargetType::UpNeutralDownReturn; // default to logreturn
+    TargetType targetType = TargetType::UpNeutralDownReturn; // default to up-neutral-down return
     float      targetScale = 1.0f;                   // default to 100x pct
     float      targetBias  = 0.0f;                     // default no bias
     bool       targetUseZScore = false;                // default: not normalized
@@ -188,9 +164,6 @@ public:
     // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
     EAMatrix returnHeadWeight { hidden_size, 1 };
     EAMatrix returnHeadBias { 1, 1 };
-    // Binary classification head (direction): p = sigmoid(h_T · returnHeadBinWeight + returnHeadBinBias)
-    EAMatrix returnHeadBinWeight { hidden_size, 1 };
-    EAMatrix returnHeadBinBias { 1, 1 };
     // 3-class classification head (down / neutral / up)
     EAMatrix returnHeadDirWeight { hidden_size, 3 };
     EAMatrix returnHeadDirBias { 1, 3 };
@@ -278,3 +251,4 @@ private:
 }
 
 #endif /* LSTM_hpp */
+

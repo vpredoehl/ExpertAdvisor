@@ -238,24 +238,6 @@ struct EA::LSTM::LSTMBatchProfile
 
 namespace {
 #if LSTM_EPOCH_BUCKETS
-// Epoch-level aggregation counters for BinaryReturn bucket reporting
-static size_t g_epoch_up_count = 0;
-static size_t g_epoch_down_count = 0;
-static size_t g_epoch_zero_count = 0;
-
-static size_t g_epoch_bucket_40_45_total = 0;
-static size_t g_epoch_bucket_40_45_up = 0;
-static size_t g_epoch_bucket_45_50_total = 0;
-static size_t g_epoch_bucket_45_50_up = 0;
-static size_t g_epoch_bucket_50_55_total = 0;
-static size_t g_epoch_bucket_50_55_up = 0;
-static size_t g_epoch_bucket_55_60_total = 0;
-static size_t g_epoch_bucket_55_60_up = 0;
-static size_t g_epoch_bucket_60_70_total = 0;
-static size_t g_epoch_bucket_60_70_up = 0;
-static size_t g_epoch_bucket_70p_total = 0;
-static size_t g_epoch_bucket_70p_up = 0;
-
 // 3-class epoch aggregation counters
 
 static size_t g_epoch_3class_down_count = 0;
@@ -279,28 +261,6 @@ static size_t g_epoch_3class_bucket_60_70_correct = 0;
 static size_t g_epoch_3class_bucket_70p_total = 0;
 static size_t g_epoch_3class_bucket_70p_correct = 0;
 
-inline void AccumulateEpochBuckets(size_t up_count, size_t down_count, size_t zero_count,
-                                   size_t b40t, size_t b40u, size_t b45t, size_t b45u,
-                                   size_t b50t, size_t b50u, size_t b55t, size_t b55u,
-                                   size_t b60t, size_t b60u, size_t b70t, size_t b70u)
-{
-    g_epoch_up_count += up_count;
-    g_epoch_down_count += down_count;
-    g_epoch_zero_count += zero_count;
-
-    g_epoch_bucket_40_45_total += b40t;
-    g_epoch_bucket_40_45_up += b40u;
-    g_epoch_bucket_45_50_total += b45t;
-    g_epoch_bucket_45_50_up += b45u;
-    g_epoch_bucket_50_55_total += b50t;
-    g_epoch_bucket_50_55_up += b50u;
-    g_epoch_bucket_55_60_total += b55t;
-    g_epoch_bucket_55_60_up += b55u;
-    g_epoch_bucket_60_70_total += b60t;
-    g_epoch_bucket_60_70_up += b60u;
-    g_epoch_bucket_70p_total += b70t;
-    g_epoch_bucket_70p_up += b70u;
-}
 
 inline void AccumulateEpochBuckets3Class(size_t down_count, size_t neutral_count, size_t up_count,
                                          size_t bucket_33_35_total, size_t bucket_33_35_correct,
@@ -504,35 +464,6 @@ void EA::LSTM::PrintAndResetEpochBuckets()
     {
         return (total > 0) ? (static_cast<double>(up) / static_cast<double>(total)) : 0.0;
     };
-    std::cout << "EPOCH_AGGREGATE_COUNTS\n";
-    std::cout << "up_count=" << g_epoch_up_count
-              << " down_count=" << g_epoch_down_count
-              << " zero_count=" << g_epoch_zero_count << "\n";
-
-    std::cout << "prob_bucket[0.40,0.45): total=" << g_epoch_bucket_40_45_total
-              << " up=" << g_epoch_bucket_40_45_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_40_45_up, g_epoch_bucket_40_45_total)
-              << "\n";
-    std::cout << "prob_bucket[0.45,0.50): total=" << g_epoch_bucket_45_50_total
-              << " up=" << g_epoch_bucket_45_50_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_45_50_up, g_epoch_bucket_45_50_total)
-              << "\n";
-    std::cout << "prob_bucket[0.50,0.55): total=" << g_epoch_bucket_50_55_total
-              << " up=" << g_epoch_bucket_50_55_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_50_55_up, g_epoch_bucket_50_55_total)
-              << "\n";
-    std::cout << "prob_bucket[0.55,0.60): total=" << g_epoch_bucket_55_60_total
-              << " up=" << g_epoch_bucket_55_60_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_55_60_up, g_epoch_bucket_55_60_total)
-              << "\n";
-    std::cout << "prob_bucket[0.60,0.70): total=" << g_epoch_bucket_60_70_total
-              << " up=" << g_epoch_bucket_60_70_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_60_70_up, g_epoch_bucket_60_70_total)
-              << "\n";
-    std::cout << "prob_bucket[0.70,1.00]: total=" << g_epoch_bucket_70p_total
-              << " up=" << g_epoch_bucket_70p_up
-              << " up_rate=" << bucketRate(g_epoch_bucket_70p_up, g_epoch_bucket_70p_total)
-              << "\n";
 
     std::cout << "EPOCH_3CLASS_COUNTS\n";
     std::cout << "down_count=" << g_epoch_3class_down_count
@@ -572,21 +503,6 @@ void EA::LSTM::PrintAndResetEpochBuckets()
               << "\n";
 
     // Reset counters
-    g_epoch_up_count = 0;
-    g_epoch_down_count = 0;
-    g_epoch_zero_count = 0;
-    g_epoch_bucket_40_45_total = 0;
-    g_epoch_bucket_40_45_up = 0;
-    g_epoch_bucket_45_50_total = 0;
-    g_epoch_bucket_45_50_up = 0;
-    g_epoch_bucket_50_55_total = 0;
-    g_epoch_bucket_50_55_up = 0;
-    g_epoch_bucket_55_60_total = 0;
-    g_epoch_bucket_55_60_up = 0;
-    g_epoch_bucket_60_70_total = 0;
-    g_epoch_bucket_60_70_up = 0;
-    g_epoch_bucket_70p_total = 0;
-    g_epoch_bucket_70p_up = 0;
     g_epoch_3class_down_count = 0;
     g_epoch_3class_neutral_count = 0;
     g_epoch_3class_up_count = 0;
@@ -1152,18 +1068,8 @@ inline auto EA::LSTM::predictAndLoss(const EAMatrix& h_T,
                              const EAMatrix& b,
                              float target) const -> HeadLoss
 {
-    auto logits = MetaNN::Dot(h_T, W) + b;
-    if (targetType == TargetType::BinaryReturn)
     {
-        auto prob = MetaNN::Sigmoid(logits);
-        auto pH = prob.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        float p = pH.Data()(0, 0);
-        float err = p - target; // BCE gradient wrt logit
-        return { p, err };
-    }
-    else
-    {
+        auto logits = MetaNN::Dot(h_T, W) + b;
         auto predH = logits.EvalRegister();
         MetaNN::EvalPlan::Inst().Eval();
         float y_hat = predH.Data()(0, 0);
@@ -1222,13 +1128,6 @@ float EA::LSTM::predictOnly(const EAMatrix& h_T,
                             const EAMatrix& b) const
 {
     auto logits = MetaNN::Dot(h_T, W) + b;
-    if (targetType == TargetType::BinaryReturn)
-    {
-        auto prob = MetaNN::Sigmoid(logits);
-        auto predH = prob.EvalRegister();
-        MetaNN::EvalPlan::Inst().Eval();
-        return predH.Data()(0, 0);
-    }
     if (targetType == TargetType::UpNeutralDownReturn)
     {
         auto predH = logits.EvalRegister();
@@ -1237,10 +1136,10 @@ float EA::LSTM::predictOnly(const EAMatrix& h_T,
         float zz[3] = { z(0, 0), z(0, 1), z(0, 2) };
         float p[3];
         Softmax3(zz, p);
-
         const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
         return (predClass == 0) ? -1.0f : ((predClass == 1) ? 0.0f : 1.0f);
-    }    auto predH = logits.EvalRegister();
+    }
+    auto predH = logits.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
     return predH.Data()(0, 0);
 }
@@ -1478,8 +1377,6 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
     prevCellState = EAMatrix(1, hidden_size);
     returnHeadWeight = EAMatrix(hidden_size, 1);
     returnHeadBias = EAMatrix(1, 1);
-    returnHeadBinWeight = EAMatrix(hidden_size, 1);
-    returnHeadBinBias = EAMatrix(1, 1);
     returnHeadDirWeight = EAMatrix(hidden_size, 3);
     returnHeadDirBias = EAMatrix(1, 3);
 #if 0
@@ -1553,18 +1450,6 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
                 bp[0] = 0.0f;
             }
             break;
-        case TargetType::BinaryReturn:
-            {
-                auto lowW = MetaNN::LowerAccess(returnHeadBinWeight);
-                float* wp = lowW.MutableRawMemory();
-                std::fill(wp, wp + hidden_size, 0.01f);
-            }
-            {
-                auto lowB = MetaNN::LowerAccess(returnHeadBinBias);
-                float* bp = lowB.MutableRawMemory();
-                bp[0] = 0.0f;
-            }
-            break;
         case TargetType::UpNeutralDownReturn:
             {
                 auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
@@ -1603,26 +1488,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t skippedWindows = 0;
     LSTMBatchProfile profile;
 
-    // Class counts for BinaryReturn targets
+    // Class counts for 3-class targets
     size_t up_count = 0;
     size_t down_count = 0;
-    size_t zero_count = 0;
     size_t neutral_count = 0;
-    size_t ignoredBinaryWindows = 0;
-
-    // Calibration buckets for BinaryReturn probabilities
-    size_t bucket_40_45_total = 0;
-    size_t bucket_40_45_up = 0;
-    size_t bucket_45_50_total = 0;
-    size_t bucket_45_50_up = 0;
-    size_t bucket_50_55_total = 0;
-    size_t bucket_50_55_up = 0;
-    size_t bucket_55_60_total = 0;
-    size_t bucket_55_60_up = 0;
-    size_t bucket_60_70_total = 0;
-    size_t bucket_60_70_up = 0;
-    size_t bucket_70p_total = 0;
-    size_t bucket_70p_up = 0;
 
     size_t bucket3_33_35_total = 0;
     size_t bucket3_33_35_correct = 0;
@@ -1670,8 +1539,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
     };
 
-    // Always declare to avoid missing symbol in Metal kernels
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headBinW_accum_f(hidden_size, 1);
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, returnHeadDirWeight.Shape()[1]);
 #if !LSTM_INFERENCE_ONLY
     // Head gradient accumulators across all windows in the batch
@@ -1679,10 +1546,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
-
-    { auto low = MetaNN::LowerAccess(d_headBinW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f); }
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headBinB_accum_f(1, 1);
-    { auto low = MetaNN::LowerAccess(d_headBinB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
     { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * returnHeadDirWeight.Shape()[1], 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirB_accum_f(1, returnHeadDirBias.Shape()[1]);
@@ -1806,26 +1669,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             const float y_true_scaled      = prebuilt_ptr[targetIdx * F + closeCol];
             const float y_true_logret      = y_true_scaled / EA::LSTM::kFeatScale;
 
-            bool keepWindow = true;
-            float binaryTarget = 0.0f;
             float regressionTarget = 0.0f;
             int classTarget = 1;
 
             if (targetType == TargetType::UpNeutralDownReturn)
             {
                 classTarget = ClassFromLogReturn(y_true_logret, c_next_threshold);
-            }
-            else if (targetType == TargetType::BinaryReturn)
-            {
-                if (!std::isfinite(y_true_logret) || std::abs(y_true_logret) <= c_next_threshold)
-                {
-                    keepWindow = false;
-                    ++ignoredBinaryWindows;
-                }
-                else
-                {
-                    binaryTarget = (y_true_logret > 0.0f) ? 1.0f : 0.0f;
-                }
             }
             else
             {
@@ -1840,36 +1689,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 regressionTarget = std::clamp(tval, -10.0f, 10.0f);
             }
 
-            if (!keepWindow)
-                continue;
-
-            const size_t b = (targetType == TargetType::UpNeutralDownReturn)
-                ? wb.classTargets.size()
-                : wb.targets.size();
-#if LSTM_BATCH_PROFILE
-            ++profile.total_windows_built;
-            auto t_pack0 = std::chrono::steady_clock::now();
-#endif
-            for (size_t tstep = 0; tstep < window_size; ++tstep)
-            {
-                const float* src = prebuilt_ptr + (start + tstep) * F;
-                std::memcpy(packed_step_ptrs[tstep] + b * F, src, F * sizeof(float));
-            }
-#if LSTM_BATCH_PROFILE
-            auto t_pack1 = std::chrono::steady_clock::now();
-            profile.pack_copy_us += std::chrono::duration<double, std::micro>(t_pack1 - t_pack0).count();
-#endif
-
-            wb.close_t.push_back(close_t_local);
-            wb.close_target.push_back(close_target_local);
-
             if (targetType == TargetType::UpNeutralDownReturn)
             {
                 wb.classTargets.push_back(classTarget);
-            }
-            else if (targetType == TargetType::BinaryReturn)
-            {
-                wb.targets.push_back(binaryTarget);
             }
             else
             {
@@ -1915,16 +1737,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         // Pre-update snapshots for true delta norms (compute unconditionally for simplicity)
         EAMatrix param_before_snap = DeepMatrixCopy(param);
         EAMatrix bias_before_snap  = DeepMatrixCopy(bias);
-        EAMatrix headW_before_snap = (targetType == TargetType::BinaryReturn)
-            ? DeepMatrixCopy(returnHeadBinWeight)
-            : ((targetType == TargetType::UpNeutralDownReturn)
-                ? DeepMatrixCopy(returnHeadDirWeight)
-                : DeepMatrixCopy(returnHeadWeight));
-        EAMatrix headB_before_snap = (targetType == TargetType::BinaryReturn)
-            ? DeepMatrixCopy(returnHeadBinBias)
-            : ((targetType == TargetType::UpNeutralDownReturn)
-                ? DeepMatrixCopy(returnHeadDirBias)
-                : DeepMatrixCopy(returnHeadBias));
+        EAMatrix headW_before_snap = (targetType == TargetType::UpNeutralDownReturn)
+            ? DeepMatrixCopy(returnHeadDirWeight)
+            : DeepMatrixCopy(returnHeadWeight);
+        EAMatrix headB_before_snap = (targetType == TargetType::UpNeutralDownReturn)
+            ? DeepMatrixCopy(returnHeadDirBias)
+            : DeepMatrixCopy(returnHeadBias);
 #endif
 
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
@@ -2105,114 +1923,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             windowsInBatch += B;
     #endif
         }
-        else if (targetType == TargetType::BinaryReturn)
-        {
-            // combine into single evaluation barrier for efficiency
-            if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != 1)
-                head_logits_batch = EAMatrix(B, 1);
-#if LSTM_BATCH_PROFILE
-            {
-                LSTMScopedProfileTimer timer(profile.head_affine_us);
-                auto lowA = MetaNN::LowerAccess(h_batch);
-                auto lowB = MetaNN::LowerAccess(returnHeadBinWeight);
-                auto lowBias = MetaNN::LowerAccess(returnHeadBinBias);
-                auto lowY = MetaNN::LowerAccess(head_logits_batch);
-
-                auto aMem = lowA.SharedMemory();
-                auto bMem = lowB.SharedMemory();
-                auto biasMem = lowBias.SharedMemory();
-                auto yMem = lowY.SharedMemory();
-
-                MetaNN::NSMetalMatMul::MatMulBias(aMem,bMem,biasMem,yMem,B, hidden_size, 1);
-            }
-#else
-            {
-                auto lowA = MetaNN::LowerAccess(h_batch);
-                auto lowB = MetaNN::LowerAccess(returnHeadBinWeight);
-                auto lowBias = MetaNN::LowerAccess(returnHeadBinBias);
-                auto lowY = MetaNN::LowerAccess(head_logits_batch);
-
-                auto aMem = lowA.SharedMemory();
-                auto bMem = lowB.SharedMemory();
-                auto biasMem = lowBias.SharedMemory();
-                auto yMem = lowY.SharedMemory();
-
-                MetaNN::NSMetalMatMul::MatMulBias(aMem,bMem,biasMem,yMem,B, hidden_size, 1);
-            }
-#endif
-            MetaNN::NSMetalMatMul::WaitForAll();    // wait for MatMulBias
-            auto lowP = MetaNN::LowerAccess(head_logits_batch);
-            const float* pptr = lowP.RawMemory();
-
-            for (size_t b = 0; b < B; ++b)
-            {
-                const float logit = pptr[b];
-                const float target = wb.targets[b];
-                const float prob = 1.0f / (1.0f + std::exp(-logit));
-                errs[b] = prob - target;
-
-                const double logit_d = static_cast<double>(logit);
-                const double target_d = static_cast<double>(target);
-                const double max0 = std::max(logit_d, 0.0);
-                const double bce = max0 - logit_d * target_d + std::log1p(std::exp(-std::abs(logit_d)));
-                sse += bce;
-                ++mseCount;
-
-                // Class counts for diagnostics
-                const float close_t = wb.close_t[b];
-                const float close_target = wb.close_target[b];
-                const bool actual_up = close_target > close_t;
-                if (actual_up)                   ++up_count;
-                else if (close_target < close_t) ++down_count;
-                else                             ++zero_count;
-
-                // Calibration buckets for predicted P(up)
-                if (prob >= 0.40f && prob < 0.45f)
-                {
-                    ++bucket_40_45_total;
-                    if (actual_up) ++bucket_40_45_up;
-                }
-                else if (prob >= 0.45f && prob < 0.50f)
-                {
-                    ++bucket_45_50_total;
-                    if (actual_up) ++bucket_45_50_up;
-                }
-                else if (prob >= 0.50f && prob < 0.55f)
-                {
-                    ++bucket_50_55_total;
-                    if (actual_up) ++bucket_50_55_up;
-                }
-                else if (prob >= 0.55f && prob < 0.60f)
-                {
-                    ++bucket_55_60_total;
-                    if (actual_up) ++bucket_55_60_up;
-                }
-                else if (prob >= 0.60f && prob < 0.70f)
-                {
-                    ++bucket_60_70_total;
-                    if (actual_up) ++bucket_60_70_up;
-                }
-                else if (prob >= 0.70f)
-                {
-                    ++bucket_70p_total;
-                    if (actual_up) ++bucket_70p_up;
-                }
-
-#if !LSTM_INFERENCE_ONLY
-                y_sum   += static_cast<double>(target);
-                y_sumsq += static_cast<double>(target) * static_cast<double>(target);
-                y_min = std::min(y_min, target);
-                y_max = std::max(y_max, target);
-                ++y_count;
-                if (yhat_samples.size() < 10) yhat_samples.push_back(prob);
-#endif
-            }
-    #if !LSTM_INFERENCE_ONLY
-            windowCount += B;
-            windowsInBatch += B;
-    #endif
-
-        }
         else
         {
             // combine into single evaluation barrier for efficiency
@@ -2332,71 +2042,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                             AccumulateHeadGradsBatch3Class(d_headDirW_mb, d_headDirB_mb, h_batch, d_logits_batch);
                             const double n_mb_dheadW = FroNormEvalHost(d_headDirW_mb);
                             const double n_mb_dheadB = FroNormEvalHost(d_headDirB_mb);
-
-                            std::cout
-                                << "DIAG_MB"
-                                << ",calcBatchCall=" << calcBatchCallIdx
-                                << ",mb=" << mbIdx
-                                << ",B=" << B
-                                << ",mb_dparam=" << n_mb_dparam
-                                << ",mb_dbias="  << n_mb_dbias
-                                << ",mb_dHeadW=" << n_mb_dheadW
-                                << ",mb_dHeadB=" << n_mb_dheadB
-                                << ",dparam=" << n_dparam
-                                << ",dbias="  << n_dbias
-                                << ",dHeadW=" << n_dheadW
-                                << ",dHeadB=" << n_dheadB
-                                << ",headW="  << n_headW
-                                << ",headB="  << n_headB
-                                << "\n";
-                        }
-            #endif
-        }
-        else if (targetType == TargetType::BinaryReturn)
-        {
-            AccumulateHeadGradsBatch(d_headBinW_accum_f, d_headBinB_accum_f, h_batch, errs);
-
-            d_h_batch = BuildHeadDhBatch(errs, returnHeadBinWeight, LSTM_CORE_GRAD_SCALE);
-            if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hidden_size)
-                d_c_batch = EAMatrix(B, hidden_size);
-            zeroFill(d_c_batch);
-
-            zeroGateAccumulators(G_bin, param.Shape()[0], hidden_size);
-
-            auto gb = hoistGateBlocks(ww.W_h, hidden_size);
-            for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
-                backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
-
-            mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
-            #if LSTM_DIAG
-                        if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
-                        {
-                            const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
-                            const double n_dparam = FroNormEvalHost(d_param_accum);
-                            const double n_dbias  = FroNormEvalHost(d_bias_accum);
-                            const double n_dheadW = FroNormEvalHost(d_headBinW_accum_f);
-                            const double n_dheadB = FroNormEvalHost(d_headBinB_accum_f);
-                            const double n_headW  = FroNormEvalHost(returnHeadBinWeight);
-                            const double n_headB  = FroNormEvalHost(returnHeadBinBias);
-
-                            const double n_mb_dparam = std::sqrt(
-                                std::pow(FroNormEvalHost(G_bin.dW_i), 2.0) +
-                                std::pow(FroNormEvalHost(G_bin.dW_f), 2.0) +
-                                std::pow(FroNormEvalHost(G_bin.dW_g), 2.0) +
-                                std::pow(FroNormEvalHost(G_bin.dW_o), 2.0));
-                            const double n_mb_dbias = std::sqrt(
-                                std::pow(FroNormEvalHost(G_bin.db_i), 2.0) +
-                                std::pow(FroNormEvalHost(G_bin.db_f), 2.0) +
-                                std::pow(FroNormEvalHost(G_bin.db_g), 2.0) +
-                                std::pow(FroNormEvalHost(G_bin.db_o), 2.0));
-
-                            EAMatrix d_headBinW_mb(hidden_size, 1);
-                            EAMatrix d_headBinB_mb(1, 1);
-                            zeroFill(d_headBinW_mb);
-                            zeroFill(d_headBinB_mb);
-                            AccumulateHeadGradsBatch(d_headBinW_mb, d_headBinB_mb, h_batch, errs);
-                            const double n_mb_dheadW = FroNormEvalHost(d_headBinW_mb);
-                            const double n_mb_dheadB = FroNormEvalHost(d_headBinB_mb);
 
                             std::cout
                                 << "DIAG_MB"
@@ -2559,44 +2204,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     double loss_value = 0.0;
     loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
     std::cout << "loss_value=" << loss_value << "\n";
-    if (targetType == TargetType::BinaryReturn)
-    {
-        std::cout << "ignored_binary_windows=" << ignoredBinaryWindows << "\n";
-        auto bucketRate = [](size_t up, size_t total) -> double
-        {
-            return (total > 0) ? (static_cast<double>(up) / static_cast<double>(total)) : 0.0;
-        };
 
-        std::cout << "up_count=" << up_count
-                  << " down_count=" << down_count
-                  << " zero_count=" << zero_count << "\n";
-
-        std::cout << "prob_bucket[0.40,0.45): total=" << bucket_40_45_total
-                  << " up=" << bucket_40_45_up
-                  << " up_rate=" << bucketRate(bucket_40_45_up, bucket_40_45_total)
-                  << "\n";
-        std::cout << "prob_bucket[0.45,0.50): total=" << bucket_45_50_total
-                  << " up=" << bucket_45_50_up
-                  << " up_rate=" << bucketRate(bucket_45_50_up, bucket_45_50_total)
-                  << "\n";
-        std::cout << "prob_bucket[0.50,0.55): total=" << bucket_50_55_total
-                  << " up=" << bucket_50_55_up
-                  << " up_rate=" << bucketRate(bucket_50_55_up, bucket_50_55_total)
-                  << "\n";
-        std::cout << "prob_bucket[0.55,0.60): total=" << bucket_55_60_total
-                  << " up=" << bucket_55_60_up
-                  << " up_rate=" << bucketRate(bucket_55_60_up, bucket_55_60_total)
-                  << "\n";
-        std::cout << "prob_bucket[0.60,0.70): total=" << bucket_60_70_total
-                  << " up=" << bucket_60_70_up
-                  << " up_rate=" << bucketRate(bucket_60_70_up, bucket_60_70_total)
-                  << "\n";
-        std::cout << "prob_bucket[0.70,1.00]: total=" << bucket_70p_total
-                  << " up=" << bucket_70p_up
-                  << " up_rate=" << bucketRate(bucket_70p_up, bucket_70p_total)
-                  << "\n";
-
-    }
 #endif
 
 #if !LSTM_INFERENCE_ONLY && LSTM_DEBUG_PRINTS
@@ -2616,8 +2224,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::cout << "train: pred_pct (relative move) samples:";
         for (float v : ydenorm_samples) std::cout << ' ' << v;
         std::cout << std::endl;
-        std::cout << "train: skipped_windows=" << skippedWindows
-                  << " ignored_binary_windows=" << ignoredBinaryWindows << std::endl;
+        std::cout << "train: skipped_windows=" << skippedWindows << std::endl;
     }
     std::cout << "batch: max_abs_y_true=" << max_abs_y_true
               << " count_abs_gt_0p01=" << count_abs_gt_0p01
@@ -2663,9 +2270,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
         const auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
 
-        const auto d_headBinW_f = MetaNN::Evaluate(d_headBinW_accum_f);
-        const auto d_headBinB_f = MetaNN::Evaluate(d_headBinB_accum_f);
-
         const auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
         const auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
@@ -2680,30 +2284,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 {
                     const double n_param = FroNormEvalHost(param);
                     const double n_bias  = FroNormEvalHost(bias);
-                    const double n_headW = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadBinWeight)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(returnHeadDirWeight)
-                            : FroNormEvalHost(returnHeadWeight));
-                    const double n_headB = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadBinBias)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(returnHeadDirBias)
-                            : FroNormEvalHost(returnHeadBias));
+                    const double n_headW = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirWeight) : FroNormEvalHost(returnHeadWeight);
+                    const double n_headB = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirBias) : FroNormEvalHost(returnHeadBias);
         
                     // Gradient norms (after Evaluate already below, but safe to compute here too)
                     const double n_gparam = FroNormEvalHost(d_param_accum);
                     const double n_gbias  = FroNormEvalHost(d_bias_accum);
-                    const double n_gheadW = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headBinW_accum_f)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(d_headDirW_accum_f)
-                            : FroNormEvalHost(d_headW_accum_f));
-                    const double n_gheadB = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headBinB_accum_f)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(d_headDirB_accum_f)
-                            : FroNormEvalHost(d_headB_accum_f));
+                    const double n_gheadW = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirW_accum_f) : FroNormEvalHost(d_headW_accum_f);
+                    const double n_gheadB = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirB_accum_f) : FroNormEvalHost(d_headB_accum_f);
 
                     std::cout
                         << "DIAG_PREUPD"
@@ -2722,10 +2310,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         #if !LSTM_DISABLE_UPDATES
             SGDUpdate(param, d_param_f, lrCore);
             SGDUpdate(bias,  d_bias_f,  lrCore);
-            if (targetType == TargetType::BinaryReturn) {
-                SGDUpdate(returnHeadBinWeight, d_headBinW_f, lrHead);
-                SGDUpdate(returnHeadBinBias,   d_headBinB_f, lrHead);
-            } else if (targetType == TargetType::UpNeutralDownReturn) {
+            if (targetType == TargetType::UpNeutralDownReturn) {
                 SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
                 SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
             } else {
@@ -2738,28 +2323,15 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 {
                     const double n_param2 = FroNormEvalHost(param);
                     const double n_bias2  = FroNormEvalHost(bias);
-                    const double n_headW2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadBinWeight)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(returnHeadDirWeight)
-                            : FroNormEvalHost(returnHeadWeight));
-                    const double n_headB2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadBinBias)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(returnHeadDirBias)
-                            : FroNormEvalHost(returnHeadBias));
+                    const double n_headW2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirWeight) : FroNormEvalHost(returnHeadWeight);
+                    const double n_headB2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirBias) : FroNormEvalHost(returnHeadBias);
 
                     // True update magnitudes (Frobenius norms of parameter deltas)
                     double d_param_delta = FroNormDeltaHost(param, param_before_snap);
                     double d_bias_delta  = FroNormDeltaHost(bias,  bias_before_snap);
                     double d_headW_delta = 0.0;
                     double d_headB_delta = 0.0;
-                    if (targetType == TargetType::BinaryReturn)
-                    {
-                        d_headW_delta = FroNormDeltaHost(returnHeadBinWeight, headW_before_snap);
-                        d_headB_delta = FroNormDeltaHost(returnHeadBinBias,   headB_before_snap);
-                    }
-                    else if (targetType == TargetType::UpNeutralDownReturn)
+                    if (targetType == TargetType::UpNeutralDownReturn)
                     {
                         d_headW_delta = FroNormDeltaHost(returnHeadDirWeight, headW_before_snap);
                         d_headB_delta = FroNormDeltaHost(returnHeadDirBias,   headB_before_snap);
@@ -2792,16 +2364,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     // Gradient norms (recomputed here for a single-line summary)
                     const double n_gparam2 = FroNormEvalHost(d_param_accum);
                     const double n_gbias2  = FroNormEvalHost(d_bias_accum);
-                    const double n_gheadW2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headBinW_accum_f)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(d_headDirW_accum_f)
-                            : FroNormEvalHost(d_headW_accum_f));
-                    const double n_gheadB2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headBinB_accum_f)
-                        : ((targetType == TargetType::UpNeutralDownReturn)
-                            ? FroNormEvalHost(d_headDirB_accum_f)
-                            : FroNormEvalHost(d_headB_accum_f));
+                    const double n_gheadW2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirW_accum_f) : FroNormEvalHost(d_headW_accum_f);
+                    const double n_gheadB2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirB_accum_f) : FroNormEvalHost(d_headB_accum_f);
 
                     std::cout
                         << "DIAG_COMBINED"
@@ -2830,15 +2394,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
 #if LSTM_EPOCH_BUCKETS
     // Insert epoch-bucket aggregation here (moved from after PredictNextRelativeMove)
-    if (targetType == TargetType::BinaryReturn)
-        AccumulateEpochBuckets(up_count, down_count, zero_count,
-                               bucket_40_45_total, bucket_40_45_up,
-                               bucket_45_50_total, bucket_45_50_up,
-                               bucket_50_55_total, bucket_50_55_up,
-                               bucket_55_60_total, bucket_55_60_up,
-                               bucket_60_70_total, bucket_60_70_up,
-                               bucket_70p_total, bucket_70p_up);
-    else if (targetType == TargetType::UpNeutralDownReturn)
+    if (targetType == TargetType::UpNeutralDownReturn)
         AccumulateEpochBuckets3Class(down_count, neutral_count, up_count,
                                      bucket3_33_35_total, bucket3_33_35_correct,
                                      bucket3_35_40_total, bucket3_35_40_correct,
@@ -2851,7 +2407,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
-    return { mse, windowCount, skippedWindows + ignoredBinaryWindows };
+    return { mse, windowCount, skippedWindows };
 }
 
 std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
@@ -2928,13 +2484,10 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
     // For UpNeutralDownReturn, the inference API returns the most likely class encoded as:
     //   -1.0f = down, 0.0f = neutral, 1.0f = up.
     // Continuous return-valued outputs are only available for LogReturn/PercentReturn.
-    float y_hat = (targetType == TargetType::BinaryReturn)
-        ? predictOnly(prevHiddenState, returnHeadBinWeight, returnHeadBinBias)
-        : ((targetType == TargetType::UpNeutralDownReturn)
-            ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
-            : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias));
+    float y_hat = (targetType == TargetType::UpNeutralDownReturn)
+        ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
+        : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 
-    if (targetType == TargetType::BinaryReturn) return y_hat;
     if (targetType == TargetType::UpNeutralDownReturn)
     {
         LSTM_ASSERT(false, "PredictNextReturn() is not valid for UpNeutralDownReturn; use PredictNextDirectionClass() or PredictNextDirectionProbs().");
@@ -3002,13 +2555,10 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
     // For UpNeutralDownReturn, the inference API returns the most likely class encoded as:
     //   -1.0f = down, 0.0f = neutral, 1.0f = up.
     // Relative-move outputs are only available for LogReturn/PercentReturn.
-    float y_hat = (targetType == TargetType::BinaryReturn)
-        ? predictOnly(prevHiddenState, returnHeadBinWeight, returnHeadBinBias)
-        : ((targetType == TargetType::UpNeutralDownReturn)
-            ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
-            : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias));
+    float y_hat = (targetType == TargetType::UpNeutralDownReturn)
+        ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
+        : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
 
-    if (targetType == TargetType::BinaryReturn) return y_hat;
     if (targetType == TargetType::UpNeutralDownReturn)
     {
         LSTM_ASSERT(false, "PredictNextRelativeMove() is not valid for UpNeutralDownReturn; use PredictNextDirectionClass() or PredictNextDirectionProbs().");
@@ -3029,3 +2579,4 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
 
 
  
+

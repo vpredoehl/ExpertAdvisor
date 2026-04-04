@@ -220,7 +220,7 @@ public:
         lstm.bias             = loadParameterMatrix<float>(w, modelId, "bias");
         lstm.returnHeadWeight = loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
         lstm.returnHeadBias   = loadParameterMatrix<float>(w, modelId, "returnHeadBias");
-        // Try to load binary classification head if present (backward compatible)
+        // Try to load 3-class direction head if present (backward compatible)
         try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
         try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
         (void)tryLoadTargetMeta(w, modelId, lstm);
@@ -238,7 +238,7 @@ public:
             switch (typeInt) {
                 case 0: lstm.targetType = EA::LSTM::TargetType::LogReturn; break;
                 case 1: lstm.targetType = EA::LSTM::TargetType::PercentReturn; break;
-                case 2: lstm.targetType = EA::LSTM::TargetType::BinaryReturn; break;
+                case 2: // legacy BinaryReturn -> map to 3-class direction
                 case 3: lstm.targetType = EA::LSTM::TargetType::UpNeutralDownReturn; break;
                 default: return false; // unknown type, fail to load meta
             }

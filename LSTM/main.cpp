@@ -66,63 +66,6 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
         return s;
     };
 
-    if (l.targetType == EA::LSTM::TargetType::BinaryReturn)
-    {
-        auto predProbUp = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
-
-#if LSTM_DEBUG_PRINTS
-        std::cout << "predProbUp samples: ";
-        for (size_t i = 0; i < std::min<size_t>(10, predProbUp.size()); ++i) std::cout << predProbUp[i] << " ";
-        std::cout << "\n";
-#endif
-
-        std::vector<float> actual;
-        actual.reserve(predProbUp.size());
-        for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
-        {
-            const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
-            const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
-            actual.push_back(v_unscaled > 0.0f ? 1.0f : 0.0f);
-        }
-
-        const size_t N = std::min(predProbUp.size(), actual.size());
-        if (N == 0)
-            return {0, 0, 0, 0.0, 0, 0};
-
-        auto s_prob = stats(predProbUp);
-        std::cout << "pred_prob_up stats: min=" << s_prob.min << " max=" << s_prob.max
-                  << " mean=" << s_prob.mean << " std=" << s_prob.std
-                  << " uniq~=" << s_prob.uniq << std::endl;
-
-        size_t acted = 0;
-        size_t correct = 0;
-        double mae = 0.0;
-        const float confThr = 0.05f;
-        for (size_t i = 0; i < N; ++i)
-        {
-            const float p = std::clamp(predProbUp[i], 0.0f, 1.0f);
-            const float y = actual[i];
-            mae += std::abs(static_cast<double>(p) - static_cast<double>(y));
-
-            if (std::fabs(p - 0.5f) < confThr) continue;
-            ++acted;
-
-            const bool predUp = p >= 0.5f;
-            const bool actUp = y >= 0.5f;
-            if (predUp == actUp) ++correct;
-        }
-
-        std::cout << "Binary direction accuracy: "
-                  << (acted ? (static_cast<double>(correct) / static_cast<double>(acted) * 100.0) : 0.0)
-                  << "% over " << acted << " acted (of " << N << ")"
-                  << " confThr=" << confThr
-                  << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
-                  << " | MAE(prob vs label)=" << (mae / static_cast<double>(N))
-                  << std::endl;
-
-        return {correct, acted, N, mae, correct, acted};
-    }
-
     auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
 
 #if LSTM_DEBUG_PRINTS
@@ -348,8 +291,6 @@ int main(int argc, const char * argv[])
                             double b0 = l2(l.bias);
                             double hw0 = l2(l.returnHeadWeight);
                             double hb0 = l2(l.returnHeadBias);
-                            double bhw0 = l2(l.returnHeadBinWeight);
-                            double bhb0 = l2(l.returnHeadBinBias);
                             double dhw0 = l2(l.returnHeadDirWeight);
                             double dhb0 = l2(l.returnHeadDirBias);
                             
@@ -360,8 +301,6 @@ int main(int argc, const char * argv[])
                             double b1 = l2(l.bias);
                             double hw1 = l2(l.returnHeadWeight);
                             double hb1 = l2(l.returnHeadBias);
-                            double bhw1 = l2(l.returnHeadBinWeight);
-                            double bhb1 = l2(l.returnHeadBinBias);
                             double dhw1 = l2(l.returnHeadDirWeight);
                             double dhb1 = l2(l.returnHeadDirBias);
                             
@@ -369,16 +308,13 @@ int main(int argc, const char * argv[])
                             << " loss=" << loss
                             << " ||param|| " << p0  << " -> " << p1
                             << " ||bias|| "  << b0  << " -> " << b1;
-                            if (l.targetType == EA::LSTM::TargetType::BinaryReturn)
-                                std::cout << " ||binHeadW|| " << bhw0 << " -> " << bhw1 << " ||binHeadB|| " << bhb0 << " -> " << bhb1 << std::endl;
-                            else if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                            if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
                                 std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
                             else
                                 std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                         }
                     } );
-                    if (l.targetType == EA::LSTM::TargetType::BinaryReturn ||
-                        l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                    if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
                         EA::LSTM::PrintAndResetEpochBuckets();
                 }
             if constexpr (inference_only)
