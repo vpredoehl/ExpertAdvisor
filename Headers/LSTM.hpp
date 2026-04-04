@@ -206,7 +206,7 @@ public:
     std::tuple<float, size_t, size_t> CalculateBatch(const Window);
     // Inference-only helpers (forward pass, no training)
     float PredictNextReturn(const Window& w, bool resetState = true);
-    float PredictNextClose(const Window& w, bool resetState = true);
+    float PredictNextRelativeMove(const Window& w, bool resetState = true);
     
     std::vector<float> RollingPredictNextLogReturn(const Window& batch, bool resetAtStart = true);
     std::vector<float> RollingPredictNextClose(const Window& batch, bool resetAtStart = true);

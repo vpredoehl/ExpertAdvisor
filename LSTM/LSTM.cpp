@@ -1420,6 +1420,8 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
     prevCellState = EAMatrix(1, hidden_size);
     returnHeadWeight = EAMatrix(hidden_size, 1);
     returnHeadBias = EAMatrix(1, 1);
+    returnHeadBinWeight = EAMatrix(hidden_size, 1);
+    returnHeadBinBias = EAMatrix(1, 1);
     returnHeadDirWeight = EAMatrix(hidden_size, 3);
     returnHeadDirBias = EAMatrix(1, 3);
 #if 0
@@ -1457,7 +1459,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
         auto low = MetaNN::LowerAccess(param);
         float* p = low.MutableRawMemory();
         const size_t cols = static_cast<size_t>(4 * n_out);
-        for (int r = 0; r < n_in; ++r)
+        for (int r = 0; r < n_in + hidden_size; ++r)
         {
             const size_t rowOff = static_cast<size_t>(r) * cols;
             for (size_t c = 0; c < cols; ++c) p[rowOff + c] = uniform_symmetric(0.01f);
@@ -1480,7 +1482,8 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
 
     switch(targetType)
     {
-        case TargetType::PercentReturn: case TargetType::LogReturn:
+        case TargetType::PercentReturn:
+        case TargetType::LogReturn:
             {
                 auto lowW = MetaNN::LowerAccess(returnHeadWeight);
                 float* wp = lowW.MutableRawMemory();
@@ -1493,6 +1496,17 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
             }
             break;
         case TargetType::BinaryReturn:
+            {
+                auto lowW = MetaNN::LowerAccess(returnHeadBinWeight);
+                float* wp = lowW.MutableRawMemory();
+                std::fill(wp, wp + hidden_size, 0.01f);
+            }
+            {
+                auto lowB = MetaNN::LowerAccess(returnHeadBinBias);
+                float* bp = lowB.MutableRawMemory();
+                bp[0] = 0.0f;
+            }
+            break;
         case TargetType::UpNeutralDownReturn:
             {
                 auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
@@ -1504,6 +1518,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
                 float* bp = lowB.MutableRawMemory();
                 std::fill(bp, bp + returnHeadDirBias.Shape()[1], 0.0f);
             }
+            break;
     }
     
 #if LSTM_DEBUG_PRINTS
@@ -1598,13 +1613,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     };
 
     // Always declare to avoid missing symbol in Metal kernels
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headBinW_accum_f(hidden_size, 1);
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, returnHeadDirWeight.Shape()[1]);
 #if !LSTM_INFERENCE_ONLY
     // Head gradient accumulators across all windows in the batch
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headW_accum_f(hidden_size, 1);
-    { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * 1, 0.0f); }
+    { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
+
+    { auto low = MetaNN::LowerAccess(d_headBinW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f); }
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headBinB_accum_f(1, 1);
+    { auto low = MetaNN::LowerAccess(d_headBinB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
     { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * returnHeadDirWeight.Shape()[1], 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirB_accum_f(1, returnHeadDirBias.Shape()[1]);
@@ -1808,12 +1828,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         // Pre-update snapshots for true delta norms (compute unconditionally for simplicity)
         EAMatrix param_before_snap = DeepMatrixCopy(param);
         EAMatrix bias_before_snap  = DeepMatrixCopy(bias);
-        EAMatrix headW_before_snap = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
-            ? DeepMatrixCopy(returnHeadDirWeight)
-            : DeepMatrixCopy(returnHeadWeight);
-        EAMatrix headB_before_snap = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
-            ? DeepMatrixCopy(returnHeadDirBias)
-            : DeepMatrixCopy(returnHeadBias);
+        EAMatrix headW_before_snap = (targetType == TargetType::BinaryReturn)
+            ? DeepMatrixCopy(returnHeadBinWeight)
+            : ((targetType == TargetType::UpNeutralDownReturn)
+                ? DeepMatrixCopy(returnHeadDirWeight)
+                : DeepMatrixCopy(returnHeadWeight));
+        EAMatrix headB_before_snap = (targetType == TargetType::BinaryReturn)
+            ? DeepMatrixCopy(returnHeadBinBias)
+            : ((targetType == TargetType::UpNeutralDownReturn)
+                ? DeepMatrixCopy(returnHeadDirBias)
+                : DeepMatrixCopy(returnHeadBias));
 #endif
 
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
@@ -2003,8 +2027,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 LSTMScopedProfileTimer timer(profile.head_affine_us);
                 auto lowA = MetaNN::LowerAccess(h_batch);
-                auto lowB = MetaNN::LowerAccess(returnHeadDirWeight);
-                auto lowBias = MetaNN::LowerAccess(returnHeadDirBias);
+                auto lowB = MetaNN::LowerAccess(returnHeadBinWeight);
+                auto lowBias = MetaNN::LowerAccess(returnHeadBinBias);
                 auto lowY = MetaNN::LowerAccess(head_logits_batch);
 
                 auto aMem = lowA.SharedMemory();
@@ -2017,8 +2041,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #else
             {
                 auto lowA = MetaNN::LowerAccess(h_batch);
-                auto lowB = MetaNN::LowerAccess(returnHeadDirWeight);
-                auto lowBias = MetaNN::LowerAccess(returnHeadDirBias);
+                auto lowB = MetaNN::LowerAccess(returnHeadBinWeight);
+                auto lowBias = MetaNN::LowerAccess(returnHeadBinBias);
                 auto lowY = MetaNN::LowerAccess(head_logits_batch);
 
                 auto aMem = lowA.SharedMemory();
@@ -2242,9 +2266,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             #endif
         }
         else if (targetType == TargetType::BinaryReturn)
-        {         AccumulateHeadGradsBatch(d_headDirW_accum_f, d_headDirB_accum_f, h_batch, errs);
+        {
+            AccumulateHeadGradsBatch(d_headBinW_accum_f, d_headBinB_accum_f, h_batch, errs);
 
-            d_h_batch = BuildHeadDhBatch(errs, returnHeadDirWeight, LSTM_CORE_GRAD_SCALE);
+            d_h_batch = BuildHeadDhBatch(errs, returnHeadBinWeight, LSTM_CORE_GRAD_SCALE);
             if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hidden_size)
                 d_c_batch = EAMatrix(B, hidden_size);
             zeroFill(d_c_batch);
@@ -2262,10 +2287,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                             const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
                             const double n_dparam = FroNormEvalHost(d_param_accum);
                             const double n_dbias  = FroNormEvalHost(d_bias_accum);
-                            const double n_dheadW = FroNormEvalHost(d_headDirW_accum_f);
-                            const double n_dheadB = FroNormEvalHost(d_headDirB_accum_f);
-                            const double n_headW  = FroNormEvalHost(returnHeadDirWeight);
-                            const double n_headB  = FroNormEvalHost(returnHeadDirBias);
+                            const double n_dheadW = FroNormEvalHost(d_headBinW_accum_f);
+                            const double n_dheadB = FroNormEvalHost(d_headBinB_accum_f);
+                            const double n_headW  = FroNormEvalHost(returnHeadBinWeight);
+                            const double n_headB  = FroNormEvalHost(returnHeadBinBias);
 
                             const double n_mb_dparam = std::sqrt(
                                 std::pow(FroNormEvalHost(G_bin.dW_i), 2.0) +
@@ -2278,13 +2303,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                                 std::pow(FroNormEvalHost(G_bin.db_g), 2.0) +
                                 std::pow(FroNormEvalHost(G_bin.db_o), 2.0));
 
-                            EAMatrix d_headDirW_mb(hidden_size, 1);
-                            EAMatrix d_headDirB_mb(1, 1);
-                            zeroFill(d_headDirW_mb);
-                            zeroFill(d_headDirB_mb);
-                            AccumulateHeadGradsBatch(d_headDirW_mb, d_headDirB_mb, h_batch, errs);
-                            const double n_mb_dheadW = FroNormEvalHost(d_headDirW_mb);
-                            const double n_mb_dheadB = FroNormEvalHost(d_headDirB_mb);
+                            EAMatrix d_headBinW_mb(hidden_size, 1);
+                            EAMatrix d_headBinB_mb(1, 1);
+                            zeroFill(d_headBinW_mb);
+                            zeroFill(d_headBinB_mb);
+                            AccumulateHeadGradsBatch(d_headBinW_mb, d_headBinB_mb, h_batch, errs);
+                            const double n_mb_dheadW = FroNormEvalHost(d_headBinW_mb);
+                            const double n_mb_dheadB = FroNormEvalHost(d_headBinB_mb);
 
                             std::cout
                                 << "DIAG_MB"
@@ -2551,6 +2576,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
         const auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
 
+        const auto d_headBinW_f = MetaNN::Evaluate(d_headBinW_accum_f);
+        const auto d_headBinB_f = MetaNN::Evaluate(d_headBinB_accum_f);
+
         const auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
         const auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
@@ -2566,12 +2594,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double n_param = FroNormEvalHost(param);
                     const double n_bias  = FroNormEvalHost(bias);
                     const double n_headW = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadDirWeight)
+                        ? FroNormEvalHost(returnHeadBinWeight)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(returnHeadDirWeight)
                             : FroNormEvalHost(returnHeadWeight));
                     const double n_headB = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadDirBias)
+                        ? FroNormEvalHost(returnHeadBinBias)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(returnHeadDirBias)
                             : FroNormEvalHost(returnHeadBias));
@@ -2580,12 +2608,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double n_gparam = FroNormEvalHost(d_param_accum);
                     const double n_gbias  = FroNormEvalHost(d_bias_accum);
                     const double n_gheadW = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headDirW_accum_f)
+                        ? FroNormEvalHost(d_headBinW_accum_f)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(d_headDirW_accum_f)
                             : FroNormEvalHost(d_headW_accum_f));
                     const double n_gheadB = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headDirB_accum_f)
+                        ? FroNormEvalHost(d_headBinB_accum_f)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(d_headDirB_accum_f)
                             : FroNormEvalHost(d_headB_accum_f));
@@ -2607,7 +2635,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         #if !LSTM_DISABLE_UPDATES
             SGDUpdate(param, d_param_f, lrCore);
             SGDUpdate(bias,  d_bias_f,  lrCore);
-            if (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn) {
+            if (targetType == TargetType::BinaryReturn) {
+                SGDUpdate(returnHeadBinWeight, d_headBinW_f, lrHead);
+                SGDUpdate(returnHeadBinBias,   d_headBinB_f, lrHead);
+            } else if (targetType == TargetType::UpNeutralDownReturn) {
                 SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
                 SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
             } else {
@@ -2621,12 +2652,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double n_param2 = FroNormEvalHost(param);
                     const double n_bias2  = FroNormEvalHost(bias);
                     const double n_headW2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadDirWeight)
+                        ? FroNormEvalHost(returnHeadBinWeight)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(returnHeadDirWeight)
                             : FroNormEvalHost(returnHeadWeight));
                     const double n_headB2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(returnHeadDirBias)
+                        ? FroNormEvalHost(returnHeadBinBias)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(returnHeadDirBias)
                             : FroNormEvalHost(returnHeadBias));
@@ -2638,8 +2669,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     double d_headB_delta = 0.0;
                     if (targetType == TargetType::BinaryReturn)
                     {
-                        d_headW_delta = FroNormDeltaHost(returnHeadDirWeight, headW_before_snap);
-                        d_headB_delta = FroNormDeltaHost(returnHeadDirBias,   headB_before_snap);
+                        d_headW_delta = FroNormDeltaHost(returnHeadBinWeight, headW_before_snap);
+                        d_headB_delta = FroNormDeltaHost(returnHeadBinBias,   headB_before_snap);
                     }
                     else if (targetType == TargetType::UpNeutralDownReturn)
                     {
@@ -2675,12 +2706,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double n_gparam2 = FroNormEvalHost(d_param_accum);
                     const double n_gbias2  = FroNormEvalHost(d_bias_accum);
                     const double n_gheadW2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headDirW_accum_f)
+                        ? FroNormEvalHost(d_headBinW_accum_f)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(d_headDirW_accum_f)
                             : FroNormEvalHost(d_headW_accum_f));
                     const double n_gheadB2 = (targetType == TargetType::BinaryReturn)
-                        ? FroNormEvalHost(d_headDirB_accum_f)
+                        ? FroNormEvalHost(d_headBinB_accum_f)
                         : ((targetType == TargetType::UpNeutralDownReturn)
                             ? FroNormEvalHost(d_headDirB_accum_f)
                             : FroNormEvalHost(d_headB_accum_f));
@@ -2711,7 +2742,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 
 #if LSTM_EPOCH_BUCKETS
-    // Insert epoch-bucket aggregation here (moved from after PredictNextClose)
+    // Insert epoch-bucket aggregation here (moved from after PredictNextRelativeMove)
     if (targetType == TargetType::BinaryReturn)
         AccumulateEpochBuckets(up_count, down_count, zero_count,
                                bucket_40_45_total, bucket_40_45_up,
@@ -2757,7 +2788,7 @@ std::vector<float> EA::LSTM::RollingPredictNextClose(const Window& batch, bool r
     for (auto it = batch.begin(); it + window_size < batch.end(); ++it)
     {
         auto w = t.GetWindow(it);
-        preds.push_back(PredictNextClose(w, reset_state_per_window));
+        preds.push_back(PredictNextRelativeMove(w, reset_state_per_window));
     }
     return preds;
 }
@@ -2807,9 +2838,11 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
     }
 
     // Predict next-step log return from the last hidden state
-    float y_hat = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
-        ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
-        : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
+    float y_hat = (targetType == TargetType::BinaryReturn)
+        ? predictOnly(prevHiddenState, returnHeadBinWeight, returnHeadBinBias)
+        : ((targetType == TargetType::UpNeutralDownReturn)
+            ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
+            : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias));
 
     if (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn) return y_hat;
 
@@ -2825,12 +2858,12 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
     // REPLACED HERE: explicit switch return for BinaryReturn type
     switch (targetType)
     {
-        case TargetType::PercentReturn: return std::log(1.0f + raw); // convert percent return to log-return
+        case TargetType::PercentReturn: return std::log(1.0f + std::clamp(raw, -1.0f + 1e-6f, std::numeric_limits<float>::infinity())); // convert percent return to log-return
         case TargetType::LogReturn: default:     return raw; // already log-return
     }
 }
 
-inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
+inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
 {
     // Minimal inference fix: return predicted relative move (fraction), not a price.
     if (resetState) ResetPreviousState();
@@ -2872,9 +2905,11 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
     }
 
     // Predict next-step return from the last hidden state
-    float y_hat = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
-        ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
-        : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias);
+    float y_hat = (targetType == TargetType::BinaryReturn)
+        ? predictOnly(prevHiddenState, returnHeadBinWeight, returnHeadBinBias)
+        : ((targetType == TargetType::UpNeutralDownReturn)
+            ? predictOnly(prevHiddenState, returnHeadDirWeight, returnHeadDirBias)
+            : predictOnly(prevHiddenState, returnHeadWeight, returnHeadBias));
 
     if (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn) return y_hat;
 
@@ -2892,3 +2927,4 @@ inline float EA::LSTM::PredictNextClose(const Window& w, bool resetState)
 }
 
 
+ 
