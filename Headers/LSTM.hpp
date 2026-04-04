@@ -171,7 +171,7 @@ public:
     // Simple SGD learning rate for head-only training
     float learningRate = 1e-3f / 3; // or /2 or /4
     
-    LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0);
+    LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0, TargetType explicitTargetType = TargetType::UpNeutralDownReturn);
     LSTM() = delete;
     
     void SetLearningRate(float lr) { learningRate = lr; }

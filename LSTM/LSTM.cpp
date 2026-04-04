@@ -1352,9 +1352,10 @@ inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
     writeBias(d_bias_accum, 3*H, A.db_o);
 }
 
-EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
+EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetType)
   : t{ tt },
     n_in { (tt.begin() != tt.end()) ? static_cast<int>((*tt.begin()).Shape()[1] + kReturnFeatureCount) : static_cast<int>(kReturnFeatureCount) },
+    targetType { explicitTargetType },
     param  { static_cast<size_t>(n_in), 4 * n_out } // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out];
 {
     const size_t baseFeatureCount = (tt.begin() != tt.end())
@@ -1462,6 +1463,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st)
                 std::fill(bp, bp + returnHeadDirBias.Shape()[1], 0.0f);
             }
             break;
+        default:    throw std::runtime_error("Invalid targetType in LSTM constructor");
     }
     
 #if LSTM_DEBUG_PRINTS
@@ -2576,7 +2578,4 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
-
-
- 
 
