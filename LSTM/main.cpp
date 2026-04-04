@@ -66,6 +66,95 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
         return s;
     };
 
+    if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+    {
+        std::vector<int> predClass;
+        std::vector<int> actClass;
+        std::vector<float> predMaxProb;
+
+        const auto nWindows = static_cast<size_t>(
+            std::max<std::ptrdiff_t>(0, (b.end() - b.begin()) - static_cast<std::ptrdiff_t>(window_size + prediction_horizon) + 1));
+        predClass.reserve(nWindows);
+        actClass.reserve(nWindows);
+        predMaxProb.reserve(nWindows);
+
+        size_t confusion[3][3] = {};
+
+        for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
+        {
+            auto w = Window{it, it + window_size};
+
+            const auto probs = l.PredictNextDirectionProbs(w, /*resetState=*/true);
+            const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
+                           : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
+            const float maxProb = std::max(probs[0], std::max(probs[1], probs[2]));
+
+            const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
+            const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+            const int actual = (v_unscaled > c_next_threshold) ? 2
+                             : ((v_unscaled < -c_next_threshold) ? 0 : 1);
+
+            predClass.push_back(pred);
+            actClass.push_back(actual);
+            predMaxProb.push_back(maxProb);
+            ++confusion[actual][pred];
+        }
+
+        const size_t N = std::min(predClass.size(), actClass.size());
+        if (N == 0)
+            return {0, 0, 0, 0.0, 0, 0};
+
+        size_t correct = 0;
+        for (size_t i = 0; i < N; ++i)
+            if (predClass[i] == actClass[i]) ++correct;
+
+        std::vector<float> predClassF, actClassF;
+        predClassF.reserve(N);
+        actClassF.reserve(N);
+        for (size_t i = 0; i < N; ++i)
+        {
+            predClassF.push_back(static_cast<float>(predClass[i]));
+            actClassF.push_back(static_cast<float>(actClass[i]));
+        }
+
+        const auto s_pred = stats(predClassF);
+        const auto s_act  = stats(actClassF);
+        const auto s_prob = stats(predMaxProb);
+
+        std::cout << "pred_class stats: min=" << s_pred.min << " max=" << s_pred.max
+                  << " mean=" << s_pred.mean << " std=" << s_pred.std
+                  << " uniq~=" << s_pred.uniq << std::endl;
+        std::cout << "act_class stats: min=" << s_act.min << " max=" << s_act.max
+                  << " mean=" << s_act.mean << " std=" << s_act.std
+                  << " uniq~=" << s_act.uniq << std::endl;
+        std::cout << "pred_max_prob stats: min=" << s_prob.min << " max=" << s_prob.max
+                  << " mean=" << s_prob.mean << " std=" << s_prob.std
+                  << " uniq~=" << s_prob.uniq << std::endl;
+
+        const double acc = static_cast<double>(correct) / static_cast<double>(N) * 100.0;
+        std::cout << "3-class accuracy: " << acc << "% over " << N << " windows" << std::endl;
+        std::cout << "3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
+                  << "[[" << confusion[0][0] << ", " << confusion[0][1] << ", " << confusion[0][2] << "], "
+                  << "[" << confusion[1][0] << ", " << confusion[1][1] << ", " << confusion[1][2] << "], "
+                  << "[" << confusion[2][0] << ", " << confusion[2][1] << ", " << confusion[2][2] << "]]"
+                  << std::endl;
+
+#if LSTM_DEBUG_INTERNAL_PRINTS
+        const size_t toPrint = std::min<size_t>(N, 10);
+        for (size_t i = 0; i < toPrint; ++i)
+        {
+            std::cout << "i=" << i
+                      << " predClass=" << predClass[i]
+                      << " actClass=" << actClass[i]
+                      << " maxProb=" << predMaxProb[i]
+                      << " match=" << (predClass[i] == actClass[i])
+                      << "\n";
+        }
+#endif
+
+        return {correct, N, N, 0.0, correct, N};
+    }
+
     auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
 
 #if LSTM_DEBUG_PRINTS
@@ -193,7 +282,6 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
     return {correctLog, actedLog, N, maeMove, correctDir, acted};
 }
 
-
 const std::string dbName = "forex";
 const std::string dbModelName = "LSTM";
 
@@ -258,6 +346,7 @@ int main(int argc, const char * argv[])
             double totalAbsErrMove = 0.0;
             size_t totalCorrectDir = 0;
             size_t totalActedDir = 0;
+            size_t totalConfusion[3][3] = {};
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             std::cout << std::setprecision(15);
                 for(auto e = 0; e < epoch_count; e++)
@@ -273,6 +362,24 @@ int main(int argc, const char * argv[])
                             totalAbsErrMove += absErrMove;
                             totalCorrectDir += correctDir;
                             totalActedDir += actedDir;
+
+                            if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                            {
+                                for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
+                                {
+                                    auto w = Window{it, it + window_size};
+                                    const auto probs = l.PredictNextDirectionProbs(w, /*resetState=*/true);
+                                    const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
+                                                   : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
+
+                                    const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
+                                    const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+                                    const int actual = (v_unscaled > c_next_threshold) ? 2
+                                                     : ((v_unscaled < -c_next_threshold) ? 0 : 1);
+
+                                    ++totalConfusion[actual][pred];
+                                }
+                            }
                         }
                         else
                         {
@@ -319,29 +426,46 @@ int main(int argc, const char * argv[])
                 }
             if constexpr (inference_only)
             {
-                const double overallAccLog = totalActedLog
-                    ? (static_cast<double>(totalCorrectLog) / static_cast<double>(totalActedLog) * 100.0)
-                    : 0.0;
-                const double overallCovLog = totalWindows
-                    ? (static_cast<double>(totalActedLog) / static_cast<double>(totalWindows) * 100.0)
-                    : 0.0;
-                const double overallMaeMove = totalWindows
-                    ? (totalAbsErrMove / static_cast<double>(totalWindows))
-                    : 0.0;
-                const double overallAccDir = totalActedDir
-                    ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalActedDir) * 100.0)
-                    : 0.0;
-                const double overallCovDir = totalWindows
-                    ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
-                    : 0.0;
+                if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                {
+                    const double overallAcc3Class = totalWindows
+                        ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalWindows) * 100.0)
+                        : 0.0;
 
-                std::cout << "Overall direction accuracy (log-return): " << overallAccLog
-                          << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
-                          << " coverage=" << overallCovLog << "%" << std::endl;
-                std::cout << "Overall MAE (relative move fraction): " << overallMaeMove
-                          << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
-                          << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
-                          << " coverage=" << overallCovDir << "%" << std::endl;
+                    std::cout << "Overall 3-class accuracy: " << overallAcc3Class
+                              << "% over " << totalWindows << " windows" << std::endl;
+                    std::cout << "Overall 3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
+                              << "[[" << totalConfusion[0][0] << ", " << totalConfusion[0][1] << ", " << totalConfusion[0][2] << "], "
+                              << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
+                              << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
+                              << std::endl;
+                }
+                else
+                {
+                    const double overallAccLog = totalActedLog
+                        ? (static_cast<double>(totalCorrectLog) / static_cast<double>(totalActedLog) * 100.0)
+                        : 0.0;
+                    const double overallCovLog = totalWindows
+                        ? (static_cast<double>(totalActedLog) / static_cast<double>(totalWindows) * 100.0)
+                        : 0.0;
+                    const double overallMaeMove = totalWindows
+                        ? (totalAbsErrMove / static_cast<double>(totalWindows))
+                        : 0.0;
+                    const double overallAccDir = totalActedDir
+                        ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalActedDir) * 100.0)
+                        : 0.0;
+                    const double overallCovDir = totalWindows
+                        ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
+                        : 0.0;
+
+                    std::cout << "Overall direction accuracy (log-return): " << overallAccLog
+                              << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
+                              << " coverage=" << overallCovLog << "%" << std::endl;
+                    std::cout << "Overall MAE (relative move fraction): " << overallMaeMove
+                              << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
+                              << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
+                              << " coverage=" << overallCovDir << "%" << std::endl;
+                }
             }
 
             // Persist trained model parameters to DB

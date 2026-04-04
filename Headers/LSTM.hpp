@@ -180,12 +180,13 @@ public:
     // Inference-only helpers (forward pass, no training)
     float PredictNextReturn(const Window& w, bool resetState = true);
     float PredictNextRelativeMove(const Window& w, bool resetState = true);
+    int PredictNextDirectionClass(const Window& w, bool resetState = true);
+    std::array<float, 3> PredictNextDirectionProbs(const Window& w, bool resetState = true);
     
     std::vector<float> RollingPredictNextLogReturn(const Window& batch, bool resetAtStart = true);
     std::vector<float> RollingPredictNextClose(const Window& batch, bool resetAtStart = true);
     
     static void PrintAndResetEpochBuckets();
-
 private:
     using AccumScalar = float;
     
@@ -229,8 +230,6 @@ private:
                                             size_t rowIdx,
                                             float* dst,
                                             size_t dstOffset) const;
-    int PredictNextDirectionClass(const Window& w, bool resetState);
-    std::array<float, 3> PredictNextDirectionProbs(const Window& w, bool resetState);
     
     // Batched helpers
     EAMatrix RepeatRows(const EAMatrix& row, size_t B) const;
