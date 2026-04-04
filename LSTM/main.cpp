@@ -56,7 +56,6 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
             mn = std::min(mn, static_cast<double>(x));
             mx = std::max(mx, static_cast<double>(x));
             sum += x; sumsq += static_cast<double>(x) * static_cast<double>(x);
-            // simple bucketing by rounding to 1e-6
             long long key = static_cast<long long>(std::llround(static_cast<double>(x) * 1e6));
             ++buckets[key];
         }
@@ -67,31 +66,85 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
         return s;
     };
 
-    // 1) Get predicted log-returns (already de-normalized / de-affined inside PredictNextReturn)
+    if (l.targetType == EA::LSTM::TargetType::BinaryReturn)
+    {
+        auto predProbUp = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
+
+#if LSTM_DEBUG_PRINTS
+        std::cout << "predProbUp samples: ";
+        for (size_t i = 0; i < std::min<size_t>(10, predProbUp.size()); ++i) std::cout << predProbUp[i] << " ";
+        std::cout << "\n";
+#endif
+
+        std::vector<float> actual;
+        actual.reserve(predProbUp.size());
+        for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
+        {
+            const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
+            const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+            actual.push_back(v_unscaled > 0.0f ? 1.0f : 0.0f);
+        }
+
+        const size_t N = std::min(predProbUp.size(), actual.size());
+        if (N == 0)
+            return {0, 0, 0, 0.0, 0, 0};
+
+        auto s_prob = stats(predProbUp);
+        std::cout << "pred_prob_up stats: min=" << s_prob.min << " max=" << s_prob.max
+                  << " mean=" << s_prob.mean << " std=" << s_prob.std
+                  << " uniq~=" << s_prob.uniq << std::endl;
+
+        size_t acted = 0;
+        size_t correct = 0;
+        double mae = 0.0;
+        const float confThr = 0.05f;
+        for (size_t i = 0; i < N; ++i)
+        {
+            const float p = std::clamp(predProbUp[i], 0.0f, 1.0f);
+            const float y = actual[i];
+            mae += std::abs(static_cast<double>(p) - static_cast<double>(y));
+
+            if (std::fabs(p - 0.5f) < confThr) continue;
+            ++acted;
+
+            const bool predUp = p >= 0.5f;
+            const bool actUp = y >= 0.5f;
+            if (predUp == actUp) ++correct;
+        }
+
+        std::cout << "Binary direction accuracy: "
+                  << (acted ? (static_cast<double>(correct) / static_cast<double>(acted) * 100.0) : 0.0)
+                  << "% over " << acted << " acted (of " << N << ")"
+                  << " confThr=" << confThr
+                  << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
+                  << " | MAE(prob vs label)=" << (mae / static_cast<double>(N))
+                  << std::endl;
+
+        return {correct, acted, N, mae, correct, acted};
+    }
+
     auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
-    
+
 #if LSTM_DEBUG_PRINTS
     std::cout << "predLogRet samples: ";
     for (size_t i = 0; i < std::min<size_t>(10, predLogRet.size()); ++i) std::cout << predLogRet[i] << " ";
     std::cout << "\n";
 #endif
-    
-    // 2) Convert predicted log-return -> relative move fraction
+
     std::vector<float> predRel; predRel.reserve(predLogRet.size());
     for (float logret : predLogRet) predRel.push_back(std::exp(logret) - 1.0f);
 
-    // 3) Build ground-truth relative moves for comparison from feature log-return
     size_t gtOutliers = 0;
-    std::vector<float> actRel, actLogRet; // percent move derived from log-return
+    std::vector<float> actRel, actLogRet;
     actRel.reserve(predRel.size()); actLogRet.reserve(predRel.size());
     for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
     {
         const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
-        const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;   // <-- MUST unscale to raw log-return
-        
-        if(std::fabs(v_unscaled) > 0.02f)    gtOutliers++;  // 2% log-return is already huge for many FX horizons
-        actLogRet.push_back(v_unscaled);                    // <-- MUST be this exact v
-        actRel.push_back(std::exp(v_unscaled) - 1.0f);      // <-- derived from same v
+        const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+
+        if(std::fabs(v_unscaled) > 0.02f) gtOutliers++;
+        actLogRet.push_back(v_unscaled);
+        actRel.push_back(std::exp(v_unscaled) - 1.0f);
     }
     auto s_gt = stats(actLogRet);
 #if LSTM_DEBUG_INTERNAL_PRINTS
@@ -100,14 +153,12 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
               << " uniq~=" << s_gt.uniq << std::endl << "GT outliers |v|>0.02: " << gtOutliers
               << " of " << actLogRet.size() << std::endl;
 #endif
-    assert(predRel.size() == actRel.size());    // DEBUG
+    assert(predRel.size() == actRel.size());
     if (predRel.empty() || actRel.empty())
     {
         return {0, 0, 0, 0.0, 0, 0};
     }
 
-
-    // 4) Print prediction distribution stats to diagnose saturation
     auto s_raw = stats(predLogRet);
     auto s_rel = stats(predRel);
     std::cout << "pred_raw stats: min=" << s_raw.min << " max=" << s_raw.max
@@ -119,20 +170,18 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
     std::cout << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
               << " mean=" << s_rel.mean << " std=" << s_rel.std
               << " uniq~=" << s_rel.uniq << std::endl;
-    
-    // 5) Compare predicted vs actual relative moves directly (fractions)
+
     std::vector<float> predMove = predRel;
     std::vector<float> actualMove = actRel;
     size_t N = std::min(predMove.size(), actualMove.size());
     const size_t toPrint = std::min<size_t>(N, 10);
 
-    // Direction accuracy in log-return domain with an acted threshold
     size_t actedLog = 0;
     size_t correctLog = 0;
-    const float actedThrLog = 2e-4;
+    const float actedThrLog = 2e-4f;
     for (size_t i = 0; i < N && i < predLogRet.size() && i < actLogRet.size(); ++i)
     {
-        if (std::fabs(predLogRet[i]) < actedThrLog) continue; // only act on confident predictions
+        if (std::fabs(predLogRet[i]) < actedThrLog) continue;
         ++actedLog;
         bool predUp = predLogRet[i] >= 0.0f;
         bool actUp  = actLogRet[i]  >= 0.0f;
@@ -145,7 +194,7 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
               << " thr=" << actedThrLog
               << " coverage=" << covLog << "%" << std::endl;
 
-    #if LSTM_DEBUG_INTERNAL_PRINTS
+#if LSTM_DEBUG_INTERNAL_PRINTS
     const size_t M = std::min<size_t>(5, std::min(predLogRet.size(), actLogRet.size()));
     for (size_t i = 0; i < M; ++i)  std::cout << "align i=" << i << " predLogRet=" << predLogRet[i]  << " actLogRet(unscaled)=" << actLogRet[i] << " actRel=" << (std::exp(actLogRet[i]) - 1.0f) << "\n";
     for (size_t i = 0; i < toPrint; ++i)
@@ -168,9 +217,8 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
     size_t correctDir = 0;
     size_t acted = 0;
 
-    // Ignore tiny predictions (no-signal zone)
     const float predThr = 1e-4f;
-    const float actThr  = 1e-4f;   // optional: ignore tiny true moves too
+    const float actThr  = 1e-4f;
 
     for (size_t i = 0; i < N; ++i)
     {
@@ -300,6 +348,8 @@ int main(int argc, const char * argv[])
                             double b0 = l2(l.bias);
                             double hw0 = l2(l.returnHeadWeight);
                             double hb0 = l2(l.returnHeadBias);
+                            double bhw0 = l2(l.returnHeadBinWeight);
+                            double bhb0 = l2(l.returnHeadBinBias);
                             double dhw0 = l2(l.returnHeadDirWeight);
                             double dhb0 = l2(l.returnHeadDirBias);
                             
@@ -310,6 +360,8 @@ int main(int argc, const char * argv[])
                             double b1 = l2(l.bias);
                             double hw1 = l2(l.returnHeadWeight);
                             double hb1 = l2(l.returnHeadBias);
+                            double bhw1 = l2(l.returnHeadBinWeight);
+                            double bhb1 = l2(l.returnHeadBinBias);
                             double dhw1 = l2(l.returnHeadDirWeight);
                             double dhb1 = l2(l.returnHeadDirBias);
                             
@@ -317,8 +369,12 @@ int main(int argc, const char * argv[])
                             << " loss=" << loss
                             << " ||param|| " << p0  << " -> " << p1
                             << " ||bias|| "  << b0  << " -> " << b1;
-                            if (l.targetType == EA::LSTM::TargetType::BinaryReturn || l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn) std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
-                            else std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
+                            if (l.targetType == EA::LSTM::TargetType::BinaryReturn)
+                                std::cout << " ||binHeadW|| " << bhw0 << " -> " << bhw1 << " ||binHeadB|| " << bhb0 << " -> " << bhb1 << std::endl;
+                            else if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                                std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
+                            else
+                                std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                         }
                     } );
                     if (l.targetType == EA::LSTM::TargetType::BinaryReturn ||

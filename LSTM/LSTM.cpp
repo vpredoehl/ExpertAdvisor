@@ -1597,6 +1597,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>(1, hidden_size)
     };
 
+    // Always declare to avoid missing symbol in Metal kernels
+    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, returnHeadDirWeight.Shape()[1]);
 #if !LSTM_INFERENCE_ONLY
     // Head gradient accumulators across all windows in the batch
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headW_accum_f(hidden_size, 1);
@@ -1604,7 +1606,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headB_accum_f(1, 1);
     { auto low = MetaNN::LowerAccess(d_headB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + 1, 0.0f); }
 
-    MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, returnHeadDirWeight.Shape()[1]);
     { auto low = MetaNN::LowerAccess(d_headDirW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size * returnHeadDirWeight.Shape()[1], 0.0f); }
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirB_accum_f(1, returnHeadDirBias.Shape()[1]);
     { auto low = MetaNN::LowerAccess(d_headDirB_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + returnHeadDirBias.Shape()[1], 0.0f); }
@@ -2564,22 +2565,30 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 {
                     const double n_param = FroNormEvalHost(param);
                     const double n_bias  = FroNormEvalHost(bias);
-                    const double n_headW = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                    const double n_headW = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(returnHeadDirWeight)
-                        : FroNormEvalHost(returnHeadWeight);
-                    const double n_headB = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(returnHeadDirWeight)
+                            : FroNormEvalHost(returnHeadWeight));
+                    const double n_headB = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(returnHeadDirBias)
-                        : FroNormEvalHost(returnHeadBias);
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(returnHeadDirBias)
+                            : FroNormEvalHost(returnHeadBias));
         
                     // Gradient norms (after Evaluate already below, but safe to compute here too)
-                   const double n_gparam = FroNormEvalHost(d_param_accum);
+                    const double n_gparam = FroNormEvalHost(d_param_accum);
                     const double n_gbias  = FroNormEvalHost(d_bias_accum);
-                    const double n_gheadW = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                    const double n_gheadW = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(d_headDirW_accum_f)
-                        : FroNormEvalHost(d_headW_accum_f);
-                    const double n_gheadB = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(d_headDirW_accum_f)
+                            : FroNormEvalHost(d_headW_accum_f));
+                    const double n_gheadB = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(d_headDirB_accum_f)
-                        : FroNormEvalHost(d_headB_accum_f);
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(d_headDirB_accum_f)
+                            : FroNormEvalHost(d_headB_accum_f));
 
                     std::cout
                         << "DIAG_PREUPD"
@@ -2611,19 +2620,28 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 {
                     const double n_param2 = FroNormEvalHost(param);
                     const double n_bias2  = FroNormEvalHost(bias);
-                    const double n_headW2 = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                    const double n_headW2 = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(returnHeadDirWeight)
-                        : FroNormEvalHost(returnHeadWeight);
-                    const double n_headB2 = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(returnHeadDirWeight)
+                            : FroNormEvalHost(returnHeadWeight));
+                    const double n_headB2 = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(returnHeadDirBias)
-                        : FroNormEvalHost(returnHeadBias);
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(returnHeadDirBias)
+                            : FroNormEvalHost(returnHeadBias));
 
                     // True update magnitudes (Frobenius norms of parameter deltas)
                     double d_param_delta = FroNormDeltaHost(param, param_before_snap);
                     double d_bias_delta  = FroNormDeltaHost(bias,  bias_before_snap);
                     double d_headW_delta = 0.0;
                     double d_headB_delta = 0.0;
-                    if (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                    if (targetType == TargetType::BinaryReturn)
+                    {
+                        d_headW_delta = FroNormDeltaHost(returnHeadDirWeight, headW_before_snap);
+                        d_headB_delta = FroNormDeltaHost(returnHeadDirBias,   headB_before_snap);
+                    }
+                    else if (targetType == TargetType::UpNeutralDownReturn)
                     {
                         d_headW_delta = FroNormDeltaHost(returnHeadDirWeight, headW_before_snap);
                         d_headB_delta = FroNormDeltaHost(returnHeadDirBias,   headB_before_snap);
@@ -2656,12 +2674,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     // Gradient norms (recomputed here for a single-line summary)
                     const double n_gparam2 = FroNormEvalHost(d_param_accum);
                     const double n_gbias2  = FroNormEvalHost(d_bias_accum);
-                    const double n_gheadW2 = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                    const double n_gheadW2 = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(d_headDirW_accum_f)
-                        : FroNormEvalHost(d_headW_accum_f);
-                    const double n_gheadB2 = (targetType == TargetType::BinaryReturn || targetType == TargetType::UpNeutralDownReturn)
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(d_headDirW_accum_f)
+                            : FroNormEvalHost(d_headW_accum_f));
+                    const double n_gheadB2 = (targetType == TargetType::BinaryReturn)
                         ? FroNormEvalHost(d_headDirB_accum_f)
-                        : FroNormEvalHost(d_headB_accum_f);
+                        : ((targetType == TargetType::UpNeutralDownReturn)
+                            ? FroNormEvalHost(d_headDirB_accum_f)
+                            : FroNormEvalHost(d_headB_accum_f));
 
                     std::cout
                         << "DIAG_COMBINED"

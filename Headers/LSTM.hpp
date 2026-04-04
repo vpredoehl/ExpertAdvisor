@@ -85,7 +85,7 @@ namespace EA
     }
     float PredictDirLogitFromH(const EAMatrix& h)
     {
-        auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // binary logit
+        auto z = Dot(h, returnHeadBinWeight) + returnHeadBinBias;   // binary logit
         auto zMat = Evaluate(z);
         LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 1, "PredictDirLogitFromH: expected 1x1 result");
         return zMat(0,0);
@@ -188,7 +188,10 @@ public:
     // Output head for next-step return regression: y_hat = h_T · returnHeadWeight + returnHeadBias
     EAMatrix returnHeadWeight { hidden_size, 1 };
     EAMatrix returnHeadBias { 1, 1 };
-    // Binary classification head (direction): p = sigmoid(h_T · returnHeadDirWeight + returnHeadDirBias)
+    // Binary classification head (direction): p = sigmoid(h_T · returnHeadBinWeight + returnHeadBinBias)
+    EAMatrix returnHeadBinWeight { hidden_size, 1 };
+    EAMatrix returnHeadBinBias { 1, 1 };
+    // 3-class classification head (down / neutral / up)
     EAMatrix returnHeadDirWeight { hidden_size, 3 };
     EAMatrix returnHeadDirBias { 1, 3 };
     
@@ -273,4 +276,3 @@ private:
 }
 
 #endif /* LSTM_hpp */
-
