@@ -33,6 +33,75 @@
 #define LSTM_DIAG_ONLY_FIRST_BATCH 1
 #endif
 
+#include <cmath>
+#include <cstdio>   // make sure this exists
+
+// ============================
+// Distribution Logging (3-class)
+// ============================
+
+static size_t epoch_actual[3] = {0,0,0};
+static size_t epoch_pred[3]   = {0,0,0};
+static size_t epoch_conf[3][3] = {{0}};
+static size_t epoch_total = 0;
+static size_t epoch_correct = 0;
+
+static void Log3ClassSample(int actual, int predicted)
+{
+    if (actual >=0 && actual <3) epoch_actual[actual]++;
+    if (predicted >=0 && predicted <3) epoch_pred[predicted]++;
+
+    if (actual >=0 && actual <3 && predicted >=0 && predicted <3)
+        epoch_conf[actual][predicted]++;
+
+    epoch_total++;
+    if (actual == predicted) epoch_correct++;
+}
+
+void PrintAndResetDistribution()
+{
+    if (epoch_total == 0) return;
+
+    auto frac = [](size_t x, size_t t){ return t ? (double)x / (double)t : 0.0; };
+
+    printf("EPOCH_3CLASS_ACTUAL_DISTRIBUTION total=%zu down=%.4f neutral=%.4f up=%.4f\n",
+           epoch_total,
+           frac(epoch_actual[0], epoch_total),
+           frac(epoch_actual[1], epoch_total),
+           frac(epoch_actual[2], epoch_total));
+
+    printf("EPOCH_3CLASS_PRED_DISTRIBUTION total=%zu down=%.4f neutral=%.4f up=%.4f\n",
+           epoch_total,
+           frac(epoch_pred[0], epoch_total),
+           frac(epoch_pred[1], epoch_total),
+           frac(epoch_pred[2], epoch_total));
+
+    printf("EPOCH_3CLASS_CONFUSION_MATRIX rows=actual cols=predicted\n");
+    for (int i=0;i<3;i++)
+    {
+        printf("row%d: %zu %zu %zu\n",
+               i,
+               epoch_conf[i][0],
+               epoch_conf[i][1],
+               epoch_conf[i][2]);
+    }
+
+    printf("EPOCH_3CLASS_ACCURACY correct=%zu total=%zu acc=%.4f\n",
+           epoch_correct,
+           epoch_total,
+           frac(epoch_correct, epoch_total));
+
+    // reset
+    for (int i=0;i<3;i++)
+    {
+        epoch_actual[i]=0;
+        epoch_pred[i]=0;
+        for (int j=0;j<3;j++) epoch_conf[i][j]=0;
+    }
+    epoch_total = 0;
+    epoch_correct = 0;
+}
+
 // Frobenius norm of the difference between two matrices, evaluated on host
 template <typename Mat>
 static double FroNormDeltaHost(const Mat& a, const Mat& b)
@@ -1869,6 +1938,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
                 const bool correct = (predClass == cls);
 
+                Log3ClassSample(cls, predClass);
                 if (max_prob >= 0.33f && max_prob < 0.35f)
                 {
                     ++bucket3_33_35_total;

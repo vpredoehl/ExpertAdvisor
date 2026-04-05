@@ -422,7 +422,12 @@ int main(int argc, const char * argv[])
                         }
                     } );
                     if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                    {
+                        void PrintAndResetDistribution();
+                        
                         EA::LSTM::PrintAndResetEpochBuckets();
+                        PrintAndResetDistribution();
+                    }
                 }
             if constexpr (inference_only)
             {
