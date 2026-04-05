@@ -1829,6 +1829,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         for (auto it = first; it != last; ++it)
         {
             const size_t start = *it;
+            const size_t b = static_cast<size_t>(it - first);
+            for (size_t tstep = 0; tstep < window_size; ++tstep)
+            {
+                float* dstRow = packed_step_ptrs[tstep] + b * F;
+                const float* srcRow = prebuilt_ptr + (start + tstep) * F;
+                std::memcpy(dstRow, srcRow, F * sizeof(float));
+            }
             const size_t lastIdx   = start + (window_size - 1);
             const size_t targetIdx = lastIdx + prediction_horizon;
             const auto lastIt      = batch.begin() + static_cast<std::ptrdiff_t>(lastIdx);
