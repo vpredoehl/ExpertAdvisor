@@ -246,6 +246,10 @@ private:
 
     static EAMatrix GatherRows(const std::vector<EAMatrix>& rows);
     static void ScatterRows(EAMatrix& dst, const EAMatrix& src, size_t row0);
+    
+    static void PrintMatrixSummary(const char* label,
+                                          const EA::LSTM::EAMatrix& m,
+                                          size_t maxPrint);
 };
 }
 

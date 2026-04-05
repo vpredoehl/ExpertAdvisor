@@ -46,6 +46,64 @@ static size_t epoch_conf[3][3] = {{0}};
 static size_t epoch_total = 0;
 static size_t epoch_correct = 0;
 
+void EA::LSTM::PrintMatrixSummary(const char* label,
+                               const EA::LSTM::EAMatrix& m,
+                               size_t maxPrint = 16)
+{
+    MetaNN::NSMetalMatMul::WaitForAll();
+    auto ev = MetaNN::Evaluate(m);
+    auto low = MetaNN::LowerAccess(ev);
+
+    const float* p = low.RawMemory();
+    const size_t rows = ev.Shape()[0];
+    const size_t cols = ev.Shape()[1];
+    const size_t n = rows * cols;
+
+    if (n == 0)
+    {
+        std::cout << label << ": empty\n";
+        return;
+    }
+
+    double sum = 0.0;
+    double sumsq = 0.0;
+    float mn = std::numeric_limits<float>::infinity();
+    float mx = -std::numeric_limits<float>::infinity();
+    size_t nz = 0;
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        const float v = p[i];
+        mn = std::min(mn, v);
+        mx = std::max(mx, v);
+        sum += v;
+        sumsq += static_cast<double>(v) * static_cast<double>(v);
+        if (std::fabs(v) > 1e-12f)
+            ++nz;
+    }
+
+    const double mean = sum / static_cast<double>(n);
+    const double var = std::max(0.0, sumsq / static_cast<double>(n) - mean * mean);
+    const double stdv = std::sqrt(var);
+
+    std::cout << label
+              << " shape=(" << rows << "," << cols << ")"
+              << " min=" << mn
+              << " max=" << mx
+              << " mean=" << mean
+              << " std=" << stdv
+              << " nz=" << nz << "/" << n
+              << " first=";
+
+    const size_t k = std::min(n, maxPrint);
+    for (size_t i = 0; i < k; ++i)
+    {
+        if (i)
+            std::cout << ",";
+        std::cout << p[i];
+    }
+    std::cout << "\n";
+}
 static void Log3ClassSample(int actual, int predicted)
 {
     if (actual >=0 && actual <3) epoch_actual[actual]++;
@@ -287,18 +345,11 @@ struct EA::LSTM::GateAccumulators
 struct EA::LSTM::LSTMBatchProfile
 {
     double build_window_batch_us = 0.0;
-    double get_window_us = 0.0;
-    double pack_copy_us = 0.0;
-    size_t total_windows_built = 0;
     double forward_step_batches_us = 0.0;
-    double repeat_bias_us = 0.0;
     double concat_cols_us = 0.0;
     double dot_plus_bias_us = 0.0;
     double head_affine_us = 0.0;
     size_t mini_batches = 0;
-    size_t total_windows = 0;
-    size_t total_rows_processed = 0;
-    size_t total_features_processed = 0;
 };
 
 #ifndef LSTM_EPOCH_BUCKETS
@@ -999,8 +1050,55 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 
+#if LSTM_DIAG
+    static size_t s_forwardStepBatchCalls = 0;
+    const bool diag_cond = (!LSTM_DIAG_ONLY_FIRST_BATCH || s_forwardStepBatchCalls++ == 0);
+    if (diag_cond &&
+        prevHiddenState.Shape()[0] > 0 &&
+        prevHiddenState.Shape()[1] > 0)
+    {
+        static bool s_printed_fused_gate_diag = false;
+        if (!s_printed_fused_gate_diag)
+        {
+            PrintMatrixSummary("DIAG_GATES_BATCH_PRE_FUSED", scratch.gates_batch);
+            PrintMatrixSummary("DIAG_PREV_C_PRE_FUSED", prevCellState);
+            PrintMatrixSummary("DIAG_PREV_H_PRE_FUSED", prevHiddenState);
+            {
+                const size_t Hdiag = scratch.gates_batch.Shape()[1] / 4;
+                auto gate_i_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 0 * Hdiag, Hdiag);
+                auto gate_f_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * Hdiag, Hdiag);
+                auto gate_g_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 2 * Hdiag, Hdiag);
+                auto gate_o_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 3 * Hdiag, Hdiag);
+                PrintMatrixSummary("DIAG_GATE_I_LOGITS_PRE_FUSED", gate_i_logits);
+                PrintMatrixSummary("DIAG_GATE_F_LOGITS_PRE_FUSED", gate_f_logits);
+                PrintMatrixSummary("DIAG_GATE_G_LOGITS_PRE_FUSED", gate_g_logits);
+                PrintMatrixSummary("DIAG_GATE_O_LOGITS_PRE_FUSED", gate_o_logits);
+            }
+            s_printed_fused_gate_diag = true;
+        }
+    }
+#endif
+
     ComputeGateStateBatchFromContiguous(scratch.gates_batch,prevCellState,scratch.gate_i_batch,scratch.gate_f_batch,scratch.gate_g_batch,scratch.gate_o_batch,scratch.c,scratch.h);
     MetaNN::NSMetalMatMul::WaitForAll();    // Ensure all Metal writes are completed before deep copies
+ #if LSTM_DIAG
+    if (diag_cond &&
+        scratch.h.Shape()[0] > 0 &&
+        scratch.h.Shape()[1] > 0)
+    {
+        static bool s_printed_fused_gate_post_diag = false;
+        if (!s_printed_fused_gate_post_diag)
+        {
+            PrintMatrixSummary("DIAG_GATE_I_POST_FUSED", scratch.gate_i_batch);
+            PrintMatrixSummary("DIAG_GATE_F_POST_FUSED", scratch.gate_f_batch);
+            PrintMatrixSummary("DIAG_GATE_G_POST_FUSED", scratch.gate_g_batch);
+            PrintMatrixSummary("DIAG_GATE_O_POST_FUSED", scratch.gate_o_batch);
+            PrintMatrixSummary("DIAG_C_POST_FUSED", scratch.c);
+            PrintMatrixSummary("DIAG_H_POST_FUSED", scratch.h);
+            s_printed_fused_gate_post_diag = true;
+        }
+    }
+#endif
     BatchStepCache sc
     {
         x_t,    // SHOULD THIS ALSO BE CLONED??
@@ -1760,14 +1858,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 regressionTarget = std::clamp(tval, -10.0f, 10.0f);
             }
 
-            if (targetType == TargetType::UpNeutralDownReturn)
-            {
-                wb.classTargets.push_back(classTarget);
-            }
-            else
-            {
-                wb.targets.push_back(regressionTarget);
-            }
+            if (targetType == TargetType::UpNeutralDownReturn)  wb.classTargets.push_back(classTarget);
+            else    wb.targets.push_back(regressionTarget);
         }
 
         const size_t B_final = (targetType == TargetType::UpNeutralDownReturn)
@@ -1830,7 +1922,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         }
 #if LSTM_BATCH_PROFILE
         ++profile.mini_batches;
-        profile.total_windows += B;
 #endif
 
         if (h_batch.Shape()[0] != B || h_batch.Shape()[1] != hidden_size)
@@ -1854,15 +1945,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 LSTMScopedProfileTimer timer(profile.forward_step_batches_us);
                 const EAMatrix& x_t_batch = wb.packed_steps[tstep];
-                if (tstep == 0 && B > 0)
-                    profile.total_features_processed += B * window_size * x_t_batch.Shape()[1];
-                profile.total_rows_processed += B;
                 cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, &profile));
             }
 #else
             const EAMatrix& x_t_batch = wb.packed_steps[tstep];
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, nullptr));
 #endif
+        }
+        if (calcBatchCallIdx == 0 && batchBase == 0)
+        {
+            PrintMatrixSummary("DIAG_DIRHEAD_INPUT_h_batch", h_batch);
+            PrintMatrixSummary("DIAG_DIRHEAD_CELL_c_batch", c_batch);
+            PrintMatrixSummary("DIAG_DIRHEAD_WEIGHT", returnHeadDirWeight);
+            PrintMatrixSummary("DIAG_DIRHEAD_BIAS", returnHeadDirBias);
         }
 
         std::vector<float> errs(B, 0.0f);
@@ -1873,6 +1968,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         {
             if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != 3)
                 head_logits_batch = EAMatrix(B, 3);
+            if (calcBatchCallIdx == 0 && batchBase == 0)    PrintMatrixSummary("DIAG_PRE_HEAD_h_batch", h_batch);
 #if LSTM_BATCH_PROFILE
             {
                 LSTMScopedProfileTimer timer(profile.head_affine_us);
@@ -2210,27 +2306,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const double forward_pct = (assembly_us > 0.0) ? (100.0 * profile.forward_step_batches_us / assembly_us) : 0.0;
         const double build_pct = (assembly_us > 0.0) ? (100.0 * profile.build_window_batch_us / assembly_us) : 0.0;
         const double head_affine_pct = (assembly_us > 0.0) ? (100.0 * profile.head_affine_us / assembly_us) : 0.0;
-        const double ns_per_row = (profile.total_rows_processed > 0)
-        ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_rows_processed))
-        : 0.0;
-        const double ns_per_feature = (profile.total_features_processed > 0)
-        ? (profile.forward_step_batches_us * 1000.0 / static_cast<double>(profile.total_features_processed))
-        : 0.0;
-        const double get_window_pct_of_build = (profile.build_window_batch_us > 0.0)
-        ? (100.0 * profile.get_window_us / profile.build_window_batch_us)
-        : 0.0;
-        const double pack_copy_pct_of_build = (profile.build_window_batch_us > 0.0)
-        ? (100.0 * profile.pack_copy_us / profile.build_window_batch_us)
-        : 0.0;
-        const double get_window_us_per_window = (profile.total_windows_built > 0)
-        ? (profile.get_window_us / static_cast<double>(profile.total_windows_built))
-        : 0.0;
-        const double pack_copy_us_per_window = (profile.total_windows_built > 0)
-        ? (profile.pack_copy_us / static_cast<double>(profile.total_windows_built))
-        : 0.0;
-        const double repeat_bias_pct_of_forward = (profile.forward_step_batches_us > 0.0)
-        ? (100.0 * profile.repeat_bias_us / profile.forward_step_batches_us)
-        : 0.0;
         const double concat_cols_pct_of_forward = (profile.forward_step_batches_us > 0.0)
         ? (100.0 * profile.concat_cols_us / profile.forward_step_batches_us)
         : 0.0;
@@ -2244,30 +2319,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         std::cout << std::fixed << std::setprecision(3)
                   << "assembly_us=" << assembly_us
                   << " build_window_batch_us=" << profile.build_window_batch_us
-                  << " get_window_us=" << profile.get_window_us
-                  << " pack_copy_us=" << profile.pack_copy_us
                   << " forward_step_batches_us=" << profile.forward_step_batches_us
-                  << " repeat_bias_us=" << profile.repeat_bias_us
                   << " concat_cols_us=" << profile.concat_cols_us
                   << " dot_plus_bias_us=" << profile.dot_plus_bias_us
                   << " head_affine_us=" << profile.head_affine_us
                   << " forward_pct=" << forward_pct
                   << " build_pct=" << build_pct
                   << " head_affine_pct=" << head_affine_pct
-                  << " get_window_pct_of_build=" << get_window_pct_of_build
-                  << " pack_copy_pct_of_build=" << pack_copy_pct_of_build
-                  << " get_window_us_per_window=" << get_window_us_per_window
-                  << " pack_copy_us_per_window=" << pack_copy_us_per_window
-                  << " repeat_bias_pct_of_forward=" << repeat_bias_pct_of_forward
                   << " concat_cols_pct_of_forward=" << concat_cols_pct_of_forward
                   << " dot_plus_bias_pct_of_forward=" << dot_plus_bias_pct_of_forward
-                  // << " gate_only_pct_of_forward=" << gate_only_pct_of_forward
-                  << " ns_per_row=" << ns_per_row
-                  << " ns_per_feature=" << ns_per_feature
                   << " minibatches=" << profile.mini_batches
-                  << " windows_built=" << profile.total_windows_built
-                  << " rows_processed=" << profile.total_rows_processed
-                  << " features_processed=" << profile.total_features_processed
                   << std::defaultfloat << std::setprecision(15)
                   << "\n";
     }
