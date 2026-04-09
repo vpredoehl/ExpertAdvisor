@@ -46,64 +46,6 @@ static size_t epoch_conf[3][3] = {{0}};
 static size_t epoch_total = 0;
 static size_t epoch_correct = 0;
 
-void EA::LSTM::PrintMatrixSummary(const char* label,
-                               const EA::LSTM::EAMatrix& m,
-                               size_t maxPrint = 16)
-{
-    MetaNN::NSMetalMatMul::WaitForAll();
-    auto ev = MetaNN::Evaluate(m);
-    auto low = MetaNN::LowerAccess(ev);
-
-    const float* p = low.RawMemory();
-    const size_t rows = ev.Shape()[0];
-    const size_t cols = ev.Shape()[1];
-    const size_t n = rows * cols;
-
-    if (n == 0)
-    {
-        std::cout << label << ": empty\n";
-        return;
-    }
-
-    double sum = 0.0;
-    double sumsq = 0.0;
-    float mn = std::numeric_limits<float>::infinity();
-    float mx = -std::numeric_limits<float>::infinity();
-    size_t nz = 0;
-
-    for (size_t i = 0; i < n; ++i)
-    {
-        const float v = p[i];
-        mn = std::min(mn, v);
-        mx = std::max(mx, v);
-        sum += v;
-        sumsq += static_cast<double>(v) * static_cast<double>(v);
-        if (std::fabs(v) > 1e-12f)
-            ++nz;
-    }
-
-    const double mean = sum / static_cast<double>(n);
-    const double var = std::max(0.0, sumsq / static_cast<double>(n) - mean * mean);
-    const double stdv = std::sqrt(var);
-
-    std::cout << label
-              << " shape=(" << rows << "," << cols << ")"
-              << " min=" << mn
-              << " max=" << mx
-              << " mean=" << mean
-              << " std=" << stdv
-              << " nz=" << nz << "/" << n
-              << " first=";
-
-    const size_t k = std::min(n, maxPrint);
-    for (size_t i = 0; i < k; ++i)
-    {
-        if (i)
-            std::cout << ",";
-        std::cout << p[i];
-    }
-    std::cout << "\n";
-}
 static void Log3ClassSample(int actual, int predicted)
 {
     if (actual >=0 && actual <3) epoch_actual[actual]++;
@@ -425,12 +367,19 @@ template <typename Mat>
 auto DeepMatrixCopy(const Mat& src) -> Mat
 {
     Mat out(src.Shape()[0], src.Shape()[1]);
-    auto srcEval = MetaNN::Evaluate(src);
-    auto lowSrc = MetaNN::LowerAccess(srcEval);
+
+    auto srcEval = src.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    MetaNN::NSMetalMatMul::WaitForAll();
+
+    auto lowSrc = MetaNN::LowerAccess(srcEval.Data());
     auto lowOut = MetaNN::LowerAccess(out);
+
+    const size_t n = src.Shape()[0] * src.Shape()[1];
     std::copy(lowSrc.RawMemory(),
-              lowSrc.RawMemory() + src.Shape()[0] * src.Shape()[1],
+              lowSrc.RawMemory() + n,
               lowOut.MutableRawMemory());
+
     return out;
 }
 
@@ -520,6 +469,64 @@ struct EA::LSTM::ForwardBatchScratch
 };
 
 // Member function definitions moved to EA::LSTM
+
+void EA::LSTM::PrintMatrixSummary(const char* label,
+                               const EA::LSTM::EAMatrix& m,
+                               size_t maxPrint = 16)
+{
+    auto evalHandle = m.EvalRegister();
+    MetaNN::EvalPlan::Inst().Eval();
+    EAMatrix dense = DeepMatrixCopy(evalHandle.Data());
+
+    auto low = MetaNN::LowerAccess(dense);
+    const float* p = low.RawMemory();
+    const size_t rows = dense.Shape()[0];
+    const size_t cols = dense.Shape()[1];
+    const size_t n = rows * cols;
+    
+    if (n == 0)
+    {
+        std::cout << label << ": empty\n";
+        return;
+    }
+
+    double sum = 0.0;
+    double sumsq = 0.0;
+    const char* mnText = "NA";
+    const char* mxText = "NA";
+    size_t nz = 0;
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        const float v = p[i];
+        sum += v;
+        sumsq += static_cast<double>(v) * static_cast<double>(v);
+        if (std::fabs(v) > 1e-12f)
+            ++nz;
+    }
+
+    const double mean = sum / static_cast<double>(n);
+    const double var = std::max(0.0, sumsq / static_cast<double>(n) - mean * mean);
+    const double stdv = std::sqrt(var);
+
+    std::cout << label
+              << " shape=(" << rows << "," << cols << ")"
+              << " min=" << mnText
+              << " max=" << mxText
+              << " mean=" << mean
+              << " std=" << stdv
+              << " nz=" << nz << "/" << n
+              << " first=";
+
+    const size_t k = std::min(n, maxPrint);
+    for (size_t i = 0; i < k; ++i)
+    {
+        if (i)
+            std::cout << ",";
+        std::cout << p[i];
+    }
+    std::cout << "\n";
+}
 
 std::array<float, 3> EA::LSTM::PredictNextDirectionProbs(const Window& w, bool resetState)
 {
@@ -1060,20 +1067,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         static bool s_printed_fused_gate_diag = false;
         if (!s_printed_fused_gate_diag)
         {
-            PrintMatrixSummary("DIAG_GATES_BATCH_PRE_FUSED", scratch.gates_batch);
-            PrintMatrixSummary("DIAG_PREV_C_PRE_FUSED", prevCellState);
-            PrintMatrixSummary("DIAG_PREV_H_PRE_FUSED", prevHiddenState);
-            {
-                const size_t Hdiag = scratch.gates_batch.Shape()[1] / 4;
-                auto gate_i_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 0 * Hdiag, Hdiag);
-                auto gate_f_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * Hdiag, Hdiag);
-                auto gate_g_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 2 * Hdiag, Hdiag);
-                auto gate_o_logits = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 3 * Hdiag, Hdiag);
-                PrintMatrixSummary("DIAG_GATE_I_LOGITS_PRE_FUSED", gate_i_logits);
-                PrintMatrixSummary("DIAG_GATE_F_LOGITS_PRE_FUSED", gate_f_logits);
-                PrintMatrixSummary("DIAG_GATE_G_LOGITS_PRE_FUSED", gate_g_logits);
-                PrintMatrixSummary("DIAG_GATE_O_LOGITS_PRE_FUSED", gate_o_logits);
-            }
+            std::cout << "DIAG_NOTE skipping PrintMatrixSummary extrema for Metal-backed fused tensors (pre-fused); using direct-read probes instead\n";
             s_printed_fused_gate_diag = true;
         }
     }
@@ -1089,12 +1083,45 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         static bool s_printed_fused_gate_post_diag = false;
         if (!s_printed_fused_gate_post_diag)
         {
-            PrintMatrixSummary("DIAG_GATE_I_POST_FUSED", scratch.gate_i_batch);
-            PrintMatrixSummary("DIAG_GATE_F_POST_FUSED", scratch.gate_f_batch);
-            PrintMatrixSummary("DIAG_GATE_G_POST_FUSED", scratch.gate_g_batch);
-            PrintMatrixSummary("DIAG_GATE_O_POST_FUSED", scratch.gate_o_batch);
-            PrintMatrixSummary("DIAG_C_POST_FUSED", scratch.c);
-            PrintMatrixSummary("DIAG_H_POST_FUSED", scratch.h);
+            std::cout << "DIAG_NOTE skipping PrintMatrixSummary extrema for Metal-backed fused tensors (post-fused); using direct-read probes instead\n";
+            std::cout << "DIRECT_PREV_C "
+                      << prevCellState(0,0) << ","
+                      << prevCellState(0,1) << ","
+                      << prevCellState(0,2) << ","
+                      << prevCellState(0,3) << "\n";
+
+            std::cout << "DIRECT_GATES_PRE "
+                      << scratch.gates_batch(0,0) << ","
+                      << scratch.gates_batch(0,1) << ","
+                      << scratch.gates_batch(0,2) << ","
+                      << scratch.gates_batch(0,3) << ","
+                      << scratch.gates_batch(0,64) << ","
+                      << scratch.gates_batch(0,128) << ","
+                      << scratch.gates_batch(0,192) << "\n";
+
+            std::cout << "DIRECT_GATE_I_POST "
+                      << scratch.gate_i_batch(0,0) << ","
+                      << scratch.gate_i_batch(0,1) << ","
+                      << scratch.gate_i_batch(0,2) << ","
+                      << scratch.gate_i_batch(0,3) << "\n";
+
+            std::cout << "DIRECT_GATE_F_POST "
+                      << scratch.gate_f_batch(0,0) << ","
+                      << scratch.gate_f_batch(0,1) << ","
+                      << scratch.gate_f_batch(0,2) << ","
+                      << scratch.gate_f_batch(0,3) << "\n";
+
+            std::cout << "DIRECT_C_POST "
+                      << scratch.c(0,0) << ","
+                      << scratch.c(0,1) << ","
+                      << scratch.c(0,2) << ","
+                      << scratch.c(0,3) << "\n";
+
+            std::cout << "DIRECT_H_POST "
+                      << scratch.h(0,0) << ","
+                      << scratch.h(0,1) << ","
+                      << scratch.h(0,2) << ","
+                      << scratch.h(0,3) << "\n";
             s_printed_fused_gate_post_diag = true;
         }
     }
@@ -1402,6 +1429,21 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     const EAMatrix& d_f_mat = dfH.Data();
     const EAMatrix& d_g_mat = dgH.Data();
     const EAMatrix& d_o_mat = doH.Data();
+#if LSTM_DIAG
+    static bool s_printed_backward_gate_norms = false;
+    if (!s_printed_backward_gate_norms)
+    {
+        std::cout
+            << "DIAG_BWD_GATES"
+            << ",d_i_norm=" << FroNormEvalHost(d_i_mat)
+            << ",d_f_norm=" << FroNormEvalHost(d_f_mat)
+            << ",d_g_norm=" << FroNormEvalHost(d_g_mat)
+            << ",d_o_norm=" << FroNormEvalHost(d_o_mat)
+            << ",d_c_prev_norm=" << FroNormEvalHost(dc_prevH.Data())
+            << "\n";
+        s_printed_backward_gate_norms = true;
+    }
+#endif
 
     // Pack all gate gradients into one contiguous (B, 4H) matrix so the major
     // backward GEMMs can stay fused on the Metal path.
@@ -1448,6 +1490,19 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     auto dh_prevH = dh_prev_expr.EvalRegister();
 
     MetaNN::EvalPlan::Inst().Eval();
+#if LSTM_DIAG
+    static bool s_printed_backward_fused_norms = false;
+    if (!s_printed_backward_fused_norms)
+    {
+        std::cout
+            << "DIAG_BWD_FUSED"
+            << ",dW_cat_norm=" << FroNormEvalHost(dW_catH.Data())
+            << ",db_cat_norm=" << FroNormEvalHost(db_catH.Data())
+            << ",dh_prev_norm=" << FroNormEvalHost(dh_prevH.Data())
+            << "\n";
+        s_printed_backward_fused_norms = true;
+    }
+#endif
 
     auto addColsToGateAccum = [&](auto& dst, const EAMatrix& src, size_t colOffset)
     {
@@ -1543,10 +1598,6 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
     bias = EAMatrix(1, static_cast<size_t>(4 * n_out));
     prevHiddenState = EAMatrix(1, hidden_size);
     prevCellState = EAMatrix(1, hidden_size);
-    returnHeadWeight = EAMatrix(hidden_size, 1);
-    returnHeadBias = EAMatrix(1, 1);
-    returnHeadDirWeight = EAMatrix(hidden_size, 3);
-    returnHeadDirBias = EAMatrix(1, 3);
 #if 0
     // Deterministic constant initialization for verification
     const float weightInit = 0.1f;
@@ -1835,6 +1886,31 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 float* dstRow = packed_step_ptrs[tstep] + b * F;
                 const float* srcRow = prebuilt_ptr + (start + tstep) * F;
                 std::memcpy(dstRow, srcRow, F * sizeof(float));
+#if LSTM_DIAG
+                if (calcBatchCallIdx == 0 && b == 0 && (tstep == 0 || tstep == window_size - 1))
+                {
+                    float maxAbsDiff = 0.0f;
+                    for (size_t j = 0; j < F; ++j)
+                    {
+                        const float diff = std::fabs(dstRow[j] - srcRow[j]);
+                        if (diff > maxAbsDiff) maxAbsDiff = diff;
+                    }
+
+                    std::cout
+                        << "DIAG_COPY"
+                        << ",tstep=" << tstep
+                        << ",F=" << F
+                        << ",start=" << start
+                        << ",maxAbsDiff=" << maxAbsDiff
+                        << ",src0=" << srcRow[0]
+                        << ",dst0=" << dstRow[0]
+                        << ",src1=" << (F > 1 ? srcRow[1] : 0.0f)
+                        << ",dst1=" << (F > 1 ? dstRow[1] : 0.0f)
+                        << ",srcLast=" << srcRow[F - 1]
+                        << ",dstLast=" << dstRow[F - 1]
+                        << "\n";
+                }
+#endif
             }
             const size_t lastIdx   = start + (window_size - 1);
             const size_t targetIdx = lastIdx + prediction_horizon;
@@ -1952,10 +2028,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 LSTMScopedProfileTimer timer(profile.forward_step_batches_us);
                 const EAMatrix& x_t_batch = wb.packed_steps[tstep];
+#if LSTM_DIAG
+                if (calcBatchCallIdx == 0 && tstep == 0)    PrintMatrixSummary("DIAG_X_T_BATCH_CONSUMED", x_t_batch);
+#endif
                 cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, &profile));
             }
 #else
             const EAMatrix& x_t_batch = wb.packed_steps[tstep];
+#if LSTM_DIAG
+            if (calcBatchCallIdx == 0 && tstep == 0)    PrintMatrixSummary("DIAG_X_T_BATCH_CONSUMED", x_t_batch);
+#endif
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, nullptr));
 #endif
         }
@@ -1965,6 +2047,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             PrintMatrixSummary("DIAG_DIRHEAD_CELL_c_batch", c_batch);
             PrintMatrixSummary("DIAG_DIRHEAD_WEIGHT", returnHeadDirWeight);
             PrintMatrixSummary("DIAG_DIRHEAD_BIAS", returnHeadDirBias);
+            std::cout << "DIRHEAD_BIAS_DIRECT "
+                      << returnHeadDirBias(0,0) << ","
+                      << returnHeadDirBias(0,1) << ","
+                      << returnHeadDirBias(0,2) << "\n";
         }
 
         std::vector<float> errs(B, 0.0f);
@@ -2180,14 +2266,65 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hidden_size)
                 d_c_batch = EAMatrix(B, hidden_size);
             zeroFill(d_c_batch);
+#if LSTM_DIAG
+            if (calcBatchCallIdx == 0 && batchBase == 0)
+            {
+                std::cout
+                    << "DIAG_BACKWARD_HEAD"
+                    << ",d_h_norm=" << FroNormEvalHost(d_h_batch)
+                    << ",d_c_norm=" << FroNormEvalHost(d_c_batch)
+                    << "\n";
+            }
+#endif
 
             zeroGateAccumulators(G_bin, param.Shape()[0], hidden_size);
 
             auto gb = hoistGateBlocks(ww.W_h, hidden_size);
             for (int tstep = static_cast<int>(cache.size()) - 1; tstep >= 0; --tstep)
+            {
+#if LSTM_DIAG
+                if (calcBatchCallIdx == 0 && batchBase == 0)
+                {
+                    const double dh_pre = FroNormEvalHost(d_h_batch);
+                    const double dc_pre = FroNormEvalHost(d_c_batch);
+                    backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
+                    std::cout
+                        << "DIAG_BWD_STEP"
+                        << ",tstep=" << tstep
+                        << ",d_h_pre=" << dh_pre
+                        << ",d_c_pre=" << dc_pre
+                        << ",G_dW_g=" << FroNormEvalHost(G_bin.dW_g)
+                        << ",G_db_g=" << FroNormEvalHost(G_bin.db_g)
+                        << "\n";
+                }
+                else
+                {
+                    backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
+                }
+#else
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
+#endif
+            }
 
             mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
+#if LSTM_DIAG
+            if (calcBatchCallIdx == 0 && batchBase == 0)
+            {
+                std::cout
+                    << "DIAG_BWD_ACCUM"
+                    << ",G_dW_i=" << FroNormEvalHost(G_bin.dW_i)
+                    << ",G_dW_f=" << FroNormEvalHost(G_bin.dW_f)
+                    << ",G_dW_g=" << FroNormEvalHost(G_bin.dW_g)
+                    << ",G_dW_o=" << FroNormEvalHost(G_bin.dW_o)
+                    << ",G_db_i=" << FroNormEvalHost(G_bin.db_i)
+                    << ",G_db_f=" << FroNormEvalHost(G_bin.db_f)
+                    << ",G_db_g=" << FroNormEvalHost(G_bin.db_g)
+                    << ",G_db_o=" << FroNormEvalHost(G_bin.db_o)
+                    << ",d_param_accum=" << FroNormEvalHost(d_param_accum)
+                    << ",d_bias_accum=" << FroNormEvalHost(d_bias_accum)
+                    << "\n";
+            }
+#endif
             #if LSTM_DIAG
                         if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
                         {
