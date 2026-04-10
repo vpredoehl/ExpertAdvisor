@@ -2556,14 +2556,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const float lrCore = learningRate * invN;
         const float lrHead = learningRate * LSTM_HEAD_LR_MULT * invN; // or a separate head LR if you want
         
-        #if LSTM_DIAG
+#if LSTM_DIAG
                 if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
                 {
                     const double n_param = FroNormEvalHost(param);
                     const double n_bias  = FroNormEvalHost(bias);
                     const double n_headW = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirWeight) : FroNormEvalHost(returnHeadWeight);
                     const double n_headB = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirBias) : FroNormEvalHost(returnHeadBias);
-        
+
                     // Gradient norms (after Evaluate already below, but safe to compute here too)
                     const double n_gparam = FroNormEvalHost(d_param_accum);
                     const double n_gbias  = FroNormEvalHost(d_bias_accum);
@@ -2582,8 +2582,106 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                         << ",gHeadW=" << n_gheadW
                         << ",gHeadB=" << n_gheadB
                         << "\n";
+
+                    static bool s_have_prev_diag_preupd = false;
+                    static double s_prev_gparam = 0.0;
+                    static double s_prev_gbias  = 0.0;
+                    static double s_prev_gheadW = 0.0;
+                    static double s_prev_gheadB = 0.0;
+
+                    const bool raw_jump = s_have_prev_diag_preupd &&
+                        ((n_gparam > std::max(1000.0, 8.0 * s_prev_gparam)) ||
+                         (n_gbias  > std::max(1000.0, 8.0 * s_prev_gbias )) ||
+                         (n_gheadW > std::max(1000.0, 8.0 * s_prev_gheadW)) ||
+                         (n_gheadB > std::max(1000.0, 8.0 * s_prev_gheadB)));
+
+                    if (raw_jump)
+                    {
+                        std::cout
+                            << "DIAG_ABORT_RAW_JUMP"
+                            << ",calcBatchCall=" << calcBatchCallIdx
+                            << ",gParam=" << n_gparam
+                            << ",gBias=" << n_gbias
+                            << ",gHeadW=" << n_gheadW
+                            << ",gHeadB=" << n_gheadB
+                            << ",prev_gParam=" << s_prev_gparam
+                            << ",prev_gBias=" << s_prev_gbias
+                            << ",prev_gHeadW=" << s_prev_gheadW
+                            << ",prev_gHeadB=" << s_prev_gheadB
+                            << "\n";
+                        std::abort();
+                    }
+
+                    s_prev_gparam = n_gparam;
+                    s_prev_gbias  = n_gbias;
+                    s_prev_gheadW = n_gheadW;
+                    s_prev_gheadB = n_gheadB;
+                    s_have_prev_diag_preupd = true;
                 }
-        #endif
+#endif
+
+#if LSTM_DIAG
+        if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+        {
+            const double n_cgParam = FroNormEvalHost(d_param_f);
+            const double n_cgBias  = FroNormEvalHost(d_bias_f);
+            const double n_cgHeadW = (targetType == TargetType::UpNeutralDownReturn)
+                ? FroNormEvalHost(d_headDirW_f)
+                : FroNormEvalHost(d_headW_f);
+            const double n_cgHeadB = (targetType == TargetType::UpNeutralDownReturn)
+                ? FroNormEvalHost(d_headDirB_f)
+                : FroNormEvalHost(d_headB_f);
+
+            const double n_rgParam = FroNormEvalHost(d_param_accum);
+            const double n_rgBias  = FroNormEvalHost(d_bias_accum);
+            const double n_rgHeadW = (targetType == TargetType::UpNeutralDownReturn)
+                ? FroNormEvalHost(d_headDirW_accum_f)
+                : FroNormEvalHost(d_headW_accum_f);
+            const double n_rgHeadB = (targetType == TargetType::UpNeutralDownReturn)
+                ? FroNormEvalHost(d_headDirB_accum_f)
+                : FroNormEvalHost(d_headB_accum_f);
+
+            const auto relDiff = [](double a, double b) {
+                const double denom = std::max(1.0, std::max(std::fabs(a), std::fabs(b)));
+                return std::fabs(a - b) / denom;
+            };
+
+            const bool clipped_mismatch =
+                (relDiff(n_cgParam, n_rgParam) > 1e-9) ||
+                (relDiff(n_cgBias,  n_rgBias ) > 1e-9) ||
+                (relDiff(n_cgHeadW, n_rgHeadW) > 1e-9) ||
+                (relDiff(n_cgHeadB, n_rgHeadB) > 1e-9);
+
+            if (clipped_mismatch)
+            {
+                std::cout
+                    << "DIAG_ABORT_CLIP_MISMATCH"
+                    << ",calcBatchCall=" << calcBatchCallIdx
+                    << ",gParam=" << n_rgParam
+                    << ",gBias=" << n_rgBias
+                    << ",gHeadW=" << n_rgHeadW
+                    << ",gHeadB=" << n_rgHeadB
+                    << ",cgParam=" << n_cgParam
+                    << ",cgBias=" << n_cgBias
+                    << ",cgHeadW=" << n_cgHeadW
+                    << ",cgHeadB=" << n_cgHeadB
+                    << "\n";
+                std::abort();
+            }
+
+            std::cout
+                << "DIAG_CLIPPED"
+                << ",calcBatchCall=" << calcBatchCallIdx
+                << ",cgParam=" << n_cgParam
+                << ",cgBias=" << n_cgBias
+                << ",cgHeadW=" << n_cgHeadW
+                << ",cgHeadB=" << n_cgHeadB
+                << ",lrCore=" << lrCore
+                << ",lrHead=" << lrHead
+                << "\n";
+        }
+#endif
+
         #if !LSTM_DISABLE_UPDATES
             SGDUpdate(param, d_param_f, lrCore);
             SGDUpdate(bias,  d_bias_f,  lrCore);
@@ -2618,7 +2716,53 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                         d_headW_delta = FroNormDeltaHost(returnHeadWeight, headW_before_snap);
                         d_headB_delta = FroNormDeltaHost(returnHeadBias,   headB_before_snap);
                     }
-        
+
+                    const double n_cgParam_post = FroNormEvalHost(d_param_f);
+                    const double n_cgBias_post  = FroNormEvalHost(d_bias_f);
+                    const double n_cgHeadW_post = (targetType == TargetType::UpNeutralDownReturn)
+                        ? FroNormEvalHost(d_headDirW_f)
+                        : FroNormEvalHost(d_headW_f);
+                    const double n_cgHeadB_post = (targetType == TargetType::UpNeutralDownReturn)
+                        ? FroNormEvalHost(d_headDirB_f)
+                        : FroNormEvalHost(d_headB_f);
+
+                    const double exp_dParam = std::fabs(static_cast<double>(lrCore)) * n_cgParam_post;
+                    const double exp_dBias  = std::fabs(static_cast<double>(lrCore)) * n_cgBias_post;
+                    const double exp_dHeadW = std::fabs(static_cast<double>(lrHead)) * n_cgHeadW_post;
+                    const double exp_dHeadB = std::fabs(static_cast<double>(lrHead)) * n_cgHeadB_post;
+
+                    const auto badStepRatio = [](double actual, double expected) {
+                        if (!std::isfinite(actual) || !std::isfinite(expected)) return true;
+                        if (expected <= 1e-15) return actual > 1e-12;
+                        const double ratio = actual / expected;
+                        return (ratio < 0.5 || ratio > 2.0);
+                    };
+
+                    const bool inconsistent_update =
+                        badStepRatio(d_param_delta, exp_dParam) ||
+                        badStepRatio(d_bias_delta,  exp_dBias ) ||
+                        badStepRatio(d_headW_delta, exp_dHeadW) ||
+                        badStepRatio(d_headB_delta, exp_dHeadB);
+
+                    if (inconsistent_update)
+                    {
+                        std::cout
+                            << "DIAG_ABORT_UPDATE_MISMATCH"
+                            << ",calcBatchCall=" << calcBatchCallIdx
+                            << ",dParam=" << d_param_delta
+                            << ",dBias=" << d_bias_delta
+                            << ",dHeadW=" << d_headW_delta
+                            << ",dHeadB=" << d_headB_delta
+                            << ",exp_dParam=" << exp_dParam
+                            << ",exp_dBias=" << exp_dBias
+                            << ",exp_dHeadW=" << exp_dHeadW
+                            << ",exp_dHeadB=" << exp_dHeadB
+                            << ",lrCore=" << lrCore
+                            << ",lrHead=" << lrHead
+                            << "\n";
+                        std::abort();
+                    }
+
                     std::cout
                         << "DIAG_POSTUPD"
                         << ",calcBatchCall=" << calcBatchCallIdx
