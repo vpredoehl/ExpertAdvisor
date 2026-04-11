@@ -2556,29 +2556,61 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
         auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
-        const auto clipMatrixByGlobalNorm = [](auto& mat, double clipNorm) -> double
-        {
-            const double gnorm = FroNormEvalHost(mat);
-            if (!std::isfinite(gnorm) || gnorm <= 0.0 || gnorm <= clipNorm)
-                return 1.0;
+        const auto sq = [](double x) { return x * x; };
 
-            const double scale = clipNorm / gnorm;
+        const auto scaleMatrixInPlace = [](auto& mat, double scale)
+        {
+            if (!std::isfinite(scale) || scale == 1.0)
+                return;
             auto low = MetaNN::LowerAccess(mat);
             auto* ptr = low.MutableRawMemory();
             const size_t n = mat.Shape()[0] * mat.Shape()[1];
             for (size_t i = 0; i < n; ++i)
                 ptr[i] *= static_cast<float>(scale);
-            return scale;
         };
 
-        const double clipScaleParam = clipMatrixByGlobalNorm(d_param_f, static_cast<double>(LSTM_CLIP_NORM_CORE));
-        const double clipScaleBias  = clipMatrixByGlobalNorm(d_bias_f,  static_cast<double>(LSTM_CLIP_NORM_CORE));
-        const double clipScaleHeadW = (targetType == TargetType::UpNeutralDownReturn)
-            ? clipMatrixByGlobalNorm(d_headDirW_f, static_cast<double>(LSTM_CLIP_NORM_HEAD))
-            : clipMatrixByGlobalNorm(d_headW_f,    static_cast<double>(LSTM_CLIP_NORM_HEAD));
-        const double clipScaleHeadB = (targetType == TargetType::UpNeutralDownReturn)
-            ? clipMatrixByGlobalNorm(d_headDirB_f, static_cast<double>(LSTM_CLIP_NORM_HEAD))
-            : clipMatrixByGlobalNorm(d_headB_f,    static_cast<double>(LSTM_CLIP_NORM_HEAD));
+        const double coreNormParam = FroNormEvalHost(d_param_f);
+        const double coreNormBias  = FroNormEvalHost(d_bias_f);
+        const double coreGlobalNorm = std::sqrt(sq(coreNormParam) + sq(coreNormBias));
+        const double clipScaleCore =
+            (!std::isfinite(coreGlobalNorm) || coreGlobalNorm <= 0.0 || coreGlobalNorm <= static_cast<double>(LSTM_CLIP_NORM_CORE))
+                ? 1.0
+                : (static_cast<double>(LSTM_CLIP_NORM_CORE) / coreGlobalNorm);
+        scaleMatrixInPlace(d_param_f, clipScaleCore);
+        scaleMatrixInPlace(d_bias_f,  clipScaleCore);
+
+        double headNormW = 0.0;
+        double headNormB = 0.0;
+        if (targetType == TargetType::UpNeutralDownReturn)
+        {
+            headNormW = FroNormEvalHost(d_headDirW_f);
+            headNormB = FroNormEvalHost(d_headDirB_f);
+        }
+        else
+        {
+            headNormW = FroNormEvalHost(d_headW_f);
+            headNormB = FroNormEvalHost(d_headB_f);
+        }
+        const double headGlobalNorm = std::sqrt(sq(headNormW) + sq(headNormB));
+        const double clipScaleHead =
+            (!std::isfinite(headGlobalNorm) || headGlobalNorm <= 0.0 || headGlobalNorm <= static_cast<double>(LSTM_CLIP_NORM_HEAD))
+                ? 1.0
+                : (static_cast<double>(LSTM_CLIP_NORM_HEAD) / headGlobalNorm);
+        if (targetType == TargetType::UpNeutralDownReturn)
+        {
+            scaleMatrixInPlace(d_headDirW_f, clipScaleHead);
+            scaleMatrixInPlace(d_headDirB_f, clipScaleHead);
+        }
+        else
+        {
+            scaleMatrixInPlace(d_headW_f, clipScaleHead);
+            scaleMatrixInPlace(d_headB_f, clipScaleHead);
+        }
+
+        const double clipScaleParam = clipScaleCore;
+        const double clipScaleBias  = clipScaleCore;
+        const double clipScaleHeadW = clipScaleHead;
+        const double clipScaleHeadB = clipScaleHead;
         
         // Scale learning rate by number of windows so batch size doesn't change step size
         const float invN = 1.0f / static_cast<float>(windowCount);
