@@ -2558,54 +2558,31 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         const auto sq = [](double x) { return x * x; };
 
-        const auto scaleMatrixInPlace = [](auto& mat, double scale)
-        {
-            if (!std::isfinite(scale) || scale == 1.0)
-                return;
-            auto low = MetaNN::LowerAccess(mat);
-            auto* ptr = low.MutableRawMemory();
-            const size_t n = mat.Shape()[0] * mat.Shape()[1];
-            for (size_t i = 0; i < n; ++i)
-                ptr[i] *= static_cast<float>(scale);
-        };
-
-        const double coreNormParam = FroNormEvalHost(d_param_f);
-        const double coreNormBias  = FroNormEvalHost(d_bias_f);
+        const double coreNormParam = FroNormEvalHost(d_param_accum);
+        const double coreNormBias  = FroNormEvalHost(d_bias_accum);
         const double coreGlobalNorm = std::sqrt(sq(coreNormParam) + sq(coreNormBias));
         const double clipScaleCore =
             (!std::isfinite(coreGlobalNorm) || coreGlobalNorm <= 0.0 || coreGlobalNorm <= static_cast<double>(LSTM_CLIP_NORM_CORE))
                 ? 1.0
                 : (static_cast<double>(LSTM_CLIP_NORM_CORE) / coreGlobalNorm);
-        scaleMatrixInPlace(d_param_f, clipScaleCore);
-        scaleMatrixInPlace(d_bias_f,  clipScaleCore);
 
         double headNormW = 0.0;
         double headNormB = 0.0;
         if (targetType == TargetType::UpNeutralDownReturn)
         {
-            headNormW = FroNormEvalHost(d_headDirW_f);
-            headNormB = FroNormEvalHost(d_headDirB_f);
+            headNormW = FroNormEvalHost(d_headDirW_accum_f);
+            headNormB = FroNormEvalHost(d_headDirB_accum_f);
         }
         else
         {
-            headNormW = FroNormEvalHost(d_headW_f);
-            headNormB = FroNormEvalHost(d_headB_f);
+            headNormW = FroNormEvalHost(d_headW_accum_f);
+            headNormB = FroNormEvalHost(d_headB_accum_f);
         }
         const double headGlobalNorm = std::sqrt(sq(headNormW) + sq(headNormB));
         const double clipScaleHead =
             (!std::isfinite(headGlobalNorm) || headGlobalNorm <= 0.0 || headGlobalNorm <= static_cast<double>(LSTM_CLIP_NORM_HEAD))
                 ? 1.0
                 : (static_cast<double>(LSTM_CLIP_NORM_HEAD) / headGlobalNorm);
-        if (targetType == TargetType::UpNeutralDownReturn)
-        {
-            scaleMatrixInPlace(d_headDirW_f, clipScaleHead);
-            scaleMatrixInPlace(d_headDirB_f, clipScaleHead);
-        }
-        else
-        {
-            scaleMatrixInPlace(d_headW_f, clipScaleHead);
-            scaleMatrixInPlace(d_headB_f, clipScaleHead);
-        }
 
         const double clipScaleParam = clipScaleCore;
         const double clipScaleBias  = clipScaleCore;
@@ -2617,6 +2594,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         const float lrCore = learningRate * invN;
         const float lrHead = learningRate * LSTM_HEAD_LR_MULT * invN; // or a separate head LR if you want
+
+        const float lrCoreClipped = lrCore * static_cast<float>(clipScaleCore);
+        const float lrHeadClipped = lrHead * static_cast<float>(clipScaleHead);
         
 #if LSTM_DIAG
                 if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
@@ -2722,18 +2702,20 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 << ",clipNormHead=" << LSTM_CLIP_NORM_HEAD
                 << ",lrCore=" << lrCore
                 << ",lrHead=" << lrHead
+                << ",lrCoreClipped=" << lrCoreClipped
+                << ",lrHeadClipped=" << lrHeadClipped
                 << "\n";        }
 #endif
 
         #if !LSTM_DISABLE_UPDATES
-            SGDUpdate(param, d_param_f, lrCore);
-            SGDUpdate(bias,  d_bias_f,  lrCore);
+            SGDUpdate(param, d_param_f, lrCoreClipped);
+            SGDUpdate(bias,  d_bias_f,  lrCoreClipped);
             if (targetType == TargetType::UpNeutralDownReturn) {
-                SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
-                SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
+                SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHeadClipped);
+                SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHeadClipped);
             } else {
-                SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
-                SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
+                SGDUpdate(returnHeadWeight, d_headW_f, lrHeadClipped);
+                SGDUpdate(returnHeadBias,   d_headB_f, lrHeadClipped);
             }
         #endif
 #if LSTM_DIAG
@@ -2769,10 +2751,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                         ? FroNormEvalHost(d_headDirB_f)
                         : FroNormEvalHost(d_headB_f);
 
-                    const double exp_dParam = std::fabs(static_cast<double>(lrCore)) * n_cgParam_post;
-                    const double exp_dBias  = std::fabs(static_cast<double>(lrCore)) * n_cgBias_post;
-                    const double exp_dHeadW = std::fabs(static_cast<double>(lrHead)) * n_cgHeadW_post;
-                    const double exp_dHeadB = std::fabs(static_cast<double>(lrHead)) * n_cgHeadB_post;
+                    const double exp_dParam = std::fabs(static_cast<double>(lrCoreClipped)) * n_cgParam_post;
+                    const double exp_dBias  = std::fabs(static_cast<double>(lrCoreClipped)) * n_cgBias_post;
+                    const double exp_dHeadW = std::fabs(static_cast<double>(lrHeadClipped)) * n_cgHeadW_post;
+                    const double exp_dHeadB = std::fabs(static_cast<double>(lrHeadClipped)) * n_cgHeadB_post;
 
                     const auto badStepRatio = [](double actual, double expected) {
                         if (!std::isfinite(actual) || !std::isfinite(expected)) return true;
@@ -2802,6 +2784,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                             << ",exp_dHeadB=" << exp_dHeadB
                             << ",lrCore=" << lrCore
                             << ",lrHead=" << lrHead
+                            << ",lrCoreClipped=" << lrCoreClipped
+                            << ",lrHeadClipped=" << lrHeadClipped
                             << "\n";
                         std::abort();
                     }
