@@ -196,7 +196,13 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_HEAD_LR_MULT
-#define LSTM_HEAD_LR_MULT 1.0f
+#define LSTM_HEAD_LR_MULT 0.1f
+#endif
+#ifndef LSTM_CLIP_NORM_CORE
+#define LSTM_CLIP_NORM_CORE 100.0f
+#endif
+#ifndef LSTM_CLIP_NORM_HEAD
+#define LSTM_CLIP_NORM_HEAD 100.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
 #define LSTM_CORE_GRAD_SCALE 5.0f
@@ -2542,14 +2548,38 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     if (windowCount > 0)
     {
         // Convert accumulators to concrete matrices (ensures RawMemory is valid)
-        const auto d_param_f = MetaNN::Evaluate(d_param_accum);
-        const auto d_bias_f  = MetaNN::Evaluate(d_bias_accum);
-        const auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
-        const auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
+        auto d_param_f = MetaNN::Evaluate(d_param_accum);
+        auto d_bias_f  = MetaNN::Evaluate(d_bias_accum);
+        auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
+        auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
 
-        const auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
-        const auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
+        auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
+        auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
+        const auto clipMatrixByGlobalNorm = [](auto& mat, double clipNorm) -> double
+        {
+            const double gnorm = FroNormEvalHost(mat);
+            if (!std::isfinite(gnorm) || gnorm <= 0.0 || gnorm <= clipNorm)
+                return 1.0;
+
+            const double scale = clipNorm / gnorm;
+            auto low = MetaNN::LowerAccess(mat);
+            auto* ptr = low.MutableRawMemory();
+            const size_t n = mat.Shape()[0] * mat.Shape()[1];
+            for (size_t i = 0; i < n; ++i)
+                ptr[i] *= static_cast<float>(scale);
+            return scale;
+        };
+
+        const double clipScaleParam = clipMatrixByGlobalNorm(d_param_f, static_cast<double>(LSTM_CLIP_NORM_CORE));
+        const double clipScaleBias  = clipMatrixByGlobalNorm(d_bias_f,  static_cast<double>(LSTM_CLIP_NORM_CORE));
+        const double clipScaleHeadW = (targetType == TargetType::UpNeutralDownReturn)
+            ? clipMatrixByGlobalNorm(d_headDirW_f, static_cast<double>(LSTM_CLIP_NORM_HEAD))
+            : clipMatrixByGlobalNorm(d_headW_f,    static_cast<double>(LSTM_CLIP_NORM_HEAD));
+        const double clipScaleHeadB = (targetType == TargetType::UpNeutralDownReturn)
+            ? clipMatrixByGlobalNorm(d_headDirB_f, static_cast<double>(LSTM_CLIP_NORM_HEAD))
+            : clipMatrixByGlobalNorm(d_headB_f,    static_cast<double>(LSTM_CLIP_NORM_HEAD));
+        
         // Scale learning rate by number of windows so batch size doesn't change step size
         const float invN = 1.0f / static_cast<float>(windowCount);
 
@@ -2641,45 +2671,26 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 ? FroNormEvalHost(d_headDirB_accum_f)
                 : FroNormEvalHost(d_headB_accum_f);
 
-            const auto relDiff = [](double a, double b) {
-                const double denom = std::max(1.0, std::max(std::fabs(a), std::fabs(b)));
-                return std::fabs(a - b) / denom;
-            };
-
-            const bool clipped_mismatch =
-                (relDiff(n_cgParam, n_rgParam) > 1e-9) ||
-                (relDiff(n_cgBias,  n_rgBias ) > 1e-9) ||
-                (relDiff(n_cgHeadW, n_rgHeadW) > 1e-9) ||
-                (relDiff(n_cgHeadB, n_rgHeadB) > 1e-9);
-
-            if (clipped_mismatch)
-            {
-                std::cout
-                    << "DIAG_ABORT_CLIP_MISMATCH"
-                    << ",calcBatchCall=" << calcBatchCallIdx
-                    << ",gParam=" << n_rgParam
-                    << ",gBias=" << n_rgBias
-                    << ",gHeadW=" << n_rgHeadW
-                    << ",gHeadB=" << n_rgHeadB
-                    << ",cgParam=" << n_cgParam
-                    << ",cgBias=" << n_cgBias
-                    << ",cgHeadW=" << n_cgHeadW
-                    << ",cgHeadB=" << n_cgHeadB
-                    << "\n";
-                std::abort();
-            }
-
             std::cout
                 << "DIAG_CLIPPED"
                 << ",calcBatchCall=" << calcBatchCallIdx
+                << ",gParam=" << n_rgParam
+                << ",gBias=" << n_rgBias
+                << ",gHeadW=" << n_rgHeadW
+                << ",gHeadB=" << n_rgHeadB
                 << ",cgParam=" << n_cgParam
                 << ",cgBias=" << n_cgBias
                 << ",cgHeadW=" << n_cgHeadW
                 << ",cgHeadB=" << n_cgHeadB
+                << ",clipScaleParam=" << clipScaleParam
+                << ",clipScaleBias=" << clipScaleBias
+                << ",clipScaleHeadW=" << clipScaleHeadW
+                << ",clipScaleHeadB=" << clipScaleHeadB
+                << ",clipNormCore=" << LSTM_CLIP_NORM_CORE
+                << ",clipNormHead=" << LSTM_CLIP_NORM_HEAD
                 << ",lrCore=" << lrCore
                 << ",lrHead=" << lrHead
-                << "\n";
-        }
+                << "\n";        }
 #endif
 
         #if !LSTM_DISABLE_UPDATES
