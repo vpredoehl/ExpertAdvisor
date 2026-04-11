@@ -2847,17 +2847,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         #if !LSTM_DISABLE_UPDATES
         LSTMAbortIfNonFiniteMatrix("param_before_sgdupdate", param, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_param_accum));
         SGDUpdate(param, d_param_f, lrCoreClipped);
+        MetaNN::EvalPlan::Inst().Eval();
+        MetaNN::NSMetalMatMul::WaitForAll();
         LSTMAbortIfNonFiniteMatrix("param_after_sgdupdate",  param, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_param_accum));
         LSTMAbortIfNonFiniteMatrix("bias_before_sgdupdate", bias, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_bias_accum));
         SGDUpdate(bias, d_bias_f, lrCoreClipped);
+        MetaNN::EvalPlan::Inst().Eval();
+        MetaNN::NSMetalMatMul::WaitForAll();
         LSTMAbortIfNonFiniteMatrix("bias_after_sgdupdate",  bias, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_bias_accum));
         if (targetType == TargetType::UpNeutralDownReturn)
         {
             LSTMAbortIfNonFiniteMatrix("dirHeadWeight_before_sgdupdate", returnHeadDirWeight, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirW_accum_f));
             SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHeadClipped);
+            MetaNN::EvalPlan::Inst().Eval();
+            MetaNN::NSMetalMatMul::WaitForAll();
             LSTMAbortIfNonFiniteMatrix("dirHeadWeight_after_sgdupdate",  returnHeadDirWeight, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirW_accum_f));
             LSTMAbortIfNonFiniteMatrix("dirHeadBias_before_sgdupdate", returnHeadDirBias, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirB_accum_f));
             SGDUpdate(returnHeadDirBias, d_headDirB_f, lrHeadClipped);
+            MetaNN::EvalPlan::Inst().Eval();
+            MetaNN::NSMetalMatMul::WaitForAll();
             LSTMAbortIfNonFiniteMatrix("dirHeadBias_after_sgdupdate",  returnHeadDirBias, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirB_accum_f));
         } else
         {
