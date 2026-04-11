@@ -1,0 +1,16 @@
+{
+  "input_path": "input15m.txt",
+  "train_start": "2010-01-01",
+  "train_end": "2025-01-01",
+  "window_size": 64,
+  "prediction_horizon": 4,
+  "c_next_threshold": 0.0012,
+  "batch_size": 128,
+  "epochs": 100,
+  "learning_rate": 0.0001,
+  "hidden_size": 64,
+  "valid_fraction": 0.1,
+  "seed": 42,
+  "device": "auto",
+  "output_dir": "training_output"
+}

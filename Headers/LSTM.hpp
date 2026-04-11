@@ -238,6 +238,15 @@ private:
     void AccumulateHeadGradsBatch(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_batch, const std::vector<float>& errs) const;
     void AccumulateHeadGradsBatch3Class(EAMatrix& dW_accum, EAMatrix& dB_accum, const EAMatrix& h_batch, const EAMatrix& d_logits_batch) const;
     EAMatrix SliceRows(const EAMatrix& src, size_t row0, size_t rowCount);
+    static bool LSTMMatrixAllFinite(const EAMatrix& m);
+    static void LSTMAbortIfNonFiniteMatrix(const char* tag,
+                                                  const EAMatrix& m,
+                                                  size_t calcBatchCallIdx,
+                                                  size_t batchBase,
+                                                  size_t B,
+                                                  double aux0 = 0.0,
+                                                  double aux1 = 0.0);
+
 
     // Batched backward through time
     void backwardStepBatch(const BatchStepCache& sc, const GateBlocks& gb, EAMatrix& d_h, EAMatrix& d_c, GateAccumulators& A) const;

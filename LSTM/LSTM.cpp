@@ -241,6 +241,18 @@ constexpr size_t kReturnFeatureCount =
 #define LSTM_MAX_MINI_BATCH_WINDOWS 128
 #endif
 
+#ifndef LSTM_ABORT_ON_NONFINITE_HEAD
+#define LSTM_ABORT_ON_NONFINITE_HEAD 1
+#endif
+
+#ifndef LSTM_ABORT_ON_ABSURD_HEAD
+#define LSTM_ABORT_ON_ABSURD_HEAD 1
+#endif
+
+#ifndef LSTM_ABSURD_NORM_LIMIT
+#define LSTM_ABSURD_NORM_LIMIT 1.0e6
+#endif
+
 constexpr size_t mini_batch_windows = MINI_BATCH_WINDOWS;
 
 const size_t effectiveMiniBatchWindows = std::max<size_t>(1, std::min<size_t>(mini_batch_windows, static_cast<size_t>(LSTM_MAX_MINI_BATCH_WINDOWS)));
@@ -1705,6 +1717,79 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
 #endif
 }
 
+bool EA::LSTM::LSTMMatrixAllFinite(const EAMatrix& m)
+{
+    const size_t rows = m.Shape()[0];
+    const size_t cols = m.Shape()[1];
+    for (size_t r = 0; r < rows; ++r)
+        for (size_t c = 0; c < cols; ++c)
+            if (!std::isfinite(m(r, c)))
+                return false;
+    return true;
+}
+
+void EA::LSTM::LSTMAbortIfNonFiniteMatrix(const char* tag,
+                                          const EAMatrix& m,
+                                          size_t calcBatchCallIdx,
+                                          size_t batchBase,
+                                          size_t B,
+                                          double aux0,
+                                          double aux1)
+{
+#if LSTM_ABORT_ON_NONFINITE_HEAD || LSTM_ABORT_ON_ABSURD_HEAD
+    const bool allFinite = LSTMMatrixAllFinite(m);
+    const double norm = FroNormEvalHost(m);
+    const bool absurd = !std::isfinite(norm) || (norm > LSTM_ABSURD_NORM_LIMIT);
+
+#if LSTM_ABORT_ON_NONFINITE_HEAD
+    const bool nonFinite = !allFinite;
+#else
+    const bool nonFinite = false;
+#endif
+
+#if LSTM_ABORT_ON_ABSURD_HEAD
+    const bool shouldAbort = nonFinite || absurd;
+#else
+    const bool shouldAbort = nonFinite;
+#endif
+
+    if (!shouldAbort)
+        return;
+
+    std::cout
+        << "DIAG_ABORT_NONFINITE"
+        << ",tag=" << tag
+        << ",calcBatchCall=" << calcBatchCallIdx
+        << ",batchBase=" << batchBase
+        << ",B=" << B
+        << ",rows=" << m.Shape()[0]
+        << ",cols=" << m.Shape()[1]
+        << ",norm=" << norm
+        << ",aux0=" << aux0
+        << ",aux1=" << aux1
+        << ",allFinite=" << (allFinite ? 1 : 0)
+        << ",absurd=" << (absurd ? 1 : 0);
+
+    const size_t rows = m.Shape()[0];
+    const size_t cols = m.Shape()[1];
+    const size_t maxRows = std::min<size_t>(rows, 2);
+    const size_t maxCols = std::min<size_t>(cols, 6);
+    for (size_t r = 0; r < maxRows; ++r)
+        for (size_t c = 0; c < maxCols; ++c)
+            std::cout << ",v" << r << "_" << c << "=" << m(r, c);
+    std::cout << "\n";
+    std::abort();
+#else
+    (void)tag;
+    (void)m;
+    (void)calcBatchCallIdx;
+    (void)batchBase;
+    (void)B;
+    (void)aux0;
+    (void)aux1;
+#endif
+}
+
 std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
     static size_t s_calcBatchCalls = 0;
@@ -2103,6 +2188,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             }
 #endif
             MetaNN::NSMetalMatMul::WaitForAll();
+            LSTMAbortIfNonFiniteMatrix("head_logits_post_affine",
+                                       head_logits_batch,
+                                       calcBatchCallIdx,
+                                       batchBase,
+                                       B,
+                                       FroNormEvalHost(returnHeadDirWeight),
+                                       FroNormEvalHost(returnHeadDirBias));
 
             d_logits_batch = EAMatrix(B, 3);
             auto lowLogits = MetaNN::LowerAccess(head_logits_batch);
@@ -2123,6 +2215,32 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 dptr[b * 3 + 0] = kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
                 dptr[b * 3 + 1] = kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
                 dptr[b * 3 + 2] = kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
+#if LSTM_ABORT_ON_NONFINITE_HEAD
+                if (!std::isfinite(z[0]) || !std::isfinite(z[1]) || !std::isfinite(z[2]) ||
+                    !std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]) ||
+                    !std::isfinite(dptr[b * 3 + 0]) || !std::isfinite(dptr[b * 3 + 1]) || !std::isfinite(dptr[b * 3 + 2]))
+                {
+                    std::cout
+                        << "DIAG_ABORT_NONFINITE"
+                        << ",tag=d_logits_row"
+                        << ",calcBatchCall=" << calcBatchCallIdx
+                        << ",batchBase=" << batchBase
+                        << ",B=" << B
+                        << ",row=" << b
+                        << ",cls=" << cls
+                        << ",z0=" << z[0]
+                        << ",z1=" << z[1]
+                        << ",z2=" << z[2]
+                        << ",p0=" << p[0]
+                        << ",p1=" << p[1]
+                        << ",p2=" << p[2]
+                        << ",d0=" << dptr[b * 3 + 0]
+                        << ",d1=" << dptr[b * 3 + 1]
+                        << ",d2=" << dptr[b * 3 + 2]
+                        << "\n";
+                    std::abort();
+                }
+#endif
 
                 sse += static_cast<double>(classWeight) *
                        (-std::log(std::max(1e-12f, p[cls])));
@@ -2189,6 +2307,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     yhat_samples.push_back(static_cast<float>(predClass));
 #endif
             }
+            LSTMAbortIfNonFiniteMatrix("d_logits_batch_post_softmax",
+                                       d_logits_batch,
+                                       calcBatchCallIdx,
+                                       batchBase,
+                                       B,
+                                       FroNormEvalHost(head_logits_batch),
+                                       0.0);
     #if !LSTM_INFERENCE_ONLY
             windowCount += B;
             windowsInBatch += B;
@@ -2273,6 +2398,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             AccumulateHeadGradsBatch3Class(d_headDirW_accum_f, d_headDirB_accum_f, h_batch, d_logits_batch);
 
             d_h_batch = BuildHeadDhBatch3Class(d_logits_batch, returnHeadDirWeight, LSTM_CORE_GRAD_SCALE);
+            LSTMAbortIfNonFiniteMatrix("d_h_batch_post_head_backprop",
+                                       d_h_batch,
+                                       calcBatchCallIdx,
+                                       batchBase,
+                                       B,
+                                       FroNormEvalHost(d_logits_batch),
+                                       FroNormEvalHost(returnHeadDirWeight));
             if (d_c_batch.Shape()[0] != B || d_c_batch.Shape()[1] != hidden_size)
                 d_c_batch = EAMatrix(B, hidden_size);
             zeroFill(d_c_batch);
@@ -2488,6 +2620,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     }
     #endif
     std::cout << "batch_count=" << windowCount << "\n";
+
     double loss_value = 0.0;
     loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
     std::cout << "loss_value=" << loss_value << "\n";
@@ -2712,15 +2845,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 
         #if !LSTM_DISABLE_UPDATES
-            SGDUpdate(param, d_param_f, lrCoreClipped);
-            SGDUpdate(bias,  d_bias_f,  lrCoreClipped);
-            if (targetType == TargetType::UpNeutralDownReturn) {
-                SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHeadClipped);
-                SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHeadClipped);
-            } else {
+        LSTMAbortIfNonFiniteMatrix("param_before_sgdupdate", param, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_param_accum));
+        SGDUpdate(param, d_param_f, lrCoreClipped);
+        LSTMAbortIfNonFiniteMatrix("param_after_sgdupdate",  param, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_param_accum));
+        LSTMAbortIfNonFiniteMatrix("bias_before_sgdupdate", bias, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_bias_accum));
+        SGDUpdate(bias, d_bias_f, lrCoreClipped);
+        LSTMAbortIfNonFiniteMatrix("bias_after_sgdupdate",  bias, calcBatchCallIdx, 0, 0, lrCoreClipped, FroNormEvalHost(d_bias_accum));
+        if (targetType == TargetType::UpNeutralDownReturn)
+        {
+            LSTMAbortIfNonFiniteMatrix("dirHeadWeight_before_sgdupdate", returnHeadDirWeight, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirW_accum_f));
+            SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHeadClipped);
+            LSTMAbortIfNonFiniteMatrix("dirHeadWeight_after_sgdupdate",  returnHeadDirWeight, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirW_accum_f));
+            LSTMAbortIfNonFiniteMatrix("dirHeadBias_before_sgdupdate", returnHeadDirBias, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirB_accum_f));
+            SGDUpdate(returnHeadDirBias, d_headDirB_f, lrHeadClipped);
+            LSTMAbortIfNonFiniteMatrix("dirHeadBias_after_sgdupdate",  returnHeadDirBias, calcBatchCallIdx, 0, 0, lrHeadClipped, FroNormEvalHost(d_headDirB_accum_f));
+        } else
+        {
                 SGDUpdate(returnHeadWeight, d_headW_f, lrHeadClipped);
                 SGDUpdate(returnHeadBias,   d_headB_f, lrHeadClipped);
-            }
+        }
         #endif
 #if LSTM_DIAG
                 if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
