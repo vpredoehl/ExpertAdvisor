@@ -1719,12 +1719,17 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
 
 bool EA::LSTM::LSTMMatrixAllFinite(const EAMatrix& m)
 {
-    const size_t rows = m.Shape()[0];
-    const size_t cols = m.Shape()[1];
-    for (size_t r = 0; r < rows; ++r)
-        for (size_t c = 0; c < cols; ++c)
-            if (!std::isfinite(m(r, c)))
-                return false;
+    MetaNN::EvalPlan::Inst().Eval();
+    MetaNN::NSMetalMatMul::WaitForAll();
+
+    EAMatrix hostCopy = DeepMatrixCopy(m);
+    auto low = MetaNN::LowerAccess(hostCopy);
+    const float* p = low.RawMemory();
+    const size_t n = hostCopy.Shape()[0] * hostCopy.Shape()[1];
+
+    for (size_t i = 0; i < n; ++i)
+        if (!std::isfinite(p[i]))
+            return false;
     return true;
 }
 
@@ -1737,8 +1742,27 @@ void EA::LSTM::LSTMAbortIfNonFiniteMatrix(const char* tag,
                                           double aux1)
 {
 #if LSTM_ABORT_ON_NONFINITE_HEAD || LSTM_ABORT_ON_ABSURD_HEAD
-    const bool allFinite = LSTMMatrixAllFinite(m);
-    const double norm = FroNormEvalHost(m);
+    MetaNN::EvalPlan::Inst().Eval();
+    MetaNN::NSMetalMatMul::WaitForAll();
+
+    EAMatrix hostCopy = DeepMatrixCopy(m);
+    auto low = MetaNN::LowerAccess(hostCopy);
+    const float* p = low.RawMemory();
+    const size_t rows = hostCopy.Shape()[0];
+    const size_t cols = hostCopy.Shape()[1];
+    const size_t n = rows * cols;
+
+    bool allFinite = true;
+    double sumsq = 0.0;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const double v = static_cast<double>(p[i]);
+        if (!std::isfinite(v))
+            allFinite = false;
+        if (std::isfinite(v))
+            sumsq += v * v;
+    }
+    const double norm = allFinite ? std::sqrt(sumsq) : std::numeric_limits<double>::quiet_NaN();
     const bool absurd = !std::isfinite(norm) || (norm > LSTM_ABSURD_NORM_LIMIT);
 
 #if LSTM_ABORT_ON_NONFINITE_HEAD
@@ -1762,21 +1786,19 @@ void EA::LSTM::LSTMAbortIfNonFiniteMatrix(const char* tag,
         << ",calcBatchCall=" << calcBatchCallIdx
         << ",batchBase=" << batchBase
         << ",B=" << B
-        << ",rows=" << m.Shape()[0]
-        << ",cols=" << m.Shape()[1]
+        << ",rows=" << rows
+        << ",cols=" << cols
         << ",norm=" << norm
         << ",aux0=" << aux0
         << ",aux1=" << aux1
         << ",allFinite=" << (allFinite ? 1 : 0)
         << ",absurd=" << (absurd ? 1 : 0);
 
-    const size_t rows = m.Shape()[0];
-    const size_t cols = m.Shape()[1];
     const size_t maxRows = std::min<size_t>(rows, 2);
     const size_t maxCols = std::min<size_t>(cols, 6);
     for (size_t r = 0; r < maxRows; ++r)
         for (size_t c = 0; c < maxCols; ++c)
-            std::cout << ",v" << r << "_" << c << "=" << m(r, c);
+            std::cout << ",v" << r << "_" << c << "=" << p[r * cols + c];
     std::cout << "\n";
     std::abort();
 #else
