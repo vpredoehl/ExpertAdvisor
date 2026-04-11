@@ -914,35 +914,69 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
                 "ComputeGateStateBatchFromContiguous: h_batch shape mismatch");
 #endif
 
-    auto lowGates = MetaNN::LowerAccess(gates_batch);
-    auto lowPrevC = MetaNN::LowerAccess(prevCellState);
+    MetaNN::EvalPlan::Inst().Eval();
+    MetaNN::NSMetalMatMul::WaitForAll();
+
+    EAMatrix gates_host = DeepMatrixCopy(gates_batch);
+    EAMatrix prev_c_host = DeepMatrixCopy(prevCellState);
+
+    auto lowGates = MetaNN::LowerAccess(gates_host);
+    const float* gatesPtr = lowGates.RawMemory();
+
+    auto lowPrevC = MetaNN::LowerAccess(prev_c_host);
+    const float* prevCPtr = lowPrevC.RawMemory();
+
     auto lowI = MetaNN::LowerAccess(gate_i_batch);
+    float* iPtr = lowI.MutableRawMemory();
+
     auto lowF = MetaNN::LowerAccess(gate_f_batch);
+    float* fPtr = lowF.MutableRawMemory();
+
     auto lowG = MetaNN::LowerAccess(gate_g_batch);
+    float* gPtr = lowG.MutableRawMemory();
+
     auto lowO = MetaNN::LowerAccess(gate_o_batch);
+    float* oPtr = lowO.MutableRawMemory();
+
     auto lowC = MetaNN::LowerAccess(c_batch);
+    float* cPtr = lowC.MutableRawMemory();
+
     auto lowH = MetaNN::LowerAccess(h_batch);
+    float* hPtr = lowH.MutableRawMemory();
 
-    auto gatesMem = lowGates.SharedMemory();
-    auto prevCMem = lowPrevC.SharedMemory();
-    auto iMem = lowI.SharedMemory();
-    auto fMem = lowF.SharedMemory();
-    auto gMem = lowG.SharedMemory();
-    auto oMem = lowO.SharedMemory();
-    auto cMem = lowC.SharedMemory();
-    auto hMem = lowH.SharedMemory();
+    auto sigmoidf = [](float x) -> float
+    {
+        return 1.0f / (1.0f + std::exp(-x));
+    };
 
-    MetaNN::NSMetalMatMul::GateStateFused(
-        gatesMem,
-        prevCMem,
-        iMem,
-        fMem,
-        gMem,
-        oMem,
-        cMem,
-        hMem,
-        B,
-        H);
+    for (size_t b = 0; b < B; ++b)
+    {
+        const size_t gatesRow = b * W;
+        const size_t stateRow = b * H;
+
+        for (size_t j = 0; j < H; ++j)
+        {
+            const float i_logit = gatesPtr[gatesRow + 0 * H + j];
+            const float f_logit = gatesPtr[gatesRow + 1 * H + j];
+            const float g_logit = gatesPtr[gatesRow + 2 * H + j];
+            const float o_logit = gatesPtr[gatesRow + 3 * H + j];
+            const float prev_c  = prevCPtr[stateRow + j];
+
+            const float i_val = sigmoidf(i_logit);
+            const float f_val = sigmoidf(f_logit);
+            const float g_val = std::tanh(g_logit);
+            const float o_val = sigmoidf(o_logit);
+            const float c_val = f_val * prev_c + i_val * g_val;
+            const float h_val = o_val * std::tanh(c_val);
+
+            iPtr[stateRow + j] = i_val;
+            fPtr[stateRow + j] = f_val;
+            gPtr[stateRow + j] = g_val;
+            oPtr[stateRow + j] = o_val;
+            cPtr[stateRow + j] = c_val;
+            hPtr[stateRow + j] = h_val;
+        }
+    }
 }
 
 // NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
@@ -1093,7 +1127,56 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 
     ComputeGateStateBatchFromContiguous(scratch.gates_batch,prevCellState,scratch.gate_i_batch,scratch.gate_f_batch,scratch.gate_g_batch,scratch.gate_o_batch,scratch.c,scratch.h);
     MetaNN::NSMetalMatMul::WaitForAll();    // Ensure all Metal writes are completed before deep copies
- #if LSTM_DIAG
+    LSTMAbortIfNonFiniteMatrix("forward_gates_batch_post_affine",
+                               scratch.gates_batch,
+                               0,
+                               0,
+                               scratch.gates_batch.Shape()[0],
+                               0.0,
+                               0.0);
+    LSTMAbortIfNonFiniteMatrix("forward_gate_i_post_activate",
+                               scratch.gate_i_batch,
+                               0,
+                               0,
+                               scratch.gate_i_batch.Shape()[0],
+                               0.0,
+                               0.0);
+    LSTMAbortIfNonFiniteMatrix("forward_gate_f_post_activate",
+                               scratch.gate_f_batch,
+                               0,
+                               0,
+                               scratch.gate_f_batch.Shape()[0],
+                               0.0,
+                               0.0);
+    LSTMAbortIfNonFiniteMatrix("forward_gate_g_post_activate",
+                               scratch.gate_g_batch,
+                               0,
+                               0,
+                               scratch.gate_g_batch.Shape()[0],
+                               0.0,
+                               0.0);
+    LSTMAbortIfNonFiniteMatrix("forward_gate_o_post_activate",
+                               scratch.gate_o_batch,
+                               0,
+                               0,
+                               scratch.gate_o_batch.Shape()[0],
+                               0.0,
+                               0.0);
+    LSTMAbortIfNonFiniteMatrix("forward_c_batch_post_update",
+                               scratch.c,
+                               0,
+                               0,
+                               scratch.c.Shape()[0],
+                               0.0,
+                               0.0);
+    LSTMAbortIfNonFiniteMatrix("forward_h_batch_post_update",
+                               scratch.h,
+                               0,
+                               0,
+                               scratch.h.Shape()[0],
+                               0.0,
+                               0.0);
+#if LSTM_DIAG
     if (diag_cond &&
         scratch.h.Shape()[0] > 0 &&
         scratch.h.Shape()[1] > 0)
