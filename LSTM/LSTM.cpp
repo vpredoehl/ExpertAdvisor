@@ -205,7 +205,7 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_CLIP_NORM_HEAD 100.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
-#define LSTM_CORE_GRAD_SCALE 5.0f
+#define LSTM_CORE_GRAD_SCALE 1.0f
 #endif
 #ifndef LSTM_WEIGHT_DECAY
 #define LSTM_WEIGHT_DECAY 0.0f
@@ -1676,17 +1676,21 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
             }
             break;
         case TargetType::UpNeutralDownReturn:
-            {
-                auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
-                float* wp = lowW.MutableRawMemory();
-                std::fill(wp, wp + hidden_size * returnHeadDirWeight.Shape()[1], 0.01f);
-            }
-            {
-                auto lowB = MetaNN::LowerAccess(returnHeadDirBias);
-                float* bp = lowB.MutableRawMemory();
-                std::fill(bp, bp + returnHeadDirBias.Shape()[1], 0.0f);
-            }
-            break;
+        {
+            auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
+            float* wp = lowW.MutableRawMemory();
+            const size_t rows = returnHeadDirWeight.Shape()[0];
+            const size_t cols = returnHeadDirWeight.Shape()[1];
+
+            const float headLimit = std::sqrt(6.0f / static_cast<float>(rows + cols));
+            for (size_t i = 0; i < rows * cols; ++i)
+                wp[i] = uniform_symmetric(headLimit);
+        }
+        {
+            auto lowB = MetaNN::LowerAccess(returnHeadDirBias);
+            float* bp = lowB.MutableRawMemory();
+            std::fill(bp, bp + returnHeadDirBias.Shape()[1], 0.0f);
+        }            break;
         default:    throw std::runtime_error("Invalid targetType in LSTM constructor");
     }
     
@@ -2756,13 +2760,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     const double exp_dHeadW = std::fabs(static_cast<double>(lrHeadClipped)) * n_cgHeadW_post;
                     const double exp_dHeadB = std::fabs(static_cast<double>(lrHeadClipped)) * n_cgHeadB_post;
 
-                    const auto badStepRatio = [](double actual, double expected) {
+                    const auto badStepRatio = [](double actual, double expected)
+                    {
                         if (!std::isfinite(actual) || !std::isfinite(expected)) return true;
-                        if (expected <= 1e-15) return actual > 1e-12;
-                        const double ratio = actual / expected;
+
+                        const double absActual = std::fabs(actual);
+                        const double absExpected = std::fabs(expected);
+                        const double ratio = absActual / absExpected;
+
+                        // For extremely small expected updates, ratio checks are too noisy.
+                        // Only fail if the actual update is non-trivially larger than the tiny expectation.
+                        if (absExpected < 1e-10)    return absActual > 1e-8;
                         return (ratio < 0.5 || ratio > 2.0);
                     };
-
                     const bool inconsistent_update =
                         badStepRatio(d_param_delta, exp_dParam) ||
                         badStepRatio(d_bias_delta,  exp_dBias ) ||
@@ -2802,7 +2812,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                         << ",dHeadW=" << d_headW_delta
                         << ",dHeadB=" << d_headB_delta
                         << "\n";
-
+                    std::cout << "CORE_UPDATE_RATIO core_vs_headW="
+                              << d_param_delta / (d_headW_delta + 1e-12)
+                              << "\n";
+                    
                     // Combined CSV-friendly line with pre/post norms and deltas
                     const double n_param_pre = FroNormEvalHost(param_before_snap);
                     const double n_bias_pre  = FroNormEvalHost(bias_before_snap);
