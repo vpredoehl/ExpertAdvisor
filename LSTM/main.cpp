@@ -40,7 +40,7 @@
 #include "scalable_tensor.h"
 
 
-static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
+static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
 {
     auto stats = [](const auto& v)
     {
@@ -89,8 +89,15 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
                            : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
             const float maxProb = std::max(probs[0], std::max(probs[1], probs[2]));
 
-            const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
-            const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+            const auto lastIt = it + window_size - 1;
+            const auto targetIt = it + window_size - 1 + prediction_horizon;
+            const float close_t = tensor.RawCloseAtIterator(lastIt);
+            const float close_target = tensor.RawCloseAtIterator(targetIt);
+            const float v_unscaled =
+                (std::isfinite(close_t) && std::isfinite(close_target) &&
+                 close_t > 0.0f && close_target > 0.0f)
+                    ? std::log(close_target / close_t)
+                    : 0.0f;
             const int actual = (v_unscaled > c_next_threshold) ? 2
                              : ((v_unscaled < -c_next_threshold) ? 0 : 1);
 
@@ -171,8 +178,15 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
     actRel.reserve(predRel.size()); actLogRet.reserve(predRel.size());
     for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
     {
-        const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
-        const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+        const auto lastIt = it + window_size - 1;
+        const auto targetIt = it + window_size - 1 + prediction_horizon;
+        const float close_t = tensor.RawCloseAtIterator(lastIt);
+        const float close_target = tensor.RawCloseAtIterator(targetIt);
+        const float v_unscaled =
+            (std::isfinite(close_t) && std::isfinite(close_target) &&
+             close_t > 0.0f && close_target > 0.0f)
+                ? std::log(close_target / close_t)
+                : 0.0f;
 
         if(std::fabs(v_unscaled) > 0.02f) gtOutliers++;
         actLogRet.push_back(v_unscaled);
@@ -355,7 +369,7 @@ int main(int argc, const char * argv[])
                                    {
                         if constexpr (inference_only)
                         {
-                            auto [correctLog, actedLog, windows, absErrMove, correctDir, actedDir] = ProcessBatchPredict(l, b);
+                            auto [correctLog, actedLog, windows, absErrMove, correctDir, actedDir] = ProcessBatchPredict(l, t, b);
                             totalCorrectLog += correctLog;
                             totalActedLog += actedLog;
                             totalWindows += windows;
@@ -372,8 +386,15 @@ int main(int argc, const char * argv[])
                                     const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
                                                    : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
 
-                                    const float v_scaled = (*(it + window_size - 1 + prediction_horizon))(0, closeCol);
-                                    const float v_unscaled = v_scaled / EA::LSTM::kFeatScale;
+                                    const auto lastIt = it + window_size - 1;
+                                    const auto targetIt = it + window_size - 1 + prediction_horizon;
+                                    const float close_t = t.RawCloseAtIterator(lastIt);
+                                    const float close_target = t.RawCloseAtIterator(targetIt);
+                                    const float v_unscaled =
+                                        (std::isfinite(close_t) && std::isfinite(close_target) &&
+                                         close_t > 0.0f && close_target > 0.0f)
+                                            ? std::log(close_target / close_t)
+                                            : 0.0f;
                                     const int actual = (v_unscaled > c_next_threshold) ? 2
                                                      : ((v_unscaled < -c_next_threshold) ? 0 : 1);
 

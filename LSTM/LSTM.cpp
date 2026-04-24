@@ -1959,9 +1959,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #warning "Insert prediction_horizon comment before targets loop"
         // NOTE: For faster learning and less noise, consider reducing prediction_horizon
         // to a shorter range (e.g., 1–4 timesteps) instead of larger horizons.
-        auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
-        const float* prebuilt_ptr = lowPrebuilt.RawMemory();
-
         for (auto it = first; it != last; ++it)
         {
             const size_t start = *it;
@@ -1971,8 +1968,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             const auto targetIt    = batch.begin() + static_cast<std::ptrdiff_t>(targetIdx);
             const float close_t_local      = t.RawCloseAtIterator(lastIt);
             const float close_target_local = t.RawCloseAtIterator(targetIt);
-            const float y_true_scaled      = prebuilt_ptr[targetIdx * F + closeCol];
-            const float y_true_logret      = y_true_scaled / EA::LSTM::kFeatScale;
+            const float y_true_logret =
+                (std::isfinite(close_t_local) && std::isfinite(close_target_local) &&
+                 close_t_local > 0.0f && close_target_local > 0.0f)
+                    ? std::log(close_target_local / close_t_local)
+                    : 0.0f;
 
             float regressionTarget = 0.0f;
             int classTarget = 1;
@@ -1994,8 +1994,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 regressionTarget = std::clamp(tval, -10.0f, 10.0f);
             }
 
-            if (targetType == TargetType::UpNeutralDownReturn)  wb.classTargets.push_back(classTarget);
-            else    wb.targets.push_back(regressionTarget);
+            wb.close_t.push_back(close_t_local);
+            wb.close_target.push_back(close_target_local);
+            if (targetType == TargetType::UpNeutralDownReturn) wb.classTargets.push_back(classTarget);
+            else wb.targets.push_back(regressionTarget);
         }
 
         const size_t B_final = (targetType == TargetType::UpNeutralDownReturn)
