@@ -9,7 +9,7 @@
 #define LSTM_INFERENCE_ONLY 0
 #endif
 
-#define LSTM_DEBUG_PRINTS 0
+#define LSTM_DEBUG_PRINTS 1
 #define LSTM_DEBUG_INTERNAL_PRINTS 0
 
 #ifndef LSTM_DISABLE_UPDATES
@@ -27,4 +27,12 @@ constexpr bool load_latest = false;
 
 // 1: overwrite the loaded/latest model_id when saving; 0: create a new model snapshot
 constexpr bool save_overwrite = false;
+
+// Gate/state execution mode:
+//   0 = CPU/reference only
+//   1 = CPU/reference + validate fused Metal against CPU
+//   2 = fused Metal only (no CPU fallback)
+#ifndef LSTM_GATESTATE_MODE
+#define LSTM_GATESTATE_MODE 2
+#endif
 

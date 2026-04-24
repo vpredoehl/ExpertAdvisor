@@ -13,6 +13,19 @@
 
 namespace NNUtils {
 
+template <typename Mat>
+inline Mat DeepCopyMatrix(const Mat& src)
+{
+    auto eval = MetaNN::Evaluate(src);
+    Mat out(eval.Shape()[0], eval.Shape()[1]);
+    auto lowSrc = MetaNN::LowerAccess(eval);
+    auto lowOut = MetaNN::LowerAccess(out);
+    std::copy(lowSrc.RawMemory(),
+              lowSrc.RawMemory() + eval.Shape()[0] * eval.Shape()[1],
+              lowOut.MutableRawMemory());
+    return out;
+}
+
 // Internal helper: fill an already-allocated matrix with the horizontal concatenation of parts
 template <typename T, typename DevT>
 inline void FillConcatCols(MetaNN::Matrix<T, DevT>& out,
@@ -260,11 +273,8 @@ MetaNN::Matrix<T, DevT> SliceCols(const MetaNN::Matrix<T, DevT>& src,
 #endif
     const size_t rows = src.Shape()[0];
     const size_t srcCols = src.Shape()[1];
-    // Fast path: if taking all columns starting at 0, return a direct copy
-    if (colOffset == 0 && colCount == srcCols)
-    {
-        return src;
-    }
+    // Fast path: if taking all columns starting at 0, return a deep copy.
+    if (colOffset == 0 && colCount == srcCols)  return DeepCopyMatrix(src);
     MetaNN::Matrix<T, DevT> out(rows, colCount);
     auto lowSrc = MetaNN::LowerAccess(src);
     auto lowOut = MetaNN::LowerAccess(out);
@@ -416,8 +426,9 @@ MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)
     using SrcElem = typename EvalMat::ElementType;
     using SrcDev  = typename EvalMat::DeviceType;
 
-    // Fast path: if element and device types already match, return as-is
-    if constexpr (std::is_same_v<SrcElem, T> && std::is_same_v<SrcDev, DevT>)   return eval;
+    // Fast path: if element and device types already match, still materialize a
+    // deep copy so CastMatrix always returns independent storage.
+    if constexpr (std::is_same_v<SrcElem, T> && std::is_same_v<SrcDev, DevT>)   return DeepCopyMatrix(eval);
 
     // Otherwise, cast element type and/or device by copying
     MetaNN::Matrix<T, DevT> dst(eval.Shape()[0], eval.Shape()[1]);
@@ -432,6 +443,3 @@ MetaNN::Matrix<T, DevT> CastMatrix(const SrcMat& src)
 }
 
 } // namespace NNUtils
-
-
-

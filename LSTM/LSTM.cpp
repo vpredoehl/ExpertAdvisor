@@ -421,19 +421,6 @@ void zeroFill(Mat& m)
     std::fill(low.MutableRawMemory(), low.MutableRawMemory() + m.Shape()[0] * m.Shape()[1], static_cast<ElemT>(0));
 }
 
-template <typename Mat>
-auto DeepMatrixCopy(const Mat& src) -> Mat
-{
-    Mat out(src.Shape()[0], src.Shape()[1]);
-    auto srcEval = MetaNN::Evaluate(src);
-    auto lowSrc = MetaNN::LowerAccess(srcEval);
-    auto lowOut = MetaNN::LowerAccess(out);
-    std::copy(lowSrc.RawMemory(),
-              lowSrc.RawMemory() + src.Shape()[0] * src.Shape()[1],
-              lowOut.MutableRawMemory());
-    return out;
-}
-
 template<typename MatP, typename MatG>
 void SGDUpdate(MatP& P, const MatG& G, float lr)
 {
@@ -675,7 +662,7 @@ inline auto EA::LSTM::BuildHeadDhBatch3Class(const EAMatrix& d_logits_batch,
     auto h = expr.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
 
-    EAMatrix d_h = DeepMatrixCopy(h.Data());
+    EAMatrix d_h = NNUtils::DeepCopyMatrix(h.Data());
     auto lowDh = MetaNN::LowerAccess(d_h);
     float* dhp = lowDh.MutableRawMemory();
     const size_t n = d_h.Shape()[0] * d_h.Shape()[1];
@@ -888,58 +875,184 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
     LSTM_ASSERT(h_batch.Shape()[0] == B && h_batch.Shape()[1] == H,
                 "ComputeGateStateBatchFromContiguous: h_batch shape mismatch");
 #endif
+    auto run_cpu_reference = [&](EAMatrix& out_i,
+                                 EAMatrix& out_f,
+                                 EAMatrix& out_g,
+                                 EAMatrix& out_o,
+                                 EAMatrix& out_c,
+                                 EAMatrix& out_h)
+    {
+        auto lowGatesRef = MetaNN::LowerAccess(gates_batch);
+        auto lowPrevCRef = MetaNN::LowerAccess(prevCellState);
+        auto lowIRef = MetaNN::LowerAccess(out_i);
+        auto lowFRef = MetaNN::LowerAccess(out_f);
+        auto lowGRef = MetaNN::LowerAccess(out_g);
+        auto lowORef = MetaNN::LowerAccess(out_o);
+        auto lowCRef = MetaNN::LowerAccess(out_c);
+        auto lowHRef = MetaNN::LowerAccess(out_h);
 
-    auto lowGates = MetaNN::LowerAccess(gates_batch);
-    auto lowPrevC = MetaNN::LowerAccess(prevCellState);
-    auto lowI = MetaNN::LowerAccess(gate_i_batch);
-    auto lowF = MetaNN::LowerAccess(gate_f_batch);
-    auto lowG = MetaNN::LowerAccess(gate_g_batch);
-    auto lowO = MetaNN::LowerAccess(gate_o_batch);
-    auto lowC = MetaNN::LowerAccess(c_batch);
-    auto lowH = MetaNN::LowerAccess(h_batch);
+        const float* gatesPtr = lowGatesRef.RawMemory();
+        const float* prevCPtr = lowPrevCRef.RawMemory();
+        float* iPtr = lowIRef.MutableRawMemory();
+        float* fPtr = lowFRef.MutableRawMemory();
+        float* gPtr = lowGRef.MutableRawMemory();
+        float* oPtr = lowORef.MutableRawMemory();
+        float* cPtr = lowCRef.MutableRawMemory();
+        float* hPtr = lowHRef.MutableRawMemory();
 
-    auto gatesMem = lowGates.SharedMemory();
-    auto prevCMem = lowPrevC.SharedMemory();
-    auto iMem = lowI.SharedMemory();
-    auto fMem = lowF.SharedMemory();
-    auto gMem = lowG.SharedMemory();
-    auto oMem = lowO.SharedMemory();
-    auto cMem = lowC.SharedMemory();
-    auto hMem = lowH.SharedMemory();
+        auto sigmoid = [](float x) -> float
+        {
+            return 1.0f / (1.0f + std::exp(-x));
+        };
 
-    MetaNN::NSMetalMatMul::GateStateFused(
-        gatesMem,
-        prevCMem,
-        iMem,
-        fMem,
-        gMem,
-        oMem,
-        cMem,
-        hMem,
-        B,
-        H);
-}
+        for (size_t b = 0; b < B; ++b)
+        {
+            const size_t gateBase = b * (4 * H);
+            const size_t stateBase = b * H;
+            for (size_t h = 0; h < H; ++h)
+            {
+                const float i_val = sigmoid(gatesPtr[gateBase + 0 * H + h]);
+                const float f_val = sigmoid(gatesPtr[gateBase + 1 * H + h]);
+                const float g_val = std::tanh(gatesPtr[gateBase + 2 * H + h]);
+                const float o_val = sigmoid(gatesPtr[gateBase + 3 * H + h]);
+                const float c_prev = prevCPtr[stateBase + h];
+                const float c_val = f_val * c_prev + i_val * g_val;
+                const float h_val = o_val * std::tanh(c_val);
 
-// NOTE: SliceRows is kept only for debugging/compatibility. Do NOT use it in the training hot path.
-// Prefer keeping tensors in batched (B, *) form and using GatherRows/RepeatRows/ViewRows with
-// forwardStepBatch/backwardStepBatch and batched heads.
-[[deprecated("Avoid SliceRows in training hot path; use batched views/ops instead")]]
-inline auto EA::LSTM::SliceRows(const EAMatrix& src, size_t row0, size_t rowCount) -> EAMatrix
-{
-#if !LSTM_INFERENCE_ONLY
-    // SliceRows is poison for throughput in training hot path. Use batched (B, *) ops instead.
-    // This assert helps catch accidental use during training builds.
-    LSTM_ASSERT(false, "SliceRows() should not be used in training path; refactor to batched ops.");
+                iPtr[stateBase + h] = i_val;
+                fPtr[stateBase + h] = f_val;
+                gPtr[stateBase + h] = g_val;
+                oPtr[stateBase + h] = o_val;
+                cPtr[stateBase + h] = c_val;
+                hPtr[stateBase + h] = h_val;
+            }
+        }
+    };
+
+#if LSTM_GATESTATE_MODE == 0
+    run_cpu_reference(gate_i_batch,
+                      gate_f_batch,
+                      gate_g_batch,
+                      gate_o_batch,
+                      c_batch,
+                      h_batch);
+#elif LSTM_GATESTATE_MODE == 1
+    EAMatrix gate_i_ref(B, H);
+    EAMatrix gate_f_ref(B, H);
+    EAMatrix gate_g_ref(B, H);
+    EAMatrix gate_o_ref(B, H);
+    EAMatrix c_ref(B, H);
+    EAMatrix h_ref(B, H);
+
+    run_cpu_reference(gate_i_ref,
+                      gate_f_ref,
+                      gate_g_ref,
+                      gate_o_ref,
+                      c_ref,
+                      h_ref);
+
+    {
+        auto lowGates = MetaNN::LowerAccess(gates_batch);
+        auto lowPrevC = MetaNN::LowerAccess(prevCellState);
+        auto lowI = MetaNN::LowerAccess(gate_i_batch);
+        auto lowF = MetaNN::LowerAccess(gate_f_batch);
+        auto lowG = MetaNN::LowerAccess(gate_g_batch);
+        auto lowO = MetaNN::LowerAccess(gate_o_batch);
+        auto lowC = MetaNN::LowerAccess(c_batch);
+        auto lowH = MetaNN::LowerAccess(h_batch);
+
+        auto gatesMem = lowGates.SharedMemory();
+        auto prevCMem = lowPrevC.SharedMemory();
+        auto iMem = lowI.SharedMemory();
+        auto fMem = lowF.SharedMemory();
+        auto gMem = lowG.SharedMemory();
+        auto oMem = lowO.SharedMemory();
+        auto cMem = lowC.SharedMemory();
+        auto hMem = lowH.SharedMemory();
+
+        MetaNN::NSMetalMatMul::GateStateFused(
+            gatesMem,
+            prevCMem,
+            iMem,
+            fMem,
+            gMem,
+            oMem,
+            cMem,
+            hMem,
+            B,
+            H);
+    }
+    MetaNN::NSMetalMatMul::WaitForAll();
+
+    auto validate_same = [&](const char* name, const EAMatrix& actual, const EAMatrix& expected)
+    {
+        auto lowActual = MetaNN::LowerAccess(actual);
+        auto lowExpected = MetaNN::LowerAccess(expected);
+        const float* aptr = lowActual.RawMemory();
+        const float* eptr = lowExpected.RawMemory();
+        const size_t n = actual.Shape()[0] * actual.Shape()[1];
+        constexpr float absTol = 1e-5f;
+        constexpr float relTol = 1e-4f;
+
+        for (size_t idx = 0; idx < n; ++idx)
+        {
+            const float a = aptr[idx];
+            const float e = eptr[idx];
+            const float absDiff = std::fabs(a - e);
+            const float relDiff = absDiff / std::max(1.0f, std::fabs(e));
+            if (absDiff > absTol && relDiff > relTol)
+            {
+                std::ostringstream oss;
+                oss << "ComputeGateStateBatchFromContiguous: " << name
+                    << " mismatch at linear idx=" << idx
+                    << " actual=" << a
+                    << " expected=" << e
+                    << " absDiff=" << absDiff
+                    << " relDiff=" << relDiff;
+                throw std::runtime_error(oss.str());
+            }
+        }
+    };
+
+    validate_same("gate_i", gate_i_batch, gate_i_ref);
+    validate_same("gate_f", gate_f_batch, gate_f_ref);
+    validate_same("gate_g", gate_g_batch, gate_g_ref);
+    validate_same("gate_o", gate_o_batch, gate_o_ref);
+    validate_same("c", c_batch, c_ref);
+    validate_same("h", h_batch, h_ref);
+#else
+    {
+        auto lowGates = MetaNN::LowerAccess(gates_batch);
+        auto lowPrevC = MetaNN::LowerAccess(prevCellState);
+        auto lowI = MetaNN::LowerAccess(gate_i_batch);
+        auto lowF = MetaNN::LowerAccess(gate_f_batch);
+        auto lowG = MetaNN::LowerAccess(gate_g_batch);
+        auto lowO = MetaNN::LowerAccess(gate_o_batch);
+        auto lowC = MetaNN::LowerAccess(c_batch);
+        auto lowH = MetaNN::LowerAccess(h_batch);
+
+        auto gatesMem = lowGates.SharedMemory();
+        auto prevCMem = lowPrevC.SharedMemory();
+        auto iMem = lowI.SharedMemory();
+        auto fMem = lowF.SharedMemory();
+        auto gMem = lowG.SharedMemory();
+        auto oMem = lowO.SharedMemory();
+        auto cMem = lowC.SharedMemory();
+        auto hMem = lowH.SharedMemory();
+
+        MetaNN::NSMetalMatMul::GateStateFused(
+            gatesMem,
+            prevCMem,
+            iMem,
+            fMem,
+            gMem,
+            oMem,
+            cMem,
+            hMem,
+            B,
+            H);
+    }
 #endif
-    const size_t cols = src.Shape()[1];
-    EAMatrix out(rowCount, cols);
-    auto srcEval = MetaNN::Evaluate(src);
-    auto lowSrc = MetaNN::LowerAccess(srcEval);
-    auto lowOut = MetaNN::LowerAccess(out);
-    const float* sptr = lowSrc.RawMemory();
-    float* dptr = lowOut.MutableRawMemory();
-    std::copy(sptr + row0 * cols, sptr + (row0 + rowCount) * cols, dptr);
-    return out;
 }
 
 inline void EA::LSTM::ScatterRows(EAMatrix& dst, const EAMatrix& src, size_t row0)
@@ -1078,10 +1191,11 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 #endif
-
     ComputeGateStateBatchFromContiguous(scratch.gates_batch,prevCellState,scratch.gate_i_batch,scratch.gate_f_batch,scratch.gate_g_batch,scratch.gate_o_batch,scratch.c,scratch.h);
+#if LSTM_GATESTATE_MODE == 2
     MetaNN::NSMetalMatMul::WaitForAll();    // Ensure all Metal writes are completed before deep copies
- #if LSTM_DIAG
+#endif
+#if LSTM_DIAG
     if (diag_cond &&
         scratch.h.Shape()[0] > 0 &&
         scratch.h.Shape()[1] > 0)
@@ -1102,14 +1216,14 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     BatchStepCache sc
     {
         x_t,    // SHOULD THIS ALSO BE CLONED??
-        DeepMatrixCopy(prevHiddenState),
-        DeepMatrixCopy(prevCellState),
-        DeepMatrixCopy(scratch.gate_i_batch),
-        DeepMatrixCopy(scratch.gate_f_batch),
-        DeepMatrixCopy(scratch.gate_g_batch),
-        DeepMatrixCopy(scratch.gate_o_batch),
-        DeepMatrixCopy(scratch.c),
-        DeepMatrixCopy(scratch.h)
+        NNUtils::DeepCopyMatrix(prevHiddenState),
+        NNUtils::DeepCopyMatrix(prevCellState),
+        NNUtils::DeepCopyMatrix(scratch.gate_i_batch),
+        NNUtils::DeepCopyMatrix(scratch.gate_f_batch),
+        NNUtils::DeepCopyMatrix(scratch.gate_g_batch),
+        NNUtils::DeepCopyMatrix(scratch.gate_o_batch),
+        NNUtils::DeepCopyMatrix(scratch.c),
+        NNUtils::DeepCopyMatrix(scratch.h)
     };
 
     prevCellState = sc.c;
@@ -1226,8 +1340,8 @@ inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
 #endif
 
     MetaNN::NSMetalMatMul::WaitForAll();
-    prevCellState   = DeepMatrixCopy(c_2d_handle.Data());   // sc.c;
-    prevHiddenState = DeepMatrixCopy(h_2d_handle.Data());   //sc.h;
+    prevCellState   = NNUtils::DeepCopyMatrix(c_2d_handle.Data());   // sc.c;
+    prevHiddenState = NNUtils::DeepCopyMatrix(h_2d_handle.Data());   //sc.h;
 }
 
 inline auto EA::LSTM::predictAndLoss(const EAMatrix& h_T,
@@ -1898,14 +2012,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #if LSTM_DIAG
         const bool diag_capture = (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0);
         // Pre-update snapshots for true delta norms (compute unconditionally for simplicity)
-        EAMatrix param_before_snap = DeepMatrixCopy(param);
-        EAMatrix bias_before_snap  = DeepMatrixCopy(bias);
+        EAMatrix param_before_snap = NNUtils::DeepCopyMatrix(param);
+        EAMatrix bias_before_snap  = NNUtils::DeepCopyMatrix(bias);
         EAMatrix headW_before_snap = (targetType == TargetType::UpNeutralDownReturn)
-            ? DeepMatrixCopy(returnHeadDirWeight)
-            : DeepMatrixCopy(returnHeadWeight);
+            ? NNUtils::DeepCopyMatrix(returnHeadDirWeight)
+            : NNUtils::DeepCopyMatrix(returnHeadWeight);
         EAMatrix headB_before_snap = (targetType == TargetType::UpNeutralDownReturn)
-            ? DeepMatrixCopy(returnHeadDirBias)
-            : DeepMatrixCopy(returnHeadBias);
+            ? NNUtils::DeepCopyMatrix(returnHeadDirBias)
+            : NNUtils::DeepCopyMatrix(returnHeadBias);
 #endif
 
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
@@ -2709,4 +2823,3 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         case TargetType::PercentReturn: default: return raw; // already percent move
     }
 }
-
