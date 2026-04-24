@@ -60,6 +60,7 @@ constexpr auto hidden_size = 64;
 constexpr auto feature_size = 32;
 //constexpr auto n_in = feature_size + hidden_size;
 constexpr auto n_out = hidden_size;
+constexpr size_t direction_output_size = 3;
 
 // sequence of features
 constexpr CandleTF candle_duration = CandleTF::m15; // default cycle
@@ -101,4 +102,3 @@ using Batch = Window;
 
 
 #endif /* Params_h */
-

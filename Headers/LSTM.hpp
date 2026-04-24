@@ -83,11 +83,11 @@ namespace EA
         LSTM_ASSERT(yMat.Shape()[0] == 1 && yMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
         return yMat(0, 0);
     }
-    std::array<float, 3> PredictDirLogits3ClassFromH(const EAMatrix& h)
+    std::array<float, direction_output_size> PredictDirLogits3ClassFromH(const EAMatrix& h)
     {
         auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // 1x3 logits
         auto zMat = Evaluate(z);
-        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 3, "PredictDirLogits3ClassFromH: expected 1x3 result");
+        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == direction_output_size, "PredictDirLogits3ClassFromH: expected 1x3 result");
         return { zMat(0,0), zMat(0,1), zMat(0,2) };
     }
 
@@ -165,13 +165,15 @@ public:
     EAMatrix returnHeadWeight { hidden_size, 1 };
     EAMatrix returnHeadBias { 1, 1 };
     // 3-class classification head (down / neutral / up)
-    EAMatrix returnHeadDirWeight { hidden_size, 3 };
-    EAMatrix returnHeadDirBias { 1, 3 };
+    EAMatrix returnHeadDirWeight { hidden_size, direction_output_size };
+    EAMatrix returnHeadDirBias { 1, direction_output_size };
     
     // Simple SGD learning rate for head-only training
     float learningRate = 1e-3f / 3; // or /2 or /4
     
     LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0, TargetType explicitTargetType = TargetType::UpNeutralDownReturn);
+
+    void PrintOutputHeadShapes() const;
     LSTM() = delete;
     
     void SetLearningRate(float lr) { learningRate = lr; }
@@ -181,7 +183,7 @@ public:
     float PredictNextReturn(const Window& w, bool resetState = true);
     float PredictNextRelativeMove(const Window& w, bool resetState = true);
     int PredictNextDirectionClass(const Window& w, bool resetState = true);
-    std::array<float, 3> PredictNextDirectionProbs(const Window& w, bool resetState = true);
+    std::array<float, direction_output_size> PredictNextDirectionProbs(const Window& w, bool resetState = true);
     
     std::vector<float> RollingPredictNextLogReturn(const Window& batch, bool resetAtStart = true);
     std::vector<float> RollingPredictNextClose(const Window& batch, bool resetAtStart = true);
@@ -254,4 +256,3 @@ private:
 }
 
 #endif /* LSTM_hpp */
-

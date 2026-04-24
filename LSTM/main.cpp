@@ -78,7 +78,7 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Window& b) -> std::tuple<size
         actClass.reserve(nWindows);
         predMaxProb.reserve(nWindows);
 
-        size_t confusion[3][3] = {};
+        size_t confusion[direction_output_size][direction_output_size] = {};
 
         for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
         {
@@ -346,7 +346,7 @@ int main(int argc, const char * argv[])
             double totalAbsErrMove = 0.0;
             size_t totalCorrectDir = 0;
             size_t totalActedDir = 0;
-            size_t totalConfusion[3][3] = {};
+            size_t totalConfusion[direction_output_size][direction_output_size] = {};
             // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
             std::cout << std::setprecision(15);
                 for(auto e = 0; e < epoch_count; e++)
@@ -560,4 +560,3 @@ int main(int argc, const char * argv[])
 
     return 0;
 }
-

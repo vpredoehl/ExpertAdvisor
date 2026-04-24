@@ -40,9 +40,9 @@
 // Distribution Logging (3-class)
 // ============================
 
-static size_t epoch_actual[3] = {0,0,0};
-static size_t epoch_pred[3]   = {0,0,0};
-static size_t epoch_conf[3][3] = {{0}};
+static size_t epoch_actual[direction_output_size] = {0,0,0};
+static size_t epoch_pred[direction_output_size]   = {0,0,0};
+static size_t epoch_conf[direction_output_size][direction_output_size] = {{0}};
 static size_t epoch_total = 0;
 static size_t epoch_correct = 0;
 
@@ -106,10 +106,11 @@ void EA::LSTM::PrintMatrixSummary(const char* label,
 }
 static void Log3ClassSample(int actual, int predicted)
 {
-    if (actual >=0 && actual <3) epoch_actual[actual]++;
-    if (predicted >=0 && predicted <3) epoch_pred[predicted]++;
+    if (actual >=0 && actual < static_cast<int>(direction_output_size)) epoch_actual[actual]++;
+    if (predicted >=0 && predicted < static_cast<int>(direction_output_size)) epoch_pred[predicted]++;
 
-    if (actual >=0 && actual <3 && predicted >=0 && predicted <3)
+    if (actual >=0 && actual < static_cast<int>(direction_output_size) &&
+        predicted >=0 && predicted < static_cast<int>(direction_output_size))
         epoch_conf[actual][predicted]++;
 
     epoch_total++;
@@ -135,7 +136,7 @@ void PrintAndResetDistribution()
            frac(epoch_pred[2], epoch_total));
 
     printf("EPOCH_3CLASS_CONFUSION_MATRIX rows=actual cols=predicted\n");
-    for (int i=0;i<3;i++)
+    for (size_t i = 0; i < direction_output_size; ++i)
     {
         printf("row%d: %zu %zu %zu\n",
                i,
@@ -150,11 +151,11 @@ void PrintAndResetDistribution()
            frac(epoch_correct, epoch_total));
 
     // reset
-    for (int i=0;i<3;i++)
+    for (size_t i = 0; i < direction_output_size; ++i)
     {
         epoch_actual[i]=0;
         epoch_pred[i]=0;
-        for (int j=0;j<3;j++) epoch_conf[i][j]=0;
+        for (size_t j = 0; j < direction_output_size; ++j) epoch_conf[i][j]=0;
     }
     epoch_total = 0;
     epoch_correct = 0;
@@ -508,7 +509,26 @@ struct EA::LSTM::ForwardBatchScratch
 
 // Member function definitions moved to EA::LSTM
 
-std::array<float, 3> EA::LSTM::PredictNextDirectionProbs(const Window& w, bool resetState)
+void EA::LSTM::PrintOutputHeadShapes() const
+{
+    std::cout << "[LSTM] returnHeadWeight shape: ("
+              << returnHeadWeight.Shape()[0] << ", "
+              << returnHeadWeight.Shape()[1] << ")" << std::endl;
+
+    std::cout << "[LSTM] returnHeadBias shape: ("
+              << returnHeadBias.Shape()[0] << ", "
+              << returnHeadBias.Shape()[1] << ")" << std::endl;
+
+    std::cout << "[LSTM] returnHeadDirWeight shape: ("
+              << returnHeadDirWeight.Shape()[0] << ", "
+              << returnHeadDirWeight.Shape()[1] << ")" << std::endl;
+
+    std::cout << "[LSTM] returnHeadDirBias shape: ("
+              << returnHeadDirBias.Shape()[0] << ", "
+              << returnHeadDirBias.Shape()[1] << ")" << std::endl;
+}
+
+std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(const Window& w, bool resetState)
 {
     if (resetState)
         ResetPreviousState();
@@ -548,12 +568,18 @@ std::array<float, 3> EA::LSTM::PredictNextDirectionProbs(const Window& w, bool r
     }
 
     auto logits = MetaNN::Dot(prevHiddenState, returnHeadDirWeight) + returnHeadDirBias;
+    static bool printed_head_shapes = false;
+    if (!printed_head_shapes)
+    {
+        PrintOutputHeadShapes();
+        printed_head_shapes = true;
+    }
     auto predH = logits.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
 
     const auto& z = predH.Data();
-    float zz[3] = { z(0, 0), z(0, 1), z(0, 2) };
-    float p[3];
+    float zz[direction_output_size] = { z(0, 0), z(0, 1), z(0, 2) };
+    float p[direction_output_size];
     Softmax3(zz, p);
 
     return { p[0], p[1], p[2] };
@@ -1364,17 +1390,17 @@ auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, cons
     // Compute logits z = h_T · W + b (1x3)
     auto z = Dot(h_T, W) + b;
     auto zMat = Evaluate(z);
-    LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == 3, "predictAndLoss3Class: expected 1x3 logits");
+    LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == direction_output_size, "predictAndLoss3Class: expected 1x3 logits");
     const float z0 = zMat(0,0), z1 = zMat(0,1), z2 = zMat(0,2);
 
     // Softmax probabilities
-    float p[3];
-    float zArr[3] = { z0, z1, z2 };
+    float p[direction_output_size];
+    float zArr[direction_output_size] = { z0, z1, z2 };
     Softmax3(zArr, p);
 
     // One-hot target
-    float y[3] = {0.f, 0.f, 0.f};
-    if (targetClass >= 0 && targetClass < 3) y[targetClass] = 1.f;
+    float y[direction_output_size] = {0.f, 0.f, 0.f};
+    if (targetClass >= 0 && targetClass < static_cast<int>(direction_output_size)) y[targetClass] = 1.f;
 
     // Per-class cross-entropy components (unweighted)
     // loss_k = - y_k * log(max(p_k, eps))
@@ -1395,7 +1421,7 @@ auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, cons
     float dL_dz2 = wUp      * (p[2] - y[2]);
 
     // Package gradients into a 1x3 matrix for downstream accumulation
-    EAMatrix d_logits(1, 3);
+    EAMatrix d_logits(1, direction_output_size);
     d_logits.SetValue(0, 0, dL_dz0);
     d_logits.SetValue(0, 1, dL_dz1);
     d_logits.SetValue(0, 2, dL_dz2);
@@ -1414,8 +1440,8 @@ float EA::LSTM::predictOnly(const EAMatrix& h_T,
         auto predH = logits.EvalRegister();
         MetaNN::EvalPlan::Inst().Eval();
         const auto& z = predH.Data();
-        float zz[3] = { z(0, 0), z(0, 1), z(0, 2) };
-        float p[3];
+        float zz[direction_output_size] = { z(0, 0), z(0, 1), z(0, 2) };
+        float p[direction_output_size];
         Softmax3(zz, p);
         const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
         return (predClass == 0) ? -1.0f : ((predClass == 1) ? 0.0f : 1.0f);
@@ -1659,8 +1685,8 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
     prevCellState = EAMatrix(1, hidden_size);
     returnHeadWeight = EAMatrix(hidden_size, 1);
     returnHeadBias = EAMatrix(1, 1);
-    returnHeadDirWeight = EAMatrix(hidden_size, 3);
-    returnHeadDirBias = EAMatrix(1, 3);
+    returnHeadDirWeight = EAMatrix(hidden_size, direction_output_size);
+    returnHeadDirBias = EAMatrix(1, direction_output_size);
 #if 0
     // Deterministic constant initialization for verification
     const float weightInit = 0.1f;
@@ -1748,11 +1774,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
     }
     
 #if LSTM_DEBUG_PRINTS
-    std::cout << "returnHeadWeight [ rows, cols ] = [ " << returnHeadWeight.Shape()[0] << "," << returnHeadWeight.Shape()[1] << " ]" << std::endl
-        << "returnHeadWeight(0,0): " << returnHeadWeight(0,0) << std::endl
-    << "returnHeadBias(0,0): " << returnHeadBias(0,0) << std::endl
-        << "   returnHeadWeight(1,0): " << returnHeadWeight(1,0) << std::endl
-        << "   returnHeadWeight(hidden_size-1,0)" << returnHeadWeight(hidden_size-1,0) << std::endl;
+    PrintOutputHeadShapes();
 #endif
     long_term = lt; short_term = st;
 #endif
@@ -1762,7 +1784,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
     static size_t s_calcBatchCalls = 0;
     const size_t calcBatchCallIdx = s_calcBatchCalls++;
-    EAMatrix head_logits_batch(effectiveMiniBatchWindows, 3);
+    EAMatrix head_logits_batch(effectiveMiniBatchWindows, direction_output_size);
 
     double sse = 0.0;
     size_t mseCount = 0;
@@ -2075,13 +2097,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         }
 
         std::vector<float> errs(B, 0.0f);
-        EAMatrix d_logits_batch(1,3); // for 3-class path (declared once for scope)
+        EAMatrix d_logits_batch(1, direction_output_size); // for 3-class path (declared once for scope)
 
         // Batched head forward and loss on (B, H)
         if (targetType == TargetType::UpNeutralDownReturn)
         {
-            if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != 3)
-                head_logits_batch = EAMatrix(B, 3);
+            if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != direction_output_size)
+                head_logits_batch = EAMatrix(B, direction_output_size);
             if (calcBatchCallIdx == 0 && batchBase == 0)    PrintMatrixSummary("DIAG_PRE_HEAD_h_batch", h_batch);
 #if LSTM_BATCH_PROFILE
             {
@@ -2096,7 +2118,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto biasMem = lowBias.SharedMemory();
                 auto yMem = lowY.SharedMemory();
 
-                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, 3);
+                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
             }
 #else
             {
@@ -2110,12 +2132,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto biasMem = lowBias.SharedMemory();
                 auto yMem = lowY.SharedMemory();
 
-                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, 3);
+                MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
             }
 #endif
             MetaNN::NSMetalMatMul::WaitForAll();
 
-            d_logits_batch = EAMatrix(B, 3);
+            d_logits_batch = EAMatrix(B, direction_output_size);
             auto lowLogits = MetaNN::LowerAccess(head_logits_batch);
             const float* lptr = lowLogits.RawMemory();
             auto lowD = MetaNN::LowerAccess(d_logits_batch);
@@ -2123,17 +2145,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             for (size_t b = 0; b < B; ++b)
             {
-                const float* z = lptr + b * 3;
-                float p[3];
+                const float* z = lptr + b * direction_output_size;
+                float p[direction_output_size];
                 Softmax3(z, p);
                 const int cls = wb.classTargets[b];
                 const float classWeight = (cls == 0) ? kClassWeightDown
                                          : (cls == 1) ? kClassWeightNeutral
                                                       : kClassWeightUp;
 
-                dptr[b * 3 + 0] = kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
-                dptr[b * 3 + 1] = kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
-                dptr[b * 3 + 2] = kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 0] = kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 1] = kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 2] = kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
 
                 sse += static_cast<double>(classWeight) *
                        (-std::log(std::max(1e-12f, p[cls])));
