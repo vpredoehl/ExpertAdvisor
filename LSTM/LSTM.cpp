@@ -209,6 +209,66 @@ static double FroNormEvalHost(const Mat& m)
     return std::sqrt(static_cast<double>(acc));
 }
 
+template <typename Mat>
+static bool MatrixAllFiniteHost(const char* name, const Mat& m)
+{
+    MetaNN::NSMetalMatMul::WaitForAll();
+    auto ev = MetaNN::Evaluate(m);
+    auto low = MetaNN::LowerAccess(ev);
+    const auto* p = low.RawMemory();
+    const size_t n = ev.Shape()[0] * ev.Shape()[1];
+    for (size_t i = 0; i < n; ++i)
+    {
+        const double v = static_cast<double>(p[i]);
+        if (!std::isfinite(v))
+        {
+            std::cout << "DIAG_NONFINITE_MATRIX"
+                      << ",name=" << name
+                      << ",idx=" << i
+                      << ",value=" << v
+                      << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename Mat>
+static void ClipMatrixInPlace(Mat& m, float threshold, const char* name)
+{
+    auto low = MetaNN::LowerAccess(m);
+    auto* p = low.MutableRawMemory();
+    const size_t n = m.Shape()[0] * m.Shape()[1];
+    size_t clipped = 0;
+    double maxAbsBefore = 0.0;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const float v = p[i];
+        const double a = std::fabs(static_cast<double>(v));
+        maxAbsBefore = std::max(maxAbsBefore, a);
+        if (v > threshold)
+        {
+            p[i] = threshold;
+            ++clipped;
+        }
+        else if (v < -threshold)
+        {
+            p[i] = -threshold;
+            ++clipped;
+        }
+    }
+    if (clipped > 0)
+    {
+        std::cout << "DIAG_GRAD_CLIP"
+                  << ",name=" << name
+                  << ",threshold=" << threshold
+                  << ",clipped=" << clipped
+                  << ",total=" << n
+                  << ",max_abs_before=" << maxAbsBefore
+                  << "\n";
+    }
+}
+
 
 // Debug helpers: compile out debug code and prints when disabled
 #if LSTM_DEBUG_PRINTS
@@ -2551,19 +2611,39 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     if (windowCount > 0)
     {
         // Convert accumulators to concrete matrices (ensures RawMemory is valid)
-        const auto d_param_f = MetaNN::Evaluate(d_param_accum);
-        const auto d_bias_f  = MetaNN::Evaluate(d_bias_accum);
-        const auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
-        const auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
+        auto d_param_f = MetaNN::Evaluate(d_param_accum);
+        auto d_bias_f  = MetaNN::Evaluate(d_bias_accum);
+        auto d_headW_f = MetaNN::Evaluate(d_headW_accum_f);
+        auto d_headB_f = MetaNN::Evaluate(d_headB_accum_f);
 
-        const auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
-        const auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
+        auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
+        auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
         // Scale learning rate by number of windows so batch size doesn't change step size
         const float invN = 1.0f / static_cast<float>(windowCount);
 
         const float lrCore = learningRate * invN;
         const float lrHead = learningRate * LSTM_HEAD_LR_MULT * invN; // or a separate head LR if you want
+
+        bool gradsFinite =
+            MatrixAllFiniteHost("d_param", d_param_f) &&
+            MatrixAllFiniteHost("d_bias", d_bias_f) &&
+            MatrixAllFiniteHost("d_headW", d_headW_f) &&
+            MatrixAllFiniteHost("d_headB", d_headB_f) &&
+            MatrixAllFiniteHost("d_headDirW", d_headDirW_f) &&
+            MatrixAllFiniteHost("d_headDirB", d_headDirB_f);
+
+#if LSTM_USE_GRAD_CLIP
+        if (gradsFinite)
+        {
+            ClipMatrixInPlace(d_param_f, LSTM_GRAD_CLIP_THRESHOLD, "d_param");
+            ClipMatrixInPlace(d_bias_f, LSTM_GRAD_CLIP_THRESHOLD, "d_bias");
+            ClipMatrixInPlace(d_headW_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headW");
+            ClipMatrixInPlace(d_headB_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headB");
+            ClipMatrixInPlace(d_headDirW_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headDirW");
+            ClipMatrixInPlace(d_headDirB_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headDirB");
+        }
+#endif
         
         #if LSTM_DIAG
                 if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
@@ -2594,14 +2674,24 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 }
         #endif
         #if !LSTM_DISABLE_UPDATES
-            SGDUpdate(param, d_param_f, lrCore);
-            SGDUpdate(bias,  d_bias_f,  lrCore);
-            if (targetType == TargetType::UpNeutralDownReturn) {
-                SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
-                SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
-            } else {
-                SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
-                SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
+            if (!gradsFinite)
+            {
+                std::cout << "DIAG_SKIP_UPDATE_NONFINITE_GRAD"
+                          << ",calcBatchCall=" << calcBatchCallIdx
+                          << ",windowCount=" << windowCount
+                          << "\n";
+            }
+            else
+            {
+                SGDUpdate(param, d_param_f, lrCore);
+                SGDUpdate(bias,  d_bias_f,  lrCore);
+                if (targetType == TargetType::UpNeutralDownReturn) {
+                    SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
+                    SGDUpdate(returnHeadDirBias,   d_headDirB_f, lrHead);
+                } else {
+                    SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
+                    SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
+                }
             }
         #endif
 #if LSTM_DIAG
