@@ -1008,8 +1008,6 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
             B,
             H);
     }
-    MetaNN::NSMetalMatMul::WaitForAll();
-
     auto validate_same = [&](const char* name, const EAMatrix& actual, const EAMatrix& expected)
     {
         auto lowActual = MetaNN::LowerAccess(actual);
@@ -1218,9 +1216,6 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     }
 #endif
     ComputeGateStateBatchFromContiguous(scratch.gates_batch,prevCellState,scratch.gate_i_batch,scratch.gate_f_batch,scratch.gate_g_batch,scratch.gate_o_batch,scratch.c,scratch.h);
-#if LSTM_GATESTATE_MODE == 2
-    MetaNN::NSMetalMatMul::WaitForAll();    // Ensure all Metal writes are completed before deep copies
-#endif
 #if LSTM_DIAG
     if (diag_cond &&
         scratch.h.Shape()[0] > 0 &&
@@ -1309,7 +1304,6 @@ inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
             yMem,
             1, K, 4 * H);
     }
-    MetaNN::NSMetalMatMul::WaitForAll();
 #if LSTM_DEBUG_INTERNAL_PRINTS
     std::cout << "bias(0,64): " << bias(0,64) << std::endl
         << "yMat(0,64) : " << yMat(0,64) << std::endl
@@ -1365,7 +1359,6 @@ inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
     std::cout << "h_2d_handle.Data()(0,0): " << h_2d_handle.Data()(0,0) << std::endl;
 #endif
 
-    MetaNN::NSMetalMatMul::WaitForAll();
     prevCellState   = NNUtils::DeepCopyMatrix(c_2d_handle.Data());   // sc.c;
     prevHiddenState = NNUtils::DeepCopyMatrix(h_2d_handle.Data());   //sc.h;
 }
@@ -1998,6 +1991,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             wb.close_target.push_back(close_target_local);
             if (targetType == TargetType::UpNeutralDownReturn) wb.classTargets.push_back(classTarget);
             else wb.targets.push_back(regressionTarget);
+
+            auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
+            const float* prebuiltPtr = lowPrebuilt.RawMemory();
+            const size_t batchRow = static_cast<size_t>(it - first);
+            for (size_t tstep = 0; tstep < window_size; ++tstep)
+            {
+                float* dstRow = packed_step_ptrs[tstep] + batchRow * F;
+                const float* srcRow = prebuiltPtr + (start + tstep) * F;
+                std::memcpy(dstRow, srcRow, F * sizeof(float));
+            }
         }
 
         const size_t B_final = (targetType == TargetType::UpNeutralDownReturn)
@@ -2079,6 +2082,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
+            if (calcBatchCallIdx == 0 && batchBase == 0 && tstep == 0)
+            {
+                PrintMatrixSummary("DIAG_X_T_BATCH_T0", wb.packed_steps[tstep]);
+            }
 #if LSTM_BATCH_PROFILE
             {
                 LSTMScopedProfileTimer timer(profile.forward_step_batches_us);
@@ -2137,8 +2144,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
             }
 #endif
-            MetaNN::NSMetalMatMul::WaitForAll();
-
             d_logits_batch = EAMatrix(B, direction_output_size);
             auto lowLogits = MetaNN::LowerAccess(head_logits_batch);
             const float* lptr = lowLogits.RawMemory();
@@ -2274,7 +2279,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     B, hidden_size, 1);
             }
 #endif
-            MetaNN::NSMetalMatMul::WaitForAll();
             auto lowYLogits = MetaNN::LowerAccess(head_logits_batch);
             const float* yptr = lowYLogits.RawMemory();
 
