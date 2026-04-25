@@ -39,6 +39,19 @@
 #include <MetaNN/operation/tensor/slice.h>
 #include "scalable_tensor.h"
 
+namespace
+{
+const char* GateStateModeLabel()
+{
+    switch (LSTM_GATESTATE_MODE)
+    {
+        case 0: return "cpu_reference";
+        case 1: return "cpu_validate_metal";
+        case 2: return "metal_fused";
+        default: return "unknown";
+    }
+}
+}
 
 static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
 {
@@ -312,6 +325,8 @@ int main(int argc, const char * argv[])
     std::cout << "window_size=" << window_size << '\n';
     std::cout << "prediction_horizon=" << prediction_horizon << '\n';
     std::cout << "c_next_threshold=" << c_next_threshold << '\n';
+    std::cout << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
+              << " (" << GateStateModeLabel() << ")\n";
 
     w_LSTM.exec("SET TRANSACTION READ WRITE;");
     try

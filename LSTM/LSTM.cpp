@@ -19,6 +19,7 @@
 #include "Tensor.hpp"
 #include "MatrixUtils.hpp"
 #include "BuildConfig.hpp"
+#include <MetaNN/data_copy/data_copy.h>
 #include <MetaNN/metal/metal_matmul.h>
 
 #ifndef LSTM_BATCH_PROFILE
@@ -52,11 +53,13 @@ void EA::LSTM::PrintMatrixSummary(const char* label,
 {
     MetaNN::NSMetalMatMul::WaitForAll();
     auto ev = MetaNN::Evaluate(m);
-    auto low = MetaNN::LowerAccess(ev);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> host(ev.Shape()[0], ev.Shape()[1]);
+    MetaNN::DataCopy(ev, host);
+    auto low = MetaNN::LowerAccess(host);
 
     const float* p = low.RawMemory();
-    const size_t rows = ev.Shape()[0];
-    const size_t cols = ev.Shape()[1];
+    const size_t rows = host.Shape()[0];
+    const size_t cols = host.Shape()[1];
     const size_t n = rows * cols;
 
     if (n == 0)
@@ -1870,9 +1873,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t y_count = 0;
     std::vector<float> yhat_samples;
     std::vector<float> ydenorm_samples; // predicted price delta (predicted_close - close_T)
-    double max_abs_y_true = 0.0;
-    size_t count_abs_gt_0p01 = 0;
-    size_t count_abs_gt_threshold = 0;
 
     // Per-batch predicted/actual log-return stats
 #endif
@@ -2488,22 +2488,33 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         double y_mean = y_sum / static_cast<double>(y_count);
         double y_var  = std::max(0.0, y_sumsq / static_cast<double>(y_count) - y_mean * y_mean);
         double y_std  = std::sqrt(y_var);
-        std::cout << "train: target_log_return stats n=" << y_count
-                  << " mean=" << y_mean
-                  << " std="  << y_std
-                  << " min="  << y_min
-                  << " max="  << y_max << std::endl;
-        std::cout << "train: pred_raw (log-return) samples:";
-        for (float v : yhat_samples) std::cout << ' ' << v;
-        std::cout << std::endl;
-        std::cout << "train: pred_pct (relative move) samples:";
-        for (float v : ydenorm_samples) std::cout << ' ' << v;
-        std::cout << std::endl;
+        if (targetType == TargetType::UpNeutralDownReturn)
+        {
+            std::cout << "train: class_target stats n=" << y_count
+                      << " mean=" << y_mean
+                      << " std="  << y_std
+                      << " min="  << y_min
+                      << " max="  << y_max << std::endl;
+            std::cout << "train: pred_class samples:";
+            for (float v : yhat_samples) std::cout << ' ' << v;
+            std::cout << std::endl;
+        }
+        else
+        {
+            std::cout << "train: target_log_return stats n=" << y_count
+                      << " mean=" << y_mean
+                      << " std="  << y_std
+                      << " min="  << y_min
+                      << " max="  << y_max << std::endl;
+            std::cout << "train: pred_raw (log-return) samples:";
+            for (float v : yhat_samples) std::cout << ' ' << v;
+            std::cout << std::endl;
+            std::cout << "train: pred_pct (relative move) samples:";
+            for (float v : ydenorm_samples) std::cout << ' ' << v;
+            std::cout << std::endl;
+        }
         std::cout << "train: skipped_windows=" << skippedWindows << std::endl;
     }
-    std::cout << "batch: max_abs_y_true=" << max_abs_y_true
-              << " count_abs_gt_0p01=" << count_abs_gt_0p01
-              << " count_abs_gt_threshold=" << count_abs_gt_threshold << std::endl;
 
     if (windowsInBatch > 0)
     {
