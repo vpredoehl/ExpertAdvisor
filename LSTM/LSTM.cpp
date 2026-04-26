@@ -631,6 +631,15 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
     }
 
     auto logits = MetaNN::Dot(prevHiddenState, returnHeadDirWeight) + returnHeadDirBias;
+#if LSTM_DIAG
+    static bool s_printed_dir_logits = false;
+    if (!LSTM_DIAG_ONLY_FIRST_BATCH || !s_printed_dir_logits)
+    {
+        auto logits_eval = MetaNN::Evaluate(logits);
+        PrintMatrixSummary("DIAG_DIRHEAD_LOGITS", logits_eval);
+        s_printed_dir_logits = true;
+    }
+#endif
     static bool printed_head_shapes = false;
     if (!printed_head_shapes)
     {
@@ -2202,6 +2211,15 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto yMem = lowY.SharedMemory();
 
                 MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
+            }
+#endif
+#if LSTM_DIAG
+            static bool s_printed_batch_dir_logits = false;
+            if (!LSTM_DIAG_ONLY_FIRST_BATCH || !s_printed_batch_dir_logits)
+            {
+                MetaNN::NSMetalMatMul::WaitForAll();
+                PrintMatrixSummary("DIAG_BATCH_DIRHEAD_LOGITS", head_logits_batch);
+                s_printed_batch_dir_logits = true;
             }
 #endif
             d_logits_batch = EAMatrix(B, direction_output_size);
