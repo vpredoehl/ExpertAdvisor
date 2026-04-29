@@ -1257,6 +1257,18 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
                 yMem,
                 B, K, gateCols);
         }
+#if LSTM_DIAG
+        static bool s_printed_batch_matmul_shapes = false;
+        if (!s_printed_batch_matmul_shapes)
+        {
+            std::cout << "DIAG_BATCH_MATMUL_SHAPE"
+                      << ",m=" << B
+                      << ",k=" << K
+                      << ",n=" << gateCols
+                      << std::endl;
+            s_printed_batch_matmul_shapes = true;
+        }
+#endif
     }
 
 #if LSTM_DIAG
@@ -1375,6 +1387,18 @@ inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
             biasMem,
             yMem,
             1, K, 4 * H);
+#if LSTM_DIAG
+        static bool s_printed_matmul_shapes = false;
+        if (!s_printed_matmul_shapes)
+        {
+            std::cout << "DIAG_MATMUL_SHAPE"
+                      << ",m=" << 1
+                      << ",k=" << K
+                      << ",n=" << (4 * H)
+                      << std::endl;
+            s_printed_matmul_shapes = true;
+        }
+#endif
     }
 #if LSTM_DEBUG_INTERNAL_PRINTS
     std::cout << "bias(0,64): " << bias(0,64) << std::endl
@@ -1827,12 +1851,23 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
             {
                 auto lowW = MetaNN::LowerAccess(returnHeadDirWeight);
                 float* wp = lowW.MutableRawMemory();
-                std::fill(wp, wp + hidden_size * returnHeadDirWeight.Shape()[1], 0.01f);
+                const size_t cols = returnHeadDirWeight.Shape()[1];
+                const float scale = 0.05f; // small random init to break symmetry
+                for (size_t i = 0; i < hidden_size; ++i)
+                {
+                    for (size_t j = 0; j < cols; ++j)
+                    {
+                        wp[i * cols + j] = uniform_symmetric(scale);
+                    }
+                }
             }
             {
                 auto lowB = MetaNN::LowerAccess(returnHeadDirBias);
                 float* bp = lowB.MutableRawMemory();
-                std::fill(bp, bp + returnHeadDirBias.Shape()[1], 0.0f);
+                for (size_t j = 0; j < returnHeadDirBias.Shape()[1]; ++j)
+                {
+                    bp[j] = 0.0f;
+                }
             }
             break;
         default:    throw std::runtime_error("Invalid targetType in LSTM constructor");
@@ -1988,6 +2023,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 LSTM_ASSERT(appended == kReturnFeatureCount,
                             "CalculateBatch: appended return feature count mismatch");
 #endif
+            }
+
+            for (size_t c = 0; c < featureCount; ++c)
+            {
+                float& v = dstRow[c];
+                if (!std::isfinite(v))
+                {
+                    v = 0.0f;
+                }
+                else
+                {
+                    v = std::clamp(v, -10.0f, 10.0f);
+                }
             }
         }
     }
@@ -2197,6 +2245,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto yMem = lowY.SharedMemory();
 
                 MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
+#if LSTM_DIAG
+                static bool s_printed_head_matmul_shapes = false;
+                if (!s_printed_head_matmul_shapes)
+                {
+                    std::cout << "DIAG_HEAD_MATMUL_SHAPE"
+                              << ",m=" << B
+                              << ",k=" << hidden_size
+                              << ",n=" << direction_output_size
+                              << std::endl;
+                    s_printed_head_matmul_shapes = true;
+                }
+#endif
             }
 #else
             {
@@ -2211,6 +2271,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto yMem = lowY.SharedMemory();
 
                 MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
+#if LSTM_DIAG
+                static bool s_printed_head_matmul_shapes = false;
+                if (!s_printed_head_matmul_shapes)
+                {
+                    std::cout << "DIAG_HEAD_MATMUL_SHAPE"
+                              << ",m=" << B
+                              << ",k=" << hidden_size
+                              << ",n=" << direction_output_size
+                              << std::endl;
+                    s_printed_head_matmul_shapes = true;
+                }
+#endif
             }
 #endif
 #if LSTM_DIAG
@@ -2336,6 +2408,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     biasMem,
                     yMem,
                     B, hidden_size, 1);
+#if LSTM_DIAG
+                static bool s_printed_head_reg_matmul_shapes = false;
+                if (!s_printed_head_reg_matmul_shapes)
+                {
+                    std::cout << "DIAG_HEAD_REG_MATMUL_SHAPE"
+                              << ",m=" << B
+                              << ",k=" << hidden_size
+                              << ",n=1"
+                              << std::endl;
+                    s_printed_head_reg_matmul_shapes = true;
+                }
+#endif
             }
 #else
             {
@@ -2355,6 +2439,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     biasMem,
                     yMem,
                     B, hidden_size, 1);
+#if LSTM_DIAG
+                static bool s_printed_head_reg_matmul_shapes = false;
+                if (!s_printed_head_reg_matmul_shapes)
+                {
+                    std::cout << "DIAG_HEAD_REG_MATMUL_SHAPE"
+                              << ",m=" << B
+                              << ",k=" << hidden_size
+                              << ",n=1"
+                              << std::endl;
+                    s_printed_head_reg_matmul_shapes = true;
+                }
+#endif
             }
 #endif
             auto lowYLogits = MetaNN::LowerAccess(head_logits_batch);
@@ -2870,6 +2966,19 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
 #endif
         }
 
+        for (size_t c = 0; c < modelFeatureCount; ++c)
+        {
+            float& v = dst[c];
+            if (!std::isfinite(v))
+            {
+                v = 0.0f;
+            }
+            else
+            {
+                v = std::clamp(v, -10.0f, 10.0f);
+            }
+        }
+
         forwardStep(model_row, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
         ++rowIdx;
     }
@@ -2939,6 +3048,19 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextClose: appended return feature count mismatch");
 #endif
+        }
+
+        for (size_t c = 0; c < modelFeatureCount; ++c)
+        {
+            float& v = dst[c];
+            if (!std::isfinite(v))
+            {
+                v = 0.0f;
+            }
+            else
+            {
+                v = std::clamp(v, -10.0f, 10.0f);
+            }
         }
 
         forwardStep(model_row, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
