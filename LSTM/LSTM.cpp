@@ -1884,8 +1884,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 {
     static size_t s_calcBatchCalls = 0;
     const size_t calcBatchCallIdx = s_calcBatchCalls++;
+    const bool isFirstBatchCall = (calcBatchCallIdx == 0);
     EAMatrix head_logits_batch(effectiveMiniBatchWindows, direction_output_size);
-
     double sse = 0.0;
     size_t mseCount = 0;
     size_t windowCount = 0;
@@ -2168,6 +2168,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
     {
+        const bool isFirstMiniBatch = (batchBase == 0);
         const size_t batchEnd = std::min(batchBase + effectiveMiniBatchWindows, allStarts.size());
         WindowBatch wb = buildWindowBatch(allStarts.begin() + static_cast<std::ptrdiff_t>(batchBase),
                                           allStarts.begin() + static_cast<std::ptrdiff_t>(batchEnd));
@@ -2199,7 +2200,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
-            if (calcBatchCallIdx == 0 && batchBase == 0 && tstep == 0)
+            if (isFirstBatchCall && isFirstMiniBatch && tstep == 0)
             {
                 PrintMatrixSummary("DIAG_X_T_BATCH_T0", wb.packed_steps[tstep]);
             }
@@ -2214,7 +2215,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, nullptr));
 #endif
         }
-        if (calcBatchCallIdx == 0 && batchBase == 0)
+        if (isFirstBatchCall && isFirstMiniBatch)
         {
             PrintMatrixSummary("DIAG_DIRHEAD_INPUT_h_batch", h_batch);
             PrintMatrixSummary("DIAG_DIRHEAD_CELL_c_batch", c_batch);
@@ -2230,7 +2231,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         {
             if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != direction_output_size)
                 head_logits_batch = EAMatrix(B, direction_output_size);
-            if (calcBatchCallIdx == 0 && batchBase == 0)    PrintMatrixSummary("DIAG_PRE_HEAD_h_batch", h_batch);
+            if (isFirstBatchCall && isFirstMiniBatch)    PrintMatrixSummary("DIAG_PRE_HEAD_h_batch", h_batch);
 #if LSTM_BATCH_PROFILE
             {
                 LSTMScopedProfileTimer timer(profile.head_affine_us);
@@ -2287,7 +2288,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
 #if LSTM_DIAG
             static bool s_printed_batch_dir_logits = false;
-            if (!LSTM_DIAG_ONLY_FIRST_BATCH || !s_printed_batch_dir_logits)
+            if (!s_printed_batch_dir_logits)
             {
                 MetaNN::NSMetalMatMul::WaitForAll();
                 PrintMatrixSummary("DIAG_BATCH_DIRHEAD_LOGITS", head_logits_batch);
@@ -2498,7 +2499,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
             #if LSTM_DIAG
-                        if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                        if ((!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall) && isFirstMiniBatch)
                         {
                             const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
                             const double n_dparam = FroNormEvalHost(d_param_accum);
@@ -2563,7 +2564,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             mergeGateAccumulators(G_reg, d_param_accum, d_bias_accum, hidden_size);
             #if LSTM_DIAG
-                        if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                        if ((!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall) && isFirstMiniBatch)
                         {
                             const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
                             const double n_dparam = FroNormEvalHost(d_param_accum);
@@ -2760,7 +2761,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
         
         #if LSTM_DIAG
-                if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                if (!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall)
                 {
                     const double n_param = FroNormEvalHost(param);
                     const double n_bias  = FroNormEvalHost(bias);
@@ -2809,7 +2810,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             }
         #endif
 #if LSTM_DIAG
-                if (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0)
+                if (!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall)
                 {
                     const double n_param2 = FroNormEvalHost(param);
                     const double n_bias2  = FroNormEvalHost(bias);
