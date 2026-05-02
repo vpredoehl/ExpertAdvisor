@@ -30,6 +30,14 @@
 #define LSTM_DIAG 1
 #endif
 
+#ifndef LSTM_HEAVY_DIAG
+#define LSTM_HEAVY_DIAG 0
+#endif
+
+#ifndef LSTM_SHAPE_DIAG
+#define LSTM_SHAPE_DIAG 0
+#endif
+
 #ifndef LSTM_DIAG_ONLY_FIRST_BATCH
 #define LSTM_DIAG_ONLY_FIRST_BATCH 1
 #endif
@@ -631,7 +639,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
     }
 
     auto logits = MetaNN::Dot(prevHiddenState, returnHeadDirWeight) + returnHeadDirBias;
-#if LSTM_DIAG
+#if LSTM_HEAVY_DIAG
     static bool s_printed_dir_logits = false;
     if (!LSTM_DIAG_ONLY_FIRST_BATCH || !s_printed_dir_logits)
     {
@@ -1257,7 +1265,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
                 yMem,
                 B, K, gateCols);
         }
-#if LSTM_DIAG
+#if LSTM_SHAPE_DIAG
         static bool s_printed_batch_matmul_shapes = false;
         if (!s_printed_batch_matmul_shapes)
         {
@@ -1271,7 +1279,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
 #endif
     }
 
-#if LSTM_DIAG
+#if LSTM_HEAVY_DIAG
     static size_t s_forwardStepBatchCalls = 0;
     const bool diag_cond = (!LSTM_DIAG_ONLY_FIRST_BATCH || s_forwardStepBatchCalls++ == 0);
     if (diag_cond &&
@@ -1300,7 +1308,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     }
 #endif
     ComputeGateStateBatchFromContiguous(scratch.gates_batch,prevCellState,scratch.gate_i_batch,scratch.gate_f_batch,scratch.gate_g_batch,scratch.gate_o_batch,scratch.c,scratch.h);
-#if LSTM_DIAG
+#if LSTM_HEAVY_DIAG
     if (diag_cond &&
         scratch.h.Shape()[0] > 0 &&
         scratch.h.Shape()[1] > 0)
@@ -1387,7 +1395,7 @@ inline void EA::LSTM::forwardStep(const EAMatrix& x_t,
             biasMem,
             yMem,
             1, K, 4 * H);
-#if LSTM_DIAG
+#if LSTM_SHAPE_DIAG
         static bool s_printed_matmul_shapes = false;
         if (!s_printed_matmul_shapes)
         {
@@ -2066,7 +2074,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         wb.close_t.reserve(B_est);
         wb.close_target.reserve(B_est);
 
-#warning "Insert prediction_horizon comment before targets loop"
         // NOTE: For faster learning and less noise, consider reducing prediction_horizon
         // to a shorter range (e.g., 1–4 timesteps) instead of larger horizons.
         for (auto it = first; it != last; ++it)
@@ -2153,9 +2160,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         allStarts.push_back(start);
     }
 
-#if LSTM_DIAG
-        const bool diag_capture = (!LSTM_DIAG_ONLY_FIRST_BATCH || calcBatchCallIdx == 0);
-        // Pre-update snapshots for true delta norms (compute unconditionally for simplicity)
+#if LSTM_HEAVY_DIAG
         EAMatrix param_before_snap = NNUtils::DeepCopyMatrix(param);
         EAMatrix bias_before_snap  = NNUtils::DeepCopyMatrix(bias);
         EAMatrix headW_before_snap = (targetType == TargetType::UpNeutralDownReturn)
@@ -2200,10 +2205,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
         for (size_t tstep = 0; tstep < window_size; ++tstep)
         {
-            if (isFirstBatchCall && isFirstMiniBatch && tstep == 0)
-            {
-                PrintMatrixSummary("DIAG_X_T_BATCH_T0", wb.packed_steps[tstep]);
-            }
+#if LSTM_HEAVY_DIAG
+            if (isFirstBatchCall && isFirstMiniBatch && tstep == 0) PrintMatrixSummary("DIAG_X_T_BATCH_T0", wb.packed_steps[tstep]);
+#endif
 #if LSTM_BATCH_PROFILE
             {
                 LSTMScopedProfileTimer timer(profile.forward_step_batches_us);
@@ -2215,6 +2219,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             cache.push_back(forwardStepBatch(x_t_batch, ww, bias, h_batch, c_batch, xh_concat_batch, forward_scratch, nullptr));
 #endif
         }
+#if LSTM_HEAVY_DIAG
         if (isFirstBatchCall && isFirstMiniBatch)
         {
             PrintMatrixSummary("DIAG_DIRHEAD_INPUT_h_batch", h_batch);
@@ -2222,6 +2227,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             PrintMatrixSummary("DIAG_DIRHEAD_WEIGHT", returnHeadDirWeight);
             PrintMatrixSummary("DIAG_DIRHEAD_BIAS", returnHeadDirBias);
         }
+#endif
 
         std::vector<float> errs(B, 0.0f);
         EAMatrix d_logits_batch(1, direction_output_size); // for 3-class path (declared once for scope)
@@ -2231,7 +2237,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         {
             if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != direction_output_size)
                 head_logits_batch = EAMatrix(B, direction_output_size);
+#if LSTM_HEAVY_DIAG
             if (isFirstBatchCall && isFirstMiniBatch)    PrintMatrixSummary("DIAG_PRE_HEAD_h_batch", h_batch);
+#endif
 #if LSTM_BATCH_PROFILE
             {
                 LSTMScopedProfileTimer timer(profile.head_affine_us);
@@ -2246,7 +2254,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto yMem = lowY.SharedMemory();
 
                 MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
-#if LSTM_DIAG
+#if LSTM_SHAPE_DIAG
                 static bool s_printed_head_matmul_shapes = false;
                 if (!s_printed_head_matmul_shapes)
                 {
@@ -2272,7 +2280,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 auto yMem = lowY.SharedMemory();
 
                 MetaNN::NSMetalMatMul::MatMulBias(aMem, bMem, biasMem, yMem, B, hidden_size, direction_output_size);
-#if LSTM_DIAG
+#if LSTM_SHAPE_DIAG
                 static bool s_printed_head_matmul_shapes = false;
                 if (!s_printed_head_matmul_shapes)
                 {
@@ -2286,7 +2294,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
             }
 #endif
-#if LSTM_DIAG
+#if LSTM_HEAVY_DIAG
             static bool s_printed_batch_dir_logits = false;
             if (!s_printed_batch_dir_logits)
             {
@@ -2409,7 +2417,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     biasMem,
                     yMem,
                     B, hidden_size, 1);
-#if LSTM_DIAG
+#if LSTM_SHAPE_DIAG
                 static bool s_printed_head_reg_matmul_shapes = false;
                 if (!s_printed_head_reg_matmul_shapes)
                 {
@@ -2440,7 +2448,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     biasMem,
                     yMem,
                     B, hidden_size, 1);
-#if LSTM_DIAG
+#if LSTM_SHAPE_DIAG
                 static bool s_printed_head_reg_matmul_shapes = false;
                 if (!s_printed_head_reg_matmul_shapes)
                 {
@@ -2498,7 +2506,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
 
             mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
-            #if LSTM_DIAG
+            #if LSTM_HEAVY_DIAG
                         if ((!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall) && isFirstMiniBatch)
                         {
                             const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
@@ -2563,7 +2571,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_reg);
 
             mergeGateAccumulators(G_reg, d_param_accum, d_bias_accum, hidden_size);
-            #if LSTM_DIAG
+            #if LSTM_HEAVY_DIAG
                         if ((!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall) && isFirstMiniBatch)
                         {
                             const size_t mbIdx = batchBase / effectiveMiniBatchWindows;
@@ -2760,7 +2768,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         }
 #endif
         
-        #if LSTM_DIAG
+        #if LSTM_HEAVY_DIAG
                 if (!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall)
                 {
                     const double n_param = FroNormEvalHost(param);
@@ -2809,7 +2817,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 }
             }
         #endif
-#if LSTM_DIAG
+#if LSTM_HEAVY_DIAG
                 if (!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall)
                 {
                     const double n_param2 = FroNormEvalHost(param);
