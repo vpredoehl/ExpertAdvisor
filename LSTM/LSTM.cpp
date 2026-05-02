@@ -2036,14 +2036,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             for (size_t c = 0; c < featureCount; ++c)
             {
                 float& v = dstRow[c];
-                if (!std::isfinite(v))
-                {
-                    v = 0.0f;
-                }
-                else
-                {
-                    v = std::clamp(v, -10.0f, 10.0f);
-                }
+                if (!std::isfinite(v))  v = 0.0f;
+                else                    v = std::clamp(v, -10.0f, 10.0f);
             }
         }
     }
@@ -2096,7 +2090,52 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             if (targetType == TargetType::UpNeutralDownReturn)
             {
-                classTarget = ClassFromLogReturn(y_true_logret, c_next_threshold);
+                bool upHit = false;
+                bool downHit = false;
+                size_t upOffset = 0;
+                size_t downOffset = 0;
+
+                for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
+                {
+                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(lastIdx + lookahead);
+                    const float futureHigh = t.RawHighAtIterator(futureIt);
+                    const float futureLow = t.RawLowAtIterator(futureIt);
+
+                    if (std::isfinite(close_t_local) && close_t_local > 0.0f)
+                    {
+                        const float upMove = std::log(futureHigh / close_t_local);
+                        const float downMove = std::log(futureLow / close_t_local);
+
+                        if (!upHit && std::isfinite(upMove) && upMove > c_next_threshold)
+                        {
+                            upHit = true;
+                            upOffset = lookahead;
+                        }
+
+                        if (!downHit && std::isfinite(downMove) && downMove < -c_next_threshold)
+                        {
+                            downHit = true;
+                            downOffset = lookahead;
+                        }
+                    }
+                }
+
+                if (upHit && downHit)   classTarget = (upOffset <= downOffset) ? 2 : 0;
+                else if (upHit) classTarget = 2;
+                else if (downHit)   classTarget = 0;
+                else    classTarget = 1;
+                // --- DIAGNOSTIC BLOCK: Print first few lookahead labelings ---
+                const size_t batchRow = static_cast<size_t>(it - first);
+                if (isFirstBatchCall && batchRow < 5)
+                    std::cout << "DIAG_LOOKAHEAD"
+                              << ",close=" << close_t_local
+                              << ",upHit=" << upHit
+                              << ",downHit=" << downHit
+                              << ",upOffset=" << upOffset
+                              << ",downOffset=" << downOffset
+                              << ",class=" << classTarget
+                              << std::endl;
+                // --- END DIAGNOSTIC BLOCK ---
             }
             else
             {

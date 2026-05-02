@@ -68,6 +68,8 @@ void Tensor::Add(Feature f)
     // Reduce reallocations by reserving capacity in chunks
     if (ds.size() == ds.capacity()) ds.reserve(ds.size() + 4096);
     if (raw_close.size() == raw_close.capacity())   raw_close.reserve(raw_close.size() + 4096);
+    if (raw_high.size() == raw_high.capacity())     raw_high.reserve(raw_high.size() + 4096);
+    if (raw_low.size() == raw_low.capacity())       raw_low.reserve(raw_low.size() + 4096);
 
     FeatureMatrix fm(1, feature_size);
 
@@ -78,6 +80,8 @@ void Tensor::Add(Feature f)
         prev_close = f.close;
         ds.push_back(std::move(fm));
         raw_close.push_back(f.close);
+        raw_high.push_back(f.high);
+        raw_low.push_back(f.low);
 
         // Initialize EMA baselines on first sample
         has_ema = true;
@@ -257,6 +261,8 @@ void Tensor::Add(Feature f)
     prev_close = f.close;
     ds.push_back(std::move(fm));
     raw_close.push_back(f.close);
+    raw_high.push_back(f.high);
+    raw_low.push_back(f.low);
 }
 
 float Tensor::RawCloseAtIterator(DataSet::const_iterator it) const
@@ -269,5 +275,29 @@ float Tensor::RawCloseAtIterator(DataSet::const_iterator it) const
     LSTM_ASSERT(idx < raw_close.size(), "RawCloseAtIterator: index out of raw_close bounds");
 #endif
     return raw_close[idx];
+}
+
+float Tensor::RawHighAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawHighAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_high.size(), "RawHighAtIterator: index out of raw_high bounds");
+#endif
+    return raw_high[idx];
+}
+
+float Tensor::RawLowAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawLowAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_low.size(), "RawLowAtIterator: index out of raw_low bounds");
+#endif
+    return raw_low[idx];
 }
 
