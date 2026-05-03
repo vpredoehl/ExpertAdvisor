@@ -50,6 +50,7 @@ class Tensor
     std::vector<float> raw_close;
     std::vector<float> raw_high;
     std::vector<float> raw_low;
+    std::vector<PriceTP> raw_time;
     RollingMean rangeMean{rolling_vol_lookback};
     // EMA state for various periods
     bool has_ema = false;
@@ -125,6 +126,7 @@ public:
     float RawCloseAtIterator(DataSet::const_iterator it) const;
     float RawHighAtIterator(DataSet::const_iterator it) const;
     float RawLowAtIterator(DataSet::const_iterator it) const;
+    PriceTP RawTimeAtIterator(DataSet::const_iterator it) const;
 
 };
 

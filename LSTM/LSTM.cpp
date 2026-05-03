@@ -582,6 +582,23 @@ struct EA::LSTM::ForwardBatchScratch
 
 void EA::LSTM::PrintOutputHeadShapes() const
 {
+    if (targetType == TargetType::UpNeutralDownReturn)
+    {
+        static_assert(direction_output_size == 3, "UpNeutralDownReturn expects exactly 3 output classes");
+        LSTM_ASSERT(returnHeadDirWeight.Shape()[1] == direction_output_size,
+                    "PrintOutputHeadShapes: classification head weight width mismatch");
+        LSTM_ASSERT(returnHeadDirBias.Shape()[1] == direction_output_size,
+                    "PrintOutputHeadShapes: classification head bias width mismatch");
+        LSTM_ASSERT(direction_output_size == 3,
+                    "PrintOutputHeadShapes: classification mode requires output dimension 3");
+        std::cout << "DIAG_CLASS_HEAD"
+                  << ",target_type=UpNeutralDownReturn"
+                  << ",output_dim=" << direction_output_size
+                  << ",weight_shape=(" << returnHeadDirWeight.Shape()[0] << "," << returnHeadDirWeight.Shape()[1] << ")"
+                  << ",bias_shape=(" << returnHeadDirBias.Shape()[0] << "," << returnHeadDirBias.Shape()[1] << ")"
+                  << std::endl;
+    }
+
     std::cout << "[LSTM] returnHeadWeight shape: ("
               << returnHeadWeight.Shape()[0] << ", "
               << returnHeadWeight.Shape()[1] << ")" << std::endl;
@@ -2124,6 +2141,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 else if (upHit) classTarget = 2;
                 else if (downHit)   classTarget = 0;
                 else    classTarget = 1;
+                LSTM_ASSERT(classTarget >= 0 && classTarget < static_cast<int>(direction_output_size),
+                            "CalculateBatch: classTarget out of [0,2]");
                 // --- DIAGNOSTIC BLOCK: Print first few lookahead labelings ---
                 const size_t batchRow = static_cast<size_t>(it - first);
                 if (isFirstBatchCall && batchRow < 5)
@@ -2354,6 +2373,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 float p[direction_output_size];
                 Softmax3(z, p);
                 const int cls = wb.classTargets[b];
+                LSTM_ASSERT(cls >= 0 && cls < static_cast<int>(direction_output_size),
+                            "CalculateBatch: wb.classTargets contains class id out of [0,2]");
                 const float classWeight = (cls == 0) ? kClassWeightDown
                                          : (cls == 1) ? kClassWeightNeutral
                                                       : kClassWeightUp;
@@ -2418,11 +2439,23 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 }
 
 #if !LSTM_INFERENCE_ONLY
-                y_sum += static_cast<double>(cls);
-                y_sumsq += static_cast<double>(cls) * static_cast<double>(cls);
-                y_min = std::min(y_min, static_cast<float>(cls));
-                y_max = std::max(y_max, static_cast<float>(cls));
-                ++y_count;
+                if (cls >= 0 && cls < static_cast<int>(direction_output_size))
+                {
+                    y_sum += static_cast<double>(cls);
+                    y_sumsq += static_cast<double>(cls) * static_cast<double>(cls);
+                    y_min = std::min(y_min, static_cast<float>(cls));
+                    y_max = std::max(y_max, static_cast<float>(cls));
+                    ++y_count;
+                }
+                else
+                {
+                    std::cout << "DIAG_BAD_CLASS_TARGET"
+                              << ",calcBatchCall=" << calcBatchCallIdx
+                              << ",miniBatchBase=" << batchBase
+                              << ",row=" << b
+                              << ",class=" << cls
+                              << std::endl;
+                }
                 if (yhat_samples.size() < 10)
                     yhat_samples.push_back(static_cast<float>(predClass));
 #endif
@@ -2712,11 +2745,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         double y_std  = std::sqrt(y_var);
         if (targetType == TargetType::UpNeutralDownReturn)
         {
-            std::cout << "train: class_target stats n=" << y_count
-                      << " mean=" << y_mean
-                      << " std="  << y_std
-                      << " min="  << y_min
-                      << " max="  << y_max << std::endl;
+            const size_t class_total = down_count + neutral_count + up_count;
+            const double down_frac = (class_total > 0) ? static_cast<double>(down_count) / static_cast<double>(class_total) : 0.0;
+            const double neutral_frac = (class_total > 0) ? static_cast<double>(neutral_count) / static_cast<double>(class_total) : 0.0;
+            const double up_frac = (class_total > 0) ? static_cast<double>(up_count) / static_cast<double>(class_total) : 0.0;
+
+            std::cout << "train: class_target counts n=" << class_total
+                      << " down=" << down_count
+                      << " neutral=" << neutral_count
+                      << " up=" << up_count
+                      << " down_frac=" << down_frac
+                      << " neutral_frac=" << neutral_frac
+                      << " up_frac=" << up_frac
+                      << std::endl;
             std::cout << "train: pred_class samples:";
             for (float v : yhat_samples) std::cout << ' ' << v;
             std::cout << std::endl;

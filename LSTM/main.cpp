@@ -51,6 +51,159 @@ const char* GateStateModeLabel()
         default: return "unknown";
     }
 }
+
+const char* CurrentRangeKindLabel()
+{
+    return inference_only ? "inference" : "train";
+}
+
+struct LookaheadClassInfo
+{
+    PriceTP dt {};
+    PriceTP targetDt {};
+    float closeT = 0.0f;
+    float targetClose = 0.0f;
+    float deltaClose = 0.0f;
+    float terminalLogReturn = 0.0f;
+    bool upHit = false;
+    bool downHit = false;
+    size_t upOffset = 0;
+    size_t downOffset = 0;
+    int assignedClass = 1;
+};
+
+LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
+                                          DataSet::const_iterator startIt)
+{
+    const auto lastIt = startIt + window_size - 1;
+    const auto targetIt = lastIt + prediction_horizon;
+
+    LookaheadClassInfo info;
+    info.dt = tensor.RawTimeAtIterator(lastIt);
+    info.targetDt = tensor.RawTimeAtIterator(targetIt);
+    info.closeT = tensor.RawCloseAtIterator(lastIt);
+    info.targetClose = tensor.RawCloseAtIterator(targetIt);
+    info.deltaClose = info.targetClose - info.closeT;
+    info.terminalLogReturn =
+        (std::isfinite(info.closeT) && std::isfinite(info.targetClose) &&
+         info.closeT > 0.0f && info.targetClose > 0.0f)
+            ? std::log(info.targetClose / info.closeT)
+            : 0.0f;
+
+    for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
+    {
+        const auto futureIt = lastIt + static_cast<std::ptrdiff_t>(lookahead);
+        const float futureHigh = tensor.RawHighAtIterator(futureIt);
+        const float futureLow = tensor.RawLowAtIterator(futureIt);
+
+        if (std::isfinite(info.closeT) && info.closeT > 0.0f)
+        {
+            const float upMove = std::log(futureHigh / info.closeT);
+            const float downMove = std::log(futureLow / info.closeT);
+
+            if (!info.upHit && std::isfinite(upMove) && upMove > c_next_threshold)
+            {
+                info.upHit = true;
+                info.upOffset = lookahead;
+            }
+
+            if (!info.downHit && std::isfinite(downMove) && downMove < -c_next_threshold)
+            {
+                info.downHit = true;
+                info.downOffset = lookahead;
+            }
+        }
+    }
+
+    if (info.upHit && info.downHit) info.assignedClass = (info.upOffset <= info.downOffset) ? 2 : 0;
+    else if (info.upHit) info.assignedClass = 2;
+    else if (info.downHit) info.assignedClass = 0;
+    else info.assignedClass = 1;
+
+    LSTM_ASSERT(info.assignedClass >= 0 && info.assignedClass < static_cast<int>(direction_output_size),
+                "BuildLookaheadClassInfo: assigned class out of [0,2]");
+    return info;
+}
+
+void PrintClassificationProofDiagnostics(const EA::LSTM& l,
+                                         const Tensor& tensor,
+                                         const std::string& fromDate,
+                                         const std::string& toDate)
+{
+    if (l.targetType != EA::LSTM::TargetType::UpNeutralDownReturn)
+        return;
+
+    static bool printed = false;
+    if (printed)
+        return;
+    printed = true;
+
+    static_assert(direction_output_size == 3, "UpNeutralDownReturn expects exactly 3 output classes");
+    LSTM_ASSERT(direction_output_size == 3,
+                "PrintClassificationProofDiagnostics: output dimension must be 3 in classification mode");
+    LSTM_ASSERT(l.returnHeadDirWeight.Shape()[1] == direction_output_size,
+                "PrintClassificationProofDiagnostics: returnHeadDirWeight width mismatch");
+    LSTM_ASSERT(l.returnHeadDirBias.Shape()[1] == direction_output_size,
+                "PrintClassificationProofDiagnostics: returnHeadDirBias width mismatch");
+
+    std::cout << "DIAG_CLASS_THRESHOLDS"
+              << ",range_kind=" << CurrentRangeKindLabel()
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",threshold_logret=" << c_next_threshold
+              << ",prediction_horizon=" << prediction_horizon
+              << ",neutral_rule=no_threshold_hit_within_horizon"
+              << ",output_dim=" << direction_output_size
+              << std::endl;
+    std::cout << "DIAG_CLASS_LABEL_RULE"
+              << ",training_label=lookahead_high_low_first_hit"
+              << ",inference_eval_label=terminal_close_logret"
+              << std::endl;
+
+    std::array<size_t, direction_output_size> hist {0, 0, 0};
+    size_t windowCount = 0;
+    size_t printedRows = 0;
+
+    for (auto it = tensor.begin(); it + window_size - 1 + prediction_horizon < tensor.end(); ++it)
+    {
+        const auto info = BuildLookaheadClassInfo(tensor, it);
+        ++hist[static_cast<size_t>(info.assignedClass)];
+        ++windowCount;
+
+        if (printedRows < 20)
+        {
+            std::cout << "DIAG_CLASS_ROW"
+                      << ",idx=" << printedRows
+                      << ",dt=" << info.dt
+                      << ",target_dt=" << info.targetDt
+                      << ",close_t=" << info.closeT
+                      << ",target_close=" << info.targetClose
+                      << ",delta_close=" << info.deltaClose
+                      << ",terminal_logret=" << info.terminalLogReturn
+                      << ",up_hit=" << static_cast<int>(info.upHit)
+                      << ",down_hit=" << static_cast<int>(info.downHit)
+                      << ",up_offset=" << info.upOffset
+                      << ",down_offset=" << info.downOffset
+                      << ",assigned_class=" << info.assignedClass
+                      << std::endl;
+            ++printedRows;
+        }
+    }
+
+    const double denom = (windowCount > 0) ? static_cast<double>(windowCount) : 1.0;
+    std::cout << "DIAG_CLASS_HIST"
+              << ",range_kind=" << CurrentRangeKindLabel()
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",windows=" << windowCount
+              << ",down=" << hist[0]
+              << ",neutral=" << hist[1]
+              << ",up=" << hist[2]
+              << ",down_frac=" << (static_cast<double>(hist[0]) / denom)
+              << ",neutral_frac=" << (static_cast<double>(hist[1]) / denom)
+              << ",up_frac=" << (static_cast<double>(hist[2]) / denom)
+              << std::endl;
+}
 }
 
 static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
@@ -367,6 +520,8 @@ int main(int argc, const char * argv[])
                 }
                 catch (const std::exception& e) {   std::cout << "Load latest failed: " << e.what() << "; using default params" << std::endl;   }
             else    std::cout << "load_latest=false; using default-initialized parameters" << std::endl;
+
+            PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
 
             
             size_t totalCorrectLog = 0;

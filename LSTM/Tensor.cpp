@@ -70,6 +70,7 @@ void Tensor::Add(Feature f)
     if (raw_close.size() == raw_close.capacity())   raw_close.reserve(raw_close.size() + 4096);
     if (raw_high.size() == raw_high.capacity())     raw_high.reserve(raw_high.size() + 4096);
     if (raw_low.size() == raw_low.capacity())       raw_low.reserve(raw_low.size() + 4096);
+    if (raw_time.size() == raw_time.capacity())     raw_time.reserve(raw_time.size() + 4096);
 
     FeatureMatrix fm(1, feature_size);
 
@@ -82,6 +83,7 @@ void Tensor::Add(Feature f)
         raw_close.push_back(f.close);
         raw_high.push_back(f.high);
         raw_low.push_back(f.low);
+        raw_time.push_back(f.time);
 
         // Initialize EMA baselines on first sample
         has_ema = true;
@@ -263,6 +265,7 @@ void Tensor::Add(Feature f)
     raw_close.push_back(f.close);
     raw_high.push_back(f.high);
     raw_low.push_back(f.low);
+    raw_time.push_back(f.time);
 }
 
 float Tensor::RawCloseAtIterator(DataSet::const_iterator it) const
@@ -301,3 +304,14 @@ float Tensor::RawLowAtIterator(DataSet::const_iterator it) const
     return raw_low[idx];
 }
 
+PriceTP Tensor::RawTimeAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawTimeAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_time.size(), "RawTimeAtIterator: index out of raw_time bounds");
+#endif
+    return raw_time[idx];
+}
