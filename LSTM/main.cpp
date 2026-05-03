@@ -249,6 +249,11 @@ struct Phase2ScalarStats
     }
 };
 
+bool IsSaneFxPrice(double v)
+{
+    return std::isfinite(v) && v > 0.0 && v >= 0.2 && v <= 2.0;
+}
+
 void PrintPhase2ScalarLine(const char* label,
                            const std::string& rangeKind,
                            const std::string& fromDate,
@@ -287,8 +292,11 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     const size_t cols = (rows > 0) ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
     constexpr size_t kDiagFeatureCols = 8;
     constexpr size_t kDiagWindowCount = 3;
+    constexpr size_t kDiagBadRowLimit = 50;
     constexpr double kNearZeroStdThreshold = 1e-6;
     constexpr double kFeatureAbsMaxWarnThreshold = 50.0;
+    constexpr double kRawFxLowerBound = 0.2;
+    constexpr double kRawFxUpperBound = 2.0;
 
     std::cout << "DIAG_DATA_CONFIG"
               << ",range_kind=" << rangeKind
@@ -342,21 +350,103 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     Phase2ScalarStats rawLowStats;
     Phase2ScalarStats featureGlobalStats;
     std::vector<Phase2ScalarStats> featureColStats(cols);
+    std::vector<double> featureColAbsmax(cols, 0.0);
+    std::vector<double> featureColAbsmaxValue(cols, 0.0);
+    std::vector<size_t> featureColAbsmaxRow(cols, 0);
+    size_t badRawRowCount = 0;
+    size_t badRawRowPrinted = 0;
+    size_t featureSpikeCount = 0;
+    size_t featureSpikePrinted = 0;
+    double globalFeatureAbsmax = 0.0;
+    double globalFeatureAbsmaxValue = 0.0;
+    size_t globalFeatureAbsmaxCol = 0;
+    size_t globalFeatureAbsmaxRow = 0;
 
-    for (auto it = tensor.begin(); it != tensor.end(); ++it)
+    size_t rowIdx = 0;
+    for (auto it = tensor.begin(); it != tensor.end(); ++it, ++rowIdx)
     {
-        rawOpenStats.add(static_cast<double>(tensor.RawOpenAtIterator(it)));
-        rawCloseStats.add(static_cast<double>(tensor.RawCloseAtIterator(it)));
-        rawHighStats.add(static_cast<double>(tensor.RawHighAtIterator(it)));
-        rawLowStats.add(static_cast<double>(tensor.RawLowAtIterator(it)));
+        const double rawOpen = static_cast<double>(tensor.RawOpenAtIterator(it));
+        const double rawClose = static_cast<double>(tensor.RawCloseAtIterator(it));
+        const double rawHigh = static_cast<double>(tensor.RawHighAtIterator(it));
+        const double rawLow = static_cast<double>(tensor.RawLowAtIterator(it));
+        const auto dt = tensor.RawTimeAtIterator(it);
+
+        rawOpenStats.add(rawOpen);
+        rawCloseStats.add(rawClose);
+        rawHighStats.add(rawHigh);
+        rawLowStats.add(rawLow);
+
+        const bool badOpen = !IsSaneFxPrice(rawOpen);
+        const bool badClose = !IsSaneFxPrice(rawClose);
+        const bool badHigh = !IsSaneFxPrice(rawHigh);
+        const bool badLow = !IsSaneFxPrice(rawLow);
+        const bool highLtLow = std::isfinite(rawHigh) && std::isfinite(rawLow) && rawHigh < rawLow;
+        if (badOpen || badClose || badHigh || badLow || highLtLow)
+        {
+            ++badRawRowCount;
+            if (badRawRowPrinted < kDiagBadRowLimit)
+            {
+                std::cout << "DIAG_DATA_BAD_ROW"
+                          << ",range_kind=" << rangeKind
+                          << ",row=" << rowIdx
+                          << ",dt=" << dt
+                          << ",open=" << rawOpen
+                          << ",close=" << rawClose
+                          << ",high=" << rawHigh
+                          << ",low=" << rawLow
+                          << ",bad_open=" << static_cast<int>(badOpen)
+                          << ",bad_close=" << static_cast<int>(badClose)
+                          << ",bad_high=" << static_cast<int>(badHigh)
+                          << ",bad_low=" << static_cast<int>(badLow)
+                          << ",high_lt_low=" << static_cast<int>(highLtLow)
+                          << ",sane_lower_bound=" << kRawFxLowerBound
+                          << ",sane_upper_bound=" << kRawFxUpperBound
+                          << std::endl;
+                ++badRawRowPrinted;
+            }
+        }
 
         auto low = MetaNN::LowerAccess(*it);
         const float* p = low.RawMemory();
         for (size_t c = 0; c < cols; ++c)
         {
             const double v = static_cast<double>(p[c]);
+            const double absV = std::fabs(v);
             featureGlobalStats.add(v);
             featureColStats[c].add(v);
+            if (absV > featureColAbsmax[c])
+            {
+                featureColAbsmax[c] = absV;
+                featureColAbsmaxValue[c] = v;
+                featureColAbsmaxRow[c] = rowIdx;
+            }
+            if (absV > globalFeatureAbsmax)
+            {
+                globalFeatureAbsmax = absV;
+                globalFeatureAbsmaxValue = v;
+                globalFeatureAbsmaxCol = c;
+                globalFeatureAbsmaxRow = rowIdx;
+            }
+            if (absV > kFeatureAbsMaxWarnThreshold)
+            {
+                ++featureSpikeCount;
+                if (featureSpikePrinted < kDiagBadRowLimit)
+                {
+                    std::cout << "DIAG_FEATURE_SPIKE"
+                              << ",range_kind=" << rangeKind
+                              << ",row=" << rowIdx
+                              << ",dt=" << dt
+                              << ",col=" << c
+                              << ",value=" << v
+                              << ",abs_value=" << absV
+                              << ",open=" << rawOpen
+                              << ",close=" << rawClose
+                              << ",high=" << rawHigh
+                              << ",low=" << rawLow
+                              << std::endl;
+                    ++featureSpikePrinted;
+                }
+            }
         }
     }
 
@@ -364,6 +454,14 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "close", rawCloseStats);
     PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "high", rawHighStats);
     PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "low", rawLowStats);
+    std::cout << "DIAG_DATA_BAD_ROW_SUMMARY"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",count=" << badRawRowCount
+              << ",printed=" << badRawRowPrinted
+              << ",limit=" << kDiagBadRowLimit
+              << std::endl;
 
     size_t zeroVarFeatureCount = 0;
     for (const auto& colStat : featureColStats)
@@ -408,6 +506,53 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                   << std::endl;
     }
 
+    std::cout << "DIAG_FEATURE_SPIKE_GLOBAL"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",col=" << globalFeatureAbsmaxCol
+              << ",row=" << globalFeatureAbsmaxRow
+              << ",value=" << globalFeatureAbsmaxValue
+              << ",absmax=" << globalFeatureAbsmax
+              << ",dt=" << tensor.RawTimeAtIterator(tensor.begin() + static_cast<std::ptrdiff_t>(globalFeatureAbsmaxRow))
+              << ",open=" << tensor.RawOpenAtIterator(tensor.begin() + static_cast<std::ptrdiff_t>(globalFeatureAbsmaxRow))
+              << ",close=" << tensor.RawCloseAtIterator(tensor.begin() + static_cast<std::ptrdiff_t>(globalFeatureAbsmaxRow))
+              << ",high=" << tensor.RawHighAtIterator(tensor.begin() + static_cast<std::ptrdiff_t>(globalFeatureAbsmaxRow))
+              << ",low=" << tensor.RawLowAtIterator(tensor.begin() + static_cast<std::ptrdiff_t>(globalFeatureAbsmaxRow))
+              << std::endl;
+
+    for (size_t c = 0; c < cols; ++c)
+    {
+        if (featureColAbsmax[c] <= kFeatureAbsMaxWarnThreshold)
+            continue;
+
+        const auto it = tensor.begin() + static_cast<std::ptrdiff_t>(featureColAbsmaxRow[c]);
+        std::cout << "DIAG_FEATURE_SPIKE_COL"
+                  << ",range_kind=" << rangeKind
+                  << ",from=" << fromDate
+                  << ",to=" << toDate
+                  << ",col=" << c
+                  << ",row=" << featureColAbsmaxRow[c]
+                  << ",value=" << featureColAbsmaxValue[c]
+                  << ",absmax=" << featureColAbsmax[c]
+                  << ",dt=" << tensor.RawTimeAtIterator(it)
+                  << ",open=" << tensor.RawOpenAtIterator(it)
+                  << ",close=" << tensor.RawCloseAtIterator(it)
+                  << ",high=" << tensor.RawHighAtIterator(it)
+                  << ",low=" << tensor.RawLowAtIterator(it)
+                  << std::endl;
+    }
+
+    std::cout << "DIAG_FEATURE_SPIKE_SUMMARY"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",count=" << featureSpikeCount
+              << ",printed=" << featureSpikePrinted
+              << ",limit=" << kDiagBadRowLimit
+              << ",threshold=" << kFeatureAbsMaxWarnThreshold
+              << std::endl;
+
     for (size_t w = 0; w < kDiagWindowCount && rows >= window_size && w + window_size <= rows; ++w)
     {
         Phase2ScalarStats windowStats;
@@ -438,6 +583,72 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                   << ",absmax=" << windowStats.absmax
                   << std::endl;
     }
+
+    size_t badLookaheadWindows = 0;
+    size_t badLookaheadRows = 0;
+    size_t badLookaheadPrinted = 0;
+    for (size_t startRow = 0;
+         startRow + window_size + prediction_horizon - 1 < rows;
+         ++startRow)
+    {
+        const auto startIt = tensor.begin() + static_cast<std::ptrdiff_t>(startRow);
+        const size_t lastRow = startRow + window_size - 1;
+        const auto lastIt = tensor.begin() + static_cast<std::ptrdiff_t>(lastRow);
+        bool windowHasBadLookahead = false;
+
+        for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
+        {
+            const size_t futureRow = lastRow + lookahead;
+            const auto futureIt = tensor.begin() + static_cast<std::ptrdiff_t>(futureRow);
+            const double futureHigh = static_cast<double>(tensor.RawHighAtIterator(futureIt));
+            const double futureLow = static_cast<double>(tensor.RawLowAtIterator(futureIt));
+            const bool badFutureHigh = !IsSaneFxPrice(futureHigh);
+            const bool badFutureLow = !IsSaneFxPrice(futureLow);
+            const bool futureHighLtLow = std::isfinite(futureHigh) && std::isfinite(futureLow) && futureHigh < futureLow;
+            if (!(badFutureHigh || badFutureLow || futureHighLtLow))
+                continue;
+
+            windowHasBadLookahead = true;
+            ++badLookaheadRows;
+            if (badLookaheadPrinted < kDiagBadRowLimit)
+            {
+                const auto info = BuildLookaheadClassInfo(tensor, startIt);
+                std::cout << "DIAG_DATA_BAD_LOOKAHEAD"
+                          << ",range_kind=" << rangeKind
+                          << ",start_row=" << startRow
+                          << ",start_dt=" << tensor.RawTimeAtIterator(lastIt)
+                          << ",close_t=" << tensor.RawCloseAtIterator(lastIt)
+                          << ",future_row=" << futureRow
+                          << ",future_dt=" << tensor.RawTimeAtIterator(futureIt)
+                          << ",future_high=" << futureHigh
+                          << ",future_low=" << futureLow
+                          << ",bad_high=" << static_cast<int>(badFutureHigh)
+                          << ",bad_low=" << static_cast<int>(badFutureLow)
+                          << ",high_lt_low=" << static_cast<int>(futureHighLtLow)
+                          << ",assigned_class=" << info.assignedClass
+                          << ",terminal_logret=" << info.terminalLogReturn
+                          << ",up_hit=" << static_cast<int>(info.upHit)
+                          << ",down_hit=" << static_cast<int>(info.downHit)
+                          << ",up_offset=" << info.upOffset
+                          << ",down_offset=" << info.downOffset
+                          << std::endl;
+                ++badLookaheadPrinted;
+            }
+        }
+
+        if (windowHasBadLookahead)
+            ++badLookaheadWindows;
+    }
+
+    std::cout << "DIAG_DATA_BAD_LOOKAHEAD_SUMMARY"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",windows=" << badLookaheadWindows
+              << ",future_rows=" << badLookaheadRows
+              << ",printed=" << badLookaheadPrinted
+              << ",limit=" << kDiagBadRowLimit
+              << std::endl;
 
     if (featureGlobalStats.nanCount > 0 || featureGlobalStats.infCount > 0 ||
         rawOpenStats.nanCount > 0 || rawOpenStats.infCount > 0 ||
