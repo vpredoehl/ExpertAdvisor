@@ -65,6 +65,10 @@ std::ostream& operator<<(std::ostream& o, Window w)
 
 void Tensor::Add(Feature f)
 {
+    static size_t s_featureRangeGuardDiagCount = 0;
+    constexpr size_t kFeatureRangeGuardDiagLimit = 50;
+    constexpr float kMinRealisticFxRangeRaw = 1.0e-4f; // 1 pip floor for 15m FX bars
+
     // Reduce reallocations by reserving capacity in chunks
     if (ds.size() == ds.capacity()) ds.reserve(ds.size() + 4096);
     if (raw_open.size() == raw_open.capacity())     raw_open.reserve(raw_open.size() + 4096);
@@ -161,22 +165,84 @@ void Tensor::Add(Feature f)
     const float ema8_s  = std::log(ema8  / ref) * kFeatureScale;
     const float ema21_s = std::log(ema21 / ref) * kFeatureScale;
     const float ema50_s = std::log(ema50 / ref) * kFeatureScale;
-    const float denom_range = std::max(range, 1e-6f);
-    p[14] = (c - ema8_s)  / denom_range;
-    p[15] = (c - ema21_s) / denom_range;
-    p[16] = (c - ema50_s) / denom_range;
+    const float denom_range_old = std::max(range, 1e-6f);
+    const float avg_range_scaled =
+        (std::isfinite(avg_range) && avg_range > 0.0f && std::isfinite(ref) && ref > 0.0f)
+            ? std::fabs(std::log((ref + avg_range) / ref) * kFeatureScale)
+            : 0.0f;
+    const float atr_range_scaled =
+        (std::isfinite(atr14) && atr14 > 0.0f && std::isfinite(ref) && ref > 0.0f)
+            ? std::fabs(std::log((ref + atr14) / ref) * kFeatureScale)
+            : 0.0f;
+    const float min_range_scaled =
+        (std::isfinite(ref) && ref > 0.0f)
+            ? std::fabs(std::log((ref + kMinRealisticFxRangeRaw) / ref) * kFeatureScale)
+            : 0.0f;
+    const float denom_range = std::max(std::max(denom_range_old, avg_range_scaled),
+                                       std::max(atr_range_scaled, min_range_scaled));
+    const float col14_before = (c - ema8_s)  / denom_range_old;
+    const float col15_before = (c - ema21_s) / denom_range_old;
+    const float col16_before = (c - ema50_s) / denom_range_old;
+    const float col17_before = (ema8_s  - ema21_s) / denom_range_old;
+    const float col18_before = (ema21_s - ema50_s) / denom_range_old;
+    const float col14_after = (c - ema8_s)  / denom_range;
+    const float col15_after = (c - ema21_s) / denom_range;
+    const float col16_after = (c - ema50_s) / denom_range;
+    const float col17_after = (ema8_s  - ema21_s) / denom_range;
+    const float col18_after = (ema21_s - ema50_s) / denom_range;
+    p[14] = col14_after;
+    p[15] = col15_after;
+    p[16] = col16_after;
 
     // EMA slope (log space) normalized by current candle range
     const float slopeLog8  = std::log(std::max(ema8,  1e-12f) / std::max(ema8_prev,  1e-12f)) * kFeatureScale;
     const float slopeLog21 = std::log(std::max(ema21, 1e-12f) / std::max(ema21_prev, 1e-12f)) * kFeatureScale;
     const float slopeLog50 = std::log(std::max(ema50, 1e-12f) / std::max(ema50_prev, 1e-12f)) * kFeatureScale;
-    p[24] = slopeLog8  / denom_range;
-    p[25] = slopeLog21 / denom_range;
-    p[26] = slopeLog50 / denom_range;
+    const float col24_before = slopeLog8  / denom_range_old;
+    const float col25_before = slopeLog21 / denom_range_old;
+    const float col26_before = slopeLog50 / denom_range_old;
+    const float col24_after = slopeLog8  / denom_range;
+    const float col25_after = slopeLog21 / denom_range;
+    const float col26_after = slopeLog50 / denom_range;
+    p[24] = col24_after;
+    p[25] = col25_after;
+    p[26] = col26_after;
 
     // EMA spread features normalized by current candle range (scaled log space)
-    p[17] = (ema8_s  - ema21_s) / denom_range;
-    p[18] = (ema21_s - ema50_s) / denom_range;
+    p[17] = col17_after;
+    p[18] = col18_after;
+
+    if (denom_range > denom_range_old && s_featureRangeGuardDiagCount < kFeatureRangeGuardDiagLimit)
+    {
+        std::cout << "DIAG_FEATURE_RANGE_GUARD"
+                  << ",row=" << ds.size()
+                  << ",dt=" << f.time
+                  << ",range=" << range
+                  << ",denom_range_old=" << denom_range_old
+                  << ",denom_range_new=" << denom_range
+                  << ",avg_range_raw=" << avg_range
+                  << ",atr14_raw=" << atr14
+                  << ",min_range_scaled=" << min_range_scaled
+                  << ",cols=14|15|16|17|18|24|25|26"
+                  << ",before=14:" << col14_before
+                  << "|15:" << col15_before
+                  << "|16:" << col16_before
+                  << "|17:" << col17_before
+                  << "|18:" << col18_before
+                  << "|24:" << col24_before
+                  << "|25:" << col25_before
+                  << "|26:" << col26_before
+                  << ",after=14:" << col14_after
+                  << "|15:" << col15_after
+                  << "|16:" << col16_after
+                  << "|17:" << col17_after
+                  << "|18:" << col18_after
+                  << "|24:" << col24_after
+                  << "|25:" << col25_after
+                  << "|26:" << col26_after
+                  << std::endl;
+        ++s_featureRangeGuardDiagCount;
+    }
 
     // ATR-normalized EMA distance features in raw price space
     const float denom_atr = std::max(atr14, 1e-12f);

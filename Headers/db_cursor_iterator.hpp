@@ -43,19 +43,20 @@ struct db_forward_iterator
         ++(*this);
         return tmp;
     }
-    auto operator++() -> db_forward_iterator
+    auto operator++() -> db_forward_iterator&
     {
         if(isSTLEnd)    throw std::range_error { "Can't advance rmp_forward_iterator past end" };
-        return { cur, isSTLEnd = !ReadPP(), false };
+        isSTLEnd = !ReadPP();
+        return *this;
     }
 
 private:
-    inline static bool isValidPP = false;
     thread_local static unsigned long magic;
-    unsigned long uniqID;
-    db_cursor_stream<T> *cur;
-    T pp;
-    bool isSTLEnd;
+    unsigned long uniqID = 0;
+    db_cursor_stream<T> *cur = nullptr;
+    T pp {};
+    bool isSTLEnd = true;
+    bool hasValue = false;
 
     bool ReadPP();  // returns true if row was read
 };
@@ -73,15 +74,23 @@ template<typename T> db_forward_iterator<T>::db_forward_iterator(db_cursor_strea
     if(!(isSTLEnd = end))
     {
         uniqID = magic++;
-        if(advance || !isValidPP) isSTLEnd = !ReadPP();
+        if(advance || !hasValue) isSTLEnd = !ReadPP();
     }
 }
 
 template<typename T>
 struct db_cursor_stream : public pqxx::icursorstream
 {
+    std::string queryText;
+    std::string cursorName;
+    size_t nextRowIndex = 0;
+    size_t parseFailDiagCount = 0;
+    size_t badRowDiagCount = 0;
+
     db_cursor_stream(pqxx::work &w, std::string query, std::string curName)
-    : pqxx::icursorstream { static_cast<pqxx::transaction_base&>(w), query, curName } {}
+    : pqxx::icursorstream { static_cast<pqxx::transaction_base&>(w), query, curName },
+      queryText { query },
+      cursorName { curName } {}
 
     auto cbegin() -> db_forward_iterator<T> { return { this, false, false }; }
     auto cend() -> db_forward_iterator<T>   {   return { this, true, false }; }
