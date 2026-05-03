@@ -67,6 +67,7 @@ void Tensor::Add(Feature f)
 {
     // Reduce reallocations by reserving capacity in chunks
     if (ds.size() == ds.capacity()) ds.reserve(ds.size() + 4096);
+    if (raw_open.size() == raw_open.capacity())     raw_open.reserve(raw_open.size() + 4096);
     if (raw_close.size() == raw_close.capacity())   raw_close.reserve(raw_close.size() + 4096);
     if (raw_high.size() == raw_high.capacity())     raw_high.reserve(raw_high.size() + 4096);
     if (raw_low.size() == raw_low.capacity())       raw_low.reserve(raw_low.size() + 4096);
@@ -80,6 +81,7 @@ void Tensor::Add(Feature f)
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
+        raw_open.push_back(f.open);
         raw_close.push_back(f.close);
         raw_high.push_back(f.high);
         raw_low.push_back(f.low);
@@ -262,6 +264,7 @@ void Tensor::Add(Feature f)
     
     prev_close = f.close;
     ds.push_back(std::move(fm));
+    raw_open.push_back(f.open);
     raw_close.push_back(f.close);
     raw_high.push_back(f.high);
     raw_low.push_back(f.low);
@@ -302,6 +305,18 @@ float Tensor::RawLowAtIterator(DataSet::const_iterator it) const
     LSTM_ASSERT(idx < raw_low.size(), "RawLowAtIterator: index out of raw_low bounds");
 #endif
     return raw_low[idx];
+}
+
+float Tensor::RawOpenAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawOpenAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_open.size(), "RawOpenAtIterator: index out of raw_open bounds");
+#endif
+    return raw_open[idx];
 }
 
 PriceTP Tensor::RawTimeAtIterator(DataSet::const_iterator it) const

@@ -115,6 +115,171 @@ void EA::LSTM::PrintMatrixSummary(const char* label,
     }
     std::cout << "\n";
 }
+
+namespace
+{
+struct Phase2MatrixStats
+{
+    size_t finiteCount = 0;
+    size_t nanCount = 0;
+    size_t infCount = 0;
+    double sum = 0.0;
+    double sumSq = 0.0;
+    double min = std::numeric_limits<double>::infinity();
+    double max = -std::numeric_limits<double>::infinity();
+    double absmax = 0.0;
+
+    void add(double v)
+    {
+        if (std::isnan(v))
+        {
+            ++nanCount;
+            return;
+        }
+        if (!std::isfinite(v))
+        {
+            ++infCount;
+            return;
+        }
+        ++finiteCount;
+        min = std::min(min, v);
+        max = std::max(max, v);
+        absmax = std::max(absmax, std::fabs(v));
+        sum += v;
+        sumSq += v * v;
+    }
+
+    double mean() const
+    {
+        return finiteCount ? (sum / static_cast<double>(finiteCount)) : 0.0;
+    }
+
+    double stddev() const
+    {
+        if (!finiteCount) return 0.0;
+        const double m = mean();
+        return std::sqrt(std::max(0.0, sumSq / static_cast<double>(finiteCount) - m * m));
+    }
+};
+
+template <typename Mat>
+void PrintPhase2MatrixDiagnostics(const char* stem,
+                                  const char* warnLabel,
+                                  const Mat& m,
+                                  double absmaxWarnThreshold,
+                                  double nearZeroStdThreshold,
+                                  size_t colsToPrint = 8,
+                                  size_t windowsToPrint = 3)
+{
+    MetaNN::NSMetalMatMul::WaitForAll();
+    auto ev = MetaNN::Evaluate(m);
+    MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> host(ev.Shape()[0], ev.Shape()[1]);
+    MetaNN::DataCopy(ev, host);
+    auto low = MetaNN::LowerAccess(host);
+
+    const float* p = low.RawMemory();
+    const size_t rows = host.Shape()[0];
+    const size_t cols = host.Shape()[1];
+    Phase2MatrixStats globalStats;
+    std::vector<Phase2MatrixStats> colStats(cols);
+
+    for (size_t r = 0; r < rows; ++r)
+    {
+        for (size_t c = 0; c < cols; ++c)
+        {
+            const double v = static_cast<double>(p[r * cols + c]);
+            globalStats.add(v);
+            colStats[c].add(v);
+        }
+    }
+
+    size_t zeroVarFeatureCount = 0;
+    for (const auto& s : colStats)
+    {
+        if (s.finiteCount > 0 && s.stddev() <= nearZeroStdThreshold)
+            ++zeroVarFeatureCount;
+    }
+
+    std::cout << stem
+              << "_GLOBAL"
+              << ",rows=" << rows
+              << ",cols=" << cols
+              << ",finite=" << globalStats.finiteCount
+              << ",nan=" << globalStats.nanCount
+              << ",inf=" << globalStats.infCount
+              << ",min=" << (globalStats.finiteCount ? globalStats.min : 0.0)
+              << ",max=" << (globalStats.finiteCount ? globalStats.max : 0.0)
+              << ",mean=" << globalStats.mean()
+              << ",std=" << globalStats.stddev()
+              << ",absmax=" << globalStats.absmax
+              << ",zero_var_features=" << zeroVarFeatureCount
+              << std::endl;
+
+    for (size_t c = 0; c < std::min(cols, colsToPrint); ++c)
+    {
+        const auto& s = colStats[c];
+        std::cout << stem
+                  << "_COL"
+                  << ",idx=" << c
+                  << ",finite=" << s.finiteCount
+                  << ",nan=" << s.nanCount
+                  << ",inf=" << s.infCount
+                  << ",min=" << (s.finiteCount ? s.min : 0.0)
+                  << ",max=" << (s.finiteCount ? s.max : 0.0)
+                  << ",mean=" << s.mean()
+                  << ",std=" << s.stddev()
+                  << ",absmax=" << s.absmax
+                  << std::endl;
+    }
+
+    for (size_t w = 0; w < windowsToPrint && rows >= window_size && w + window_size <= rows; ++w)
+    {
+        Phase2MatrixStats windowStats;
+        for (size_t r = w; r < w + window_size; ++r)
+        {
+            for (size_t c = 0; c < cols; ++c)
+                windowStats.add(static_cast<double>(p[r * cols + c]));
+        }
+
+        std::cout << stem
+                  << "_WINDOW"
+                  << ",window_idx=" << w
+                  << ",start_row=" << w
+                  << ",rows=" << window_size
+                  << ",cols=" << cols
+                  << ",finite=" << windowStats.finiteCount
+                  << ",nan=" << windowStats.nanCount
+                  << ",inf=" << windowStats.infCount
+                  << ",min=" << (windowStats.finiteCount ? windowStats.min : 0.0)
+                  << ",max=" << (windowStats.finiteCount ? windowStats.max : 0.0)
+                  << ",mean=" << windowStats.mean()
+                  << ",std=" << windowStats.stddev()
+                  << ",absmax=" << windowStats.absmax
+                  << std::endl;
+    }
+
+    if (globalStats.absmax > absmaxWarnThreshold)
+    {
+        std::cout << warnLabel
+                  << ",kind=absmax_exceeds_sane_threshold"
+                  << ",stem=" << stem
+                  << ",threshold=" << absmaxWarnThreshold
+                  << ",absmax=" << globalStats.absmax
+                  << std::endl;
+    }
+
+    if (zeroVarFeatureCount > 0)
+    {
+        std::cout << warnLabel
+                  << ",kind=near_zero_std_features"
+                  << ",stem=" << stem
+                  << ",threshold=" << nearZeroStdThreshold
+                  << ",count=" << zeroVarFeatureCount
+                  << std::endl;
+    }
+}
+}
+
 static void Log3ClassSample(int actual, int predicted)
 {
     if (actual >=0 && actual < static_cast<int>(direction_output_size)) epoch_actual[actual]++;
@@ -631,6 +796,11 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
                 "PredictNextDirectionProbs: model input width must equal base features + enabled return features");
 #endif
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> model_row(1, modelFeatureCount);
+    static bool s_printed_phase2_infer_direction_diag = false;
+    const bool capturePhase2Window = !s_printed_phase2_infer_direction_diag;
+    EAMatrix phase2WindowRows = capturePhase2Window
+        ? EAMatrix(static_cast<size_t>(w.end() - w.begin()), modelFeatureCount)
+        : EAMatrix(0, 0);
 
     size_t rowIdx = 0;
     for (const auto& f_sample : w)
@@ -651,8 +821,54 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
 #endif
         }
 
+        for (size_t c = 0; c < modelFeatureCount; ++c)
+        {
+            const float v = dst[c];
+            if (!std::isfinite(v))
+            {
+                std::cout << "DIAG_NORM_FAIL"
+                          << ",phase=inference_direction"
+                          << ",row=" << rowIdx
+                          << ",col=" << c
+                          << ",value=" << v
+                          << std::endl;
+                LSTM_ASSERT(false, "PredictNextDirectionProbs: non-finite feature detected before LSTM");
+            }
+        }
+
+        if (capturePhase2Window)
+        {
+            auto lowPhase2 = MetaNN::LowerAccess(phase2WindowRows);
+            float* phase2Ptr = lowPhase2.MutableRawMemory();
+            std::memcpy(phase2Ptr + rowIdx * modelFeatureCount,
+                        dst,
+                        modelFeatureCount * sizeof(float));
+        }
+
         forwardStep(model_row, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
         ++rowIdx;
+    }
+
+    if (capturePhase2Window)
+    {
+        std::cout << "DIAG_FEATURE_CONFIG"
+                  << ",phase=inference_direction"
+                  << ",base_feature_cols=" << baseFeatureCount
+                  << ",appended_return_feature_cols=" << kReturnFeatureCount
+                  << ",model_feature_cols=" << modelFeatureCount
+                  << ",feature_uses_future_values=0"
+                  << std::endl;
+        std::cout << "DIAG_NORM_WARN"
+                  << ",kind=classification_inference_prelstm_unsanitized"
+                  << ",training_clamp=10"
+                  << ",classification_inference_clamp=0"
+                  << std::endl;
+        PrintPhase2MatrixDiagnostics("DIAG_FEATURE_INFER_DIRECTION_PRELSTM",
+                                     "DIAG_FEATURE_WARN",
+                                     phase2WindowRows,
+                                     50.0,
+                                     1e-6);
+        s_printed_phase2_infer_direction_diag = true;
     }
 
     auto logits = MetaNN::Dot(prevHiddenState, returnHeadDirWeight) + returnHeadDirBias;
@@ -2029,6 +2245,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
     const size_t featureCount = modelFeatureCount;
     EAMatrix prebuilt_rows(batchRows, featureCount);
+    if (isFirstBatchCall)
+    {
+        std::cout << "DIAG_FEATURE_CONFIG"
+                  << ",phase=train"
+                  << ",base_feature_cols=" << baseFeatureCount
+                  << ",appended_return_feature_cols=" << kReturnFeatureCount
+                  << ",model_feature_cols=" << modelFeatureCount
+                  << ",feature_uses_future_values=0"
+                  << std::endl;
+    }
     {
         auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
         float* dst = lowPrebuilt.MutableRawMemory();
@@ -2052,12 +2278,33 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             for (size_t c = 0; c < featureCount; ++c)
             {
-                float& v = dstRow[c];
-                if (!std::isfinite(v))  v = 0.0f;
-                else                    v = std::clamp(v, -10.0f, 10.0f);
+                const float v = dstRow[c];
+                if (!std::isfinite(v))
+                {
+                    std::cout << "DIAG_NORM_FAIL"
+                              << ",phase=train"
+                              << ",row=" << r
+                              << ",col=" << c
+                              << ",value=" << v
+                              << std::endl;
+                    LSTM_ASSERT(false, "CalculateBatch: non-finite feature detected before LSTM");
+                }
             }
         }
     }
+
+    if (isFirstBatchCall)
+        PrintPhase2MatrixDiagnostics("DIAG_FEATURE_PRELSTM", "DIAG_FEATURE_WARN", prebuilt_rows, 50.0, 1e-6);
+
+    {
+        auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
+        float* dst = lowPrebuilt.MutableRawMemory();
+        for (size_t i = 0; i < batchRows * featureCount; ++i)
+            dst[i] = std::clamp(dst[i], -10.0f, 10.0f);
+    }
+
+    if (isFirstBatchCall)
+        PrintPhase2MatrixDiagnostics("DIAG_NORM_PRELSTM", "DIAG_NORM_WARN", prebuilt_rows, 9.99, 1e-6);
 
     auto buildWindowBatch = [&](auto first, auto last) -> WindowBatch
     {
@@ -3060,12 +3307,15 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
             float& v = dst[c];
             if (!std::isfinite(v))
             {
-                v = 0.0f;
+                std::cout << "DIAG_NORM_FAIL"
+                          << ",phase=inference_regression_logret"
+                          << ",row=" << rowIdx
+                          << ",col=" << c
+                          << ",value=" << v
+                          << std::endl;
+                LSTM_ASSERT(false, "PredictNextReturn: non-finite feature detected before LSTM");
             }
-            else
-            {
-                v = std::clamp(v, -10.0f, 10.0f);
-            }
+            v = std::clamp(v, -10.0f, 10.0f);
         }
 
         forwardStep(model_row, ww, bias, prevHiddenState, prevCellState, xh_concat_row);
@@ -3144,12 +3394,15 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
             float& v = dst[c];
             if (!std::isfinite(v))
             {
-                v = 0.0f;
+                std::cout << "DIAG_NORM_FAIL"
+                          << ",phase=inference_regression_relmove"
+                          << ",row=" << rowIdx
+                          << ",col=" << c
+                          << ",value=" << v
+                          << std::endl;
+                LSTM_ASSERT(false, "PredictNextRelativeMove: non-finite feature detected before LSTM");
             }
-            else
-            {
-                v = std::clamp(v, -10.0f, 10.0f);
-            }
+            v = std::clamp(v, -10.0f, 10.0f);
         }
 
         forwardStep(model_row, ww, bias, prevHiddenState, prevCellState, xh_concat_row);

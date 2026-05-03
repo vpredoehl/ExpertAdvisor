@@ -204,6 +204,270 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
               << ",up_frac=" << (static_cast<double>(hist[2]) / denom)
               << std::endl;
 }
+
+struct Phase2ScalarStats
+{
+    size_t finiteCount = 0;
+    size_t nanCount = 0;
+    size_t infCount = 0;
+    double sum = 0.0;
+    double sumSq = 0.0;
+    double min = std::numeric_limits<double>::infinity();
+    double max = -std::numeric_limits<double>::infinity();
+    double absmax = 0.0;
+
+    void add(double v)
+    {
+        if (std::isnan(v))
+        {
+            ++nanCount;
+            return;
+        }
+        if (!std::isfinite(v))
+        {
+            ++infCount;
+            return;
+        }
+        ++finiteCount;
+        min = std::min(min, v);
+        max = std::max(max, v);
+        absmax = std::max(absmax, std::fabs(v));
+        sum += v;
+        sumSq += v * v;
+    }
+
+    double mean() const
+    {
+        return finiteCount ? (sum / static_cast<double>(finiteCount)) : 0.0;
+    }
+
+    double stddev() const
+    {
+        if (!finiteCount) return 0.0;
+        const double m = mean();
+        return std::sqrt(std::max(0.0, sumSq / static_cast<double>(finiteCount) - m * m));
+    }
+};
+
+void PrintPhase2ScalarLine(const char* label,
+                           const std::string& rangeKind,
+                           const std::string& fromDate,
+                           const std::string& toDate,
+                           const char* name,
+                           const Phase2ScalarStats& s)
+{
+    std::cout << label
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",name=" << name
+              << ",finite=" << s.finiteCount
+              << ",nan=" << s.nanCount
+              << ",inf=" << s.infCount
+              << ",min=" << (s.finiteCount ? s.min : 0.0)
+              << ",max=" << (s.finiteCount ? s.max : 0.0)
+              << ",mean=" << s.mean()
+              << ",std=" << s.stddev()
+              << ",absmax=" << s.absmax
+              << std::endl;
+}
+
+void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
+                                  const Tensor& tensor,
+                                  const std::string& fromDate,
+                                  const std::string& toDate)
+{
+    static bool printed = false;
+    if (printed)
+        return;
+    printed = true;
+
+    const std::string rangeKind = CurrentRangeKindLabel();
+    const size_t rows = static_cast<size_t>(tensor.end() - tensor.begin());
+    const size_t cols = (rows > 0) ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
+    constexpr size_t kDiagFeatureCols = 8;
+    constexpr size_t kDiagWindowCount = 3;
+    constexpr double kNearZeroStdThreshold = 1e-6;
+    constexpr double kFeatureAbsMaxWarnThreshold = 50.0;
+
+    std::cout << "DIAG_DATA_CONFIG"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",source=postgresql_candlestick_query"
+              << ",rows=" << rows
+              << ",raw_open=1"
+              << ",raw_close=1"
+              << ",raw_high=1"
+              << ",raw_low=1"
+              << ",raw_volume=0"
+              << ",raw_target=0"
+              << std::endl;
+    std::cout << "DIAG_FEATURE_CONFIG"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",base_feature_cols=" << cols
+              << ",feature_size_constant=" << feature_size
+              << ",kFeatureScale=" << kFeatureScale
+              << ",feature_uses_future_values=0"
+              << ",feature_uses_target_column=0"
+              << std::endl;
+    std::cout << "DIAG_NORM_CONFIG"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",target_use_zscore=" << (l.targetUseZScore ? 1 : 0)
+              << ",target_mean=" << l.targetMean
+              << ",target_std=" << l.targetStd
+              << ",train_pre_lstm_nonfinite_fail=1"
+              << ",train_pre_lstm_clamp=10"
+              << ",classification_inference_pre_lstm_nonfinite_fail=1"
+              << ",classification_inference_pre_lstm_clamp=0"
+              << ",regression_inference_pre_lstm_nonfinite_fail=1"
+              << ",regression_inference_pre_lstm_clamp=10"
+              << std::endl;
+    std::cout << "DIAG_DATA_WARN"
+              << ",range_kind=" << rangeKind
+              << ",kind=volume_not_ingested_in_active_postgresql_path"
+              << std::endl;
+    std::cout << "DIAG_DATA_WARN"
+              << ",range_kind=" << rangeKind
+              << ",kind=target_column_not_used_in_active_postgresql_path"
+              << std::endl;
+
+    Phase2ScalarStats rawOpenStats;
+    Phase2ScalarStats rawCloseStats;
+    Phase2ScalarStats rawHighStats;
+    Phase2ScalarStats rawLowStats;
+    Phase2ScalarStats featureGlobalStats;
+    std::vector<Phase2ScalarStats> featureColStats(cols);
+
+    for (auto it = tensor.begin(); it != tensor.end(); ++it)
+    {
+        rawOpenStats.add(static_cast<double>(tensor.RawOpenAtIterator(it)));
+        rawCloseStats.add(static_cast<double>(tensor.RawCloseAtIterator(it)));
+        rawHighStats.add(static_cast<double>(tensor.RawHighAtIterator(it)));
+        rawLowStats.add(static_cast<double>(tensor.RawLowAtIterator(it)));
+
+        auto low = MetaNN::LowerAccess(*it);
+        const float* p = low.RawMemory();
+        for (size_t c = 0; c < cols; ++c)
+        {
+            const double v = static_cast<double>(p[c]);
+            featureGlobalStats.add(v);
+            featureColStats[c].add(v);
+        }
+    }
+
+    PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "open", rawOpenStats);
+    PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "close", rawCloseStats);
+    PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "high", rawHighStats);
+    PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "low", rawLowStats);
+
+    size_t zeroVarFeatureCount = 0;
+    for (const auto& colStat : featureColStats)
+    {
+        if (colStat.finiteCount > 0 && colStat.stddev() <= kNearZeroStdThreshold)
+            ++zeroVarFeatureCount;
+    }
+
+    std::cout << "DIAG_FEATURE_BASE_GLOBAL"
+              << ",range_kind=" << rangeKind
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << ",rows=" << rows
+              << ",cols=" << cols
+              << ",finite=" << featureGlobalStats.finiteCount
+              << ",nan=" << featureGlobalStats.nanCount
+              << ",inf=" << featureGlobalStats.infCount
+              << ",min=" << (featureGlobalStats.finiteCount ? featureGlobalStats.min : 0.0)
+              << ",max=" << (featureGlobalStats.finiteCount ? featureGlobalStats.max : 0.0)
+              << ",mean=" << featureGlobalStats.mean()
+              << ",std=" << featureGlobalStats.stddev()
+              << ",absmax=" << featureGlobalStats.absmax
+              << ",zero_var_features=" << zeroVarFeatureCount
+              << std::endl;
+
+    for (size_t c = 0; c < std::min(cols, kDiagFeatureCols); ++c)
+    {
+        const auto& s = featureColStats[c];
+        std::cout << "DIAG_FEATURE_BASE_COL"
+                  << ",range_kind=" << rangeKind
+                  << ",from=" << fromDate
+                  << ",to=" << toDate
+                  << ",idx=" << c
+                  << ",finite=" << s.finiteCount
+                  << ",nan=" << s.nanCount
+                  << ",inf=" << s.infCount
+                  << ",min=" << (s.finiteCount ? s.min : 0.0)
+                  << ",max=" << (s.finiteCount ? s.max : 0.0)
+                  << ",mean=" << s.mean()
+                  << ",std=" << s.stddev()
+                  << ",absmax=" << s.absmax
+                  << std::endl;
+    }
+
+    for (size_t w = 0; w < kDiagWindowCount && rows >= window_size && w + window_size <= rows; ++w)
+    {
+        Phase2ScalarStats windowStats;
+        auto it = tensor.begin() + static_cast<std::ptrdiff_t>(w);
+        for (size_t r = 0; r < window_size; ++r, ++it)
+        {
+            auto low = MetaNN::LowerAccess(*it);
+            const float* p = low.RawMemory();
+            for (size_t c = 0; c < cols; ++c)
+                windowStats.add(static_cast<double>(p[c]));
+        }
+
+        std::cout << "DIAG_FEATURE_BASE_WINDOW"
+                  << ",range_kind=" << rangeKind
+                  << ",from=" << fromDate
+                  << ",to=" << toDate
+                  << ",window_idx=" << w
+                  << ",start_row=" << w
+                  << ",rows=" << window_size
+                  << ",cols=" << cols
+                  << ",finite=" << windowStats.finiteCount
+                  << ",nan=" << windowStats.nanCount
+                  << ",inf=" << windowStats.infCount
+                  << ",min=" << (windowStats.finiteCount ? windowStats.min : 0.0)
+                  << ",max=" << (windowStats.finiteCount ? windowStats.max : 0.0)
+                  << ",mean=" << windowStats.mean()
+                  << ",std=" << windowStats.stddev()
+                  << ",absmax=" << windowStats.absmax
+                  << std::endl;
+    }
+
+    if (featureGlobalStats.nanCount > 0 || featureGlobalStats.infCount > 0 ||
+        rawOpenStats.nanCount > 0 || rawOpenStats.infCount > 0 ||
+        rawCloseStats.nanCount > 0 || rawCloseStats.infCount > 0 ||
+        rawHighStats.nanCount > 0 || rawHighStats.infCount > 0 ||
+        rawLowStats.nanCount > 0 || rawLowStats.infCount > 0)
+    {
+        LSTM_ASSERT(false, "PrintPhase2TensorDiagnostics: non-finite raw data or base features detected before LSTM");
+    }
+
+    if (featureGlobalStats.absmax > kFeatureAbsMaxWarnThreshold)
+    {
+        std::cout << "DIAG_FEATURE_WARN"
+                  << ",range_kind=" << rangeKind
+                  << ",kind=absmax_exceeds_sane_threshold"
+                  << ",threshold=" << kFeatureAbsMaxWarnThreshold
+                  << ",absmax=" << featureGlobalStats.absmax
+                  << std::endl;
+    }
+
+    if (zeroVarFeatureCount > 0)
+    {
+        std::cout << "DIAG_FEATURE_WARN"
+                  << ",range_kind=" << rangeKind
+                  << ",kind=near_zero_std_features"
+                  << ",threshold=" << kNearZeroStdThreshold
+                  << ",count=" << zeroVarFeatureCount
+                  << std::endl;
+    }
+}
 }
 
 static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
@@ -485,7 +749,6 @@ int main(int argc, const char * argv[])
     try
     {
         pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
-        std::string fromDate{ argv[1] }, toDate{ argv[2] };
         for (auto tbl : tables)
         {
             std::string rawPriceTableName{ tbl[0].c_str() };
@@ -522,6 +785,7 @@ int main(int argc, const char * argv[])
             else    std::cout << "load_latest=false; using default-initialized parameters" << std::endl;
 
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
+            PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
 
             
             size_t totalCorrectLog = 0;

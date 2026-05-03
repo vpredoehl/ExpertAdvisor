@@ -47,6 +47,7 @@ class Tensor
     float prev_close = 0.0f;
     string table;
     DataSet ds;
+    std::vector<float> raw_open;
     std::vector<float> raw_close;
     std::vector<float> raw_high;
     std::vector<float> raw_low;
@@ -126,6 +127,7 @@ public:
     float RawCloseAtIterator(DataSet::const_iterator it) const;
     float RawHighAtIterator(DataSet::const_iterator it) const;
     float RawLowAtIterator(DataSet::const_iterator it) const;
+    float RawOpenAtIterator(DataSet::const_iterator it) const;
     PriceTP RawTimeAtIterator(DataSet::const_iterator it) const;
 
 };
