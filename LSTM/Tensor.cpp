@@ -166,20 +166,13 @@ void Tensor::Add(Feature f)
     const float ema21_s = std::log(ema21 / ref) * kFeatureScale;
     const float ema50_s = std::log(ema50 / ref) * kFeatureScale;
     const float denom_range_old = std::max(range, 1e-6f);
-    const float avg_range_scaled =
-        (std::isfinite(avg_range) && avg_range > 0.0f && std::isfinite(ref) && ref > 0.0f)
-            ? std::fabs(std::log((ref + avg_range) / ref) * kFeatureScale)
-            : 0.0f;
-    const float atr_range_scaled =
-        (std::isfinite(atr14) && atr14 > 0.0f && std::isfinite(ref) && ref > 0.0f)
-            ? std::fabs(std::log((ref + atr14) / ref) * kFeatureScale)
-            : 0.0f;
-    const float min_range_scaled =
+    const float typical_raw_range = std::max(std::max(avg_range, atr14), 0.0f);
+    const float fallback_raw_range = std::max(kMinRealisticFxRangeRaw, 0.25f * typical_raw_range);
+    const float denom_range =
         (std::isfinite(ref) && ref > 0.0f)
-            ? std::fabs(std::log((ref + kMinRealisticFxRangeRaw) / ref) * kFeatureScale)
-            : 0.0f;
-    const float denom_range = std::max(std::max(denom_range_old, avg_range_scaled),
-                                       std::max(atr_range_scaled, min_range_scaled));
+            ? std::max(denom_range_old,
+                       std::fabs(std::log((ref + fallback_raw_range) / ref) * kFeatureScale))
+            : denom_range_old;
     const float col14_before = (c - ema8_s)  / denom_range_old;
     const float col15_before = (c - ema21_s) / denom_range_old;
     const float col16_before = (c - ema50_s) / denom_range_old;
@@ -222,7 +215,7 @@ void Tensor::Add(Feature f)
                   << ",denom_range_new=" << denom_range
                   << ",avg_range_raw=" << avg_range
                   << ",atr14_raw=" << atr14
-                  << ",min_range_scaled=" << min_range_scaled
+                  << ",fallback_raw_range=" << fallback_raw_range
                   << ",cols=14|15|16|17|18|24|25|26"
                   << ",before=14:" << col14_before
                   << "|15:" << col15_before
