@@ -12,6 +12,10 @@
 #include <iomanip>
 #include <cmath>
 #include <ctime>
+#include <locale>
+#include <cstdlib>
+#include <cerrno>
+#include <cctype>
 
 namespace
 {
@@ -26,6 +30,7 @@ bool ParseTimestampStrict(const char* text, PriceTP& out)
 
     std::tm ct {};
     std::istringstream ss { text };
+    ss.imbue(std::locale::classic());
     ss >> std::get_time(&ct, "%F %T");
     if (ss.fail())
         return false;
@@ -40,10 +45,21 @@ bool ParseFloatStrict(const char* text, float& out)
     if (!text)
         return false;
 
-    std::istringstream ss { text };
-    ss >> out;
-    ss >> std::ws;
-    return !ss.fail() && ss.eof();
+    errno = 0;
+    char* end = nullptr;
+    const float parsed = std::strtof(text, &end);
+
+    if (end == text || errno == ERANGE || !std::isfinite(parsed))
+        return false;
+
+    while (end && *end != '\0' && std::isspace(static_cast<unsigned char>(*end)))
+        ++end;
+
+    if (end && *end != '\0')
+        return false;
+
+    out = parsed;
+    return true;
 }
 
 bool IsSaneFxPrice(float v)
@@ -82,18 +98,18 @@ bool db_input_iterator<Feature>::ReadPP()
         return false;
 
     const size_t rowIndex = cur->nextRowIndex++;
-    const char* dtText = r[0]["dt"].c_str();
-    const char* openText = r[0]["open"].c_str();
-    const char* closeText = r[0]["close"].c_str();
-    const char* highText = r[0]["high"].c_str();
-    const char* lowText = r[0]["low"].c_str();
+    const std::string dtText = r[0]["dt"].c_str();
+    const std::string openText = r[0]["open"].c_str();
+    const std::string closeText = r[0]["close"].c_str();
+    const std::string highText = r[0]["high"].c_str();
+    const std::string lowText = r[0]["low"].c_str();
 
     Feature parsed {};
-    const bool dtOk = ParseTimestampStrict(dtText, parsed.time);
-    const bool openOk = ParseFloatStrict(openText, parsed.open);
-    const bool closeOk = ParseFloatStrict(closeText, parsed.close);
-    const bool highOk = ParseFloatStrict(highText, parsed.high);
-    const bool lowOk = ParseFloatStrict(lowText, parsed.low);
+    const bool dtOk = ParseTimestampStrict(dtText.c_str(), parsed.time);
+    const bool openOk = ParseFloatStrict(openText.c_str(), parsed.open);
+    const bool closeOk = ParseFloatStrict(closeText.c_str(), parsed.close);
+    const bool highOk = ParseFloatStrict(highText.c_str(), parsed.high);
+    const bool lowOk = ParseFloatStrict(lowText.c_str(), parsed.low);
     const bool parseOk = dtOk && openOk && closeOk && highOk && lowOk;
 
     pp = parsed;
@@ -110,11 +126,11 @@ bool db_input_iterator<Feature>::ReadPP()
             << ",close_ok=" << static_cast<int>(closeOk)
             << ",high_ok=" << static_cast<int>(highOk)
             << ",low_ok=" << static_cast<int>(lowOk)
-            << ",dt_text=" << (dtText ? dtText : "")
-            << ",open_text=" << (openText ? openText : "")
-            << ",close_text=" << (closeText ? closeText : "")
-            << ",high_text=" << (highText ? highText : "")
-            << ",low_text=" << (lowText ? lowText : "")
+            << ",dt_text=" << dtText
+            << ",open_text=" << openText
+            << ",close_text=" << closeText
+            << ",high_text=" << highText
+            << ",low_text=" << lowText
             << ",query=" << cur->queryText
             << std::endl;
             ++cur->parseFailDiagCount;
