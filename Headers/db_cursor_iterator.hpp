@@ -18,32 +18,31 @@
 template<typename T> struct db_cursor_stream;
 
 template<typename T>
-struct db_forward_iterator
+struct db_input_iterator
 {
     using value_type = T;
-    using iterator_category = std::forward_iterator_tag;
+    using iterator_category = std::input_iterator_tag;
     using difference_type = signed long;
 
-    db_forward_iterator(db_cursor_stream<T> *c, bool end, bool = true);
+    db_input_iterator(db_cursor_stream<T> *c, bool end, bool = true);
 
     const T operator*() const    {   return pp;  }
     const T* operator->() const    {   return &pp;  }
 
-    bool operator!=(db_forward_iterator i) const  {   return !operator==(i);   }
-    bool operator==(db_forward_iterator i) const
+    bool operator!=(db_input_iterator i) const  {   return !(*this == i);   }
+    bool operator==(const db_input_iterator& i) const
     {
-        if(isSTLEnd == i.isSTLEnd)  return true;
-        if(!isSTLEnd && !i.isSTLEnd) return uniqID == i.uniqID;
-        return false;
+        if (isSTLEnd && i.isSTLEnd) return true;
+        if (isSTLEnd != i.isSTLEnd) return false;
+        return cur == i.cur && uniqID == i.uniqID;
     }
-
-    auto operator++(int) -> db_forward_iterator
+    auto operator++(int) -> db_input_iterator
     {
-        db_forward_iterator tmp(*this);
+        db_input_iterator tmp(*this);
         ++(*this);
         return tmp;
     }
-    auto operator++() -> db_forward_iterator&
+    auto operator++() -> db_input_iterator&
     {
         if(isSTLEnd)    throw std::range_error { "Can't advance rmp_forward_iterator past end" };
         isSTLEnd = !ReadPP();
@@ -56,25 +55,19 @@ private:
     db_cursor_stream<T> *cur = nullptr;
     T pp {};
     bool isSTLEnd = true;
-    bool hasValue = false;
 
     bool ReadPP();  // returns true if row was read
 };
-template<typename T> struct std::iterator_traits<db_forward_iterator<T>>
-{
-    using value_type = typename db_forward_iterator<T>::value_type;
-    using iterator_category = std::forward_iterator_tag;
-};
 
-template<typename T> thread_local unsigned long db_forward_iterator<T>::magic = 0;
-template<> bool db_forward_iterator<PricePoint>::ReadPP();
-template<typename T> db_forward_iterator<T>::db_forward_iterator(db_cursor_stream<T> *c, bool end, bool advance)
+template<typename T> thread_local unsigned long db_input_iterator<T>::magic = 0;
+template<> bool db_input_iterator<PricePoint>::ReadPP();
+template<typename T> db_input_iterator<T>::db_input_iterator(db_cursor_stream<T> *c, bool end, bool advance)
     : cur { c }
 {
     if(!(isSTLEnd = end))
     {
         uniqID = magic++;
-        if(advance || !hasValue) isSTLEnd = !ReadPP();
+        if(advance) isSTLEnd = !ReadPP();
     }
 }
 
@@ -92,8 +85,8 @@ struct db_cursor_stream : public pqxx::icursorstream
       queryText { query },
       cursorName { curName } {}
 
-    auto cbegin() -> db_forward_iterator<T> { return { this, false, false }; }
-    auto cend() -> db_forward_iterator<T>   {   return { this, true, false }; }
+    auto begin() -> db_input_iterator<T> { return { this, false, true }; }
+    auto end() -> db_input_iterator<T>   {   return { this, true, false }; }
 };
 
 #endif /* ResultIter_hpp */

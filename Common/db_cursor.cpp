@@ -54,12 +54,11 @@ bool IsSaneFxPrice(float v)
 
 
 template<>
-bool db_forward_iterator<PricePoint>::ReadPP()
+bool db_input_iterator<PricePoint>::ReadPP()
 {
     pqxx::result r;
     bool lineRead = *cur >> r;
     pp = PricePoint {};
-    hasValue = false;
 
     if(lineRead)
     {
@@ -67,19 +66,17 @@ bool db_forward_iterator<PricePoint>::ReadPP()
         std::istringstream time { r[0]["time"].c_str() };
 
         time >> pp.time;  bid >> pp.bid; ask >> pp.ask;
-        hasValue = true;
     }
     return lineRead;
 }
 
 
 template<>
-bool db_forward_iterator<Feature>::ReadPP()
+bool db_input_iterator<Feature>::ReadPP()
 {
     pqxx::result r;
     bool lineRead = *cur >> r;
     pp = Feature {};
-    hasValue = false;
 
     if(!lineRead)
         return false;
@@ -100,28 +97,30 @@ bool db_forward_iterator<Feature>::ReadPP()
     const bool parseOk = dtOk && openOk && closeOk && highOk && lowOk;
 
     pp = parsed;
-    hasValue = true;
 
-    if (!parseOk && cur->parseFailDiagCount < kDiagLimit)
+    if (!parseOk)
     {
-        std::cout << "DIAG_DB_PARSE_FAIL"
-                  << ",cursor=" << cur->cursorName
-                  << ",row=" << rowIndex
-                  << ",dt_ok=" << static_cast<int>(dtOk)
-                  << ",open_ok=" << static_cast<int>(openOk)
-                  << ",close_ok=" << static_cast<int>(closeOk)
-                  << ",high_ok=" << static_cast<int>(highOk)
-                  << ",low_ok=" << static_cast<int>(lowOk)
-                  << ",dt_text=" << (dtText ? dtText : "")
-                  << ",open_text=" << (openText ? openText : "")
-                  << ",close_text=" << (closeText ? closeText : "")
-                  << ",high_text=" << (highText ? highText : "")
-                  << ",low_text=" << (lowText ? lowText : "")
-                  << ",query=" << cur->queryText
-                  << std::endl;
-        ++cur->parseFailDiagCount;
+        if(cur->parseFailDiagCount < kDiagLimit)
+        {
+            std::cout << "DIAG_DB_PARSE_FAIL"
+            << ",cursor=" << cur->cursorName
+            << ",row=" << rowIndex
+            << ",dt_ok=" << static_cast<int>(dtOk)
+            << ",open_ok=" << static_cast<int>(openOk)
+            << ",close_ok=" << static_cast<int>(closeOk)
+            << ",high_ok=" << static_cast<int>(highOk)
+            << ",low_ok=" << static_cast<int>(lowOk)
+            << ",dt_text=" << (dtText ? dtText : "")
+            << ",open_text=" << (openText ? openText : "")
+            << ",close_text=" << (closeText ? closeText : "")
+            << ",high_text=" << (highText ? highText : "")
+            << ",low_text=" << (lowText ? lowText : "")
+            << ",query=" << cur->queryText
+            << std::endl;
+            ++cur->parseFailDiagCount;
+        }
+        throw std::runtime_error("DB feature parse failed");
     }
-
     const bool badOpen = !IsSaneFxPrice(parsed.open);
     const bool badClose = !IsSaneFxPrice(parsed.close);
     const bool badHigh = !IsSaneFxPrice(parsed.high);

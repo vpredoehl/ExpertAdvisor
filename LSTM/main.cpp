@@ -965,7 +965,7 @@ int main(int argc, const char * argv[])
             std::string rawPriceTableName{ tbl[0].c_str() };
             std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
-            db_forward_iterator csb = cs_cur.cbegin(), cse = cs_cur.cend();
+            db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
             Tensor t{ rawPriceTableName };
             
             std::cout << "Candlestick query: " << query << "\n";
