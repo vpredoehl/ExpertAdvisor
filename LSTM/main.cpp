@@ -972,7 +972,21 @@ int main(int argc, const char * argv[])
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
   
-            thread_local EA::LSTM l { t, 1, 0, EA::LSTM::TargetType::UpNeutralDownReturn };
+            EA::LSTM l { t, 1, 0, EA::LSTM::TargetType::UpNeutralDownReturn };
+            static size_t s_lstmBindingDiagCount = 0;
+            constexpr size_t kLstmBindingDiagLimit = 50;
+            if (s_lstmBindingDiagCount < kLstmBindingDiagLimit)
+            {
+                std::cout << "DIAG_LSTM_BINDING"
+                          << ",table=" << rawPriceTableName
+                          << ",tensor_rows=" << t.RowCount()
+                          << ",tensor_addr=" << static_cast<const void*>(&t)
+                          << ",lstm_tensor_ref_addr=" << static_cast<const void*>(l.BoundTensorAddress())
+                          << ",newly_constructed=1"
+                          << ",reused=0"
+                          << std::endl;
+                ++s_lstmBindingDiagCount;
+            }
 
             // Track whether we started from scratch (no model loaded)
             std::optional<long long> loadedModelId;

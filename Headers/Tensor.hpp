@@ -103,6 +103,7 @@ public:
     
     DataSet::const_iterator begin() const  { return ds.cbegin(); }
     DataSet::const_iterator end() const { return ds.cend(); }
+    size_t RowCount() const { return ds.size(); }
     
     auto GetWindow(DataSet::const_iterator iter) const -> Window
     {

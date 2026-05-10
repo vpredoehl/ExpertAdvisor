@@ -177,6 +177,7 @@ public:
     LSTM() = delete;
     
     void SetLearningRate(float lr) { learningRate = lr; }
+    const ::Tensor* BoundTensorAddress() const { return &t; }
     
     std::tuple<float, size_t, size_t> CalculateBatch(const Window);
     // Inference-only helpers (forward pass, no training)
