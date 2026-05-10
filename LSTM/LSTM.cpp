@@ -2228,6 +2228,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     // minibatch window assembly can memcpy directly from a contiguous source
     // instead of repeatedly materializing overlapping windows via GetWindow().
     const size_t batchRows = static_cast<size_t>(batch.end() - batch.begin());
+    const size_t batchGlobalStartIdx = static_cast<size_t>(batch.begin() - t.begin());
     const size_t baseFeatureCount = (batchRows > 0) ? static_cast<size_t>((*batch.begin()).Shape()[1]) : 0;
     const size_t modelFeatureCount = static_cast<size_t>(n_in);
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
@@ -2311,6 +2312,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #if LSTM_BATCH_PROFILE
         LSTMScopedProfileTimer timer(profile.build_window_batch_us);
 #endif
+        static size_t s_targetIndexDiagCount = 0;
+        constexpr size_t kTargetIndexDiagLimit = 50;
         WindowBatch wb;
 
         const size_t B_est = static_cast<size_t>(last - first);
@@ -2339,8 +2342,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             const size_t start = *it;
             const size_t lastIdx   = start + (window_size - 1);
             const size_t targetIdx = lastIdx + prediction_horizon;
-            const auto lastIt      = batch.begin() + static_cast<std::ptrdiff_t>(lastIdx);
-            const auto targetIt    = batch.begin() + static_cast<std::ptrdiff_t>(targetIdx);
+            const size_t globalStartIdx = batchGlobalStartIdx + start;
+            const size_t globalLastIdx = batchGlobalStartIdx + lastIdx;
+            const size_t globalTargetIdx = batchGlobalStartIdx + targetIdx;
+            const auto lastIt      = t.begin() + static_cast<std::ptrdiff_t>(globalLastIdx);
+            const auto targetIt    = t.begin() + static_cast<std::ptrdiff_t>(globalTargetIdx);
             const float close_t_local      = t.RawCloseAtIterator(lastIt);
             const float close_target_local = t.RawCloseAtIterator(targetIt);
             const float y_true_logret =
@@ -2361,7 +2367,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
                 for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
                 {
-                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(lastIdx + lookahead);
+                    const size_t globalFutureIdx = globalLastIdx + lookahead;
+                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(globalFutureIdx);
                     const float futureHigh = t.RawHighAtIterator(futureIt);
                     const float futureLow = t.RawLowAtIterator(futureIt);
 
@@ -2390,18 +2397,36 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 else    classTarget = 1;
                 LSTM_ASSERT(classTarget >= 0 && classTarget < static_cast<int>(direction_output_size),
                             "CalculateBatch: classTarget out of [0,2]");
-                // --- DIAGNOSTIC BLOCK: Print first few lookahead labelings ---
-                const size_t batchRow = static_cast<size_t>(it - first);
-                if (isFirstBatchCall && batchRow < 5)
-                    std::cout << "DIAG_LOOKAHEAD"
-                              << ",close=" << close_t_local
-                              << ",upHit=" << upHit
-                              << ",downHit=" << downHit
-                              << ",upOffset=" << upOffset
-                              << ",downOffset=" << downOffset
-                              << ",class=" << classTarget
+
+                if (s_targetIndexDiagCount < kTargetIndexDiagLimit)
+                {
+                    size_t selectedOffset = prediction_horizon;
+                    if (classTarget == 2 && upHit) selectedOffset = upOffset;
+                    else if (classTarget == 0 && downHit) selectedOffset = downOffset;
+                    else if (upHit && downHit) selectedOffset = std::min(upOffset, downOffset);
+
+                    const size_t globalFutureIdx = globalLastIdx + selectedOffset;
+                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(globalFutureIdx);
+                    const float futureHigh = t.RawHighAtIterator(futureIt);
+                    const float futureLow = t.RawLowAtIterator(futureIt);
+                    const size_t miniBatchRow = static_cast<size_t>(it - first);
+
+                    std::cout << "DIAG_TARGET_INDEX"
+                              << ",batch_row_idx=" << start
+                              << ",mini_batch_row_idx=" << miniBatchRow
+                              << ",batch_start_global_idx=" << batchGlobalStartIdx
+                              << ",global_tensor_row_idx=" << globalStartIdx
+                              << ",last_row_idx=" << globalLastIdx
+                              << ",target_row_idx=" << globalTargetIdx
+                              << ",future_row_idx=" << globalFutureIdx
+                              << ",close_t=" << close_t_local
+                              << ",close_target=" << close_target_local
+                              << ",futureHigh=" << futureHigh
+                              << ",futureLow=" << futureLow
+                              << ",assigned_class=" << classTarget
                               << std::endl;
-                // --- END DIAGNOSTIC BLOCK ---
+                    ++s_targetIndexDiagCount;
+                }
             }
             else
             {
