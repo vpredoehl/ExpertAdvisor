@@ -28,6 +28,7 @@
 #include "LSTM.hpp"
 #include "PgModelIO.hpp"
 #include "BuildConfig.hpp"
+#include "TargetLabel.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -55,74 +56,6 @@ const char* GateStateModeLabel()
 const char* CurrentRangeKindLabel()
 {
     return inference_only ? "inference" : "train";
-}
-
-struct LookaheadClassInfo
-{
-    PriceTP dt {};
-    PriceTP targetDt {};
-    float closeT = 0.0f;
-    float targetClose = 0.0f;
-    float deltaClose = 0.0f;
-    float terminalLogReturn = 0.0f;
-    bool upHit = false;
-    bool downHit = false;
-    size_t upOffset = 0;
-    size_t downOffset = 0;
-    int assignedClass = 1;
-};
-
-LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
-                                          DataSet::const_iterator startIt)
-{
-    const auto lastIt = startIt + window_size - 1;
-    const auto targetIt = lastIt + prediction_horizon;
-
-    LookaheadClassInfo info;
-    info.dt = tensor.RawTimeAtIterator(lastIt);
-    info.targetDt = tensor.RawTimeAtIterator(targetIt);
-    info.closeT = tensor.RawCloseAtIterator(lastIt);
-    info.targetClose = tensor.RawCloseAtIterator(targetIt);
-    info.deltaClose = info.targetClose - info.closeT;
-    info.terminalLogReturn =
-        (std::isfinite(info.closeT) && std::isfinite(info.targetClose) &&
-         info.closeT > 0.0f && info.targetClose > 0.0f)
-            ? std::log(info.targetClose / info.closeT)
-            : 0.0f;
-
-    for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
-    {
-        const auto futureIt = lastIt + static_cast<std::ptrdiff_t>(lookahead);
-        const float futureHigh = tensor.RawHighAtIterator(futureIt);
-        const float futureLow = tensor.RawLowAtIterator(futureIt);
-
-        if (std::isfinite(info.closeT) && info.closeT > 0.0f)
-        {
-            const float upMove = std::log(futureHigh / info.closeT);
-            const float downMove = std::log(futureLow / info.closeT);
-
-            if (!info.upHit && std::isfinite(upMove) && upMove > c_next_threshold)
-            {
-                info.upHit = true;
-                info.upOffset = lookahead;
-            }
-
-            if (!info.downHit && std::isfinite(downMove) && downMove < -c_next_threshold)
-            {
-                info.downHit = true;
-                info.downOffset = lookahead;
-            }
-        }
-    }
-
-    if (info.upHit && info.downHit) info.assignedClass = (info.upOffset <= info.downOffset) ? 2 : 0;
-    else if (info.upHit) info.assignedClass = 2;
-    else if (info.downHit) info.assignedClass = 0;
-    else info.assignedClass = 1;
-
-    LSTM_ASSERT(info.assignedClass >= 0 && info.assignedClass < static_cast<int>(direction_output_size),
-                "BuildLookaheadClassInfo: assigned class out of [0,2]");
-    return info;
 }
 
 void PrintClassificationProofDiagnostics(const EA::LSTM& l,
@@ -157,7 +90,7 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
               << std::endl;
     std::cout << "DIAG_CLASS_LABEL_RULE"
               << ",training_label=lookahead_high_low_first_hit"
-              << ",inference_eval_label=terminal_close_logret"
+              << ",inference_eval_label=lookahead_high_low_first_hit"
               << std::endl;
 
     std::array<size_t, direction_output_size> hist {0, 0, 0};
@@ -709,6 +642,20 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
 
     if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
     {
+        static bool s_inferLabelRulePrinted = false;
+        static size_t s_inferLabelRowDiagCount = 0;
+        constexpr size_t kInferLabelRowDiagLimit = 50;
+        if (!s_inferLabelRulePrinted)
+        {
+            std::cout << "DIAG_INFER_LABEL_RULE"
+                      << ",eval_label=lookahead_high_low_first_hit"
+                      << ",old_terminal_close_class=reported_for_comparison"
+                      << ",threshold_logret=" << c_next_threshold
+                      << ",prediction_horizon=" << prediction_horizon
+                      << std::endl;
+            s_inferLabelRulePrinted = true;
+        }
+
         std::vector<int> predClass;
         std::vector<int> actClass;
         std::vector<float> predMaxProb;
@@ -730,17 +677,33 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
                            : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
             const float maxProb = std::max(probs[0], std::max(probs[1], probs[2]));
 
-            const auto lastIt = it + window_size - 1;
-            const auto targetIt = it + window_size - 1 + prediction_horizon;
-            const float close_t = tensor.RawCloseAtIterator(lastIt);
-            const float close_target = tensor.RawCloseAtIterator(targetIt);
-            const float v_unscaled =
-                (std::isfinite(close_t) && std::isfinite(close_target) &&
-                 close_t > 0.0f && close_target > 0.0f)
-                    ? std::log(close_target / close_t)
-                    : 0.0f;
-            const int actual = (v_unscaled > c_next_threshold) ? 2
-                             : ((v_unscaled < -c_next_threshold) ? 0 : 1);
+            const auto labelInfo = BuildLookaheadClassInfo(tensor, it);
+            const int actual = labelInfo.assignedClass;
+
+            if (s_inferLabelRowDiagCount < kInferLabelRowDiagLimit)
+            {
+                const size_t globalStartIdx = static_cast<size_t>(it - tensor.begin());
+                const size_t globalLastIdx = globalStartIdx + window_size - 1;
+                const size_t globalTargetIdx = globalLastIdx + prediction_horizon;
+                const size_t globalFutureIdx = globalLastIdx + labelInfo.selectedOffset;
+                std::cout << "DIAG_INFER_LABEL_ROW"
+                          << ",global_tensor_row_idx=" << globalStartIdx
+                          << ",last_row_idx=" << globalLastIdx
+                          << ",target_row_idx=" << globalTargetIdx
+                          << ",future_row_idx=" << globalFutureIdx
+                          << ",close_t=" << labelInfo.closeT
+                          << ",target_close=" << labelInfo.targetClose
+                          << ",terminal_logret=" << labelInfo.terminalLogReturn
+                          << ",old_terminal_close_class=" << labelInfo.terminalCloseClass
+                          << ",new_lookahead_first_hit_class=" << labelInfo.assignedClass
+                          << ",up_hit=" << static_cast<int>(labelInfo.upHit)
+                          << ",down_hit=" << static_cast<int>(labelInfo.downHit)
+                          << ",up_offset=" << labelInfo.upOffset
+                          << ",down_offset=" << labelInfo.downOffset
+                          << ",pred_class=" << pred
+                          << std::endl;
+                ++s_inferLabelRowDiagCount;
+            }
 
             predClass.push_back(pred);
             actClass.push_back(actual);
@@ -1045,17 +1008,8 @@ int main(int argc, const char * argv[])
                                     const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
                                                    : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
 
-                                    const auto lastIt = it + window_size - 1;
-                                    const auto targetIt = it + window_size - 1 + prediction_horizon;
-                                    const float close_t = t.RawCloseAtIterator(lastIt);
-                                    const float close_target = t.RawCloseAtIterator(targetIt);
-                                    const float v_unscaled =
-                                        (std::isfinite(close_t) && std::isfinite(close_target) &&
-                                         close_t > 0.0f && close_target > 0.0f)
-                                            ? std::log(close_target / close_t)
-                                            : 0.0f;
-                                    const int actual = (v_unscaled > c_next_threshold) ? 2
-                                                     : ((v_unscaled < -c_next_threshold) ? 0 : 1);
+                                    const auto labelInfo = BuildLookaheadClassInfo(t, it);
+                                    const int actual = labelInfo.assignedClass;
 
                                     ++totalConfusion[actual][pred];
                                 }

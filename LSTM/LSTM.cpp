@@ -13,12 +13,15 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
+
 #include <numeric>
+#include <optional>
 
 #include "LSTM.hpp"
 #include "Tensor.hpp"
 #include "MatrixUtils.hpp"
 #include "BuildConfig.hpp"
+#include "TargetLabel.hpp"
 #include <MetaNN/data_copy/data_copy.h>
 #include <MetaNN/metal/metal_matmul.h>
 
@@ -798,10 +801,9 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> model_row(1, modelFeatureCount);
     static bool s_printed_phase2_infer_direction_diag = false;
     const bool capturePhase2Window = !s_printed_phase2_infer_direction_diag;
-    EAMatrix phase2WindowRows = capturePhase2Window
-        ? EAMatrix(static_cast<size_t>(w.end() - w.begin()), modelFeatureCount)
-        : EAMatrix(0, 0);
+    std::optional<EAMatrix> phase2WindowRows;
 
+    if (capturePhase2Window)    phase2WindowRows.emplace(static_cast<size_t>(w.end() - w.begin()), modelFeatureCount);
     size_t rowIdx = 0;
     for (const auto& f_sample : w)
     {
@@ -838,7 +840,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
 
         if (capturePhase2Window)
         {
-            auto lowPhase2 = MetaNN::LowerAccess(phase2WindowRows);
+            auto lowPhase2 = MetaNN::LowerAccess(*phase2WindowRows);
             float* phase2Ptr = lowPhase2.MutableRawMemory();
             std::memcpy(phase2Ptr + rowIdx * modelFeatureCount,
                         dst,
@@ -865,7 +867,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
                   << std::endl;
         PrintPhase2MatrixDiagnostics("DIAG_FEATURE_INFER_DIRECTION_PRELSTM",
                                      "DIAG_FEATURE_WARN",
-                                     phase2WindowRows,
+                                     *phase2WindowRows,
                                      50.0,
                                      1e-6);
         s_printed_phase2_infer_direction_diag = true;
@@ -2360,55 +2362,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
             if (targetType == TargetType::UpNeutralDownReturn)
             {
-                bool upHit = false;
-                bool downHit = false;
-                size_t upOffset = 0;
-                size_t downOffset = 0;
-
-                for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
-                {
-                    const size_t globalFutureIdx = globalLastIdx + lookahead;
-                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(globalFutureIdx);
-                    const float futureHigh = t.RawHighAtIterator(futureIt);
-                    const float futureLow = t.RawLowAtIterator(futureIt);
-
-                    if (std::isfinite(close_t_local) && close_t_local > 0.0f)
-                    {
-                        const float upMove = std::log(futureHigh / close_t_local);
-                        const float downMove = std::log(futureLow / close_t_local);
-
-                        if (!upHit && std::isfinite(upMove) && upMove > c_next_threshold)
-                        {
-                            upHit = true;
-                            upOffset = lookahead;
-                        }
-
-                        if (!downHit && std::isfinite(downMove) && downMove < -c_next_threshold)
-                        {
-                            downHit = true;
-                            downOffset = lookahead;
-                        }
-                    }
-                }
-
-                if (upHit && downHit)   classTarget = (upOffset <= downOffset) ? 2 : 0;
-                else if (upHit) classTarget = 2;
-                else if (downHit)   classTarget = 0;
-                else    classTarget = 1;
+                const auto labelInfo = BuildLookaheadClassInfo(t, t.begin() + static_cast<std::ptrdiff_t>(globalStartIdx));
+                classTarget = labelInfo.assignedClass;
                 LSTM_ASSERT(classTarget >= 0 && classTarget < static_cast<int>(direction_output_size),
                             "CalculateBatch: classTarget out of [0,2]");
 
                 if (s_targetIndexDiagCount < kTargetIndexDiagLimit)
                 {
-                    size_t selectedOffset = prediction_horizon;
-                    if (classTarget == 2 && upHit) selectedOffset = upOffset;
-                    else if (classTarget == 0 && downHit) selectedOffset = downOffset;
-                    else if (upHit && downHit) selectedOffset = std::min(upOffset, downOffset);
-
-                    const size_t globalFutureIdx = globalLastIdx + selectedOffset;
-                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(globalFutureIdx);
-                    const float futureHigh = t.RawHighAtIterator(futureIt);
-                    const float futureLow = t.RawLowAtIterator(futureIt);
+                    const size_t globalFutureIdx = globalLastIdx + labelInfo.selectedOffset;
                     const size_t miniBatchRow = static_cast<size_t>(it - first);
 
                     std::cout << "DIAG_TARGET_INDEX"
@@ -2421,8 +2382,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                               << ",future_row_idx=" << globalFutureIdx
                               << ",close_t=" << close_t_local
                               << ",close_target=" << close_target_local
-                              << ",futureHigh=" << futureHigh
-                              << ",futureLow=" << futureLow
+                              << ",futureHigh=" << labelInfo.selectedFutureHigh
+                              << ",futureLow=" << labelInfo.selectedFutureLow
                               << ",assigned_class=" << classTarget
                               << std::endl;
                     ++s_targetIndexDiagCount;
