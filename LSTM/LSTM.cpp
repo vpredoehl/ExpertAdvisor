@@ -13,9 +13,11 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
-
+#include <array>
 #include <numeric>
 #include <optional>
+#include <sstream>
+#include <stdexcept>
 
 #include "LSTM.hpp"
 #include "Tensor.hpp"
@@ -597,6 +599,171 @@ struct EA::LSTM::LSTMBatchProfile
 #endif
 
 namespace {
+#ifndef LSTM_PHASE3_GATE_DIAG_LIMIT
+#define LSTM_PHASE3_GATE_DIAG_LIMIT 8
+#endif
+#ifndef LSTM_PHASE3_HEAD_DIAG_LIMIT
+#define LSTM_PHASE3_HEAD_DIAG_LIMIT 4
+#endif
+
+struct Phase3MatrixStats
+{
+    size_t count = 0;
+    size_t finite = 0;
+    size_t nan = 0;
+    size_t inf = 0;
+    size_t satLow = 0;
+    size_t satHigh = 0;
+    double sum = 0.0;
+    double sumSq = 0.0;
+    double min = std::numeric_limits<double>::infinity();
+    double max = -std::numeric_limits<double>::infinity();
+    double absmax = 0.0;
+};
+
+inline void Phase3AddStat(Phase3MatrixStats& s, float v, double satLowThreshold, double satHighThreshold)
+{
+    ++s.count;
+    if (std::isnan(v))
+    {
+        ++s.nan;
+        return;
+    }
+    if (!std::isfinite(v))
+    {
+        ++s.inf;
+        return;
+    }
+
+    const double d = static_cast<double>(v);
+    ++s.finite;
+    s.sum += d;
+    s.sumSq += d * d;
+    s.min = std::min(s.min, d);
+    s.max = std::max(s.max, d);
+    s.absmax = std::max(s.absmax, std::fabs(d));
+    if (d <= satLowThreshold) ++s.satLow;
+    if (d >= satHighThreshold) ++s.satHigh;
+}
+
+template <typename Mat>
+Phase3MatrixStats Phase3StatsWhole(const Mat& m, double satLowThreshold, double satHighThreshold)
+{
+    auto low = MetaNN::LowerAccess(m);
+    const float* p = low.RawMemory();
+    Phase3MatrixStats s;
+    const size_t n = m.Shape()[0] * m.Shape()[1];
+    for (size_t i = 0; i < n; ++i)
+        Phase3AddStat(s, p[i], satLowThreshold, satHighThreshold);
+    return s;
+}
+
+template <typename Mat>
+Phase3MatrixStats Phase3StatsCols(const Mat& m, size_t col0, size_t colCount, double satLowThreshold, double satHighThreshold)
+{
+    auto low = MetaNN::LowerAccess(m);
+    const float* p = low.RawMemory();
+    Phase3MatrixStats s;
+    const size_t rows = m.Shape()[0];
+    const size_t cols = m.Shape()[1];
+    for (size_t r = 0; r < rows; ++r)
+        for (size_t c = 0; c < colCount; ++c)
+            Phase3AddStat(s, p[r * cols + col0 + c], satLowThreshold, satHighThreshold);
+    return s;
+}
+
+inline void PrintPhase3Stats(const char* prefix, size_t callIdx, const char* name, const Phase3MatrixStats& s)
+{
+    const double denom = s.finite ? static_cast<double>(s.finite) : 1.0;
+    const double mean = s.sum / denom;
+    const double var = std::max(0.0, s.sumSq / denom - mean * mean);
+    std::cout << prefix
+              << ",call=" << callIdx
+              << ",name=" << name
+              << ",count=" << s.count
+              << ",finite=" << s.finite
+              << ",nan=" << s.nan
+              << ",inf=" << s.inf
+              << ",min=" << (s.finite ? s.min : 0.0)
+              << ",max=" << (s.finite ? s.max : 0.0)
+              << ",mean=" << mean
+              << ",std=" << std::sqrt(var)
+              << ",absmax=" << s.absmax
+              << ",sat_low=" << s.satLow
+              << ",sat_high=" << s.satHigh
+              << std::endl;
+}
+
+template <typename Mat>
+void PrintPhase3PreactStats(size_t callIdx, const Mat& gatesBatch)
+{
+    const size_t H = gatesBatch.Shape()[1] / 4;
+    constexpr double kPreactLow = -20.0;
+    constexpr double kPreactHigh = 20.0;
+    PrintPhase3Stats("DIAG_LSTM_PREACT_", callIdx, "i", Phase3StatsCols(gatesBatch, 0 * H, H, kPreactLow, kPreactHigh));
+    PrintPhase3Stats("DIAG_LSTM_PREACT_", callIdx, "f", Phase3StatsCols(gatesBatch, 1 * H, H, kPreactLow, kPreactHigh));
+    PrintPhase3Stats("DIAG_LSTM_PREACT_", callIdx, "g", Phase3StatsCols(gatesBatch, 2 * H, H, kPreactLow, kPreactHigh));
+    PrintPhase3Stats("DIAG_LSTM_PREACT_", callIdx, "o", Phase3StatsCols(gatesBatch, 3 * H, H, kPreactLow, kPreactHigh));
+}
+
+inline const char* Phase3ClassName(size_t cls)
+{
+    switch (cls)
+    {
+        case 0: return "down";
+        case 1: return "neutral";
+        case 2: return "up";
+        default: return "unknown";
+    }
+}
+
+struct Phase3CompareStats
+{
+    size_t count = 0;
+    size_t firstMismatch = static_cast<size_t>(-1);
+    double sumAbsDiff = 0.0;
+    double maxAbsDiff = 0.0;
+};
+
+template <typename Mat>
+Phase3CompareStats Phase3CompareMatrices(const Mat& actual, const Mat& expected, float absTol, float relTol)
+{
+    auto lowActual = MetaNN::LowerAccess(actual);
+    auto lowExpected = MetaNN::LowerAccess(expected);
+    const float* aptr = lowActual.RawMemory();
+    const float* eptr = lowExpected.RawMemory();
+    const size_t n = actual.Shape()[0] * actual.Shape()[1];
+    Phase3CompareStats s;
+    s.count = n;
+    for (size_t idx = 0; idx < n; ++idx)
+    {
+        const float a = aptr[idx];
+        const float e = eptr[idx];
+        const double absDiff = std::fabs(static_cast<double>(a) - static_cast<double>(e));
+        const double relDiff = absDiff / std::max(1.0, std::fabs(static_cast<double>(e)));
+        s.sumAbsDiff += absDiff;
+        s.maxAbsDiff = std::max(s.maxAbsDiff, absDiff);
+        if (s.firstMismatch == static_cast<size_t>(-1) && absDiff > absTol && relDiff > relTol)
+            s.firstMismatch = idx;
+    }
+    return s;
+}
+
+inline void PrintPhase3CompareStats(size_t callIdx, const char* name, const Phase3CompareStats& s)
+{
+    const double meanAbsDiff = s.count ? s.sumAbsDiff / static_cast<double>(s.count) : 0.0;
+    std::cout << "DIAG_LSTM_COMPARE_"
+              << ",call=" << callIdx
+              << ",name=" << name
+              << ",count=" << s.count
+              << ",max_abs_diff=" << s.maxAbsDiff
+              << ",mean_abs_diff=" << meanAbsDiff
+              << ",first_mismatch_idx=";
+    if (s.firstMismatch == static_cast<size_t>(-1)) std::cout << -1;
+    else std::cout << s.firstMismatch;
+    std::cout << std::endl;
+}
+
 #if LSTM_EPOCH_BUCKETS
 // 3-class epoch aggregation counters
 
@@ -999,6 +1166,39 @@ inline auto EA::LSTM::BuildHeadDhBatch3Class(const EAMatrix& d_logits_batch,
                                              const EAMatrix& headW,
                                              float scale) const -> EAMatrix
 {
+    static size_t s_headDhDiagCount = 0;
+    const size_t headDhDiagIdx = s_headDhDiagCount++;
+    const bool headDhDiagEnabled = (headDhDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT);
+    const size_t B = d_logits_batch.Shape()[0];
+    const size_t C = d_logits_batch.Shape()[1];
+    const size_t H = headW.Shape()[0];
+    const size_t headClasses = headW.Shape()[1];
+
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(C == direction_output_size, "BuildHeadDhBatch3Class: d_logits width must equal class count");
+    LSTM_ASSERT(headClasses == direction_output_size, "BuildHeadDhBatch3Class: headW width must equal class count");
+#endif
+
+    EAMatrix cpu_ref(B, H);
+    {
+        auto lowD = MetaNN::LowerAccess(d_logits_batch);
+        auto lowW = MetaNN::LowerAccess(headW);
+        auto lowRef = MetaNN::LowerAccess(cpu_ref);
+        const float* dptr = lowD.RawMemory();
+        const float* wptr = lowW.RawMemory();
+        float* rptr = lowRef.MutableRawMemory();
+        for (size_t b = 0; b < B; ++b)
+        {
+            for (size_t h = 0; h < H; ++h)
+            {
+                float acc = 0.0f;
+                for (size_t c = 0; c < C; ++c)
+                    acc += dptr[b * C + c] * wptr[h * headClasses + c];
+                rptr[b * H + h] = acc * scale;
+            }
+        }
+    }
+
     auto expr = MetaNN::Dot(d_logits_batch, MetaNN::Transpose(headW));
     auto h = expr.EvalRegister();
     MetaNN::EvalPlan::Inst().Eval();
@@ -1009,6 +1209,39 @@ inline auto EA::LSTM::BuildHeadDhBatch3Class(const EAMatrix& d_logits_batch,
     const size_t n = d_h.Shape()[0] * d_h.Shape()[1];
     for (size_t i = 0; i < n; ++i)
         dhp[i] *= scale;
+
+    if (headDhDiagEnabled)
+    {
+        std::cout << "DIAG_HEAD_DH_SHAPE"
+                  << ",call=" << headDhDiagIdx
+                  << ",d_logits_rows=" << B
+                  << ",d_logits_cols=" << C
+                  << ",headW_rows=" << H
+                  << ",headW_cols=" << headClasses
+                  << ",d_h_rows=" << d_h.Shape()[0]
+                  << ",d_h_cols=" << d_h.Shape()[1]
+                  << ",scale=" << scale
+                  << std::endl;
+        PrintPhase3Stats("DIAG_HEAD_DH_INPUT", headDhDiagIdx, "d_logits",
+                         Phase3StatsWhole(d_logits_batch, -20.0, 20.0));
+        PrintPhase3Stats("DIAG_HEAD_DH_WEIGHT", headDhDiagIdx, "headW",
+                         Phase3StatsWhole(headW, -20.0, 20.0));
+        PrintPhase3Stats("DIAG_HEAD_DH_OUTPUT", headDhDiagIdx, "d_h",
+                         Phase3StatsWhole(d_h, -20.0, 20.0));
+        PrintPhase3Stats("DIAG_HEAD_DH_CPU_REF", headDhDiagIdx, "d_h_ref",
+                         Phase3StatsWhole(cpu_ref, -20.0, 20.0));
+        const auto cmp = Phase3CompareMatrices(d_h, cpu_ref, 1e-5f, 1e-4f);
+        const double meanAbsDiff = cmp.count ? cmp.sumAbsDiff / static_cast<double>(cmp.count) : 0.0;
+        std::cout << "DIAG_HEAD_DH_COMPARE"
+                  << ",call=" << headDhDiagIdx
+                  << ",count=" << cmp.count
+                  << ",max_abs_diff=" << cmp.maxAbsDiff
+                  << ",mean_abs_diff=" << meanAbsDiff
+                  << ",first_mismatch_idx=";
+        if (cmp.firstMismatch == static_cast<size_t>(-1)) std::cout << -1;
+        else std::cout << cmp.firstMismatch;
+        std::cout << std::endl;
+    }
     return d_h;
 }
 
@@ -1198,6 +1431,9 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
     const size_t B = gates_batch.Shape()[0];
     const size_t W = gates_batch.Shape()[1];
     const size_t H = W / 4;
+    static size_t s_gateStateDiagCallCount = 0;
+    const size_t gateStateCallIdx = s_gateStateDiagCallCount++;
+    const bool phase3DiagEnabled = (gateStateCallIdx < LSTM_PHASE3_GATE_DIAG_LIMIT);
 
 #if LSTM_TRAINING_ASSERTS
     LSTM_ASSERT(W % 4 == 0, "ComputeGateStateBatchFromContiguous: gates width must be divisible by 4");
@@ -1277,6 +1513,21 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
                       gate_o_batch,
                       c_batch,
                       h_batch);
+    if (phase3DiagEnabled)
+    {
+        constexpr double kSigmoidLow = 1.0e-4;
+        constexpr double kSigmoidHigh = 1.0 - 1.0e-4;
+        constexpr double kTanhLow = -1.0 + 1.0e-4;
+        constexpr double kTanhHigh = 1.0 - 1.0e-4;
+        constexpr double kStateLow = -20.0;
+        constexpr double kStateHigh = 20.0;
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "i", Phase3StatsWhole(gate_i_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "f", Phase3StatsWhole(gate_f_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "g", Phase3StatsWhole(gate_g_batch, kTanhLow, kTanhHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "o", Phase3StatsWhole(gate_o_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_STATE_", gateStateCallIdx, "c", Phase3StatsWhole(c_batch, kStateLow, kStateHigh));
+        PrintPhase3Stats("DIAG_LSTM_STATE_", gateStateCallIdx, "h", Phase3StatsWhole(h_batch, -1.0 + 1.0e-4, 1.0 - 1.0e-4));
+    }
 #elif LSTM_GATESTATE_MODE == 1
     EAMatrix gate_i_ref(B, H);
     EAMatrix gate_f_ref(B, H);
@@ -1353,6 +1604,30 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
         }
     };
 
+    if (phase3DiagEnabled)
+    {
+        constexpr double kSigmoidLow = 1.0e-4;
+        constexpr double kSigmoidHigh = 1.0 - 1.0e-4;
+        constexpr double kTanhLow = -1.0 + 1.0e-4;
+        constexpr double kTanhHigh = 1.0 - 1.0e-4;
+        constexpr double kStateLow = -20.0;
+        constexpr double kStateHigh = 20.0;
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "i", Phase3StatsWhole(gate_i_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "f", Phase3StatsWhole(gate_f_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "g", Phase3StatsWhole(gate_g_batch, kTanhLow, kTanhHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "o", Phase3StatsWhole(gate_o_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_STATE_", gateStateCallIdx, "c", Phase3StatsWhole(c_batch, kStateLow, kStateHigh));
+        PrintPhase3Stats("DIAG_LSTM_STATE_", gateStateCallIdx, "h", Phase3StatsWhole(h_batch, -1.0 + 1.0e-4, 1.0 - 1.0e-4));
+        constexpr float absTol = 1e-5f;
+        constexpr float relTol = 1e-4f;
+        PrintPhase3CompareStats(gateStateCallIdx, "gate_i", Phase3CompareMatrices(gate_i_batch, gate_i_ref, absTol, relTol));
+        PrintPhase3CompareStats(gateStateCallIdx, "gate_f", Phase3CompareMatrices(gate_f_batch, gate_f_ref, absTol, relTol));
+        PrintPhase3CompareStats(gateStateCallIdx, "gate_g", Phase3CompareMatrices(gate_g_batch, gate_g_ref, absTol, relTol));
+        PrintPhase3CompareStats(gateStateCallIdx, "gate_o", Phase3CompareMatrices(gate_o_batch, gate_o_ref, absTol, relTol));
+        PrintPhase3CompareStats(gateStateCallIdx, "c", Phase3CompareMatrices(c_batch, c_ref, absTol, relTol));
+        PrintPhase3CompareStats(gateStateCallIdx, "h", Phase3CompareMatrices(h_batch, h_ref, absTol, relTol));
+    }
+
     validate_same("gate_i", gate_i_batch, gate_i_ref);
     validate_same("gate_f", gate_f_batch, gate_f_ref);
     validate_same("gate_g", gate_g_batch, gate_g_ref);
@@ -1391,6 +1666,21 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
             B,
             H);
     }
+    if (phase3DiagEnabled)
+    {
+        constexpr double kSigmoidLow = 1.0e-4;
+        constexpr double kSigmoidHigh = 1.0 - 1.0e-4;
+        constexpr double kTanhLow = -1.0 + 1.0e-4;
+        constexpr double kTanhHigh = 1.0 - 1.0e-4;
+        constexpr double kStateLow = -20.0;
+        constexpr double kStateHigh = 20.0;
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "i", Phase3StatsWhole(gate_i_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "f", Phase3StatsWhole(gate_f_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "g", Phase3StatsWhole(gate_g_batch, kTanhLow, kTanhHigh));
+        PrintPhase3Stats("DIAG_LSTM_GATE_", gateStateCallIdx, "o", Phase3StatsWhole(gate_o_batch, kSigmoidLow, kSigmoidHigh));
+        PrintPhase3Stats("DIAG_LSTM_STATE_", gateStateCallIdx, "c", Phase3StatsWhole(c_batch, kStateLow, kStateHigh));
+        PrintPhase3Stats("DIAG_LSTM_STATE_", gateStateCallIdx, "h", Phase3StatsWhole(h_batch, -1.0 + 1.0e-4, 1.0 - 1.0e-4));
+    }
 #endif
 }
 
@@ -1419,6 +1709,8 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
     const size_t H = prevHiddenState.Shape()[1];
     const size_t expectedCols = x_t.Shape()[1] + H;
     const size_t gateCols = 4 * H;
+    static size_t s_phase3ForwardStepBatchCallCount = 0;
+    const size_t phase3ForwardCallIdx = s_phase3ForwardStepBatchCallCount++;
 
     if (xh_concat_batch.Shape()[0] != B || xh_concat_batch.Shape()[1] != expectedCols)
         xh_concat_batch = EAMatrix(B, expectedCols);
@@ -1513,6 +1805,9 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
 #endif
     }
+
+    if (phase3ForwardCallIdx < LSTM_PHASE3_GATE_DIAG_LIMIT)
+        PrintPhase3PreactStats(phase3ForwardCallIdx, scratch.gates_batch);
 
 #if LSTM_HEAVY_DIAG
     static size_t s_forwardStepBatchCalls = 0;
@@ -2526,8 +2821,21 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         // Batched head forward and loss on (B, H)
         if (targetType == TargetType::UpNeutralDownReturn)
         {
+            static size_t s_phase3HeadDiagCount = 0;
+            const size_t phase3HeadDiagIdx = s_phase3HeadDiagCount++;
+            const bool phase3HeadDiagEnabled = (phase3HeadDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT);
             if (head_logits_batch.Shape()[0] != B || head_logits_batch.Shape()[1] != direction_output_size)
                 head_logits_batch = EAMatrix(B, direction_output_size);
+            if (phase3HeadDiagEnabled)
+            {
+                PrintPhase3Stats("DIAG_HEAD_INPUT_", phase3HeadDiagIdx, "h_batch",
+                                 Phase3StatsWhole(h_batch, -20.0, 20.0));
+                for (size_t cls = 0; cls < direction_output_size; ++cls)
+                    PrintPhase3Stats("DIAG_HEAD_WEIGHT_", phase3HeadDiagIdx, Phase3ClassName(cls),
+                                     Phase3StatsCols(returnHeadDirWeight, cls, 1, -20.0, 20.0));
+                PrintPhase3Stats("DIAG_HEAD_WEIGHT_", phase3HeadDiagIdx, "bias",
+                                 Phase3StatsWhole(returnHeadDirBias, -20.0, 20.0));
+            }
 #if LSTM_HEAVY_DIAG
             if (isFirstBatchCall && isFirstMiniBatch)    PrintMatrixSummary("DIAG_PRE_HEAD_h_batch", h_batch);
 #endif
@@ -2599,6 +2907,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             const float* lptr = lowLogits.RawMemory();
             auto lowD = MetaNN::LowerAccess(d_logits_batch);
             float* dptr = lowD.MutableRawMemory();
+            std::array<size_t, direction_output_size> actualHist {0, 0, 0};
+            std::array<size_t, direction_output_size> predHist {0, 0, 0};
+            std::array<double, direction_output_size> weightedLossByClass {0.0, 0.0, 0.0};
+            std::array<Phase3MatrixStats, direction_output_size> probStats {};
 
             for (size_t b = 0; b < B; ++b)
             {
@@ -2616,18 +2928,24 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 dptr[b * direction_output_size + 1] = kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
                 dptr[b * direction_output_size + 2] = kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
 
-                sse += static_cast<double>(classWeight) *
-                       (-std::log(std::max(1e-12f, p[cls])));
+                const double weightedLoss = static_cast<double>(classWeight) *
+                    (-std::log(std::max(1e-12f, p[cls])));
+                sse += weightedLoss;
+                weightedLossByClass[static_cast<size_t>(cls)] += weightedLoss;
                 ++mseCount;
 
                 if (cls == 0) ++down_count;
                 else if (cls == 1) ++neutral_count;
                 else ++up_count;
+                ++actualHist[static_cast<size_t>(cls)];
+                for (size_t pc = 0; pc < direction_output_size; ++pc)
+                    Phase3AddStat(probStats[pc], p[pc], 1.0e-4, 1.0 - 1.0e-4);
 
                 // 3-class probability bucket logic
                 const float max_prob = std::max(p[0], std::max(p[1], p[2]));
                 const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
                 const bool correct = (predClass == cls);
+                ++predHist[static_cast<size_t>(predClass)];
 
                 Log3ClassSample(cls, predClass);
                 if (max_prob >= 0.33f && max_prob < 0.35f)
@@ -2692,6 +3010,38 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 if (yhat_samples.size() < 10)
                     yhat_samples.push_back(static_cast<float>(predClass));
 #endif
+            }
+            if (phase3HeadDiagEnabled)
+            {
+                for (size_t cls = 0; cls < direction_output_size; ++cls)
+                {
+                    PrintPhase3Stats("DIAG_HEAD_LOGITS_", phase3HeadDiagIdx, Phase3ClassName(cls),
+                                     Phase3StatsCols(head_logits_batch, cls, 1, -20.0, 20.0));
+                    PrintPhase3Stats("DIAG_HEAD_PROBS_", phase3HeadDiagIdx, Phase3ClassName(cls), probStats[cls]);
+                    PrintPhase3Stats("DIAG_GRAD_PRECLIP_", phase3HeadDiagIdx, Phase3ClassName(cls),
+                                     Phase3StatsCols(d_logits_batch, cls, 1, -20.0, 20.0));
+                }
+                std::cout << "DIAG_HEAD_PRED_"
+                          << ",call=" << phase3HeadDiagIdx
+                          << ",B=" << B
+                          << ",pred_down=" << predHist[0]
+                          << ",pred_neutral=" << predHist[1]
+                          << ",pred_up=" << predHist[2]
+                          << ",actual_down=" << actualHist[0]
+                          << ",actual_neutral=" << actualHist[1]
+                          << ",actual_up=" << actualHist[2]
+                          << std::endl;
+                std::cout << "DIAG_LOSS_"
+                          << ",call=" << phase3HeadDiagIdx
+                          << ",B=" << B
+                          << ",class_weight_down=" << kClassWeightDown
+                          << ",class_weight_neutral=" << kClassWeightNeutral
+                          << ",class_weight_up=" << kClassWeightUp
+                          << ",weighted_loss_down=" << weightedLossByClass[0]
+                          << ",weighted_loss_neutral=" << weightedLossByClass[1]
+                          << ",weighted_loss_up=" << weightedLossByClass[2]
+                          << ",weighted_loss_total=" << (weightedLossByClass[0] + weightedLossByClass[1] + weightedLossByClass[2])
+                          << std::endl;
             }
     #if !LSTM_INFERENCE_ONLY
             windowCount += B;
@@ -2811,6 +3161,36 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
 
             mergeGateAccumulators(G_bin, d_param_accum, d_bias_accum, hidden_size);
+            {
+                static size_t s_phase3GradDiagCount = 0;
+                const size_t phase3GradDiagIdx = s_phase3GradDiagCount++;
+                if (phase3GradDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT)
+                {
+                    const double mbCoreWNorm = std::sqrt(
+                        std::pow(FroNormEvalHost(G_bin.dW_i), 2.0) +
+                        std::pow(FroNormEvalHost(G_bin.dW_f), 2.0) +
+                        std::pow(FroNormEvalHost(G_bin.dW_g), 2.0) +
+                        std::pow(FroNormEvalHost(G_bin.dW_o), 2.0));
+                    const double mbCoreBNorm = std::sqrt(
+                        std::pow(FroNormEvalHost(G_bin.db_i), 2.0) +
+                        std::pow(FroNormEvalHost(G_bin.db_f), 2.0) +
+                        std::pow(FroNormEvalHost(G_bin.db_g), 2.0) +
+                        std::pow(FroNormEvalHost(G_bin.db_o), 2.0));
+                    std::cout << "DIAG_GRAD_PRECLIP_"
+                              << ",call=" << phase3GradDiagIdx
+                              << ",name=norms"
+                              << ",B=" << B
+                              << ",d_logits_norm=" << FroNormEvalHost(d_logits_batch)
+                              << ",d_h_norm=" << FroNormEvalHost(d_h_batch)
+                              << ",mb_core_weight_norm=" << mbCoreWNorm
+                              << ",mb_core_bias_norm=" << mbCoreBNorm
+                              << ",accum_core_weight_norm=" << FroNormEvalHost(d_param_accum)
+                              << ",accum_core_bias_norm=" << FroNormEvalHost(d_bias_accum)
+                              << ",accum_head_weight_norm=" << FroNormEvalHost(d_headDirW_accum_f)
+                              << ",accum_head_bias_norm=" << FroNormEvalHost(d_headDirB_accum_f)
+                              << std::endl;
+                }
+            }
             #if LSTM_HEAVY_DIAG
                         if ((!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall) && isFirstMiniBatch)
                         {
