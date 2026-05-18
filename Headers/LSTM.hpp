@@ -40,56 +40,10 @@ using std::array;
 class Tensor;
 namespace EA
 {
-    class LSTM
+class LSTM
 {
-    using EAMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>;
     const ::Tensor& t;
     int n_in = 0;
-    
-    struct GateMatrixView
-    {
-        EAMatrix& m;
-        size_t colOffset;
-        size_t inputCols;
-        inline size_t rows() const { return static_cast<size_t>(n_out); }
-        inline size_t cols() const { return inputCols; }
-        inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
-        inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
-        inline void SetValue(size_t r, size_t c, float v) { m.SetValue(c, colOffset + r, v); }
-    };
-    
-    struct ConstGateMatrixView
-    {
-        const EAMatrix& m;
-        size_t colOffset;
-        size_t inputCols;
-        inline size_t rows() const { return static_cast<size_t>(n_out); }
-        inline size_t cols() const { return inputCols; }
-        inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
-        inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
-    };
-    
-    
-    float Forget()  // calculate forget module
-    {
-        return 0;
-    }
-    float PredictLogReturnFromH(const EAMatrix& h)
-    {
-        // y = h^T W + b
-        // MetaNN expressions are lazy; evaluate and extract scalar
-        auto expr = Dot(h, returnHeadWeight) + returnHeadBias; // 1x1 tensor
-        auto yMat = Evaluate(expr);
-        LSTM_ASSERT(yMat.Shape()[0] == 1 && yMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
-        return yMat(0, 0);
-    }
-    std::array<float, direction_output_size> PredictDirLogits3ClassFromH(const EAMatrix& h)
-    {
-        auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // 1x3 logits
-        auto zMat = Evaluate(z);
-        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == direction_output_size, "PredictDirLogits3ClassFromH: expected 1x3 result");
-        return { zMat(0,0), zMat(0,1), zMat(0,2) };
-    }
 
     static inline int ClassFromLogReturn(float r, float threshold)
     {
@@ -113,16 +67,8 @@ namespace EA
     
     static float Sigmoid(float z) { return 1.0f / (1.0f + std::exp(-z)); }
 public:
-    inline GateMatrixView gateMatrix(size_t gateIndex)
-    {
-        LSTM_ASSERT(gateIndex < 4, "gateMatrix: gateIndex must be < 4");
-        return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
-    }
-    inline ConstGateMatrixView gateMatrix(size_t gateIndex) const
-    {
-        LSTM_ASSERT(gateIndex < 4, "gateMatrix const: gateIndex must be < 4");
-        return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
-    }
+    using EAMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>;
+
     inline void ResetPreviousState()
     {
         LSTM_ASSERT(prevHiddenState.Shape()[0] == 1 && prevHiddenState.Shape()[1] == hidden_size, "prevHiddenState shape mismatch");
@@ -203,6 +149,61 @@ private:
     struct ForwardBatchScratch;
     struct LSTMBatchProfile;
     
+    struct GateMatrixView
+    {
+        EAMatrix& m;
+        size_t colOffset;
+        size_t inputCols;
+        inline size_t rows() const { return static_cast<size_t>(n_out); }
+        inline size_t cols() const { return inputCols; }
+        inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
+        inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
+        inline void SetValue(size_t r, size_t c, float v) { m.SetValue(c, colOffset + r, v); }
+    };
+    
+    struct ConstGateMatrixView
+    {
+        const EAMatrix& m;
+        size_t colOffset;
+        size_t inputCols;
+        inline size_t rows() const { return static_cast<size_t>(n_out); }
+        inline size_t cols() const { return inputCols; }
+        inline MetaNN::Shape<2> Shape() const { return MetaNN::Shape<2>(rows(), cols()); }
+        inline float operator()(size_t r, size_t c) const { return m(c, colOffset + r); }
+    };
+
+    
+    float Forget()  // calculate forget module
+    {
+        return 0;
+    }
+    float PredictLogReturnFromH(const EAMatrix& h)
+    {
+        // y = h^T W + b
+        // MetaNN expressions are lazy; evaluate and extract scalar
+        auto expr = Dot(h, returnHeadWeight) + returnHeadBias; // 1x1 tensor
+        auto yMat = Evaluate(expr);
+        LSTM_ASSERT(yMat.Shape()[0] == 1 && yMat.Shape()[1] == 1, "PredictLogReturnFromH: expected 1x1 result");
+        return yMat(0, 0);
+    }
+    std::array<float, direction_output_size> PredictDirLogits3ClassFromH(const EAMatrix& h)
+    {
+        auto z = Dot(h, returnHeadDirWeight) + returnHeadDirBias;   // 1x3 logits
+        auto zMat = Evaluate(z);
+        LSTM_ASSERT(zMat.Shape()[0] == 1 && zMat.Shape()[1] == direction_output_size, "PredictDirLogits3ClassFromH: expected 1x3 result");
+        return { zMat(0,0), zMat(0,1), zMat(0,2) };
+    }
+    inline GateMatrixView gateMatrix(size_t gateIndex)
+    {
+        LSTM_ASSERT(gateIndex < 4, "gateMatrix: gateIndex must be < 4");
+        return GateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
+    }
+    inline ConstGateMatrixView gateMatrix(size_t gateIndex) const
+    {
+        LSTM_ASSERT(gateIndex < 4, "gateMatrix const: gateIndex must be < 4");
+        return ConstGateMatrixView{ param, gateIndex * static_cast<size_t>(n_out), static_cast<size_t>(n_in) };
+    }
+
     WindowWeights hoistWindowWeights() const;
     void forwardStep(const EAMatrix& x_t, const WindowWeights& ww, const EAMatrix& bias, EAMatrix& prevHiddenState, EAMatrix& prevCellState, EAMatrix& xh_concat) const;
     BatchStepCache forwardStepBatch(const EAMatrix& x_t,
