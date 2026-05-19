@@ -2880,6 +2880,16 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     if (isFirstBatchCall)
         PrintPhase2MatrixDiagnostics("DIAG_NORM_PRELSTM", "DIAG_NORM_WARN", prebuilt_rows, 9.99, 1e-6);
 
+    struct Phase3LabelReturnSeparationStats
+    {
+        size_t count = 0;
+        size_t horizonCount = 0;
+        double terminalLogReturnSum = 0.0;
+        double maxFutureHighLogReturnSum = 0.0;
+        double minFutureLowLogReturnSum = 0.0;
+        double rangeToThresholdRatioSum = 0.0;
+    };
+    std::array<Phase3LabelReturnSeparationStats, direction_output_size> phase3LabelReturnStats {};
     auto buildWindowBatch = [&](auto first, auto last) -> WindowBatch
     {
 #if LSTM_BATCH_PROFILE
@@ -2937,7 +2947,67 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 classTarget = labelInfo.assignedClass;
                 LSTM_ASSERT(classTarget >= 0 && classTarget < static_cast<int>(direction_output_size),
                             "CalculateBatch: classTarget out of [0,2]");
+                double maxFutureHighLogReturn = -std::numeric_limits<double>::infinity();
+                double minFutureLowLogReturn = std::numeric_limits<double>::infinity();
+                size_t validHorizonReturnCount = 0;
 
+                for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
+                {
+                    const size_t globalFutureIdx = globalLastIdx + lookahead;
+                    const auto futureIt = t.begin() + static_cast<std::ptrdiff_t>(globalFutureIdx);
+                    const float futureHigh = t.RawHighAtIterator(futureIt);
+                    const float futureLow = t.RawLowAtIterator(futureIt);
+
+                    if (std::isfinite(close_t_local) && close_t_local > 0.0f &&
+                        std::isfinite(futureHigh) && futureHigh > 0.0f)
+                    {
+                        const double highLogReturn =
+                            static_cast<double>(std::log(futureHigh / close_t_local));
+                        maxFutureHighLogReturn =
+                            std::max(maxFutureHighLogReturn, highLogReturn);
+                        ++validHorizonReturnCount;
+                    }
+
+                    if (std::isfinite(close_t_local) && close_t_local > 0.0f &&
+                        std::isfinite(futureLow) && futureLow > 0.0f)
+                    {
+                        const double lowLogReturn =
+                            static_cast<double>(std::log(futureLow / close_t_local));
+                        minFutureLowLogReturn =
+                            std::min(minFutureLowLogReturn, lowLogReturn);
+                    }
+                }
+                
+
+                auto& s = phase3LabelReturnStats[static_cast<size_t>(classTarget)];
+                ++s.count;  s.horizonCount += validHorizonReturnCount;
+                
+                const double terminalLogReturn =
+                    (std::isfinite(close_t_local) && close_t_local > 0.0f &&
+                     std::isfinite(close_target_local) && close_target_local > 0.0f)
+                        ? static_cast<double>(std::log(close_target_local / close_t_local))
+                        : 0.0;
+                
+                const double highLogReturn =
+                    (std::isfinite(close_t_local) && close_t_local > 0.0f &&
+                     std::isfinite(labelInfo.selectedFutureHigh) && labelInfo.selectedFutureHigh > 0.0f)
+                        ? static_cast<double>(std::log(labelInfo.selectedFutureHigh / close_t_local))
+                        : 0.0;
+
+                const double lowLogReturn =
+                    (std::isfinite(close_t_local) && close_t_local > 0.0f &&
+                     std::isfinite(labelInfo.selectedFutureLow) && labelInfo.selectedFutureLow > 0.0f)
+                        ? static_cast<double>(std::log(labelInfo.selectedFutureLow / close_t_local))
+                        : 0.0;
+                
+                const double thresholdDenom =
+                    std::max(static_cast<double>(std::fabs(c_next_threshold)), 1.0e-12);
+
+                s.terminalLogReturnSum += terminalLogReturn;
+                s.maxFutureHighLogReturnSum += highLogReturn;
+                s.minFutureLowLogReturnSum += lowLogReturn;
+                s.rangeToThresholdRatioSum += (highLogReturn - lowLogReturn) / thresholdDenom;
+                
                 if (s_targetIndexDiagCount < kTargetIndexDiagLimit)
                 {
                     const size_t globalFutureIdx = globalLastIdx + labelInfo.selectedOffset;
@@ -3196,6 +3266,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             std::array<Phase3MatrixStats, direction_output_size> probStats {};
             std::array<std::array<double, direction_output_size>, direction_output_size> logitSumByActual {};
             std::array<std::array<double, direction_output_size>, direction_output_size> probSumByActual {};
+            std::array<double, direction_output_size> hiddenHeadProjectionMean {0.0, 0.0, 0.0};
+            std::array<double, direction_output_size> hiddenHeadProjectionAbsMean {0.0, 0.0, 0.0};
+
+            const auto hHostForSeparation = Phase3MaterializeHost(h_batch);
+            std::array<std::vector<double>, direction_output_size> hSumByActual;
+            std::array<double, direction_output_size> hSumSqByActual {0.0, 0.0, 0.0};
+            for (size_t cls = 0; cls < direction_output_size; ++cls)
+                hSumByActual[cls].assign(hidden_size, 0.0);
 
             for (size_t b = 0; b < B; ++b)
             {
@@ -3228,6 +3306,39 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     Phase3AddStat(probStats[pc], p[pc], 1.0e-4, 1.0 - 1.0e-4);
                     logitSumByActual[static_cast<size_t>(cls)][pc] += static_cast<double>(z[pc]);
                     probSumByActual[static_cast<size_t>(cls)][pc] += static_cast<double>(p[pc]);
+                }
+                if (hHostForSeparation.cols == hidden_size && b < hHostForSeparation.rows)
+                {
+                    const size_t clsIdx = static_cast<size_t>(cls);
+                    for (size_t h = 0; h < hidden_size; ++h)
+                    {
+                        const double hv = static_cast<double>(hHostForSeparation.data[b * hHostForSeparation.cols + h]);
+                        hSumByActual[clsIdx][h] += hv;
+                        hSumSqByActual[clsIdx] += hv * hv;
+                    }
+                }
+
+                {
+                    const size_t clsIdx = static_cast<size_t>(cls);
+                    double projection = 0.0;
+
+                    if (hHostForSeparation.cols == hidden_size && b < hHostForSeparation.rows)
+                    {
+                        auto lowHeadW = MetaNN::LowerAccess(returnHeadDirWeight);
+                        const float* wptr = lowHeadW.RawMemory();
+
+                        for (size_t h = 0; h < hidden_size; ++h)
+                        {
+                            const double hv = static_cast<double>(
+                                hHostForSeparation.data[b * hHostForSeparation.cols + h]);
+                            const double wv = static_cast<double>(
+                                wptr[h * direction_output_size + clsIdx]);
+                            projection += hv * wv;
+                        }
+                    }
+
+                    hiddenHeadProjectionMean[clsIdx] += projection;
+                    hiddenHeadProjectionAbsMean[clsIdx] += std::abs(projection);
                 }
 
                 // 3-class probability bucket logic
@@ -3379,6 +3490,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                           << std::endl;
             }
 #endif
+#if 1
             // === BEGIN CLASS SEPARATION DIAGNOSTIC ===
             if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
             {
@@ -3399,6 +3511,150 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                               << ",mean_prob_up=" << (probSumByActual[actualCls][2] / denom)
                               << std::endl;
                 }
+            }
+#endif
+            if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
+            {
+                std::array<double, direction_output_size> hMeanNormByActual {0.0, 0.0, 0.0};
+                std::array<double, direction_output_size> hStdByActual {0.0, 0.0, 0.0};
+
+                for (size_t actualCls = 0; actualCls < direction_output_size; ++actualCls)
+                {
+                    const double count = actualHist[actualCls]
+                        ? static_cast<double>(actualHist[actualCls])
+                        : 1.0;
+                    double meanNormSq = 0.0;
+                    double meanSq = 0.0;
+                    for (size_t h = 0; h < hidden_size; ++h)
+                    {
+                        const double mean = hSumByActual[actualCls][h] / count;
+                        meanNormSq += mean * mean;
+                        meanSq += mean * mean;
+                    }
+                    const double elemMeanSq = meanSq / static_cast<double>(hidden_size);
+                    const double elemSecondMoment = hSumSqByActual[actualCls] / (count * static_cast<double>(hidden_size));
+                    hMeanNormByActual[actualCls] = std::sqrt(meanNormSq);
+                    hStdByActual[actualCls] = std::sqrt(std::max(0.0, elemSecondMoment - elemMeanSq));
+                }
+
+                auto classMeanDistance = [&](size_t a, size_t b) -> double
+                {
+                    const double countA = actualHist[a] ? static_cast<double>(actualHist[a]) : 1.0;
+                    const double countB = actualHist[b] ? static_cast<double>(actualHist[b]) : 1.0;
+                    double distSq = 0.0;
+                    for (size_t h = 0; h < hidden_size; ++h)
+                    {
+                        const double ma = hSumByActual[a][h] / countA;
+                        const double mb = hSumByActual[b][h] / countB;
+                        const double d = ma - mb;
+                        distSq += d * d;
+                    }
+                    return std::sqrt(distSq);
+                };
+
+                // === BEGIN CENTROID-ACCURACY DIAGNOSTIC ===
+                size_t centroidPredHist[direction_output_size] = {0, 0, 0};
+                size_t centroidActualHist[direction_output_size] = {0, 0, 0};
+                size_t centroidCorrect = 0;
+                size_t centroidTotal = 0;
+
+                if (hHostForSeparation.cols == hidden_size)
+                {
+                    for (size_t row = 0; row < B && row < hHostForSeparation.rows; ++row)
+                    {
+                        const int actual = wb.classTargets[row];
+                        if (actual < 0 || actual >= static_cast<int>(direction_output_size))
+                            continue;
+
+                        double bestDistSq = std::numeric_limits<double>::infinity();
+                        size_t bestClass = 1;
+                        for (size_t candidate = 0; candidate < direction_output_size; ++candidate)
+                        {
+                            if (actualHist[candidate] == 0)
+                                continue;
+
+                            const double count = static_cast<double>(actualHist[candidate]);
+                            double distSq = 0.0;
+                            for (size_t h = 0; h < hidden_size; ++h)
+                            {
+                                const double hv = static_cast<double>(
+                                    hHostForSeparation.data[row * hHostForSeparation.cols + h]);
+                                const double mean = hSumByActual[candidate][h] / count;
+                                const double d = hv - mean;
+                                distSq += d * d;
+                            }
+
+                            if (distSq < bestDistSq)
+                            {
+                                bestDistSq = distSq;
+                                bestClass = candidate;
+                            }
+                        }
+
+                        ++centroidTotal;
+                        ++centroidPredHist[bestClass];
+                        ++centroidActualHist[static_cast<size_t>(actual)];
+                        if (bestClass == static_cast<size_t>(actual))
+                            ++centroidCorrect;
+                    }
+                }
+
+                std::cout << "DIAG_H_SEPARATION_"
+                          << ",update=" << phase3HeadDiagIdx
+                          << ",hidden_size=" << hidden_size
+                          << ",count_down=" << actualHist[0]
+                          << ",count_neutral=" << actualHist[1]
+                          << ",count_up=" << actualHist[2]
+                          << ",h_mean_norm_down=" << hMeanNormByActual[0]
+                          << ",h_mean_norm_neutral=" << hMeanNormByActual[1]
+                          << ",h_mean_norm_up=" << hMeanNormByActual[2]
+                          << ",h_std_down=" << hStdByActual[0]
+                          << ",h_std_neutral=" << hStdByActual[1]
+                          << ",h_std_up=" << hStdByActual[2]
+                          << ",mean_dist_down_neutral=" << classMeanDistance(0, 1)
+                          << ",mean_dist_down_up=" << classMeanDistance(0, 2)
+                          << ",mean_dist_neutral_up=" << classMeanDistance(1, 2)
+                          << std::endl;
+
+                std::cout << "DIAG_H_CENTROID_ACC_"
+                          << ",update=" << phase3HeadDiagIdx
+                          << ",hidden_size=" << hidden_size
+                          << ",total=" << centroidTotal
+                          << ",correct=" << centroidCorrect
+                          << ",accuracy=" << (centroidTotal ? static_cast<double>(centroidCorrect) / static_cast<double>(centroidTotal) : 0.0)
+                          << ",pred_down=" << centroidPredHist[0]
+                          << ",pred_neutral=" << centroidPredHist[1]
+                          << ",pred_up=" << centroidPredHist[2]
+                          << ",actual_down=" << centroidActualHist[0]
+                          << ",actual_neutral=" << centroidActualHist[1]
+                          << ",actual_up=" << centroidActualHist[2]
+                          << std::endl;
+
+                // === HEAD PROJECTION DIAGNOSTIC ===
+                std::cout << "DIAG_HEAD_ALIGNMENT_"
+                          << ",update=" << phase3HeadDiagIdx
+                          << ",count_down=" << actualHist[0]
+                          << ",count_neutral=" << actualHist[1]
+                          << ",count_up=" << actualHist[2]
+                          << ",mean_proj_down="
+                          << (hiddenHeadProjectionMean[0] /
+                              std::max<size_t>(actualHist[0], 1))
+                          << ",mean_proj_neutral="
+                          << (hiddenHeadProjectionMean[1] /
+                              std::max<size_t>(actualHist[1], 1))
+                          << ",mean_proj_up="
+                          << (hiddenHeadProjectionMean[2] /
+                              std::max<size_t>(actualHist[2], 1))
+                          << ",mean_abs_proj_down="
+                          << (hiddenHeadProjectionAbsMean[0] /
+                              std::max<size_t>(actualHist[0], 1))
+                          << ",mean_abs_proj_neutral="
+                          << (hiddenHeadProjectionAbsMean[1] /
+                              std::max<size_t>(actualHist[1], 1))
+                          << ",mean_abs_proj_up="
+                          << (hiddenHeadProjectionAbsMean[2] /
+                              std::max<size_t>(actualHist[2], 1))
+                          << std::endl;
             }
 #if !LSTM_INFERENCE_ONLY
             windowCount += B;
@@ -3710,6 +3966,31 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << "\n";
     }
     #endif
+    if (targetType == TargetType::UpNeutralDownReturn)
+    {
+        static size_t s_phase3LabelReturnSeparationDiagCount = 0;
+        if (s_phase3LabelReturnSeparationDiagCount < LSTM_PHASE3_HEAD_DIAG_LIMIT)
+        {
+            for (size_t cls = 0; cls < direction_output_size; ++cls)
+            {
+                const auto& s = phase3LabelReturnStats[cls];
+                const double denom = s.count ? static_cast<double>(s.count) : 1.0;
+
+                std::cout << "DIAG_LABEL_RETURN_SEPARATION_"
+                          << ",call=" << s_phase3LabelReturnSeparationDiagCount
+                          << ",class=" << Phase3ClassName(cls)
+                          << ",count=" << s.count
+                          << ",horizon_count=" << s.horizonCount
+                          << ",mean_terminal_logret=" << (s.terminalLogReturnSum / denom)
+                          << ",mean_max_future_high_logret=" << (s.maxFutureHighLogReturnSum / denom)
+                          << ",mean_min_future_low_logret=" << (s.minFutureLowLogReturnSum / denom)
+                          << ",mean_range_to_threshold_ratio=" << (s.rangeToThresholdRatioSum / denom)
+                          << std::endl;
+            }
+
+            ++s_phase3LabelReturnSeparationDiagCount;
+        }
+    }
     std::cout << "batch_count=" << windowCount << "\n";
     double loss_value = 0.0;
     loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
