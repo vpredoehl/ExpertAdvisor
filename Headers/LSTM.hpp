@@ -115,14 +115,14 @@ public:
     EAMatrix returnHeadDirBias { 1, direction_output_size };
     
     // Simple SGD learning rate for head-only training
-    float learningRate = 1e-3f / 3; // or /2 or /4
+    float learning_rate = 1e-3f / 3; // or /2 or /4
     
     LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0, TargetType explicitTargetType = TargetType::UpNeutralDownReturn);
 
     void PrintOutputHeadShapes() const;
     LSTM() = delete;
     
-    void SetLearningRate(float lr) { learningRate = lr; }
+    void SetLearningRate(float lr) { learning_rate = lr; }
     const ::Tensor* BoundTensorAddress() const { return &t; }
     
     std::tuple<float, size_t, size_t> CalculateBatch(const Window);

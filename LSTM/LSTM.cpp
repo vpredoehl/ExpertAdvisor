@@ -30,7 +30,7 @@
 #include <MetaNN/metal/metal_matmul.h>
 
 #ifndef LSTM_BATCH_PROFILE
-#define LSTM_BATCH_PROFILE 1
+#define LSTM_BATCH_PROFILE 0
 #endif
 
 #ifndef LSTM_DIAG
@@ -38,7 +38,7 @@
 #endif
 
 #ifndef LSTM_HEAVY_DIAG
-#define LSTM_HEAVY_DIAG 1
+#define LSTM_HEAVY_DIAG 0
 #endif
 
 #ifndef LSTM_SHAPE_DIAG
@@ -500,7 +500,7 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_HEAD_LR_MULT
-#define LSTM_HEAD_LR_MULT 100.0f
+#define LSTM_HEAD_LR_MULT 10.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
 #define LSTM_CORE_GRAD_SCALE 5.0f
@@ -573,7 +573,7 @@ static inline float uniform_symmetric(float limit) {
 struct EA::LSTM::HeadLoss { float y_hat; float err; };
 struct EA::LSTM::GateBlocks
 {
-    EA::LSTM::EAMatrix W_i, W_f, W_g, W_o; // individual recurrent gate blocks (H x H)
+    EA::LSTM::EAMatrix W_hi, W_hf, W_hg, W_ho; // individual recurrent gate blocks (H x H)
     EA::LSTM::EAMatrix W_h_cat;            // full recurrent block (H x 4H)
 };
 struct EA::LSTM::GateAccumulators
@@ -607,7 +607,7 @@ namespace {
 #define LSTM_PHASE3_GATE_DIAG_LIMIT 8
 #endif
 #ifndef LSTM_PHASE3_HEAD_DIAG_LIMIT
-#define LSTM_PHASE3_HEAD_DIAG_LIMIT 16
+#define LSTM_PHASE3_HEAD_DIAG_LIMIT 64
 #endif
 
 struct Phase3MatrixStats
@@ -1218,6 +1218,7 @@ struct EA::LSTM::BatchStepCache
     EA::LSTM::EAMatrix o;      // (B, hidden_size)
     EA::LSTM::EAMatrix c;      // (B, hidden_size)
     EA::LSTM::EAMatrix h;      // (B, hidden_size)
+    EA::LSTM::EAMatrix z_f;      // (B, hidden_size)
 };
 
 struct EA::LSTM::WindowBatch
@@ -2185,9 +2186,11 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         }
     }
 #endif
+    auto z_f_view = NNUtils::ViewCols<float, MetaNN::DeviceTags::Metal>(scratch.gates_batch, 1 * H, H);
+
     BatchStepCache sc
     {
-        x_t,    // SHOULD THIS ALSO BE CLONED??
+        NNUtils::DeepCopyMatrix(x_t),
         NNUtils::DeepCopyMatrix(prevHiddenState),
         NNUtils::DeepCopyMatrix(prevCellState),
         NNUtils::DeepCopyMatrix(scratch.gate_i_batch),
@@ -2195,7 +2198,8 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         NNUtils::DeepCopyMatrix(scratch.gate_g_batch),
         NNUtils::DeepCopyMatrix(scratch.gate_o_batch),
         NNUtils::DeepCopyMatrix(scratch.c),
-        NNUtils::DeepCopyMatrix(scratch.h)
+        NNUtils::DeepCopyMatrix(scratch.h),
+        NNUtils::DeepCopyMatrix(z_f_view)
     };
 
     prevCellState = sc.c;
@@ -2672,16 +2676,16 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
             };
 
             auto dh_prev_i_expr =
-                MetaNN::Dot(d_i_mat, MetaNN::Transpose(gb.W_i));
+                MetaNN::Dot(d_i_mat, MetaNN::Transpose(gb.W_hi));
 
             auto dh_prev_f_expr =
-                MetaNN::Dot(d_f_mat, MetaNN::Transpose(gb.W_f));
+                MetaNN::Dot(d_f_mat, MetaNN::Transpose(gb.W_hf));
 
             auto dh_prev_g_expr =
-                MetaNN::Dot(d_g_mat, MetaNN::Transpose(gb.W_g));
+                MetaNN::Dot(d_g_mat, MetaNN::Transpose(gb.W_hg));
 
             auto dh_prev_o_expr =
-                MetaNN::Dot(d_o_mat, MetaNN::Transpose(gb.W_o));
+                MetaNN::Dot(d_o_mat, MetaNN::Transpose(gb.W_ho));
 
             auto dhiH = dh_prev_i_expr.EvalRegister();
             auto dhfH = dh_prev_f_expr.EvalRegister();
@@ -2832,7 +2836,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
         const size_t H = hidden_size;
         auto low = MetaNN::LowerAccess(bias);
         float* bp = low.MutableRawMemory();
-        for (size_t j = H; j < 2 * H; ++j) bp[j] += 1.0f;
+        for (size_t j = H; j < 2 * H; ++j) bp[j] += 1.5f;
     }
     ResetPreviousState();
 
@@ -3370,6 +3374,132 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 PrintPhase3Stats("DIAG_HEAD_INPUT_", phase3HeadDiagIdx, "h_batch",
                                  Phase3StatsWhole(h_batch, -20.0, 20.0));
+                // --- BEGIN PATCH: DIAG HEAD INPUT BY CLASS SEPARATION ---
+                {
+                    const auto hHostByClass = Phase3MaterializeHost(h_batch);
+
+                    std::array<size_t, direction_output_size> clsCount {0, 0, 0};
+                    std::array<long double, direction_output_size> clsSum {0.0L, 0.0L, 0.0L};
+                    std::array<long double, direction_output_size> clsSqSum {0.0L, 0.0L, 0.0L};
+                    std::array<double, direction_output_size> clsAbsMax {0.0, 0.0, 0.0};
+                    std::array<std::vector<long double>, direction_output_size> centroidSum;
+
+                    const size_t rows = hHostByClass.rows;
+                    const size_t cols = hHostByClass.cols;
+
+                    for (size_t cls = 0; cls < direction_output_size; ++cls)
+                        centroidSum[cls].assign(cols, 0.0L);
+
+                    size_t invalidClassRows = 0;
+                    size_t nonFiniteRows = 0;
+
+                    for (size_t r = 0; r < rows && r < wb.classTargets.size(); ++r)
+                    {
+                        const int clsInt = wb.classTargets[r];
+                        if (clsInt < 0 || clsInt >= static_cast<int>(direction_output_size))
+                        {
+                            ++invalidClassRows;
+                            continue;
+                        }
+
+                        const size_t cls = static_cast<size_t>(clsInt);
+                        bool rowFinite = true;
+                        for (size_t h = 0; h < cols; ++h)
+                        {
+                            const double v = static_cast<double>(hHostByClass.data[r * cols + h]);
+                            if (!std::isfinite(v))
+                            {
+                                rowFinite = false;
+                                break;
+                            }
+                        }
+                        if (!rowFinite)
+                        {
+                            ++nonFiniteRows;
+                            continue;
+                        }
+
+                        ++clsCount[cls];
+                        for (size_t h = 0; h < cols; ++h)
+                        {
+                            const double v = static_cast<double>(hHostByClass.data[r * cols + h]);
+                            clsSum[cls] += static_cast<long double>(v);
+                            clsSqSum[cls] += static_cast<long double>(v) * static_cast<long double>(v);
+                            clsAbsMax[cls] = std::max(clsAbsMax[cls], std::fabs(v));
+                            centroidSum[cls][h] += static_cast<long double>(v);
+                        }
+                    }
+
+                    std::array<std::vector<double>, direction_output_size> centroid;
+                    std::array<double, direction_output_size> centroidNorm {0.0, 0.0, 0.0};
+                    for (size_t cls = 0; cls < direction_output_size; ++cls)
+                    {
+                        centroid[cls].assign(cols, 0.0);
+                        long double centroidSq = 0.0L;
+                        if (clsCount[cls] > 0)
+                        {
+                            const long double denom = static_cast<long double>(clsCount[cls]);
+                            for (size_t h = 0; h < cols; ++h)
+                            {
+                                const double meanH = static_cast<double>(centroidSum[cls][h] / denom);
+                                centroid[cls][h] = meanH;
+                                centroidSq += static_cast<long double>(meanH) * static_cast<long double>(meanH);
+                            }
+                        }
+                        centroidNorm[cls] = std::sqrt(static_cast<double>(centroidSq));
+                    }
+
+                    auto centroidDistance = [&](size_t a, size_t b) -> double
+                    {
+                        if (clsCount[a] == 0 || clsCount[b] == 0)
+                            return 0.0;
+                        long double ss = 0.0L;
+                        for (size_t h = 0; h < cols; ++h)
+                        {
+                            const long double d = static_cast<long double>(centroid[a][h]) -
+                                                  static_cast<long double>(centroid[b][h]);
+                            ss += d * d;
+                        }
+                        return std::sqrt(static_cast<double>(ss));
+                    };
+
+                    for (size_t cls = 0; cls < direction_output_size; ++cls)
+                    {
+                        const size_t elemCount = clsCount[cls] * cols;
+                        const double mean = elemCount > 0
+                            ? static_cast<double>(clsSum[cls] / static_cast<long double>(elemCount))
+                            : 0.0;
+                        const double meanSq = elemCount > 0
+                            ? static_cast<double>(clsSqSum[cls] / static_cast<long double>(elemCount))
+                            : 0.0;
+                        const double var = std::max(0.0, meanSq - mean * mean);
+
+                        std::cout << "DIAG_HEAD_INPUT_BY_CLASS_"
+                                  << ",call=" << phase3HeadDiagIdx
+                                  << ",class=" << Phase3ClassName(cls)
+                                  << ",count=" << clsCount[cls]
+                                  << ",h_mean=" << mean
+                                  << ",h_std=" << std::sqrt(var)
+                                  << ",h_absmax=" << clsAbsMax[cls]
+                                  << ",centroid_norm=" << centroidNorm[cls]
+                                  << std::endl;
+                    }
+
+                    std::cout << "DIAG_HEAD_CLASS_SEPARATION_"
+                              << ",call=" << phase3HeadDiagIdx
+                              << ",rows=" << rows
+                              << ",hidden_size=" << cols
+                              << ",actual_down=" << clsCount[0]
+                              << ",actual_neutral=" << clsCount[1]
+                              << ",actual_up=" << clsCount[2]
+                              << ",down_neutral_dist=" << centroidDistance(0, 1)
+                              << ",down_up_dist=" << centroidDistance(0, 2)
+                              << ",neutral_up_dist=" << centroidDistance(1, 2)
+                              << ",invalid_class_rows=" << invalidClassRows
+                              << ",nonfinite_rows=" << nonFiniteRows
+                              << std::endl;
+                }
+                // --- END PATCH ---
                 for (size_t cls = 0; cls < direction_output_size; ++cls)
                     PrintPhase3Stats("DIAG_HEAD_WEIGHT_", phase3HeadDiagIdx, Phase3ClassName(cls),
                                      Phase3StatsCols(returnHeadDirWeight, cls, 1, -20.0, 20.0));
@@ -3432,6 +3562,182 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 }
 #endif
             }
+// --- BEGIN PATCH: DIAG RAW LOGITS BEFORE SOFTMAX ---
+            if (phase3HeadDiagEnabled)
+            {
+                const auto phase3LogitsHost = Phase3MaterializeHost(head_logits_batch);
+                const auto phase3BiasHost = Phase3MaterializeHost(returnHeadDirBias);
+
+                const size_t phase3Rows = phase3LogitsHost.rows;
+                const size_t phase3Cols = phase3LogitsHost.cols;
+
+                std::array<size_t, direction_output_size> phase3WinHist {0, 0, 0};
+                std::array<size_t, direction_output_size> phase3ActualHist {0, 0, 0};
+                std::array<long double, direction_output_size> phase3ChSum {0.0L, 0.0L, 0.0L};
+                std::array<long double, direction_output_size> phase3ChSqSum {0.0L, 0.0L, 0.0L};
+                std::array<double, direction_output_size> phase3ChMin {0.0, 0.0, 0.0};
+                std::array<double, direction_output_size> phase3ChMax {0.0, 0.0, 0.0};
+                std::array<std::array<long double, direction_output_size>, direction_output_size> phase3ActualLogitSum {{
+                    {0.0L, 0.0L, 0.0L},
+                    {0.0L, 0.0L, 0.0L},
+                    {0.0L, 0.0L, 0.0L}
+                }};
+
+                size_t phase3FiniteRows = 0;
+                size_t phase3NonFiniteRows = 0;
+                size_t phase3InvalidActualRows = 0;
+
+                if (phase3Cols == direction_output_size)
+                {
+                    bool phase3MinMaxInitialized = false;
+                    for (size_t r = 0; r < phase3Rows; ++r)
+                    {
+                        bool rowFinite = true;
+                        for (size_t c = 0; c < direction_output_size; ++c)
+                        {
+                            const double v = static_cast<double>(phase3LogitsHost.data[r * phase3Cols + c]);
+                            if (!std::isfinite(v))
+                            {
+                                rowFinite = false;
+                                break;
+                            }
+                        }
+
+                        if (!rowFinite)
+                        {
+                            ++phase3NonFiniteRows;
+                            continue;
+                        }
+
+                        ++phase3FiniteRows;
+
+                        size_t winClass = 0;
+                        double bestLogit = static_cast<double>(phase3LogitsHost.data[r * phase3Cols + 0]);
+
+                        for (size_t c = 0; c < direction_output_size; ++c)
+                        {
+                            const double v = static_cast<double>(phase3LogitsHost.data[r * phase3Cols + c]);
+                            if (!phase3MinMaxInitialized)
+                            {
+                                phase3ChMin[c] = v;
+                                phase3ChMax[c] = v;
+                            }
+                            else
+                            {
+                                phase3ChMin[c] = std::min(phase3ChMin[c], v);
+                                phase3ChMax[c] = std::max(phase3ChMax[c], v);
+                            }
+
+                            phase3ChSum[c] += static_cast<long double>(v);
+                            phase3ChSqSum[c] += static_cast<long double>(v) * static_cast<long double>(v);
+
+                            if (c == 0 || v > bestLogit)
+                            {
+                                bestLogit = v;
+                                winClass = c;
+                            }
+                        }
+                        phase3MinMaxInitialized = true;
+                        ++phase3WinHist[winClass];
+
+                        if (r < wb.classTargets.size())
+                        {
+                            const int clsInt = wb.classTargets[r];
+                            if (clsInt < 0 || clsInt >= static_cast<int>(direction_output_size))
+                            {
+                                ++phase3InvalidActualRows;
+                            }
+                            else
+                            {
+                                const size_t actual = static_cast<size_t>(clsInt);
+                                ++phase3ActualHist[actual];
+                                for (size_t c = 0; c < direction_output_size; ++c)
+                                {
+                                    phase3ActualLogitSum[actual][c] += static_cast<long double>(
+                                        phase3LogitsHost.data[r * phase3Cols + c]);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            ++phase3InvalidActualRows;
+                        }
+                    }
+                }
+                else
+                {
+                    phase3NonFiniteRows = phase3Rows;
+                }
+
+                std::array<double, direction_output_size> phase3ChMean {0.0, 0.0, 0.0};
+                std::array<double, direction_output_size> phase3ChStd {0.0, 0.0, 0.0};
+                for (size_t c = 0; c < direction_output_size; ++c)
+                {
+                    if (phase3FiniteRows > 0)
+                    {
+                        phase3ChMean[c] = static_cast<double>(
+                            phase3ChSum[c] / static_cast<long double>(phase3FiniteRows));
+                        const double meanSq = static_cast<double>(
+                            phase3ChSqSum[c] / static_cast<long double>(phase3FiniteRows));
+                        phase3ChStd[c] = std::sqrt(std::max(0.0, meanSq - phase3ChMean[c] * phase3ChMean[c]));
+                    }
+                }
+
+                auto phase3AvgActualLogit = [&](size_t actual, size_t channel) -> double
+                {
+                    return phase3ActualHist[actual] > 0
+                        ? static_cast<double>(phase3ActualLogitSum[actual][channel] /
+                                              static_cast<long double>(phase3ActualHist[actual]))
+                        : 0.0;
+                };
+
+                auto phase3SafeBias = [&](size_t idx) -> double
+                {
+                    return idx < phase3BiasHost.data.size()
+                        ? static_cast<double>(phase3BiasHost.data[idx])
+                        : 0.0;
+                };
+
+                std::cout << "DIAG_LOGITS_"
+                          << ",call=" << phase3HeadDiagIdx
+                          << ",rows=" << phase3Rows
+                          << ",cols=" << phase3Cols
+                          << ",finite_rows=" << phase3FiniteRows
+                          << ",nonfinite_rows=" << phase3NonFiniteRows
+                          << ",invalid_actual_rows=" << phase3InvalidActualRows
+                          << ",down_min=" << phase3ChMin[0]
+                          << ",down_max=" << phase3ChMax[0]
+                          << ",down_mean=" << phase3ChMean[0]
+                          << ",down_std=" << phase3ChStd[0]
+                          << ",neutral_min=" << phase3ChMin[1]
+                          << ",neutral_max=" << phase3ChMax[1]
+                          << ",neutral_mean=" << phase3ChMean[1]
+                          << ",neutral_std=" << phase3ChStd[1]
+                          << ",up_min=" << phase3ChMin[2]
+                          << ",up_max=" << phase3ChMax[2]
+                          << ",up_mean=" << phase3ChMean[2]
+                          << ",up_std=" << phase3ChStd[2]
+                          << ",actual_down=" << phase3ActualHist[0]
+                          << ",actual_neutral=" << phase3ActualHist[1]
+                          << ",actual_up=" << phase3ActualHist[2]
+                          << ",win_down=" << phase3WinHist[0]
+                          << ",win_neutral=" << phase3WinHist[1]
+                          << ",win_up=" << phase3WinHist[2]
+                          << ",bias_down=" << phase3SafeBias(0)
+                          << ",bias_neutral=" << phase3SafeBias(1)
+                          << ",bias_up=" << phase3SafeBias(2)
+                          << ",actual_down_logit_down_mean=" << phase3AvgActualLogit(0, 0)
+                          << ",actual_down_logit_neutral_mean=" << phase3AvgActualLogit(0, 1)
+                          << ",actual_down_logit_up_mean=" << phase3AvgActualLogit(0, 2)
+                          << ",actual_neutral_logit_down_mean=" << phase3AvgActualLogit(1, 0)
+                          << ",actual_neutral_logit_neutral_mean=" << phase3AvgActualLogit(1, 1)
+                          << ",actual_neutral_logit_up_mean=" << phase3AvgActualLogit(1, 2)
+                          << ",actual_up_logit_down_mean=" << phase3AvgActualLogit(2, 0)
+                          << ",actual_up_logit_neutral_mean=" << phase3AvgActualLogit(2, 1)
+                          << ",actual_up_logit_up_mean=" << phase3AvgActualLogit(2, 2)
+                          << std::endl;
+            }
+            // --- END PATCH ---
 #endif
 #if LSTM_HEAVY_DIAG
             static bool s_printed_batch_dir_logits = false;
@@ -3456,6 +3762,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             float* dptr = lowD.MutableRawMemory();
             std::array<size_t, direction_output_size> actualHist {0, 0, 0};
             std::array<size_t, direction_output_size> predHist {0, 0, 0};
+            std::array<size_t, direction_output_size> correctHist {0, 0, 0};
             std::array<double, direction_output_size> weightedLossByClass {0.0, 0.0, 0.0};
             std::array<Phase3MatrixStats, direction_output_size> probStats {};
             std::array<std::array<double, direction_output_size>, direction_output_size> logitSumByActual {};
@@ -3540,6 +3847,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
                 const bool correct = (predClass == cls);
                 ++predHist[static_cast<size_t>(predClass)];
+                if (correct)
+                    ++correctHist[static_cast<size_t>(cls)];
 
                 Log3ClassSample(cls, predClass);
                 if (max_prob >= 0.33f && max_prob < 0.35f)
@@ -3607,6 +3916,34 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             }
             if (phase3HeadDiagEnabled)
             {
+                const size_t phase3ValidRows = actualHist[0] + actualHist[1] + actualHist[2];
+                const size_t phase3PredTotal = predHist[0] + predHist[1] + predHist[2];
+                const size_t phase3CorrectTotal = correctHist[0] + correctHist[1] + correctHist[2];
+
+                std::cout << "DIAG_PRED_CLASS_COUNTS_"
+                          << ",call=" << phase3HeadDiagIdx
+                          << ",rows=" << B
+                          << ",cols=3"
+                          << ",valid_rows=" << phase3ValidRows
+                          << ",actual_down=" << actualHist[0]
+                          << ",actual_neutral=" << actualHist[1]
+                          << ",actual_up=" << actualHist[2]
+                          << ",pred_down=" << predHist[0]
+                          << ",pred_neutral=" << predHist[1]
+                          << ",pred_up=" << predHist[2]
+                          << ",correct_down=" << correctHist[0]
+                          << ",correct_neutral=" << correctHist[1]
+                          << ",correct_up=" << correctHist[2]
+                          << ",correct_total=" << phase3CorrectTotal
+                          << ",accuracy=" << (phase3ValidRows > 0
+                                  ? static_cast<double>(phase3CorrectTotal) / static_cast<double>(phase3ValidRows)
+                                  : 0.0)
+                          << ",pred_total=" << phase3PredTotal
+                          << std::endl;
+            }
+            
+            if (phase3HeadDiagEnabled)
+            {
                 for (size_t cls = 0; cls < direction_output_size; ++cls)
                 {
                     PrintPhase3Stats("DIAG_HEAD_LOGITS_", phase3HeadDiagIdx, Phase3ClassName(cls),
@@ -3636,11 +3973,55 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                           << ",weighted_loss_up=" << weightedLossByClass[2]
                           << ",weighted_loss_total=" << (weightedLossByClass[0] + weightedLossByClass[1] + weightedLossByClass[2])
                           << std::endl;
+                const double phase3WeightedLossTotal =
+                    weightedLossByClass[0] + weightedLossByClass[1] + weightedLossByClass[2];
+
+                if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
+                {
+                    const auto logitsProgress = Phase3DirHeadLogitsCpu(h_batch, returnHeadDirWeight, returnHeadDirBias);
+                    const auto probsProgress = Phase3SoftmaxProbsCpu(logitsProgress);
+
+                    const auto headWStats = Phase3StatsWhole(returnHeadDirWeight, -20.0, 20.0);
+                    const auto headBStats = Phase3StatsWhole(returnHeadDirBias, -20.0, 20.0);
+                    const auto logitStats = Phase3StatsWhole(logitsProgress, -20.0, 20.0);
+                    const auto probStats = Phase3StatsWhole(probsProgress, 1.0e-4, 1.0 - 1.0e-4);
+
+                    std::cout << "DIAG_HEAD_PROGRESS_"
+                              << ",update=" << phase3HeadDiagIdx
+                              << ",head_weight_norm=" << FroNormEvalHost(returnHeadDirWeight)
+                              << ",head_weight_absmax=" << headWStats.absmax
+                              << ",head_bias_norm=" << FroNormEvalHost(returnHeadDirBias)
+                              << ",head_bias_absmax=" << headBStats.absmax
+                              << std::endl;
+
+                    std::cout << "DIAG_LOGIT_PROGRESS_"
+                              << ",update=" << phase3HeadDiagIdx
+                              << ",logit_absmax=" << logitStats.absmax
+                              << ",logit_std=" << Phase3StatsStddev(logitStats)
+                              << std::endl;
+
+                    std::cout << "DIAG_PROB_PROGRESS_"
+                              << ",update=" << phase3HeadDiagIdx
+                              << ",prob_absmax=" << probStats.absmax
+                              << ",prob_std=" << Phase3StatsStddev(probStats)
+                              << std::endl;
+
+                    std::cout << "DIAG_PRED_PROGRESS_"
+                              << ",update=" << phase3HeadDiagIdx
+                              << ",B=" << B
+                              << ",pred_down=" << predHist[0]
+                              << ",pred_neutral=" << predHist[1]
+                              << ",pred_up=" << predHist[2]
+                              << ",actual_down=" << actualHist[0]
+                              << ",actual_neutral=" << actualHist[1]
+                              << ",actual_up=" << actualHist[2]
+                              << ",weighted_loss_total=" << phase3WeightedLossTotal
+                              << std::endl;
+                }
             }
             const double phase3WeightedLossTotal =
                 weightedLossByClass[0] + weightedLossByClass[1] + weightedLossByClass[2];
 
-#if 1
             if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
             {
                 const auto logitsProgress = Phase3DirHeadLogitsCpu(h_batch, returnHeadDirWeight, returnHeadDirBias);
@@ -3683,8 +4064,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                           << ",weighted_loss_total=" << phase3WeightedLossTotal
                           << std::endl;
             }
-#endif
-#if 1
+
             // === BEGIN CLASS SEPARATION DIAGNOSTIC ===
             if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
             {
@@ -3706,7 +4086,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                               << std::endl;
                 }
             }
-#endif
             if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
             {
                 std::array<double, direction_output_size> hMeanNormByActual {0.0, 0.0, 0.0};
@@ -4137,6 +4516,56 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             auto gb = hoistGateBlocks(ww.W_h, hidden_size);
             if (phase3DhDiagEnabled)
             {
+                const double whINorm = FroNormEvalHost(gb.W_hi);
+                const double whFNorm = FroNormEvalHost(gb.W_hf);
+                const double whGNorm = FroNormEvalHost(gb.W_hg);
+                const double whONorm = FroNormEvalHost(gb.W_ho);
+
+                auto phase3MaxAbsHost = [](const EAMatrix& m) -> double
+                {
+                    auto low = MetaNN::LowerAccess(m);
+                    const float* ptr = low.RawMemory();
+                    const size_t count = m.Shape()[0] * m.Shape()[1];
+                    double maxAbs = 0.0;
+                    for (size_t idx = 0; idx < count; ++idx)
+                    {
+                        const double v = static_cast<double>(ptr[idx]);
+                        if (std::isfinite(v))
+                            maxAbs = std::max(maxAbs, std::abs(v));
+                    }
+                    return maxAbs;
+                };
+
+                const double whIMaxAbs = phase3MaxAbsHost(gb.W_hi);
+                const double whFMaxAbs = phase3MaxAbsHost(gb.W_hf);
+                const double whGMaxAbs = phase3MaxAbsHost(gb.W_hg);
+                const double whOMaxAbs = phase3MaxAbsHost(gb.W_ho);
+
+                const double whIAvgColNorm = hidden_size > 0 ? whINorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
+                const double whFAvgColNorm = hidden_size > 0 ? whFNorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
+                const double whGAvgColNorm = hidden_size > 0 ? whGNorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
+                const double whOAvgColNorm = hidden_size > 0 ? whONorm / std::sqrt(static_cast<double>(hidden_size)) : 0.0;
+
+                std::cout << "DIAG_BPTT_RECURRENT_BLOCK_SCALE_"
+                          << ",call=" << phase3DhFromHeadDiagIdx
+                          << ",hidden_size=" << hidden_size
+                          << ",W_hi_fro_norm=" << whINorm
+                          << ",W_hf_fro_norm=" << whFNorm
+                          << ",W_hg_fro_norm=" << whGNorm
+                          << ",W_ho_fro_norm=" << whONorm
+                          << ",W_hi_avg_col_norm=" << whIAvgColNorm
+                          << ",W_hf_avg_col_norm=" << whFAvgColNorm
+                          << ",W_hg_avg_col_norm=" << whGAvgColNorm
+                          << ",W_ho_avg_col_norm=" << whOAvgColNorm
+                          << ",W_hi_max_abs=" << whIMaxAbs
+                          << ",W_hf_max_abs=" << whFMaxAbs
+                          << ",W_hg_max_abs=" << whGMaxAbs
+                          << ",W_ho_max_abs=" << whOMaxAbs
+                          << ",g_to_i_fro_ratio=" << (whINorm > 1.0e-12 ? whGNorm / whINorm : 0.0)
+                          << ",g_to_f_fro_ratio=" << (whFNorm > 1.0e-12 ? whGNorm / whFNorm : 0.0)
+                          << ",g_to_o_fro_ratio=" << (whONorm > 1.0e-12 ? whGNorm / whONorm : 0.0)
+                          << std::endl;
+
                 PrintPhase3NormStats("DIAG_BPTT_DH_IN_", phase3DhFromHeadDiagIdx, "d_h_before_bptt", d_h_batch);
                 PrintPhase3NormStats("DIAG_BPTT_DC_IN_", phase3DhFromHeadDiagIdx, "d_c_before_bptt", d_c_batch);
             }
@@ -4176,6 +4605,137 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 const double phase3StepDhInNorm = phase3DhDiagEnabled ? FroNormEvalHost(d_h_batch) : 0.0;
                 const double phase3StepDcInNorm = phase3DhDiagEnabled ? FroNormEvalHost(d_c_batch) : 0.0;
                 // --- END PATCH ---
+
+#if !LSTM_INFERENCE_ONLY
+                if (phase3DhDiagEnabled)
+                {
+                    static size_t s_phase3CellCarryDiagCount = 0;
+                    if (s_phase3CellCarryDiagCount < LSTM_PHASE3_HEAD_DIAG_LIMIT)
+                    {
+                        const auto& phase3CellCarrySc = cache[static_cast<size_t>(tstep)];
+
+                        auto lowF = MetaNN::LowerAccess(phase3CellCarrySc.f);
+                        auto lowO = MetaNN::LowerAccess(phase3CellCarrySc.o);
+                        auto lowC = MetaNN::LowerAccess(phase3CellCarrySc.c);
+                        auto lowZf = MetaNN::LowerAccess(phase3CellCarrySc.z_f);
+                        auto lowDh = MetaNN::LowerAccess(d_h_batch);
+                        auto lowDc = MetaNN::LowerAccess(d_c_batch);
+
+                        const float* fptr = lowF.RawMemory();
+                        const float* optr = lowO.RawMemory();
+                        const float* cptr = lowC.RawMemory();
+                        const float* zfptr = lowZf.RawMemory();
+                        const float* dhptr = lowDh.RawMemory();
+                        const float* dcptr = lowDc.RawMemory();
+
+                        const size_t rows = d_h_batch.Shape()[0];
+                        const size_t cols = d_h_batch.Shape()[1];
+                        const size_t count = rows * cols;
+
+                        double fSum = 0.0;
+                        double fSq = 0.0;
+                        double fMin = count ? static_cast<double>(fptr[0]) : 0.0;
+                        double fMax = fMin;
+                        double zfSum = 0.0;
+                        double zfMin = count ? static_cast<double>(zfptr[0]) : 0.0;
+                        double zfMax = zfMin;
+                        double fBiasPlus05Sum = 0.0, fBiasPlus10Sum = 0.0;
+                        double fBiasPlus05Sq = 0.0, fBiasPlus10Sq = 0.0;
+                        long double dcPrevFromDcSq = 0.0L;
+                        long double dcPrevFromDhSq = 0.0L;
+                        long double dcPrevTotalSq = 0.0L;
+
+                        for (size_t idx = 0; idx < count; ++idx)
+                        {
+                            const double f = static_cast<double>(fptr[idx]);
+                            const double o = static_cast<double>(optr[idx]);
+                            const double c = static_cast<double>(cptr[idx]);
+                            const double zf = static_cast<double>(zfptr[idx]);
+                            const double dh = static_cast<double>(dhptr[idx]);
+                            const double dc = static_cast<double>(dcptr[idx]);
+
+                            const double tanhC = std::tanh(c);
+                            const double tanhDeriv = 1.0 - tanhC * tanhC;
+                            const double dcPrevFromDc = dc * f;
+                            const double dcPrevFromDh = dh * o * tanhDeriv * f;
+                            const double dcPrevTotal = dcPrevFromDc + dcPrevFromDh;
+
+                            fSum += f;
+                            fSq += f * f;
+                            fMin = std::min(fMin, f);
+                            fMax = std::max(fMax, f);
+                            zfSum += zf;
+                            zfMin = std::min(zfMin, zf);
+                            zfMax = std::max(zfMax, zf);
+                            const double fBiasPlus05 = 1.0 / (1.0 + std::exp(-(zf + 0.5)));
+                            const double fBiasPlus10 = 1.0 / (1.0 + std::exp(-(zf + 1.0)));
+
+                            fBiasPlus05Sum += fBiasPlus05;
+                            fBiasPlus10Sum += fBiasPlus10;
+                            fBiasPlus05Sq += fBiasPlus05 * fBiasPlus05;
+                            fBiasPlus10Sq += fBiasPlus10 * fBiasPlus10;
+                            dcPrevFromDcSq += static_cast<long double>(dcPrevFromDc) * static_cast<long double>(dcPrevFromDc);
+                            dcPrevFromDhSq += static_cast<long double>(dcPrevFromDh) * static_cast<long double>(dcPrevFromDh);
+                            dcPrevTotalSq += static_cast<long double>(dcPrevTotal) * static_cast<long double>(dcPrevTotal);
+                        }
+
+                        const int phase3StepsFromLast =
+                            static_cast<int>(cache.size()) - 1 - tstep;
+                        const double phase3FMean =
+                            count ? fSum / static_cast<double>(count) : 0.0;
+                        const double phase3CarryPowerEst =
+                            std::pow(phase3FMean, static_cast<double>(phase3StepsFromLast));
+                        const double phase3ZfMean =
+                            count ? zfSum / static_cast<double>(count) : 0.0;
+                        const double phase3SigmoidZfMean =
+                            1.0 / (1.0 + std::exp(-phase3ZfMean));
+                        const double phase3FBiasPlus05Mean = count ? fBiasPlus05Sum / double(count) : 0.0;
+                        const double phase3FBiasPlus10Mean = count ? fBiasPlus10Sum / double(count) : 0.0;
+
+                        const double phase3CarryPowerEstBiasPlus05 =
+                            std::pow(phase3FBiasPlus05Mean, double(phase3StepsFromLast));
+                        const double phase3CarryPowerEstBiasPlus10 =
+                            std::pow(phase3FBiasPlus10Mean, double(phase3StepsFromLast));
+                        std::cout << "DIAG_BPTT_FORGET_OPERATING_POINT_"
+                                  << ",call=" << s_phase3CellCarryDiagCount
+                                  << ",source_call=" << phase3DhFromHeadDiagIdx
+                                  << ",tstep=" << tstep
+                                  << ",steps_from_last=" << phase3StepsFromLast
+                                  << ",rows=" << rows
+                                  << ",hidden_size=" << cols
+                                  << ",z_f_mean=" << phase3ZfMean
+                                  << ",z_f_min=" << zfMin
+                                  << ",z_f_max=" << zfMax
+                                  << ",sigmoid_z_f_mean=" << phase3SigmoidZfMean
+                                  << ",f_mean=" << phase3FMean
+                                  << ",f_mean_minus_sigmoid_z_f_mean=" << (phase3FMean - phase3SigmoidZfMean)
+                        << ",f_bias_plus_0p5_mean=" << phase3FBiasPlus05Mean
+                        << ",carry_power_est_bias_plus_0p5=" << phase3CarryPowerEstBiasPlus05
+                        << ",f_bias_plus_1p0_mean=" << phase3FBiasPlus10Mean
+                        << ",carry_power_est_bias_plus_1p0=" << phase3CarryPowerEstBiasPlus10
+                        << std::endl;
+
+                        std::cout << "DIAG_BPTT_CELL_CARRY_"
+                                  << ",call=" << s_phase3CellCarryDiagCount
+                                  << ",source_call=" << phase3DhFromHeadDiagIdx
+                                  << ",tstep=" << tstep
+                                  << ",steps_from_last=" << phase3StepsFromLast
+                                  << ",carry_power_est=" << phase3CarryPowerEst
+                                  << ",rows=" << rows
+                                  << ",hidden_size=" << cols
+                                  << ",f_mean=" << phase3FMean
+                                  << ",f_min=" << fMin
+                                  << ",f_max=" << fMax
+                                  << ",f_rms=" << (count ? std::sqrt(fSq / static_cast<double>(count)) : 0.0)
+                                  << ",dc_prev_from_dc_norm=" << std::sqrt(static_cast<double>(dcPrevFromDcSq))
+                                  << ",dc_prev_from_dh_norm=" << std::sqrt(static_cast<double>(dcPrevFromDhSq))
+                                  << ",dc_prev_total_norm=" << std::sqrt(static_cast<double>(dcPrevTotalSq))
+                                  << std::endl;
+
+                        ++s_phase3CellCarryDiagCount;
+                    }
+                }
+#endif
 
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
 
@@ -4630,6 +5190,26 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         auto d_headDirW_f = MetaNN::Evaluate(d_headDirW_accum_f);
         auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
+        // Convert accumulated gradients to mean gradients before clipping.
+        // This prevents full-epoch/window accumulation from triggering clipping
+        // before the learning-rate/window normalization can take effect.
+        const float invN = 1.0f / static_cast<float>(windowCount);
+        auto phase3ScaleMatrixInPlace = [](auto& m, float scale)
+        {
+            auto low = MetaNN::LowerAccess(m);
+            auto* ptr = low.MutableRawMemory();
+            const size_t count = m.Shape()[0] * m.Shape()[1];
+            for (size_t idx = 0; idx < count; ++idx)
+                ptr[idx] = ptr[idx] * scale;
+        };
+
+        phase3ScaleMatrixInPlace(d_param_f, invN);
+        phase3ScaleMatrixInPlace(d_bias_f, invN);
+        phase3ScaleMatrixInPlace(d_headW_f, invN);
+        phase3ScaleMatrixInPlace(d_headB_f, invN);
+        phase3ScaleMatrixInPlace(d_headDirW_f, invN);
+        phase3ScaleMatrixInPlace(d_headDirB_f, invN);
+
         auto d_param_preclip = NNUtils::DeepCopyMatrix(d_param_f);
         auto d_bias_preclip = NNUtils::DeepCopyMatrix(d_bias_f);
         auto d_headW_preclip = NNUtils::DeepCopyMatrix(d_headW_f);
@@ -4637,11 +5217,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         auto d_headDirW_preclip = NNUtils::DeepCopyMatrix(d_headDirW_f);
         auto d_headDirB_preclip = NNUtils::DeepCopyMatrix(d_headDirB_f);
 
-        // Scale learning rate by number of windows so batch size doesn't change step size
-        const float invN = 1.0f / static_cast<float>(windowCount);
-
-        const float lrCore = learningRate * invN;
-        const float lrHead = learningRate * LSTM_HEAD_LR_MULT * invN; // or a separate head LR if you want
+        // Gradients are already normalized by windowCount above, so use the raw learning rate here.
+        const float lrCore = learning_rate;
+        const float lrHead = learning_rate * LSTM_HEAD_LR_MULT; // or a separate head LR if you want
 
         static size_t s_phase3LrScaleDiagCount = 0;
         const size_t phase3LrScaleDiagIdx = s_phase3LrScaleDiagCount++;
@@ -4661,18 +5239,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                       << ",plannedMiniBatches=" << plannedMiniBatches
                       << ",profileMiniBatches=" << profile.mini_batches
                       << ",denominator_is_full_calculate_batch_windows=1"
+                      << ",gradients_preclip_are_mean_gradients=1"
                       << ",denominator_is_minibatch_size=0"
                       << std::endl;
             std::cout << "DIAG_LR_SCALE_"
                       << ",call=" << phase3LrScaleDiagIdx
-                      << ",raw_learningRate=" << learningRate
+                      << ",raw_learningRate=" << learning_rate
                       << ",core_lr_mult=1"
                       << ",head_lr_mult=" << LSTM_HEAD_LR_MULT
                       << ",invN=" << invN
                       << ",lrCore=" << lrCore
                       << ",lrHead=" << lrHead
-                      << ",core_formula=learningRate/windowCount"
-                      << ",head_formula=learningRate*LSTM_HEAD_LR_MULT/windowCount"
+                      << ",core_formula=learningRate_after_mean_gradient_scaling"
+                      << ",head_formula=learningRate*LSTM_HEAD_LR_MULT_after_mean_gradient_scaling"
                       << std::endl;
         }
 
@@ -4758,6 +5337,148 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirWeight", returnHeadDirWeight, d_headDirW_f, lrHead);
                 PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirBias", returnHeadDirBias, d_headDirB_f, lrHead);
+                {
+                    auto phase3HeadGradLow = MetaNN::LowerAccess(d_headDirW_f);
+                    const float* phase3HeadGradPtr = phase3HeadGradLow.RawMemory();
+
+                    const size_t phase3HeadGradRows = d_headDirW_f.Shape()[0];
+                    const size_t phase3HeadGradCols = d_headDirW_f.Shape()[1];
+
+                    std::array<long double, direction_output_size> phase3HeadGradColSum {0.0L, 0.0L, 0.0L};
+                    std::array<long double, direction_output_size> phase3HeadGradColSqSum {0.0L, 0.0L, 0.0L};
+                    std::array<double, direction_output_size> phase3HeadGradColAbsMax {0.0, 0.0, 0.0};
+                    std::array<size_t, direction_output_size> phase3HeadGradFiniteCount {0, 0, 0};
+                    std::array<size_t, direction_output_size> phase3HeadGradNonFiniteCount {0, 0, 0};
+
+                    if (phase3HeadGradCols >= direction_output_size)
+                    {
+                        for (size_t r = 0; r < phase3HeadGradRows; ++r)
+                        {
+                            for (size_t cls = 0; cls < direction_output_size; ++cls)
+                            {
+                                const double v = static_cast<double>(
+                                    phase3HeadGradPtr[r * phase3HeadGradCols + cls]);
+
+                                if (!std::isfinite(v))
+                                {
+                                    ++phase3HeadGradNonFiniteCount[cls];
+                                    continue;
+                                }
+
+                                ++phase3HeadGradFiniteCount[cls];
+                                phase3HeadGradColSum[cls] += static_cast<long double>(v);
+                                phase3HeadGradColSqSum[cls] += static_cast<long double>(v) * static_cast<long double>(v);
+                                phase3HeadGradColAbsMax[cls] = std::max(phase3HeadGradColAbsMax[cls], std::fabs(v));
+                            }
+                        }
+                    }
+
+                    auto phase3HeadGradColNorm = [&](size_t cls) -> double
+                    {
+                        return std::sqrt(static_cast<double>(phase3HeadGradColSqSum[cls]));
+                    };
+
+                    auto phase3HeadGradColMean = [&](size_t cls) -> double
+                    {
+                        return phase3HeadGradFiniteCount[cls] > 0
+                            ? static_cast<double>(phase3HeadGradColSum[cls] /
+                                                  static_cast<long double>(phase3HeadGradFiniteCount[cls]))
+                            : 0.0;
+                    };
+
+                    std::cout << "DIAG_HEAD_CLASS_GRAD_"
+                              << ",call=" << phase3ClipFullDiagIdx
+                              << ",rows=" << phase3HeadGradRows
+                              << ",cols=" << phase3HeadGradCols
+                              << ",dW_down_norm=" << phase3HeadGradColNorm(0)
+                              << ",dW_neutral_norm=" << phase3HeadGradColNorm(1)
+                              << ",dW_up_norm=" << phase3HeadGradColNorm(2)
+                              << ",dW_down_mean=" << phase3HeadGradColMean(0)
+                              << ",dW_neutral_mean=" << phase3HeadGradColMean(1)
+                              << ",dW_up_mean=" << phase3HeadGradColMean(2)
+                              << ",dW_down_absmax=" << phase3HeadGradColAbsMax[0]
+                              << ",dW_neutral_absmax=" << phase3HeadGradColAbsMax[1]
+                              << ",dW_up_absmax=" << phase3HeadGradColAbsMax[2]
+                              << ",dW_down_finite=" << phase3HeadGradFiniteCount[0]
+                              << ",dW_neutral_finite=" << phase3HeadGradFiniteCount[1]
+                              << ",dW_up_finite=" << phase3HeadGradFiniteCount[2]
+                              << ",dW_down_nonfinite=" << phase3HeadGradNonFiniteCount[0]
+                              << ",dW_neutral_nonfinite=" << phase3HeadGradNonFiniteCount[1]
+                              << ",dW_up_nonfinite=" << phase3HeadGradNonFiniteCount[2]
+                              << std::endl;
+                }
+                // --- BEGIN PATCH: DIAG HEAD WEIGHT BY CLASS ---
+                {
+                    auto phase3HeadWLow = MetaNN::LowerAccess(returnHeadDirWeight);
+                    const float* phase3HeadWPtr = phase3HeadWLow.RawMemory();
+
+                    const size_t phase3HeadWRows = returnHeadDirWeight.Shape()[0];
+                    const size_t phase3HeadWCols = returnHeadDirWeight.Shape()[1];
+
+                    std::array<long double, direction_output_size> phase3HeadWColSum {0.0L, 0.0L, 0.0L};
+                    std::array<long double, direction_output_size> phase3HeadWColSqSum {0.0L, 0.0L, 0.0L};
+                    std::array<double, direction_output_size> phase3HeadWColAbsMax {0.0, 0.0, 0.0};
+                    std::array<size_t, direction_output_size> phase3HeadWFiniteCount {0, 0, 0};
+                    std::array<size_t, direction_output_size> phase3HeadWNonFiniteCount {0, 0, 0};
+
+                    if (phase3HeadWCols >= direction_output_size)
+                    {
+                        for (size_t r = 0; r < phase3HeadWRows; ++r)
+                        {
+                            for (size_t cls = 0; cls < direction_output_size; ++cls)
+                            {
+                                const double v = static_cast<double>(
+                                    phase3HeadWPtr[r * phase3HeadWCols + cls]);
+
+                                if (!std::isfinite(v))
+                                {
+                                    ++phase3HeadWNonFiniteCount[cls];
+                                    continue;
+                                }
+
+                                ++phase3HeadWFiniteCount[cls];
+                                phase3HeadWColSum[cls] += static_cast<long double>(v);
+                                phase3HeadWColSqSum[cls] += static_cast<long double>(v) * static_cast<long double>(v);
+                                phase3HeadWColAbsMax[cls] = std::max(phase3HeadWColAbsMax[cls], std::fabs(v));
+                            }
+                        }
+                    }
+
+                    auto phase3HeadWColNorm = [&](size_t cls) -> double
+                    {
+                        return std::sqrt(static_cast<double>(phase3HeadWColSqSum[cls]));
+                    };
+
+                    auto phase3HeadWColMean = [&](size_t cls) -> double
+                    {
+                        return phase3HeadWFiniteCount[cls] > 0
+                            ? static_cast<double>(phase3HeadWColSum[cls] /
+                                                  static_cast<long double>(phase3HeadWFiniteCount[cls]))
+                            : 0.0;
+                    };
+
+                    std::cout << "DIAG_HEAD_WEIGHT_BY_CLASS_"
+                              << ",call=" << phase3ClipFullDiagIdx
+                              << ",rows=" << phase3HeadWRows
+                              << ",cols=" << phase3HeadWCols
+                              << ",W_down_norm=" << phase3HeadWColNorm(0)
+                              << ",W_neutral_norm=" << phase3HeadWColNorm(1)
+                              << ",W_up_norm=" << phase3HeadWColNorm(2)
+                              << ",W_down_mean=" << phase3HeadWColMean(0)
+                              << ",W_neutral_mean=" << phase3HeadWColMean(1)
+                              << ",W_up_mean=" << phase3HeadWColMean(2)
+                              << ",W_down_absmax=" << phase3HeadWColAbsMax[0]
+                              << ",W_neutral_absmax=" << phase3HeadWColAbsMax[1]
+                              << ",W_up_absmax=" << phase3HeadWColAbsMax[2]
+                              << ",W_down_finite=" << phase3HeadWFiniteCount[0]
+                              << ",W_neutral_finite=" << phase3HeadWFiniteCount[1]
+                              << ",W_up_finite=" << phase3HeadWFiniteCount[2]
+                              << ",W_down_nonfinite=" << phase3HeadWNonFiniteCount[0]
+                              << ",W_neutral_nonfinite=" << phase3HeadWNonFiniteCount[1]
+                              << ",W_up_nonfinite=" << phase3HeadWNonFiniteCount[2]
+                              << std::endl;
+                }
+                // --- END PATCH ---
                 std::cout << "DIAG_UPDATE_EFFECTIVE_"
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadDirWeight"
@@ -4824,7 +5545,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << ",call=" << s_phase3CoreUpdateScaleCount
                   << ",windowCount=" << windowCount
                   << ",effectiveMiniBatchWindows=" << effectiveMiniBatchWindows
-                  << ",learningRate=" << learningRate
+                  << ",learningRate=" << learning_rate
                   << ",core_lr=" << lrCore
                   << ",head_lr=" << lrHead
                   << ",head_lr_mult=" << LSTM_HEAD_LR_MULT
@@ -4935,8 +5656,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                                   << ",actual_neutral=" << s_phase3LastHGeometryActualHistBeforeUpdate[1]
                                   << ",actual_up=" << s_phase3LastHGeometryActualHistBeforeUpdate[2]
                                   << ",h_before_norm=" << hBeforeNorm
-                                  << ",core_param_update_norm=" << FroNormDeltaHost(param, param_before_snap)
-                                  << ",core_bias_update_norm=" << FroNormDeltaHost(bias, bias_before_snap)
+                                  << ",core_param_update_norm=" << (static_cast<double>(lrCore) * FroNormEvalHost(d_param_f))
+                                  << ",core_bias_update_norm=" << (static_cast<double>(lrCore) * FroNormEvalHost(d_bias_f))
                                   << ",head_weight_update_norm=" << FroNormDeltaHost(returnHeadDirWeight, phase3HeadWUpdateBefore)
                                   << ",head_bias_update_norm=" << FroNormDeltaHost(returnHeadDirBias, phase3HeadBUpdateBefore)
                                   << ",requires_forward_recompute_for_true_h_after=1"
