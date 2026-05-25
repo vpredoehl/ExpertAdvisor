@@ -3290,17 +3290,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         allStarts.push_back(start);
     }
 
-#if LSTM_HEAVY_DIAG
-        EAMatrix param_before_snap = NNUtils::DeepCopyMatrix(param);
-        EAMatrix bias_before_snap  = NNUtils::DeepCopyMatrix(bias);
-        EAMatrix headW_before_snap = (targetType == TargetType::UpNeutralDownReturn)
-            ? NNUtils::DeepCopyMatrix(returnHeadDirWeight)
-            : NNUtils::DeepCopyMatrix(returnHeadWeight);
-        EAMatrix headB_before_snap = (targetType == TargetType::UpNeutralDownReturn)
-            ? NNUtils::DeepCopyMatrix(returnHeadDirBias)
-            : NNUtils::DeepCopyMatrix(returnHeadBias);
-#endif
-
     for (size_t batchBase = 0; batchBase < allStarts.size(); batchBase += effectiveMiniBatchWindows)
     {
         const bool isFirstMiniBatch = (batchBase == 0);
@@ -5574,34 +5563,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 #endif
         }
         
-        #if LSTM_HEAVY_DIAG
-                if (!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall)
-                {
-                    const double n_param = FroNormEvalHost(param);
-                    const double n_bias  = FroNormEvalHost(bias);
-                    const double n_headW = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirWeight) : FroNormEvalHost(returnHeadWeight);
-                    const double n_headB = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirBias) : FroNormEvalHost(returnHeadBias);
-        
-                    // Gradient norms (after Evaluate already below, but safe to compute here too)
-                    const double n_gparam = FroNormEvalHost(d_param_accum);
-                    const double n_gbias  = FroNormEvalHost(d_bias_accum);
-                    const double n_gheadW = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirW_accum_f) : FroNormEvalHost(d_headW_accum_f);
-                    const double n_gheadB = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirB_accum_f) : FroNormEvalHost(d_headB_accum_f);
-
-                    std::cout
-                        << "DIAG_PREUPD"
-                        << ",calcBatchCall=" << calcBatchCallIdx
-                        << ",param=" << n_param
-                        << ",bias=" << n_bias
-                        << ",headW=" << n_headW
-                        << ",headB=" << n_headB
-                        << ",gParam=" << n_gparam
-                        << ",gBias=" << n_gbias
-                        << ",gHeadW=" << n_gheadW
-                        << ",gHeadB=" << n_gheadB
-                        << "\n";
-                }
-        #endif
         #if !LSTM_DISABLE_UPDATES
             EAMatrix phase3HeadWUpdateBefore = (targetType == TargetType::UpNeutralDownReturn)
                 ? NNUtils::DeepCopyMatrix(returnHeadDirWeight)
@@ -5901,77 +5862,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     PrintPhase3HeadDelta(phase3ClipFullDiagIdx, "returnHeadBias", returnHeadBias, phase3HeadBUpdateBefore);
                 }
             }
-        #endif
-#if LSTM_HEAVY_DIAG
-                if (!LSTM_DIAG_ONLY_FIRST_BATCH || isFirstBatchCall)
-                {
-                    const double n_param2 = FroNormEvalHost(param);
-                    const double n_bias2  = FroNormEvalHost(bias);
-                    const double n_headW2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirWeight) : FroNormEvalHost(returnHeadWeight);
-                    const double n_headB2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(returnHeadDirBias) : FroNormEvalHost(returnHeadBias);
-
-                    // True update magnitudes (Frobenius norms of parameter deltas)
-                    double d_param_delta = FroNormDeltaHost(param, param_before_snap);
-                    double d_bias_delta  = FroNormDeltaHost(bias,  bias_before_snap);
-                    double d_headW_delta = 0.0;
-                    double d_headB_delta = 0.0;
-                    if (targetType == TargetType::UpNeutralDownReturn)
-                    {
-                        d_headW_delta = FroNormDeltaHost(returnHeadDirWeight, headW_before_snap);
-                        d_headB_delta = FroNormDeltaHost(returnHeadDirBias,   headB_before_snap);
-                    }
-                    else
-                    {
-                        d_headW_delta = FroNormDeltaHost(returnHeadWeight, headW_before_snap);
-                        d_headB_delta = FroNormDeltaHost(returnHeadBias,   headB_before_snap);
-                    }
-        
-                    std::cout
-                        << "DIAG_POSTUPD"
-                        << ",calcBatchCall=" << calcBatchCallIdx
-                        << ",param=" << n_param2
-                        << ",bias=" << n_bias2
-                        << ",headW=" << n_headW2
-                        << ",headB=" << n_headB2
-                        << ",dParam=" << d_param_delta
-                        << ",dBias="  << d_bias_delta
-                        << ",dHeadW=" << d_headW_delta
-                        << ",dHeadB=" << d_headB_delta
-                        << "\n";
-
-                    // Combined CSV-friendly line with pre/post norms and deltas
-                    const double n_param_pre = FroNormEvalHost(param_before_snap);
-                    const double n_bias_pre  = FroNormEvalHost(bias_before_snap);
-                    const double n_headW_pre = FroNormEvalHost(headW_before_snap);
-                    const double n_headB_pre = FroNormEvalHost(headB_before_snap);
-
-                    // Gradient norms (recomputed here for a single-line summary)
-                    const double n_gparam2 = FroNormEvalHost(d_param_accum);
-                    const double n_gbias2  = FroNormEvalHost(d_bias_accum);
-                    const double n_gheadW2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirW_accum_f) : FroNormEvalHost(d_headW_accum_f);
-                    const double n_gheadB2 = (targetType == TargetType::UpNeutralDownReturn) ? FroNormEvalHost(d_headDirB_accum_f) : FroNormEvalHost(d_headB_accum_f);
-
-                    std::cout
-                        << "DIAG_COMBINED"
-                        << ",calcBatchCall=" << calcBatchCallIdx
-                        << ",param_pre=" << n_param_pre
-                        << ",bias_pre="  << n_bias_pre
-                        << ",headW_pre=" << n_headW_pre
-                        << ",headB_pre=" << n_headB_pre
-                        << ",gParam="    << n_gparam2
-                        << ",gBias="     << n_gbias2
-                        << ",gHeadW="    << n_gheadW2
-                        << ",gHeadB="    << n_gheadB2
-                        << ",param_post=" << n_param2
-                        << ",bias_post="  << n_bias2
-                        << ",headW_post=" << n_headW2
-                        << ",headB_post=" << n_headB2
-                        << ",dParam="     << d_param_delta
-                        << ",dBias="      << d_bias_delta
-                        << ",dHeadW="     << d_headW_delta
-                        << ",dHeadB="     << d_headB_delta
-                        << "\n";
-                }
         #endif
     }
 #endif
