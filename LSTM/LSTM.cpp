@@ -2375,7 +2375,7 @@ auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, cons
     // Gradient of loss w.r.t logits: scale * w_k * (p_k - y_k).
     // Next diagnostic test: reduce the direction-class loss signal instead of
     // trying another forget-gate bias value.
-    constexpr float kDirectionClassGradScale = 0.5f;
+    constexpr float kDirectionClassGradScale = 0.1f;
     float wDown = kClassWeightDown;
     float wNeutral = kClassWeightNeutral;
     float wUp = kClassWeightUp;
@@ -2834,13 +2834,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
         float* bp = low.MutableRawMemory();
         std::fill(bp, bp + static_cast<size_t>(4 * n_out), 0.0f);
     }
-    {
-        // Add positive bias to forget gate block [H .. 2H)
-        const size_t H = hidden_size;
-        auto low = MetaNN::LowerAccess(bias);
-        float* bp = low.MutableRawMemory();
-        for (size_t j = H; j < 2 * H; ++j) bp[j] += 1.625f;
-    }
+    InitializeBiasWithForgetGateOffset(1.5f);
     ResetPreviousState();
 
     switch(targetType)

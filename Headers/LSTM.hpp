@@ -66,6 +66,19 @@ class LSTM
     }
     
     static float Sigmoid(float z) { return 1.0f / (1.0f + std::exp(-z)); }
+    inline void ApplyForgetGateBiasOffset(float offset)
+    {
+        // Gate column order is i, f, g, o.  The forget gate occupies
+        // bias columns [n_out, 2*n_out).  Use this immediately after the
+        // bias matrix is zero-filled or otherwise initialized.
+        LSTM_ASSERT(bias.Shape()[0] == 1 && bias.Shape()[1] == 4 * n_out,
+                    "ApplyForgetGateBiasOffset: bias shape mismatch");
+        for (size_t j = 0; j < static_cast<size_t>(n_out); ++j)
+        {
+            const size_t forgetCol = static_cast<size_t>(n_out) + j;
+            bias.SetValue(0, forgetCol, bias(0, forgetCol) + offset);
+        }
+    }
 public:
     using EAMatrix = MetaNN::Matrix<float, MetaNN::DeviceTags::Metal>;
 
@@ -118,6 +131,16 @@ public:
     float learning_rate = 1e-3f / 3; // or /2 or /4
     
     LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0, TargetType explicitTargetType = TargetType::UpNeutralDownReturn);
+
+    inline void InitializeBiasWithForgetGateOffset(float forgetBiasOffset)
+    {
+        // Keep the base gate biases at zero, then bias only the forget gate.
+        // Gate column order is i, f, g, o; ApplyForgetGateBiasOffset targets f.
+        LSTM_ASSERT(bias.Shape()[0] == 1 && bias.Shape()[1] == 4 * n_out,
+                    "InitializeBiasWithForgetGateOffset: bias shape mismatch");
+        for (size_t j = 0; j < static_cast<size_t>(4 * n_out); ++j) bias.SetValue(0, j, 0.0f);
+        ApplyForgetGateBiasOffset(forgetBiasOffset);
+    }
 
     void PrintOutputHeadShapes() const;
     LSTM() = delete;
