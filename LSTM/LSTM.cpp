@@ -5221,7 +5221,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const float lrHeadDirActiveMult =
             (targetType == TargetType::UpNeutralDownReturn) ? 0.5f : 1.0f;
         const float lrHead = lrHeadBase * lrHeadDirActiveMult;
-        const float lrHeadBias = lrHead * 0.05f; // intentionally slower bias adaptation
+        const float lrHeadBias = lrHead * 0.01f; // intentionally slower bias adaptation
 
         static size_t s_phase3LrScaleDiagCount = 0;
         const size_t phase3LrScaleDiagIdx = s_phase3LrScaleDiagCount++;
@@ -5655,17 +5655,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     << ",expected_update_norm=" << (static_cast<double>(lrHeadBias) * FroNormEvalHost(d_headDirB_f))
                     << std::endl;
                     SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
-
-                    // add neutral bias damp only
-                    {
-                        auto low = MetaNN::LowerAccess(d_headDirB_f);
-                        float* ptr = low.MutableRawMemory();
-
-                        if (d_headDirB_f.Shape()[0] >= 1 &&d_headDirB_f.Shape()[1] >= direction_output_size)
-                            ptr[1] *= 0.25f;
-                        std::cout << "DIAG_NEUTRAL_HEAD_BIAS_DAMP_,scale=0.25,target=returnHeadDirBias\n";
-                    }
-
                     SGDUpdate(returnHeadDirBias, d_headDirB_f, lrHeadBias);
                 } else {
                     SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
@@ -5835,6 +5824,193 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                             }
                             return std::sqrt(static_cast<double>(ss));
                         }();
+
+                        // --- BEGIN PATCH: DIAG HIDDEN REPRESENTATION COLLAPSE ---
+                        {
+                            const size_t hRows = s_phase3LastHGeometryHostBeforeUpdate.rows;
+                            const size_t hCols = s_phase3LastHGeometryHostBeforeUpdate.cols;
+                            const bool hasClassIds =
+                                s_phase3HiddenReplayCapture.valid &&
+                                s_phase3HiddenReplayCapture.actualClasses.size() == hRows;
+
+                            std::array<size_t, direction_output_size> classCount {0, 0, 0};
+                            std::array<std::vector<long double>, direction_output_size> classSum;
+                            std::array<long double, direction_output_size> classSqSum {0.0L, 0.0L, 0.0L};
+                            for (size_t cls = 0; cls < direction_output_size; ++cls)
+                                classSum[cls].assign(hCols, 0.0L);
+
+                            long double totalSq = 0.0L;
+                            long double rowNormSum = 0.0L;
+                            long double rowNormSqSum = 0.0L;
+                            double rowNormMin = std::numeric_limits<double>::infinity();
+                            double rowNormMax = 0.0;
+                            size_t rowNormFinite = 0;
+                            size_t rowNormTiny = 0;
+                            size_t nonFiniteH = 0;
+
+                            for (size_t r = 0; r < hRows; ++r)
+                            {
+                                long double rowSq = 0.0L;
+                                bool rowFinite = true;
+                                for (size_t c = 0; c < hCols; ++c)
+                                {
+                                    const float hv = s_phase3LastHGeometryHostBeforeUpdate.data[r * hCols + c];
+                                    if (!std::isfinite(static_cast<double>(hv)))
+                                    {
+                                        rowFinite = false;
+                                        ++nonFiniteH;
+                                        continue;
+                                    }
+
+                                    const long double d = static_cast<long double>(hv);
+                                    rowSq += d * d;
+                                    totalSq += d * d;
+                                }
+
+                                if (!rowFinite)
+                                    continue;
+
+                                const double rowNorm = std::sqrt(static_cast<double>(rowSq));
+                                rowNormMin = std::min(rowNormMin, rowNorm);
+                                rowNormMax = std::max(rowNormMax, rowNorm);
+                                rowNormSum += static_cast<long double>(rowNorm);
+                                rowNormSqSum += static_cast<long double>(rowNorm) * static_cast<long double>(rowNorm);
+                                ++rowNormFinite;
+                                if (rowNorm < 1.0e-6)
+                                    ++rowNormTiny;
+
+                                if (hasClassIds)
+                                {
+                                    const size_t cls = static_cast<size_t>(s_phase3HiddenReplayCapture.actualClasses[r]);
+                                    if (cls < direction_output_size)
+                                    {
+                                        ++classCount[cls];
+                                        classSqSum[cls] += rowSq;
+                                        for (size_t c = 0; c < hCols; ++c)
+                                            classSum[cls][c] += static_cast<long double>(s_phase3LastHGeometryHostBeforeUpdate.data[r * hCols + c]);
+                                    }
+                                }
+                            }
+
+                            auto classMeanNorm = [&](size_t cls) -> double
+                            {
+                                if (!hasClassIds || classCount[cls] == 0)
+                                    return 0.0;
+
+                                long double ss = 0.0L;
+                                for (size_t c = 0; c < hCols; ++c)
+                                {
+                                    const long double m = classSum[cls][c] / static_cast<long double>(classCount[cls]);
+                                    ss += m * m;
+                                }
+                                return std::sqrt(static_cast<double>(ss));
+                            };
+
+                            auto classWithinRms = [&](size_t cls) -> double
+                            {
+                                if (!hasClassIds || classCount[cls] == 0)
+                                    return 0.0;
+
+                                const double meanNorm = classMeanNorm(cls);
+                                const long double meanSq = static_cast<long double>(meanNorm) * static_cast<long double>(meanNorm);
+                                const long double avgSq = classSqSum[cls] / static_cast<long double>(classCount[cls]);
+                                return std::sqrt(static_cast<double>(std::max(0.0L, avgSq - meanSq)));
+                            };
+
+                            auto centroidDistance = [&](size_t a, size_t b) -> double
+                            {
+                                if (!hasClassIds || classCount[a] == 0 || classCount[b] == 0)
+                                    return 0.0;
+
+                                long double ss = 0.0L;
+                                for (size_t c = 0; c < hCols; ++c)
+                                {
+                                    const long double ma = classSum[a][c] / static_cast<long double>(classCount[a]);
+                                    const long double mb = classSum[b][c] / static_cast<long double>(classCount[b]);
+                                    const long double d = ma - mb;
+                                    ss += d * d;
+                                }
+                                return std::sqrt(static_cast<double>(ss));
+                            };
+
+                            auto centroidCosine = [&](size_t a, size_t b) -> double
+                            {
+                                if (!hasClassIds || classCount[a] == 0 || classCount[b] == 0)
+                                    return 0.0;
+
+                                long double dot = 0.0L;
+                                long double aa = 0.0L;
+                                long double bb = 0.0L;
+                                for (size_t c = 0; c < hCols; ++c)
+                                {
+                                    const long double ma = classSum[a][c] / static_cast<long double>(classCount[a]);
+                                    const long double mb = classSum[b][c] / static_cast<long double>(classCount[b]);
+                                    dot += ma * mb;
+                                    aa += ma * ma;
+                                    bb += mb * mb;
+                                }
+
+                                const long double denom = std::sqrt(aa) * std::sqrt(bb);
+                                return denom > 1.0e-18L ? static_cast<double>(dot / denom) : 0.0;
+                            };
+
+                            const double totalRms = (hRows * hCols) > 0
+                                ? std::sqrt(static_cast<double>(totalSq / static_cast<long double>(hRows * hCols)))
+                                : 0.0;
+                            const double rowNormMean = rowNormFinite > 0
+                                ? static_cast<double>(rowNormSum / static_cast<long double>(rowNormFinite))
+                                : 0.0;
+                            const double rowNormStd = rowNormFinite > 0
+                                ? std::sqrt(std::max(0.0,
+                                      static_cast<double>(rowNormSqSum / static_cast<long double>(rowNormFinite)) -
+                                      rowNormMean * rowNormMean))
+                                : 0.0;
+                            if (!std::isfinite(rowNormMin))
+                                rowNormMin = 0.0;
+
+                            const double downNeutralDist = centroidDistance(0, 1);
+                            const double neutralUpDist = centroidDistance(1, 2);
+                            const double downUpDist = centroidDistance(0, 2);
+                            const double meanCentroidDist = (downNeutralDist + neutralUpDist + downUpDist) / 3.0;
+                            const double downWithin = classWithinRms(0);
+                            const double neutralWithin = classWithinRms(1);
+                            const double upWithin = classWithinRms(2);
+                            const double meanWithin = (downWithin + neutralWithin + upWithin) / 3.0;
+
+                            std::cout << "DIAG_HIDDEN_REP_GEOMETRY_"
+                                      << ",call=" << phase3ClipFullDiagIdx
+                                      << ",rows=" << hRows
+                                      << ",cols=" << hCols
+                                      << ",has_class_ids=" << (hasClassIds ? 1 : 0)
+                                      << ",nonfinite_h=" << nonFiniteH
+                                      << ",h_fro_norm=" << hBeforeNorm
+                                      << ",h_total_rms=" << totalRms
+                                      << ",row_norm_mean=" << rowNormMean
+                                      << ",row_norm_std=" << rowNormStd
+                                      << ",row_norm_min=" << rowNormMin
+                                      << ",row_norm_max=" << rowNormMax
+                                      << ",row_norm_tiny_lt_1e_minus_6=" << rowNormTiny
+                                      << ",count_down=" << classCount[0]
+                                      << ",count_neutral=" << classCount[1]
+                                      << ",count_up=" << classCount[2]
+                                      << ",centroid_norm_down=" << classMeanNorm(0)
+                                      << ",centroid_norm_neutral=" << classMeanNorm(1)
+                                      << ",centroid_norm_up=" << classMeanNorm(2)
+                                      << ",within_rms_down=" << downWithin
+                                      << ",within_rms_neutral=" << neutralWithin
+                                      << ",within_rms_up=" << upWithin
+                                      << ",centroid_dist_down_neutral=" << downNeutralDist
+                                      << ",centroid_dist_neutral_up=" << neutralUpDist
+                                      << ",centroid_dist_down_up=" << downUpDist
+                                      << ",centroid_cos_down_neutral=" << centroidCosine(0, 1)
+                                      << ",centroid_cos_neutral_up=" << centroidCosine(1, 2)
+                                      << ",centroid_cos_down_up=" << centroidCosine(0, 2)
+                                      << ",mean_centroid_dist=" << meanCentroidDist
+                                      << ",mean_within_rms=" << meanWithin
+                                      << ",separation_to_within_ratio=" << (meanWithin > 1.0e-12 ? meanCentroidDist / meanWithin : 0.0)
+                                      << std::endl;
+                        }
+                        // --- END PATCH ---
 
                         std::cout << "DIAG_H_UPDATE_DELTA_"
                                   << ",call=" << phase3ClipFullDiagIdx
