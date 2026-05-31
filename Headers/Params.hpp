@@ -76,9 +76,9 @@ constexpr size_t rolling_vol_lookback = 32;
 constexpr size_t rolling_ret_lookback = 32;
 // Class weights for 3-class direction loss: order (Down, Neutral, Up)
 // Adjust these to rebalance the contribution of each class to the total loss.
-constexpr float kClassWeightDown    = 5.0f;
-constexpr float kClassWeightNeutral = 1.0f;
-constexpr float kClassWeightUp      = 5.0f;
+constexpr float kClassWeightDown    = 1.0f;
+constexpr float kClassWeightNeutral = 1.5f;
+constexpr float kClassWeightUp      = 1.0f;
 
 // Utility to combine per-class losses using the weights above.
 // loss_total = w_up * loss_up + w_down * loss_down + w_neutral * loss_neutral
