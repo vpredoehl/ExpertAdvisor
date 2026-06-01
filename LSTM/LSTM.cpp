@@ -2393,6 +2393,37 @@ auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, cons
     return HeadLoss3Class{ L, std::move(d_logits), p[0], p[1], p[2], predicted_class };
 }
 
+void EA::LSTM::PrintHeadGradNormDiag(
+    size_t tag,
+    const EAMatrix& gradW, const EAMatrix& gradB,
+    const EAMatrix& paramW, const EAMatrix& paramB,
+    float learningRateW, float learningRateB)
+{
+    const double gradWNorm  = FroNormEvalHost(gradW);
+    const double gradBNorm  = FroNormEvalHost(gradB);
+    const double paramWNorm = FroNormEvalHost(paramW);
+    const double paramBNorm = FroNormEvalHost(paramB);
+
+    const double updateWNorm = std::fabs(static_cast<double>(learningRateW)) * gradWNorm;
+    const double updateBNorm = std::fabs(static_cast<double>(learningRateB)) * gradBNorm;
+    std::cout
+        << "DIAG_HEAD_GRAD_NORM"
+        << ",tag=" << tag
+        << ",d_headDirW_norm=" << gradWNorm
+        << ",d_headDirB_norm=" << gradBNorm
+        << ",headDirW_norm=" << paramWNorm
+        << ",headDirB_norm=" << paramBNorm
+        << ",learningRateW=" << learningRateW
+        << ",learningRateB=" << learningRateB
+        << ",updateW_norm=" << updateWNorm
+        << ",updateB_norm=" << updateBNorm
+        << ",updateW_to_paramW="
+        << (paramWNorm > 0.0 ? updateWNorm / paramWNorm : 0.0)
+        << ",updateB_to_paramB="
+        << (paramBNorm > 0.0 ? updateBNorm / paramBNorm : 0.0)
+        << std::endl;
+}
+
 float EA::LSTM::predictOnly(const EAMatrix& h_T,
                             const EAMatrix& W,
                             const EAMatrix& b) const
@@ -5337,6 +5368,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
             {
                 PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirWeight", returnHeadDirWeight, d_headDirW_f, lrHead);
                 PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirBias", returnHeadDirBias, d_headDirB_f, lrHeadBias);
+                PrintHeadGradNormDiag(
+                    phase3ClipFullDiagIdx,
+                    d_headDirW_f, d_headDirB_f,
+                    returnHeadDirWeight, returnHeadDirBias,
+                    lrHead, lrHeadBias);
                 {
                     auto phase3HeadGradLow = MetaNN::LowerAccess(d_headDirW_f);
                     const float* phase3HeadGradPtr = phase3HeadGradLow.RawMemory();

@@ -277,6 +277,11 @@ private:
     static void PrintMatrixSummary(const char* label,
                                           const EA::LSTM::EAMatrix& m,
                                           size_t maxPrint);
+    static void PrintHeadGradNormDiag(
+        size_t tag,
+        const EAMatrix& gradW, const EAMatrix& gradB,
+        const EAMatrix& paramW, const EAMatrix& paramB,
+        float learningRateW, float learningRateB);
 };
 }
 
