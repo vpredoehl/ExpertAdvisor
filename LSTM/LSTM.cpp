@@ -2937,6 +2937,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
     size_t up_count = 0;
     size_t down_count = 0;
     size_t neutral_count = 0;
+    size_t pred_down_count = 0;
+    size_t pred_neutral_count = 0;
+    size_t pred_up_count = 0;
 
     size_t bucket3_33_35_total = 0;
     size_t bucket3_33_35_correct = 0;
@@ -3804,10 +3807,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                                          : (cls == 1) ? kClassWeightNeutral
                                                       : kClassWeightUp;
 
-                dptr[b * direction_output_size + 0] = kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
-                dptr[b * direction_output_size + 1] = kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
-                dptr[b * direction_output_size + 2] = kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
+                constexpr float kDirectionClassGradScale = 0.1f;
 
+                dptr[b * direction_output_size + 0] = kDirectionClassGradScale * kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 1] = kDirectionClassGradScale * kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 2] = kDirectionClassGradScale * kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
+                
                 const double weightedLoss = static_cast<double>(classWeight) *
                     (-std::log(std::max(1e-12f, p[cls])));
                 sse += weightedLoss;
@@ -4041,51 +4046,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                               << ",weighted_loss_total=" << phase3WeightedLossTotal
                               << std::endl;
                 }
-            }
-            const double phase3WeightedLossTotal =
-                weightedLossByClass[0] + weightedLossByClass[1] + weightedLossByClass[2];
-
-            if (Phase3ShouldPrintProgressSample(phase3HeadDiagIdx))
-            {
-                const auto logitsProgress = Phase3DirHeadLogitsCpu(h_batch, returnHeadDirWeight, returnHeadDirBias);
-                const auto probsProgress = Phase3SoftmaxProbsCpu(logitsProgress);
-
-                const auto headWStats = Phase3StatsWhole(returnHeadDirWeight, -20.0, 20.0);
-                const auto headBStats = Phase3StatsWhole(returnHeadDirBias, -20.0, 20.0);
-                const auto logitStats = Phase3StatsWhole(logitsProgress, -20.0, 20.0);
-                const auto probStats = Phase3StatsWhole(probsProgress, 1.0e-4, 1.0 - 1.0e-4);
-
-                std::cout << "DIAG_HEAD_PROGRESS_"
-                          << ",update=" << phase3HeadDiagIdx
-                          << ",head_weight_norm=" << FroNormEvalHost(returnHeadDirWeight)
-                          << ",head_weight_absmax=" << headWStats.absmax
-                          << ",head_bias_norm=" << FroNormEvalHost(returnHeadDirBias)
-                          << ",head_bias_absmax=" << headBStats.absmax
-                          << std::endl;
-
-                std::cout << "DIAG_LOGIT_PROGRESS_"
-                          << ",update=" << phase3HeadDiagIdx
-                          << ",logit_absmax=" << logitStats.absmax
-                          << ",logit_std=" << Phase3StatsStddev(logitStats)
-                          << std::endl;
-
-                std::cout << "DIAG_PROB_PROGRESS_"
-                          << ",update=" << phase3HeadDiagIdx
-                          << ",prob_absmax=" << probStats.absmax
-                          << ",prob_std=" << Phase3StatsStddev(probStats)
-                          << std::endl;
-
-                std::cout << "DIAG_PRED_PROGRESS_"
-                          << ",update=" << phase3HeadDiagIdx
-                          << ",B=" << B
-                          << ",pred_down=" << predHist[0]
-                          << ",pred_neutral=" << predHist[1]
-                          << ",pred_up=" << predHist[2]
-                          << ",actual_down=" << actualHist[0]
-                          << ",actual_neutral=" << actualHist[1]
-                          << ",actual_up=" << actualHist[2]
-                          << ",weighted_loss_total=" << phase3WeightedLossTotal
-                          << std::endl;
             }
 
             // === BEGIN CLASS SEPARATION DIAGNOSTIC ===
