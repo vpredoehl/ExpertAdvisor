@@ -503,7 +503,7 @@ using AccumScalar = float;   // default accumulation precision
 #define LSTM_HEAD_LR_MULT 20.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
-#define LSTM_CORE_GRAD_SCALE 5.0f
+#define LSTM_CORE_GRAD_SCALE 4.0f
 #endif
 #ifndef LSTM_WEIGHT_DECAY
 #define LSTM_WEIGHT_DECAY 0.0f
@@ -2916,7 +2916,7 @@ EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetTy
 #endif
 }
 
-std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
+std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigned short epochIdx)
 {
     static size_t s_calcBatchCalls = 0;
     const size_t calcBatchCallIdx = s_calcBatchCalls++;
@@ -4108,11 +4108,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     return std::sqrt(distSq);
                 };
 
-                // === BEGIN CENTROID-ACCURACY DIAGNOSTIC ===
+                // === BEGIN LEAVE-ONE-OUT CENTROID-ACCURACY DIAGNOSTIC ===
                 size_t centroidPredHist[direction_output_size] = {0, 0, 0};
                 size_t centroidActualHist[direction_output_size] = {0, 0, 0};
                 size_t centroidCorrect = 0;
                 size_t centroidTotal = 0;
+                size_t centroidSkippedSingletonActual = 0;
+                size_t centroidSkippedInvalidActual = 0;
+                size_t centroidSkippedNonfiniteRow = 0;
+                long double centroidRowNormSum = 0.0L;
+                long double centroidActualDistSum = 0.0L;
+                long double centroidNearestOtherDistSum = 0.0L;
+                long double centroidMarginSum = 0.0L;
+                const double centroidLargeDistance = std::numeric_limits<double>::max();
+                double centroidActualDistMin = centroidLargeDistance;
+                double centroidActualDistMax = 0.0;
+                double centroidNearestOtherDistMin = centroidLargeDistance;
+                double centroidNearestOtherDistMax = 0.0;
+                double centroidMarginMin = centroidLargeDistance;
+                double centroidMarginMax = -centroidLargeDistance;
 
                 if (hHostForSeparation.cols == hidden_size)
                 {
@@ -4120,25 +4134,63 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                     {
                         const int actual = wb.classTargets[row];
                         if (actual < 0 || actual >= static_cast<int>(direction_output_size))
+                        {
+                            ++centroidSkippedInvalidActual;
                             continue;
+                        }
+                        const size_t actualClass = static_cast<size_t>(actual);
+                        if (actualHist[actualClass] <= 1)
+                        {
+                            ++centroidSkippedSingletonActual;
+                            continue;
+                        }
 
-                        double bestDistSq = std::numeric_limits<double>::infinity();
+                        bool rowFinite = true;
+                        long double rowNormSq = 0.0L;
+                        for (size_t h = 0; h < hidden_size; ++h)
+                        {
+                            const double hv = static_cast<double>(
+                                hHostForSeparation.data[row * hHostForSeparation.cols + h]);
+                            if (!std::isfinite(hv))
+                            {
+                                rowFinite = false;
+                                break;
+                            }
+                            rowNormSq += static_cast<long double>(hv) * static_cast<long double>(hv);
+                        }
+                        if (!rowFinite)
+                        {
+                            ++centroidSkippedNonfiniteRow;
+                            continue;
+                        }
+
+                        double bestDistSq = centroidLargeDistance;
                         size_t bestClass = 1;
+                        double actualDistSq = centroidLargeDistance;
+                        double nearestOtherDistSq = centroidLargeDistance;
                         for (size_t candidate = 0; candidate < direction_output_size; ++candidate)
                         {
-                            if (actualHist[candidate] == 0)
+                            const bool excludeRow = (candidate == actualClass);
+                            const size_t candidateCount = actualHist[candidate] - (excludeRow ? 1 : 0);
+                            if (candidateCount == 0)
                                 continue;
 
-                            const double count = static_cast<double>(actualHist[candidate]);
+                            const double count = static_cast<double>(candidateCount);
                             double distSq = 0.0;
                             for (size_t h = 0; h < hidden_size; ++h)
                             {
                                 const double hv = static_cast<double>(
                                     hHostForSeparation.data[row * hHostForSeparation.cols + h]);
-                                const double mean = hSumByActual[candidate][h] / count;
+                                const double centroidSum = hSumByActual[candidate][h] - (excludeRow ? hv : 0.0);
+                                const double mean = centroidSum / count;
                                 const double d = hv - mean;
                                 distSq += d * d;
                             }
+
+                            if (candidate == actualClass)
+                                actualDistSq = distSq;
+                            else if (distSq < nearestOtherDistSq)
+                                nearestOtherDistSq = distSq;
 
                             if (distSq < bestDistSq)
                             {
@@ -4147,12 +4199,38 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                             }
                         }
 
+                        if (bestDistSq == centroidLargeDistance || actualDistSq == centroidLargeDistance)
+                            continue;
+
+                        const double actualDist = std::sqrt(actualDistSq);
+                        const double nearestOtherDist = (nearestOtherDistSq != centroidLargeDistance)
+                            ? std::sqrt(nearestOtherDistSq)
+                            : 0.0;
+                        const double margin = nearestOtherDist - actualDist;
+
                         ++centroidTotal;
                         ++centroidPredHist[bestClass];
-                        ++centroidActualHist[static_cast<size_t>(actual)];
-                        if (bestClass == static_cast<size_t>(actual))
+                        ++centroidActualHist[actualClass];
+                        if (bestClass == actualClass)
                             ++centroidCorrect;
+                        centroidRowNormSum += std::sqrt(static_cast<double>(rowNormSq));
+                        centroidActualDistSum += actualDist;
+                        centroidNearestOtherDistSum += nearestOtherDist;
+                        centroidMarginSum += margin;
+                        centroidActualDistMin = std::min(centroidActualDistMin, actualDist);
+                        centroidActualDistMax = std::max(centroidActualDistMax, actualDist);
+                        centroidNearestOtherDistMin = std::min(centroidNearestOtherDistMin, nearestOtherDist);
+                        centroidNearestOtherDistMax = std::max(centroidNearestOtherDistMax, nearestOtherDist);
+                        centroidMarginMin = std::min(centroidMarginMin, margin);
+                        centroidMarginMax = std::max(centroidMarginMax, margin);
                     }
+                }
+                if (centroidTotal == 0)
+                {
+                    centroidActualDistMin = 0.0;
+                    centroidNearestOtherDistMin = 0.0;
+                    centroidMarginMin = 0.0;
+                    centroidMarginMax = 0.0;
                 }
 
                 std::cout << "DIAG_H_SEPARATION_"
@@ -4174,6 +4252,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
 
                 std::cout << "DIAG_H_CENTROID_ACC_"
                           << ",update=" << phase3HeadDiagIdx
+                          << ",mode=leave_one_out"
                           << ",hidden_size=" << hidden_size
                           << ",total=" << centroidTotal
                           << ",correct=" << centroidCorrect
@@ -4184,6 +4263,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                           << ",actual_down=" << centroidActualHist[0]
                           << ",actual_neutral=" << centroidActualHist[1]
                           << ",actual_up=" << centroidActualHist[2]
+                          << ",skipped_singleton_actual=" << centroidSkippedSingletonActual
+                          << ",skipped_invalid_actual=" << centroidSkippedInvalidActual
+                          << ",skipped_nonfinite_row=" << centroidSkippedNonfiniteRow
+                          << ",row_norm_mean=" << (centroidTotal ? static_cast<double>(centroidRowNormSum / static_cast<long double>(centroidTotal)) : 0.0)
+                          << ",actual_centroid_dist_mean=" << (centroidTotal ? static_cast<double>(centroidActualDistSum / static_cast<long double>(centroidTotal)) : 0.0)
+                          << ",actual_centroid_dist_min=" << centroidActualDistMin
+                          << ",actual_centroid_dist_max=" << centroidActualDistMax
+                          << ",nearest_other_centroid_dist_mean=" << (centroidTotal ? static_cast<double>(centroidNearestOtherDistSum / static_cast<long double>(centroidTotal)) : 0.0)
+                          << ",nearest_other_centroid_dist_min=" << centroidNearestOtherDistMin
+                          << ",nearest_other_centroid_dist_max=" << centroidNearestOtherDistMax
+                          << ",nearest_other_minus_actual_dist_mean=" << (centroidTotal ? static_cast<double>(centroidMarginSum / static_cast<long double>(centroidTotal)) : 0.0)
+                          << ",nearest_other_minus_actual_dist_min=" << centroidMarginMin
+                          << ",nearest_other_minus_actual_dist_max=" << centroidMarginMax
                           << std::endl;
 
                 s_phase3LastHGeometryHostBeforeUpdate = hHostForSeparation;
@@ -5208,6 +5300,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
         const float lrHead = lrHeadBase * lrHeadDirActiveMult;
         const float lrHeadBias = lrHead * 0.01f; // intentionally slower bias adaptation
 
+        const float directionHeadWeightLr = learning_rate * 25.0f;
+        const float directionHeadBiasLr   = learning_rate * 5.0f;
+
         static size_t s_phase3LrScaleDiagCount = 0;
         const size_t phase3LrScaleDiagIdx = s_phase3LrScaleDiagCount++;
         const bool phase3LrScaleDiagEnabled = (phase3LrScaleDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT);
@@ -5241,8 +5336,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                       << ",lrCore=" << lrCore
                       << ",lrHead=" << lrHead
                       << ",lrHeadBias=" << lrHeadBias
+                      << ",directionHeadWeightLr=" << directionHeadWeightLr
+                      << ",directionHeadBiasLr=" << directionHeadBiasLr
                       << ",core_formula=learningRate_after_mean_gradient_scaling"
                       << ",head_formula=learningRate*LSTM_HEAD_LR_MULT*direction_head_active_lr_mult_after_mean_gradient_scaling"
+                      << ",direction_head_override_formula=weight:learningRate*50,bias:learningRate*10_after_mean_gradient_scaling"
                       << std::endl;
         }
 
@@ -5313,6 +5411,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                       << ",denominator_name=windowCount"
                       << ",denominator_value=" << windowCount
                       << ",grad_norm_after_clip=" << FroNormEvalHost(d_param_f)
+                      << ",param_norm=" << FroNormEvalHost(param)
                       << ",update_norm=" << (static_cast<double>(lrCore) * FroNormEvalHost(d_param_f))
                       << std::endl;
             std::cout << "DIAG_UPDATE_EFFECTIVE_"
@@ -5322,17 +5421,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                       << ",denominator_name=windowCount"
                       << ",denominator_value=" << windowCount
                       << ",grad_norm_after_clip=" << FroNormEvalHost(d_bias_f)
+                      << ",bias_norm=" << FroNormEvalHost(bias)
                       << ",update_norm=" << (static_cast<double>(lrCore) * FroNormEvalHost(d_bias_f))
                       << std::endl;
             if (targetType == TargetType::UpNeutralDownReturn)
             {
-                PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirWeight", returnHeadDirWeight, d_headDirW_f, lrHead);
-                PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirBias", returnHeadDirBias, d_headDirB_f, lrHeadBias);
+                PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirWeight", returnHeadDirWeight, d_headDirW_f, directionHeadWeightLr);
+                PrintPhase3UpdateScale(phase3ClipFullDiagIdx, "returnHeadDirBias", returnHeadDirBias, d_headDirB_f, directionHeadBiasLr);
                 PrintHeadGradNormDiag(
                     phase3ClipFullDiagIdx,
                     d_headDirW_f, d_headDirB_f,
                     returnHeadDirWeight, returnHeadDirBias,
-                    lrHead, lrHeadBias);
+                    directionHeadWeightLr, directionHeadBiasLr);
                 {
                     auto phase3HeadGradLow = MetaNN::LowerAccess(d_headDirW_f);
                     const float* phase3HeadGradPtr = phase3HeadGradLow.RawMemory();
@@ -5511,20 +5611,20 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 std::cout << "DIAG_UPDATE_EFFECTIVE_"
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadDirWeight"
-                          << ",effective_lr=" << lrHead
+                          << ",effective_lr=" << directionHeadWeightLr
                           << ",denominator_name=windowCount"
                           << ",denominator_value=" << windowCount
                           << ",grad_norm_after_clip=" << FroNormEvalHost(d_headDirW_f)
-                          << ",update_norm=" << (static_cast<double>(lrHead) * FroNormEvalHost(d_headDirW_f))
+                          << ",update_norm=" << (static_cast<double>(directionHeadWeightLr) * FroNormEvalHost(d_headDirW_f))
                           << std::endl;
                 std::cout << "DIAG_UPDATE_EFFECTIVE_"
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadDirBias"
-                          << ",effective_lr=" << lrHeadBias
+                          << ",effective_lr=" << directionHeadBiasLr
                           << ",denominator_name=windowCount"
                           << ",denominator_value=" << windowCount
                           << ",grad_norm_after_clip=" << FroNormEvalHost(d_headDirB_f)
-                          << ",update_norm=" << (static_cast<double>(lrHeadBias) * FroNormEvalHost(d_headDirB_f))
+                          << ",update_norm=" << (static_cast<double>(directionHeadBiasLr) * FroNormEvalHost(d_headDirB_f))
                           << std::endl;
             }
             else
@@ -5550,38 +5650,52 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                           << ",update_norm=" << (static_cast<double>(lrHead) * FroNormEvalHost(d_headB_f))
                           << std::endl;
             }
-#if LSTM_HEAVY_DIAG
 {
     static size_t s_phase3CoreUpdateScaleCount = 0;
     if (s_phase3CoreUpdateScaleCount < LSTM_PHASE3_HEAD_DIAG_LIMIT)
     {
+        const bool directionHeadPath = (targetType == TargetType::UpNeutralDownReturn);
+
         const double coreParamNorm = FroNormEvalHost(param);
         const double coreBiasNorm = FroNormEvalHost(bias);
-        const double headWNorm = FroNormEvalHost(returnHeadDirWeight);
-        const double headBNorm = FroNormEvalHost(returnHeadDirBias);
+        const double headWNorm = directionHeadPath
+            ? FroNormEvalHost(returnHeadDirWeight)
+            : FroNormEvalHost(returnHeadWeight);
+        const double headBNorm = directionHeadPath
+            ? FroNormEvalHost(returnHeadDirBias)
+            : FroNormEvalHost(returnHeadBias);
 
-        const double coreParamGradNorm = FroNormEvalHost(d_param_accum);
-        const double coreBiasGradNorm = FroNormEvalHost(d_bias_accum);
-        const double headWGradNorm = FroNormEvalHost(d_headDirW_accum_f);
-        const double headBGradNorm = FroNormEvalHost(d_headDirB_accum_f);
+        const double coreParamGradNorm = FroNormEvalHost(d_param_f);
+        const double coreBiasGradNorm = FroNormEvalHost(d_bias_f);
+        const double headWGradNorm = directionHeadPath
+            ? FroNormEvalHost(d_headDirW_f)
+            : FroNormEvalHost(d_headW_f);
+        const double headBGradNorm = directionHeadPath
+            ? FroNormEvalHost(d_headDirB_f)
+            : FroNormEvalHost(d_headB_f);
+
+        const double activeHeadWlr = directionHeadPath ? directionHeadWeightLr : lrHead;
+        const double activeHeadBlr = directionHeadPath ? directionHeadBiasLr : lrHead;
 
         const double coreParamUpdateNorm = static_cast<double>(lrCore) * coreParamGradNorm;
         const double coreBiasUpdateNorm = static_cast<double>(lrCore) * coreBiasGradNorm;
-        const double headWUpdateNorm = static_cast<double>(lrHead) * headWGradNorm;
-        const double headBUpdateNorm = static_cast<double>(lrHeadBias) * headBGradNorm;
+        const double headWUpdateNorm = activeHeadWlr * headWGradNorm;
+        const double headBUpdateNorm = activeHeadBlr * headBGradNorm;
 
         std::cout << "DIAG_CORE_UPDATE_SCALE_"
                   << ",call=" << s_phase3CoreUpdateScaleCount
+                  << ",phase3_call=" << phase3ClipFullDiagIdx
+                  << ",target=" << (directionHeadPath ? "UpNeutralDownReturn" : "RegressionReturn")
                   << ",windowCount=" << windowCount
                   << ",effectiveMiniBatchWindows=" << effectiveMiniBatchWindows
                   << ",learningRate=" << learning_rate
                   << ",core_lr=" << lrCore
                   << ",head_lr_base=" << lrHeadBase
-                  << ",head_lr=" << lrHead
-                  << ",head_bias_lr=" << lrHeadBias
+                  << ",head_weight_lr=" << activeHeadWlr
+                  << ",head_bias_lr=" << activeHeadBlr
                   << ",head_lr_mult=" << LSTM_HEAD_LR_MULT
                   << ",direction_head_active_lr_mult=" << lrHeadDirActiveMult
-                  << ",direction_head_active_path=" << (targetType == TargetType::UpNeutralDownReturn ? 1 : 0)
+                  << ",direction_head_active_path=" << (directionHeadPath ? 1 : 0)
                   << ",core_param_norm=" << coreParamNorm
                   << ",core_param_grad_norm=" << coreParamGradNorm
                   << ",core_param_update_norm=" << coreParamUpdateNorm
@@ -5598,13 +5712,15 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                   << ",head_bias_grad_norm=" << headBGradNorm
                   << ",head_bias_update_norm=" << headBUpdateNorm
                   << ",head_bias_update_ratio=" << (headBNorm > 0.0 ? headBUpdateNorm / headBNorm : 0.0)
-                  << ",core_to_head_update_ratio=" << (headWUpdateNorm > 0.0 ? coreParamUpdateNorm / headWUpdateNorm : 0.0)
+                  << ",core_to_head_weight_update_norm_ratio=" << (headWUpdateNorm > 0.0 ? coreParamUpdateNorm / headWUpdateNorm : 0.0)
+                  << ",head_to_core_weight_update_norm_ratio=" << (coreParamUpdateNorm > 0.0 ? headWUpdateNorm / coreParamUpdateNorm : 0.0)
+                  << ",core_to_head_bias_update_norm_ratio=" << (headBUpdateNorm > 0.0 ? coreBiasUpdateNorm / headBUpdateNorm : 0.0)
+                  << ",head_to_core_bias_update_norm_ratio=" << (coreBiasUpdateNorm > 0.0 ? headBUpdateNorm / coreBiasUpdateNorm : 0.0)
                   << std::endl;
 
         ++s_phase3CoreUpdateScaleCount;
     }
 }
-#endif
         }
         
         #if !LSTM_DISABLE_UPDATES
@@ -5626,26 +5742,29 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                 SGDUpdate(param, d_param_f, lrCore);
                 SGDUpdate(bias,  d_bias_f,  lrCore);
                 if (targetType == TargetType::UpNeutralDownReturn) {
+
                     std::cout << "DIAG_ACTIVE_UPDATE_PATH_"
                     << ",target=UpNeutralDownReturn"
                     << ",name=returnHeadDirWeight"
-                    << ",effective_lr=" << lrHead
+                    << ",effective_lr=" << directionHeadWeightLr
                     << ",base_head_lr=" << lrHeadBase
                     << ",direction_head_active_lr_mult=" << lrHeadDirActiveMult
                     << ",grad_norm=" << FroNormEvalHost(d_headDirW_f)
-                    << ",expected_update_norm=" << (static_cast<double>(lrHead) * FroNormEvalHost(d_headDirW_f))
+                    << ",expected_update_norm=" << (static_cast<double>(directionHeadWeightLr) * FroNormEvalHost(d_headDirW_f))
                     << std::endl;
+
                     std::cout << "DIAG_ACTIVE_UPDATE_PATH_"
                     << ",target=UpNeutralDownReturn"
                     << ",name=returnHeadDirBias"
-                    << ",effective_lr=" << lrHeadBias
+                    << ",effective_lr=" << directionHeadBiasLr
                     << ",base_head_lr=" << lrHeadBase
                     << ",direction_head_active_lr_mult=" << lrHeadDirActiveMult
                     << ",grad_norm=" << FroNormEvalHost(d_headDirB_f)
-                    << ",expected_update_norm=" << (static_cast<double>(lrHeadBias) * FroNormEvalHost(d_headDirB_f))
+                    << ",expected_update_norm=" << (static_cast<double>(directionHeadBiasLr) * FroNormEvalHost(d_headDirB_f))
                     << std::endl;
-                    SGDUpdate(returnHeadDirWeight, d_headDirW_f, lrHead);
-                    SGDUpdate(returnHeadDirBias, d_headDirB_f, lrHeadBias);
+
+                    SGDUpdate(returnHeadDirWeight, d_headDirW_f, directionHeadWeightLr);
+                    SGDUpdate(returnHeadDirBias, d_headDirB_f, directionHeadBiasLr);
                 } else {
                     SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
                     SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
@@ -5802,7 +5921,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                                   << std::endl;
                     }
                     // --- END PATCH ---
-                    if (s_phase3LastHGeometryValidBeforeUpdate)
+                    // TODO: Re-enable epoch-checkpoint geometry diagnostics using an epoch value
+                    // passed into this phase-3 update path (or a captured training-context epoch)
+                    // instead of referencing epoch/epochs directly, which are not in scope here.
+                    const bool phase3HiddenGeometryCheckpointDiag =
+                        phase3ClipFullDiagEnabled ||
+                        ( targetType == TargetType::UpNeutralDownReturn &&
+                         ((epochIdx + 1 ) == 1 ||
+                          ((epochIdx + 1) % 5) == 0 ||
+                          (epochIdx + 1) == epoch_count));
+                    
+                    if (phase3HiddenGeometryCheckpointDiag && s_phase3LastHGeometryValidBeforeUpdate)
                     {
                         const double hBeforeNorm = [&]() -> double
                         {
@@ -5966,9 +6095,38 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch)
                             const double neutralWithin = classWithinRms(1);
                             const double upWithin = classWithinRms(2);
                             const double meanWithin = (downWithin + neutralWithin + upWithin) / 3.0;
+                            auto phase3HiddenClassName = [](size_t cls) -> const char*  {   return cls == 0 ? "down" : cls == 1 ? "neutral" : "up"; };
 
+                            for (size_t cls = 0; cls < direction_output_size; ++cls)
+                                std::cout << "DIAG_HIDDEN_CLASS_STATS"
+                                          << ",call=" << phase3ClipFullDiagIdx
+                                          << ",epoch=" << (epochIdx + 1)
+                                          << ",epoch_checkpoint=" << (phase3ClipFullDiagEnabled ? 0 : 1)
+                                          << ",actual_class=" << phase3HiddenClassName(cls)
+                                          << ",class_id=" << cls
+                                          << ",count=" << classCount[cls]
+                                          << ",hidden_size=" << hCols
+                                          << ",centroid_norm=" << classMeanNorm(cls)
+                                          << ",within_rms=" << classWithinRms(cls)
+                                          << std::endl;
+
+                            std::cout << "DIAG_HIDDEN_CLASS_COSINE"
+                                      << ",call=" << phase3ClipFullDiagIdx
+                                        << ",epoch=" << (epochIdx + 1)
+                                      << ",epoch_checkpoint=" << (phase3ClipFullDiagEnabled ? 0 : 1)
+                                      << ",hidden_size=" << hCols
+                                      << ",count_down=" << classCount[0]
+                                      << ",count_neutral=" << classCount[1]
+                                      << ",count_up=" << classCount[2]
+                                      << ",down_neutral=" << centroidCosine(0, 1)
+                                      << ",neutral_up=" << centroidCosine(1, 2)
+                                      << ",down_up=" << centroidCosine(0, 2)
+                                      << std::endl;
+                            
                             std::cout << "DIAG_HIDDEN_REP_GEOMETRY_"
                                       << ",call=" << phase3ClipFullDiagIdx
+                                        << ",epoch=" << (epochIdx + 1)
+                                      << ",epoch_checkpoint=" << (phase3ClipFullDiagEnabled ? 0 : 1)
                                       << ",rows=" << hRows
                                       << ",cols=" << hCols
                                       << ",has_class_ids=" << (hasClassIds ? 1 : 0)

@@ -148,7 +148,7 @@ public:
     void SetLearningRate(float lr) { learning_rate = lr; }
     const ::Tensor* BoundTensorAddress() const { return &t; }
     
-    std::tuple<float, size_t, size_t> CalculateBatch(const Window);
+    std::tuple<float, size_t, size_t> CalculateBatch(const Window, unsigned short);
     // Inference-only helpers (forward pass, no training)
     float PredictNextReturn(const Window& w, bool resetState = true);
     float PredictNextRelativeMove(const Window& w, bool resetState = true);

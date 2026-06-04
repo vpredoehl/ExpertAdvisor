@@ -1035,7 +1035,7 @@ int main(int argc, const char * argv[])
                             double dhw0 = l2(l.returnHeadDirWeight);
                             double dhb0 = l2(l.returnHeadDirBias);
                             
-                            auto [loss, _unused1, _unused2] = l.CalculateBatch(b);
+                            auto [loss, _unused1, _unused2] = l.CalculateBatch(b,e);
                             (void)_unused1; (void)_unused2;
                             
                             double p1 = l2(l.param);
