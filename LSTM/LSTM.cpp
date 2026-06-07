@@ -38,7 +38,7 @@
 #endif
 
 #ifndef LSTM_HEAVY_DIAG
-#define LSTM_HEAVY_DIAG 0
+#define LSTM_HEAVY_DIAG 1
 #endif
 
 #ifndef LSTM_SHAPE_DIAG
@@ -500,7 +500,7 @@ using AccumScalar = float;   // default accumulation precision
 #endif
 
 #ifndef LSTM_HEAD_LR_MULT
-#define LSTM_HEAD_LR_MULT 20.0f
+#define LSTM_HEAD_LR_MULT 100.0f
 #endif
 #ifndef LSTM_CORE_GRAD_SCALE
 #define LSTM_CORE_GRAD_SCALE 4.0f
@@ -2925,10 +2925,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     EAMatrix phase3HeadDeltaH(1, hidden_size);
     EAMatrix phase3HeadDeltaLogitsBefore(1, direction_output_size);
     EAMatrix phase3HeadDeltaProbsBefore(1, direction_output_size);
+    std::vector<int> phase3HeadDeltaActualClasses;
     bool phase3HeadDeltaCaptured = false;
     double sse = 0.0;
     size_t mseCount = 0;
     size_t windowCount = 0;
+    double phase3ClassWeightSum = 0.0;
     size_t windowsInBatch = 0;
     size_t skippedWindows = 0;
     LSTMBatchProfile profile;
@@ -3773,6 +3775,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 phase3HeadDeltaH = NNUtils::DeepCopyMatrix(h_batch);
                 phase3HeadDeltaLogitsBefore = NNUtils::DeepCopyMatrix(head_logits_batch);
                 phase3HeadDeltaProbsBefore = Phase3SoftmaxProbsCpu(phase3HeadDeltaLogitsBefore);
+                phase3HeadDeltaActualClasses.assign(wb.classTargets.begin(),
+                                                     wb.classTargets.begin() + static_cast<std::ptrdiff_t>(std::min(B, wb.classTargets.size())));
                 phase3HeadDeltaCaptured = true;
             }
             d_logits_batch = EAMatrix(B, direction_output_size);
@@ -3783,6 +3787,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             std::array<size_t, direction_output_size> actualHist {0, 0, 0};
             std::array<size_t, direction_output_size> predHist {0, 0, 0};
             std::array<size_t, direction_output_size> correctHist {0, 0, 0};
+            std::array<std::array<size_t, direction_output_size>, direction_output_size> confusionByActual {};
             std::array<double, direction_output_size> weightedLossByClass {0.0, 0.0, 0.0};
             std::array<Phase3MatrixStats, direction_output_size> probStats {};
             std::array<std::array<double, direction_output_size>, direction_output_size> logitSumByActual {};
@@ -3809,13 +3814,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                 constexpr float kDirectionClassGradScale = 0.1f;
 
-                dptr[b * direction_output_size + 0] = kDirectionClassGradScale * kClassWeightDown    * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
-                dptr[b * direction_output_size + 1] = kDirectionClassGradScale * kClassWeightNeutral * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
-                dptr[b * direction_output_size + 2] = kDirectionClassGradScale * kClassWeightUp      * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 0] = kDirectionClassGradScale * classWeight * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 1] = kDirectionClassGradScale * classWeight * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
+                dptr[b * direction_output_size + 2] = kDirectionClassGradScale * classWeight * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
                 
                 const double weightedLoss = static_cast<double>(classWeight) *
                     (-std::log(std::max(1e-12f, p[cls])));
                 sse += weightedLoss;
+                phase3ClassWeightSum += static_cast<double>(classWeight);
                 weightedLossByClass[static_cast<size_t>(cls)] += weightedLoss;
                 ++mseCount;
 
@@ -3868,6 +3874,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 const int predClass = (p[0] > p[1] && p[0] > p[2]) ? 0 : ((p[2] > p[1] && p[2] > p[0]) ? 2 : 1);
                 const bool correct = (predClass == cls);
                 ++predHist[static_cast<size_t>(predClass)];
+                ++confusionByActual[static_cast<size_t>(cls)][static_cast<size_t>(predClass)];
                 if (correct)
                     ++correctHist[static_cast<size_t>(cls)];
 
@@ -3940,6 +3947,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 const size_t phase3ValidRows = actualHist[0] + actualHist[1] + actualHist[2];
                 const size_t phase3PredTotal = predHist[0] + predHist[1] + predHist[2];
                 const size_t phase3CorrectTotal = correctHist[0] + correctHist[1] + correctHist[2];
+                auto phase3Recall = [&](size_t cls) -> double
+                {
+                    return actualHist[cls] > 0
+                        ? static_cast<double>(correctHist[cls]) / static_cast<double>(actualHist[cls])
+                        : 0.0;
+                };
+                const double phase3RecallDown = phase3Recall(0);
+                const double phase3RecallNeutral = phase3Recall(1);
+                const double phase3RecallUp = phase3Recall(2);
+                const double phase3BalancedAccuracy =
+                    (phase3RecallDown + phase3RecallNeutral + phase3RecallUp) / 3.0;
 
                 std::cout << "DIAG_PRED_CLASS_COUNTS_"
                           << ",call=" << phase3HeadDiagIdx
@@ -3959,6 +3977,20 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                           << ",accuracy=" << (phase3ValidRows > 0
                                   ? static_cast<double>(phase3CorrectTotal) / static_cast<double>(phase3ValidRows)
                                   : 0.0)
+                          << ",recall_down=" << phase3RecallDown
+                          << ",recall_neutral=" << phase3RecallNeutral
+                          << ",recall_up=" << phase3RecallUp
+                          << ",macro_recall=" << phase3BalancedAccuracy
+                          << ",balanced_accuracy=" << phase3BalancedAccuracy
+                          << ",conf_down_down=" << confusionByActual[0][0]
+                          << ",conf_down_neutral=" << confusionByActual[0][1]
+                          << ",conf_down_up=" << confusionByActual[0][2]
+                          << ",conf_neutral_down=" << confusionByActual[1][0]
+                          << ",conf_neutral_neutral=" << confusionByActual[1][1]
+                          << ",conf_neutral_up=" << confusionByActual[1][2]
+                          << ",conf_up_down=" << confusionByActual[2][0]
+                          << ",conf_up_neutral=" << confusionByActual[2][1]
+                          << ",conf_up_up=" << confusionByActual[2][2]
                           << ",pred_total=" << phase3PredTotal
                           << std::endl;
             }
@@ -3989,6 +4021,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                           << ",class_weight_down=" << kClassWeightDown
                           << ",class_weight_neutral=" << kClassWeightNeutral
                           << ",class_weight_up=" << kClassWeightUp
+                          << ",weighted_sample_sum_running=" << phase3ClassWeightSum
                           << ",weighted_loss_down=" << weightedLossByClass[0]
                           << ",weighted_loss_neutral=" << weightedLossByClass[1]
                           << ",weighted_loss_up=" << weightedLossByClass[2]
@@ -5175,7 +5208,10 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     }
     std::cout << "batch_count=" << windowCount << "\n";
     double loss_value = 0.0;
-    loss_value = (windowCount > 0) ? (sse / static_cast<double>(windowCount)) : 0.0;
+    const double lossDenominator = (targetType == TargetType::UpNeutralDownReturn && phase3ClassWeightSum > 0.0)
+        ? phase3ClassWeightSum
+        : static_cast<double>(windowCount);
+    loss_value = (lossDenominator > 0.0) ? (sse / lossDenominator) : 0.0;
     std::cout << "loss_value=" << loss_value << "\n";
 
 #endif
@@ -5268,7 +5304,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         // Convert accumulated gradients to mean gradients before clipping.
         // This prevents full-epoch/window accumulation from triggering clipping
         // before the learning-rate/window normalization can take effect.
-        const float invN = 1.0f / static_cast<float>(windowCount);
+        const double gradDenominator = (targetType == TargetType::UpNeutralDownReturn && phase3ClassWeightSum > 0.0)
+            ? phase3ClassWeightSum
+            : static_cast<double>(windowCount);
+        const char* gradDenominatorName = (targetType == TargetType::UpNeutralDownReturn)
+            ? "weighted_sample_sum"
+            : "windowCount";
+        const float invN = 1.0f / static_cast<float>(gradDenominator);
         auto phase3ScaleMatrixInPlace = [](auto& m, float scale)
         {
             auto low = MetaNN::LowerAccess(m);
@@ -5301,7 +5343,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         const float lrHeadBias = lrHead * 0.01f; // intentionally slower bias adaptation
 
         const float directionHeadWeightLr = learning_rate * 25.0f;
-        const float directionHeadBiasLr   = learning_rate * 5.0f;
+        const float directionHeadBiasLr   = learning_rate * 25.0f;
 
         static size_t s_phase3LrScaleDiagCount = 0;
         const size_t phase3LrScaleDiagIdx = s_phase3LrScaleDiagCount++;
@@ -5313,14 +5355,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 : 0;
             std::cout << "DIAG_UPDATE_DENOM_"
                       << ",call=" << phase3LrScaleDiagIdx
-                      << ",denominator_name=windowCount"
-                      << ",denominator_value=" << windowCount
+                      << ",denominator_name=" << gradDenominatorName
+                      << ",denominator_value=" << gradDenominator
+                      << ",raw_windowCount=" << windowCount
+                      << ",weighted_sample_sum=" << phase3ClassWeightSum
+                      << ",uses_weighted_sample_sum=" << (targetType == TargetType::UpNeutralDownReturn ? 1 : 0)
                       << ",mseCount=" << mseCount
                       << ",allStarts_count=" << allStarts.size()
                       << ",effectiveMiniBatchWindows=" << effectiveMiniBatchWindows
                       << ",plannedMiniBatches=" << plannedMiniBatches
                       << ",profileMiniBatches=" << profile.mini_batches
-                      << ",denominator_is_full_calculate_batch_windows=1"
+                      << ",denominator_is_full_calculate_batch_windows=" << (targetType == TargetType::UpNeutralDownReturn ? 0 : 1)
+                      << ",denominator_is_weighted_sample_sum=" << (targetType == TargetType::UpNeutralDownReturn ? 1 : 0)
                       << ",gradients_preclip_are_mean_gradients=1"
                       << ",denominator_is_minibatch_size=0"
                       << std::endl;
@@ -5408,8 +5454,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                       << ",call=" << phase3ClipFullDiagIdx
                       << ",name=param"
                       << ",effective_lr=" << lrCore
-                      << ",denominator_name=windowCount"
-                      << ",denominator_value=" << windowCount
+                      << ",denominator_name=" << gradDenominatorName
+                      << ",denominator_value=" << gradDenominator
                       << ",grad_norm_after_clip=" << FroNormEvalHost(d_param_f)
                       << ",param_norm=" << FroNormEvalHost(param)
                       << ",update_norm=" << (static_cast<double>(lrCore) * FroNormEvalHost(d_param_f))
@@ -5418,8 +5464,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                       << ",call=" << phase3ClipFullDiagIdx
                       << ",name=bias"
                       << ",effective_lr=" << lrCore
-                      << ",denominator_name=windowCount"
-                      << ",denominator_value=" << windowCount
+                      << ",denominator_name=" << gradDenominatorName
+                      << ",denominator_value=" << gradDenominator
                       << ",grad_norm_after_clip=" << FroNormEvalHost(d_bias_f)
                       << ",bias_norm=" << FroNormEvalHost(bias)
                       << ",update_norm=" << (static_cast<double>(lrCore) * FroNormEvalHost(d_bias_f))
@@ -5503,6 +5549,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                               << ",dW_up_nonfinite=" << phase3HeadGradNonFiniteCount[2]
                               << std::endl;
                 }
+#if LSTM_HEAVY_DIAG
                 // --- BEGIN PATCH: DIAG HEAD WEIGHT BY CLASS ---
                 {
                     auto phase3HeadWLow = MetaNN::LowerAccess(returnHeadDirWeight);
@@ -5608,12 +5655,14 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                               << std::endl;
                 }
                 // --- END PATCH ---
+#endif
+
                 std::cout << "DIAG_UPDATE_EFFECTIVE_"
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadDirWeight"
                           << ",effective_lr=" << directionHeadWeightLr
-                          << ",denominator_name=windowCount"
-                          << ",denominator_value=" << windowCount
+                          << ",denominator_name=" << gradDenominatorName
+                          << ",denominator_value=" << gradDenominator
                           << ",grad_norm_after_clip=" << FroNormEvalHost(d_headDirW_f)
                           << ",update_norm=" << (static_cast<double>(directionHeadWeightLr) * FroNormEvalHost(d_headDirW_f))
                           << std::endl;
@@ -5621,8 +5670,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadDirBias"
                           << ",effective_lr=" << directionHeadBiasLr
-                          << ",denominator_name=windowCount"
-                          << ",denominator_value=" << windowCount
+                          << ",denominator_name=" << gradDenominatorName
+                          << ",denominator_value=" << gradDenominator
                           << ",grad_norm_after_clip=" << FroNormEvalHost(d_headDirB_f)
                           << ",update_norm=" << (static_cast<double>(directionHeadBiasLr) * FroNormEvalHost(d_headDirB_f))
                           << std::endl;
@@ -5635,8 +5684,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadWeight"
                           << ",effective_lr=" << lrHead
-                          << ",denominator_name=windowCount"
-                          << ",denominator_value=" << windowCount
+                          << ",denominator_name=" << gradDenominatorName
+                          << ",denominator_value=" << gradDenominator
                           << ",grad_norm_after_clip=" << FroNormEvalHost(d_headW_f)
                           << ",update_norm=" << (static_cast<double>(lrHead) * FroNormEvalHost(d_headW_f))
                           << std::endl;
@@ -5644,8 +5693,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                           << ",call=" << phase3ClipFullDiagIdx
                           << ",name=returnHeadBias"
                           << ",effective_lr=" << lrHead
-                          << ",denominator_name=windowCount"
-                          << ",denominator_value=" << windowCount
+                          << ",denominator_name=" << gradDenominatorName
+                          << ",denominator_value=" << gradDenominator
                           << ",grad_norm_after_clip=" << FroNormEvalHost(d_headB_f)
                           << ",update_norm=" << (static_cast<double>(lrHead) * FroNormEvalHost(d_headB_f))
                           << std::endl;
@@ -5882,6 +5931,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                       << std::endl;
                         }
                         // --- END PATCH ---
+#if LSTM_HEAVY_DIAG
                         // --- BEGIN PATCH: DIAG HEAD BIAS DELTA BY CLASS ---
                         {
                             auto phase3BiasBeforeLow = MetaNN::LowerAccess(phase3HeadBUpdateBefore);
@@ -5934,6 +5984,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                       << std::endl;
                         }
                         // --- END PATCH ---
+#endif
                     }
                     }
                     if (phase3PostUpdateDiagEnabled && s_phase3LastHGeometryValidBeforeUpdate)
@@ -6465,14 +6516,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                             }
                         }
                     }
-                    // Insert phase3HeadDeltaActualClasses before diagnostics
-                    std::vector<int> phase3HeadDeltaActualClasses;
-                    if (phase3HeadDeltaCaptured)
-                    {
-                        const size_t phase3HeadDeltaRowsForClasses = phase3HeadDeltaH.Shape()[0];
-                        if (s_phase3HiddenReplayCapture.actualClasses.size() == phase3HeadDeltaRowsForClasses)
-                            phase3HeadDeltaActualClasses = s_phase3HiddenReplayCapture.actualClasses;
-                    }
                     if (phase3HeadDeltaCaptured)
                     {
                         const EAMatrix logitsAfter = Phase3DirHeadLogitsCpu(phase3HeadDeltaH, returnHeadDirWeight, returnHeadDirBias);
@@ -6876,6 +6919,23 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
     return { mse, windowCount, skippedWindows };
+
+
+// DIAGNOSTIC: Inserted block for 3-class weighted loss/gradient denominator
+// (Find the code that accumulates totalSampleWeight for the batch in the 3-class weighted loss/gradient computation,
+// and insert this block immediately after totalSampleWeight is computed, before it is used for normalization.)
+// Example insertion point:
+//   totalSampleWeight = ...accumulation...
+//   [INSERT BELOW]
+//   std::cout
+//       << "DIAG_CLASS_WEIGHT_DENOM"
+//       << ",samples=" << batchSize
+//       << ",weight_sum=" << totalSampleWeight
+//       << ",avg_weight="
+//       << (batchSize ?
+//           totalSampleWeight / static_cast<double>(batchSize)
+//           : 0.0)
+//       << std::endl;
 }
 
 std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
