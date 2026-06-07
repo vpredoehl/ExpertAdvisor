@@ -3784,6 +3784,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             const float* lptr = lowLogits.RawMemory();
             auto lowD = MetaNN::LowerAccess(d_logits_batch);
             float* dptr = lowD.MutableRawMemory();
+            double totalSampleWeight = 0.0;
             std::array<size_t, direction_output_size> actualHist {0, 0, 0};
             std::array<size_t, direction_output_size> predHist {0, 0, 0};
             std::array<size_t, direction_output_size> correctHist {0, 0, 0};
@@ -3811,9 +3812,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 const float classWeight = (cls == 0) ? kClassWeightDown
                                          : (cls == 1) ? kClassWeightNeutral
                                                       : kClassWeightUp;
-
                 constexpr float kDirectionClassGradScale = 0.1f;
-
+                
+                totalSampleWeight += static_cast<double>(classWeight);
                 dptr[b * direction_output_size + 0] = kDirectionClassGradScale * classWeight * (p[0] - ((cls == 0) ? 1.0f : 0.0f));
                 dptr[b * direction_output_size + 1] = kDirectionClassGradScale * classWeight * (p[1] - ((cls == 1) ? 1.0f : 0.0f));
                 dptr[b * direction_output_size + 2] = kDirectionClassGradScale * classWeight * (p[2] - ((cls == 2) ? 1.0f : 0.0f));
@@ -3942,6 +3943,22 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     yhat_samples.push_back(static_cast<float>(predClass));
 #endif
             }
+            const double weightedDenom = std::max(totalSampleWeight, 1.0e-12);
+
+            for (size_t idx = 0; idx < B * direction_output_size; ++idx)
+            {
+                dptr[idx] = static_cast<float>(
+                    static_cast<double>(dptr[idx]) / weightedDenom);
+            }
+
+            std::cout
+                << "DIAG_CLASS_WEIGHT_DENOM"
+                << ",samples=" << B
+                << ",weight_sum=" << totalSampleWeight
+                << ",avg_weight="
+                << (B ? totalSampleWeight / static_cast<double>(B) : 0.0)
+                << std::endl;
+            
             if (phase3HeadDiagEnabled)
             {
                 const size_t phase3ValidRows = actualHist[0] + actualHist[1] + actualHist[2];
@@ -6919,23 +6936,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
     double mse = sse / static_cast<double>(std::max<size_t>(mseCount, 1));
     return { mse, windowCount, skippedWindows };
-
-
-// DIAGNOSTIC: Inserted block for 3-class weighted loss/gradient denominator
-// (Find the code that accumulates totalSampleWeight for the batch in the 3-class weighted loss/gradient computation,
-// and insert this block immediately after totalSampleWeight is computed, before it is used for normalization.)
-// Example insertion point:
-//   totalSampleWeight = ...accumulation...
-//   [INSERT BELOW]
-//   std::cout
-//       << "DIAG_CLASS_WEIGHT_DENOM"
-//       << ",samples=" << batchSize
-//       << ",weight_sum=" << totalSampleWeight
-//       << ",avg_weight="
-//       << (batchSize ?
-//           totalSampleWeight / static_cast<double>(batchSize)
-//           : 0.0)
-//       << std::endl;
 }
 
 std::vector<float> EA::LSTM::RollingPredictNextLogReturn(const Window& batch, bool resetAtStart)
