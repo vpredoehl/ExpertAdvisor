@@ -740,7 +740,7 @@
 				SDKROOT = macosx;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
-					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					/opt/homebrew/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 					/opt/homebrew/opt/libomp/include,
 				);
@@ -800,9 +800,9 @@
 				SDKROOT = macosx;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
-					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 					/opt/homebrew/opt/libomp/include,
+					/opt/homebrew/include,
 				);
 				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";

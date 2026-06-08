@@ -1174,6 +1174,65 @@ void SGDUpdate(MatP& P, const MatG& G, float lr)
             p[r * cols + c] -= lr * g[r * cols + c];
 }
 
+template <typename Mat>
+std::array<double, 3> DirectionBiasValues3(const Mat& bias)
+{
+    std::array<double, 3> out {0.0, 0.0, 0.0};
+    const size_t rows = bias.Shape()[0];
+    const size_t cols = bias.Shape()[1];
+    if (rows >= 1 && cols >= 3)
+    {
+        auto acc = MetaNN::LowerAccess(bias);
+        const auto* p = acc.RawMemory();
+        out[0] = static_cast<double>(p[0]);
+        out[1] = static_cast<double>(p[1]);
+        out[2] = static_cast<double>(p[2]);
+    }
+    return out;
+}
+
+inline void PrintDirectionBiasByClassDiag(size_t call,
+                                          const char* stage,
+                                          const std::array<double, 3>& b)
+{
+    std::cout << "DIAG_HEAD_BIAS_BY_CLASS"
+              << ",call=" << call
+              << ",stage=" << stage
+              << ",B_down=" << b[0]
+              << ",B_neutral=" << b[1]
+              << ",B_up=" << b[2]
+              << ",B_down_minus_neutral=" << (b[0] - b[1])
+              << ",B_up_minus_neutral=" << (b[2] - b[1])
+              << ",B_neutral_minus_mean_edges=" << (b[1] - 0.5 * (b[0] + b[2]))
+              << std::endl;
+}
+
+inline void PrintDirectionBiasDeltaByClassDiag(size_t call,
+                                               const std::array<double, 3>& before,
+                                               const std::array<double, 3>& after)
+{
+    const double deltaDown = after[0] - before[0];
+    const double deltaNeutral = after[1] - before[1];
+    const double deltaUp = after[2] - before[2];
+    std::cout << "DIAG_HEAD_BIAS_DELTA_BY_CLASS"
+              << ",call=" << call
+              << ",before_down=" << before[0]
+              << ",before_neutral=" << before[1]
+              << ",before_up=" << before[2]
+              << ",after_down=" << after[0]
+              << ",after_neutral=" << after[1]
+              << ",after_up=" << after[2]
+              << ",delta_down=" << deltaDown
+              << ",delta_neutral=" << deltaNeutral
+              << ",delta_up=" << deltaUp
+              << ",delta_down_minus_neutral=" << (deltaDown - deltaNeutral)
+              << ",delta_up_minus_neutral=" << (deltaUp - deltaNeutral)
+              << ",after_down_minus_neutral=" << (after[0] - after[1])
+              << ",after_up_minus_neutral=" << (after[2] - after[1])
+              << ",after_neutral_minus_mean_edges=" << (after[1] - 0.5 * (after[0] + after[2]))
+              << std::endl;
+}
+
 // Moving helper structs and functions into EA::LSTM scope
 // Struct definitions inside EA::LSTM
 
@@ -3944,19 +4003,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 #endif
             }
             const double weightedDenom = std::max(totalSampleWeight, 1.0e-12);
-
-            for (size_t idx = 0; idx < B * direction_output_size; ++idx)
-            {
-                dptr[idx] = static_cast<float>(
-                    static_cast<double>(dptr[idx]) / weightedDenom);
-            }
+            constexpr bool kDirectionLogitsUseWeightedDenom = false;
 
             std::cout
                 << "DIAG_CLASS_WEIGHT_DENOM"
                 << ",samples=" << B
                 << ",weight_sum=" << totalSampleWeight
+                << ",weighted_denom_for_loss=" << weightedDenom
                 << ",avg_weight="
                 << (B ? totalSampleWeight / static_cast<double>(B) : 0.0)
+                << ",normalizes_gradients="
+                << (kDirectionLogitsUseWeightedDenom ? 1 : 0)
+                << ",gradient_normalization_stage=update_invN"
                 << std::endl;
             
             if (phase3HeadDiagEnabled)
@@ -5319,8 +5377,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         auto d_headDirB_f = MetaNN::Evaluate(d_headDirB_accum_f);
 
         // Convert accumulated gradients to mean gradients before clipping.
-        // This prevents full-epoch/window accumulation from triggering clipping
-        // before the learning-rate/window normalization can take effect.
+        // Classification keeps class weights in d_logits_batch and uses this
+        // shared invN path so head and recurrent gradients have one denominator.
         const double gradDenominator = (targetType == TargetType::UpNeutralDownReturn && phase3ClassWeightSum > 0.0)
             ? phase3ClassWeightSum
             : static_cast<double>(windowCount);
@@ -5351,8 +5409,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         auto d_headDirW_preclip = NNUtils::DeepCopyMatrix(d_headDirW_f);
         auto d_headDirB_preclip = NNUtils::DeepCopyMatrix(d_headDirB_f);
 
-        // Gradients are already normalized by windowCount above, so use the raw learning rate here.
-        const float lrCore = learning_rate;
+        // For UpNeutralDownReturn, allow the recurrent core to learn faster
+        // so hidden-state geometry can keep up with the direction head.
+        const float core_lr_mult =
+            (targetType == TargetType::UpNeutralDownReturn) ? 10.0f : 1.0f;
+
+        const float lrCore = learning_rate * core_lr_mult;
         const float lrHeadBase = learning_rate * LSTM_HEAD_LR_MULT;
         const float lrHeadDirActiveMult =
             (targetType == TargetType::UpNeutralDownReturn) ? 0.5f : 1.0f;
@@ -5360,7 +5422,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         const float lrHeadBias = lrHead * 0.01f; // intentionally slower bias adaptation
 
         const float directionHeadWeightLr = learning_rate * 25.0f;
-        const float directionHeadBiasLr   = learning_rate * 25.0f;
+        const float directionHeadBiasLr   = learning_rate * 2.5f;
 
         static size_t s_phase3LrScaleDiagCount = 0;
         const size_t phase3LrScaleDiagIdx = s_phase3LrScaleDiagCount++;
@@ -5390,7 +5452,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             std::cout << "DIAG_LR_SCALE_"
                       << ",call=" << phase3LrScaleDiagIdx
                       << ",raw_learningRate=" << learning_rate
-                      << ",core_lr_mult=1"
+                      << ",core_lr_mult=" << core_lr_mult
                       << ",head_lr_mult=" << LSTM_HEAD_LR_MULT
                       << ",head_lr_base=" << lrHeadBase
                       << ",direction_head_active_lr_mult=" << lrHeadDirActiveMult
@@ -5403,7 +5465,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                       << ",directionHeadBiasLr=" << directionHeadBiasLr
                       << ",core_formula=learningRate_after_mean_gradient_scaling"
                       << ",head_formula=learningRate*LSTM_HEAD_LR_MULT*direction_head_active_lr_mult_after_mean_gradient_scaling"
-                      << ",direction_head_override_formula=weight:learningRate*25,bias:learningRate*10_after_mean_gradient_scaling"
+                      << ",direction_head_override_formula=weight:learningRate*25,bias:learningRate*2.5_after_mean_gradient_scaling"
                       << std::endl;
         }
 
@@ -5808,6 +5870,38 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 SGDUpdate(param, d_param_f, lrCore);
                 SGDUpdate(bias,  d_bias_f,  lrCore);
                 if (targetType == TargetType::UpNeutralDownReturn) {
+                    const double directionHeadWeightGradNorm = FroNormEvalHost(d_headDirW_f);
+                    const double directionHeadBiasGradNorm = FroNormEvalHost(d_headDirB_f);
+                    const double directionHeadWeightEffectiveScale =
+                        static_cast<double>(directionHeadWeightLr) * static_cast<double>(invN);
+                    const double directionHeadBiasEffectiveScale =
+                        static_cast<double>(directionHeadBiasLr) * static_cast<double>(invN);
+
+                    std::cout << "DIAG_CLASS_GRAD_NORMALIZATION"
+                              << ",denom=" << gradDenominator
+                              << ",windowCount=" << windowCount
+                              << ",weighted_sample_sum=" << phase3ClassWeightSum
+                              << ",denominator_name=" << gradDenominatorName
+                              << ",uses_weighted_denom=0"
+                              << ",applies_later_invN=1"
+                              << ",invN=" << invN
+                              << std::endl;
+                    std::cout << "DIAG_DIRHEAD_UPDATE_SCALE"
+                              << ",effective_scale=" << directionHeadWeightEffectiveScale
+                              << ",effective_lr=" << directionHeadWeightLr
+                              << ",grad_norm_after_scaling=" << directionHeadWeightGradNorm
+                              << ",update_norm=" << (static_cast<double>(directionHeadWeightLr) * directionHeadWeightGradNorm)
+                              << ",bias_effective_scale=" << directionHeadBiasEffectiveScale
+                              << ",bias_effective_lr=" << directionHeadBiasLr
+                              << ",bias_grad_norm_after_scaling=" << directionHeadBiasGradNorm
+                              << ",bias_update_norm=" << (static_cast<double>(directionHeadBiasLr) * directionHeadBiasGradNorm)
+                              << ",denom=" << gradDenominator
+                              << ",windowCount=" << windowCount
+                              << ",weighted_sample_sum=" << phase3ClassWeightSum
+                              << ",uses_weighted_denom=0"
+                              << ",applies_later_invN=1"
+                              << ",invN=" << invN
+                              << std::endl;
 
                     std::cout << "DIAG_ACTIVE_UPDATE_PATH_"
                     << ",target=UpNeutralDownReturn"
@@ -5815,8 +5909,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     << ",effective_lr=" << directionHeadWeightLr
                     << ",base_head_lr=" << lrHeadBase
                     << ",direction_head_active_lr_mult=" << lrHeadDirActiveMult
-                    << ",grad_norm=" << FroNormEvalHost(d_headDirW_f)
-                    << ",expected_update_norm=" << (static_cast<double>(directionHeadWeightLr) * FroNormEvalHost(d_headDirW_f))
+                    << ",grad_norm=" << directionHeadWeightGradNorm
+                    << ",expected_update_norm=" << (static_cast<double>(directionHeadWeightLr) * directionHeadWeightGradNorm)
                     << std::endl;
 
                     std::cout << "DIAG_ACTIVE_UPDATE_PATH_"
@@ -5825,12 +5919,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     << ",effective_lr=" << directionHeadBiasLr
                     << ",base_head_lr=" << lrHeadBase
                     << ",direction_head_active_lr_mult=" << lrHeadDirActiveMult
-                    << ",grad_norm=" << FroNormEvalHost(d_headDirB_f)
-                    << ",expected_update_norm=" << (static_cast<double>(directionHeadBiasLr) * FroNormEvalHost(d_headDirB_f))
+                    << ",grad_norm=" << directionHeadBiasGradNorm
+                    << ",expected_update_norm=" << (static_cast<double>(directionHeadBiasLr) * directionHeadBiasGradNorm)
                     << std::endl;
+
+                    const auto dirBiasBeforeUpdate = DirectionBiasValues3(returnHeadDirBias);
+                    PrintDirectionBiasByClassDiag(phase3ClipFullDiagIdx, "pre_update", dirBiasBeforeUpdate);
 
                     SGDUpdate(returnHeadDirWeight, d_headDirW_f, directionHeadWeightLr);
                     SGDUpdate(returnHeadDirBias, d_headDirB_f, directionHeadBiasLr);
+
+                    const auto dirBiasAfterUpdate = DirectionBiasValues3(returnHeadDirBias);
+                    PrintDirectionBiasByClassDiag(phase3ClipFullDiagIdx, "post_update", dirBiasAfterUpdate);
+                    PrintDirectionBiasDeltaByClassDiag(phase3ClipFullDiagIdx, dirBiasBeforeUpdate, dirBiasAfterUpdate);
                 } else {
                     SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
                     SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
