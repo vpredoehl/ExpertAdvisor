@@ -1303,6 +1303,7 @@ struct EA::LSTM::ForwardBatchScratch
 };
 
 // Member function definitions moved to EA::LSTM
+bool EA::LSTM::suppressPhase3HiddenGeometryDiagnostics = false;
 
 void EA::LSTM::PrintOutputHeadShapes() const
 {
@@ -5938,6 +5939,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 }
             }
             const bool phase3HiddenGeometryCheckpointDiag =
+                !EA::LSTM::suppressPhase3HiddenGeometryDiagnostics &&
                 targetType == TargetType::UpNeutralDownReturn &&
                 ((epochIdx + 1) == 1 ||
                  ((epochIdx + 1) % 5) == 0 ||
