@@ -5413,7 +5413,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         // For UpNeutralDownReturn, allow the recurrent core to learn faster
         // so hidden-state geometry can keep up with the direction head.
         const float core_lr_mult =
-            (targetType == TargetType::UpNeutralDownReturn) ? 10.0f : 1.0f;
+            (targetType == TargetType::UpNeutralDownReturn) ? 120.0f : 1.0f;
 
         const float lrCore = learning_rate * core_lr_mult;
         const float lrHeadBase = learning_rate * LSTM_HEAD_LR_MULT;

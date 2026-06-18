@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <cassert>
 #include <vector>
+#include <stdexcept>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -2557,6 +2558,84 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
 const std::string dbName = "forex";
 const std::string dbModelName = "LSTM";
 
+namespace
+{
+struct LaunchArgs
+{
+    std::string fromDate;
+    std::string toDate;
+    std::optional<long long> modelId;
+};
+
+long long ParseModelIdArg(const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument("--model requires a non-empty model_id");
+
+    size_t consumed = 0;
+    long long modelId = 0;
+    try
+    {
+        modelId = std::stoll(value, &consumed, 10);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("invalid --model value '" + value + "'; expected a positive integer model_id");
+    }
+
+    if (consumed != value.size() || modelId <= 0)
+        throw std::invalid_argument("invalid --model value '" + value + "'; expected a positive integer model_id");
+
+    return modelId;
+}
+
+LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
+{
+    constexpr const char* kModelPrefix = "--model=";
+    constexpr size_t kModelPrefixLen = 8;
+
+    LaunchArgs parsed;
+    std::vector<std::string> positional;
+
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string arg{ argv[i] };
+
+        if (arg.rfind(kModelPrefix, 0) == 0)
+        {
+            if (parsed.modelId.has_value())
+                throw std::invalid_argument("--model specified more than once");
+
+            parsed.modelId = ParseModelIdArg(arg.substr(kModelPrefixLen));
+        }
+        else if (arg == "--model")
+        {
+            if (parsed.modelId.has_value())
+                throw std::invalid_argument("--model specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--model requires a model_id value");
+
+            parsed.modelId = ParseModelIdArg(argv[++i]);
+        }
+        else if (arg.rfind("--", 0) == 0)
+        {
+            throw std::invalid_argument("unknown option '" + arg + "'");
+        }
+        else
+        {
+            positional.push_back(arg);
+        }
+    }
+
+    if (positional.size() != 2)
+        throw std::invalid_argument("expected arguments: [--model=<model_id>] <fromDate> <toDate>");
+
+    parsed.fromDate = positional[0];
+    parsed.toDate = positional[1];
+    return parsed;
+}
+}
+
 
 int main(int argc, const char * argv[])
 {
@@ -2567,11 +2646,23 @@ int main(int argc, const char * argv[])
     if (argc >= 4 && std::string(argv[1]) == "--feature-trainability-3class")
         return RunFeatureTrainability3Class(argv[2], argv[3]);
 
+    LaunchArgs launchArgs;
+    try
+    {
+        launchArgs = ParseLaunchArgs(argc, argv);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Argument error: " << e.what() << "\n"
+                  << "Usage: " << argv[0] << " [--model=<model_id>] <fromDate> <toDate>\n";
+        return 1;
+    }
+
     pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
     pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
-    std::string fromDate  { argv[1] }, toDate { argv[2] };
+    std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
     
     std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
     std::cout << "window_size=" << window_size << '\n';
@@ -2616,22 +2707,51 @@ int main(int argc, const char * argv[])
             std::optional<long long> loadedModelId;
             bool startedFromScratch = true;
 
-            // Optionally load the latest model parameters from the LSTM DB
-            if constexpr (load_latest || inference_only)
-                try
+            // Load an explicitly requested model, or default to the latest stored model.
+            try
+            {
+                long long modelIdToLoad = -1;
+                const bool requestedModel = launchArgs.modelId.has_value();
+
+                if (requestedModel)
+                {
+                    modelIdToLoad = *launchArgs.modelId;
+                }
+                else
                 {
                     pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
                     if (!r.empty() && !r[0][0].is_null())
                     {
-                        loadedModelId = r[0][0].as<long long>();
-                        DBIO::PgModelIO::loadAll(w_LSTM, *loadedModelId, l);
-                        startedFromScratch = false;
-                        std::cout << "Loaded model_id=" << *loadedModelId << std::endl;
+                        modelIdToLoad = r[0][0].as<long long>();
                     }
-                    else {  std::cout << "No models found; using default-initialized parameters" << std::endl;  }
+                    else
+                    {
+                        std::cout << "No models found; using default-initialized parameters" << std::endl;
+                    }
                 }
-                catch (const std::exception& e) {   std::cout << "Load latest failed: " << e.what() << "; using default params" << std::endl;   }
-            else    std::cout << "load_latest=false; using default-initialized parameters" << std::endl;
+
+                if (modelIdToLoad > 0)
+                {
+                    DBIO::PgModelIO::loadAll(w_LSTM, modelIdToLoad, l);
+                    loadedModelId = modelIdToLoad;
+                    startedFromScratch = false;
+                    std::cout << "Loaded model_id=" << *loadedModelId
+                              << " source=" << (requestedModel ? "--model" : "latest")
+                              << std::endl;
+                }
+            }
+            catch (const std::exception& e)
+            {
+                if (launchArgs.modelId.has_value())
+                {
+                    std::cerr << "Load requested model_id=" << *launchArgs.modelId
+                              << " failed: " << e.what() << std::endl;
+                    return 1;
+                }
+
+                std::cout << "Load latest failed: " << e.what()
+                          << "; using default params" << std::endl;
+            }
 
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
             PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
