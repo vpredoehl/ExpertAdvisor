@@ -77,7 +77,7 @@ const char* GateStateModeLabel()
     }
 }
 
-bool gRuntimeInferenceMode = inference_only;
+bool gRuntimeInferenceMode = default_runtime_inference_mode;
 
 const char* CurrentRangeKindLabel()
 {
@@ -2864,7 +2864,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 
 void ApplyLaunchRuntimeConfig(const LaunchArgs& launchArgs)
 {
-    gRuntimeInferenceMode = launchArgs.inferenceMode.value_or(inference_only);
+    gRuntimeInferenceMode = launchArgs.inferenceMode.value_or(default_runtime_inference_mode);
 
     if (launchArgs.predictionHorizon.has_value())
         prediction_horizon = *launchArgs.predictionHorizon;
@@ -3608,7 +3608,7 @@ int main(int argc, const char * argv[])
                 }
                 else
                     if (gRuntimeInferenceMode)
-                        std::cout << "inference_only=true; skipping model save" << std::endl;
+                        std::cout << "runtime_infer=true; skipping model save" << std::endl;
                     else if constexpr (!save_enable)
                         std::cout << "save_enable=false; skipping model save" << std::endl;
                     else

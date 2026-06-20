@@ -2573,7 +2573,6 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     const size_t B = d_h.Shape()[0];
     const size_t H = d_h.Shape()[1];
 
-#if !LSTM_INFERENCE_ONLY
     {
         static size_t s_phase3GateDerivDiagCount = 0;
         if (s_phase3GateDerivDiagCount < LSTM_PHASE3_HEAD_DIAG_LIMIT)
@@ -2636,7 +2635,6 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
             ++s_phase3GateDerivDiagCount;
         }
     }
-#endif
 
     auto tanh_c = MetaNN::Tanh(sc.c);
 
@@ -2747,7 +2745,6 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     addBiasColsToGateAccum(A.db_g, db_catH.Data(), 2 * H);
     addBiasColsToGateAccum(A.db_o, db_catH.Data(), 3 * H);
 
-#if !LSTM_INFERENCE_ONLY
     {
         static size_t s_phase3RecurrentBackflowDiagCount = 0;
         if (s_phase3RecurrentBackflowDiagCount < LSTM_PHASE3_HEAD_DIAG_LIMIT)
@@ -2818,7 +2815,6 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
             ++s_phase3RecurrentBackflowDiagCount;
         }
     }
-#endif
     d_h = dh_prevH.Data();
     d_c = dc_prevH.Data();
 }
@@ -3050,7 +3046,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     };
 
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headDirW_accum_f(hidden_size, returnHeadDirWeight.Shape()[1]);
-#if !LSTM_INFERENCE_ONLY
     // Head gradient accumulators across all windows in the batch
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> d_headW_accum_f(hidden_size, 1);
     { auto low = MetaNN::LowerAccess(d_headW_accum_f); std::fill(low.MutableRawMemory(), low.MutableRawMemory() + hidden_size, 0.0f); }
@@ -3072,9 +3067,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         auto low = MetaNN::LowerAccess(d_bias_accum);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + bias.Shape()[0] * bias.Shape()[1], static_cast<AccumScalar>(0));
     }
-#endif
 
-#if !LSTM_INFERENCE_ONLY
     // Debug stats for training targets (log returns) and sample predictions
     double y_sum = 0.0, y_sumsq = 0.0;
     float y_min = std::numeric_limits<float>::infinity();
@@ -3084,7 +3077,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     std::vector<float> ydenorm_samples; // predicted price delta (predicted_close - close_T)
 
     // Per-batch predicted/actual log-return stats
-#endif
 
     ResetPreviousState();
 
@@ -3981,7 +3973,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     if (correct) ++bucket3_70p_correct;
                 }
 
-#if !LSTM_INFERENCE_ONLY
                 if (cls >= 0 && cls < static_cast<int>(direction_output_size))
                 {
                     y_sum += static_cast<double>(cls);
@@ -4001,7 +3992,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 }
                 if (yhat_samples.size() < 10)
                     yhat_samples.push_back(static_cast<float>(predClass));
-#endif
             }
             const double weightedDenom = std::max(totalSampleWeight, 1.0e-12);
             constexpr bool kDirectionLogitsUseWeightedDenom = false;
@@ -4466,10 +4456,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                               std::max<size_t>(actualHist[2], 1))
                           << std::endl;
             }
-#if !LSTM_INFERENCE_ONLY
             windowCount += B;
             windowsInBatch += B;
-    #endif
         }
         else
         {
@@ -4552,22 +4540,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                 sse += static_cast<double>(err) * static_cast<double>(err);
                 ++mseCount;
-    #if !LSTM_INFERENCE_ONLY
                 y_sum += static_cast<double>(target);
                 y_sumsq += static_cast<double>(target) * static_cast<double>(target);
                 y_min = std::min(y_min, target);
                 y_max = std::max(y_max, target);
                 ++y_count;
                 if (yhat_samples.size() < 10) yhat_samples.push_back(y_hat);
-    #endif
             }
-    #if !LSTM_INFERENCE_ONLY
             windowCount += B;
             windowsInBatch += B;
-    #endif
         }
 
-#if !LSTM_INFERENCE_ONLY
         if (targetType == TargetType::UpNeutralDownReturn)
         {
             AccumulateHeadGradsBatch3Class(d_headDirW_accum_f, d_headDirB_accum_f, h_batch, d_logits_batch);
@@ -4790,7 +4773,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                 const double phase3StepDcInNorm = phase3DhDiagEnabled ? FroNormEvalHost(d_c_batch) : 0.0;
                 // --- END PATCH ---
 
-#if !LSTM_INFERENCE_ONLY
                 if (phase3DhDiagEnabled)
                 {
                     static size_t s_phase3CellCarryDiagCount = 0;
@@ -4919,7 +4901,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                         ++s_phase3CellCarryDiagCount;
                     }
                 }
-#endif
 
                 backwardStepBatch(cache[static_cast<size_t>(tstep)], gb, d_h_batch, d_c_batch, G_bin);
 
@@ -5219,10 +5200,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                         }
             #endif
         }
-#endif
     }
 
-#if !LSTM_INFERENCE_ONLY
     // Per-batch diagnostics
     #if LSTM_BATCH_PROFILE
     {
@@ -5290,9 +5269,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     loss_value = (lossDenominator > 0.0) ? (sse / lossDenominator) : 0.0;
     std::cout << "loss_value=" << loss_value << "\n";
 
-#endif
 
-#if !LSTM_INFERENCE_ONLY && LSTM_DEBUG_PRINTS
+#if LSTM_DEBUG_PRINTS
     if (y_count > 0)
     {
         double y_mean = y_sum / static_cast<double>(y_count);
@@ -5365,7 +5343,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
               << " (1,0): " << returnHeadWeight(1,0)
               << " (63,0): " << returnHeadWeight(63,0) << "\n";
 #endif
-#if !LSTM_INFERENCE_ONLY
     if (windowCount > 0)
     {
         // Convert accumulators to concrete matrices (ensures RawMemory is valid)
@@ -7021,7 +6998,6 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             }
         #endif
     }
-#endif
 
 #if LSTM_EPOCH_BUCKETS
     // Insert epoch-bucket aggregation here (moved from after PredictNextRelativeMove)
