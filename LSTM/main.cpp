@@ -2370,6 +2370,16 @@ struct PredictionStats
     double tradeLogReturnSum = 0.0;
     double grossPositiveLogReturn = 0.0;
     double grossNegativeLogReturn = 0.0;
+    size_t longWinCount = 0;
+    size_t longLossCount = 0;
+    double longLogReturnSum = 0.0;
+    double longGrossPositiveLogReturn = 0.0;
+    double longGrossNegativeLogReturn = 0.0;
+    size_t shortWinCount = 0;
+    size_t shortLossCount = 0;
+    double shortLogReturnSum = 0.0;
+    double shortGrossPositiveLogReturn = 0.0;
+    double shortGrossNegativeLogReturn = 0.0;
 };
 
 const char* ClassName3(size_t cls)
@@ -2386,6 +2396,13 @@ const char* ClassName3(size_t cls)
 double SafeRatio(double numerator, double denominator)
 {
     return denominator != 0.0 ? numerator / denominator : 0.0;
+}
+
+double ProfitFactor(double grossPositiveLogReturn, double grossNegativeLogReturn)
+{
+    return grossNegativeLogReturn < 0.0
+        ? grossPositiveLogReturn / std::fabs(grossNegativeLogReturn)
+        : 0.0;
 }
 
 void PrintEvalTradingMetrics(const PredictionStats& stats)
@@ -2454,9 +2471,9 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
                                      static_cast<double>(stats.tradeCount));
     const double avgLogReturn = SafeRatio(stats.tradeLogReturnSum,
                                           static_cast<double>(stats.tradeCount));
-    const double profitFactor = stats.grossNegativeLogReturn < 0.0
-        ? stats.grossPositiveLogReturn / std::fabs(stats.grossNegativeLogReturn)
-        : 0.0;
+    const double profitFactor = ProfitFactor(stats.grossPositiveLogReturn,
+                                             stats.grossNegativeLogReturn);
+    const double aggregateTotalLogReturn = stats.tradeLogReturnSum;
 
     std::cout << "TRADING_SIGNAL_METRICS"
               << ",trade_count=" << stats.tradeCount
@@ -2471,6 +2488,85 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
               << ",gross_negative_log_return=" << stats.grossNegativeLogReturn
               << ",profit_factor=" << profitFactor
               << std::endl;
+
+    const double longWinRate = SafeRatio(static_cast<double>(stats.longWinCount),
+                                         static_cast<double>(stats.longCount));
+    const double shortWinRate = SafeRatio(static_cast<double>(stats.shortWinCount),
+                                          static_cast<double>(stats.shortCount));
+    const double longAvgLogReturn = SafeRatio(stats.longLogReturnSum,
+                                              static_cast<double>(stats.longCount));
+    const double shortAvgLogReturn = SafeRatio(stats.shortLogReturnSum,
+                                               static_cast<double>(stats.shortCount));
+    const double longProfitFactor = ProfitFactor(stats.longGrossPositiveLogReturn,
+                                                 stats.longGrossNegativeLogReturn);
+    const double shortProfitFactor = ProfitFactor(stats.shortGrossPositiveLogReturn,
+                                                  stats.shortGrossNegativeLogReturn);
+
+    std::cout << "TRADING_SIDE_METRICS"
+              << ",long_count=" << stats.longCount
+              << ",long_win_count=" << stats.longWinCount
+              << ",long_loss_count=" << stats.longLossCount
+              << ",long_win_rate=" << longWinRate
+              << ",long_total_log_return=" << stats.longLogReturnSum
+              << ",long_gross_positive_log_return=" << stats.longGrossPositiveLogReturn
+              << ",long_gross_negative_log_return=" << stats.longGrossNegativeLogReturn
+              << ",long_profit_factor=" << longProfitFactor
+              << ",long_avg_log_return=" << longAvgLogReturn
+              << ",short_count=" << stats.shortCount
+              << ",short_win_count=" << stats.shortWinCount
+              << ",short_loss_count=" << stats.shortLossCount
+              << ",short_win_rate=" << shortWinRate
+              << ",short_total_log_return=" << stats.shortLogReturnSum
+              << ",short_gross_positive_log_return=" << stats.shortGrossPositiveLogReturn
+              << ",short_gross_negative_log_return=" << stats.shortGrossNegativeLogReturn
+              << ",short_profit_factor=" << shortProfitFactor
+              << ",short_avg_log_return=" << shortAvgLogReturn
+              << std::endl;
+
+    const size_t sideTradeCount = stats.longCount + stats.shortCount;
+    const double sideTotalLogReturn = stats.longLogReturnSum + stats.shortLogReturnSum;
+    constexpr double kTradingAttributionTolerance = 1e-9;
+    if (sideTradeCount != stats.tradeCount ||
+        std::fabs(sideTotalLogReturn - aggregateTotalLogReturn) > kTradingAttributionTolerance)
+    {
+        std::cout << "TRADING_SIDE_VALIDATION_WARNING"
+                  << ",trade_count=" << stats.tradeCount
+                  << ",long_plus_short_count=" << sideTradeCount
+                  << ",aggregate_total_log_return=" << aggregateTotalLogReturn
+                  << ",long_plus_short_total_log_return=" << sideTotalLogReturn
+                  << ",abs_log_return_diff=" << std::fabs(sideTotalLogReturn - aggregateTotalLogReturn)
+                  << std::endl;
+    }
+
+    std::string dominantSide = "balanced";
+    const double totalPositiveSidePnl =
+        std::max(0.0, stats.longLogReturnSum) +
+        std::max(0.0, stats.shortLogReturnSum);
+    if (totalPositiveSidePnl > 0.0)
+    {
+        const double longFractionOfTotalPnl =
+            std::max(0.0, stats.longLogReturnSum) / totalPositiveSidePnl;
+        const double shortFractionOfTotalPnl =
+            std::max(0.0, stats.shortLogReturnSum) / totalPositiveSidePnl;
+        if (longFractionOfTotalPnl > 0.60)
+            dominantSide = "long";
+        else if (shortFractionOfTotalPnl > 0.60)
+            dominantSide = "short";
+
+        std::cout << "TRADING_SIDE_SUMMARY"
+                  << ",dominant_side=" << dominantSide
+                  << ",long_fraction_of_total_pnl=" << longFractionOfTotalPnl
+                  << ",short_fraction_of_total_pnl=" << shortFractionOfTotalPnl
+                  << std::endl;
+    }
+    else
+    {
+        std::cout << "TRADING_SIDE_SUMMARY"
+                  << ",dominant_side=" << dominantSide
+                  << ",long_fraction_of_total_pnl=0"
+                  << ",short_fraction_of_total_pnl=0"
+                  << std::endl;
+    }
 }
 
 static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b)
@@ -2600,9 +2696,35 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
 
                 ++result.tradeCount;
                 if (pred == 2)
+                {
                     ++result.longCount;
+                    result.longLogReturnSum += realizedLogReturn;
+                    if (realizedLogReturn > 0.0)
+                    {
+                        ++result.longWinCount;
+                        result.longGrossPositiveLogReturn += realizedLogReturn;
+                    }
+                    else if (realizedLogReturn < 0.0)
+                    {
+                        ++result.longLossCount;
+                        result.longGrossNegativeLogReturn += realizedLogReturn;
+                    }
+                }
                 else
+                {
                     ++result.shortCount;
+                    result.shortLogReturnSum += realizedLogReturn;
+                    if (realizedLogReturn > 0.0)
+                    {
+                        ++result.shortWinCount;
+                        result.shortGrossPositiveLogReturn += realizedLogReturn;
+                    }
+                    else if (realizedLogReturn < 0.0)
+                    {
+                        ++result.shortLossCount;
+                        result.shortGrossNegativeLogReturn += realizedLogReturn;
+                    }
+                }
 
                 result.tradeLogReturnSum += realizedLogReturn;
                 if (realizedLogReturn > 0.0)
@@ -3727,6 +3849,16 @@ int main(int argc, const char * argv[])
                             totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
                             totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
                             totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
+                            totalTradeStats.longWinCount += predictionStats.longWinCount;
+                            totalTradeStats.longLossCount += predictionStats.longLossCount;
+                            totalTradeStats.longLogReturnSum += predictionStats.longLogReturnSum;
+                            totalTradeStats.longGrossPositiveLogReturn += predictionStats.longGrossPositiveLogReturn;
+                            totalTradeStats.longGrossNegativeLogReturn += predictionStats.longGrossNegativeLogReturn;
+                            totalTradeStats.shortWinCount += predictionStats.shortWinCount;
+                            totalTradeStats.shortLossCount += predictionStats.shortLossCount;
+                            totalTradeStats.shortLogReturnSum += predictionStats.shortLogReturnSum;
+                            totalTradeStats.shortGrossPositiveLogReturn += predictionStats.shortGrossPositiveLogReturn;
+                            totalTradeStats.shortGrossNegativeLogReturn += predictionStats.shortGrossNegativeLogReturn;
                         }
                         else
                         {
