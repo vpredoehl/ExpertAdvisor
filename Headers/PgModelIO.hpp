@@ -73,6 +73,7 @@ public:
     static constexpr int kTrainConfigMetaSchemaVersion = 1;
     static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
     static constexpr int kTrainConfigMetaFieldCount = 8;
+    static constexpr int kTrainConfigMetaExtendedFieldCount = 11;
 
     // Create a new row in `model` table and return model_id
     static long long createModel(pqxx::work& w, const std::string& name, const std::string& comment)
@@ -153,12 +154,13 @@ public:
         saveParameter(w, modelId, "model_meta", meta);
     }
 
-    // Save training/evaluation compatibility metadata as a 1x8 matrix in order:
+    // Save training/evaluation compatibility metadata in order:
     // [schema_version, prediction_horizon, threshold_logret, window_size,
-    //  label_rule_id, class_weight_down, class_weight_neutral, class_weight_up]
+    //  label_rule_id, class_weight_down, class_weight_neutral, class_weight_up,
+    //  num_layers, normalization_version, epochs_trained]
     static void saveTrainConfigMeta(pqxx::work& w, long long modelId)
     {
-        MatGPU<float> meta(1, kTrainConfigMetaFieldCount);
+        MatGPU<float> meta(1, kTrainConfigMetaExtendedFieldCount);
         {
             auto low = MetaNN::LowerAccess(meta);
             float* p = low.MutableRawMemory();
@@ -170,6 +172,9 @@ public:
             p[5] = kClassWeightDown;
             p[6] = kClassWeightNeutral;
             p[7] = kClassWeightUp;
+            p[8] = static_cast<float>(num_layers);
+            p[9] = static_cast<float>(normalization_version);
+            p[10] = static_cast<float>(epoch_count);
         }
         saveParameter(w, modelId, "train_config_meta", meta);
     }

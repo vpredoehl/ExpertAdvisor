@@ -77,9 +77,11 @@ const char* GateStateModeLabel()
     }
 }
 
+bool gRuntimeInferenceMode = inference_only;
+
 const char* CurrentRangeKindLabel()
 {
-    return inference_only ? "inference" : "train";
+    return gRuntimeInferenceMode ? "inference" : "train";
 }
 
 struct TrainConfigMeta
@@ -92,6 +94,9 @@ struct TrainConfigMeta
     float classWeightDown = kClassWeightDown;
     float classWeightNeutral = kClassWeightNeutral;
     float classWeightUp = kClassWeightUp;
+    size_t numLayers = static_cast<size_t>(num_layers);
+    int normalizationVersion = normalization_version;
+    std::optional<size_t> epochsTrained;
 };
 
 struct ModelConfigValidationResult
@@ -2676,6 +2681,13 @@ struct LaunchArgs
     std::string fromDate;
     std::string toDate;
     std::optional<long long> modelId;
+    std::optional<bool> inferenceMode;
+    std::optional<size_t> predictionHorizon;
+    std::optional<double> thresholdLogret;
+    std::optional<size_t> windowSize;
+    std::optional<size_t> hiddenSize;
+    std::optional<size_t> numLayers;
+    std::optional<int> epochs;
 };
 
 long long ParseModelIdArg(const std::string& value)
@@ -2698,6 +2710,70 @@ long long ParseModelIdArg(const std::string& value)
         throw std::invalid_argument("invalid --model value '" + value + "'; expected a positive integer model_id");
 
     return modelId;
+}
+
+size_t ParsePositiveSizeArg(const std::string& optionName, const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument(optionName + " requires a non-empty integer value");
+
+    size_t consumed = 0;
+    unsigned long long parsed = 0;
+    try
+    {
+        parsed = std::stoull(value, &consumed, 10);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected a positive integer");
+    }
+
+    if (consumed != value.size() || parsed == 0)
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected a positive integer");
+
+    return static_cast<size_t>(parsed);
+}
+
+int ParsePositiveIntArg(const std::string& optionName, const std::string& value)
+{
+    const size_t parsed = ParsePositiveSizeArg(optionName, value);
+    if (parsed > static_cast<size_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; exceeds int range");
+    return static_cast<int>(parsed);
+}
+
+double ParsePositiveDoubleArg(const std::string& optionName, const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument(optionName + " requires a non-empty numeric value");
+
+    size_t consumed = 0;
+    double parsed = 0.0;
+    try
+    {
+        parsed = std::stod(value, &consumed);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected a positive number");
+    }
+
+    if (consumed != value.size() || !std::isfinite(parsed) || parsed <= 0.0)
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected a positive number");
+
+    return parsed;
+}
+
+bool SplitOptionWithValue(const std::string& arg,
+                          const char* optionName,
+                          std::string& value)
+{
+    const std::string prefix = std::string(optionName) + "=";
+    if (arg.rfind(prefix, 0) != 0)
+        return false;
+
+    value = arg.substr(prefix.size());
+    return true;
 }
 
 LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
@@ -2728,22 +2804,101 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 
             parsed.modelId = ParseModelIdArg(argv[++i]);
         }
-        else if (arg.rfind("--", 0) == 0)
+        else if (arg == "--train")
         {
-            throw std::invalid_argument("unknown option '" + arg + "'");
+            if (parsed.inferenceMode.has_value())
+                throw std::invalid_argument("--train and --infer are mutually exclusive");
+            parsed.inferenceMode = false;
+        }
+        else if (arg == "--infer")
+        {
+            if (parsed.inferenceMode.has_value())
+                throw std::invalid_argument("--train and --infer are mutually exclusive");
+            parsed.inferenceMode = true;
         }
         else
         {
-            positional.push_back(arg);
+            std::string value;
+            if (SplitOptionWithValue(arg, "--prediction-horizon", value))
+            {
+                parsed.predictionHorizon = ParsePositiveSizeArg("--prediction-horizon", value);
+            }
+            else if (SplitOptionWithValue(arg, "--threshold", value))
+            {
+                parsed.thresholdLogret = ParsePositiveDoubleArg("--threshold", value);
+            }
+            else if (SplitOptionWithValue(arg, "--window-size", value))
+            {
+                parsed.windowSize = ParsePositiveSizeArg("--window-size", value);
+            }
+            else if (SplitOptionWithValue(arg, "--hidden-size", value))
+            {
+                parsed.hiddenSize = ParsePositiveSizeArg("--hidden-size", value);
+            }
+            else if (SplitOptionWithValue(arg, "--num-layers", value))
+            {
+                parsed.numLayers = ParsePositiveSizeArg("--num-layers", value);
+            }
+            else if (SplitOptionWithValue(arg, "--epochs", value))
+            {
+                parsed.epochs = ParsePositiveIntArg("--epochs", value);
+            }
+            else if (arg.rfind("--", 0) == 0)
+            {
+                throw std::invalid_argument("unknown option '" + arg + "'");
+            }
+            else
+            {
+                positional.push_back(arg);
+            }
         }
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--model=<model_id>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
     return parsed;
+}
+
+void ApplyLaunchRuntimeConfig(const LaunchArgs& launchArgs)
+{
+    gRuntimeInferenceMode = launchArgs.inferenceMode.value_or(inference_only);
+
+    if (launchArgs.predictionHorizon.has_value())
+        prediction_horizon = *launchArgs.predictionHorizon;
+    if (launchArgs.thresholdLogret.has_value())
+        c_next_threshold = static_cast<float>(*launchArgs.thresholdLogret);
+    if (launchArgs.windowSize.has_value())
+        window_size = *launchArgs.windowSize;
+    if (launchArgs.hiddenSize.has_value())
+    {
+        hidden_size = *launchArgs.hiddenSize;
+        n_out = hidden_size;
+    }
+    if (launchArgs.numLayers.has_value())
+    {
+        if (*launchArgs.numLayers != 1)
+            throw std::invalid_argument("--num-layers currently supports only 1; increasing layers would change the LSTM architecture");
+        num_layers = *launchArgs.numLayers;
+    }
+    if (launchArgs.epochs.has_value())
+        epoch_count = *launchArgs.epochs;
+}
+
+void PrintRuntimeConfig()
+{
+    std::cout << "RUNTIME_CONFIG"
+              << ",train=" << (gRuntimeInferenceMode ? "false" : "true")
+              << ",infer=" << (gRuntimeInferenceMode ? "true" : "false")
+              << ",prediction_horizon=" << prediction_horizon
+              << ",threshold=" << c_next_threshold
+              << ",window_size=" << window_size
+              << ",hidden_size=" << hidden_size
+              << ",num_layers=" << num_layers
+              << ",epochs=" << epoch_count
+              << std::endl;
 }
 
 const char* TargetTypeName(EA::LSTM::TargetType targetType)
@@ -2769,7 +2924,7 @@ int DirectionLabelRuleId()
 
 const char* TrainConfigMetaFieldMapping()
 {
-    return "schema_version,prediction_horizon,threshold_logret,window_size,label_rule_id,class_weight_down,class_weight_neutral,class_weight_up";
+    return "schema_version,prediction_horizon,threshold_logret,window_size,label_rule_id,class_weight_down,class_weight_neutral,class_weight_up,num_layers,normalization_version,epochs_trained";
 }
 
 size_t RuntimeModelInputWidth(const Tensor& tensor)
@@ -2844,6 +2999,8 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     bool hasTargetMeta = false;
     bool hasModelMeta = false;
     bool hasTrainConfigMeta = false;
+    bool hasTrainConfigNumLayers = false;
+    bool hasTrainConfigNormalizationVersion = false;
 
     std::cout << "MODEL_TRAIN_CONFIG_META_FIELDS,"
               << TrainConfigMetaFieldMapping()
@@ -2871,7 +3028,7 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             else if (paramName == "train_config_meta")
             {
                 hasTrainConfigMeta = true;
-                persistedMetadata.push_back("train_config_meta(schema_version;prediction_horizon;threshold_logret;window_size;label_rule_id;class_weight_down;class_weight_neutral;class_weight_up)");
+                persistedMetadata.push_back("train_config_meta(schema_version;prediction_horizon;threshold_logret;window_size;label_rule_id;class_weight_down;class_weight_neutral;class_weight_up;num_layers;normalization_version;epochs_trained)");
             }
         }
     }
@@ -3014,6 +3171,20 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             trainConfigMeta.classWeightDown = static_cast<float>(vals[5]);
             trainConfigMeta.classWeightNeutral = static_cast<float>(vals[6]);
             trainConfigMeta.classWeightUp = static_cast<float>(vals[7]);
+            if (vals.size() >= 9)
+            {
+                trainConfigMeta.numLayers = static_cast<size_t>(std::llround(vals[8]));
+                hasTrainConfigNumLayers = true;
+            }
+            if (vals.size() >= 10)
+            {
+                trainConfigMeta.normalizationVersion = static_cast<int>(std::llround(vals[9]));
+                hasTrainConfigNormalizationVersion = true;
+            }
+            if (vals.size() >= 11)
+            {
+                trainConfigMeta.epochsTrained = static_cast<size_t>(std::llround(vals[10]));
+            }
             result.trainConfigMeta = trainConfigMeta;
 
             std::cout << "MODEL_TRAIN_CONFIG_META"
@@ -3026,6 +3197,14 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                       << ",class_weight_down=" << trainConfigMeta.classWeightDown
                       << ",class_weight_neutral=" << trainConfigMeta.classWeightNeutral
                       << ",class_weight_up=" << trainConfigMeta.classWeightUp
+                      << ",num_layers=" << trainConfigMeta.numLayers
+                      << ",normalization_version=" << trainConfigMeta.normalizationVersion
+                      << ",epochs_trained=";
+            if (trainConfigMeta.epochsTrained.has_value())
+                std::cout << *trainConfigMeta.epochsTrained;
+            else
+                std::cout << "missing";
+            std::cout
                       << std::endl;
 
             bool sectionMatches = true;
@@ -3053,6 +3232,14 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             sectionMatches = compareFloatField("class_weight_up",
                                                vals[7],
                                                kClassWeightUp) && sectionMatches;
+            if (vals.size() >= 9)
+                sectionMatches = compareIntField("num_layers",
+                                                 vals[8],
+                                                 num_layers) && sectionMatches;
+            if (vals.size() >= 10)
+                sectionMatches = compareIntField("normalization_version",
+                                                 vals[9],
+                                                 normalization_version) && sectionMatches;
             trainConfigMetaMatches = sectionMatches;
         }
     }
@@ -3072,6 +3259,15 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
         missingMinimum.push_back("class_weight_down");
         missingMinimum.push_back("class_weight_neutral");
         missingMinimum.push_back("class_weight_up");
+        missingMinimum.push_back("num_layers");
+        missingMinimum.push_back("normalization_version");
+    }
+    else
+    {
+        if (!hasTrainConfigNumLayers)
+            missingMinimum.push_back("num_layers");
+        if (!hasTrainConfigNormalizationVersion)
+            missingMinimum.push_back("normalization_version");
     }
     if (!hasTargetMeta)
         missingMinimum.push_back("target_type");
@@ -3117,11 +3313,12 @@ int main(int argc, const char * argv[])
     try
     {
         launchArgs = ParseLaunchArgs(argc, argv);
+        ApplyLaunchRuntimeConfig(launchArgs);
     }
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--model=<model_id>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] <fromDate> <toDate>\n";
         return 1;
     }
 
@@ -3135,6 +3332,7 @@ int main(int argc, const char * argv[])
     std::cout << "window_size=" << window_size << '\n';
     std::cout << "prediction_horizon=" << prediction_horizon << '\n';
     std::cout << "c_next_threshold=" << c_next_threshold << '\n';
+    PrintRuntimeConfig();
     std::cout << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
               << " (" << GateStateModeLabel() << ")\n";
 
@@ -3183,7 +3381,7 @@ int main(int argc, const char * argv[])
                 const bool requestedModel = launchArgs.modelId.has_value();
 
                 if (requestedModel) modelIdToLoad = *launchArgs.modelId;
-                else if constexpr (load_latest || inference_only)
+                else if (load_latest || gRuntimeInferenceMode)
                 {
                     pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
                     if (!r.empty() && !r[0][0].is_null()) modelIdToLoad = r[0][0].as<long long>();
@@ -3218,7 +3416,7 @@ int main(int argc, const char * argv[])
             ModelConfigValidationResult modelConfigValidation;
             if (loadedModelId.has_value())
                 modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t);
-            if constexpr (inference_only)
+            if (gRuntimeInferenceMode)
             {
                 if (modelConfigValidation.trainConfigMeta.has_value())
                     UseModelTrainEvalLabelConfig(*modelConfigValidation.trainConfigMeta);
@@ -3226,7 +3424,7 @@ int main(int argc, const char * argv[])
                     UseRuntimeDefaultEvalLabelConfig();
             }
             PrintEvalLabelConfig();
-            if constexpr (inference_only)
+            if (gRuntimeInferenceMode)
                 PrintInferenceConfig(loadedModelId, loadSource, l, fromDate, toDate);
 
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
@@ -3242,12 +3440,12 @@ int main(int argc, const char * argv[])
             size_t totalConfusion[direction_output_size][direction_output_size] = {};
             // Iterate all batches; inference evaluates once, training runs configured epochs.
             std::cout << std::setprecision(15);
-                constexpr int evalPassCount = inference_only ? 1 : epoch_count;
+                const int evalPassCount = gRuntimeInferenceMode ? 1 : epoch_count;
                 for(auto e = 0; e < evalPassCount; e++)
                 {
                     t.ForEachBatch( [&](auto b)
                                    {
-                        if constexpr (inference_only)
+                        if (gRuntimeInferenceMode)
                         {
                             const auto predictionStats = ProcessBatchPredict(l, t, b);
                             totalCorrectLog += predictionStats.correctLog;
@@ -3309,7 +3507,7 @@ int main(int argc, const char * argv[])
                         PrintAndResetDistribution();
                     }
                 }
-            if constexpr (inference_only)
+            if (gRuntimeInferenceMode)
             {
                 if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
                 {
@@ -3356,7 +3554,7 @@ int main(int argc, const char * argv[])
             // Persist trained model parameters to DB
             try
             {
-                if constexpr ( save_enable && !inference_only )
+                if (save_enable && !gRuntimeInferenceMode)
                 {
                     // Ensure this transaction is read-write for saving
                     w_LSTM.exec("SET TRANSACTION READ WRITE;");
@@ -3409,7 +3607,7 @@ int main(int argc, const char * argv[])
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                 }
                 else
-                    if constexpr (inference_only)
+                    if (gRuntimeInferenceMode)
                         std::cout << "inference_only=true; skipping model save" << std::endl;
                     else if constexpr (!save_enable)
                         std::cout << "save_enable=false; skipping model save" << std::endl;
