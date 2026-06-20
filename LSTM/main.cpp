@@ -3186,7 +3186,7 @@ int main(int argc, const char * argv[])
                 {
                     modelIdToLoad = *launchArgs.modelId;
                 }
-                else
+                else if constexpr (load_latest || inference_only)
                 {
                     pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
                     if (!r.empty() && !r[0][0].is_null())
