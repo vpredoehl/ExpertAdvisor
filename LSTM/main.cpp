@@ -3182,22 +3182,14 @@ int main(int argc, const char * argv[])
                 long long modelIdToLoad = -1;
                 const bool requestedModel = launchArgs.modelId.has_value();
 
-                if (requestedModel)
-                {
-                    modelIdToLoad = *launchArgs.modelId;
-                }
+                if (requestedModel) modelIdToLoad = *launchArgs.modelId;
                 else if constexpr (load_latest || inference_only)
                 {
                     pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
-                    if (!r.empty() && !r[0][0].is_null())
-                    {
-                        modelIdToLoad = r[0][0].as<long long>();
-                    }
-                    else
-                    {
-                        std::cout << "No models found; using default-initialized parameters" << std::endl;
-                    }
+                    if (!r.empty() && !r[0][0].is_null()) modelIdToLoad = r[0][0].as<long long>();
+                    else std::cout << "No models found; using default-initialized parameters" << std::endl;
                 }
+                else std::cout << "load_latest=false; using default-initialized parameters" << std::endl;
 
                 if (modelIdToLoad > 0)
                 {
