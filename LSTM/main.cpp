@@ -20,6 +20,7 @@
 #include <cassert>
 #include <vector>
 #include <stdexcept>
+#include <sstream>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -81,6 +82,70 @@ const char* CurrentRangeKindLabel()
     return inference_only ? "inference" : "train";
 }
 
+struct TrainConfigMeta
+{
+    int schemaVersion = DBIO::PgModelIO::kTrainConfigMetaSchemaVersion;
+    size_t predictionHorizon = static_cast<size_t>(prediction_horizon);
+    float thresholdLogret = c_next_threshold;
+    size_t windowSize = static_cast<size_t>(window_size);
+    int labelRuleId = DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId;
+    float classWeightDown = kClassWeightDown;
+    float classWeightNeutral = kClassWeightNeutral;
+    float classWeightUp = kClassWeightUp;
+};
+
+struct ModelConfigValidationResult
+{
+    std::optional<TrainConfigMeta> trainConfigMeta;
+};
+
+struct EvalLabelConfig
+{
+    size_t predictionHorizon = static_cast<size_t>(prediction_horizon);
+    float thresholdLogret = c_next_threshold;
+    size_t windowSize = static_cast<size_t>(window_size);
+    int labelRuleId = DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId;
+    const char* source = "runtime_defaults";
+};
+
+EvalLabelConfig RuntimeDefaultEvalLabelConfig()
+{
+    return {
+        static_cast<size_t>(prediction_horizon),
+        c_next_threshold,
+        static_cast<size_t>(window_size),
+        DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId,
+        "runtime_defaults"
+    };
+}
+
+EvalLabelConfig ModelTrainEvalLabelConfig(const TrainConfigMeta& meta)
+{
+    return {
+        meta.predictionHorizon,
+        meta.thresholdLogret,
+        meta.windowSize,
+        meta.labelRuleId,
+        "model_train_config"
+    };
+}
+
+EvalLabelConfig& ActiveEvalLabelConfig()
+{
+    static EvalLabelConfig config = RuntimeDefaultEvalLabelConfig();
+    return config;
+}
+
+void UseRuntimeDefaultEvalLabelConfig()
+{
+    ActiveEvalLabelConfig() = RuntimeDefaultEvalLabelConfig();
+}
+
+void UseModelTrainEvalLabelConfig(const TrainConfigMeta& meta)
+{
+    ActiveEvalLabelConfig() = ModelTrainEvalLabelConfig(meta);
+}
+
 void PrintClassificationProofDiagnostics(const EA::LSTM& l,
                                          const Tensor& tensor,
                                          const std::string& fromDate,
@@ -102,12 +167,16 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
     LSTM_ASSERT(l.returnHeadDirBias.Shape()[1] == direction_output_size,
                 "PrintClassificationProofDiagnostics: returnHeadDirBias width mismatch");
 
+    const auto& evalConfig = ActiveEvalLabelConfig();
     std::cout << "DIAG_CLASS_THRESHOLDS"
               << ",range_kind=" << CurrentRangeKindLabel()
               << ",from=" << fromDate
               << ",to=" << toDate
-              << ",threshold_logret=" << c_next_threshold
-              << ",prediction_horizon=" << prediction_horizon
+              << ",threshold_logret=" << evalConfig.thresholdLogret
+              << ",prediction_horizon=" << evalConfig.predictionHorizon
+              << ",window_size=" << evalConfig.windowSize
+              << ",label_rule_id=" << evalConfig.labelRuleId
+              << ",config_source=" << evalConfig.source
               << ",neutral_rule=no_threshold_hit_within_horizon"
               << ",output_dim=" << direction_output_size
               << std::endl;
@@ -120,9 +189,15 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
     size_t windowCount = 0;
     size_t printedRows = 0;
 
-    for (auto it = tensor.begin(); it + window_size - 1 + prediction_horizon < tensor.end(); ++it)
+    for (auto it = tensor.begin();
+         it + static_cast<std::ptrdiff_t>(evalConfig.windowSize - 1 + evalConfig.predictionHorizon) < tensor.end();
+         ++it)
     {
-        const auto info = BuildLookaheadClassInfo(tensor, it);
+        const auto info = BuildLookaheadClassInfo(tensor,
+                                                  it,
+                                                  evalConfig.windowSize,
+                                                  evalConfig.predictionHorizon,
+                                                  evalConfig.thresholdLogret);
         ++hist[static_cast<size_t>(info.assignedClass)];
         ++windowCount;
 
@@ -2269,7 +2344,18 @@ int RunFeatureTrainability3Class(const std::string& fromDate, const std::string&
 }
 }
 
-static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b) -> std::tuple<size_t, size_t, size_t, double, size_t, size_t>
+struct PredictionStats
+{
+    size_t correctLog = 0;
+    size_t actedLog = 0;
+    size_t windows = 0;
+    double absErrMove = 0.0;
+    size_t correctDir = 0;
+    size_t actedDir = 0;
+    size_t confusion[direction_output_size][direction_output_size] = {};
+};
+
+static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b)
 {
     auto stats = [](const auto& v)
     {
@@ -2297,6 +2383,7 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
 
     if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
     {
+        const auto& evalConfig = ActiveEvalLabelConfig();
         static bool s_inferLabelRulePrinted = false;
         static size_t s_inferLabelRowDiagCount = 0;
         constexpr size_t kInferLabelRowDiagLimit = 50;
@@ -2305,8 +2392,11 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
             std::cout << "DIAG_INFER_LABEL_RULE"
                       << ",eval_label=lookahead_high_low_first_hit"
                       << ",old_terminal_close_class=reported_for_comparison"
-                      << ",threshold_logret=" << c_next_threshold
-                      << ",prediction_horizon=" << prediction_horizon
+                      << ",threshold_logret=" << evalConfig.thresholdLogret
+                      << ",prediction_horizon=" << evalConfig.predictionHorizon
+                      << ",window_size=" << evalConfig.windowSize
+                      << ",label_rule_id=" << evalConfig.labelRuleId
+                      << ",config_source=" << evalConfig.source
                       << std::endl;
             s_inferLabelRulePrinted = true;
         }
@@ -2316,30 +2406,39 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
         std::vector<float> predMaxProb;
 
         const auto nWindows = static_cast<size_t>(
-            std::max<std::ptrdiff_t>(0, (b.end() - b.begin()) - static_cast<std::ptrdiff_t>(window_size + prediction_horizon) + 1));
+            std::max<std::ptrdiff_t>(0,
+                                     (b.end() - b.begin()) -
+                                     static_cast<std::ptrdiff_t>(evalConfig.windowSize + evalConfig.predictionHorizon) +
+                                     1));
         predClass.reserve(nWindows);
         actClass.reserve(nWindows);
         predMaxProb.reserve(nWindows);
 
-        size_t confusion[direction_output_size][direction_output_size] = {};
+        PredictionStats result;
 
-        for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
+        for (auto it = b.begin();
+             it + static_cast<std::ptrdiff_t>(evalConfig.windowSize - 1 + evalConfig.predictionHorizon) < b.end();
+             ++it)
         {
-            auto w = Window{it, it + window_size};
+            auto w = Window{it, it + static_cast<std::ptrdiff_t>(evalConfig.windowSize)};
 
             const auto probs = l.PredictNextDirectionProbs(w, /*resetState=*/true);
             const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
                            : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
             const float maxProb = std::max(probs[0], std::max(probs[1], probs[2]));
 
-            const auto labelInfo = BuildLookaheadClassInfo(tensor, it);
+            const auto labelInfo = BuildLookaheadClassInfo(tensor,
+                                                           it,
+                                                           evalConfig.windowSize,
+                                                           evalConfig.predictionHorizon,
+                                                           evalConfig.thresholdLogret);
             const int actual = labelInfo.assignedClass;
 
             if (s_inferLabelRowDiagCount < kInferLabelRowDiagLimit)
             {
                 const size_t globalStartIdx = static_cast<size_t>(it - tensor.begin());
-                const size_t globalLastIdx = globalStartIdx + window_size - 1;
-                const size_t globalTargetIdx = globalLastIdx + prediction_horizon;
+                const size_t globalLastIdx = globalStartIdx + evalConfig.windowSize - 1;
+                const size_t globalTargetIdx = globalLastIdx + evalConfig.predictionHorizon;
                 const size_t globalFutureIdx = globalLastIdx + labelInfo.selectedOffset;
                 std::cout << "DIAG_INFER_LABEL_ROW"
                           << ",global_tensor_row_idx=" << globalStartIdx
@@ -2363,12 +2462,12 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
             predClass.push_back(pred);
             actClass.push_back(actual);
             predMaxProb.push_back(maxProb);
-            ++confusion[actual][pred];
+            ++result.confusion[actual][pred];
         }
 
         const size_t N = std::min(predClass.size(), actClass.size());
         if (N == 0)
-            return {0, 0, 0, 0.0, 0, 0};
+            return result;
 
         size_t correct = 0;
         for (size_t i = 0; i < N; ++i)
@@ -2400,9 +2499,9 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
         const double acc = static_cast<double>(correct) / static_cast<double>(N) * 100.0;
         std::cout << "3-class accuracy: " << acc << "% over " << N << " windows" << std::endl;
         std::cout << "3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
-                  << "[[" << confusion[0][0] << ", " << confusion[0][1] << ", " << confusion[0][2] << "], "
-                  << "[" << confusion[1][0] << ", " << confusion[1][1] << ", " << confusion[1][2] << "], "
-                  << "[" << confusion[2][0] << ", " << confusion[2][1] << ", " << confusion[2][2] << "]]"
+                  << "[[" << result.confusion[0][0] << ", " << result.confusion[0][1] << ", " << result.confusion[0][2] << "], "
+                  << "[" << result.confusion[1][0] << ", " << result.confusion[1][1] << ", " << result.confusion[1][2] << "], "
+                  << "[" << result.confusion[2][0] << ", " << result.confusion[2][1] << ", " << result.confusion[2][2] << "]]"
                   << std::endl;
 
 #if LSTM_DEBUG_INTERNAL_PRINTS
@@ -2418,7 +2517,12 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
         }
 #endif
 
-        return {correct, N, N, 0.0, correct, N};
+        result.correctLog = correct;
+        result.actedLog = N;
+        result.windows = N;
+        result.correctDir = correct;
+        result.actedDir = N;
+        return result;
     }
 
     auto predLogRet = l.RollingPredictNextLogReturn(b, /*resetAtStart=*/true);
@@ -2461,7 +2565,7 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
     assert(predRel.size() == actRel.size());
     if (predRel.empty() || actRel.empty())
     {
-        return {0, 0, 0, 0.0, 0, 0};
+        return {};
     }
 
     auto s_raw = stats(predLogRet);
@@ -2552,7 +2656,14 @@ static auto ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window&
                   << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
                   << std::endl;
 
-    return {correctLog, actedLog, N, maeMove, correctDir, acted};
+    PredictionStats result;
+    result.correctLog = correctLog;
+    result.actedLog = actedLog;
+    result.windows = N;
+    result.absErrMove = maeMove;
+    result.correctDir = correctDir;
+    result.actedDir = acted;
+    return result;
 }
 
 const std::string dbName = "forex";
@@ -2634,6 +2745,362 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     parsed.toDate = positional[1];
     return parsed;
 }
+
+const char* TargetTypeName(EA::LSTM::TargetType targetType)
+{
+    switch (targetType)
+    {
+        case EA::LSTM::TargetType::LogReturn: return "LogReturn";
+        case EA::LSTM::TargetType::PercentReturn: return "PercentReturn";
+        case EA::LSTM::TargetType::UpNeutralDownReturn: return "UpNeutralDownReturn";
+    }
+    return "Unknown";
+}
+
+const char* DirectionLabelRuleName()
+{
+    return "lookahead_high_low_first_hit";
+}
+
+int DirectionLabelRuleId()
+{
+    return DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId;
+}
+
+const char* TrainConfigMetaFieldMapping()
+{
+    return "schema_version,prediction_horizon,threshold_logret,window_size,label_rule_id,class_weight_down,class_weight_neutral,class_weight_up";
+}
+
+size_t RuntimeModelInputWidth(const Tensor& tensor)
+{
+    const size_t baseFeatureCount = (tensor.begin() != tensor.end())
+        ? static_cast<size_t>((*tensor.begin()).Shape()[1])
+        : 0;
+    return baseFeatureCount + BaselineReturnFeatureCount;
+}
+
+std::string JoinStrings(const std::vector<std::string>& values, const char* separator)
+{
+    if (values.empty())
+        return "none";
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i) oss << separator;
+        oss << values[i];
+    }
+    return oss.str();
+}
+
+void PrintEvalLabelConfig()
+{
+    const auto& evalConfig = ActiveEvalLabelConfig();
+    std::cout << "EVAL_LABEL_CONFIG"
+              << ",label_rule=" << DirectionLabelRuleName()
+              << ",prediction_horizon=" << evalConfig.predictionHorizon
+              << ",threshold_logret=" << evalConfig.thresholdLogret
+              << ",window_size=" << evalConfig.windowSize
+              << ",label_rule_id=" << evalConfig.labelRuleId
+              << ",config_source=" << evalConfig.source
+              << std::endl;
+}
+
+void PrintInferenceConfig(const std::optional<long long>& loadedModelId,
+                          const std::string& loadSource,
+                          const EA::LSTM& lstm,
+                          const std::string& fromDate,
+                          const std::string& toDate)
+{
+    const auto& evalConfig = ActiveEvalLabelConfig();
+    std::cout << "INFERENCE_CONFIG_SOURCE=" << evalConfig.source << std::endl;
+    std::cout << "INFERENCE_CONFIG"
+              << ",model_id=";
+    if (loadedModelId.has_value())
+        std::cout << *loadedModelId;
+    else
+        std::cout << -1;
+
+    std::cout << ",load_source=" << loadSource
+              << ",prediction_horizon=" << evalConfig.predictionHorizon
+              << ",threshold_logret=" << evalConfig.thresholdLogret
+              << ",target_type=" << TargetTypeName(lstm.targetType)
+              << ",window_size=" << evalConfig.windowSize
+              << ",label_rule_id=" << evalConfig.labelRuleId
+              << ",from=" << fromDate
+              << ",to=" << toDate
+              << std::endl;
+}
+
+ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
+                                                       long long modelId,
+                                                       EA::LSTM::TargetType requestedTargetType,
+                                                       const Tensor& tensor)
+{
+    ModelConfigValidationResult result;
+    std::vector<std::string> persistedParams;
+    std::vector<std::string> persistedMetadata;
+    bool hasTargetMeta = false;
+    bool hasModelMeta = false;
+    bool hasTrainConfigMeta = false;
+
+    std::cout << "MODEL_TRAIN_CONFIG_META_FIELDS,"
+              << TrainConfigMetaFieldMapping()
+              << std::endl;
+
+    try
+    {
+        pqxx::result params = w.exec_params(
+            "SELECT DISTINCT param_name FROM matrix WHERE model_id = $1 ORDER BY param_name;",
+            modelId);
+        for (const auto& row : params)
+        {
+            const std::string paramName = row[0].as<std::string>();
+            persistedParams.push_back(paramName);
+            if (paramName == "target_meta")
+            {
+                hasTargetMeta = true;
+                persistedMetadata.push_back("target_meta(type;scale;bias;use_zscore;mean;std)");
+            }
+            else if (paramName == "model_meta")
+            {
+                hasModelMeta = true;
+                persistedMetadata.push_back("model_meta(schemaVersion;n_in;hidden_size)");
+            }
+            else if (paramName == "train_config_meta")
+            {
+                hasTrainConfigMeta = true;
+                persistedMetadata.push_back("train_config_meta(schema_version;prediction_horizon;threshold_logret;window_size;label_rule_id;class_weight_down;class_weight_neutral;class_weight_up)");
+            }
+        }
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "MODEL_METADATA_READ_FAIL"
+                  << ",model_id=" << modelId
+                  << ",error=" << e.what()
+                  << std::endl;
+    }
+
+    std::cout << "MODEL_METADATA_PERSISTED"
+              << ",model_id=" << modelId
+              << ",param_names=" << JoinStrings(persistedParams, ";")
+              << ",metadata=" << JoinStrings(persistedMetadata, ";")
+              << std::endl;
+
+    bool targetMetaMatches = false;
+    bool modelMetaMatches = false;
+    bool trainConfigMetaMatches = false;
+    bool mismatch = false;
+
+    auto printMismatch = [&](const char* field, const auto& modelValue, const auto& runtimeValue)
+    {
+        mismatch = true;
+        std::cout << "MODEL_CONFIG_MISMATCH"
+                  << ",field=" << field
+                  << ",model=" << modelValue
+                  << ",runtime=" << runtimeValue
+                  << std::endl;
+    };
+
+    auto compareIntField = [&](const char* field, double modelValue, long long runtimeValue) -> bool
+    {
+        const long long roundedModelValue = static_cast<long long>(std::llround(modelValue));
+        if (roundedModelValue != runtimeValue)
+        {
+            printMismatch(field, roundedModelValue, runtimeValue);
+            return false;
+        }
+        return true;
+    };
+
+    auto compareFloatField = [&](const char* field, double modelValue, double runtimeValue) -> bool
+    {
+        constexpr double kFloatCompareTolerance = 1e-7;
+        if (std::fabs(modelValue - runtimeValue) > kFloatCompareTolerance)
+        {
+            printMismatch(field, modelValue, runtimeValue);
+            return false;
+        }
+        return true;
+    };
+
+    try
+    {
+        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "target_meta");
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 6 || vals.size() != 6)
+        {
+            printMismatch("target_meta_shape", std::to_string(dims.n_rows) + "x" + std::to_string(dims.n_cols), "1x6");
+        }
+        else
+        {
+            bool sectionMatches = true;
+            const auto modelTargetType = static_cast<EA::LSTM::TargetType>(static_cast<int>(vals[0]));
+            if (static_cast<int>(modelTargetType) != static_cast<int>(requestedTargetType))
+            {
+                printMismatch("target_type", TargetTypeName(modelTargetType), TargetTypeName(requestedTargetType));
+                sectionMatches = false;
+            }
+            targetMetaMatches = sectionMatches;
+        }
+    }
+    catch (const std::exception&)
+    {
+        // Older models may not have target_meta.
+    }
+
+    try
+    {
+        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+        {
+            printMismatch("model_meta_shape", std::to_string(dims.n_rows) + "x" + std::to_string(dims.n_cols), "1x3");
+        }
+        else
+        {
+            bool sectionMatches = true;
+            const int schemaVersion = static_cast<int>(vals[0]);
+            const int modelInputWidth = static_cast<int>(vals[1]);
+            const int modelHiddenSize = static_cast<int>(vals[2]);
+            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
+            const int runtimeHiddenSize = static_cast<int>(hidden_size);
+
+            if (schemaVersion != 1)
+            {
+                printMismatch("model_meta_schema_version", schemaVersion, 1);
+                sectionMatches = false;
+            }
+            if (modelInputWidth != runtimeInputWidth)
+            {
+                printMismatch("feature_count", modelInputWidth, runtimeInputWidth);
+                sectionMatches = false;
+            }
+            if (modelHiddenSize != runtimeHiddenSize)
+            {
+                printMismatch("hidden_size", modelHiddenSize, runtimeHiddenSize);
+                sectionMatches = false;
+            }
+            modelMetaMatches = sectionMatches;
+        }
+    }
+    catch (const std::exception&)
+    {
+        // Older models may not have model_meta.
+    }
+
+    try
+    {
+        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
+        if (dims.n_rows != 1 ||
+            dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaFieldCount ||
+            vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaFieldCount))
+        {
+            printMismatch("train_config_meta_shape",
+                          std::to_string(dims.n_rows) + "x" + std::to_string(dims.n_cols),
+                          "1x>=8");
+        }
+        else
+        {
+            TrainConfigMeta trainConfigMeta;
+            trainConfigMeta.schemaVersion = static_cast<int>(std::llround(vals[0]));
+            trainConfigMeta.predictionHorizon = static_cast<size_t>(std::llround(vals[1]));
+            trainConfigMeta.thresholdLogret = static_cast<float>(vals[2]);
+            trainConfigMeta.windowSize = static_cast<size_t>(std::llround(vals[3]));
+            trainConfigMeta.labelRuleId = static_cast<int>(std::llround(vals[4]));
+            trainConfigMeta.classWeightDown = static_cast<float>(vals[5]);
+            trainConfigMeta.classWeightNeutral = static_cast<float>(vals[6]);
+            trainConfigMeta.classWeightUp = static_cast<float>(vals[7]);
+            result.trainConfigMeta = trainConfigMeta;
+
+            std::cout << "MODEL_TRAIN_CONFIG_META"
+                      << ",model_id=" << modelId
+                      << ",schema_version=" << trainConfigMeta.schemaVersion
+                      << ",prediction_horizon=" << trainConfigMeta.predictionHorizon
+                      << ",threshold_logret=" << trainConfigMeta.thresholdLogret
+                      << ",window_size=" << trainConfigMeta.windowSize
+                      << ",label_rule_id=" << trainConfigMeta.labelRuleId
+                      << ",class_weight_down=" << trainConfigMeta.classWeightDown
+                      << ",class_weight_neutral=" << trainConfigMeta.classWeightNeutral
+                      << ",class_weight_up=" << trainConfigMeta.classWeightUp
+                      << std::endl;
+
+            bool sectionMatches = true;
+            sectionMatches = compareIntField("schema_version",
+                                             vals[0],
+                                             DBIO::PgModelIO::kTrainConfigMetaSchemaVersion) && sectionMatches;
+            sectionMatches = compareIntField("prediction_horizon",
+                                             vals[1],
+                                             prediction_horizon) && sectionMatches;
+            sectionMatches = compareFloatField("threshold_logret",
+                                               vals[2],
+                                               c_next_threshold) && sectionMatches;
+            sectionMatches = compareIntField("window_size",
+                                             vals[3],
+                                             window_size) && sectionMatches;
+            sectionMatches = compareIntField("label_rule_id",
+                                             vals[4],
+                                             DirectionLabelRuleId()) && sectionMatches;
+            sectionMatches = compareFloatField("class_weight_down",
+                                               vals[5],
+                                               kClassWeightDown) && sectionMatches;
+            sectionMatches = compareFloatField("class_weight_neutral",
+                                               vals[6],
+                                               kClassWeightNeutral) && sectionMatches;
+            sectionMatches = compareFloatField("class_weight_up",
+                                               vals[7],
+                                               kClassWeightUp) && sectionMatches;
+            trainConfigMetaMatches = sectionMatches;
+        }
+    }
+    catch (const std::exception&)
+    {
+        // Older models may not have train_config_meta.
+    }
+
+    std::vector<std::string> missingMinimum;
+
+    if (!hasTrainConfigMeta)
+    {
+        missingMinimum.push_back("prediction_horizon");
+        missingMinimum.push_back("threshold_logret");
+        missingMinimum.push_back("window_size");
+        missingMinimum.push_back("label_rule");
+        missingMinimum.push_back("class_weight_down");
+        missingMinimum.push_back("class_weight_neutral");
+        missingMinimum.push_back("class_weight_up");
+    }
+    if (!hasTargetMeta)
+        missingMinimum.push_back("target_type");
+    if (!hasModelMeta)
+    {
+        missingMinimum.push_back("feature_count");
+        missingMinimum.push_back("hidden_size");
+    }
+
+    if (targetMetaMatches &&
+        modelMetaMatches &&
+        trainConfigMetaMatches &&
+        !mismatch &&
+        missingMinimum.empty())
+    {
+        std::cout << "MODEL_CONFIG_MATCH=1" << std::endl;
+    }
+
+    if (!missingMinimum.empty())
+    {
+        std::cout << "MODEL_CONFIG_METADATA_GAP"
+                  << ",model_id=" << modelId
+                  << ",missing=" << JoinStrings(missingMinimum, ";")
+                  << ",recommend_minimum_additions=" << JoinStrings(missingMinimum, ";")
+                  << std::endl;
+    }
+
+    return result;
+}
 }
 
 
@@ -2687,7 +3154,8 @@ int main(int argc, const char * argv[])
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
   
-            EA::LSTM l { t, 1, 0, EA::LSTM::TargetType::UpNeutralDownReturn };
+            constexpr auto requestedTargetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+            EA::LSTM l { t, 1, 0, requestedTargetType };
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
             if (s_lstmBindingDiagCount < kLstmBindingDiagLimit)
@@ -2706,6 +3174,7 @@ int main(int argc, const char * argv[])
             // Track whether we started from scratch (no model loaded)
             std::optional<long long> loadedModelId;
             bool startedFromScratch = true;
+            const std::string loadSource = launchArgs.modelId.has_value() ? "--model" : "latest";
 
             // Load an explicitly requested model, or default to the latest stored model.
             try
@@ -2736,7 +3205,7 @@ int main(int argc, const char * argv[])
                     loadedModelId = modelIdToLoad;
                     startedFromScratch = false;
                     std::cout << "Loaded model_id=" << *loadedModelId
-                              << " source=" << (requestedModel ? "--model" : "latest")
+                              << " source=" << loadSource
                               << std::endl;
                 }
             }
@@ -2753,6 +3222,21 @@ int main(int argc, const char * argv[])
                           << "; using default params" << std::endl;
             }
 
+            UseRuntimeDefaultEvalLabelConfig();
+            ModelConfigValidationResult modelConfigValidation;
+            if (loadedModelId.has_value())
+                modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t);
+            if constexpr (inference_only)
+            {
+                if (modelConfigValidation.trainConfigMeta.has_value())
+                    UseModelTrainEvalLabelConfig(*modelConfigValidation.trainConfigMeta);
+                else
+                    UseRuntimeDefaultEvalLabelConfig();
+            }
+            PrintEvalLabelConfig();
+            if constexpr (inference_only)
+                PrintInferenceConfig(loadedModelId, loadSource, l, fromDate, toDate);
+
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
             PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
 
@@ -2764,37 +3248,26 @@ int main(int argc, const char * argv[])
             size_t totalCorrectDir = 0;
             size_t totalActedDir = 0;
             size_t totalConfusion[direction_output_size][direction_output_size] = {};
-            // Iterate all batches (including trailing partial batch) and process each via CalculateBatch
+            // Iterate all batches; inference evaluates once, training runs configured epochs.
             std::cout << std::setprecision(15);
-                for(auto e = 0; e < epoch_count; e++)
+                constexpr int evalPassCount = inference_only ? 1 : epoch_count;
+                for(auto e = 0; e < evalPassCount; e++)
                 {
                     t.ForEachBatch( [&](auto b)
                                    {
                         if constexpr (inference_only)
                         {
-                            auto [correctLog, actedLog, windows, absErrMove, correctDir, actedDir] = ProcessBatchPredict(l, t, b);
-                            totalCorrectLog += correctLog;
-                            totalActedLog += actedLog;
-                            totalWindows += windows;
-                            totalAbsErrMove += absErrMove;
-                            totalCorrectDir += correctDir;
-                            totalActedDir += actedDir;
+                            const auto predictionStats = ProcessBatchPredict(l, t, b);
+                            totalCorrectLog += predictionStats.correctLog;
+                            totalActedLog += predictionStats.actedLog;
+                            totalWindows += predictionStats.windows;
+                            totalAbsErrMove += predictionStats.absErrMove;
+                            totalCorrectDir += predictionStats.correctDir;
+                            totalActedDir += predictionStats.actedDir;
 
-                            if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
-                            {
-                                for (auto it = b.begin(); it + window_size - 1 + prediction_horizon < b.end(); ++it)
-                                {
-                                    auto w = Window{it, it + window_size};
-                                    const auto probs = l.PredictNextDirectionProbs(w, /*resetState=*/true);
-                                    const int pred = (probs[0] > probs[1] && probs[0] > probs[2]) ? 0
-                                                   : ((probs[2] > probs[1] && probs[2] > probs[0]) ? 2 : 1);
-
-                                    const auto labelInfo = BuildLookaheadClassInfo(t, it);
-                                    const int actual = labelInfo.assignedClass;
-
-                                    ++totalConfusion[actual][pred];
-                                }
-                            }
+                            for (size_t actual = 0; actual < direction_output_size; ++actual)
+                                for (size_t pred = 0; pred < direction_output_size; ++pred)
+                                    totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
                         }
                         else
                         {
@@ -2944,10 +3417,10 @@ int main(int argc, const char * argv[])
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                 }
                 else
-                    if constexpr (!(save_enable && !inference_only))
-                        std::cout << "save_enable=false; skipping model save" << std::endl;
-                    else if constexpr (inference_only)
+                    if constexpr (inference_only)
                         std::cout << "inference_only=true; skipping model save" << std::endl;
+                    else if constexpr (!save_enable)
+                        std::cout << "save_enable=false; skipping model save" << std::endl;
                     else
                         std::cout << "skipping model save (unknown reason)" << std::endl;
             }

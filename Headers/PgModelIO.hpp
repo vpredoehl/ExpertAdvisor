@@ -70,6 +70,10 @@ inline std::string toPgArrayLiteral(const std::vector<double>& vals)
 // Save a MetaNN matrix into the `matrix` table via replace_parameter
 class PgModelIO {
 public:
+    static constexpr int kTrainConfigMetaSchemaVersion = 1;
+    static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
+    static constexpr int kTrainConfigMetaFieldCount = 8;
+
     // Create a new row in `model` table and return model_id
     static long long createModel(pqxx::work& w, const std::string& name, const std::string& comment)
     {
@@ -108,6 +112,7 @@ public:
         saveParameter(w, modelId, "returnHeadDirBias",   lstm.returnHeadDirBias);
         saveTargetMeta(w, modelId, lstm);
         saveModelMeta(w, modelId, lstm);
+        saveTrainConfigMeta(w, modelId);
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:
@@ -146,6 +151,27 @@ public:
             p[2] = static_cast<float>(hidden_size);
         }
         saveParameter(w, modelId, "model_meta", meta);
+    }
+
+    // Save training/evaluation compatibility metadata as a 1x8 matrix in order:
+    // [schema_version, prediction_horizon, threshold_logret, window_size,
+    //  label_rule_id, class_weight_down, class_weight_neutral, class_weight_up]
+    static void saveTrainConfigMeta(pqxx::work& w, long long modelId)
+    {
+        MatGPU<float> meta(1, kTrainConfigMetaFieldCount);
+        {
+            auto low = MetaNN::LowerAccess(meta);
+            float* p = low.MutableRawMemory();
+            p[0] = static_cast<float>(kTrainConfigMetaSchemaVersion);
+            p[1] = static_cast<float>(prediction_horizon);
+            p[2] = static_cast<float>(c_next_threshold);
+            p[3] = static_cast<float>(window_size);
+            p[4] = static_cast<float>(kLookaheadHighLowFirstHitLabelRuleId);
+            p[5] = kClassWeightDown;
+            p[6] = kClassWeightNeutral;
+            p[7] = kClassWeightUp;
+        }
+        saveParameter(w, modelId, "train_config_meta", meta);
     }
 
     // Try to load minimal model metadata and validate against current parameter shapes
@@ -255,4 +281,3 @@ public:
 
 } // namespace DBIO
 #pragma clang diagnostic pop
-

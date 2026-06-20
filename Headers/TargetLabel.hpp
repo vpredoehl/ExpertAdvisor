@@ -26,12 +26,16 @@ struct LookaheadClassInfo
 };
 
 inline LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
-                                                  DataSet::const_iterator startIt)
+                                                  DataSet::const_iterator startIt,
+                                                  size_t evalWindowSize,
+                                                  size_t evalPredictionHorizon,
+                                                  float evalThresholdLogret)
 {
-    const auto lastIt = startIt + window_size - 1;
-    const auto targetIt = lastIt + prediction_horizon;
+    const auto lastIt = startIt + static_cast<std::ptrdiff_t>(evalWindowSize - 1);
+    const auto targetIt = lastIt + static_cast<std::ptrdiff_t>(evalPredictionHorizon);
 
     LookaheadClassInfo info;
+    info.selectedOffset = evalPredictionHorizon;
     info.dt = tensor.RawTimeAtIterator(lastIt);
     info.targetDt = tensor.RawTimeAtIterator(targetIt);
     info.closeT = tensor.RawCloseAtIterator(lastIt);
@@ -43,10 +47,10 @@ inline LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
             ? std::log(info.targetClose / info.closeT)
             : 0.0f;
     info.terminalCloseClass =
-        (info.terminalLogReturn > c_next_threshold) ? 2 :
-        ((info.terminalLogReturn < -c_next_threshold) ? 0 : 1);
+        (info.terminalLogReturn > evalThresholdLogret) ? 2 :
+        ((info.terminalLogReturn < -evalThresholdLogret) ? 0 : 1);
 
-    for (size_t lookahead = 1; lookahead <= prediction_horizon; ++lookahead)
+    for (size_t lookahead = 1; lookahead <= evalPredictionHorizon; ++lookahead)
     {
         const auto futureIt = lastIt + static_cast<std::ptrdiff_t>(lookahead);
         const float futureHigh = tensor.RawHighAtIterator(futureIt);
@@ -57,13 +61,13 @@ inline LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
             const float upMove = std::log(futureHigh / info.closeT);
             const float downMove = std::log(futureLow / info.closeT);
 
-            if (!info.upHit && std::isfinite(upMove) && upMove > c_next_threshold)
+            if (!info.upHit && std::isfinite(upMove) && upMove > evalThresholdLogret)
             {
                 info.upHit = true;
                 info.upOffset = lookahead;
             }
 
-            if (!info.downHit && std::isfinite(downMove) && downMove < -c_next_threshold)
+            if (!info.downHit && std::isfinite(downMove) && downMove < -evalThresholdLogret)
             {
                 info.downHit = true;
                 info.downOffset = lookahead;
@@ -78,7 +82,7 @@ inline LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
 
     if (info.assignedClass == 2 && info.upHit) info.selectedOffset = info.upOffset;
     else if (info.assignedClass == 0 && info.downHit) info.selectedOffset = info.downOffset;
-    else info.selectedOffset = prediction_horizon;
+    else info.selectedOffset = evalPredictionHorizon;
 
     const auto selectedIt = lastIt + static_cast<std::ptrdiff_t>(info.selectedOffset);
     info.selectedFutureHigh = tensor.RawHighAtIterator(selectedIt);
@@ -87,6 +91,16 @@ inline LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
     LSTM_ASSERT(info.assignedClass >= 0 && info.assignedClass < static_cast<int>(direction_output_size),
                 "BuildLookaheadClassInfo: assigned class out of [0,2]");
     return info;
+}
+
+inline LookaheadClassInfo BuildLookaheadClassInfo(const Tensor& tensor,
+                                                  DataSet::const_iterator startIt)
+{
+    return BuildLookaheadClassInfo(tensor,
+                                   startIt,
+                                   static_cast<size_t>(window_size),
+                                   static_cast<size_t>(prediction_horizon),
+                                   c_next_threshold);
 }
 
 #endif /* TargetLabel_hpp */
