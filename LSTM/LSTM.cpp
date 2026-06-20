@@ -5389,8 +5389,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
         // For UpNeutralDownReturn, allow the recurrent core to learn faster
         // so hidden-state geometry can keep up with the direction head.
-        const float core_lr_mult =
-            (targetType == TargetType::UpNeutralDownReturn) ? 120.0f : 1.0f;
+        const float core_lr_mult = CoreLrMultForTarget(targetType);
 
         const float lrCore = learning_rate * core_lr_mult;
         const float lrHeadBase = learning_rate * LSTM_HEAD_LR_MULT;
@@ -5399,8 +5398,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
         const float lrHead = lrHeadBase * lrHeadDirActiveMult;
         const float lrHeadBias = lrHead * 0.01f; // intentionally slower bias adaptation
 
-        const float directionHeadWeightLr = learning_rate * 25.0f;
-        const float directionHeadBiasLr   = learning_rate * 2.5f;
+        const float directionHeadWeightLr = learning_rate * head_weight_lr_mult;
+        const float directionHeadBiasLr   = learning_rate * head_bias_lr_mult;
 
         static size_t s_phase3LrScaleDiagCount = 0;
         const size_t phase3LrScaleDiagIdx = s_phase3LrScaleDiagCount++;
@@ -5441,9 +5440,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                       << ",lrHeadBias=" << lrHeadBias
                       << ",directionHeadWeightLr=" << directionHeadWeightLr
                       << ",directionHeadBiasLr=" << directionHeadBiasLr
+                      << ",head_weight_lr_mult=" << head_weight_lr_mult
+                      << ",head_bias_lr_mult=" << head_bias_lr_mult
                       << ",core_formula=learningRate_after_mean_gradient_scaling"
                       << ",head_formula=learningRate*LSTM_HEAD_LR_MULT*direction_head_active_lr_mult_after_mean_gradient_scaling"
-                      << ",direction_head_override_formula=weight:learningRate*25,bias:learningRate*2.5_after_mean_gradient_scaling"
+                      << ",direction_head_override_formula=weight:learningRate*head_weight_lr_mult,bias:learningRate*head_bias_lr_mult_after_mean_gradient_scaling"
                       << std::endl;
         }
 

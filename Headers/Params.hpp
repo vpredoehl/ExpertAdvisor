@@ -61,10 +61,13 @@ inline constexpr int prediction_horizon_for(CandleTF tf)
 inline constexpr std::size_t default_hidden_size = 64;
 inline constexpr std::size_t default_window_size = 64;
 inline constexpr int default_epoch_count = 60;
-inline constexpr std::size_t default_prediction_horizon = 8;
+inline constexpr std::size_t default_prediction_horizon = 6;
 inline constexpr float default_c_next_threshold = .0008f;
 inline constexpr std::size_t default_num_layers = 1;
 inline constexpr int default_normalization_version = 1;
+inline constexpr float default_core_lr_mult = 120.0f;
+inline constexpr float default_head_weight_lr_mult = 25.0f;
+inline constexpr float default_head_bias_lr_mult = 2.5f;
 
 inline std::size_t hidden_size = default_hidden_size;
 constexpr auto feature_size = 32;
@@ -80,6 +83,9 @@ inline int epoch_count = default_epoch_count;
 inline std::size_t prediction_horizon = default_prediction_horizon;//prediction_horizon_for(candle_duration);
 inline std::size_t num_layers = default_num_layers;
 inline int normalization_version = default_normalization_version;
+inline float core_lr_mult = default_core_lr_mult;
+inline float head_weight_lr_mult = default_head_weight_lr_mult;
+inline float head_bias_lr_mult = default_head_bias_lr_mult;
 
 constexpr float kFeatureScale = 1000.0f;
 inline float c_next_threshold = default_c_next_threshold;  //c_next_threshold_for(candle_duration);

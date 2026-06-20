@@ -101,6 +101,11 @@ public:
         RelativeMove = PercentReturn,
         UpNeutralDownReturn = 2
     };
+
+    static inline float CoreLrMultForTarget(TargetType targetType)
+    {
+        return (targetType == TargetType::UpNeutralDownReturn) ? ::core_lr_mult : 1.0f;
+    }
     
     // How the head's scalar output maps to the target used for training/inference
     // y_hat approximates (optionally normalized) of:  t = raw * targetScale + targetBias

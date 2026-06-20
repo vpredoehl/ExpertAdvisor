@@ -73,7 +73,7 @@ public:
     static constexpr int kTrainConfigMetaSchemaVersion = 1;
     static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
     static constexpr int kTrainConfigMetaFieldCount = 8;
-    static constexpr int kTrainConfigMetaExtendedFieldCount = 11;
+    static constexpr int kTrainConfigMetaExtendedFieldCount = 14;
 
     // Create a new row in `model` table and return model_id
     static long long createModel(pqxx::work& w, const std::string& name, const std::string& comment)
@@ -113,7 +113,7 @@ public:
         saveParameter(w, modelId, "returnHeadDirBias",   lstm.returnHeadDirBias);
         saveTargetMeta(w, modelId, lstm);
         saveModelMeta(w, modelId, lstm);
-        saveTrainConfigMeta(w, modelId);
+        saveTrainConfigMeta(w, modelId, lstm);
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:
@@ -157,8 +157,9 @@ public:
     // Save training/evaluation compatibility metadata in order:
     // [schema_version, prediction_horizon, threshold_logret, window_size,
     //  label_rule_id, class_weight_down, class_weight_neutral, class_weight_up,
-    //  num_layers, normalization_version, epochs_trained]
-    static void saveTrainConfigMeta(pqxx::work& w, long long modelId)
+    //  num_layers, normalization_version, epochs_trained, core_lr_mult,
+    //  head_weight_lr_mult, head_bias_lr_mult]
+    static void saveTrainConfigMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
     {
         MatGPU<float> meta(1, kTrainConfigMetaExtendedFieldCount);
         {
@@ -175,6 +176,9 @@ public:
             p[8] = static_cast<float>(num_layers);
             p[9] = static_cast<float>(normalization_version);
             p[10] = static_cast<float>(epoch_count);
+            p[11] = EA::LSTM::CoreLrMultForTarget(lstm.targetType);
+            p[12] = head_weight_lr_mult;
+            p[13] = head_bias_lr_mult;
         }
         saveParameter(w, modelId, "train_config_meta", meta);
     }

@@ -97,6 +97,9 @@ struct TrainConfigMeta
     size_t numLayers = static_cast<size_t>(num_layers);
     int normalizationVersion = normalization_version;
     std::optional<size_t> epochsTrained;
+    std::optional<float> coreLrMult;
+    std::optional<float> headWeightLrMult;
+    std::optional<float> headBiasLrMult;
 };
 
 struct ModelConfigValidationResult
@@ -2358,7 +2361,117 @@ struct PredictionStats
     size_t correctDir = 0;
     size_t actedDir = 0;
     size_t confusion[direction_output_size][direction_output_size] = {};
+    size_t tradeCount = 0;
+    size_t longCount = 0;
+    size_t shortCount = 0;
+    size_t flatCount = 0;
+    size_t winCount = 0;
+    size_t lossCount = 0;
+    double tradeLogReturnSum = 0.0;
+    double grossPositiveLogReturn = 0.0;
+    double grossNegativeLogReturn = 0.0;
 };
+
+const char* ClassName3(size_t cls)
+{
+    switch (cls)
+    {
+        case 0: return "down";
+        case 1: return "neutral";
+        case 2: return "up";
+        default: return "unknown";
+    }
+}
+
+double SafeRatio(double numerator, double denominator)
+{
+    return denominator != 0.0 ? numerator / denominator : 0.0;
+}
+
+void PrintEvalTradingMetrics(const PredictionStats& stats)
+{
+    size_t total = 0;
+    size_t correct = 0;
+    double recallSum = 0.0;
+    double f1Sum = 0.0;
+
+    for (size_t cls = 0; cls < direction_output_size; ++cls)
+    {
+        const size_t tp = stats.confusion[cls][cls];
+        size_t predicted = 0;
+        size_t support = 0;
+        for (size_t i = 0; i < direction_output_size; ++i)
+        {
+            support += stats.confusion[cls][i];
+            predicted += stats.confusion[i][cls];
+        }
+
+        total += support;
+        correct += tp;
+
+        const double precision = SafeRatio(static_cast<double>(tp), static_cast<double>(predicted));
+        const double recall = SafeRatio(static_cast<double>(tp), static_cast<double>(support));
+        const double f1 = (precision + recall) > 0.0
+            ? (2.0 * precision * recall / (precision + recall))
+            : 0.0;
+
+        recallSum += recall;
+        f1Sum += f1;
+
+        std::cout << "PER_CLASS_METRICS"
+                  << ",class=" << ClassName3(cls)
+                  << ",precision=" << precision
+                  << ",recall=" << recall
+                  << ",f1=" << f1
+                  << ",support=" << support
+                  << std::endl;
+    }
+
+    const double accuracy = SafeRatio(static_cast<double>(correct), static_cast<double>(total));
+    const double macroF1 = f1Sum / static_cast<double>(direction_output_size);
+    const double balancedAccuracy = recallSum / static_cast<double>(direction_output_size);
+
+    std::cout << "SUMMARY_CLASS_METRICS"
+              << ",accuracy=" << accuracy
+              << ",macro_f1=" << macroF1
+              << ",balanced_accuracy=" << balancedAccuracy
+              << std::endl;
+
+    const size_t directionalSamples =
+        stats.confusion[0][0] + stats.confusion[0][1] + stats.confusion[0][2] +
+        stats.confusion[2][0] + stats.confusion[2][1] + stats.confusion[2][2];
+    const size_t directionalCorrect = stats.confusion[0][0] + stats.confusion[2][2];
+    const double directionalAccuracy =
+        SafeRatio(static_cast<double>(directionalCorrect), static_cast<double>(directionalSamples));
+
+    std::cout << "DIRECTIONAL_ONLY_METRICS"
+              << ",samples=" << directionalSamples
+              << ",correct=" << directionalCorrect
+              << ",accuracy=" << directionalAccuracy
+              << std::endl;
+
+    const double winRate = SafeRatio(static_cast<double>(stats.winCount),
+                                     static_cast<double>(stats.tradeCount));
+    const double avgLogReturn = SafeRatio(stats.tradeLogReturnSum,
+                                          static_cast<double>(stats.tradeCount));
+    const double profitFactor = stats.grossNegativeLogReturn < 0.0
+        ? stats.grossPositiveLogReturn / std::fabs(stats.grossNegativeLogReturn)
+        : 0.0;
+
+    std::cout << "TRADING_SIGNAL_METRICS"
+              << ",trade_count=" << stats.tradeCount
+              << ",long_count=" << stats.longCount
+              << ",short_count=" << stats.shortCount
+              << ",flat_count=" << stats.flatCount
+              << ",win_count=" << stats.winCount
+              << ",loss_count=" << stats.lossCount
+              << ",win_rate=" << winRate
+              << ",avg_log_return=" << avgLogReturn
+              << ",gross_positive_log_return=" << stats.grossPositiveLogReturn
+              << ",gross_negative_log_return=" << stats.grossNegativeLogReturn
+              << ",profit_factor=" << profitFactor
+              << std::endl;
+}
 
 static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b)
 {
@@ -2468,6 +2581,41 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
             actClass.push_back(actual);
             predMaxProb.push_back(maxProb);
             ++result.confusion[actual][pred];
+
+            if (pred == 1)
+            {
+                ++result.flatCount;
+            }
+            else if (std::isfinite(labelInfo.closeT) &&
+                     std::isfinite(labelInfo.targetClose) &&
+                     labelInfo.closeT > 0.0f &&
+                     labelInfo.targetClose > 0.0f)
+            {
+                const double terminalLogReturn =
+                    std::log(static_cast<double>(labelInfo.targetClose) /
+                             static_cast<double>(labelInfo.closeT));
+                const double realizedLogReturn = (pred == 2)
+                    ? terminalLogReturn
+                    : -terminalLogReturn;
+
+                ++result.tradeCount;
+                if (pred == 2)
+                    ++result.longCount;
+                else
+                    ++result.shortCount;
+
+                result.tradeLogReturnSum += realizedLogReturn;
+                if (realizedLogReturn > 0.0)
+                {
+                    ++result.winCount;
+                    result.grossPositiveLogReturn += realizedLogReturn;
+                }
+                else if (realizedLogReturn < 0.0)
+                {
+                    ++result.lossCount;
+                    result.grossNegativeLogReturn += realizedLogReturn;
+                }
+            }
         }
 
         const size_t N = std::min(predClass.size(), actClass.size());
@@ -2688,6 +2836,10 @@ struct LaunchArgs
     std::optional<size_t> hiddenSize;
     std::optional<size_t> numLayers;
     std::optional<int> epochs;
+    std::optional<double> coreLrMult;
+    std::optional<double> headWeightLrMult;
+    std::optional<double> headBiasLrMult;
+    bool evalTrading = false;
 };
 
 long long ParseModelIdArg(const std::string& value)
@@ -2816,6 +2968,10 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--train and --infer are mutually exclusive");
             parsed.inferenceMode = true;
         }
+        else if (arg == "--eval-trading")
+        {
+            parsed.evalTrading = true;
+        }
         else
         {
             std::string value;
@@ -2843,6 +2999,18 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             {
                 parsed.epochs = ParsePositiveIntArg("--epochs", value);
             }
+            else if (SplitOptionWithValue(arg, "--core-lr-mult", value))
+            {
+                parsed.coreLrMult = ParsePositiveDoubleArg("--core-lr-mult", value);
+            }
+            else if (SplitOptionWithValue(arg, "--head-weight-lr-mult", value))
+            {
+                parsed.headWeightLrMult = ParsePositiveDoubleArg("--head-weight-lr-mult", value);
+            }
+            else if (SplitOptionWithValue(arg, "--head-bias-lr-mult", value))
+            {
+                parsed.headBiasLrMult = ParsePositiveDoubleArg("--head-bias-lr-mult", value);
+            }
             else if (arg.rfind("--", 0) == 0)
             {
                 throw std::invalid_argument("unknown option '" + arg + "'");
@@ -2855,7 +3023,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -2885,6 +3053,12 @@ void ApplyLaunchRuntimeConfig(const LaunchArgs& launchArgs)
     }
     if (launchArgs.epochs.has_value())
         epoch_count = *launchArgs.epochs;
+    if (launchArgs.coreLrMult.has_value())
+        core_lr_mult = static_cast<float>(*launchArgs.coreLrMult);
+    if (launchArgs.headWeightLrMult.has_value())
+        head_weight_lr_mult = static_cast<float>(*launchArgs.headWeightLrMult);
+    if (launchArgs.headBiasLrMult.has_value())
+        head_bias_lr_mult = static_cast<float>(*launchArgs.headBiasLrMult);
 }
 
 void PrintRuntimeConfig()
@@ -2898,6 +3072,9 @@ void PrintRuntimeConfig()
               << ",hidden_size=" << hidden_size
               << ",num_layers=" << num_layers
               << ",epochs=" << epoch_count
+              << ",core_lr_mult=" << core_lr_mult
+              << ",head_weight_lr_mult=" << head_weight_lr_mult
+              << ",head_bias_lr_mult=" << head_bias_lr_mult
               << std::endl;
 }
 
@@ -2912,6 +3089,33 @@ const char* TargetTypeName(EA::LSTM::TargetType targetType)
     return "Unknown";
 }
 
+void PrintRuntimeLrConfig(const EA::LSTM& lstm)
+{
+    const float coreLrMult = EA::LSTM::CoreLrMultForTarget(lstm.targetType);
+    const bool directionHeadPath =
+        (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn);
+    const float effectiveHeadWeightLr = lstm.learning_rate * head_weight_lr_mult;
+    const float effectiveHeadBiasLr = lstm.learning_rate * head_bias_lr_mult;
+    std::cout << "RUNTIME_LR_CONFIG"
+              << ",target_type=" << TargetTypeName(lstm.targetType)
+              << ",raw_learning_rate=" << lstm.learning_rate
+              << ",core_lr_mult=" << coreLrMult
+              << ",effective_core_lr=" << (lstm.learning_rate * coreLrMult)
+              << ",head_weight_lr_mult=" << head_weight_lr_mult
+              << ",effective_head_weight_lr=";
+    if (directionHeadPath)
+        std::cout << effectiveHeadWeightLr;
+    else
+        std::cout << "not_applicable";
+    std::cout << ",head_bias_lr_mult=" << head_bias_lr_mult
+              << ",effective_head_bias_lr=";
+    if (directionHeadPath)
+        std::cout << effectiveHeadBiasLr;
+    else
+        std::cout << "not_applicable";
+    std::cout << std::endl;
+}
+
 const char* DirectionLabelRuleName()
 {
     return "lookahead_high_low_first_hit";
@@ -2924,7 +3128,7 @@ int DirectionLabelRuleId()
 
 const char* TrainConfigMetaFieldMapping()
 {
-    return "schema_version,prediction_horizon,threshold_logret,window_size,label_rule_id,class_weight_down,class_weight_neutral,class_weight_up,num_layers,normalization_version,epochs_trained";
+    return "schema_version,prediction_horizon,threshold_logret,window_size,label_rule_id,class_weight_down,class_weight_neutral,class_weight_up,num_layers,normalization_version,epochs_trained,core_lr_mult,head_weight_lr_mult,head_bias_lr_mult";
 }
 
 size_t RuntimeModelInputWidth(const Tensor& tensor)
@@ -3001,6 +3205,9 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     bool hasTrainConfigMeta = false;
     bool hasTrainConfigNumLayers = false;
     bool hasTrainConfigNormalizationVersion = false;
+    bool hasTrainConfigCoreLrMult = false;
+    bool hasTrainConfigHeadWeightLrMult = false;
+    bool hasTrainConfigHeadBiasLrMult = false;
 
     std::cout << "MODEL_TRAIN_CONFIG_META_FIELDS,"
               << TrainConfigMetaFieldMapping()
@@ -3028,7 +3235,7 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             else if (paramName == "train_config_meta")
             {
                 hasTrainConfigMeta = true;
-                persistedMetadata.push_back("train_config_meta(schema_version;prediction_horizon;threshold_logret;window_size;label_rule_id;class_weight_down;class_weight_neutral;class_weight_up;num_layers;normalization_version;epochs_trained)");
+                persistedMetadata.push_back("train_config_meta(schema_version;prediction_horizon;threshold_logret;window_size;label_rule_id;class_weight_down;class_weight_neutral;class_weight_up;num_layers;normalization_version;epochs_trained;core_lr_mult;head_weight_lr_mult;head_bias_lr_mult)");
             }
         }
     }
@@ -3185,6 +3392,21 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             {
                 trainConfigMeta.epochsTrained = static_cast<size_t>(std::llround(vals[10]));
             }
+            if (vals.size() >= 12)
+            {
+                trainConfigMeta.coreLrMult = static_cast<float>(vals[11]);
+                hasTrainConfigCoreLrMult = true;
+            }
+            if (vals.size() >= 13)
+            {
+                trainConfigMeta.headWeightLrMult = static_cast<float>(vals[12]);
+                hasTrainConfigHeadWeightLrMult = true;
+            }
+            if (vals.size() >= 14)
+            {
+                trainConfigMeta.headBiasLrMult = static_cast<float>(vals[13]);
+                hasTrainConfigHeadBiasLrMult = true;
+            }
             result.trainConfigMeta = trainConfigMeta;
 
             std::cout << "MODEL_TRAIN_CONFIG_META"
@@ -3204,8 +3426,22 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                 std::cout << *trainConfigMeta.epochsTrained;
             else
                 std::cout << "missing";
-            std::cout
-                      << std::endl;
+            std::cout << ",core_lr_mult=";
+            if (trainConfigMeta.coreLrMult.has_value())
+                std::cout << *trainConfigMeta.coreLrMult;
+            else
+                std::cout << "missing";
+            std::cout << ",head_weight_lr_mult=";
+            if (trainConfigMeta.headWeightLrMult.has_value())
+                std::cout << *trainConfigMeta.headWeightLrMult;
+            else
+                std::cout << "missing";
+            std::cout << ",head_bias_lr_mult=";
+            if (trainConfigMeta.headBiasLrMult.has_value())
+                std::cout << *trainConfigMeta.headBiasLrMult;
+            else
+                std::cout << "missing";
+            std::cout << std::endl;
 
             bool sectionMatches = true;
             sectionMatches = compareIntField("schema_version",
@@ -3240,6 +3476,18 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                 sectionMatches = compareIntField("normalization_version",
                                                  vals[9],
                                                  normalization_version) && sectionMatches;
+            if (vals.size() >= 12)
+                sectionMatches = compareFloatField("core_lr_mult",
+                                                   vals[11],
+                                                   EA::LSTM::CoreLrMultForTarget(requestedTargetType)) && sectionMatches;
+            if (vals.size() >= 13)
+                sectionMatches = compareFloatField("head_weight_lr_mult",
+                                                   vals[12],
+                                                   head_weight_lr_mult) && sectionMatches;
+            if (vals.size() >= 14)
+                sectionMatches = compareFloatField("head_bias_lr_mult",
+                                                   vals[13],
+                                                   head_bias_lr_mult) && sectionMatches;
             trainConfigMetaMatches = sectionMatches;
         }
     }
@@ -3261,6 +3509,9 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
         missingMinimum.push_back("class_weight_up");
         missingMinimum.push_back("num_layers");
         missingMinimum.push_back("normalization_version");
+        missingMinimum.push_back("core_lr_mult");
+        missingMinimum.push_back("head_weight_lr_mult");
+        missingMinimum.push_back("head_bias_lr_mult");
     }
     else
     {
@@ -3268,6 +3519,12 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             missingMinimum.push_back("num_layers");
         if (!hasTrainConfigNormalizationVersion)
             missingMinimum.push_back("normalization_version");
+        if (!hasTrainConfigCoreLrMult)
+            missingMinimum.push_back("core_lr_mult");
+        if (!hasTrainConfigHeadWeightLrMult)
+            missingMinimum.push_back("head_weight_lr_mult");
+        if (!hasTrainConfigHeadBiasLrMult)
+            missingMinimum.push_back("head_bias_lr_mult");
     }
     if (!hasTargetMeta)
         missingMinimum.push_back("target_type");
@@ -3318,7 +3575,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
         return 1;
     }
 
@@ -3354,6 +3611,7 @@ int main(int argc, const char * argv[])
   
             constexpr auto requestedTargetType = EA::LSTM::TargetType::UpNeutralDownReturn;
             EA::LSTM l { t, 1, 0, requestedTargetType };
+            PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
             if (s_lstmBindingDiagCount < kLstmBindingDiagLimit)
@@ -3438,6 +3696,7 @@ int main(int argc, const char * argv[])
             size_t totalCorrectDir = 0;
             size_t totalActedDir = 0;
             size_t totalConfusion[direction_output_size][direction_output_size] = {};
+            PredictionStats totalTradeStats;
             // Iterate all batches; inference evaluates once, training runs configured epochs.
             std::cout << std::setprecision(15);
                 const int evalPassCount = gRuntimeInferenceMode ? 1 : epoch_count;
@@ -3458,6 +3717,16 @@ int main(int argc, const char * argv[])
                             for (size_t actual = 0; actual < direction_output_size; ++actual)
                                 for (size_t pred = 0; pred < direction_output_size; ++pred)
                                     totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
+
+                            totalTradeStats.tradeCount += predictionStats.tradeCount;
+                            totalTradeStats.longCount += predictionStats.longCount;
+                            totalTradeStats.shortCount += predictionStats.shortCount;
+                            totalTradeStats.flatCount += predictionStats.flatCount;
+                            totalTradeStats.winCount += predictionStats.winCount;
+                            totalTradeStats.lossCount += predictionStats.lossCount;
+                            totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
+                            totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
+                            totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
                         }
                         else
                         {
@@ -3522,6 +3791,14 @@ int main(int argc, const char * argv[])
                               << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
                               << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
                               << std::endl;
+
+                    if (launchArgs.evalTrading)
+                    {
+                        for (size_t actual = 0; actual < direction_output_size; ++actual)
+                            for (size_t pred = 0; pred < direction_output_size; ++pred)
+                                totalTradeStats.confusion[actual][pred] = totalConfusion[actual][pred];
+                        PrintEvalTradingMetrics(totalTradeStats);
+                    }
                 }
                 else
                 {
