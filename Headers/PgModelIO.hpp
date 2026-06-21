@@ -7,6 +7,7 @@
 #include <string>
 #include <sstream>
 #include <stdexcept>
+#include <cmath>
 
 #include "LSTM.hpp"
 
@@ -103,7 +104,10 @@ public:
     }
 
     // Save all LSTM learnable parameters
-    static void saveAll(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
+    static void saveAll(pqxx::work& w,
+                        long long modelId,
+                        const EA::LSTM& lstm,
+                        const std::string& symbol = {})
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -114,6 +118,8 @@ public:
         saveTargetMeta(w, modelId, lstm);
         saveModelMeta(w, modelId, lstm);
         saveTrainConfigMeta(w, modelId, lstm);
+        if (!symbol.empty())
+            saveTrainSymbolMeta(w, modelId, symbol);
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:
@@ -181,6 +187,40 @@ public:
             p[13] = head_bias_lr_mult;
         }
         saveParameter(w, modelId, "train_config_meta", meta);
+    }
+
+    // Save the source symbol/table as ASCII codepoints in a 1xN matrix.
+    // This keeps metadata in the existing matrix persistence mechanism.
+    static void saveTrainSymbolMeta(pqxx::work& w, long long modelId, const std::string& symbol)
+    {
+        MatGPU<float> meta(1, symbol.size());
+        {
+            auto low = MetaNN::LowerAccess(meta);
+            float* p = low.MutableRawMemory();
+            for (size_t i = 0; i < symbol.size(); ++i)
+                p[i] = static_cast<float>(static_cast<unsigned char>(symbol[i]));
+        }
+        saveParameter(w, modelId, "train_symbol_meta", meta);
+    }
+
+    static std::string decodeTrainSymbolMeta(pqxx::work& w, long long modelId)
+    {
+        auto dims = loadParameterDims(w, modelId, "train_symbol_meta");
+        auto vals = loadParameterValues(w, modelId, "train_symbol_meta");
+        if (dims.n_rows != 1 || dims.n_cols <= 0 ||
+            vals.size() != static_cast<size_t>(dims.n_cols))
+            throw std::runtime_error("train_symbol_meta has invalid shape");
+
+        std::string symbol;
+        symbol.reserve(vals.size());
+        for (double value : vals)
+        {
+            const long long code = static_cast<long long>(std::llround(value));
+            if (code <= 0 || code > 255)
+                throw std::runtime_error("train_symbol_meta contains invalid character code");
+            symbol.push_back(static_cast<char>(code));
+        }
+        return symbol;
     }
 
     // Try to load minimal model metadata and validate against current parameter shapes

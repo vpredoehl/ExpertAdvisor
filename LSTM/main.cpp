@@ -86,6 +86,7 @@ const char* CurrentRangeKindLabel()
 
 struct TrainConfigMeta
 {
+    std::optional<std::string> symbol;
     int schemaVersion = DBIO::PgModelIO::kTrainConfigMetaSchemaVersion;
     size_t predictionHorizon = static_cast<size_t>(prediction_horizon);
     float thresholdLogret = c_next_threshold;
@@ -3326,13 +3327,15 @@ void PrintInferenceConfig(const std::optional<long long>& loadedModelId,
 ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                                                        long long modelId,
                                                        EA::LSTM::TargetType requestedTargetType,
-                                                       const Tensor& tensor)
+                                                       const Tensor& tensor,
+                                                       const std::string& runtimeSymbol)
 {
     ModelConfigValidationResult result;
     std::vector<std::string> persistedParams;
     std::vector<std::string> persistedMetadata;
     bool hasTargetMeta = false;
     bool hasModelMeta = false;
+    bool hasTrainSymbolMeta = false;
     bool hasTrainConfigMeta = false;
     bool hasTrainConfigNumLayers = false;
     bool hasTrainConfigNormalizationVersion = false;
@@ -3368,6 +3371,11 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                 hasTrainConfigMeta = true;
                 persistedMetadata.push_back("train_config_meta(schema_version;prediction_horizon;threshold_logret;window_size;label_rule_id;class_weight_down;class_weight_neutral;class_weight_up;num_layers;normalization_version;epochs_trained;core_lr_mult;head_weight_lr_mult;head_bias_lr_mult)");
             }
+            else if (paramName == "train_symbol_meta")
+            {
+                hasTrainSymbolMeta = true;
+                persistedMetadata.push_back("train_symbol_meta(ascii_table_name)");
+            }
         }
     }
     catch (const std::exception& e)
@@ -3386,6 +3394,7 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
 
     bool targetMetaMatches = false;
     bool modelMetaMatches = false;
+    bool trainSymbolMetaMatches = true;
     bool trainConfigMetaMatches = false;
     bool mismatch = false;
 
@@ -3421,6 +3430,44 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
         return true;
     };
 
+    auto compareStringField = [&](const char* field,
+                                  const std::string& modelValue,
+                                  const std::string& runtimeValue) -> bool
+    {
+        if (modelValue != runtimeValue)
+        {
+            printMismatch(field, modelValue, runtimeValue);
+            return false;
+        }
+        return true;
+    };
+
+    try
+    {
+        const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+        std::cout << "MODEL_TRAIN_SYMBOL_META"
+                  << ",model_id=" << modelId
+                  << ",symbol=" << modelSymbol
+                  << std::endl;
+        if (result.trainConfigMeta.has_value())
+            result.trainConfigMeta->symbol = modelSymbol;
+        trainSymbolMetaMatches = compareStringField("symbol", modelSymbol, runtimeSymbol);
+    }
+    catch (const std::exception& e)
+    {
+        if (hasTrainSymbolMeta)
+        {
+            printMismatch("train_symbol_meta", e.what(), runtimeSymbol);
+            trainSymbolMetaMatches = false;
+        }
+        else
+            std::cout << "MODEL_CONFIG_WARN"
+                      << ",model_id=" << modelId
+                      << ",field=symbol"
+                      << ",model=missing_legacy_train_symbol_meta"
+                      << ",runtime=" << runtimeSymbol
+                      << std::endl;
+    }
     try
     {
         auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "target_meta");
@@ -3667,6 +3714,7 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
 
     if (targetMetaMatches &&
         modelMetaMatches &&
+        trainSymbolMetaMatches &&
         trainConfigMetaMatches &&
         !mismatch &&
         missingMinimum.empty())
@@ -3835,7 +3883,7 @@ int main(int argc, const char * argv[])
             UseRuntimeDefaultEvalLabelConfig();
             ModelConfigValidationResult modelConfigValidation;
             if (loadedModelId.has_value())
-                modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t);
+                modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t, rawPriceTableName);
             if (gRuntimeInferenceMode)
             {
                 if (modelConfigValidation.trainConfigMeta.has_value())
@@ -4051,7 +4099,7 @@ int main(int argc, const char * argv[])
                             std::cout << "Created new model_id=" << modelId << std::endl;
                         }
 
-                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l);
+                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l, rawPriceTableName);
                     w_LSTM.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                 }
