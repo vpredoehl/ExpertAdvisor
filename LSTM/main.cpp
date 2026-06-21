@@ -2950,6 +2950,7 @@ struct LaunchArgs
 {
     std::string fromDate;
     std::string toDate;
+    std::optional<std::string> symbol;
     std::optional<long long> modelId;
     std::optional<bool> inferenceMode;
     std::optional<size_t> predictionHorizon;
@@ -3133,6 +3134,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             {
                 parsed.headBiasLrMult = ParsePositiveDoubleArg("--head-bias-lr-mult", value);
             }
+            else if (SplitOptionWithValue(arg, "--symbol", value))
+            {
+                if (parsed.symbol.has_value())
+                    throw std::invalid_argument("--symbol specified more than once");
+                if (value.empty())
+                    throw std::invalid_argument("--symbol requires a non-empty table_name");
+                parsed.symbol = value;
+            }
             else if (arg.rfind("--", 0) == 0)
             {
                 throw std::invalid_argument("unknown option '" + arg + "'");
@@ -3145,7 +3154,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -3697,14 +3706,13 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
         return 1;
     }
 
     pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
-    pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
     
     std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
@@ -3718,10 +3726,42 @@ int main(int argc, const char * argv[])
     w_LSTM.exec("SET TRANSACTION READ WRITE;");
     try
     {
-        pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
+        pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp' order by table_name;");
+        std::vector<std::string> availableSymbols;
+        availableSymbols.reserve(tables.size());
         for (auto tbl : tables)
+            availableSymbols.emplace_back(tbl[0].c_str());
+
+        std::vector<std::string> selectedSymbols;
+        if (launchArgs.symbol.has_value())
         {
-            std::string rawPriceTableName{ tbl[0].c_str() };
+            const auto it = std::find(availableSymbols.begin(),
+                                      availableSymbols.end(),
+                                      *launchArgs.symbol);
+            if (it == availableSymbols.end())
+            {
+                std::cerr << "Requested symbol/table not found: " << *launchArgs.symbol << std::endl;
+                std::cerr << "AVAILABLE_SYMBOLS";
+                for (const auto& symbol : availableSymbols)
+                    std::cerr << "," << symbol;
+                std::cerr << std::endl;
+                return 1;
+            }
+            selectedSymbols.push_back(*it);
+        }
+        else
+        {
+            selectedSymbols = availableSymbols;
+        }
+
+        for (const auto& rawPriceTableName : selectedSymbols)
+        {
+            std::cout << "SYMBOL_SELECTION"
+                      << ",requested=" << (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")
+                      << ",selected=" << rawPriceTableName
+                      << ",available_count=" << availableSymbols.size()
+                      << std::endl;
+
             std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
