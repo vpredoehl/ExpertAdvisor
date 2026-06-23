@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <cmath>
+#include <utility>
 
 #include "LSTM.hpp"
 
@@ -75,6 +76,9 @@ public:
     static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
     static constexpr int kTrainConfigMetaFieldCount = 8;
     static constexpr int kTrainConfigMetaExtendedFieldCount = 14;
+    static constexpr int kOptimizerMetaSchemaVersion = 1;
+    static constexpr int kOptimizerTypeSgd = 1;
+    static constexpr int kOptimizerMetaFieldCount = 5;
 
     // Create a new row in `model` table and return model_id
     static long long createModel(pqxx::work& w, const std::string& name, const std::string& comment)
@@ -107,7 +111,9 @@ public:
     static void saveAll(pqxx::work& w,
                         long long modelId,
                         const EA::LSTM& lstm,
-                        const std::string& symbol = {})
+                        const std::string& symbol = {},
+                        const std::string& fromDate = {},
+                        const std::string& toDate = {})
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -118,8 +124,11 @@ public:
         saveTargetMeta(w, modelId, lstm);
         saveModelMeta(w, modelId, lstm);
         saveTrainConfigMeta(w, modelId, lstm);
+        saveOptimizerMeta(w, modelId, lstm);
         if (!symbol.empty())
             saveTrainSymbolMeta(w, modelId, symbol);
+        if (!fromDate.empty() || !toDate.empty())
+            saveTrainRangeMeta(w, modelId, fromDate, toDate);
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:
@@ -181,12 +190,29 @@ public:
             p[7] = kClassWeightUp;
             p[8] = static_cast<float>(num_layers);
             p[9] = static_cast<float>(normalization_version);
-            p[10] = static_cast<float>(epoch_count);
+            p[10] = static_cast<float>(lstm.completedEpochs > 0 ? lstm.completedEpochs : static_cast<size_t>(epoch_count));
             p[11] = EA::LSTM::CoreLrMultForTarget(lstm.targetType);
             p[12] = head_weight_lr_mult;
             p[13] = head_bias_lr_mult;
         }
         saveParameter(w, modelId, "train_config_meta", meta);
+    }
+
+    // Current optimizer is SGD, so there are no moment/variance buffers.
+    // Layout: [schema_version, optimizer_type, update_count, first_moment_buffer_count, second_moment_buffer_count]
+    static void saveOptimizerMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
+    {
+        MatGPU<float> meta(1, kOptimizerMetaFieldCount);
+        {
+            auto low = MetaNN::LowerAccess(meta);
+            float* p = low.MutableRawMemory();
+            p[0] = static_cast<float>(kOptimizerMetaSchemaVersion);
+            p[1] = static_cast<float>(kOptimizerTypeSgd);
+            p[2] = static_cast<float>(lstm.optimizerUpdateCount);
+            p[3] = 0.0f;
+            p[4] = 0.0f;
+        }
+        saveParameter(w, modelId, "optimizer_meta", meta);
     }
 
     // Save the source symbol/table as ASCII codepoints in a 1xN matrix.
@@ -222,6 +248,87 @@ public:
         }
         return symbol;
     }
+
+    static void saveTrainRangeMeta(pqxx::work& w,
+                                   long long modelId,
+                                   const std::string& fromDate,
+                                   const std::string& toDate)
+    {
+        saveAsciiMeta(w, modelId, "train_range_meta", fromDate + "|" + toDate);
+    }
+
+    static std::pair<std::string, std::string> decodeTrainRangeMeta(pqxx::work& w, long long modelId)
+    {
+        const std::string encoded = decodeAsciiMeta(w, modelId, "train_range_meta");
+        const size_t sep = encoded.find('|');
+        if (sep == std::string::npos)
+            throw std::runtime_error("train_range_meta missing separator");
+        return { encoded.substr(0, sep), encoded.substr(sep + 1) };
+    }
+
+    static void loadOptimizerMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)
+    {
+        auto dims = loadParameterDims(w, modelId, "optimizer_meta");
+        auto vals = loadParameterValues(w, modelId, "optimizer_meta");
+        if (dims.n_rows != 1 ||
+            dims.n_cols < kOptimizerMetaFieldCount ||
+            vals.size() < static_cast<size_t>(kOptimizerMetaFieldCount))
+            throw std::runtime_error("optimizer_meta has invalid shape");
+
+        const int schemaVersion = static_cast<int>(std::llround(vals[0]));
+        const int optimizerType = static_cast<int>(std::llround(vals[1]));
+        const int firstMomentBuffers = static_cast<int>(std::llround(vals[3]));
+        const int secondMomentBuffers = static_cast<int>(std::llround(vals[4]));
+
+        if (schemaVersion != kOptimizerMetaSchemaVersion)
+            throw std::runtime_error("optimizer_meta unsupported schema_version");
+        if (optimizerType != kOptimizerTypeSgd)
+            throw std::runtime_error("optimizer_meta optimizer_type is not supported by this binary");
+        if (firstMomentBuffers != 0 || secondMomentBuffers != 0)
+            throw std::runtime_error("optimizer_meta declares moment buffers unsupported by current SGD optimizer");
+
+        lstm.optimizerUpdateCount = static_cast<size_t>(std::llround(vals[2]));
+    }
+
+private:
+    static void saveAsciiMeta(pqxx::work& w,
+                              long long modelId,
+                              const std::string& paramName,
+                              const std::string& value)
+    {
+        MatGPU<float> meta(1, value.size());
+        {
+            auto low = MetaNN::LowerAccess(meta);
+            float* p = low.MutableRawMemory();
+            for (size_t i = 0; i < value.size(); ++i)
+                p[i] = static_cast<float>(static_cast<unsigned char>(value[i]));
+        }
+        saveParameter(w, modelId, paramName, meta);
+    }
+
+    static std::string decodeAsciiMeta(pqxx::work& w,
+                                       long long modelId,
+                                       const std::string& paramName)
+    {
+        auto dims = loadParameterDims(w, modelId, paramName);
+        auto vals = loadParameterValues(w, modelId, paramName);
+        if (dims.n_rows != 1 || dims.n_cols <= 0 ||
+            vals.size() != static_cast<size_t>(dims.n_cols))
+            throw std::runtime_error(paramName + " has invalid shape");
+
+        std::string value;
+        value.reserve(vals.size());
+        for (double v : vals)
+        {
+            const long long code = static_cast<long long>(std::llround(v));
+            if (code <= 0 || code > 255)
+                throw std::runtime_error(paramName + " contains invalid character code");
+            value.push_back(static_cast<char>(code));
+        }
+        return value;
+    }
+
+public:
 
     // Try to load minimal model metadata and validate against current parameter shapes
     static bool tryLoadModelMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)

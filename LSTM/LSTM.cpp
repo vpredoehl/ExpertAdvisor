@@ -5915,6 +5915,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
                     SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
                 }
+                ++optimizerUpdateCount;
             }
             const bool phase3HiddenGeometryCheckpointDiag =
                 !EA::LSTM::suppressPhase3HiddenGeometryDiagnostics &&

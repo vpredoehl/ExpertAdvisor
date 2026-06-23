@@ -134,6 +134,8 @@ public:
     
     // Simple SGD learning rate for head-only training
     float learning_rate = 1e-3f / 3; // or /2 or /4
+    size_t optimizerUpdateCount = 0;
+    size_t completedEpochs = 0;
     static bool suppressPhase3HiddenGeometryDiagnostics;
     
     LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0, TargetType explicitTargetType = TargetType::UpNeutralDownReturn);

@@ -2951,8 +2951,12 @@ struct LaunchArgs
 {
     std::string fromDate;
     std::string toDate;
+    bool positionalDateRangeSupplied = false;
     std::optional<std::string> symbol;
     std::optional<long long> modelId;
+    std::optional<long long> resumeModelId;
+    std::optional<int> targetEpochs;
+    std::optional<std::string> newModelName;
     std::optional<bool> inferenceMode;
     std::optional<size_t> predictionHorizon;
     std::optional<double> thresholdLogret;
@@ -3056,6 +3060,8 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 {
     constexpr const char* kModelPrefix = "--model=";
     constexpr size_t kModelPrefixLen = 8;
+    constexpr const char* kResumeModelPrefix = "--resume-model-id=";
+    constexpr size_t kResumeModelPrefixLen = 18;
 
     LaunchArgs parsed;
     std::vector<std::string> positional;
@@ -3070,6 +3076,39 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--model specified more than once");
 
             parsed.modelId = ParseModelIdArg(arg.substr(kModelPrefixLen));
+        }
+        else if (arg.rfind(kResumeModelPrefix, 0) == 0)
+        {
+            if (parsed.resumeModelId.has_value())
+                throw std::invalid_argument("--resume-model-id specified more than once");
+            parsed.resumeModelId = ParseModelIdArg(arg.substr(kResumeModelPrefixLen));
+        }
+        else if (arg == "--resume-model-id")
+        {
+            if (parsed.resumeModelId.has_value())
+                throw std::invalid_argument("--resume-model-id specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--resume-model-id requires a model_id value");
+            parsed.resumeModelId = ParseModelIdArg(argv[++i]);
+        }
+        else if (arg == "--target-epochs")
+        {
+            if (parsed.targetEpochs.has_value())
+                throw std::invalid_argument("--target-epochs specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--target-epochs requires a value");
+            parsed.targetEpochs = ParsePositiveIntArg("--target-epochs", argv[++i]);
+        }
+        else if (arg == "--new-model-name")
+        {
+            if (parsed.newModelName.has_value())
+                throw std::invalid_argument("--new-model-name specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--new-model-name requires a value");
+            std::string value{ argv[++i] };
+            if (value.empty())
+                throw std::invalid_argument("--new-model-name requires a non-empty value");
+            parsed.newModelName = value;
         }
         else if (arg == "--model")
         {
@@ -3143,6 +3182,20 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     throw std::invalid_argument("--symbol requires a non-empty table_name");
                 parsed.symbol = value;
             }
+            else if (SplitOptionWithValue(arg, "--target-epochs", value))
+            {
+                if (parsed.targetEpochs.has_value())
+                    throw std::invalid_argument("--target-epochs specified more than once");
+                parsed.targetEpochs = ParsePositiveIntArg("--target-epochs", value);
+            }
+            else if (SplitOptionWithValue(arg, "--new-model-name", value))
+            {
+                if (parsed.newModelName.has_value())
+                    throw std::invalid_argument("--new-model-name specified more than once");
+                if (value.empty())
+                    throw std::invalid_argument("--new-model-name requires a non-empty value");
+                parsed.newModelName = value;
+            }
             else if (arg.rfind("--", 0) == 0)
             {
                 throw std::invalid_argument("unknown option '" + arg + "'");
@@ -3154,8 +3207,23 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         }
     }
 
+    if (parsed.resumeModelId.has_value())
+    {
+        if (positional.size() == 2)
+        {
+            parsed.fromDate = positional[0];
+            parsed.toDate = positional[1];
+            parsed.positionalDateRangeSupplied = true;
+        }
+        else if (!positional.empty())
+        {
+            throw std::invalid_argument("resume mode accepts no positional date arguments");
+        }
+        return parsed;
+    }
+
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -3191,6 +3259,164 @@ void ApplyLaunchRuntimeConfig(const LaunchArgs& launchArgs)
         head_weight_lr_mult = static_cast<float>(*launchArgs.headWeightLrMult);
     if (launchArgs.headBiasLrMult.has_value())
         head_bias_lr_mult = static_cast<float>(*launchArgs.headBiasLrMult);
+}
+
+bool PrintResumeOverrideRejected(const char* param)
+{
+    std::cerr << "RESUME_CONFIG_OVERRIDE_REJECTED"
+              << ",param=" << param
+              << ",reason=resume_uses_database_config_only"
+              << std::endl;
+    return false;
+}
+
+bool ValidateResumeLaunchArgs(const LaunchArgs& launchArgs)
+{
+    if (!launchArgs.resumeModelId.has_value())
+        return true;
+    if (launchArgs.inferenceMode.has_value() && *launchArgs.inferenceMode)
+        return PrintResumeOverrideRejected("--infer");
+    if (launchArgs.modelId.has_value())
+        return PrintResumeOverrideRejected("--model");
+    if (launchArgs.symbol.has_value())
+        return PrintResumeOverrideRejected("--symbol");
+    if (launchArgs.positionalDateRangeSupplied)
+        return PrintResumeOverrideRejected("date_range");
+    if (launchArgs.evalTrading)
+        return PrintResumeOverrideRejected("--eval-trading");
+    if (launchArgs.predictionHorizon.has_value())
+        return PrintResumeOverrideRejected("--prediction-horizon");
+    if (launchArgs.thresholdLogret.has_value())
+        return PrintResumeOverrideRejected("--threshold");
+    if (launchArgs.windowSize.has_value())
+        return PrintResumeOverrideRejected("--window-size");
+    if (launchArgs.hiddenSize.has_value())
+        return PrintResumeOverrideRejected("--hidden-size");
+    if (launchArgs.numLayers.has_value())
+        return PrintResumeOverrideRejected("--num-layers");
+    if (launchArgs.epochs.has_value())
+        return PrintResumeOverrideRejected("--epochs");
+    if (launchArgs.coreLrMult.has_value())
+        return PrintResumeOverrideRejected("--core-lr-mult");
+    if (launchArgs.headWeightLrMult.has_value())
+        return PrintResumeOverrideRejected("--head-weight-lr-mult");
+    if (launchArgs.headBiasLrMult.has_value())
+        return PrintResumeOverrideRejected("--head-bias-lr-mult");
+    if (!launchArgs.targetEpochs.has_value())
+        return PrintResumeOverrideRejected("--target-epochs");
+    return true;
+}
+
+struct ResumeCheckpointConfig
+{
+    long long sourceModelId = -1;
+    std::string symbol;
+    std::string fromDate;
+    std::string toDate;
+    TrainConfigMeta trainConfig;
+    int modelInputWidth = 0;
+    size_t modelHiddenSize = 0;
+    EA::LSTM::TargetType targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+    size_t completedEpoch = 0;
+    size_t optimizerUpdateCount = 0;
+};
+
+TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
+{
+    auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
+    auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
+    if (dims.n_rows != 1 ||
+        dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount ||
+        vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount))
+        throw std::runtime_error("resume requires complete train_config_meta with 14 fields");
+
+    TrainConfigMeta meta;
+    meta.schemaVersion = static_cast<int>(std::llround(vals[0]));
+    meta.predictionHorizon = static_cast<size_t>(std::llround(vals[1]));
+    meta.thresholdLogret = static_cast<float>(vals[2]);
+    meta.windowSize = static_cast<size_t>(std::llround(vals[3]));
+    meta.labelRuleId = static_cast<int>(std::llround(vals[4]));
+    meta.classWeightDown = static_cast<float>(vals[5]);
+    meta.classWeightNeutral = static_cast<float>(vals[6]);
+    meta.classWeightUp = static_cast<float>(vals[7]);
+    meta.numLayers = static_cast<size_t>(std::llround(vals[8]));
+    meta.normalizationVersion = static_cast<int>(std::llround(vals[9]));
+    meta.epochsTrained = static_cast<size_t>(std::llround(vals[10]));
+    meta.coreLrMult = static_cast<float>(vals[11]);
+    meta.headWeightLrMult = static_cast<float>(vals[12]);
+    meta.headBiasLrMult = static_cast<float>(vals[13]);
+    return meta;
+}
+
+ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long modelId)
+{
+    ResumeCheckpointConfig cfg;
+    cfg.sourceModelId = modelId;
+    cfg.trainConfig = LoadRequiredTrainConfigMetaForResume(w, modelId);
+    cfg.completedEpoch = cfg.trainConfig.epochsTrained.value_or(0);
+    cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+    const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
+    cfg.fromDate = range.first;
+    cfg.toDate = range.second;
+
+    {
+        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+            throw std::runtime_error("resume requires valid model_meta");
+        cfg.modelInputWidth = static_cast<int>(std::llround(vals[1]));
+        cfg.modelHiddenSize = static_cast<size_t>(std::llround(vals[2]));
+    }
+
+    {
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
+        if (vals.size() != 6)
+            throw std::runtime_error("resume requires valid target_meta");
+        cfg.targetType = static_cast<EA::LSTM::TargetType>(static_cast<int>(std::llround(vals[0])));
+    }
+
+    auto optimizerDims = DBIO::PgModelIO::loadParameterDims(w, modelId, "optimizer_meta");
+    auto optimizerVals = DBIO::PgModelIO::loadParameterValues(w, modelId, "optimizer_meta");
+    if (optimizerDims.n_rows != 1 ||
+        optimizerDims.n_cols < DBIO::PgModelIO::kOptimizerMetaFieldCount ||
+        optimizerVals.size() < static_cast<size_t>(DBIO::PgModelIO::kOptimizerMetaFieldCount))
+        throw std::runtime_error("resume requires valid optimizer_meta");
+    const int optimizerSchema = static_cast<int>(std::llround(optimizerVals[0]));
+    const int optimizerType = static_cast<int>(std::llround(optimizerVals[1]));
+    if (optimizerSchema != DBIO::PgModelIO::kOptimizerMetaSchemaVersion ||
+        optimizerType != DBIO::PgModelIO::kOptimizerTypeSgd)
+        throw std::runtime_error("resume optimizer_meta is not supported by this binary");
+    cfg.optimizerUpdateCount = static_cast<size_t>(std::llround(optimizerVals[2]));
+    return cfg;
+}
+
+void ApplyResumeRuntimeConfig(const ResumeCheckpointConfig& cfg, int targetEpochs)
+{
+    if (cfg.trainConfig.schemaVersion != DBIO::PgModelIO::kTrainConfigMetaSchemaVersion)
+        throw std::runtime_error("resume train_config_meta schema_version unsupported");
+    if (cfg.trainConfig.labelRuleId != DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId)
+        throw std::runtime_error("resume label_rule_id unsupported by this binary");
+    if (cfg.trainConfig.numLayers != 1)
+        throw std::runtime_error("resume num_layers unsupported by this binary");
+    if (std::fabs(cfg.trainConfig.classWeightDown - kClassWeightDown) > 1e-7f ||
+        std::fabs(cfg.trainConfig.classWeightNeutral - kClassWeightNeutral) > 1e-7f ||
+        std::fabs(cfg.trainConfig.classWeightUp - kClassWeightUp) > 1e-7f)
+        throw std::runtime_error("resume class weights differ from this binary");
+    if (static_cast<size_t>(targetEpochs) <= cfg.completedEpoch)
+        throw std::runtime_error("target epochs is an absolute final epoch and must be greater than checkpoint completed epoch");
+
+    gRuntimeInferenceMode = false;
+    prediction_horizon = cfg.trainConfig.predictionHorizon;
+    c_next_threshold = cfg.trainConfig.thresholdLogret;
+    window_size = cfg.trainConfig.windowSize;
+    hidden_size = cfg.modelHiddenSize;
+    n_out = hidden_size;
+    num_layers = cfg.trainConfig.numLayers;
+    normalization_version = cfg.trainConfig.normalizationVersion;
+    core_lr_mult = cfg.trainConfig.coreLrMult.value();
+    head_weight_lr_mult = cfg.trainConfig.headWeightLrMult.value();
+    head_bias_lr_mult = cfg.trainConfig.headBiasLrMult.value();
+    epoch_count = targetEpochs;
 }
 
 void PrintRuntimeConfig()
@@ -3375,6 +3601,14 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             {
                 hasTrainSymbolMeta = true;
                 persistedMetadata.push_back("train_symbol_meta(ascii_table_name)");
+            }
+            else if (paramName == "train_range_meta")
+            {
+                persistedMetadata.push_back("train_range_meta(fromDate;toDate)");
+            }
+            else if (paramName == "optimizer_meta")
+            {
+                persistedMetadata.push_back("optimizer_meta(schema_version;optimizer_type;update_count;first_moment_buffer_count;second_moment_buffer_count)");
             }
         }
     }
@@ -3749,19 +3983,50 @@ int main(int argc, const char * argv[])
     try
     {
         launchArgs = ParseLaunchArgs(argc, argv);
-        ApplyLaunchRuntimeConfig(launchArgs);
+        if (!ValidateResumeLaunchArgs(launchArgs))
+            return 1;
+        if (!launchArgs.resumeModelId.has_value())
+            ApplyLaunchRuntimeConfig(launchArgs);
     }
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
         return 1;
     }
 
     pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
+    w_LSTM.exec("SET TRANSACTION READ WRITE;");
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
+    std::optional<ResumeCheckpointConfig> resumeConfig;
+
+    if (launchArgs.resumeModelId.has_value())
+    {
+        try
+        {
+            resumeConfig = LoadResumeCheckpointConfig(w_LSTM, *launchArgs.resumeModelId);
+            ApplyResumeRuntimeConfig(*resumeConfig, *launchArgs.targetEpochs);
+            fromDate = resumeConfig->fromDate;
+            toDate = resumeConfig->toDate;
+            std::cout << "RESUME_LOAD_MODEL_ID=" << *launchArgs.resumeModelId << std::endl;
+            std::cout << "RESUME_COMPLETED_EPOCH=" << resumeConfig->completedEpoch << std::endl;
+            std::cout << "RESUME_TARGET_EPOCH=" << *launchArgs.targetEpochs << std::endl;
+            std::cout << "RESUME_EPOCHS_TO_RUN="
+                      << (static_cast<size_t>(*launchArgs.targetEpochs) - resumeConfig->completedEpoch)
+                      << std::endl;
+            std::cout << "RESUME_USING_DB_CONFIG_ONLY=1" << std::endl;
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "RESUME_CONFIG_LOAD_FAILED"
+                      << ",model_id=" << *launchArgs.resumeModelId
+                      << ",error=" << e.what()
+                      << std::endl;
+            return 1;
+        }
+    }
     
     std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
     std::cout << "window_size=" << window_size << '\n';
@@ -3771,7 +4036,6 @@ int main(int argc, const char * argv[])
     std::cout << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
               << " (" << GateStateModeLabel() << ")\n";
 
-    w_LSTM.exec("SET TRANSACTION READ WRITE;");
     try
     {
         pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp' order by table_name;");
@@ -3781,7 +4045,23 @@ int main(int argc, const char * argv[])
             availableSymbols.emplace_back(tbl[0].c_str());
 
         std::vector<std::string> selectedSymbols;
-        if (launchArgs.symbol.has_value())
+        if (resumeConfig.has_value())
+        {
+            const auto it = std::find(availableSymbols.begin(),
+                                      availableSymbols.end(),
+                                      resumeConfig->symbol);
+            if (it == availableSymbols.end())
+            {
+                std::cerr << "Requested resume symbol/table not found: " << resumeConfig->symbol << std::endl;
+                std::cerr << "AVAILABLE_SYMBOLS";
+                for (const auto& symbol : availableSymbols)
+                    std::cerr << "," << symbol;
+                std::cerr << std::endl;
+                return 1;
+            }
+            selectedSymbols.push_back(*it);
+        }
+        else if (launchArgs.symbol.has_value())
         {
             const auto it = std::find(availableSymbols.begin(),
                                       availableSymbols.end(),
@@ -3805,7 +4085,7 @@ int main(int argc, const char * argv[])
         for (const auto& rawPriceTableName : selectedSymbols)
         {
             std::cout << "SYMBOL_SELECTION"
-                      << ",requested=" << (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")
+                      << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none"))
                       << ",selected=" << rawPriceTableName
                       << ",available_count=" << availableSymbols.size()
                       << std::endl;
@@ -3818,8 +4098,23 @@ int main(int argc, const char * argv[])
             std::cout << "Candlestick query: " << query << "\n";
             std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
+            if (resumeConfig.has_value())
+            {
+                const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
+                if (runtimeInputWidth != resumeConfig->modelInputWidth)
+                {
+                    std::cout << "MODEL_CONFIG_MISMATCH"
+                              << ",field=feature_count"
+                              << ",model=" << resumeConfig->modelInputWidth
+                              << ",runtime=" << runtimeInputWidth
+                              << std::endl;
+                    return 1;
+                }
+            }
   
-            constexpr auto requestedTargetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+            const auto requestedTargetType = resumeConfig.has_value()
+                ? resumeConfig->targetType
+                : EA::LSTM::TargetType::UpNeutralDownReturn;
             EA::LSTM l { t, 1, 0, requestedTargetType };
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
@@ -3840,7 +4135,9 @@ int main(int argc, const char * argv[])
             // Track whether we started from scratch (no model loaded)
             std::optional<long long> loadedModelId;
             bool startedFromScratch = true;
-            const std::string loadSource = launchArgs.modelId.has_value() ? "--model" : "latest";
+            const std::string loadSource = resumeConfig.has_value()
+                ? "--resume-model-id"
+                : (launchArgs.modelId.has_value() ? "--model" : "latest");
 
             // Load an explicitly requested model, or default to the latest stored model.
             try
@@ -3848,7 +4145,8 @@ int main(int argc, const char * argv[])
                 long long modelIdToLoad = -1;
                 const bool requestedModel = launchArgs.modelId.has_value();
 
-                if (requestedModel) modelIdToLoad = *launchArgs.modelId;
+                if (resumeConfig.has_value()) modelIdToLoad = resumeConfig->sourceModelId;
+                else if (requestedModel) modelIdToLoad = *launchArgs.modelId;
                 else if (load_latest || gRuntimeInferenceMode)
                 {
                     pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
@@ -3860,6 +4158,12 @@ int main(int argc, const char * argv[])
                 if (modelIdToLoad > 0)
                 {
                     DBIO::PgModelIO::loadAll(w_LSTM, modelIdToLoad, l);
+                    if (resumeConfig.has_value())
+                    {
+                        DBIO::PgModelIO::loadOptimizerMeta(w_LSTM, modelIdToLoad, l);
+                        l.completedEpochs = resumeConfig->completedEpoch;
+                        std::cout << "RESUME_OPTIMIZER_STATE_RESTORED=1" << std::endl;
+                    }
                     loadedModelId = modelIdToLoad;
                     startedFromScratch = false;
                     std::cout << "Loaded model_id=" << *loadedModelId
@@ -3869,6 +4173,12 @@ int main(int argc, const char * argv[])
             }
             catch (const std::exception& e)
             {
+                if (resumeConfig.has_value())
+                {
+                    std::cerr << "Resume load model_id=" << resumeConfig->sourceModelId
+                              << " failed: " << e.what() << std::endl;
+                    return 1;
+                }
                 if (launchArgs.modelId.has_value())
                 {
                     std::cerr << "Load requested model_id=" << *launchArgs.modelId
@@ -3909,8 +4219,11 @@ int main(int argc, const char * argv[])
             PredictionStats totalTradeStats;
             // Iterate all batches; inference evaluates once, training runs configured epochs.
             std::cout << std::setprecision(15);
+                const int startEpoch = (!gRuntimeInferenceMode && resumeConfig.has_value())
+                    ? static_cast<int>(resumeConfig->completedEpoch)
+                    : 0;
                 const int evalPassCount = gRuntimeInferenceMode ? 1 : epoch_count;
-                for(auto e = 0; e < evalPassCount; e++)
+                for(auto e = startEpoch; e < evalPassCount; e++)
                 {
                     t.ForEachBatch( [&](auto b)
                                    {
@@ -3995,6 +4308,8 @@ int main(int argc, const char * argv[])
                         EA::LSTM::PrintAndResetEpochBuckets();
                         PrintAndResetDistribution();
                     }
+                    if (!gRuntimeInferenceMode)
+                        l.completedEpochs = static_cast<size_t>(e + 1);
                 }
             if (gRuntimeInferenceMode)
             {
@@ -4057,7 +4372,15 @@ int main(int argc, const char * argv[])
                     w_LSTM.exec("SET TRANSACTION READ WRITE;");
                     
                     long long modelId = -1;
-                    if (startedFromScratch)
+                    if (resumeConfig.has_value())
+                    {
+                        const std::string resumeModelName = launchArgs.newModelName.value_or(rawPriceTableName + "-resume-model");
+                        modelId = DBIO::PgModelIO::createModel(w_LSTM, resumeModelName, "resumed trained parameters");
+                        std::cout << "Created new model_id=" << modelId
+                                  << " (resumed from model_id=" << resumeConfig->sourceModelId << ")"
+                                  << std::endl;
+                    }
+                    else if (startedFromScratch)
                         if constexpr (save_overwrite)
                             // Overwrite the latest model if one exists; otherwise create a new snapshot
                             try {
@@ -4099,9 +4422,11 @@ int main(int argc, const char * argv[])
                             std::cout << "Created new model_id=" << modelId << std::endl;
                         }
 
-                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l, rawPriceTableName);
+                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l, rawPriceTableName, fromDate, toDate);
                     w_LSTM.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
+                    if (resumeConfig.has_value())
+                        std::cout << "RESUME_SAVED_NEW_MODEL_ID=" << modelId << std::endl;
                 }
                 else
                     if (gRuntimeInferenceMode)
