@@ -2570,6 +2570,79 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
     }
 }
 
+void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size][direction_output_size])
+{
+    constexpr double kAcceptNeutralMax = 0.60;
+    constexpr double kAcceptMinDown = 0.15;
+    constexpr double kAcceptMinUp = 0.15;
+    std::array<size_t, direction_output_size> actualCounts {0, 0, 0};
+    std::array<size_t, direction_output_size> predCounts {0, 0, 0};
+    size_t total = 0;
+
+    for (size_t actual = 0; actual < direction_output_size; ++actual)
+    {
+        for (size_t pred = 0; pred < direction_output_size; ++pred)
+        {
+            actualCounts[actual] += confusion[actual][pred];
+            predCounts[pred] += confusion[actual][pred];
+            total += confusion[actual][pred];
+        }
+    }
+
+    std::array<double, direction_output_size> predFrac {0.0, 0.0, 0.0};
+    std::array<double, direction_output_size> actualFrac {0.0, 0.0, 0.0};
+    std::array<double, direction_output_size> precision {0.0, 0.0, 0.0};
+    std::array<double, direction_output_size> recall {0.0, 0.0, 0.0};
+
+    for (size_t cls = 0; cls < direction_output_size; ++cls)
+    {
+        predFrac[cls] = SafeRatio(static_cast<double>(predCounts[cls]), static_cast<double>(total));
+        actualFrac[cls] = SafeRatio(static_cast<double>(actualCounts[cls]), static_cast<double>(total));
+        precision[cls] = SafeRatio(static_cast<double>(confusion[cls][cls]), static_cast<double>(predCounts[cls]));
+        recall[cls] = SafeRatio(static_cast<double>(confusion[cls][cls]), static_cast<double>(actualCounts[cls]));
+    }
+
+    std::vector<std::string> rejectReasons;
+    if (predFrac[1] > kAcceptNeutralMax)
+        rejectReasons.push_back("pred_neutral_gt_0.60");
+    if (predFrac[0] < kAcceptMinDown)
+        rejectReasons.push_back("pred_down_lt_0.15");
+    if (predFrac[2] < kAcceptMinUp)
+        rejectReasons.push_back("pred_up_lt_0.15");
+
+    std::string rejectReason = "none";
+    if (!rejectReasons.empty())
+    {
+        std::ostringstream oss;
+        for (size_t i = 0; i < rejectReasons.size(); ++i)
+        {
+            if (i) oss << ";";
+            oss << rejectReasons[i];
+        }
+        rejectReason = oss.str();
+    }
+
+    std::cout << "MODEL_ACCEPTANCE"
+              << ",ACCEPT_MODEL=" << (rejectReasons.empty() ? "true" : "false")
+              << ",REJECT_REASON=" << rejectReason
+              << ",threshold_neutral_max=" << kAcceptNeutralMax
+              << ",threshold_min_down=" << kAcceptMinDown
+              << ",threshold_min_up=" << kAcceptMinUp
+              << ",pred_down=" << predFrac[0]
+              << ",pred_neutral=" << predFrac[1]
+              << ",pred_up=" << predFrac[2]
+              << ",actual_down=" << actualFrac[0]
+              << ",actual_neutral=" << actualFrac[1]
+              << ",actual_up=" << actualFrac[2]
+              << ",precision_down=" << precision[0]
+              << ",precision_neutral=" << precision[1]
+              << ",precision_up=" << precision[2]
+              << ",recall_down=" << recall[0]
+              << ",recall_neutral=" << recall[1]
+              << ",recall_up=" << recall[2]
+              << std::endl;
+}
+
 static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b)
 {
     auto stats = [](const auto& v)
@@ -4326,6 +4399,7 @@ int main(int argc, const char * argv[])
                               << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
                               << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
                               << std::endl;
+                    PrintModelAcceptanceDiagnostic(totalConfusion);
 
                     if (launchArgs.evalTrading)
                     {
