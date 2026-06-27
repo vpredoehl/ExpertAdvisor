@@ -45,6 +45,8 @@
 #include <MetaNN/operation/tensor/slice.h>
 #include "scalable_tensor.h"
 
+void PrintAndResetDistribution();
+
 namespace
 {
 #ifndef LSTM_RET_HORIZON_1
@@ -106,6 +108,9 @@ struct TrainConfigMeta
 struct ModelConfigValidationResult
 {
     std::optional<TrainConfigMeta> trainConfigMeta;
+    bool configMatch = false;
+    bool hasMismatch = false;
+    bool metadataGap = false;
 };
 
 struct EvalLabelConfig
@@ -2570,11 +2575,23 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
     }
 }
 
-void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size][direction_output_size])
+struct ModelAcceptanceSummary
 {
-    constexpr double kAcceptNeutralMax = 0.60;
-    constexpr double kAcceptMinDown = 0.15;
-    constexpr double kAcceptMinUp = 0.15;
+    bool acceptModel = false;
+    std::string rejectReason = "none";
+    std::array<double, direction_output_size> predFrac {0.0, 0.0, 0.0};
+    std::array<double, direction_output_size> actualFrac {0.0, 0.0, 0.0};
+    std::array<double, direction_output_size> precision {0.0, 0.0, 0.0};
+    std::array<double, direction_output_size> recall {0.0, 0.0, 0.0};
+};
+
+constexpr double kAcceptNeutralMax = 0.60;
+constexpr double kAcceptMinDown = 0.15;
+constexpr double kAcceptMinUp = 0.15;
+
+ModelAcceptanceSummary ComputeModelAcceptanceSummary(const size_t confusion[direction_output_size][direction_output_size])
+{
+    ModelAcceptanceSummary summary;
     std::array<size_t, direction_output_size> actualCounts {0, 0, 0};
     std::array<size_t, direction_output_size> predCounts {0, 0, 0};
     size_t total = 0;
@@ -2589,28 +2606,22 @@ void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size
         }
     }
 
-    std::array<double, direction_output_size> predFrac {0.0, 0.0, 0.0};
-    std::array<double, direction_output_size> actualFrac {0.0, 0.0, 0.0};
-    std::array<double, direction_output_size> precision {0.0, 0.0, 0.0};
-    std::array<double, direction_output_size> recall {0.0, 0.0, 0.0};
-
     for (size_t cls = 0; cls < direction_output_size; ++cls)
     {
-        predFrac[cls] = SafeRatio(static_cast<double>(predCounts[cls]), static_cast<double>(total));
-        actualFrac[cls] = SafeRatio(static_cast<double>(actualCounts[cls]), static_cast<double>(total));
-        precision[cls] = SafeRatio(static_cast<double>(confusion[cls][cls]), static_cast<double>(predCounts[cls]));
-        recall[cls] = SafeRatio(static_cast<double>(confusion[cls][cls]), static_cast<double>(actualCounts[cls]));
+        summary.predFrac[cls] = SafeRatio(static_cast<double>(predCounts[cls]), static_cast<double>(total));
+        summary.actualFrac[cls] = SafeRatio(static_cast<double>(actualCounts[cls]), static_cast<double>(total));
+        summary.precision[cls] = SafeRatio(static_cast<double>(confusion[cls][cls]), static_cast<double>(predCounts[cls]));
+        summary.recall[cls] = SafeRatio(static_cast<double>(confusion[cls][cls]), static_cast<double>(actualCounts[cls]));
     }
 
     std::vector<std::string> rejectReasons;
-    if (predFrac[1] > kAcceptNeutralMax)
+    if (summary.predFrac[1] > kAcceptNeutralMax)
         rejectReasons.push_back("pred_neutral_gt_0.60");
-    if (predFrac[0] < kAcceptMinDown)
+    if (summary.predFrac[0] < kAcceptMinDown)
         rejectReasons.push_back("pred_down_lt_0.15");
-    if (predFrac[2] < kAcceptMinUp)
+    if (summary.predFrac[2] < kAcceptMinUp)
         rejectReasons.push_back("pred_up_lt_0.15");
 
-    std::string rejectReason = "none";
     if (!rejectReasons.empty())
     {
         std::ostringstream oss;
@@ -2619,27 +2630,34 @@ void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size
             if (i) oss << ";";
             oss << rejectReasons[i];
         }
-        rejectReason = oss.str();
+        summary.rejectReason = oss.str();
     }
+    summary.acceptModel = rejectReasons.empty();
+    return summary;
+}
+
+void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size][direction_output_size])
+{
+    const ModelAcceptanceSummary summary = ComputeModelAcceptanceSummary(confusion);
 
     std::cout << "MODEL_ACCEPTANCE"
-              << ",ACCEPT_MODEL=" << (rejectReasons.empty() ? "true" : "false")
-              << ",REJECT_REASON=" << rejectReason
+              << ",ACCEPT_MODEL=" << (summary.acceptModel ? "true" : "false")
+              << ",REJECT_REASON=" << summary.rejectReason
               << ",threshold_neutral_max=" << kAcceptNeutralMax
               << ",threshold_min_down=" << kAcceptMinDown
               << ",threshold_min_up=" << kAcceptMinUp
-              << ",pred_down=" << predFrac[0]
-              << ",pred_neutral=" << predFrac[1]
-              << ",pred_up=" << predFrac[2]
-              << ",actual_down=" << actualFrac[0]
-              << ",actual_neutral=" << actualFrac[1]
-              << ",actual_up=" << actualFrac[2]
-              << ",precision_down=" << precision[0]
-              << ",precision_neutral=" << precision[1]
-              << ",precision_up=" << precision[2]
-              << ",recall_down=" << recall[0]
-              << ",recall_neutral=" << recall[1]
-              << ",recall_up=" << recall[2]
+              << ",pred_down=" << summary.predFrac[0]
+              << ",pred_neutral=" << summary.predFrac[1]
+              << ",pred_up=" << summary.predFrac[2]
+              << ",actual_down=" << summary.actualFrac[0]
+              << ",actual_neutral=" << summary.actualFrac[1]
+              << ",actual_up=" << summary.actualFrac[2]
+              << ",precision_down=" << summary.precision[0]
+              << ",precision_neutral=" << summary.precision[1]
+              << ",precision_up=" << summary.precision[2]
+              << ",recall_down=" << summary.recall[0]
+              << ",recall_neutral=" << summary.recall[1]
+              << ",recall_up=" << summary.recall[2]
               << std::endl;
 }
 
@@ -3051,7 +3069,9 @@ struct LaunchArgs
     std::optional<double> headWeightLrMult;
     std::optional<double> headBiasLrMult;
     std::optional<int> checkpointEvery;
+    std::optional<long long> inferStartAfterModelId;
     bool evalTrading = false;
+    bool inferAll = false;
 };
 
 long long ParseModelIdArg(const std::string& value)
@@ -3224,6 +3244,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--checkpoint-every requires a value");
             parsed.checkpointEvery = ParseNonNegativeIntArg("--checkpoint-every", argv[++i]);
         }
+        else if (arg == "--infer-start-after-model-id")
+        {
+            if (parsed.inferStartAfterModelId.has_value())
+                throw std::invalid_argument("--infer-start-after-model-id specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--infer-start-after-model-id requires a model_id value");
+            parsed.inferStartAfterModelId = ParseModelIdArg(argv[++i]);
+        }
         else if (arg == "--model")
         {
             if (parsed.modelId.has_value())
@@ -3248,6 +3276,10 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         else if (arg == "--eval-trading")
         {
             parsed.evalTrading = true;
+        }
+        else if (arg == "--infer-all")
+        {
+            parsed.inferAll = true;
         }
         else
         {
@@ -3294,6 +3326,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     throw std::invalid_argument("--checkpoint-every specified more than once");
                 parsed.checkpointEvery = ParseNonNegativeIntArg("--checkpoint-every", value);
             }
+            else if (SplitOptionWithValue(arg, "--infer-start-after-model-id", value))
+            {
+                if (parsed.inferStartAfterModelId.has_value())
+                    throw std::invalid_argument("--infer-start-after-model-id specified more than once");
+                parsed.inferStartAfterModelId = ParseModelIdArg(value);
+            }
             else if (SplitOptionWithValue(arg, "--symbol", value))
             {
                 if (parsed.symbol.has_value())
@@ -3329,6 +3367,10 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 
     if (parsed.resumeModelId.has_value())
     {
+        if (parsed.inferAll)
+            throw std::invalid_argument("--infer-all cannot be combined with --resume-model-id");
+        if (parsed.inferStartAfterModelId.has_value())
+            throw std::invalid_argument("--infer-start-after-model-id cannot be combined with --resume-model-id");
         if (positional.size() == 2)
         {
             parsed.fromDate = positional[0];
@@ -3342,8 +3384,20 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         return parsed;
     }
 
+    if (parsed.inferStartAfterModelId.has_value() && !parsed.inferAll)
+        throw std::invalid_argument("--infer-start-after-model-id requires --infer-all");
+    if (parsed.inferAll)
+    {
+        if (!parsed.inferenceMode.has_value() || !*parsed.inferenceMode)
+            throw std::invalid_argument("--infer-all requires explicit --infer");
+        if (!parsed.symbol.has_value())
+            throw std::invalid_argument("--infer-all requires --symbol=<table_name>");
+        if (parsed.modelId.has_value())
+            throw std::invalid_argument("--infer-all cannot be combined with --model");
+    }
+
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -4164,12 +4218,17 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
         missingMinimum.push_back("hidden_size");
     }
 
-    if (targetMetaMatches &&
+    result.hasMismatch = mismatch;
+    result.metadataGap = !missingMinimum.empty();
+    result.configMatch =
+        targetMetaMatches &&
         modelMetaMatches &&
         trainSymbolMetaMatches &&
         trainConfigMetaMatches &&
         !mismatch &&
-        missingMinimum.empty())
+        missingMinimum.empty();
+
+    if (result.configMatch)
     {
         std::cout << "MODEL_CONFIG_MATCH=1" << std::endl;
     }
@@ -4184,6 +4243,641 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     }
 
     return result;
+}
+
+struct InferAllCandidate
+{
+    long long modelId = -1;
+    std::string name;
+    std::optional<size_t> completedEpochs;
+    bool legacyMissingSymbol = false;
+    bool metadataGap = false;
+};
+
+struct InferAllSummaryRow
+{
+    long long modelId = -1;
+    std::string name;
+    std::optional<size_t> completedEpochs;
+    double accuracy = 0.0;
+    ModelAcceptanceSummary acceptance;
+};
+
+struct InferenceEvaluationResult
+{
+    double accuracy = 0.0;
+    std::optional<size_t> completedEpochs;
+    ModelAcceptanceSummary acceptance;
+};
+
+InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
+                                                 const LaunchArgs& launchArgs,
+                                                 EA::LSTM& lstm,
+                                                 const Tensor& tensor,
+                                                 const std::optional<long long>& loadedModelId,
+                                                 const std::string& loadSource,
+                                                 EA::LSTM::TargetType requestedTargetType,
+                                                 const std::string& rawPriceTableName,
+                                                 const std::string& fromDate,
+                                                 const std::string& toDate,
+                                                 bool failOnConfigMismatch)
+{
+    UseRuntimeDefaultEvalLabelConfig();
+    ModelConfigValidationResult modelConfigValidation;
+    if (loadedModelId.has_value())
+    {
+        modelConfigValidation =
+            PrintModelConfigValidation(w, *loadedModelId, requestedTargetType, tensor, rawPriceTableName);
+        if (failOnConfigMismatch && modelConfigValidation.hasMismatch)
+            throw std::runtime_error("candidate became incompatible during validation");
+    }
+
+    if (modelConfigValidation.trainConfigMeta.has_value())
+        UseModelTrainEvalLabelConfig(*modelConfigValidation.trainConfigMeta);
+    else
+        UseRuntimeDefaultEvalLabelConfig();
+
+    PrintEvalLabelConfig();
+    PrintInferenceConfig(loadedModelId, loadSource, lstm, fromDate, toDate);
+    PrintClassificationProofDiagnostics(lstm, tensor, fromDate, toDate);
+    PrintPhase2TensorDiagnostics(lstm, tensor, fromDate, toDate);
+
+    size_t totalCorrectLog = 0;
+    size_t totalActedLog = 0;
+    size_t totalWindows = 0;
+    double totalAbsErrMove = 0.0;
+    size_t totalCorrectDir = 0;
+    size_t totalActedDir = 0;
+    size_t totalConfusion[direction_output_size][direction_output_size] = {};
+    PredictionStats totalTradeStats;
+
+    tensor.ForEachBatch([&](auto b)
+    {
+        const auto predictionStats = ProcessBatchPredict(lstm, tensor, b);
+        totalCorrectLog += predictionStats.correctLog;
+        totalActedLog += predictionStats.actedLog;
+        totalWindows += predictionStats.windows;
+        totalAbsErrMove += predictionStats.absErrMove;
+        totalCorrectDir += predictionStats.correctDir;
+        totalActedDir += predictionStats.actedDir;
+
+        for (size_t actual = 0; actual < direction_output_size; ++actual)
+            for (size_t pred = 0; pred < direction_output_size; ++pred)
+                totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
+
+        totalTradeStats.tradeCount += predictionStats.tradeCount;
+        totalTradeStats.longCount += predictionStats.longCount;
+        totalTradeStats.shortCount += predictionStats.shortCount;
+        totalTradeStats.flatCount += predictionStats.flatCount;
+        totalTradeStats.winCount += predictionStats.winCount;
+        totalTradeStats.lossCount += predictionStats.lossCount;
+        totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
+        totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
+        totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
+        totalTradeStats.longWinCount += predictionStats.longWinCount;
+        totalTradeStats.longLossCount += predictionStats.longLossCount;
+        totalTradeStats.longLogReturnSum += predictionStats.longLogReturnSum;
+        totalTradeStats.longGrossPositiveLogReturn += predictionStats.longGrossPositiveLogReturn;
+        totalTradeStats.longGrossNegativeLogReturn += predictionStats.longGrossNegativeLogReturn;
+        totalTradeStats.shortWinCount += predictionStats.shortWinCount;
+        totalTradeStats.shortLossCount += predictionStats.shortLossCount;
+        totalTradeStats.shortLogReturnSum += predictionStats.shortLogReturnSum;
+        totalTradeStats.shortGrossPositiveLogReturn += predictionStats.shortGrossPositiveLogReturn;
+        totalTradeStats.shortGrossNegativeLogReturn += predictionStats.shortGrossNegativeLogReturn;
+    });
+
+    if (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+    {
+        EA::LSTM::PrintAndResetEpochBuckets();
+        ::PrintAndResetDistribution();
+    }
+
+    InferenceEvaluationResult result;
+    if (modelConfigValidation.trainConfigMeta.has_value() &&
+        modelConfigValidation.trainConfigMeta->epochsTrained.has_value())
+        result.completedEpochs = *modelConfigValidation.trainConfigMeta->epochsTrained;
+
+    if (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+    {
+        result.accuracy = totalWindows
+            ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalWindows))
+            : 0.0;
+        std::cout << "Overall 3-class accuracy: " << (result.accuracy * 100.0)
+                  << "% over " << totalWindows << " windows" << std::endl;
+        std::cout << "Overall 3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
+                  << "[[" << totalConfusion[0][0] << ", " << totalConfusion[0][1] << ", " << totalConfusion[0][2] << "], "
+                  << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
+                  << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
+                  << std::endl;
+        PrintModelAcceptanceDiagnostic(totalConfusion);
+        result.acceptance = ComputeModelAcceptanceSummary(totalConfusion);
+
+        if (launchArgs.evalTrading)
+        {
+            for (size_t actual = 0; actual < direction_output_size; ++actual)
+                for (size_t pred = 0; pred < direction_output_size; ++pred)
+                    totalTradeStats.confusion[actual][pred] = totalConfusion[actual][pred];
+            PrintEvalTradingMetrics(totalTradeStats);
+        }
+    }
+    else
+    {
+        result.accuracy = totalActedLog
+            ? (static_cast<double>(totalCorrectLog) / static_cast<double>(totalActedLog))
+            : 0.0;
+        const double overallCovLog = totalWindows
+            ? (static_cast<double>(totalActedLog) / static_cast<double>(totalWindows) * 100.0)
+            : 0.0;
+        const double overallMaeMove = totalWindows
+            ? (totalAbsErrMove / static_cast<double>(totalWindows))
+            : 0.0;
+        const double overallAccDir = totalActedDir
+            ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalActedDir) * 100.0)
+            : 0.0;
+        const double overallCovDir = totalWindows
+            ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
+            : 0.0;
+
+        std::cout << "Overall direction accuracy (log-return): " << (result.accuracy * 100.0)
+                  << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
+                  << " coverage=" << overallCovLog << "%" << std::endl;
+        std::cout << "Overall MAE (relative move fraction): " << overallMaeMove
+                  << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
+                  << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
+                  << " coverage=" << overallCovDir << "%" << std::endl;
+    }
+
+    return result;
+}
+
+bool MatrixParamExists(pqxx::work& w, long long modelId, const std::string& paramName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM matrix WHERE model_id = $1 AND param_name = $2 LIMIT 1;",
+        modelId, paramName);
+    return !r.empty();
+}
+
+bool NearlyEqualDouble(double lhs, double rhs, double tolerance = 1e-7)
+{
+    return std::fabs(lhs - rhs) <= tolerance;
+}
+
+bool InferAllCandidateCompatible(pqxx::work& w,
+                                 long long modelId,
+                                 const std::string& runtimeSymbol,
+                                 EA::LSTM::TargetType requestedTargetType,
+                                 const Tensor& tensor,
+                                 InferAllCandidate& candidate,
+                                 std::string& skipReason)
+{
+    candidate.legacyMissingSymbol = false;
+    candidate.metadataGap = false;
+
+    if (MatrixParamExists(w, modelId, "train_symbol_meta"))
+    {
+        try
+        {
+            const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+            if (modelSymbol != runtimeSymbol)
+            {
+                skipReason = "symbol_mismatch";
+                return false;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            skipReason = std::string("invalid_train_symbol_meta:") + e.what();
+            return false;
+        }
+    }
+    else
+    {
+        candidate.legacyMissingSymbol = true;
+        candidate.metadataGap = true;
+    }
+
+    if (MatrixParamExists(w, modelId, "target_meta"))
+    {
+        try
+        {
+            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "target_meta");
+            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
+            if (dims.n_rows != 1 || dims.n_cols != 6 || vals.size() != 6)
+            {
+                skipReason = "invalid_target_meta_shape";
+                return false;
+            }
+            const auto modelTargetType =
+                static_cast<EA::LSTM::TargetType>(static_cast<int>(std::llround(vals[0])));
+            if (static_cast<int>(modelTargetType) != static_cast<int>(requestedTargetType))
+            {
+                skipReason = "target_type_mismatch";
+                return false;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            skipReason = std::string("invalid_target_meta:") + e.what();
+            return false;
+        }
+    }
+    else
+        candidate.metadataGap = true;
+
+    if (MatrixParamExists(w, modelId, "model_meta"))
+    {
+        try
+        {
+            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
+            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
+            if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+            {
+                skipReason = "invalid_model_meta_shape";
+                return false;
+            }
+            const int schemaVersion = static_cast<int>(std::llround(vals[0]));
+            const int modelInputWidth = static_cast<int>(std::llround(vals[1]));
+            const int modelHiddenSize = static_cast<int>(std::llround(vals[2]));
+            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
+            if (schemaVersion != 1)
+            {
+                skipReason = "model_meta_schema_mismatch";
+                return false;
+            }
+            if (modelInputWidth != runtimeInputWidth)
+            {
+                skipReason = "feature_count_mismatch";
+                return false;
+            }
+            if (modelHiddenSize != static_cast<int>(hidden_size))
+            {
+                skipReason = "hidden_size_mismatch";
+                return false;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            skipReason = std::string("invalid_model_meta:") + e.what();
+            return false;
+        }
+    }
+    else
+        candidate.metadataGap = true;
+
+    if (MatrixParamExists(w, modelId, "train_config_meta"))
+    {
+        try
+        {
+            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
+            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
+            if (dims.n_rows != 1 ||
+                dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaFieldCount ||
+                vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaFieldCount))
+            {
+                skipReason = "invalid_train_config_meta_shape";
+                return false;
+            }
+
+            auto checkInt = [&](const char* reason, double modelValue, long long runtimeValue) -> bool
+            {
+                if (static_cast<long long>(std::llround(modelValue)) != runtimeValue)
+                {
+                    skipReason = reason;
+                    return false;
+                }
+                return true;
+            };
+            auto checkFloat = [&](const char* reason, double modelValue, double runtimeValue) -> bool
+            {
+                if (!NearlyEqualDouble(modelValue, runtimeValue))
+                {
+                    skipReason = reason;
+                    return false;
+                }
+                return true;
+            };
+
+            if (!checkInt("schema_version_mismatch", vals[0], DBIO::PgModelIO::kTrainConfigMetaSchemaVersion) ||
+                !checkInt("prediction_horizon_mismatch", vals[1], prediction_horizon) ||
+                !checkFloat("threshold_logret_mismatch", vals[2], c_next_threshold) ||
+                !checkInt("window_size_mismatch", vals[3], window_size) ||
+                !checkInt("label_rule_id_mismatch", vals[4], DirectionLabelRuleId()) ||
+                !checkFloat("class_weight_down_mismatch", vals[5], kClassWeightDown) ||
+                !checkFloat("class_weight_neutral_mismatch", vals[6], kClassWeightNeutral) ||
+                !checkFloat("class_weight_up_mismatch", vals[7], kClassWeightUp))
+                return false;
+
+            if (vals.size() >= 9)
+            {
+                if (!checkInt("num_layers_mismatch", vals[8], num_layers))
+                    return false;
+            }
+            else
+                candidate.metadataGap = true;
+
+            if (vals.size() >= 10)
+            {
+                if (!checkInt("normalization_version_mismatch", vals[9], normalization_version))
+                    return false;
+            }
+            else
+                candidate.metadataGap = true;
+
+            if (vals.size() >= 11)
+                candidate.completedEpochs = static_cast<size_t>(std::llround(vals[10]));
+            else
+                candidate.metadataGap = true;
+
+            if (vals.size() >= 12)
+            {
+                if (!checkFloat("core_lr_mult_mismatch",
+                                vals[11],
+                                EA::LSTM::CoreLrMultForTarget(requestedTargetType)))
+                    return false;
+            }
+            else
+                candidate.metadataGap = true;
+
+            if (vals.size() >= 13)
+            {
+                if (!checkFloat("head_weight_lr_mult_mismatch", vals[12], head_weight_lr_mult))
+                    return false;
+            }
+            else
+                candidate.metadataGap = true;
+
+            if (vals.size() >= 14)
+            {
+                if (!checkFloat("head_bias_lr_mult_mismatch", vals[13], head_bias_lr_mult))
+                    return false;
+            }
+            else
+                candidate.metadataGap = true;
+        }
+        catch (const std::exception& e)
+        {
+            skipReason = std::string("invalid_train_config_meta:") + e.what();
+            return false;
+        }
+    }
+    else
+        candidate.metadataGap = true;
+
+    return true;
+}
+
+std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
+                                                      const LaunchArgs& launchArgs,
+                                                      const std::string& runtimeSymbol,
+                                                      EA::LSTM::TargetType requestedTargetType,
+                                                      const Tensor& tensor,
+                                                      size_t& skippedDueToResume,
+                                                      size_t& skippedIncompatible,
+                                                      std::vector<std::string>& skippedModelLogs)
+{
+    skippedDueToResume = 0;
+    skippedIncompatible = 0;
+    const long long startAfter = launchArgs.inferStartAfterModelId.value_or(0);
+    if (startAfter > 0)
+    {
+        pqxx::result skipped = w.exec_params(
+            "SELECT count(*) FROM model WHERE model_id <= $1;",
+            startAfter);
+        if (!skipped.empty())
+            skippedDueToResume = skipped[0][0].as<size_t>();
+    }
+
+    pqxx::result rows = w.exec_params(
+        "SELECT model_id, COALESCE(name, '') FROM model WHERE model_id > $1 ORDER BY model_id ASC;",
+        startAfter);
+
+    std::vector<InferAllCandidate> candidates;
+    candidates.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        InferAllCandidate candidate;
+        candidate.modelId = row[0].as<long long>();
+        candidate.name = row[1].as<std::string>();
+        std::string skipReason;
+        if (InferAllCandidateCompatible(w,
+                                        candidate.modelId,
+                                        runtimeSymbol,
+                                        requestedTargetType,
+                                        tensor,
+                                        candidate,
+                                        skipReason))
+        {
+            candidates.push_back(candidate);
+        }
+        else
+        {
+            ++skippedIncompatible;
+            std::ostringstream oss;
+            oss << "INFER_ALL_MODEL_SKIPPED"
+                << " model_id=" << candidate.modelId
+                << " name=" << candidate.name
+                << " reason=" << skipReason;
+            skippedModelLogs.push_back(oss.str());
+        }
+    }
+    return candidates;
+}
+
+InferAllSummaryRow RunInferAllModel(pqxx::work& w,
+                                    const LaunchArgs& launchArgs,
+                                    const InferAllCandidate& candidate,
+                                    const std::string& rawPriceTableName,
+                                    const std::string& fromDate,
+                                    const std::string& toDate,
+                                    const Tensor& tensor,
+                                    EA::LSTM::TargetType requestedTargetType)
+{
+    std::cout << "INFER_ALL_MODEL_BEGIN"
+              << " model_id=" << candidate.modelId
+              << " name=" << candidate.name
+              << std::endl;
+    if (candidate.legacyMissingSymbol)
+        std::cout << "INFER_ALL_MODEL_WARN"
+                  << " model_id=" << candidate.modelId
+                  << " name=" << candidate.name
+                  << " reason=missing_legacy_train_symbol_meta_included"
+                  << std::endl;
+    if (candidate.metadataGap)
+        std::cout << "INFER_ALL_MODEL_WARN"
+                  << " model_id=" << candidate.modelId
+                  << " name=" << candidate.name
+                  << " reason=metadata_gap_included"
+                  << std::endl;
+
+    EA::LSTM lstm { tensor, 1, 0, requestedTargetType };
+    PrintRuntimeLrConfig(lstm);
+    std::cout << "DIAG_LSTM_BINDING"
+              << ",table=" << rawPriceTableName
+              << ",tensor_rows=" << tensor.RowCount()
+              << ",tensor_addr=" << static_cast<const void*>(&tensor)
+              << ",lstm_tensor_ref_addr=" << static_cast<const void*>(lstm.BoundTensorAddress())
+              << ",newly_constructed=1"
+              << ",reused=0"
+              << std::endl;
+
+    DBIO::PgModelIO::loadAll(w, candidate.modelId, lstm);
+    std::cout << "Loaded model_id=" << candidate.modelId
+              << " source=--infer-all"
+              << std::endl;
+
+    const InferenceEvaluationResult evaluation =
+        RunInferenceEvaluation(w,
+                               launchArgs,
+                               lstm,
+                               tensor,
+                               std::optional<long long>{candidate.modelId},
+                               "--infer-all",
+                               requestedTargetType,
+                               rawPriceTableName,
+                               fromDate,
+                               toDate,
+                               true);
+
+    InferAllSummaryRow row;
+    row.modelId = candidate.modelId;
+    row.name = candidate.name;
+    row.completedEpochs = evaluation.completedEpochs.has_value()
+        ? evaluation.completedEpochs
+        : candidate.completedEpochs;
+    row.accuracy = evaluation.accuracy;
+    row.acceptance = evaluation.acceptance;
+
+    std::cout << "INFER_ALL_MODEL_DONE"
+              << " model_id=" << row.modelId
+              << " accuracy=" << row.accuracy
+              << " accept_model=" << (row.acceptance.acceptModel ? "true" : "false")
+              << " reject_reason=" << row.acceptance.rejectReason
+              << std::endl;
+    return row;
+}
+
+int RunInferAllForSymbol(pqxx::work& w,
+                         const LaunchArgs& launchArgs,
+                         const std::string& rawPriceTableName,
+                         const std::string& fromDate,
+                         const std::string& toDate,
+                         const Tensor& tensor,
+                         EA::LSTM::TargetType requestedTargetType)
+{
+    size_t skippedDueToResume = 0;
+    size_t skippedIncompatible = 0;
+    std::vector<std::string> skippedModelLogs;
+    std::vector<InferAllCandidate> candidates =
+        LoadInferAllCandidates(w,
+                               launchArgs,
+                               rawPriceTableName,
+                               requestedTargetType,
+                               tensor,
+                               skippedDueToResume,
+                               skippedIncompatible,
+                               skippedModelLogs);
+
+    if (launchArgs.inferStartAfterModelId.has_value())
+    {
+        std::cout << "INFER_ALL_RESUME"
+                  << " start_after_model_id=" << *launchArgs.inferStartAfterModelId
+                  << " skipped_due_to_resume=" << skippedDueToResume
+                  << std::endl;
+    }
+
+    std::cout << "INFER_ALL_BEGIN"
+              << " symbol=" << rawPriceTableName
+              << " model_count=" << candidates.size()
+              << " start_after_model_id=";
+    if (launchArgs.inferStartAfterModelId.has_value())
+        std::cout << *launchArgs.inferStartAfterModelId;
+    else
+        std::cout << "none";
+    std::cout << std::endl;
+
+    for (const auto& skippedModelLog : skippedModelLogs)
+        std::cout << skippedModelLog << std::endl;
+
+    if (candidates.empty())
+    {
+        std::cout << "INFER_ALL_NO_MODELS"
+                  << " symbol=" << rawPriceTableName
+                  << std::endl;
+        std::cout << "runtime_infer=true; skipping model save" << std::endl;
+        return 0;
+    }
+
+    std::vector<InferAllSummaryRow> summaries;
+    summaries.reserve(candidates.size());
+    size_t skippedDuringEvaluation = 0;
+    for (const auto& candidate : candidates)
+    {
+        try
+        {
+            summaries.push_back(RunInferAllModel(w,
+                                                 launchArgs,
+                                                 candidate,
+                                                 rawPriceTableName,
+                                                 fromDate,
+                                                 toDate,
+                                                 tensor,
+                                                 requestedTargetType));
+        }
+        catch (const std::exception& e)
+        {
+            ++skippedDuringEvaluation;
+            std::cout << "INFER_ALL_MODEL_SKIPPED"
+                      << " model_id=" << candidate.modelId
+                      << " name=" << candidate.name
+                      << " reason=evaluation_failed:"
+                      << e.what()
+                      << std::endl;
+        }
+    }
+
+    long long bestModelId = -1;
+    double bestAccuracy = -1.0;
+    for (const auto& row : summaries)
+    {
+        if (row.accuracy > bestAccuracy)
+        {
+            bestAccuracy = row.accuracy;
+            bestModelId = row.modelId;
+        }
+    }
+    if (bestAccuracy < 0.0)
+        bestAccuracy = 0.0;
+
+    std::cout << "INFER_ALL_DONE"
+              << " evaluated=" << summaries.size()
+              << " skipped=" << (skippedDueToResume + skippedIncompatible + skippedDuringEvaluation)
+              << " best_model_id=" << bestModelId
+              << " best_accuracy=" << bestAccuracy
+              << std::endl;
+
+    std::cout << "INFER_ALL_SUMMARY" << std::endl;
+    std::cout << "model_id,name,completed_epochs,accuracy,accept_model,reject_reason,pred_down,pred_neutral,pred_up" << std::endl;
+    for (const auto& row : summaries)
+    {
+        std::cout << row.modelId
+                  << "," << row.name
+                  << ",";
+        if (row.completedEpochs.has_value())
+            std::cout << *row.completedEpochs;
+        else
+            std::cout << "missing";
+        std::cout << "," << row.accuracy
+                  << "," << (row.acceptance.acceptModel ? "true" : "false")
+                  << "," << row.acceptance.rejectReason
+                  << "," << row.acceptance.predFrac[0]
+                  << "," << row.acceptance.predFrac[1]
+                  << "," << row.acceptance.predFrac[2]
+                  << std::endl;
+    }
+
+    std::cout << "runtime_infer=true; skipping model save" << std::endl;
+    return 0;
 }
 }
 
@@ -4209,7 +4903,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
         return 1;
     }
 
@@ -4333,6 +5027,14 @@ int main(int argc, const char * argv[])
             const auto requestedTargetType = resumeConfig.has_value()
                 ? resumeConfig->targetType
                 : EA::LSTM::TargetType::UpNeutralDownReturn;
+            if (launchArgs.inferAll)
+                return RunInferAllForSymbol(w_LSTM,
+                                            launchArgs,
+                                            rawPriceTableName,
+                                            fromDate,
+                                            toDate,
+                                            t,
+                                            requestedTargetType);
             EA::LSTM l { t, 1, 0, requestedTargetType };
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
@@ -4408,192 +5110,95 @@ int main(int argc, const char * argv[])
                           << "; using default params" << std::endl;
             }
 
+            if (gRuntimeInferenceMode)
+            {
+                (void)RunInferenceEvaluation(w_LSTM,
+                                             launchArgs,
+                                             l,
+                                             t,
+                                             loadedModelId,
+                                             loadSource,
+                                             requestedTargetType,
+                                             rawPriceTableName,
+                                             fromDate,
+                                             toDate,
+                                             false);
+                std::cout << "runtime_infer=true; skipping model save" << std::endl;
+                break;
+            }
+
             UseRuntimeDefaultEvalLabelConfig();
             ModelConfigValidationResult modelConfigValidation;
             if (loadedModelId.has_value())
                 modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t, rawPriceTableName);
-            if (gRuntimeInferenceMode)
-            {
-                if (modelConfigValidation.trainConfigMeta.has_value())
-                    UseModelTrainEvalLabelConfig(*modelConfigValidation.trainConfigMeta);
-                else
-                    UseRuntimeDefaultEvalLabelConfig();
-            }
             PrintEvalLabelConfig();
-            if (gRuntimeInferenceMode)
-                PrintInferenceConfig(loadedModelId, loadSource, l, fromDate, toDate);
 
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
             PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
 
-            
-            size_t totalCorrectLog = 0;
-            size_t totalActedLog = 0;
-            size_t totalWindows = 0;
-            double totalAbsErrMove = 0.0;
-            size_t totalCorrectDir = 0;
-            size_t totalActedDir = 0;
-            size_t totalConfusion[direction_output_size][direction_output_size] = {};
-            PredictionStats totalTradeStats;
-            // Iterate all batches; inference evaluates once, training runs configured epochs.
+            // Iterate all training batches; inference exits through RunInferenceEvaluation above.
             std::cout << std::setprecision(15);
-                const int startEpoch = (!gRuntimeInferenceMode && resumeConfig.has_value())
+                const int startEpoch = resumeConfig.has_value()
                     ? static_cast<int>(resumeConfig->completedEpoch)
                     : 0;
-                const int evalPassCount = gRuntimeInferenceMode ? 1 : epoch_count;
-                for(auto e = startEpoch; e < evalPassCount; e++)
+                for(auto e = startEpoch; e < epoch_count; e++)
                 {
                     t.ForEachBatch( [&](auto b)
                                    {
-                        if (gRuntimeInferenceMode)
-                        {
-                            const auto predictionStats = ProcessBatchPredict(l, t, b);
-                            totalCorrectLog += predictionStats.correctLog;
-                            totalActedLog += predictionStats.actedLog;
-                            totalWindows += predictionStats.windows;
-                            totalAbsErrMove += predictionStats.absErrMove;
-                            totalCorrectDir += predictionStats.correctDir;
-                            totalActedDir += predictionStats.actedDir;
+                        auto l2 = [](const auto& m){
+                            // Ensure we operate on a concrete, materialized matrix to avoid stale/lazy views
+                            auto cm = MetaNN::Evaluate(m);
+                            auto low = MetaNN::LowerAccess(cm);
+                            const float* p = low.RawMemory();
+                            size_t len = cm.Shape()[0] * cm.Shape()[1];
+                            double s = 0;
+                            for (size_t i = 0; i < len; ++i) { double v = p[i]; s += v * v; }
+                            return std::sqrt(s);
+                        };
 
-                            for (size_t actual = 0; actual < direction_output_size; ++actual)
-                                for (size_t pred = 0; pred < direction_output_size; ++pred)
-                                    totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
+                        double p0 = l2(l.param);
+                        double b0 = l2(l.bias);
+                        double hw0 = l2(l.returnHeadWeight);
+                        double hb0 = l2(l.returnHeadBias);
+                        double dhw0 = l2(l.returnHeadDirWeight);
+                        double dhb0 = l2(l.returnHeadDirBias);
 
-                            totalTradeStats.tradeCount += predictionStats.tradeCount;
-                            totalTradeStats.longCount += predictionStats.longCount;
-                            totalTradeStats.shortCount += predictionStats.shortCount;
-                            totalTradeStats.flatCount += predictionStats.flatCount;
-                            totalTradeStats.winCount += predictionStats.winCount;
-                            totalTradeStats.lossCount += predictionStats.lossCount;
-                            totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
-                            totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
-                            totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
-                            totalTradeStats.longWinCount += predictionStats.longWinCount;
-                            totalTradeStats.longLossCount += predictionStats.longLossCount;
-                            totalTradeStats.longLogReturnSum += predictionStats.longLogReturnSum;
-                            totalTradeStats.longGrossPositiveLogReturn += predictionStats.longGrossPositiveLogReturn;
-                            totalTradeStats.longGrossNegativeLogReturn += predictionStats.longGrossNegativeLogReturn;
-                            totalTradeStats.shortWinCount += predictionStats.shortWinCount;
-                            totalTradeStats.shortLossCount += predictionStats.shortLossCount;
-                            totalTradeStats.shortLogReturnSum += predictionStats.shortLogReturnSum;
-                            totalTradeStats.shortGrossPositiveLogReturn += predictionStats.shortGrossPositiveLogReturn;
-                            totalTradeStats.shortGrossNegativeLogReturn += predictionStats.shortGrossNegativeLogReturn;
-                        }
+                        auto [loss, _unused1, _unused2] = l.CalculateBatch(b,e);
+                        (void)_unused1; (void)_unused2;
+
+                        double p1 = l2(l.param);
+                        double b1 = l2(l.bias);
+                        double hw1 = l2(l.returnHeadWeight);
+                        double hb1 = l2(l.returnHeadBias);
+                        double dhw1 = l2(l.returnHeadDirWeight);
+                        double dhb1 = l2(l.returnHeadDirBias);
+
+                        std::cout << "epoch " << (e+1)
+                        << " loss=" << loss
+                        << " ||param|| " << p0  << " -> " << p1
+                        << " ||bias|| "  << b0  << " -> " << b1;
+                        if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+                            std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
                         else
-                        {
-                            auto l2 = [](const auto& m){
-                                // Ensure we operate on a concrete, materialized matrix to avoid stale/lazy views
-                                auto cm = MetaNN::Evaluate(m);
-                                auto low = MetaNN::LowerAccess(cm);
-                                const float* p = low.RawMemory();
-                                size_t len = cm.Shape()[0] * cm.Shape()[1];
-                                double s = 0;
-                                for (size_t i = 0; i < len; ++i) { double v = p[i]; s += v * v; }
-                                return std::sqrt(s);
-                            };
-                            
-                            double p0 = l2(l.param);
-                            double b0 = l2(l.bias);
-                            double hw0 = l2(l.returnHeadWeight);
-                            double hb0 = l2(l.returnHeadBias);
-                            double dhw0 = l2(l.returnHeadDirWeight);
-                            double dhb0 = l2(l.returnHeadDirBias);
-                            
-                            auto [loss, _unused1, _unused2] = l.CalculateBatch(b,e);
-                            (void)_unused1; (void)_unused2;
-                            
-                            double p1 = l2(l.param);
-                            double b1 = l2(l.bias);
-                            double hw1 = l2(l.returnHeadWeight);
-                            double hb1 = l2(l.returnHeadBias);
-                            double dhw1 = l2(l.returnHeadDirWeight);
-                            double dhb1 = l2(l.returnHeadDirBias);
-                            
-                            std::cout << "epoch " << (e+1)
-                            << " loss=" << loss
-                            << " ||param|| " << p0  << " -> " << p1
-                            << " ||bias|| "  << b0  << " -> " << b1;
-                            if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
-                                std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
-                            else
-                                std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
-                        }
+                            std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                     } );
                     if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
                     {
-                        void PrintAndResetDistribution();
-                        
                         EA::LSTM::PrintAndResetEpochBuckets();
                         PrintAndResetDistribution();
                     }
-                    if (!gRuntimeInferenceMode)
-                    {
-                        l.completedEpochs = static_cast<size_t>(e + 1);
-                        SavePeriodicCheckpointIfDue(launchArgs,
-                                                    resumeConfig,
-                                                    rawPriceTableName,
-                                                    fromDate,
-                                                    toDate,
-                                                    l);
-                    }
+                    l.completedEpochs = static_cast<size_t>(e + 1);
+                    SavePeriodicCheckpointIfDue(launchArgs,
+                                                resumeConfig,
+                                                rawPriceTableName,
+                                                fromDate,
+                                                toDate,
+                                                l);
                 }
-            if (gRuntimeInferenceMode)
-            {
-                if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
-                {
-                    const double overallAcc3Class = totalWindows
-                        ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalWindows) * 100.0)
-                        : 0.0;
-
-                    std::cout << "Overall 3-class accuracy: " << overallAcc3Class
-                              << "% over " << totalWindows << " windows" << std::endl;
-                    std::cout << "Overall 3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
-                              << "[[" << totalConfusion[0][0] << ", " << totalConfusion[0][1] << ", " << totalConfusion[0][2] << "], "
-                              << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
-                              << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
-                              << std::endl;
-                    PrintModelAcceptanceDiagnostic(totalConfusion);
-
-                    if (launchArgs.evalTrading)
-                    {
-                        for (size_t actual = 0; actual < direction_output_size; ++actual)
-                            for (size_t pred = 0; pred < direction_output_size; ++pred)
-                                totalTradeStats.confusion[actual][pred] = totalConfusion[actual][pred];
-                        PrintEvalTradingMetrics(totalTradeStats);
-                    }
-                }
-                else
-                {
-                    const double overallAccLog = totalActedLog
-                        ? (static_cast<double>(totalCorrectLog) / static_cast<double>(totalActedLog) * 100.0)
-                        : 0.0;
-                    const double overallCovLog = totalWindows
-                        ? (static_cast<double>(totalActedLog) / static_cast<double>(totalWindows) * 100.0)
-                        : 0.0;
-                    const double overallMaeMove = totalWindows
-                        ? (totalAbsErrMove / static_cast<double>(totalWindows))
-                        : 0.0;
-                    const double overallAccDir = totalActedDir
-                        ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalActedDir) * 100.0)
-                        : 0.0;
-                    const double overallCovDir = totalWindows
-                        ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
-                        : 0.0;
-
-                    std::cout << "Overall direction accuracy (log-return): " << overallAccLog
-                              << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
-                              << " coverage=" << overallCovLog << "%" << std::endl;
-                    std::cout << "Overall MAE (relative move fraction): " << overallMaeMove
-                              << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
-                              << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
-                              << " coverage=" << overallCovDir << "%" << std::endl;
-                }
-            }
-
             // Persist trained model parameters to DB
             try
             {
-                if (save_enable && !gRuntimeInferenceMode)
+                if (save_enable)
                 {
                     // Ensure this transaction is read-write for saving
                     w_LSTM.exec("SET TRANSACTION READ WRITE;");
@@ -4656,9 +5261,7 @@ int main(int argc, const char * argv[])
                         std::cout << "RESUME_SAVED_NEW_MODEL_ID=" << modelId << std::endl;
                 }
                 else
-                    if (gRuntimeInferenceMode)
-                        std::cout << "runtime_infer=true; skipping model save" << std::endl;
-                    else if constexpr (!save_enable)
+                    if constexpr (!save_enable)
                         std::cout << "save_enable=false; skipping model save" << std::endl;
                     else
                         std::cout << "skipping model save (unknown reason)" << std::endl;
