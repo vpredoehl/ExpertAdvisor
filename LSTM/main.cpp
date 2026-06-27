@@ -3020,6 +3020,16 @@ const std::string dbModelName = "LSTM";
 
 namespace
 {
+std::string ForexDbConnectionString()
+{
+    return "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName;
+}
+
+std::string LstmDbConnectionString()
+{
+    return "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName;
+}
+
 struct LaunchArgs
 {
     std::string fromDate;
@@ -3040,6 +3050,7 @@ struct LaunchArgs
     std::optional<double> coreLrMult;
     std::optional<double> headWeightLrMult;
     std::optional<double> headBiasLrMult;
+    std::optional<int> checkpointEvery;
     bool evalTrading = false;
 };
 
@@ -3092,6 +3103,28 @@ int ParsePositiveIntArg(const std::string& optionName, const std::string& value)
     const size_t parsed = ParsePositiveSizeArg(optionName, value);
     if (parsed > static_cast<size_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; exceeds int range");
+    return static_cast<int>(parsed);
+}
+
+int ParseNonNegativeIntArg(const std::string& optionName, const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument(optionName + " requires a non-empty integer value");
+
+    size_t consumed = 0;
+    long long parsed = 0;
+    try
+    {
+        parsed = std::stoll(value, &consumed, 10);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected a non-negative integer");
+    }
+
+    if (consumed != value.size() || parsed < 0 || parsed > std::numeric_limits<int>::max())
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected a non-negative integer");
+
     return static_cast<int>(parsed);
 }
 
@@ -3183,6 +3216,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--new-model-name requires a non-empty value");
             parsed.newModelName = value;
         }
+        else if (arg == "--checkpoint-every")
+        {
+            if (parsed.checkpointEvery.has_value())
+                throw std::invalid_argument("--checkpoint-every specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--checkpoint-every requires a value");
+            parsed.checkpointEvery = ParseNonNegativeIntArg("--checkpoint-every", argv[++i]);
+        }
         else if (arg == "--model")
         {
             if (parsed.modelId.has_value())
@@ -3247,6 +3288,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             {
                 parsed.headBiasLrMult = ParsePositiveDoubleArg("--head-bias-lr-mult", value);
             }
+            else if (SplitOptionWithValue(arg, "--checkpoint-every", value))
+            {
+                if (parsed.checkpointEvery.has_value())
+                    throw std::invalid_argument("--checkpoint-every specified more than once");
+                parsed.checkpointEvery = ParseNonNegativeIntArg("--checkpoint-every", value);
+            }
             else if (SplitOptionWithValue(arg, "--symbol", value))
             {
                 if (parsed.symbol.has_value())
@@ -3296,7 +3343,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -3545,6 +3592,104 @@ void PrintRuntimeLrConfig(const EA::LSTM& lstm)
     else
         std::cout << "not_applicable";
     std::cout << std::endl;
+}
+
+std::string CheckpointBaseModelName(const LaunchArgs& launchArgs,
+                                    const std::optional<ResumeCheckpointConfig>& resumeConfig,
+                                    const std::string& rawPriceTableName)
+{
+    if (resumeConfig.has_value())
+        return launchArgs.newModelName.value_or(rawPriceTableName + "-resume-model");
+    return launchArgs.newModelName.value_or(rawPriceTableName + "-model");
+}
+
+std::string EpochCheckpointModelName(const std::string& baseModelName, size_t completedEpoch)
+{
+    std::ostringstream oss;
+    oss << baseModelName
+        << "_epoch"
+        << std::setw(3)
+        << std::setfill('0')
+        << completedEpoch;
+    return oss.str();
+}
+
+bool ModelNameExists(pqxx::work& w, const std::string& modelName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM model WHERE name = $1 LIMIT 1;",
+        modelName);
+    return !r.empty();
+}
+
+std::string UniqueModelName(pqxx::work& w, const std::string& desiredName)
+{
+    if (!ModelNameExists(w, desiredName))
+        return desiredName;
+
+    for (int suffix = 1; suffix <= 9999; ++suffix)
+    {
+        std::ostringstream candidate;
+        candidate << desiredName << "_dup" << std::setw(3) << std::setfill('0') << suffix;
+        if (!ModelNameExists(w, candidate.str()))
+            return candidate.str();
+    }
+
+    throw std::runtime_error("unable to allocate unique model name for checkpoint '" + desiredName + "'");
+}
+
+void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
+                                 const std::optional<ResumeCheckpointConfig>& resumeConfig,
+                                 const std::string& rawPriceTableName,
+                                 const std::string& fromDate,
+                                 const std::string& toDate,
+                                 EA::LSTM& lstm)
+{
+    if (!launchArgs.checkpointEvery.has_value() || *launchArgs.checkpointEvery <= 0)
+        return;
+    if (gRuntimeInferenceMode)
+    {
+        std::cout << "CHECKPOINT_SAVE_SKIPPED reason=inference_mode" << std::endl;
+        return;
+    }
+    if constexpr (!save_enable)
+    {
+        std::cout << "CHECKPOINT_SAVE_SKIPPED reason=save_disabled" << std::endl;
+        return;
+    }
+
+    const size_t completedEpoch = lstm.completedEpochs;
+    const size_t checkpointEvery = static_cast<size_t>(*launchArgs.checkpointEvery);
+    if (completedEpoch == 0 || completedEpoch % checkpointEvery != 0)
+        return;
+
+    const std::string baseName = CheckpointBaseModelName(launchArgs, resumeConfig, rawPriceTableName);
+    const std::string requestedName = EpochCheckpointModelName(baseName, completedEpoch);
+    pqxx::connection cCheckpoint { LstmDbConnectionString() };
+    pqxx::work wCheckpoint { cCheckpoint };
+    wCheckpoint.exec("SET TRANSACTION READ WRITE;");
+    const std::string checkpointName = UniqueModelName(wCheckpoint, requestedName);
+
+    std::cout << "CHECKPOINT_SAVE_BEGIN"
+              << " epoch=" << completedEpoch
+              << " name=" << checkpointName
+              << std::endl;
+    if (checkpointName != requestedName)
+        std::cout << "CHECKPOINT_SAVE_RENAMED"
+                  << " reason=name_exists"
+                  << " requested_name=" << requestedName
+                  << " using_name=" << checkpointName
+                  << std::endl;
+
+    const long long checkpointModelId =
+        DBIO::PgModelIO::createModel(wCheckpoint, checkpointName, "periodic training checkpoint");
+    DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm, rawPriceTableName, fromDate, toDate);
+    wCheckpoint.commit();
+    std::cout << "CHECKPOINT_SAVE_DONE"
+              << " epoch=" << completedEpoch
+              << " model_id=" << checkpointModelId
+              << " name=" << checkpointName
+              << std::endl;
 }
 
 const char* DirectionLabelRuleName()
@@ -4064,12 +4209,12 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
         return 1;
     }
 
-    pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
-    pqxx::connection c_LSTM { "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::connection c_forex { ForexDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
+    pqxx::connection c_LSTM { LstmDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
     w_LSTM.exec("SET TRANSACTION READ WRITE;");
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
@@ -4382,7 +4527,15 @@ int main(int argc, const char * argv[])
                         PrintAndResetDistribution();
                     }
                     if (!gRuntimeInferenceMode)
+                    {
                         l.completedEpochs = static_cast<size_t>(e + 1);
+                        SavePeriodicCheckpointIfDue(launchArgs,
+                                                    resumeConfig,
+                                                    rawPriceTableName,
+                                                    fromDate,
+                                                    toDate,
+                                                    l);
+                    }
                 }
             if (gRuntimeInferenceMode)
             {
