@@ -34,11 +34,11 @@
 #endif
 
 #ifndef LSTM_DIAG
-#define LSTM_DIAG 1
+#define LSTM_DIAG 0
 #endif
 
 #ifndef LSTM_HEAVY_DIAG
-#define LSTM_HEAVY_DIAG 1
+#define LSTM_HEAVY_DIAG 0
 #endif
 
 #ifndef LSTM_SHAPE_DIAG

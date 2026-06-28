@@ -4,7 +4,7 @@
 // Adjust these defaults in one place or override via target build settings
 // (Preprocessor Macros) as needed.
 
-#define LSTM_DEBUG_PRINTS 1
+#define LSTM_DEBUG_PRINTS 0
 #define LSTM_DEBUG_INTERNAL_PRINTS 0
 
 #ifndef LSTM_DISABLE_UPDATES
