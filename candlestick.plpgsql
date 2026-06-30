@@ -7,36 +7,36 @@ create type tgt as ( dt timestamp without time zone, target numeric(10,6) );
 CREATE OR REPLACE FUNCTION candlestick_cur(tbl text, n int, unit text, fromdt timestamp without time zone, todt timestamp without time zone)  RETURNS refcursor
 AS $$
 declare
-	higher_tf text;
-	c refcursor;
+    higher_tf text;
+    c refcursor;
 begin
-	select case when unit='minute' then 'hour'
-	when unit='hour' then 'day'
-	when unit='day' then 'month' 
-	when unit='month' then 'year' 
-	else ''	end into higher_tf;
-	if higher_tf='' then raise exception 'unit must be year, month, day, hour, minute, not %', unit; end if;
-	--raise info 'unit: %, higher_tf: %', unit, higher_tf;
+    select case when unit='minute' then 'hour'
+    when unit='hour' then 'day'
+    when unit='day' then 'month' 
+    when unit='month' then 'year' 
+    else ''    end into higher_tf;
+    if higher_tf='' then raise exception 'unit must be year, month, day, hour, minute, not %', unit; end if;
+    --raise info 'unit: %, higher_tf: %', unit, higher_tf;
 
-	open c no scroll for execute
-	'select *, (( high + low + close ) / 3)::numeric(10,6) as target from ( select distinct '
-		|| case 
-			when unit = 'day' then 'dt as dt, '
-			else 'dt + mn * interval ''' || n::text || ' ' || unit || ''' as dt, '
-		   end
-		|| 'case when count(*) over w=1 then lag(ask,1) over w_1row else first_value(ask) over w end::numeric(10,6) as open,'
-		|| ' last_value(ask) over w::numeric(10,6) as close,  '
-                || 'case when count(*) over w=1 then max(ask) over w_1row else max(ask) over w end::numeric(10,6) as high,'
-                || 'case when count(*) over w=1 then min(ask) over w_1row else min(ask) over w end::numeric(10,6) as low,'
-		|| ' sum(vol) over w::integer as vol   from ('
-		|| case
-			when unit = 'day' then ' select date_trunc(''day'', time - interval ''16 hours'') + interval ''16 hours'' as dt, 0 as mn, ask, vol '
-			else ' select date_trunc(''' || higher_tf || ''', time) as dt, extract(' || unit || ' from time)::int / ' || n::text || ' as mn,  ask, vol '
-		   end
-		|| ' from ' || tbl || ' where time between ''' || fromdt::text || ''' and ''' || todt::text || ''' order by time) as t'
-		|| ' window w as (partition by (dt, mn)), w_1row as ( rows 1 preceding ) order by dt asc);';
+    open c no scroll for execute
+    'select *, (( high + low + close ) / 3)::numeric(10,6) as target from ( select distinct '
+        || case 
+            when unit = 'day' then 'dt as dt, '
+            else 'dt + mn * interval ''' || n::text || ' ' || unit || ''' as dt, '
+           end
+        || 'first_value(ask) over w::numeric(10,6) as open,'
+        || ' last_value(ask) over w::numeric(10,6) as close,  '
+                || 'max(ask) over w::numeric(10,6) as high,'
+                || 'min(ask) over w::numeric(10,6) as low,'
+        || ' sum(vol) over w::integer as vol   from ('
+        || case
+            when unit = 'day' then ' select date_trunc(''day'', time - interval ''16 hours'') + interval ''16 hours'' as dt, 0 as mn, ask, vol '
+            else ' select date_trunc(''' || higher_tf || ''', time) as dt, extract(' || unit || ' from time)::int / ' || n::text || ' as mn,  ask, vol '
+           end
+        || ' from ' || tbl || ' where time between ''' || fromdt::text || ''' and ''' || todt::text || ''' order by time) as t'
+        || ' window w as (partition by (dt, mn)), w_1row as ( rows 1 preceding ) order by dt asc);';
 
-	return c;
+    return c;
 end;
 $$
 LANGUAGE 'plpgsql'
@@ -46,56 +46,56 @@ PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION candlestick(tbl text, n int, unit text, fromdt timestamp without time zone DEFAULT '-INFINITY', todt timestamp without time zone DEFAULT 'INFINITY')  RETURNS setof cst
 as $$
 declare
-	gl_row record;
-	c refcursor;
-	tf text;
-	qs text;
-	p text;
-	rc integer;
+    gl_row record;
+    c refcursor;
+    tf text;
+    qs text;
+    p text;
+    rc integer;
 begin
-	-- look for a materialized view
-	select substring(tbl,position('.' in tbl) + 1,6) into p;
-	--raise info 'p: %', p;
-	if position( 'rmp' in tbl ) != 0 then
-		begin	
-			select case
-	     			when unit = 'minute' then n::text || 'm'	
-	     			when unit = 'hour' then n::text|| 'hr'	
-		     			else n::text || unit
-				end into tf;			
-			--raise info 'using rmp: p %, tf %, fromdt %, todt %',p,tf,fromdt,todt;
-			return query select * from public.candlestick_mv(p,tf,fromdt,todt);
-			GET DIAGNOSTICS rc = ROW_COUNT;
-			--raise info 'rc: %', rc;
-			if rc > 0 then return; end if;
-		exception when others then
-			raise notice 'rmp: % %', SQLERRM, SQLSTATE;
-		end; 
-	elsif fromdt != '-INFINITY' and todt != 'INFINITY' then
-		begin
-			select case
-		     		when unit = 'minute' then n::text || 'm'	
-		     		when unit = 'hour' then n::text|| 'hr'	
-		     		else n::text || unit
-			end into tf;			
-			--raise info 'using candlestick_mv  tf: %, p: %', tf, p;
-			return query select * from public.candlestick_mv(p,tf,fromdt,todt);
-			GET DIAGNOSTICS rc = ROW_COUNT;
-			--raise info 'rc: %', rc;
-			if rc > 0 then return; end if;
-		exception when others then
-			raise notice 'INFINITY: % %', SQLERRM, SQLSTATE;
-		end; 
-	end if;
-	-- no view found
-	raise info 'Calculating candlesticks: % % %', tbl, n, unit;
-	select * from public.candlestick_cur(tbl, n, unit, fromdt, todt) into c;
-	LOOP
-		fetch next from c into gl_row;
-		-- raise info 'time: %, high: %, low: %, open: %, close: %', gl_row.time, gl_row.high, gl_row.low, gl_row.open, gl_row.close;
-		exit when not found;
-		return next gl_row;
-	END LOOP;
+    -- look for a materialized view
+    select substring(tbl,position('.' in tbl) + 1,6) into p;
+    --raise info 'p: %', p;
+    if position( 'rmp' in tbl ) != 0 then
+        begin    
+            select case
+                     when unit = 'minute' then n::text || 'm'    
+                     when unit = 'hour' then n::text|| 'hr'    
+                         else n::text || unit
+                end into tf;            
+            --raise info 'using rmp: p %, tf %, fromdt %, todt %',p,tf,fromdt,todt;
+            return query select * from public.candlestick_mv(p,tf,fromdt,todt);
+            GET DIAGNOSTICS rc = ROW_COUNT;
+            --raise info 'rc: %', rc;
+            if rc > 0 then return; end if;
+        exception when others then
+            raise notice 'rmp: % %', SQLERRM, SQLSTATE;
+        end; 
+    elsif fromdt != '-INFINITY' and todt != 'INFINITY' then
+        begin
+            select case
+                     when unit = 'minute' then n::text || 'm'    
+                     when unit = 'hour' then n::text|| 'hr'    
+                     else n::text || unit
+            end into tf;            
+            --raise info 'using candlestick_mv  tf: %, p: %', tf, p;
+            return query select * from public.candlestick_mv(p,tf,fromdt,todt);
+            GET DIAGNOSTICS rc = ROW_COUNT;
+            --raise info 'rc: %', rc;
+            if rc > 0 then return; end if;
+        exception when others then
+            raise notice 'INFINITY: % %', SQLERRM, SQLSTATE;
+        end; 
+    end if;
+    -- no view found
+    raise info 'Calculating candlesticks: % % %', tbl, n, unit;
+    select * from public.candlestick_cur(tbl, n, unit, fromdt, todt) into c;
+    LOOP
+        fetch next from c into gl_row;
+        -- raise info 'time: %, high: %, low: %, open: %, close: %', gl_row.time, gl_row.high, gl_row.low, gl_row.open, gl_row.close;
+        exit when not found;
+        return next gl_row;
+    END LOOP;
 end;
 $$ language plpgsql
 PARALLEL SAFE;
@@ -105,51 +105,51 @@ PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION candlestick_mv(tbl text, tf text, fromdt timestamp without time zone default '-INFINITY', todt timestamp without time zone default 'INFINITY') RETURNS setof cst
 as $$
 declare
-	f text;
-	y int;
-	key text;
-	qs text;
-	qs2 text;
-	u text;
-	b int;
-	e int;
-	has_table boolean;
-	hasview boolean;
+    f text;
+    y int;
+    key text;
+    qs text;
+    qs2 text;
+    u text;
+    b int;
+    e int;
+    has_table boolean;
+    hasview boolean;
 begin
-	select '' into u;
-	select false into hasview;
-	select 'with t as ( ' into qs;
+    select '' into u;
+    select false into hasview;
+    select 'with t as ( ' into qs;
 
-	begin
-		select date_part('year', fromdt) into b;
-	exception when numeric_value_out_of_range then
-		select 2000 into b;
-	end;
-	begin
-		select date_part('year', todt) into e;
-	exception when numeric_value_out_of_range then
-		select 2030 into e;
-	end;
-	--raise info 'b: %, e: %',b,e;
-	for y in b..e LOOP
-		select tbl || '_' || y || '_candlestick' || tf into key;
-		qs2 = format('select exists(select matviewname from pg_matviews where matviewname = %L) ', key);
-		execute qs2 into has_table;
-		--raise info 'key: %, has_table: %', key, has_table;
-		CONTINUE WHEN has_table is false;
-		select true into hasview;
-		qs = format(qs || u || 'select * from public.%I', key );
-		select ' union ' into u;
-		--raise info 'qs: %', qs;
-	END LOOP;
-	begin
-		if hasview = false then return; end if;
-		u = format(' ) select * from t where dt between %L and %L', fromdt, todt);
-		--raise info 'qs: %', qs || u;
-		RETURN QUERY EXECUTE qs || u;
-	exception when others then 
-		raise notice 'candlestick_mv: % %', SQLERRM, SQLSTATE;
-	end;
+    begin
+        select date_part('year', fromdt) into b;
+    exception when numeric_value_out_of_range then
+        select 2000 into b;
+    end;
+    begin
+        select date_part('year', todt) into e;
+    exception when numeric_value_out_of_range then
+        select 2030 into e;
+    end;
+    --raise info 'b: %, e: %',b,e;
+    for y in b..e LOOP
+        select tbl || '_' || y || '_candlestick' || tf into key;
+        qs2 = format('select exists(select matviewname from pg_matviews where matviewname = %L) ', key);
+        execute qs2 into has_table;
+        --raise info 'key: %, has_table: %', key, has_table;
+        CONTINUE WHEN has_table is false;
+        select true into hasview;
+        qs = format(qs || u || 'select * from public.%I', key );
+        select ' union ' into u;
+        --raise info 'qs: %', qs;
+    END LOOP;
+    begin
+        if hasview = false then return; end if;
+        u = format(' ) select * from t where dt between %L and %L', fromdt, todt);
+        --raise info 'qs: %', qs || u;
+        RETURN QUERY EXECUTE qs || u;
+    exception when others then 
+        raise notice 'candlestick_mv: % %', SQLERRM, SQLSTATE;
+    end;
 end;
 $$ language 'plpgsql'
 PARALLEL SAFE;

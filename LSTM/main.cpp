@@ -3390,14 +3390,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     {
         if (!parsed.inferenceMode.has_value() || !*parsed.inferenceMode)
             throw std::invalid_argument("--infer-all requires explicit --infer");
-        if (!parsed.symbol.has_value())
-            throw std::invalid_argument("--infer-all requires --symbol=<table_name>");
-        if (parsed.modelId.has_value())
-            throw std::invalid_argument("--infer-all cannot be combined with --model");
+        if (!parsed.symbol.has_value() && !parsed.modelId.has_value())
+            throw std::invalid_argument("--infer-all requires --model=<anchor_model_id> or --symbol=<table_name>");
+        if (parsed.modelId.has_value() && parsed.inferStartAfterModelId.has_value())
+            throw std::invalid_argument("--infer-all cannot combine --model anchor with --infer-start-after-model-id");
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -4245,6 +4245,309 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     return result;
 }
 
+struct PersistedInferenceConfig
+{
+    long long modelId = -1;
+    std::string modelName;
+    std::string symbol;
+    std::string symbolSource = "unknown";
+    TrainConfigMeta trainConfig;
+    bool hasTrainConfigMeta = false;
+    bool hasTargetMeta = false;
+    bool hasModelMeta = false;
+    bool hasCompleteTrainConfigMeta = false;
+    int modelInputWidth = 0;
+    size_t modelHiddenSize = 0;
+    EA::LSTM::TargetType targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+};
+
+template <typename T>
+std::string ValueToString(const T& value)
+{
+    std::ostringstream oss;
+    oss << value;
+    return oss.str();
+}
+
+std::string ModelNameForId(pqxx::work& w, long long modelId)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT COALESCE(name, '') FROM model WHERE model_id = $1;",
+        modelId);
+    if (r.empty())
+        throw std::runtime_error("model_id not found");
+    return r[0][0].as<std::string>();
+}
+
+long long LatestModelId(pqxx::work& w)
+{
+    pqxx::result r = w.exec("SELECT max(model_id) FROM model;");
+    if (r.empty() || r[0][0].is_null())
+        return -1;
+    return r[0][0].as<long long>();
+}
+
+std::optional<std::string> ResolveSymbolFromModelName(const std::string& modelName,
+                                                      const std::vector<std::string>& availableSymbols)
+{
+    std::optional<std::string> bestMatch;
+    for (const auto& symbol : availableSymbols)
+    {
+        const bool exact = (modelName == symbol);
+        const bool prefixWithDash = modelName.rfind(symbol + "-", 0) == 0;
+        const bool prefixWithUnderscore = modelName.rfind(symbol + "_", 0) == 0;
+        if (exact || prefixWithDash || prefixWithUnderscore)
+        {
+            if (!bestMatch.has_value() || symbol.size() > bestMatch->size())
+                bestMatch = symbol;
+        }
+    }
+    return bestMatch;
+}
+
+TrainConfigMeta LoadTrainConfigMetaForInference(pqxx::work& w,
+                                                long long modelId,
+                                                bool& hasCompleteExtendedFields)
+{
+    auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
+    auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
+    if (dims.n_rows != 1 ||
+        dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaFieldCount ||
+        vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaFieldCount))
+        throw std::runtime_error("train_config_meta missing required 1x8 inference fields");
+
+    TrainConfigMeta meta;
+    meta.schemaVersion = static_cast<int>(std::llround(vals[0]));
+    meta.predictionHorizon = static_cast<size_t>(std::llround(vals[1]));
+    meta.thresholdLogret = static_cast<float>(vals[2]);
+    meta.windowSize = static_cast<size_t>(std::llround(vals[3]));
+    meta.labelRuleId = static_cast<int>(std::llround(vals[4]));
+    meta.classWeightDown = static_cast<float>(vals[5]);
+    meta.classWeightNeutral = static_cast<float>(vals[6]);
+    meta.classWeightUp = static_cast<float>(vals[7]);
+    if (vals.size() >= 9)
+        meta.numLayers = static_cast<size_t>(std::llround(vals[8]));
+    if (vals.size() >= 10)
+        meta.normalizationVersion = static_cast<int>(std::llround(vals[9]));
+    if (vals.size() >= 11)
+        meta.epochsTrained = static_cast<size_t>(std::llround(vals[10]));
+    if (vals.size() >= 12)
+        meta.coreLrMult = static_cast<float>(vals[11]);
+    if (vals.size() >= 13)
+        meta.headWeightLrMult = static_cast<float>(vals[12]);
+    if (vals.size() >= 14)
+        meta.headBiasLrMult = static_cast<float>(vals[13]);
+
+    hasCompleteExtendedFields =
+        vals.size() >= static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount);
+    return meta;
+}
+
+void ValidateRedundantCliString(const char* param,
+                                const std::optional<std::string>& cliValue,
+                                const std::string& modelValue)
+{
+    if (!cliValue.has_value())
+        return;
+    if (*cliValue != modelValue)
+    {
+        std::cerr << "CONFIG_MISMATCH"
+                  << ",param=" << param
+                  << ",model=" << modelValue
+                  << ",cli=" << *cliValue
+                  << std::endl;
+        throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
+    }
+    std::cout << "INFERENCE_CLI_ARG_REDUNDANT"
+              << ",param=" << param
+              << ",value=" << *cliValue
+              << ",source=persisted_model"
+              << std::endl;
+}
+
+template <typename T>
+void ValidateRedundantCliInteger(const char* param,
+                                 const std::optional<T>& cliValue,
+                                 size_t modelValue)
+{
+    if (!cliValue.has_value())
+        return;
+    if (static_cast<size_t>(*cliValue) != modelValue)
+    {
+        std::cerr << "CONFIG_MISMATCH"
+                  << ",param=" << param
+                  << ",model=" << modelValue
+                  << ",cli=" << *cliValue
+                  << std::endl;
+        throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
+    }
+    std::cout << "INFERENCE_CLI_ARG_REDUNDANT"
+              << ",param=" << param
+              << ",value=" << *cliValue
+              << ",source=persisted_model"
+              << std::endl;
+}
+
+void ValidateRedundantCliFloat(const char* param,
+                               const std::optional<double>& cliValue,
+                               double modelValue)
+{
+    if (!cliValue.has_value())
+        return;
+    constexpr double kTolerance = 1e-7;
+    if (std::fabs(*cliValue - modelValue) > kTolerance)
+    {
+        std::cerr << "CONFIG_MISMATCH"
+                  << ",param=" << param
+                  << ",model=" << modelValue
+                  << ",cli=" << *cliValue
+                  << std::endl;
+        throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
+    }
+    std::cout << "INFERENCE_CLI_ARG_REDUNDANT"
+              << ",param=" << param
+              << ",value=" << *cliValue
+              << ",source=persisted_model"
+              << std::endl;
+}
+
+PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
+                                                      long long modelId,
+                                                      const LaunchArgs& launchArgs,
+                                                      const std::vector<std::string>& availableSymbols)
+{
+    PersistedInferenceConfig cfg;
+    cfg.modelId = modelId;
+    cfg.modelName = ModelNameForId(w, modelId);
+
+    try
+    {
+        cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+        cfg.symbolSource = "metadata";
+    }
+    catch (const std::exception&)
+    {
+        const auto modelNameSymbol = ResolveSymbolFromModelName(cfg.modelName, availableSymbols);
+        if (modelNameSymbol.has_value())
+        {
+            cfg.symbol = *modelNameSymbol;
+            cfg.symbolSource = "model_name";
+        }
+        else if (launchArgs.symbol.has_value())
+        {
+            cfg.symbol = *launchArgs.symbol;
+            cfg.symbolSource = "cli";
+        }
+        else
+        {
+            throw std::runtime_error("unable to resolve model symbol from train_symbol_meta, model name, or --symbol");
+        }
+    }
+
+    cfg.trainConfig = LoadTrainConfigMetaForInference(w,
+                                                      modelId,
+                                                      cfg.hasCompleteTrainConfigMeta);
+    cfg.hasTrainConfigMeta = true;
+    cfg.trainConfig.symbol = cfg.symbol;
+    if (cfg.trainConfig.schemaVersion != DBIO::PgModelIO::kTrainConfigMetaSchemaVersion)
+        throw std::runtime_error("unsupported train_config_meta schema_version");
+    if (cfg.trainConfig.labelRuleId != DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId)
+        throw std::runtime_error("unsupported train_config_meta label_rule_id");
+    if (cfg.trainConfig.numLayers != 1)
+        throw std::runtime_error("unsupported persisted num_layers; this binary supports only 1");
+
+    {
+        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+            throw std::runtime_error("model_meta missing required 1x3 inference fields");
+        const int schemaVersion = static_cast<int>(std::llround(vals[0]));
+        if (schemaVersion != 1)
+            throw std::runtime_error("unsupported model_meta schema_version");
+        cfg.modelInputWidth = static_cast<int>(std::llround(vals[1]));
+        cfg.modelHiddenSize = static_cast<size_t>(std::llround(vals[2]));
+        cfg.hasModelMeta = true;
+    }
+
+    try
+    {
+        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "target_meta");
+        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 6 || vals.size() != 6)
+            throw std::runtime_error("target_meta has invalid shape");
+        cfg.targetType = static_cast<EA::LSTM::TargetType>(static_cast<int>(std::llround(vals[0])));
+        cfg.hasTargetMeta = true;
+    }
+    catch (const std::exception&)
+    {
+        cfg.targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+    }
+
+    ValidateRedundantCliString("--symbol", launchArgs.symbol, cfg.symbol);
+    ValidateRedundantCliInteger("--prediction-horizon", launchArgs.predictionHorizon, cfg.trainConfig.predictionHorizon);
+    ValidateRedundantCliFloat("--threshold", launchArgs.thresholdLogret, cfg.trainConfig.thresholdLogret);
+    ValidateRedundantCliInteger("--window-size", launchArgs.windowSize, cfg.trainConfig.windowSize);
+    ValidateRedundantCliInteger("--hidden-size", launchArgs.hiddenSize, cfg.modelHiddenSize);
+    ValidateRedundantCliInteger("--num-layers", launchArgs.numLayers, cfg.trainConfig.numLayers);
+    if (cfg.trainConfig.coreLrMult.has_value())
+        ValidateRedundantCliFloat("--core-lr-mult", launchArgs.coreLrMult, *cfg.trainConfig.coreLrMult);
+    if (cfg.trainConfig.headWeightLrMult.has_value())
+        ValidateRedundantCliFloat("--head-weight-lr-mult", launchArgs.headWeightLrMult, *cfg.trainConfig.headWeightLrMult);
+    if (cfg.trainConfig.headBiasLrMult.has_value())
+        ValidateRedundantCliFloat("--head-bias-lr-mult", launchArgs.headBiasLrMult, *cfg.trainConfig.headBiasLrMult);
+
+    return cfg;
+}
+
+void ApplyPersistedInferenceRuntimeConfig(const PersistedInferenceConfig& cfg)
+{
+    prediction_horizon = cfg.trainConfig.predictionHorizon;
+    c_next_threshold = cfg.trainConfig.thresholdLogret;
+    window_size = cfg.trainConfig.windowSize;
+    hidden_size = cfg.modelHiddenSize;
+    n_out = hidden_size;
+    num_layers = cfg.trainConfig.numLayers;
+    normalization_version = cfg.trainConfig.normalizationVersion;
+    if (cfg.trainConfig.coreLrMult.has_value())
+        core_lr_mult = *cfg.trainConfig.coreLrMult;
+    if (cfg.trainConfig.headWeightLrMult.has_value())
+        head_weight_lr_mult = *cfg.trainConfig.headWeightLrMult;
+    if (cfg.trainConfig.headBiasLrMult.has_value())
+        head_bias_lr_mult = *cfg.trainConfig.headBiasLrMult;
+}
+
+void PrintResolvedInferenceConfig(const PersistedInferenceConfig& cfg)
+{
+    std::cout << "INFER_SYMBOL_RESOLVED"
+              << ",source=" << cfg.symbolSource
+              << ",symbol=" << cfg.symbol
+              << std::endl;
+    std::cout << "INFERENCE_CONFIG_RESOLVED"
+              << ",model_id=" << cfg.modelId
+              << ",symbol=" << cfg.symbol
+              << ",prediction_horizon=" << cfg.trainConfig.predictionHorizon
+              << ",threshold=" << cfg.trainConfig.thresholdLogret
+              << ",window_size=" << cfg.trainConfig.windowSize
+              << ",target_type=" << TargetTypeName(cfg.targetType)
+              << ",label_rule_id=" << cfg.trainConfig.labelRuleId
+              << ",source=persisted_model"
+              << std::endl;
+}
+
+std::optional<long long> InferenceAnchorModelId(pqxx::work& w, const LaunchArgs& launchArgs)
+{
+    if (!gRuntimeInferenceMode)
+        return std::nullopt;
+    if (launchArgs.modelId.has_value())
+        return *launchArgs.modelId;
+    if (launchArgs.inferAll)
+        return std::nullopt;
+    const long long latest = LatestModelId(w);
+    if (latest > 0)
+        return latest;
+    return std::nullopt;
+}
+
 struct InferAllCandidate
 {
     long long modelId = -1;
@@ -4261,6 +4564,15 @@ struct InferAllSummaryRow
     std::optional<size_t> completedEpochs;
     double accuracy = 0.0;
     ModelAcceptanceSummary acceptance;
+};
+
+struct InferAllSkipDetail
+{
+    std::string reason = "CONFIG_MISMATCH";
+    std::string field;
+    std::string anchor;
+    std::string candidate;
+    std::string detail;
 };
 
 struct InferenceEvaluationResult
@@ -4428,11 +4740,29 @@ bool InferAllCandidateCompatible(pqxx::work& w,
                                  const std::string& runtimeSymbol,
                                  EA::LSTM::TargetType requestedTargetType,
                                  const Tensor& tensor,
+                                 const TrainConfigMeta* anchorTrainConfig,
                                  InferAllCandidate& candidate,
-                                 std::string& skipReason)
+                                 InferAllSkipDetail& skipDetail)
 {
     candidate.legacyMissingSymbol = false;
     candidate.metadataGap = false;
+
+    auto configMismatch = [&](const char* field, const auto& anchorValue, const auto& candidateValue) -> bool
+    {
+        skipDetail.reason = "CONFIG_MISMATCH";
+        skipDetail.field = field;
+        skipDetail.anchor = ValueToString(anchorValue);
+        skipDetail.candidate = ValueToString(candidateValue);
+        return false;
+    };
+
+    auto invalidMetadata = [&](const char* field, const std::string& detail) -> bool
+    {
+        skipDetail.reason = "INVALID_METADATA";
+        skipDetail.field = field;
+        skipDetail.detail = detail;
+        return false;
+    };
 
     if (MatrixParamExists(w, modelId, "train_symbol_meta"))
     {
@@ -4440,19 +4770,21 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         {
             const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
             if (modelSymbol != runtimeSymbol)
-            {
-                skipReason = "symbol_mismatch";
-                return false;
-            }
+                return configMismatch("symbol", runtimeSymbol, modelSymbol);
         }
         catch (const std::exception& e)
         {
-            skipReason = std::string("invalid_train_symbol_meta:") + e.what();
-            return false;
+            return invalidMetadata("train_symbol_meta", e.what());
         }
     }
     else
     {
+        const bool candidateNameMatchesSymbol =
+            candidate.name == runtimeSymbol ||
+            candidate.name.rfind(runtimeSymbol + "-", 0) == 0 ||
+            candidate.name.rfind(runtimeSymbol + "_", 0) == 0;
+        if (!candidateNameMatchesSymbol)
+            return configMismatch("symbol", runtimeSymbol, "missing_train_symbol_meta");
         candidate.legacyMissingSymbol = true;
         candidate.metadataGap = true;
     }
@@ -4465,21 +4797,16 @@ bool InferAllCandidateCompatible(pqxx::work& w,
             auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
             if (dims.n_rows != 1 || dims.n_cols != 6 || vals.size() != 6)
             {
-                skipReason = "invalid_target_meta_shape";
-                return false;
+                return invalidMetadata("target_meta", "invalid_shape");
             }
             const auto modelTargetType =
                 static_cast<EA::LSTM::TargetType>(static_cast<int>(std::llround(vals[0])));
             if (static_cast<int>(modelTargetType) != static_cast<int>(requestedTargetType))
-            {
-                skipReason = "target_type_mismatch";
-                return false;
-            }
+                return configMismatch("target_type", TargetTypeName(requestedTargetType), TargetTypeName(modelTargetType));
         }
         catch (const std::exception& e)
         {
-            skipReason = std::string("invalid_target_meta:") + e.what();
-            return false;
+            return invalidMetadata("target_meta", e.what());
         }
     }
     else
@@ -4493,33 +4820,22 @@ bool InferAllCandidateCompatible(pqxx::work& w,
             auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
             if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
             {
-                skipReason = "invalid_model_meta_shape";
-                return false;
+                return invalidMetadata("model_meta", "invalid_shape");
             }
             const int schemaVersion = static_cast<int>(std::llround(vals[0]));
             const int modelInputWidth = static_cast<int>(std::llround(vals[1]));
             const int modelHiddenSize = static_cast<int>(std::llround(vals[2]));
-            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
             if (schemaVersion != 1)
-            {
-                skipReason = "model_meta_schema_mismatch";
-                return false;
-            }
+                return configMismatch("model_meta_schema_version", 1, schemaVersion);
+            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
             if (modelInputWidth != runtimeInputWidth)
-            {
-                skipReason = "feature_count_mismatch";
-                return false;
-            }
+                return configMismatch("feature_count", runtimeInputWidth, modelInputWidth);
             if (modelHiddenSize != static_cast<int>(hidden_size))
-            {
-                skipReason = "hidden_size_mismatch";
-                return false;
-            }
+                return configMismatch("hidden_size", hidden_size, modelHiddenSize);
         }
         catch (const std::exception& e)
         {
-            skipReason = std::string("invalid_model_meta:") + e.what();
-            return false;
+            return invalidMetadata("model_meta", e.what());
         }
     }
     else
@@ -4535,42 +4851,49 @@ bool InferAllCandidateCompatible(pqxx::work& w,
                 dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaFieldCount ||
                 vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaFieldCount))
             {
-                skipReason = "invalid_train_config_meta_shape";
-                return false;
+                return invalidMetadata("train_config_meta", "invalid_shape");
             }
 
-            auto checkInt = [&](const char* reason, double modelValue, long long runtimeValue) -> bool
+            auto checkInt = [&](const char* field, double modelValue, long long runtimeValue) -> bool
             {
-                if (static_cast<long long>(std::llround(modelValue)) != runtimeValue)
-                {
-                    skipReason = reason;
-                    return false;
-                }
+                const long long candidateValue = static_cast<long long>(std::llround(modelValue));
+                if (candidateValue != runtimeValue)
+                    return configMismatch(field, runtimeValue, candidateValue);
                 return true;
             };
-            auto checkFloat = [&](const char* reason, double modelValue, double runtimeValue) -> bool
+            auto checkFloat = [&](const char* field, double modelValue, double runtimeValue) -> bool
             {
                 if (!NearlyEqualDouble(modelValue, runtimeValue))
-                {
-                    skipReason = reason;
-                    return false;
-                }
+                    return configMismatch(field, runtimeValue, modelValue);
                 return true;
             };
 
-            if (!checkInt("schema_version_mismatch", vals[0], DBIO::PgModelIO::kTrainConfigMetaSchemaVersion) ||
-                !checkInt("prediction_horizon_mismatch", vals[1], prediction_horizon) ||
-                !checkFloat("threshold_logret_mismatch", vals[2], c_next_threshold) ||
-                !checkInt("window_size_mismatch", vals[3], window_size) ||
-                !checkInt("label_rule_id_mismatch", vals[4], DirectionLabelRuleId()) ||
-                !checkFloat("class_weight_down_mismatch", vals[5], kClassWeightDown) ||
-                !checkFloat("class_weight_neutral_mismatch", vals[6], kClassWeightNeutral) ||
-                !checkFloat("class_weight_up_mismatch", vals[7], kClassWeightUp))
+            const double anchorClassWeightDown = anchorTrainConfig ? anchorTrainConfig->classWeightDown : kClassWeightDown;
+            const double anchorClassWeightNeutral = anchorTrainConfig ? anchorTrainConfig->classWeightNeutral : kClassWeightNeutral;
+            const double anchorClassWeightUp = anchorTrainConfig ? anchorTrainConfig->classWeightUp : kClassWeightUp;
+            const double anchorCoreLrMult = (anchorTrainConfig && anchorTrainConfig->coreLrMult.has_value())
+                ? *anchorTrainConfig->coreLrMult
+                : EA::LSTM::CoreLrMultForTarget(requestedTargetType);
+            const double anchorHeadWeightLrMult = (anchorTrainConfig && anchorTrainConfig->headWeightLrMult.has_value())
+                ? *anchorTrainConfig->headWeightLrMult
+                : head_weight_lr_mult;
+            const double anchorHeadBiasLrMult = (anchorTrainConfig && anchorTrainConfig->headBiasLrMult.has_value())
+                ? *anchorTrainConfig->headBiasLrMult
+                : head_bias_lr_mult;
+
+            if (!checkInt("schema_version", vals[0], DBIO::PgModelIO::kTrainConfigMetaSchemaVersion) ||
+                !checkInt("prediction_horizon", vals[1], prediction_horizon) ||
+                !checkFloat("threshold_logret", vals[2], c_next_threshold) ||
+                !checkInt("window_size", vals[3], window_size) ||
+                !checkInt("label_rule_id", vals[4], DirectionLabelRuleId()) ||
+                !checkFloat("class_weight_down", vals[5], anchorClassWeightDown) ||
+                !checkFloat("class_weight_neutral", vals[6], anchorClassWeightNeutral) ||
+                !checkFloat("class_weight_up", vals[7], anchorClassWeightUp))
                 return false;
 
             if (vals.size() >= 9)
             {
-                if (!checkInt("num_layers_mismatch", vals[8], num_layers))
+                if (!checkInt("num_layers", vals[8], num_layers))
                     return false;
             }
             else
@@ -4578,7 +4901,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
 
             if (vals.size() >= 10)
             {
-                if (!checkInt("normalization_version_mismatch", vals[9], normalization_version))
+                if (!checkInt("normalization_version", vals[9], normalization_version))
                     return false;
             }
             else
@@ -4591,9 +4914,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
 
             if (vals.size() >= 12)
             {
-                if (!checkFloat("core_lr_mult_mismatch",
-                                vals[11],
-                                EA::LSTM::CoreLrMultForTarget(requestedTargetType)))
+                if (!checkFloat("core_lr_mult", vals[11], anchorCoreLrMult))
                     return false;
             }
             else
@@ -4601,7 +4922,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
 
             if (vals.size() >= 13)
             {
-                if (!checkFloat("head_weight_lr_mult_mismatch", vals[12], head_weight_lr_mult))
+                if (!checkFloat("head_weight_lr_mult", vals[12], anchorHeadWeightLrMult))
                     return false;
             }
             else
@@ -4609,7 +4930,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
 
             if (vals.size() >= 14)
             {
-                if (!checkFloat("head_bias_lr_mult_mismatch", vals[13], head_bias_lr_mult))
+                if (!checkFloat("head_bias_lr_mult", vals[13], anchorHeadBiasLrMult))
                     return false;
             }
             else
@@ -4617,8 +4938,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         }
         catch (const std::exception& e)
         {
-            skipReason = std::string("invalid_train_config_meta:") + e.what();
-            return false;
+            return invalidMetadata("train_config_meta", e.what());
         }
     }
     else
@@ -4632,13 +4952,14 @@ std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
                                                       const std::string& runtimeSymbol,
                                                       EA::LSTM::TargetType requestedTargetType,
                                                       const Tensor& tensor,
+                                                      const TrainConfigMeta* anchorTrainConfig,
                                                       size_t& skippedDueToResume,
                                                       size_t& skippedIncompatible,
                                                       std::vector<std::string>& skippedModelLogs)
 {
     skippedDueToResume = 0;
     skippedIncompatible = 0;
-    const long long startAfter = launchArgs.inferStartAfterModelId.value_or(0);
+    const long long startAfter = launchArgs.modelId.value_or(launchArgs.inferStartAfterModelId.value_or(0));
     if (startAfter > 0)
     {
         pqxx::result skipped = w.exec_params(
@@ -4659,14 +4980,15 @@ std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
         InferAllCandidate candidate;
         candidate.modelId = row[0].as<long long>();
         candidate.name = row[1].as<std::string>();
-        std::string skipReason;
+        InferAllSkipDetail skipDetail;
         if (InferAllCandidateCompatible(w,
                                         candidate.modelId,
                                         runtimeSymbol,
                                         requestedTargetType,
                                         tensor,
+                                        anchorTrainConfig,
                                         candidate,
-                                        skipReason))
+                                        skipDetail))
         {
             candidates.push_back(candidate);
         }
@@ -4674,10 +4996,17 @@ std::vector<InferAllCandidate> LoadInferAllCandidates(pqxx::work& w,
         {
             ++skippedIncompatible;
             std::ostringstream oss;
-            oss << "INFER_ALL_MODEL_SKIPPED"
-                << " model_id=" << candidate.modelId
-                << " name=" << candidate.name
-                << " reason=" << skipReason;
+            oss << "INFER_ALL_SKIP_MODEL"
+                << ",model_id=" << candidate.modelId
+                << ",reason=" << skipDetail.reason;
+            if (!skipDetail.field.empty())
+                oss << ",field=" << skipDetail.field;
+            if (!skipDetail.anchor.empty())
+                oss << ",anchor=" << skipDetail.anchor;
+            if (!skipDetail.candidate.empty())
+                oss << ",candidate=" << skipDetail.candidate;
+            if (!skipDetail.detail.empty())
+                oss << ",detail=" << skipDetail.detail;
             skippedModelLogs.push_back(oss.str());
         }
     }
@@ -4763,25 +5092,28 @@ int RunInferAllForSymbol(pqxx::work& w,
                          const std::string& fromDate,
                          const std::string& toDate,
                          const Tensor& tensor,
-                         EA::LSTM::TargetType requestedTargetType)
+                         EA::LSTM::TargetType requestedTargetType,
+                         const std::optional<PersistedInferenceConfig>& inferenceConfig)
 {
     size_t skippedDueToResume = 0;
     size_t skippedIncompatible = 0;
     std::vector<std::string> skippedModelLogs;
+    const long long startAfter = launchArgs.modelId.value_or(launchArgs.inferStartAfterModelId.value_or(0));
     std::vector<InferAllCandidate> candidates =
         LoadInferAllCandidates(w,
                                launchArgs,
                                rawPriceTableName,
                                requestedTargetType,
                                tensor,
+                               inferenceConfig.has_value() ? &inferenceConfig->trainConfig : nullptr,
                                skippedDueToResume,
                                skippedIncompatible,
                                skippedModelLogs);
 
-    if (launchArgs.inferStartAfterModelId.has_value())
+    if (startAfter > 0)
     {
         std::cout << "INFER_ALL_RESUME"
-                  << " start_after_model_id=" << *launchArgs.inferStartAfterModelId
+                  << " start_after_model_id=" << startAfter
                   << " skipped_due_to_resume=" << skippedDueToResume
                   << std::endl;
     }
@@ -4790,8 +5122,8 @@ int RunInferAllForSymbol(pqxx::work& w,
               << " symbol=" << rawPriceTableName
               << " model_count=" << candidates.size()
               << " start_after_model_id=";
-    if (launchArgs.inferStartAfterModelId.has_value())
-        std::cout << *launchArgs.inferStartAfterModelId;
+    if (startAfter > 0)
+        std::cout << startAfter;
     else
         std::cout << "none";
     std::cout << std::endl;
@@ -4827,11 +5159,10 @@ int RunInferAllForSymbol(pqxx::work& w,
         catch (const std::exception& e)
         {
             ++skippedDuringEvaluation;
-            std::cout << "INFER_ALL_MODEL_SKIPPED"
-                      << " model_id=" << candidate.modelId
-                      << " name=" << candidate.name
-                      << " reason=evaluation_failed:"
-                      << e.what()
+            std::cout << "INFER_ALL_SKIP_MODEL"
+                      << ",model_id=" << candidate.modelId
+                      << ",reason=EVALUATION_FAILED"
+                      << ",detail=" << e.what()
                       << std::endl;
         }
     }
@@ -4903,7 +5234,9 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n";
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
+                  << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
+                  << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
     }
 
@@ -4939,15 +5272,6 @@ int main(int argc, const char * argv[])
             return 1;
         }
     }
-    
-    std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
-    std::cout << "window_size=" << window_size << '\n';
-    std::cout << "prediction_horizon=" << prediction_horizon << '\n';
-    std::cout << "c_next_threshold=" << c_next_threshold << '\n';
-    PrintRuntimeConfig();
-    std::cout << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
-              << " (" << GateStateModeLabel() << ")\n";
-
     try
     {
         pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp' order by table_name;");
@@ -4955,6 +5279,47 @@ int main(int argc, const char * argv[])
         availableSymbols.reserve(tables.size());
         for (auto tbl : tables)
             availableSymbols.emplace_back(tbl[0].c_str());
+
+        std::optional<PersistedInferenceConfig> inferenceConfig;
+        if (!resumeConfig.has_value() && gRuntimeInferenceMode)
+        {
+            const auto anchorModelId = InferenceAnchorModelId(w_LSTM, launchArgs);
+            if (anchorModelId.has_value())
+            {
+                try
+                {
+                    inferenceConfig = LoadPersistedInferenceConfig(w_LSTM,
+                                                                   *anchorModelId,
+                                                                   launchArgs,
+                                                                   availableSymbols);
+                    ApplyPersistedInferenceRuntimeConfig(*inferenceConfig);
+                    PrintResolvedInferenceConfig(*inferenceConfig);
+                }
+                catch (const std::exception& e)
+                {
+                    std::cerr << "INFERENCE_CONFIG_RESOLVE_FAILED"
+                              << ",model_id=" << *anchorModelId
+                              << ",error=" << e.what()
+                              << std::endl;
+                    return 1;
+                }
+            }
+            else if (launchArgs.symbol.has_value())
+            {
+                std::cout << "INFER_SYMBOL_RESOLVED"
+                          << ",source=cli"
+                          << ",symbol=" << *launchArgs.symbol
+                          << std::endl;
+            }
+        }
+
+        std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
+        std::cout << "window_size=" << window_size << '\n';
+        std::cout << "prediction_horizon=" << prediction_horizon << '\n';
+        std::cout << "c_next_threshold=" << c_next_threshold << '\n';
+        PrintRuntimeConfig();
+        std::cout << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
+                  << " (" << GateStateModeLabel() << ")\n";
 
         std::vector<std::string> selectedSymbols;
         if (resumeConfig.has_value())
@@ -4965,6 +5330,22 @@ int main(int argc, const char * argv[])
             if (it == availableSymbols.end())
             {
                 std::cerr << "Requested resume symbol/table not found: " << resumeConfig->symbol << std::endl;
+                std::cerr << "AVAILABLE_SYMBOLS";
+                for (const auto& symbol : availableSymbols)
+                    std::cerr << "," << symbol;
+                std::cerr << std::endl;
+                return 1;
+            }
+            selectedSymbols.push_back(*it);
+        }
+        else if (inferenceConfig.has_value())
+        {
+            const auto it = std::find(availableSymbols.begin(),
+                                      availableSymbols.end(),
+                                      inferenceConfig->symbol);
+            if (it == availableSymbols.end())
+            {
+                std::cerr << "Resolved inference symbol/table not found: " << inferenceConfig->symbol << std::endl;
                 std::cerr << "AVAILABLE_SYMBOLS";
                 for (const auto& symbol : availableSymbols)
                     std::cerr << "," << symbol;
@@ -4997,7 +5378,7 @@ int main(int argc, const char * argv[])
         for (const auto& rawPriceTableName : selectedSymbols)
         {
             std::cout << "SYMBOL_SELECTION"
-                      << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none"))
+                      << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (inferenceConfig.has_value() ? inferenceConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")))
                       << ",selected=" << rawPriceTableName
                       << ",available_count=" << availableSymbols.size()
                       << std::endl;
@@ -5023,10 +5404,25 @@ int main(int argc, const char * argv[])
                     return 1;
                 }
             }
+            if (inferenceConfig.has_value())
+            {
+                const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
+                if (runtimeInputWidth != inferenceConfig->modelInputWidth)
+                {
+                    std::cout << "MODEL_CONFIG_MISMATCH"
+                              << ",field=feature_count"
+                              << ",model=" << inferenceConfig->modelInputWidth
+                              << ",runtime=" << runtimeInputWidth
+                              << std::endl;
+                    return 1;
+                }
+            }
   
             const auto requestedTargetType = resumeConfig.has_value()
                 ? resumeConfig->targetType
-                : EA::LSTM::TargetType::UpNeutralDownReturn;
+                : (inferenceConfig.has_value()
+                   ? inferenceConfig->targetType
+                   : EA::LSTM::TargetType::UpNeutralDownReturn);
             if (launchArgs.inferAll)
                 return RunInferAllForSymbol(w_LSTM,
                                             launchArgs,
@@ -5034,7 +5430,8 @@ int main(int argc, const char * argv[])
                                             fromDate,
                                             toDate,
                                             t,
-                                            requestedTargetType);
+                                            requestedTargetType,
+                                            inferenceConfig);
             EA::LSTM l { t, 1, 0, requestedTargetType };
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
