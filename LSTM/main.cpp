@@ -79,7 +79,87 @@ const char* GateStateModeLabel()
     }
 }
 
+enum class RuntimeLogLevel
+{
+    Quiet = 0,
+    Summary = 1,
+    Diagnostic = 2
+};
+
+RuntimeLogLevel gRuntimeLogLevel = RuntimeLogLevel::Summary;
 bool gRuntimeInferenceMode = default_runtime_inference_mode;
+
+bool LogSummary()
+{
+    return static_cast<int>(gRuntimeLogLevel) >= static_cast<int>(RuntimeLogLevel::Summary);
+}
+
+bool LogDiagnostic()
+{
+    return gRuntimeLogLevel == RuntimeLogLevel::Diagnostic;
+}
+
+RuntimeLogLevel ParseRuntimeLogLevel(const std::string& value)
+{
+    if (value == "quiet")
+        return RuntimeLogLevel::Quiet;
+    if (value == "summary")
+        return RuntimeLogLevel::Summary;
+    if (value == "diagnostic")
+        return RuntimeLogLevel::Diagnostic;
+    throw std::invalid_argument("invalid --log-level value '" + value + "'; expected quiet, summary, or diagnostic");
+}
+
+const char* RuntimeLogLevelName(RuntimeLogLevel level)
+{
+    switch (level)
+    {
+        case RuntimeLogLevel::Quiet: return "quiet";
+        case RuntimeLogLevel::Summary: return "summary";
+        case RuntimeLogLevel::Diagnostic: return "diagnostic";
+    }
+    return "unknown";
+}
+
+class NullLogBuffer : public std::streambuf
+{
+public:
+    int overflow(int c) override
+    {
+        return c;
+    }
+};
+
+std::ostream& DiagnosticOut()
+{
+    static NullLogBuffer nullBuffer;
+    static std::ostream nullStream(&nullBuffer);
+    return LogDiagnostic() ? std::cout : nullStream;
+}
+
+class ScopedDiagnosticCoutSilencer
+{
+public:
+    ScopedDiagnosticCoutSilencer()
+    {
+        if (!LogDiagnostic())
+            previousBuffer = std::cout.rdbuf(nullStream.rdbuf());
+    }
+
+    ~ScopedDiagnosticCoutSilencer()
+    {
+        if (previousBuffer != nullptr)
+            std::cout.rdbuf(previousBuffer);
+    }
+
+    ScopedDiagnosticCoutSilencer(const ScopedDiagnosticCoutSilencer&) = delete;
+    ScopedDiagnosticCoutSilencer& operator=(const ScopedDiagnosticCoutSilencer&) = delete;
+
+private:
+    NullLogBuffer nullBuffer;
+    std::ostream nullStream { &nullBuffer };
+    std::streambuf* previousBuffer = nullptr;
+};
 
 const char* CurrentRangeKindLabel()
 {
@@ -182,7 +262,7 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
                 "PrintClassificationProofDiagnostics: returnHeadDirBias width mismatch");
 
     const auto& evalConfig = ActiveEvalLabelConfig();
-    std::cout << "DIAG_CLASS_THRESHOLDS"
+    DiagnosticOut() << "DIAG_CLASS_THRESHOLDS"
               << ",range_kind=" << CurrentRangeKindLabel()
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -194,7 +274,7 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
               << ",neutral_rule=no_threshold_hit_within_horizon"
               << ",output_dim=" << direction_output_size
               << std::endl;
-    std::cout << "DIAG_CLASS_LABEL_RULE"
+    DiagnosticOut() << "DIAG_CLASS_LABEL_RULE"
               << ",training_label=lookahead_high_low_first_hit"
               << ",inference_eval_label=lookahead_high_low_first_hit"
               << std::endl;
@@ -217,7 +297,7 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
 
         if (printedRows < 20)
         {
-            std::cout << "DIAG_CLASS_ROW"
+            DiagnosticOut() << "DIAG_CLASS_ROW"
                       << ",idx=" << printedRows
                       << ",dt=" << info.dt
                       << ",target_dt=" << info.targetDt
@@ -236,7 +316,7 @@ void PrintClassificationProofDiagnostics(const EA::LSTM& l,
     }
 
     const double denom = (windowCount > 0) ? static_cast<double>(windowCount) : 1.0;
-    std::cout << "DIAG_CLASS_HIST"
+    DiagnosticOut() << "DIAG_CLASS_HIST"
               << ",range_kind=" << CurrentRangeKindLabel()
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -306,7 +386,7 @@ void PrintPhase2ScalarLine(const char* label,
                            const char* name,
                            const Phase2ScalarStats& s)
 {
-    std::cout << label
+    DiagnosticOut() << label
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -343,7 +423,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     constexpr double kRawFxLowerBound = 0.2;
     constexpr double kRawFxUpperBound = 2.0;
 
-    std::cout << "DIAG_DATA_CONFIG"
+    DiagnosticOut() << "DIAG_DATA_CONFIG"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -356,7 +436,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
               << ",raw_volume=0"
               << ",raw_target=0"
               << std::endl;
-    std::cout << "DIAG_FEATURE_CONFIG"
+    DiagnosticOut() << "DIAG_FEATURE_CONFIG"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -366,7 +446,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
               << ",feature_uses_future_values=0"
               << ",feature_uses_target_column=0"
               << std::endl;
-    std::cout << "DIAG_NORM_CONFIG"
+    DiagnosticOut() << "DIAG_NORM_CONFIG"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -380,11 +460,11 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
               << ",regression_inference_pre_lstm_nonfinite_fail=1"
               << ",regression_inference_pre_lstm_clamp=10"
               << std::endl;
-    std::cout << "DIAG_DATA_WARN"
+    DiagnosticOut() << "DIAG_DATA_WARN"
               << ",range_kind=" << rangeKind
               << ",kind=volume_not_ingested_in_active_postgresql_path"
               << std::endl;
-    std::cout << "DIAG_DATA_WARN"
+    DiagnosticOut() << "DIAG_DATA_WARN"
               << ",range_kind=" << rangeKind
               << ",kind=target_column_not_used_in_active_postgresql_path"
               << std::endl;
@@ -431,7 +511,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
             ++badRawRowCount;
             if (badRawRowPrinted < kDiagBadRowLimit)
             {
-                std::cout << "DIAG_DATA_BAD_ROW"
+                DiagnosticOut() << "DIAG_DATA_BAD_ROW"
                           << ",range_kind=" << rangeKind
                           << ",row=" << rowIdx
                           << ",dt=" << dt
@@ -477,7 +557,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                 ++featureSpikeCount;
                 if (featureSpikePrinted < kDiagBadRowLimit)
                 {
-                    std::cout << "DIAG_FEATURE_SPIKE"
+                    DiagnosticOut() << "DIAG_FEATURE_SPIKE"
                               << ",range_kind=" << rangeKind
                               << ",row=" << rowIdx
                               << ",dt=" << dt
@@ -499,7 +579,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "close", rawCloseStats);
     PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "high", rawHighStats);
     PrintPhase2ScalarLine("DIAG_DATA_RAW_COL", rangeKind, fromDate, toDate, "low", rawLowStats);
-    std::cout << "DIAG_DATA_BAD_ROW_SUMMARY"
+    DiagnosticOut() << "DIAG_DATA_BAD_ROW_SUMMARY"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -515,7 +595,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
             ++zeroVarFeatureCount;
     }
 
-    std::cout << "DIAG_FEATURE_BASE_GLOBAL"
+    DiagnosticOut() << "DIAG_FEATURE_BASE_GLOBAL"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -535,7 +615,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     for (size_t c = 0; c < std::min(cols, kDiagFeatureCols); ++c)
     {
         const auto& s = featureColStats[c];
-        std::cout << "DIAG_FEATURE_BASE_COL"
+        DiagnosticOut() << "DIAG_FEATURE_BASE_COL"
                   << ",range_kind=" << rangeKind
                   << ",from=" << fromDate
                   << ",to=" << toDate
@@ -551,7 +631,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                   << std::endl;
     }
 
-    std::cout << "DIAG_FEATURE_SPIKE_GLOBAL"
+    DiagnosticOut() << "DIAG_FEATURE_SPIKE_GLOBAL"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -572,7 +652,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
             continue;
 
         const auto it = tensor.begin() + static_cast<std::ptrdiff_t>(featureColAbsmaxRow[c]);
-        std::cout << "DIAG_FEATURE_SPIKE_COL"
+        DiagnosticOut() << "DIAG_FEATURE_SPIKE_COL"
                   << ",range_kind=" << rangeKind
                   << ",from=" << fromDate
                   << ",to=" << toDate
@@ -588,7 +668,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                   << std::endl;
     }
 
-    std::cout << "DIAG_FEATURE_SPIKE_SUMMARY"
+    DiagnosticOut() << "DIAG_FEATURE_SPIKE_SUMMARY"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -610,7 +690,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                 windowStats.add(static_cast<double>(p[c]));
         }
 
-        std::cout << "DIAG_FEATURE_BASE_WINDOW"
+        DiagnosticOut() << "DIAG_FEATURE_BASE_WINDOW"
                   << ",range_kind=" << rangeKind
                   << ",from=" << fromDate
                   << ",to=" << toDate
@@ -658,7 +738,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
             if (badLookaheadPrinted < kDiagBadRowLimit)
             {
                 const auto info = BuildLookaheadClassInfo(tensor, startIt);
-                std::cout << "DIAG_DATA_BAD_LOOKAHEAD"
+                DiagnosticOut() << "DIAG_DATA_BAD_LOOKAHEAD"
                           << ",range_kind=" << rangeKind
                           << ",start_row=" << startRow
                           << ",start_dt=" << tensor.RawTimeAtIterator(lastIt)
@@ -685,7 +765,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
             ++badLookaheadWindows;
     }
 
-    std::cout << "DIAG_DATA_BAD_LOOKAHEAD_SUMMARY"
+    DiagnosticOut() << "DIAG_DATA_BAD_LOOKAHEAD_SUMMARY"
               << ",range_kind=" << rangeKind
               << ",from=" << fromDate
               << ",to=" << toDate
@@ -706,7 +786,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
 
     if (featureGlobalStats.absmax > kFeatureAbsMaxWarnThreshold)
     {
-        std::cout << "DIAG_FEATURE_WARN"
+        DiagnosticOut() << "DIAG_FEATURE_WARN"
                   << ",range_kind=" << rangeKind
                   << ",kind=absmax_exceeds_sane_threshold"
                   << ",threshold=" << kFeatureAbsMaxWarnThreshold
@@ -716,7 +796,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
 
     if (zeroVarFeatureCount > 0)
     {
-        std::cout << "DIAG_FEATURE_WARN"
+        DiagnosticOut() << "DIAG_FEATURE_WARN"
                   << ",range_kind=" << rangeKind
                   << ",kind=near_zero_std_features"
                   << ",threshold=" << kNearZeroStdThreshold
@@ -2695,7 +2775,7 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
         constexpr size_t kInferLabelRowDiagLimit = 50;
         if (!s_inferLabelRulePrinted)
         {
-            std::cout << "DIAG_INFER_LABEL_RULE"
+            DiagnosticOut() << "DIAG_INFER_LABEL_RULE"
                       << ",eval_label=lookahead_high_low_first_hit"
                       << ",old_terminal_close_class=reported_for_comparison"
                       << ",threshold_logret=" << evalConfig.thresholdLogret
@@ -2746,7 +2826,7 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
                 const size_t globalLastIdx = globalStartIdx + evalConfig.windowSize - 1;
                 const size_t globalTargetIdx = globalLastIdx + evalConfig.predictionHorizon;
                 const size_t globalFutureIdx = globalLastIdx + labelInfo.selectedOffset;
-                std::cout << "DIAG_INFER_LABEL_ROW"
+                DiagnosticOut() << "DIAG_INFER_LABEL_ROW"
                           << ",global_tensor_row_idx=" << globalStartIdx
                           << ",last_row_idx=" << globalLastIdx
                           << ",target_row_idx=" << globalTargetIdx
@@ -2853,23 +2933,23 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
         const auto s_act  = stats(actClassF);
         const auto s_prob = stats(predMaxProb);
 
-        std::cout << "pred_class stats: min=" << s_pred.min << " max=" << s_pred.max
-                  << " mean=" << s_pred.mean << " std=" << s_pred.std
-                  << " uniq~=" << s_pred.uniq << std::endl;
-        std::cout << "act_class stats: min=" << s_act.min << " max=" << s_act.max
-                  << " mean=" << s_act.mean << " std=" << s_act.std
-                  << " uniq~=" << s_act.uniq << std::endl;
-        std::cout << "pred_max_prob stats: min=" << s_prob.min << " max=" << s_prob.max
-                  << " mean=" << s_prob.mean << " std=" << s_prob.std
-                  << " uniq~=" << s_prob.uniq << std::endl;
+        DiagnosticOut() << "pred_class stats: min=" << s_pred.min << " max=" << s_pred.max
+                        << " mean=" << s_pred.mean << " std=" << s_pred.std
+                        << " uniq~=" << s_pred.uniq << std::endl;
+        DiagnosticOut() << "act_class stats: min=" << s_act.min << " max=" << s_act.max
+                        << " mean=" << s_act.mean << " std=" << s_act.std
+                        << " uniq~=" << s_act.uniq << std::endl;
+        DiagnosticOut() << "pred_max_prob stats: min=" << s_prob.min << " max=" << s_prob.max
+                        << " mean=" << s_prob.mean << " std=" << s_prob.std
+                        << " uniq~=" << s_prob.uniq << std::endl;
 
         const double acc = static_cast<double>(correct) / static_cast<double>(N) * 100.0;
-        std::cout << "3-class accuracy: " << acc << "% over " << N << " windows" << std::endl;
-        std::cout << "3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
-                  << "[[" << result.confusion[0][0] << ", " << result.confusion[0][1] << ", " << result.confusion[0][2] << "], "
-                  << "[" << result.confusion[1][0] << ", " << result.confusion[1][1] << ", " << result.confusion[1][2] << "], "
-                  << "[" << result.confusion[2][0] << ", " << result.confusion[2][1] << ", " << result.confusion[2][2] << "]]"
-                  << std::endl;
+        DiagnosticOut() << "3-class accuracy: " << acc << "% over " << N << " windows" << std::endl;
+        DiagnosticOut() << "3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
+                        << "[[" << result.confusion[0][0] << ", " << result.confusion[0][1] << ", " << result.confusion[0][2] << "], "
+                        << "[" << result.confusion[1][0] << ", " << result.confusion[1][1] << ", " << result.confusion[1][2] << "], "
+                        << "[" << result.confusion[2][0] << ", " << result.confusion[2][1] << ", " << result.confusion[2][2] << "]]"
+                        << std::endl;
 
 #if LSTM_DEBUG_INTERNAL_PRINTS
         const size_t toPrint = std::min<size_t>(N, 10);
@@ -2937,15 +3017,15 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
 
     auto s_raw = stats(predLogRet);
     auto s_rel = stats(predRel);
-    std::cout << "pred_raw stats: min=" << s_raw.min << " max=" << s_raw.max
-              << " mean=" << s_raw.mean << " std=" << s_raw.std
-              << " uniq~=" << s_raw.uniq << std::endl;
-    std::cout << "std ratio (pred_raw/actLogRet): " << (s_gt.std > 0.0 ? (s_raw.std / s_gt.std) : 0.0) << std::endl;
-    std::cout << "means: pred_raw=" << s_raw.mean << " actLogRet=" << s_gt.mean << std::endl;
+    DiagnosticOut() << "pred_raw stats: min=" << s_raw.min << " max=" << s_raw.max
+                    << " mean=" << s_raw.mean << " std=" << s_raw.std
+                    << " uniq~=" << s_raw.uniq << std::endl;
+    DiagnosticOut() << "std ratio (pred_raw/actLogRet): " << (s_gt.std > 0.0 ? (s_raw.std / s_gt.std) : 0.0) << std::endl;
+    DiagnosticOut() << "means: pred_raw=" << s_raw.mean << " actLogRet=" << s_gt.mean << std::endl;
 
-    std::cout << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
-              << " mean=" << s_rel.mean << " std=" << s_rel.std
-              << " uniq~=" << s_rel.uniq << std::endl;
+    DiagnosticOut() << "pred_rel stats: min=" << s_rel.min << " max=" << s_rel.max
+                    << " mean=" << s_rel.mean << " std=" << s_rel.std
+                    << " uniq~=" << s_rel.uniq << std::endl;
 
     std::vector<float> predMove = predRel;
     std::vector<float> actualMove = actRel;
@@ -2965,10 +3045,10 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
     }
     double accLog = actedLog ? (static_cast<double>(correctLog) / static_cast<double>(actedLog) * 100.0) : 0.0;
     double covLog = N ? (static_cast<double>(actedLog) / static_cast<double>(N) * 100.0) : 0.0;
-    std::cout << "Direction accuracy (log-return): " << accLog
-              << "% over " << actedLog << " acted (of " << N << ")"
-              << " thr=" << actedThrLog
-              << " coverage=" << covLog << "%" << std::endl;
+    DiagnosticOut() << "Direction accuracy (log-return): " << accLog
+                    << "% over " << actedLog << " acted (of " << N << ")"
+                    << " thr=" << actedThrLog
+                    << " coverage=" << covLog << "%" << std::endl;
 
 #if LSTM_DEBUG_INTERNAL_PRINTS
     const size_t M = std::min<size_t>(5, std::min(predLogRet.size(), actLogRet.size()));
@@ -3011,17 +3091,17 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
         if (predUp == actUp) ++correctDir;
     }
 
-    if (N > 0)  std::cout << "Batch MAE (relative move fraction): "
-                  << (maeMove / static_cast<double>(N))
-                  << " | Direction accuracy (relative move, thresholded): "
-                  << (acted ? (static_cast<double>(correctDir) /
-                               static_cast<double>(acted) * 100.0)
-                            : 0.0)
-                  << "% over " << acted << " acted (of " << N << ")"
-                  << " predThr=" << predThr
-                  << " actThr=" << actThr
-                  << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
-                  << std::endl;
+    if (N > 0)  DiagnosticOut() << "Batch MAE (relative move fraction): "
+                                << (maeMove / static_cast<double>(N))
+                                << " | Direction accuracy (relative move, thresholded): "
+                                << (acted ? (static_cast<double>(correctDir) /
+                                             static_cast<double>(acted) * 100.0)
+                                          : 0.0)
+                                << "% over " << acted << " acted (of " << N << ")"
+                                << " predThr=" << predThr
+                                << " actThr=" << actThr
+                                << " coverage=" << (static_cast<double>(acted) / static_cast<double>(N) * 100.0) << "%"
+                                << std::endl;
 
     PredictionStats result;
     result.correctLog = correctLog;
@@ -3070,8 +3150,10 @@ struct LaunchArgs
     std::optional<double> headBiasLrMult;
     std::optional<int> checkpointEvery;
     std::optional<long long> inferStartAfterModelId;
+    std::optional<RuntimeLogLevel> logLevel;
     bool evalTrading = false;
     bool inferAll = false;
+    bool forceInfer = false;
 };
 
 long long ParseModelIdArg(const std::string& value)
@@ -3252,6 +3334,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--infer-start-after-model-id requires a model_id value");
             parsed.inferStartAfterModelId = ParseModelIdArg(argv[++i]);
         }
+        else if (arg == "--log-level")
+        {
+            if (parsed.logLevel.has_value())
+                throw std::invalid_argument("--log-level specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--log-level requires quiet, summary, or diagnostic");
+            parsed.logLevel = ParseRuntimeLogLevel(argv[++i]);
+        }
         else if (arg == "--model")
         {
             if (parsed.modelId.has_value())
@@ -3280,6 +3370,10 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         else if (arg == "--infer-all")
         {
             parsed.inferAll = true;
+        }
+        else if (arg == "--force-infer")
+        {
+            parsed.forceInfer = true;
         }
         else
         {
@@ -3331,6 +3425,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.inferStartAfterModelId.has_value())
                     throw std::invalid_argument("--infer-start-after-model-id specified more than once");
                 parsed.inferStartAfterModelId = ParseModelIdArg(value);
+            }
+            else if (SplitOptionWithValue(arg, "--log-level", value))
+            {
+                if (parsed.logLevel.has_value())
+                    throw std::invalid_argument("--log-level specified more than once");
+                parsed.logLevel = ParseRuntimeLogLevel(value);
             }
             else if (SplitOptionWithValue(arg, "--symbol", value))
             {
@@ -3386,6 +3486,8 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 
     if (parsed.inferStartAfterModelId.has_value() && !parsed.inferAll)
         throw std::invalid_argument("--infer-start-after-model-id requires --infer-all");
+    if (parsed.forceInfer && !parsed.inferAll)
+        throw std::invalid_argument("--force-infer requires --infer-all");
     if (parsed.inferAll)
     {
         if (!parsed.inferenceMode.has_value() || !*parsed.inferenceMode)
@@ -3397,7 +3499,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -3412,6 +3514,8 @@ void ApplyLaunchRuntimeConfig(const LaunchArgs& launchArgs)
         prediction_horizon = *launchArgs.predictionHorizon;
     if (launchArgs.thresholdLogret.has_value())
         c_next_threshold = static_cast<float>(*launchArgs.thresholdLogret);
+    if (launchArgs.logLevel.has_value())
+        gRuntimeLogLevel = *launchArgs.logLevel;
     if (launchArgs.windowSize.has_value())
         window_size = *launchArgs.windowSize;
     if (launchArgs.hiddenSize.has_value())
@@ -3595,9 +3699,12 @@ void ApplyResumeRuntimeConfig(const ResumeCheckpointConfig& cfg, int targetEpoch
 
 void PrintRuntimeConfig()
 {
+    if (!LogSummary())
+        return;
     std::cout << "RUNTIME_CONFIG"
               << ",train=" << (gRuntimeInferenceMode ? "false" : "true")
               << ",infer=" << (gRuntimeInferenceMode ? "true" : "false")
+              << ",log_level=" << RuntimeLogLevelName(gRuntimeLogLevel)
               << ",prediction_horizon=" << prediction_horizon
               << ",threshold=" << c_next_threshold
               << ",window_size=" << window_size
@@ -3623,6 +3730,8 @@ const char* TargetTypeName(EA::LSTM::TargetType targetType)
 
 void PrintRuntimeLrConfig(const EA::LSTM& lstm)
 {
+    if (!LogDiagnostic())
+        return;
     const float coreLrMult = EA::LSTM::CoreLrMultForTarget(lstm.targetType);
     const bool directionHeadPath =
         (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn);
@@ -3703,12 +3812,12 @@ void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
         return;
     if (gRuntimeInferenceMode)
     {
-        std::cout << "CHECKPOINT_SAVE_SKIPPED reason=inference_mode" << std::endl;
+        DiagnosticOut() << "CHECKPOINT_SAVE_SKIPPED reason=inference_mode" << std::endl;
         return;
     }
     if constexpr (!save_enable)
     {
-        std::cout << "CHECKPOINT_SAVE_SKIPPED reason=save_disabled" << std::endl;
+        DiagnosticOut() << "CHECKPOINT_SAVE_SKIPPED reason=save_disabled" << std::endl;
         return;
     }
 
@@ -3785,6 +3894,8 @@ std::string JoinStrings(const std::vector<std::string>& values, const char* sepa
 
 void PrintEvalLabelConfig()
 {
+    if (!LogDiagnostic())
+        return;
     const auto& evalConfig = ActiveEvalLabelConfig();
     std::cout << "EVAL_LABEL_CONFIG"
               << ",label_rule=" << DirectionLabelRuleName()
@@ -3802,8 +3913,10 @@ void PrintInferenceConfig(const std::optional<long long>& loadedModelId,
                           const std::string& fromDate,
                           const std::string& toDate)
 {
+    if (!LogSummary())
+        return;
     const auto& evalConfig = ActiveEvalLabelConfig();
-    std::cout << "INFERENCE_CONFIG_SOURCE=" << evalConfig.source << std::endl;
+    DiagnosticOut() << "INFERENCE_CONFIG_SOURCE=" << evalConfig.source << std::endl;
     std::cout << "INFERENCE_CONFIG"
               << ",model_id=";
     if (loadedModelId.has_value())
@@ -3841,9 +3954,9 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     bool hasTrainConfigHeadWeightLrMult = false;
     bool hasTrainConfigHeadBiasLrMult = false;
 
-    std::cout << "MODEL_TRAIN_CONFIG_META_FIELDS,"
-              << TrainConfigMetaFieldMapping()
-              << std::endl;
+    DiagnosticOut() << "MODEL_TRAIN_CONFIG_META_FIELDS,"
+                    << TrainConfigMetaFieldMapping()
+                    << std::endl;
 
     try
     {
@@ -3886,17 +3999,17 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     }
     catch (const std::exception& e)
     {
-        std::cout << "MODEL_METADATA_READ_FAIL"
-                  << ",model_id=" << modelId
-                  << ",error=" << e.what()
-                  << std::endl;
+        DiagnosticOut() << "MODEL_METADATA_READ_FAIL"
+                        << ",model_id=" << modelId
+                        << ",error=" << e.what()
+                        << std::endl;
     }
 
-    std::cout << "MODEL_METADATA_PERSISTED"
-              << ",model_id=" << modelId
-              << ",param_names=" << JoinStrings(persistedParams, ";")
-              << ",metadata=" << JoinStrings(persistedMetadata, ";")
-              << std::endl;
+    DiagnosticOut() << "MODEL_METADATA_PERSISTED"
+                    << ",model_id=" << modelId
+                    << ",param_names=" << JoinStrings(persistedParams, ";")
+                    << ",metadata=" << JoinStrings(persistedMetadata, ";")
+                    << std::endl;
 
     bool targetMetaMatches = false;
     bool modelMetaMatches = false;
@@ -3907,11 +4020,12 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     auto printMismatch = [&](const char* field, const auto& modelValue, const auto& runtimeValue)
     {
         mismatch = true;
-        std::cout << "MODEL_CONFIG_MISMATCH"
-                  << ",field=" << field
-                  << ",model=" << modelValue
-                  << ",runtime=" << runtimeValue
-                  << std::endl;
+        if (LogSummary())
+            std::cout << "MODEL_CONFIG_MISMATCH"
+                      << ",field=" << field
+                      << ",model=" << modelValue
+                      << ",runtime=" << runtimeValue
+                      << std::endl;
     };
 
     auto compareIntField = [&](const char* field, double modelValue, long long runtimeValue) -> bool
@@ -3951,10 +4065,11 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     try
     {
         const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
-        std::cout << "MODEL_TRAIN_SYMBOL_META"
-                  << ",model_id=" << modelId
-                  << ",symbol=" << modelSymbol
-                  << std::endl;
+        if (LogSummary())
+            std::cout << "MODEL_TRAIN_SYMBOL_META"
+                      << ",model_id=" << modelId
+                      << ",symbol=" << modelSymbol
+                      << std::endl;
         if (result.trainConfigMeta.has_value())
             result.trainConfigMeta->symbol = modelSymbol;
         trainSymbolMetaMatches = compareStringField("symbol", modelSymbol, runtimeSymbol);
@@ -3967,12 +4082,12 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             trainSymbolMetaMatches = false;
         }
         else
-            std::cout << "MODEL_CONFIG_WARN"
-                      << ",model_id=" << modelId
-                      << ",field=symbol"
-                      << ",model=missing_legacy_train_symbol_meta"
-                      << ",runtime=" << runtimeSymbol
-                      << std::endl;
+            DiagnosticOut() << "MODEL_CONFIG_WARN"
+                            << ",model_id=" << modelId
+                            << ",field=symbol"
+                            << ",model=missing_legacy_train_symbol_meta"
+                            << ",runtime=" << runtimeSymbol
+                            << std::endl;
     }
     try
     {
@@ -4093,39 +4208,42 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             }
             result.trainConfigMeta = trainConfigMeta;
 
-            std::cout << "MODEL_TRAIN_CONFIG_META"
-                      << ",model_id=" << modelId
-                      << ",schema_version=" << trainConfigMeta.schemaVersion
-                      << ",prediction_horizon=" << trainConfigMeta.predictionHorizon
-                      << ",threshold_logret=" << trainConfigMeta.thresholdLogret
-                      << ",window_size=" << trainConfigMeta.windowSize
-                      << ",label_rule_id=" << trainConfigMeta.labelRuleId
-                      << ",class_weight_down=" << trainConfigMeta.classWeightDown
-                      << ",class_weight_neutral=" << trainConfigMeta.classWeightNeutral
-                      << ",class_weight_up=" << trainConfigMeta.classWeightUp
-                      << ",num_layers=" << trainConfigMeta.numLayers
-                      << ",normalization_version=" << trainConfigMeta.normalizationVersion
-                      << ",epochs_trained=";
-            if (trainConfigMeta.epochsTrained.has_value())
-                std::cout << *trainConfigMeta.epochsTrained;
-            else
-                std::cout << "missing";
-            std::cout << ",core_lr_mult=";
-            if (trainConfigMeta.coreLrMult.has_value())
-                std::cout << *trainConfigMeta.coreLrMult;
-            else
-                std::cout << "missing";
-            std::cout << ",head_weight_lr_mult=";
-            if (trainConfigMeta.headWeightLrMult.has_value())
-                std::cout << *trainConfigMeta.headWeightLrMult;
-            else
-                std::cout << "missing";
-            std::cout << ",head_bias_lr_mult=";
-            if (trainConfigMeta.headBiasLrMult.has_value())
-                std::cout << *trainConfigMeta.headBiasLrMult;
-            else
-                std::cout << "missing";
-            std::cout << std::endl;
+            if (LogSummary())
+            {
+                std::cout << "MODEL_TRAIN_CONFIG_META"
+                          << ",model_id=" << modelId
+                          << ",schema_version=" << trainConfigMeta.schemaVersion
+                          << ",prediction_horizon=" << trainConfigMeta.predictionHorizon
+                          << ",threshold_logret=" << trainConfigMeta.thresholdLogret
+                          << ",window_size=" << trainConfigMeta.windowSize
+                          << ",label_rule_id=" << trainConfigMeta.labelRuleId
+                          << ",class_weight_down=" << trainConfigMeta.classWeightDown
+                          << ",class_weight_neutral=" << trainConfigMeta.classWeightNeutral
+                          << ",class_weight_up=" << trainConfigMeta.classWeightUp
+                          << ",num_layers=" << trainConfigMeta.numLayers
+                          << ",normalization_version=" << trainConfigMeta.normalizationVersion
+                          << ",epochs_trained=";
+                if (trainConfigMeta.epochsTrained.has_value())
+                    std::cout << *trainConfigMeta.epochsTrained;
+                else
+                    std::cout << "missing";
+                std::cout << ",core_lr_mult=";
+                if (trainConfigMeta.coreLrMult.has_value())
+                    std::cout << *trainConfigMeta.coreLrMult;
+                else
+                    std::cout << "missing";
+                std::cout << ",head_weight_lr_mult=";
+                if (trainConfigMeta.headWeightLrMult.has_value())
+                    std::cout << *trainConfigMeta.headWeightLrMult;
+                else
+                    std::cout << "missing";
+                std::cout << ",head_bias_lr_mult=";
+                if (trainConfigMeta.headBiasLrMult.has_value())
+                    std::cout << *trainConfigMeta.headBiasLrMult;
+                else
+                    std::cout << "missing";
+                std::cout << std::endl;
+            }
 
             bool sectionMatches = true;
             sectionMatches = compareIntField("schema_version",
@@ -4230,16 +4348,18 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
 
     if (result.configMatch)
     {
-        std::cout << "MODEL_CONFIG_MATCH=1" << std::endl;
+        if (LogSummary())
+            std::cout << "MODEL_CONFIG_MATCH=1" << std::endl;
     }
 
     if (!missingMinimum.empty())
     {
-        std::cout << "MODEL_CONFIG_METADATA_GAP"
-                  << ",model_id=" << modelId
-                  << ",missing=" << JoinStrings(missingMinimum, ";")
-                  << ",recommend_minimum_additions=" << JoinStrings(missingMinimum, ";")
-                  << std::endl;
+        if (LogSummary())
+            std::cout << "MODEL_CONFIG_METADATA_GAP"
+                      << ",model_id=" << modelId
+                      << ",missing=" << JoinStrings(missingMinimum, ";")
+                      << ",recommend_minimum_additions=" << JoinStrings(missingMinimum, ";")
+                      << std::endl;
     }
 
     return result;
@@ -4358,11 +4478,11 @@ void ValidateRedundantCliString(const char* param,
                   << std::endl;
         throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
     }
-    std::cout << "INFERENCE_CLI_ARG_REDUNDANT"
-              << ",param=" << param
-              << ",value=" << *cliValue
-              << ",source=persisted_model"
-              << std::endl;
+    DiagnosticOut() << "INFERENCE_CLI_ARG_REDUNDANT"
+                    << ",param=" << param
+                    << ",value=" << *cliValue
+                    << ",source=persisted_model"
+                    << std::endl;
 }
 
 template <typename T>
@@ -4381,11 +4501,11 @@ void ValidateRedundantCliInteger(const char* param,
                   << std::endl;
         throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
     }
-    std::cout << "INFERENCE_CLI_ARG_REDUNDANT"
-              << ",param=" << param
-              << ",value=" << *cliValue
-              << ",source=persisted_model"
-              << std::endl;
+    DiagnosticOut() << "INFERENCE_CLI_ARG_REDUNDANT"
+                    << ",param=" << param
+                    << ",value=" << *cliValue
+                    << ",source=persisted_model"
+                    << std::endl;
 }
 
 void ValidateRedundantCliFloat(const char* param,
@@ -4404,11 +4524,11 @@ void ValidateRedundantCliFloat(const char* param,
                   << std::endl;
         throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
     }
-    std::cout << "INFERENCE_CLI_ARG_REDUNDANT"
-              << ",param=" << param
-              << ",value=" << *cliValue
-              << ",source=persisted_model"
-              << std::endl;
+    DiagnosticOut() << "INFERENCE_CLI_ARG_REDUNDANT"
+                    << ",param=" << param
+                    << ",value=" << *cliValue
+                    << ",source=persisted_model"
+                    << std::endl;
 }
 
 PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
@@ -4518,10 +4638,12 @@ void ApplyPersistedInferenceRuntimeConfig(const PersistedInferenceConfig& cfg)
 
 void PrintResolvedInferenceConfig(const PersistedInferenceConfig& cfg)
 {
-    std::cout << "INFER_SYMBOL_RESOLVED"
-              << ",source=" << cfg.symbolSource
-              << ",symbol=" << cfg.symbol
-              << std::endl;
+    if (!LogSummary())
+        return;
+    DiagnosticOut() << "INFER_SYMBOL_RESOLVED"
+                    << ",source=" << cfg.symbolSource
+                    << ",symbol=" << cfg.symbol
+                    << std::endl;
     std::cout << "INFERENCE_CONFIG_RESOLVED"
               << ",model_id=" << cfg.modelId
               << ",symbol=" << cfg.symbol
@@ -4566,6 +4688,19 @@ struct InferAllSummaryRow
     ModelAcceptanceSummary acceptance;
 };
 
+struct InferenceIdentity
+{
+    long long modelId = -1;
+    std::string symbol;
+    size_t predictionHorizon = 0;
+    double thresholdLogret = 0.0;
+    size_t windowSize = 0;
+    int labelRuleId = DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId;
+    int targetType = 0;
+    std::string fromDate;
+    std::string toDate;
+};
+
 struct InferAllSkipDetail
 {
     std::string reason = "CONFIG_MISMATCH";
@@ -4581,6 +4716,172 @@ struct InferenceEvaluationResult
     std::optional<size_t> completedEpochs;
     ModelAcceptanceSummary acceptance;
 };
+
+EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
+                                      float initialLongTerm,
+                                      float initialShortTerm,
+                                      EA::LSTM::TargetType targetType)
+{
+    ScopedDiagnosticCoutSilencer silence;
+    return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType };
+}
+
+InferenceIdentity BuildInferenceIdentity(long long modelId,
+                                         const std::string& symbol,
+                                         EA::LSTM::TargetType targetType,
+                                         const std::string& fromDate,
+                                         const std::string& toDate)
+{
+    InferenceIdentity identity;
+    identity.modelId = modelId;
+    identity.symbol = symbol;
+    identity.predictionHorizon = prediction_horizon;
+    identity.thresholdLogret = c_next_threshold;
+    identity.windowSize = window_size;
+    identity.labelRuleId = DirectionLabelRuleId();
+    identity.targetType = static_cast<int>(targetType);
+    identity.fromDate = fromDate;
+    identity.toDate = toDate;
+    return identity;
+}
+
+bool InferenceEvalResultTableExists(pqxx::work& w)
+{
+    pqxx::result exists = w.exec(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = 'inference_eval_result' "
+        "LIMIT 1;");
+    return !exists.empty();
+}
+
+bool RequireInferenceEvalResultTable(pqxx::work& w)
+{
+    if (InferenceEvalResultTableExists(w))
+        return true;
+
+    std::cerr << "DATABASE_MIGRATION_REQUIRED"
+              << ",missing=inference_eval_result"
+              << ",command=./migrate_lstm_db.sh"
+              << std::endl;
+    return false;
+}
+
+std::optional<InferAllSummaryRow> LoadCompletedInferenceResult(pqxx::work& w,
+                                                               const InferenceIdentity& identity,
+                                                               const InferAllCandidate& candidate)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT completed_epochs, accuracy, accept_model, COALESCE(reject_reason, ''), "
+        "COALESCE(pred_down, 0), COALESCE(pred_neutral, 0), COALESCE(pred_up, 0) "
+        "FROM inference_eval_result "
+        "WHERE model_id = $1 AND symbol = $2 AND prediction_horizon = $3 "
+        "AND threshold_logret = $4 AND window_size = $5 AND label_rule_id = $6 "
+        "AND target_type = $7 AND from_date = $8 AND to_date = $9 "
+        "AND status = 'completed' "
+        "ORDER BY completed_at DESC LIMIT 1;",
+        identity.modelId,
+        identity.symbol,
+        static_cast<long long>(identity.predictionHorizon),
+        identity.thresholdLogret,
+        static_cast<long long>(identity.windowSize),
+        identity.labelRuleId,
+        identity.targetType,
+        identity.fromDate,
+        identity.toDate);
+
+    if (rows.empty())
+        return std::nullopt;
+
+    InferAllSummaryRow row;
+    row.modelId = identity.modelId;
+    row.name = candidate.name;
+    if (!rows[0][0].is_null())
+        row.completedEpochs = rows[0][0].as<size_t>();
+    else
+        row.completedEpochs = candidate.completedEpochs;
+    row.accuracy = rows[0][1].is_null() ? 0.0 : rows[0][1].as<double>();
+    row.acceptance.acceptModel = !rows[0][2].is_null() && rows[0][2].as<bool>();
+    row.acceptance.rejectReason = rows[0][3].as<std::string>();
+    if (row.acceptance.rejectReason.empty())
+        row.acceptance.rejectReason = "none";
+    row.acceptance.predFrac[0] = rows[0][4].as<double>();
+    row.acceptance.predFrac[1] = rows[0][5].as<double>();
+    row.acceptance.predFrac[2] = rows[0][6].as<double>();
+    return row;
+}
+
+void PersistCompletedInferenceResult(pqxx::work& w,
+                                      const InferenceIdentity& identity,
+                                      const InferAllSummaryRow& row)
+{
+    w.exec_params(
+        "DELETE FROM inference_eval_result "
+        "WHERE model_id = $1 AND symbol = $2 AND prediction_horizon = $3 "
+        "AND threshold_logret = $4 AND window_size = $5 AND label_rule_id = $6 "
+        "AND target_type = $7 AND from_date = $8 AND to_date = $9 "
+        "AND status = 'completed';",
+        identity.modelId,
+        identity.symbol,
+        static_cast<long long>(identity.predictionHorizon),
+        identity.thresholdLogret,
+        static_cast<long long>(identity.windowSize),
+        identity.labelRuleId,
+        identity.targetType,
+        identity.fromDate,
+        identity.toDate);
+
+    const long long completedEpochs = row.completedEpochs.has_value()
+        ? static_cast<long long>(*row.completedEpochs)
+        : -1;
+    w.exec_params(
+        "INSERT INTO inference_eval_result ("
+        "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
+        "from_date, to_date, completed_epochs, accuracy, accept_model, reject_reason, "
+        "pred_down, pred_neutral, pred_up, status, completed_at"
+        ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint, -1),$11,$12,$13,$14,$15,$16,'completed',now());",
+        identity.modelId,
+        identity.symbol,
+        static_cast<long long>(identity.predictionHorizon),
+        identity.thresholdLogret,
+        static_cast<long long>(identity.windowSize),
+        identity.labelRuleId,
+        identity.targetType,
+        identity.fromDate,
+        identity.toDate,
+        completedEpochs,
+        row.accuracy,
+        row.acceptance.acceptModel,
+        row.acceptance.rejectReason,
+        row.acceptance.predFrac[0],
+        row.acceptance.predFrac[1],
+        row.acceptance.predFrac[2]);
+}
+
+void PersistFailedInferenceResult(pqxx::work& w,
+                                  const InferenceIdentity& identity,
+                                  const InferAllCandidate& candidate,
+                                  const std::string& error)
+{
+    const long long completedEpochs = candidate.completedEpochs.has_value()
+        ? static_cast<long long>(*candidate.completedEpochs)
+        : -1;
+    w.exec_params(
+        "INSERT INTO inference_eval_result ("
+        "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
+        "from_date, to_date, completed_epochs, reject_reason, status, completed_at"
+        ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint, -1),$11,'failed',now());",
+        identity.modelId,
+        identity.symbol,
+        static_cast<long long>(identity.predictionHorizon),
+        identity.thresholdLogret,
+        static_cast<long long>(identity.windowSize),
+        identity.labelRuleId,
+        identity.targetType,
+        identity.fromDate,
+        identity.toDate,
+        completedEpochs,
+        error);
+}
 
 InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                                                  const LaunchArgs& launchArgs,
@@ -4623,43 +4924,47 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
     size_t totalConfusion[direction_output_size][direction_output_size] = {};
     PredictionStats totalTradeStats;
 
-    tensor.ForEachBatch([&](auto b)
     {
-        const auto predictionStats = ProcessBatchPredict(lstm, tensor, b);
-        totalCorrectLog += predictionStats.correctLog;
-        totalActedLog += predictionStats.actedLog;
-        totalWindows += predictionStats.windows;
-        totalAbsErrMove += predictionStats.absErrMove;
-        totalCorrectDir += predictionStats.correctDir;
-        totalActedDir += predictionStats.actedDir;
+        ScopedDiagnosticCoutSilencer silence;
+        tensor.ForEachBatch([&](auto b)
+        {
+            const auto predictionStats = ProcessBatchPredict(lstm, tensor, b);
+            totalCorrectLog += predictionStats.correctLog;
+            totalActedLog += predictionStats.actedLog;
+            totalWindows += predictionStats.windows;
+            totalAbsErrMove += predictionStats.absErrMove;
+            totalCorrectDir += predictionStats.correctDir;
+            totalActedDir += predictionStats.actedDir;
 
-        for (size_t actual = 0; actual < direction_output_size; ++actual)
-            for (size_t pred = 0; pred < direction_output_size; ++pred)
-                totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
+            for (size_t actual = 0; actual < direction_output_size; ++actual)
+                for (size_t pred = 0; pred < direction_output_size; ++pred)
+                    totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
 
-        totalTradeStats.tradeCount += predictionStats.tradeCount;
-        totalTradeStats.longCount += predictionStats.longCount;
-        totalTradeStats.shortCount += predictionStats.shortCount;
-        totalTradeStats.flatCount += predictionStats.flatCount;
-        totalTradeStats.winCount += predictionStats.winCount;
-        totalTradeStats.lossCount += predictionStats.lossCount;
-        totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
-        totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
-        totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
-        totalTradeStats.longWinCount += predictionStats.longWinCount;
-        totalTradeStats.longLossCount += predictionStats.longLossCount;
-        totalTradeStats.longLogReturnSum += predictionStats.longLogReturnSum;
-        totalTradeStats.longGrossPositiveLogReturn += predictionStats.longGrossPositiveLogReturn;
-        totalTradeStats.longGrossNegativeLogReturn += predictionStats.longGrossNegativeLogReturn;
-        totalTradeStats.shortWinCount += predictionStats.shortWinCount;
-        totalTradeStats.shortLossCount += predictionStats.shortLossCount;
-        totalTradeStats.shortLogReturnSum += predictionStats.shortLogReturnSum;
-        totalTradeStats.shortGrossPositiveLogReturn += predictionStats.shortGrossPositiveLogReturn;
-        totalTradeStats.shortGrossNegativeLogReturn += predictionStats.shortGrossNegativeLogReturn;
-    });
+            totalTradeStats.tradeCount += predictionStats.tradeCount;
+            totalTradeStats.longCount += predictionStats.longCount;
+            totalTradeStats.shortCount += predictionStats.shortCount;
+            totalTradeStats.flatCount += predictionStats.flatCount;
+            totalTradeStats.winCount += predictionStats.winCount;
+            totalTradeStats.lossCount += predictionStats.lossCount;
+            totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
+            totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
+            totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
+            totalTradeStats.longWinCount += predictionStats.longWinCount;
+            totalTradeStats.longLossCount += predictionStats.longLossCount;
+            totalTradeStats.longLogReturnSum += predictionStats.longLogReturnSum;
+            totalTradeStats.longGrossPositiveLogReturn += predictionStats.longGrossPositiveLogReturn;
+            totalTradeStats.longGrossNegativeLogReturn += predictionStats.longGrossNegativeLogReturn;
+            totalTradeStats.shortWinCount += predictionStats.shortWinCount;
+            totalTradeStats.shortLossCount += predictionStats.shortLossCount;
+            totalTradeStats.shortLogReturnSum += predictionStats.shortLogReturnSum;
+            totalTradeStats.shortGrossPositiveLogReturn += predictionStats.shortGrossPositiveLogReturn;
+            totalTradeStats.shortGrossNegativeLogReturn += predictionStats.shortGrossNegativeLogReturn;
+        });
+    }
 
     if (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
     {
+        ScopedDiagnosticCoutSilencer silence;
         EA::LSTM::PrintAndResetEpochBuckets();
         ::PrintAndResetDistribution();
     }
@@ -4674,13 +4979,16 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
         result.accuracy = totalWindows
             ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalWindows))
             : 0.0;
-        std::cout << "Overall 3-class accuracy: " << (result.accuracy * 100.0)
-                  << "% over " << totalWindows << " windows" << std::endl;
-        std::cout << "Overall 3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
-                  << "[[" << totalConfusion[0][0] << ", " << totalConfusion[0][1] << ", " << totalConfusion[0][2] << "], "
-                  << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
-                  << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
-                  << std::endl;
+        if (LogSummary())
+        {
+            std::cout << "Overall 3-class accuracy: " << (result.accuracy * 100.0)
+                      << "% over " << totalWindows << " windows" << std::endl;
+            std::cout << "Overall 3-class confusion matrix (rows=actual [down,neutral,up], cols=pred [down,neutral,up]): "
+                      << "[[" << totalConfusion[0][0] << ", " << totalConfusion[0][1] << ", " << totalConfusion[0][2] << "], "
+                      << "[" << totalConfusion[1][0] << ", " << totalConfusion[1][1] << ", " << totalConfusion[1][2] << "], "
+                      << "[" << totalConfusion[2][0] << ", " << totalConfusion[2][1] << ", " << totalConfusion[2][2] << "]]"
+                      << std::endl;
+        }
         PrintModelAcceptanceDiagnostic(totalConfusion);
         result.acceptance = ComputeModelAcceptanceSummary(totalConfusion);
 
@@ -4710,13 +5018,13 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
             ? (static_cast<double>(totalActedDir) / static_cast<double>(totalWindows) * 100.0)
             : 0.0;
 
-        std::cout << "Overall direction accuracy (log-return): " << (result.accuracy * 100.0)
-                  << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
-                  << " coverage=" << overallCovLog << "%" << std::endl;
-        std::cout << "Overall MAE (relative move fraction): " << overallMaeMove
-                  << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
-                  << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
-                  << " coverage=" << overallCovDir << "%" << std::endl;
+        DiagnosticOut() << "Overall direction accuracy (log-return): " << (result.accuracy * 100.0)
+                        << "% over " << totalActedLog << " acted (of " << totalWindows << ")"
+                        << " coverage=" << overallCovLog << "%" << std::endl;
+        DiagnosticOut() << "Overall MAE (relative move fraction): " << overallMaeMove
+                        << " | Overall direction accuracy (relative move, thresholded): " << overallAccDir
+                        << "% over " << totalActedDir << " acted (of " << totalWindows << ")"
+                        << " coverage=" << overallCovDir << "%" << std::endl;
     }
 
     return result;
@@ -5022,38 +5330,42 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                                     const Tensor& tensor,
                                     EA::LSTM::TargetType requestedTargetType)
 {
-    std::cout << "INFER_ALL_MODEL_BEGIN"
-              << " model_id=" << candidate.modelId
-              << " name=" << candidate.name
-              << std::endl;
+    if (LogSummary())
+        std::cout << "INFER_ALL_MODEL_BEGIN"
+                  << " model_id=" << candidate.modelId
+                  << " name=" << candidate.name
+                  << std::endl;
     if (candidate.legacyMissingSymbol)
-        std::cout << "INFER_ALL_MODEL_WARN"
-                  << " model_id=" << candidate.modelId
-                  << " name=" << candidate.name
-                  << " reason=missing_legacy_train_symbol_meta_included"
-                  << std::endl;
+        DiagnosticOut() << "INFER_ALL_MODEL_WARN"
+                        << " model_id=" << candidate.modelId
+                        << " name=" << candidate.name
+                        << " reason=missing_legacy_train_symbol_meta_included"
+                        << std::endl;
     if (candidate.metadataGap)
-        std::cout << "INFER_ALL_MODEL_WARN"
-                  << " model_id=" << candidate.modelId
-                  << " name=" << candidate.name
-                  << " reason=metadata_gap_included"
-                  << std::endl;
+        DiagnosticOut() << "INFER_ALL_MODEL_WARN"
+                        << " model_id=" << candidate.modelId
+                        << " name=" << candidate.name
+                        << " reason=metadata_gap_included"
+                        << std::endl;
 
-    EA::LSTM lstm { tensor, 1, 0, requestedTargetType };
+    EA::LSTM lstm = CreateLstmForRuntimeLogLevel(tensor, 1, 0, requestedTargetType);
     PrintRuntimeLrConfig(lstm);
-    std::cout << "DIAG_LSTM_BINDING"
-              << ",table=" << rawPriceTableName
-              << ",tensor_rows=" << tensor.RowCount()
-              << ",tensor_addr=" << static_cast<const void*>(&tensor)
-              << ",lstm_tensor_ref_addr=" << static_cast<const void*>(lstm.BoundTensorAddress())
-              << ",newly_constructed=1"
-              << ",reused=0"
-              << std::endl;
+    DiagnosticOut() << "DIAG_LSTM_BINDING"
+                    << ",table=" << rawPriceTableName
+                    << ",tensor_rows=" << tensor.RowCount()
+                    << ",tensor_addr=" << static_cast<const void*>(&tensor)
+                    << ",lstm_tensor_ref_addr=" << static_cast<const void*>(lstm.BoundTensorAddress())
+                    << ",newly_constructed=1"
+                    << ",reused=0"
+                    << std::endl;
 
-    DBIO::PgModelIO::loadAll(w, candidate.modelId, lstm);
-    std::cout << "Loaded model_id=" << candidate.modelId
-              << " source=--infer-all"
-              << std::endl;
+    {
+        ScopedDiagnosticCoutSilencer silence;
+        DBIO::PgModelIO::loadAll(w, candidate.modelId, lstm);
+    }
+    DiagnosticOut() << "Loaded model_id=" << candidate.modelId
+                    << " source=--infer-all"
+                    << std::endl;
 
     const InferenceEvaluationResult evaluation =
         RunInferenceEvaluation(w,
@@ -5077,12 +5389,13 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
     row.accuracy = evaluation.accuracy;
     row.acceptance = evaluation.acceptance;
 
-    std::cout << "INFER_ALL_MODEL_DONE"
-              << " model_id=" << row.modelId
-              << " accuracy=" << row.accuracy
-              << " accept_model=" << (row.acceptance.acceptModel ? "true" : "false")
-              << " reject_reason=" << row.acceptance.rejectReason
-              << std::endl;
+    if (LogSummary())
+        std::cout << "INFER_ALL_MODEL_DONE"
+                  << " model_id=" << row.modelId
+                  << " accuracy=" << row.accuracy
+                  << " accept_model=" << (row.acceptance.acceptModel ? "true" : "false")
+                  << " reject_reason=" << row.acceptance.rejectReason
+                  << std::endl;
     return row;
 }
 
@@ -5099,6 +5412,8 @@ int RunInferAllForSymbol(pqxx::work& w,
     size_t skippedIncompatible = 0;
     std::vector<std::string> skippedModelLogs;
     const long long startAfter = launchArgs.modelId.value_or(launchArgs.inferStartAfterModelId.value_or(0));
+    if (!RequireInferenceEvalResultTable(w))
+        return 1;
     std::vector<InferAllCandidate> candidates =
         LoadInferAllCandidates(w,
                                launchArgs,
@@ -5112,58 +5427,127 @@ int RunInferAllForSymbol(pqxx::work& w,
 
     if (startAfter > 0)
     {
-        std::cout << "INFER_ALL_RESUME"
-                  << " start_after_model_id=" << startAfter
-                  << " skipped_due_to_resume=" << skippedDueToResume
-                  << std::endl;
+        DiagnosticOut() << "INFER_ALL_RESUME"
+                        << " start_after_model_id=" << startAfter
+                        << " skipped_due_to_resume=" << skippedDueToResume
+                        << std::endl;
     }
 
-    std::cout << "INFER_ALL_BEGIN"
-              << " symbol=" << rawPriceTableName
-              << " model_count=" << candidates.size()
-              << " start_after_model_id=";
-    if (startAfter > 0)
-        std::cout << startAfter;
-    else
-        std::cout << "none";
-    std::cout << std::endl;
+    if (LogSummary())
+    {
+        std::cout << "INFER_ALL_BEGIN"
+                  << " symbol=" << rawPriceTableName
+                  << " model_count=" << candidates.size()
+                  << " start_after_model_id=";
+        if (startAfter > 0)
+            std::cout << startAfter;
+        else
+            std::cout << "none";
+        std::cout << std::endl;
+    }
 
     for (const auto& skippedModelLog : skippedModelLogs)
-        std::cout << skippedModelLog << std::endl;
+        DiagnosticOut() << skippedModelLog << std::endl;
 
     if (candidates.empty())
     {
-        std::cout << "INFER_ALL_NO_MODELS"
-                  << " symbol=" << rawPriceTableName
+        if (LogSummary())
+            std::cout << "INFER_ALL_NO_MODELS"
+                      << " symbol=" << rawPriceTableName
+                      << std::endl;
+        std::cout << "INFER_ALL_DONE"
+                  << " evaluated=0"
+                  << " skipped_existing=0"
+                  << " skipped_config_mismatch=" << skippedIncompatible
+                  << " skipped_failed=0"
+                  << " skipped_resume=" << skippedDueToResume
+                  << " best_model_id=-1"
+                  << " best_accuracy=0"
                   << std::endl;
-        std::cout << "runtime_infer=true; skipping model save" << std::endl;
+        std::cout << "INFER_ALL_SUMMARY" << std::endl;
+        std::cout << "model_id,name,completed_epochs,accuracy,accept_model,reject_reason,pred_down,pred_neutral,pred_up" << std::endl;
+        DiagnosticOut() << "runtime_infer=true; skipping model save" << std::endl;
+        w.commit();
         return 0;
     }
 
     std::vector<InferAllSummaryRow> summaries;
     summaries.reserve(candidates.size());
     size_t skippedDuringEvaluation = 0;
+    size_t skippedExisting = 0;
+    size_t newlyEvaluated = 0;
     for (const auto& candidate : candidates)
     {
+        const InferenceIdentity identity =
+            BuildInferenceIdentity(candidate.modelId,
+                                   rawPriceTableName,
+                                   requestedTargetType,
+                                   fromDate,
+                                   toDate);
+        if (!launchArgs.forceInfer)
+        {
+            const auto existing = LoadCompletedInferenceResult(w, identity, candidate);
+            if (existing.has_value())
+            {
+                ++skippedExisting;
+                if (LogDiagnostic())
+                {
+                    std::cout << "INFER_ALL_SKIP_EXISTING"
+                              << " model_id=" << candidate.modelId
+                              << " completed_epochs=";
+                    if (existing->completedEpochs.has_value())
+                        std::cout << *existing->completedEpochs;
+                    else
+                        std::cout << "missing";
+                    std::cout << " from=" << fromDate
+                              << " to=" << toDate
+                              << std::endl;
+                    std::cout << "INFER_ALL_MODEL_EXISTING"
+                              << " model_id=" << existing->modelId
+                              << " accuracy=" << existing->accuracy
+                              << " accept_model=" << (existing->acceptance.acceptModel ? "true" : "false")
+                              << " reject_reason=" << existing->acceptance.rejectReason
+                              << std::endl;
+                }
+                summaries.push_back(*existing);
+                continue;
+            }
+        }
+
         try
         {
-            summaries.push_back(RunInferAllModel(w,
-                                                 launchArgs,
-                                                 candidate,
-                                                 rawPriceTableName,
-                                                 fromDate,
-                                                 toDate,
-                                                 tensor,
-                                                 requestedTargetType));
+            InferAllSummaryRow row = RunInferAllModel(w,
+                                                      launchArgs,
+                                                      candidate,
+                                                      rawPriceTableName,
+                                                      fromDate,
+                                                      toDate,
+                                                      tensor,
+                                                      requestedTargetType);
+            PersistCompletedInferenceResult(w, identity, row);
+            summaries.push_back(row);
+            ++newlyEvaluated;
         }
         catch (const std::exception& e)
         {
             ++skippedDuringEvaluation;
-            std::cout << "INFER_ALL_SKIP_MODEL"
-                      << ",model_id=" << candidate.modelId
-                      << ",reason=EVALUATION_FAILED"
-                      << ",detail=" << e.what()
-                      << std::endl;
+            try
+            {
+                PersistFailedInferenceResult(w, identity, candidate, e.what());
+            }
+            catch (const std::exception& persistError)
+            {
+                DiagnosticOut() << "INFER_ALL_RESULT_WRITE_FAILED"
+                                << ",model_id=" << candidate.modelId
+                                << ",status=failed"
+                                << ",error=" << persistError.what()
+                                << std::endl;
+            }
+            DiagnosticOut() << "INFER_ALL_SKIP_MODEL"
+                            << ",model_id=" << candidate.modelId
+                            << ",reason=EVALUATION_FAILED"
+                            << ",detail=" << e.what()
+                            << std::endl;
         }
     }
 
@@ -5181,8 +5565,11 @@ int RunInferAllForSymbol(pqxx::work& w,
         bestAccuracy = 0.0;
 
     std::cout << "INFER_ALL_DONE"
-              << " evaluated=" << summaries.size()
-              << " skipped=" << (skippedDueToResume + skippedIncompatible + skippedDuringEvaluation)
+              << " evaluated=" << newlyEvaluated
+              << " skipped_existing=" << skippedExisting
+              << " skipped_config_mismatch=" << skippedIncompatible
+              << " skipped_failed=" << skippedDuringEvaluation
+              << " skipped_resume=" << skippedDueToResume
               << " best_model_id=" << bestModelId
               << " best_accuracy=" << bestAccuracy
               << std::endl;
@@ -5207,11 +5594,16 @@ int RunInferAllForSymbol(pqxx::work& w,
                   << std::endl;
     }
 
-    std::cout << "runtime_infer=true; skipping model save" << std::endl;
+    DiagnosticOut() << "runtime_infer=true; skipping model save" << std::endl;
+    w.commit();
     return 0;
 }
 }
 
+extern "C" bool LstmRuntimeDiagnosticLoggingEnabled()
+{
+    return LogDiagnostic();
+}
 
 int main(int argc, const char * argv[])
 {
@@ -5226,6 +5618,8 @@ int main(int argc, const char * argv[])
     try
     {
         launchArgs = ParseLaunchArgs(argc, argv);
+        if (launchArgs.logLevel.has_value())
+            gRuntimeLogLevel = *launchArgs.logLevel;
         if (!ValidateResumeLaunchArgs(launchArgs))
             return 1;
         if (!launchArgs.resumeModelId.has_value())
@@ -5234,7 +5628,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--infer-start-after-model-id <model_id>] [--eval-trading] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
@@ -5306,20 +5700,20 @@ int main(int argc, const char * argv[])
             }
             else if (launchArgs.symbol.has_value())
             {
-                std::cout << "INFER_SYMBOL_RESOLVED"
-                          << ",source=cli"
-                          << ",symbol=" << *launchArgs.symbol
-                          << std::endl;
+                DiagnosticOut() << "INFER_SYMBOL_RESOLVED"
+                                << ",source=cli"
+                                << ",symbol=" << *launchArgs.symbol
+                                << std::endl;
             }
         }
 
-        std::cout << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
-        std::cout << "window_size=" << window_size << '\n';
-        std::cout << "prediction_horizon=" << prediction_horizon << '\n';
-        std::cout << "c_next_threshold=" << c_next_threshold << '\n';
+        DiagnosticOut() << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
+        DiagnosticOut() << "window_size=" << window_size << '\n';
+        DiagnosticOut() << "prediction_horizon=" << prediction_horizon << '\n';
+        DiagnosticOut() << "c_next_threshold=" << c_next_threshold << '\n';
         PrintRuntimeConfig();
-        std::cout << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
-                  << " (" << GateStateModeLabel() << ")\n";
+        DiagnosticOut() << "DIAG_GATESTATE_MODE=" << LSTM_GATESTATE_MODE
+                        << " (" << GateStateModeLabel() << ")\n";
 
         std::vector<std::string> selectedSymbols;
         if (resumeConfig.has_value())
@@ -5377,19 +5771,19 @@ int main(int argc, const char * argv[])
 
         for (const auto& rawPriceTableName : selectedSymbols)
         {
-            std::cout << "SYMBOL_SELECTION"
-                      << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (inferenceConfig.has_value() ? inferenceConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")))
-                      << ",selected=" << rawPriceTableName
-                      << ",available_count=" << availableSymbols.size()
-                      << std::endl;
+            DiagnosticOut() << "SYMBOL_SELECTION"
+                            << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (inferenceConfig.has_value() ? inferenceConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")))
+                            << ",selected=" << rawPriceTableName
+                            << ",available_count=" << availableSymbols.size()
+                            << std::endl;
 
             std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
             Tensor t{ rawPriceTableName };
             
-            std::cout << "Candlestick query: " << query << "\n";
-            std::cout << "Building tensor for table: " << rawPriceTableName << std::endl;
+            DiagnosticOut() << "Candlestick query: " << query << "\n";
+            DiagnosticOut() << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
             if (resumeConfig.has_value())
             {
@@ -5432,20 +5826,20 @@ int main(int argc, const char * argv[])
                                             t,
                                             requestedTargetType,
                                             inferenceConfig);
-            EA::LSTM l { t, 1, 0, requestedTargetType };
+            EA::LSTM l = CreateLstmForRuntimeLogLevel(t, 1, 0, requestedTargetType);
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
             if (s_lstmBindingDiagCount < kLstmBindingDiagLimit)
             {
-                std::cout << "DIAG_LSTM_BINDING"
-                          << ",table=" << rawPriceTableName
-                          << ",tensor_rows=" << t.RowCount()
-                          << ",tensor_addr=" << static_cast<const void*>(&t)
-                          << ",lstm_tensor_ref_addr=" << static_cast<const void*>(l.BoundTensorAddress())
-                          << ",newly_constructed=1"
-                          << ",reused=0"
-                          << std::endl;
+                DiagnosticOut() << "DIAG_LSTM_BINDING"
+                                << ",table=" << rawPriceTableName
+                                << ",tensor_rows=" << t.RowCount()
+                                << ",tensor_addr=" << static_cast<const void*>(&t)
+                                << ",lstm_tensor_ref_addr=" << static_cast<const void*>(l.BoundTensorAddress())
+                                << ",newly_constructed=1"
+                                << ",reused=0"
+                                << std::endl;
                 ++s_lstmBindingDiagCount;
             }
 
@@ -5468,24 +5862,28 @@ int main(int argc, const char * argv[])
                 {
                     pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
                     if (!r.empty() && !r[0][0].is_null()) modelIdToLoad = r[0][0].as<long long>();
-                    else std::cout << "No models found; using default-initialized parameters" << std::endl;
+                    else DiagnosticOut() << "No models found; using default-initialized parameters" << std::endl;
                 }
-                else std::cout << "load_latest=false; using default-initialized parameters" << std::endl;
+                else DiagnosticOut() << "load_latest=false; using default-initialized parameters" << std::endl;
 
                 if (modelIdToLoad > 0)
                 {
-                    DBIO::PgModelIO::loadAll(w_LSTM, modelIdToLoad, l);
+                    {
+                        ScopedDiagnosticCoutSilencer silence;
+                        DBIO::PgModelIO::loadAll(w_LSTM, modelIdToLoad, l);
+                    }
                     if (resumeConfig.has_value())
                     {
+                        ScopedDiagnosticCoutSilencer silence;
                         DBIO::PgModelIO::loadOptimizerMeta(w_LSTM, modelIdToLoad, l);
                         l.completedEpochs = resumeConfig->completedEpoch;
                         std::cout << "RESUME_OPTIMIZER_STATE_RESTORED=1" << std::endl;
                     }
                     loadedModelId = modelIdToLoad;
                     startedFromScratch = false;
-                    std::cout << "Loaded model_id=" << *loadedModelId
-                              << " source=" << loadSource
-                              << std::endl;
+                    DiagnosticOut() << "Loaded model_id=" << *loadedModelId
+                                    << " source=" << loadSource
+                                    << std::endl;
                 }
             }
             catch (const std::exception& e)
@@ -5503,8 +5901,8 @@ int main(int argc, const char * argv[])
                     return 1;
                 }
 
-                std::cout << "Load latest failed: " << e.what()
-                          << "; using default params" << std::endl;
+                DiagnosticOut() << "Load latest failed: " << e.what()
+                                << "; using default params" << std::endl;
             }
 
             if (gRuntimeInferenceMode)
@@ -5520,7 +5918,7 @@ int main(int argc, const char * argv[])
                                              fromDate,
                                              toDate,
                                              false);
-                std::cout << "runtime_infer=true; skipping model save" << std::endl;
+                DiagnosticOut() << "runtime_infer=true; skipping model save" << std::endl;
                 break;
             }
 
@@ -5560,7 +5958,16 @@ int main(int argc, const char * argv[])
                         double dhw0 = l2(l.returnHeadDirWeight);
                         double dhb0 = l2(l.returnHeadDirBias);
 
-                        auto [loss, _unused1, _unused2] = l.CalculateBatch(b,e);
+                        float loss = 0.0f;
+                        size_t _unused1 = 0;
+                        size_t _unused2 = 0;
+                        {
+                            ScopedDiagnosticCoutSilencer silence;
+                            auto result = l.CalculateBatch(b,e);
+                            loss = std::get<0>(result);
+                            _unused1 = std::get<1>(result);
+                            _unused2 = std::get<2>(result);
+                        }
                         (void)_unused1; (void)_unused2;
 
                         double p1 = l2(l.param);
@@ -5570,17 +5977,18 @@ int main(int argc, const char * argv[])
                         double dhw1 = l2(l.returnHeadDirWeight);
                         double dhb1 = l2(l.returnHeadDirBias);
 
-                        std::cout << "epoch " << (e+1)
+                        DiagnosticOut() << "epoch " << (e+1)
                         << " loss=" << loss
                         << " ||param|| " << p0  << " -> " << p1
                         << " ||bias|| "  << b0  << " -> " << b1;
                         if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
-                            std::cout << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
+                            DiagnosticOut() << " ||dirHeadW|| " << dhw0 << " -> " << dhw1 << " ||dirHeadB|| " << dhb0 << " -> " << dhb1 << std::endl;
                         else
-                            std::cout << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
+                            DiagnosticOut() << " ||headW|| " << hw0 << " -> " << hw1 << " ||headB|| " << hb0 << " -> " << hb1 << std::endl;
                     } );
                     if (l.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
                     {
+                        ScopedDiagnosticCoutSilencer silence;
                         EA::LSTM::PrintAndResetEpochBuckets();
                         PrintAndResetDistribution();
                     }
@@ -5659,9 +6067,9 @@ int main(int argc, const char * argv[])
                 }
                 else
                     if constexpr (!save_enable)
-                        std::cout << "save_enable=false; skipping model save" << std::endl;
+                        DiagnosticOut() << "save_enable=false; skipping model save" << std::endl;
                     else
-                        std::cout << "skipping model save (unknown reason)" << std::endl;
+                        DiagnosticOut() << "skipping model save (unknown reason)" << std::endl;
             }
             catch (const std::exception& e) { std::cerr << "Model save/load error: " << e.what() << std::endl;    }
 
