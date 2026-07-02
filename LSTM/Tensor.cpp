@@ -18,6 +18,17 @@
 
 using std::setw;
 
+extern "C" bool LstmRuntimeDiagnosticLoggingEnabled() __attribute__((weak_import));
+
+namespace
+{
+bool RuntimeDiagnosticLoggingEnabled()
+{
+    return (LstmRuntimeDiagnosticLoggingEnabled == nullptr) ||
+           LstmRuntimeDiagnosticLoggingEnabled();
+}
+}
+
 std::ostream& operator<<(std::ostream& o, Window w)
 {
     for (const auto& f : w)
@@ -205,7 +216,10 @@ void Tensor::Add(Feature f)
     p[17] = col17_after;
     p[18] = col18_after;
 
-    if (denom_range > denom_range_old && s_featureRangeGuardDiagCount < kFeatureRangeGuardDiagLimit)
+    const bool featureRangeGuardTriggered = denom_range > denom_range_old;
+    if (featureRangeGuardTriggered &&
+        RuntimeDiagnosticLoggingEnabled() &&
+        s_featureRangeGuardDiagCount < kFeatureRangeGuardDiagLimit)
     {
         std::cout << "DIAG_FEATURE_RANGE_GUARD"
                   << ",row=" << ds.size()
