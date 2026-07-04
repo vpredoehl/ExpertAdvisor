@@ -13,6 +13,7 @@
 #include <optional>
 #include <regex>
 #include <signal.h>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -38,6 +39,8 @@ namespace
 
 struct SchedulerOptions
 {
+    bool modelInfo = false;
+    bool compactStatus = false;
     bool scheduleExperiments = false;
     bool enqueueExperiment = false;
     bool queueExperiment = false;
@@ -49,6 +52,8 @@ struct SchedulerOptions
     bool schedulerStatus = false;
     bool backfillExperimentMetadata = false;
     std::optional<long long> experimentMetadataId;
+    std::optional<long long> modelInfoModelId;
+    std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
     bool stopAllExperiments = false;
     std::optional<long long> pauseExperimentId;
@@ -61,6 +66,7 @@ struct SchedulerOptions
     bool dryRun = false;
     bool yes = false;
     bool force = false;
+    bool schedulerVerbose = false;
     bool schedulerOnce = false;
     bool recoverOrphansOnly = false;
     int maxTrainProcs = 1;
@@ -185,6 +191,7 @@ struct SchedulerStatusJob
     std::optional<long long> modelId;
     std::optional<int> completedEpochs;
     std::optional<int> currentEpoch;
+    bool currentEpochFromTable = false;
     std::optional<int> lastCheckpointEpoch;
     std::optional<long long> lastCheckpointModelId;
     std::optional<int> nextCheckpointEpoch;
@@ -200,6 +207,7 @@ struct SchedulerStatusJob
     std::optional<std::string> trainLogPath;
     std::optional<std::string> inferLogPath;
     std::optional<std::string> analysisLogPath;
+    std::string currentOperation;
     std::string startedAt;
     std::string updatedAt;
     std::string completedAt;
@@ -360,6 +368,31 @@ struct SchedulerIntelligenceSnapshot
     int waitingAnalyze = 0;
 };
 
+struct ModelInfoRecord
+{
+    long long modelId = -1;
+    std::string name = "unknown";
+    std::string createdAt = "unknown";
+    std::string comment = "unknown";
+    std::string symbol = "unknown";
+    std::optional<int> predictionHorizon;
+    std::optional<double> threshold;
+    std::optional<int> windowSize;
+    std::optional<int> completedEpochs;
+    std::optional<int> targetEpochs;
+    std::string trainStart = "unknown";
+    std::string trainEnd = "unknown";
+    std::string inferStart = "unknown";
+    std::string inferEnd = "unknown";
+    std::optional<int> checkpointInterval;
+    std::string optimizer = "unknown";
+    std::optional<long long> optimizerUpdateCount;
+    std::string targetType = "unknown";
+    bool isCheckpoint = false;
+    bool isResumable = false;
+    std::optional<long long> parentResumeModelId;
+};
+
 struct PhaseSchedulingStats
 {
     std::string phase;
@@ -367,6 +400,16 @@ struct PhaseSchedulingStats
     int skipped = 0;
     int launched = 0;
     int freeSlots = 0;
+};
+
+struct SchedulerEventLogState
+{
+    std::optional<std::string> previousQueueKey;
+    std::map<std::string, std::string> previousPhaseKeys;
+    std::set<std::string> previousSkipKeys;
+    std::set<std::string> currentSkipKeys;
+    std::set<std::string> previousRunningPresentKeys;
+    std::set<std::string> currentRunningPresentKeys;
 };
 
 struct ParsedMetrics
@@ -391,6 +434,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
     {
         const std::string arg{argv[i]};
         if (arg == "--schedule-experiments" ||
+            arg == "--model-info" ||
+            arg == "--status" ||
             arg == "--enqueue-experiment" ||
             arg == "--queue-experiment" ||
             arg == "--queue-sweep" ||
@@ -409,7 +454,9 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--requeue-inference" ||
             arg == "--help" ||
             arg == "--analyze-experiment" ||
+            arg == "--experiment-id" ||
             arg.rfind("--analyze-experiment=", 0) == 0 ||
+            arg.rfind("--experiment-id=", 0) == 0 ||
             arg.rfind("--stop-experiment=", 0) == 0 ||
             arg.rfind("--pause-experiment=", 0) == 0 ||
             arg.rfind("--resume-experiment=", 0) == 0 ||
@@ -536,7 +583,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         const std::string arg{argv[i]};
         std::string value;
 
-        if (arg == "--schedule-experiments")
+        if (arg == "--model-info")
+            options.modelInfo = true;
+        else if (arg == "--status")
+            options.compactStatus = true;
+        else if (arg == "--schedule-experiments")
             options.scheduleExperiments = true;
         else if (arg == "--enqueue-experiment")
             options.enqueueExperiment = true;
@@ -556,6 +607,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.backfillExperimentMetadata = true;
         else if (arg == "--experiment-metadata")
             options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--model")
+            options.modelInfoModelId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--experiment-id")
+            options.statusExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--help")
             options.help = true;
         else if (arg == "--dry-run")
@@ -564,6 +619,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.yes = true;
         else if (arg == "--force")
             options.force = true;
+        else if (arg == "--scheduler-verbose")
+            options.schedulerVerbose = true;
         else if (arg == "--scheduler-once")
             options.schedulerOnce = true;
         else if (arg == "--recover-orphans-only")
@@ -706,6 +763,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.logLevel = value;
         else if (SplitOptionWithValue(arg, "--experiment-metadata", value))
             options.experimentMetadataId = ParsePositiveLongLong("--experiment-metadata", value);
+        else if (SplitOptionWithValue(arg, "--model", value))
+            options.modelInfoModelId = ParsePositiveLongLong("--model", value);
+        else if (SplitOptionWithValue(arg, "--experiment-id", value))
+            options.statusExperimentId = ParsePositiveLongLong("--experiment-id", value);
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -713,6 +774,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     }
 
     const int commandCount =
+        (options.modelInfo ? 1 : 0) +
+        (options.compactStatus ? 1 : 0) +
         (options.scheduleExperiments ? 1 : 0) +
         (options.enqueueExperiment ? 1 : 0) +
         (options.queueExperiment ? 1 : 0) +
@@ -734,6 +797,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.help ? 1 : 0);
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
+    if (options.modelInfo && !options.modelInfoModelId.has_value())
+        throw std::invalid_argument("--model-info requires --model=<model_id>");
+    if (!options.modelInfo && options.modelInfoModelId.has_value())
+        throw std::invalid_argument("--model is only valid with --model-info or existing inference commands");
+    if (!options.compactStatus && options.statusExperimentId.has_value())
+        throw std::invalid_argument("--experiment-id is only valid with --status");
     if (options.recoverOrphansOnly && !options.scheduleExperiments)
         throw std::invalid_argument("--recover-orphans-only requires --schedule-experiments");
     if (options.logLevel != "quiet" &&
@@ -1673,7 +1742,9 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
     return experiments;
 }
 
-int RecoverOrphanedRunningExperiments(pqxx::work& w);
+int RecoverOrphanedRunningExperiments(pqxx::work& w,
+                                      SchedulerEventLogState* logState,
+                                      bool verbose);
 
 QueueSnapshot LoadQueueSnapshot(pqxx::work& w)
 {
@@ -1979,8 +2050,26 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
     return 0;
 }
 
-void PrintQueueSnapshot(const QueueSnapshot& snapshot)
+std::string QueueSnapshotKey(const QueueSnapshot& snapshot)
 {
+    std::ostringstream key;
+    key << snapshot.pendingTrain << "|"
+        << snapshot.pendingInfer << "|"
+        << snapshot.pendingAnalyze << "|"
+        << snapshot.runningTrain << "|"
+        << snapshot.runningInfer << "|"
+        << snapshot.runningAnalyze;
+    return key.str();
+}
+
+void PrintQueueSnapshot(const QueueSnapshot& snapshot,
+                        SchedulerEventLogState* logState,
+                        bool verbose)
+{
+    const std::string key = QueueSnapshotKey(snapshot);
+    if (!verbose && logState != nullptr && logState->previousQueueKey == key)
+        return;
+
     std::cout << "SCHEDULER_QUEUE"
               << ",pending_train=" << snapshot.pendingTrain
               << ",pending_infer=" << snapshot.pendingInfer
@@ -1989,6 +2078,8 @@ void PrintQueueSnapshot(const QueueSnapshot& snapshot)
               << ",running_infer=" << snapshot.runningInfer
               << ",running_analyze=" << snapshot.runningAnalyze
               << std::endl;
+    if (logState != nullptr)
+        logState->previousQueueKey = key;
 }
 
 int RunningCountForPhase(const QueueSnapshot& snapshot, const std::string& phase)
@@ -2003,17 +2094,49 @@ int RunningCountForPhase(const QueueSnapshot& snapshot, const std::string& phase
 }
 
 void LogSkip(const std::string& phase,
-                    long long experimentId,
-                    const std::string& reason)
+             long long experimentId,
+             const std::string& reason,
+             SchedulerEventLogState* logState,
+             bool verbose)
 {
+    const std::string key = phase + "|" + std::to_string(experimentId) + "|" + reason;
+    if (logState != nullptr)
+        logState->currentSkipKeys.insert(key);
+    if (!verbose &&
+        logState != nullptr &&
+        logState->previousSkipKeys.find(key) != logState->previousSkipKeys.end())
+    {
+        return;
+    }
+
     std::cout << "SCHEDULER_SKIP_" << (phase == "train" ? "TRAIN" : phase == "infer" ? "INFER" : "ANALYZE")
               << ",experiment_id=" << experimentId
               << ",reason=" << reason
               << std::endl;
 }
 
-void PrintPhaseSchedulingStats(const PhaseSchedulingStats& stats)
+std::string PhaseSchedulingStatsKey(const PhaseSchedulingStats& stats)
 {
+    std::ostringstream key;
+    key << stats.examined << "|"
+        << stats.skipped << "|"
+        << stats.launched << "|"
+        << stats.freeSlots;
+    return key.str();
+}
+
+void PrintPhaseSchedulingStats(const PhaseSchedulingStats& stats,
+                               SchedulerEventLogState* logState,
+                               bool verbose)
+{
+    const std::string key = PhaseSchedulingStatsKey(stats);
+    if (!verbose &&
+        logState != nullptr &&
+        logState->previousPhaseKeys[stats.phase] == key)
+    {
+        return;
+    }
+
     std::cout << "SCHEDULER_QUEUE_PHASE"
               << ",phase=" << stats.phase
               << ",examined=" << stats.examined
@@ -2021,6 +2144,8 @@ void PrintPhaseSchedulingStats(const PhaseSchedulingStats& stats)
               << ",launched=" << stats.launched
               << ",free_slots=" << stats.freeSlots
               << std::endl;
+    if (logState != nullptr)
+        logState->previousPhaseKeys[stats.phase] = key;
 }
 
 int FailInvalidSchedulerPhases(pqxx::work& w)
@@ -2330,6 +2455,7 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--log-level", "summary");
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
     AddCliOption(argv, "--new-model-name", BaseModelName(experiment));
+    AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
 
     const std::optional<long long> resumeFrom =
         experiment.resumeModelId.has_value() ? experiment.resumeModelId : experiment.lastModelId;
@@ -3141,7 +3267,10 @@ void MarkExperimentRunning(pqxx::work& w,
                             "analysis_log_path";
     w.exec(
         "UPDATE experiment SET status = 'running', started_at = COALESCE(started_at, now()), " +
-        std::string{logColumn} + " = " + w.quote(logPath) + ", updated_at = now() "
+        std::string{logColumn} + " = " + w.quote(logPath) +
+        ", current_operation = " + w.quote(phase) +
+        (phase == "train" ? ", current_epoch = NULL" : "") +
+        ", worker_pid = NULL, updated_at = now() "
         "WHERE experiment_id = " + std::to_string(experiment.experimentId) + ";");
 }
 
@@ -3153,6 +3282,24 @@ void PersistExperimentRunningBeforeLaunch(const ExperimentRow& experiment,
     pqxx::work w{c};
     SetTransactionReadWrite(w);
     MarkExperimentRunning(w, experiment, phase, logPath);
+    w.commit();
+}
+
+void PersistExperimentWorkerPid(const ExperimentRow& experiment,
+                                const std::string& phase,
+                                pid_t pid)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    w.exec_params(
+        "UPDATE experiment "
+        "SET worker_pid = $1, current_operation = $2, updated_at = now() "
+        "WHERE experiment_id = $3 AND status = 'running' AND phase = $4;",
+        static_cast<int>(pid),
+        phase,
+        experiment.experimentId,
+        phase);
     w.commit();
 }
 
@@ -3405,7 +3552,42 @@ bool RecoverTrainOrphanFromModel(pqxx::work& w,
     }
 }
 
-int RecoverOrphanedRunningExperiments(pqxx::work& w)
+void LogRunningExperimentPresent(const ExperimentRow& experiment,
+                                 const std::string& phase,
+                                 SchedulerEventLogState* logState,
+                                 bool verbose)
+{
+    const std::string key = phase + "|" + std::to_string(experiment.experimentId);
+    if (logState != nullptr)
+        logState->currentRunningPresentKeys.insert(key);
+    if (!verbose &&
+        logState != nullptr &&
+        logState->previousRunningPresentKeys.find(key) != logState->previousRunningPresentKeys.end())
+    {
+        return;
+    }
+
+    if (phase == "infer")
+    {
+        std::cout << "SCHEDULER_ORPHAN_INFER_STILL_RUNNING"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+                  << ",phase=infer"
+                  << ",reason=matching_process_exists"
+                  << std::endl;
+    }
+    else
+    {
+        std::cout << "SCHEDULER_RUNNING_EXPERIMENT_PRESENT"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",phase=" << phase
+                  << std::endl;
+    }
+}
+
+int RecoverOrphanedRunningExperiments(pqxx::work& w,
+                                      SchedulerEventLogState* logState,
+                                      bool verbose)
 {
     int recoveredOrFailed = 0;
     const std::vector<RunningExperimentState> runningExperiments = LoadRunningExperiments(w);
@@ -3415,22 +3597,7 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w)
         const std::string& phase = state.phase;
         if (RunningProcessExistsForExperiment(experiment, phase))
         {
-            if (phase == "infer")
-            {
-                std::cout << "SCHEDULER_ORPHAN_INFER_STILL_RUNNING"
-                          << ",experiment_id=" << experiment.experimentId
-                          << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
-                          << ",phase=infer"
-                          << ",reason=matching_process_exists"
-                          << std::endl;
-            }
-            else
-            {
-                std::cout << "SCHEDULER_RUNNING_EXPERIMENT_PRESENT"
-                          << ",experiment_id=" << experiment.experimentId
-                          << ",phase=" << phase
-                          << std::endl;
-            }
+            LogRunningExperimentPresent(experiment, phase, logState, verbose);
             continue;
         }
 
@@ -3603,7 +3770,25 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w)
     }
 }
 
-int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
+void BeginSchedulerPollLogging(SchedulerEventLogState* logState)
+{
+    if (logState == nullptr)
+        return;
+    logState->currentSkipKeys.clear();
+    logState->currentRunningPresentKeys.clear();
+}
+
+void FinishSchedulerPollLogging(SchedulerEventLogState* logState)
+{
+    if (logState == nullptr)
+        return;
+    logState->previousSkipKeys = logState->currentSkipKeys;
+    logState->previousRunningPresentKeys = logState->currentRunningPresentKeys;
+}
+
+int RunTrainJobs(const SchedulerOptions& options,
+                 const QueueSnapshot& snapshot,
+                 SchedulerEventLogState* logState)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -3628,7 +3813,7 @@ int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (resumeFrom.has_value() && !ModelExists(w, *resumeFrom))
         {
             ++stats.skipped;
-            LogSkip("train", job.experimentId, "model_not_found");
+            LogSkip("train", job.experimentId, "model_not_found", logState, options.schedulerVerbose);
             if (!options.dryRun)
                 MarkExperimentFailed(w, job, "train_model_not_found");
             continue;
@@ -3636,7 +3821,7 @@ int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (RunningProcessExistsForExperiment(job, "train"))
         {
             ++stats.skipped;
-            LogSkip("train", job.experimentId, "already_running");
+            LogSkip("train", job.experimentId, "already_running", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 MarkExperimentRunning(w, job, "train", LogPathFor(options, job, "train"));
@@ -3648,7 +3833,7 @@ int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (freeSlots <= 0)
         {
             ++stats.skipped;
-            LogSkip("train", job.experimentId, "train_slots_full");
+            LogSkip("train", job.experimentId, "train_slots_full", logState, options.schedulerVerbose);
             continue;
         }
 
@@ -3689,6 +3874,7 @@ int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         try
         {
             const pid_t pid = LaunchChildProcess(command, logPath);
+            PersistExperimentWorkerPid(job, "train", pid);
             std::cout << "SCHEDULER_CHILD_DETACHED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=train"
@@ -3709,12 +3895,14 @@ int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
             rc = 1;
         }
     }
-    PrintPhaseSchedulingStats(stats);
+    PrintPhaseSchedulingStats(stats, logState, options.schedulerVerbose);
     w.commit();
     return rc;
 }
 
-int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
+int RunInferJobs(const SchedulerOptions& options,
+                 const QueueSnapshot& snapshot,
+                 SchedulerEventLogState* logState)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -3737,7 +3925,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (!job.lastModelId.has_value())
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "missing_model");
+            LogSkip("infer", job.experimentId, "missing_model", logState, options.schedulerVerbose);
             if (!options.dryRun)
                 MarkExperimentFailed(w, job, "infer_missing_last_model_id");
             continue;
@@ -3745,7 +3933,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (!ModelExists(w, *job.lastModelId))
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "model_not_found");
+            LogSkip("infer", job.experimentId, "model_not_found", logState, options.schedulerVerbose);
             if (!options.dryRun)
                 MarkExperimentFailed(w, job, "infer_model_not_found");
             continue;
@@ -3753,7 +3941,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (HasCompletedInferenceResult(w, job))
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "existing_inference");
+            LogSkip("infer", job.experimentId, "existing_inference", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 std::cout << "SCHEDULER_SKIP_EXISTING_INFERENCE"
@@ -3782,7 +3970,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (HasValidInferenceLogPath(job))
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "valid_infer_log_path");
+            LogSkip("infer", job.experimentId, "valid_infer_log_path", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 TransitionRecoveredInferenceToAnalyze(
@@ -3797,7 +3985,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
             discoveredLog.has_value())
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "discovered_valid_infer_log");
+            LogSkip("infer", job.experimentId, "discovered_valid_infer_log", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 TransitionRecoveredInferenceToAnalyze(
@@ -3812,7 +4000,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (RunningProcessExistsForExperiment(job, "infer"))
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "already_running");
+            LogSkip("infer", job.experimentId, "already_running", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 MarkExperimentRunning(w, job, "infer", LogPathFor(options, job, "infer"));
@@ -3824,7 +4012,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         if (freeSlots <= 0)
         {
             ++stats.skipped;
-            LogSkip("infer", job.experimentId, "infer_slots_full");
+            LogSkip("infer", job.experimentId, "infer_slots_full", logState, options.schedulerVerbose);
             continue;
         }
 
@@ -3858,6 +4046,7 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
         try
         {
             const pid_t pid = LaunchChildProcess(command, logPath);
+            PersistExperimentWorkerPid(job, "infer", pid);
             std::cout << "SCHEDULER_CHILD_DETACHED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=infer"
@@ -3878,12 +4067,14 @@ int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
             rc = 1;
         }
     }
-    PrintPhaseSchedulingStats(stats);
+    PrintPhaseSchedulingStats(stats, logState, options.schedulerVerbose);
     w.commit();
     return rc;
 }
 
-int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
+int RunAnalyzeJobs(const SchedulerOptions& options,
+                   const QueueSnapshot& snapshot,
+                   SchedulerEventLogState* logState)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -3906,7 +4097,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
         if (!job.lastModelId.has_value())
         {
             ++stats.skipped;
-            LogSkip("analyze", job.experimentId, "missing_model");
+            LogSkip("analyze", job.experimentId, "missing_model", logState, options.schedulerVerbose);
             if (!options.dryRun)
                 MarkAnalyzeFailed(w, job.experimentId, "analyze_missing_last_model_id");
             continue;
@@ -3914,7 +4105,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
         if (!ModelExists(w, *job.lastModelId))
         {
             ++stats.skipped;
-            LogSkip("analyze", job.experimentId, "model_not_found");
+            LogSkip("analyze", job.experimentId, "model_not_found", logState, options.schedulerVerbose);
             if (!options.dryRun)
                 MarkAnalyzeFailed(w, job.experimentId, "analyze_model_not_found");
             continue;
@@ -3922,7 +4113,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
         if (HasCompletedAnalysisResult(w, job))
         {
             ++stats.skipped;
-            LogSkip("analyze", job.experimentId, "existing_analysis");
+            LogSkip("analyze", job.experimentId, "existing_analysis", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
@@ -3936,13 +4127,13 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
         if (!HasCompletedInferenceResult(w, job) && !HasValidInferenceLogPath(job))
         {
             ++stats.skipped;
-            LogSkip("analyze", job.experimentId, "infer_log_missing");
+            LogSkip("analyze", job.experimentId, "infer_log_missing", logState, options.schedulerVerbose);
             continue;
         }
         if (RunningProcessExistsForExperiment(job, "analyze"))
         {
             ++stats.skipped;
-            LogSkip("analyze", job.experimentId, "already_running");
+            LogSkip("analyze", job.experimentId, "already_running", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 MarkExperimentRunning(w, job, "analyze", LogPathFor(options, job, "analysis"));
@@ -3954,7 +4145,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
         if (freeSlots <= 0)
         {
             ++stats.skipped;
-            LogSkip("analyze", job.experimentId, "analyze_slots_full");
+            LogSkip("analyze", job.experimentId, "analyze_slots_full", logState, options.schedulerVerbose);
             continue;
         }
 
@@ -3992,6 +4183,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
         try
         {
             const pid_t pid = LaunchChildProcess(command, logPath);
+            PersistExperimentWorkerPid(job, "analyze", pid);
             std::cout << "SCHEDULER_CHILD_DETACHED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=analyze"
@@ -4012,15 +4204,17 @@ int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapsho
             rc = 1;
         }
     }
-    PrintPhaseSchedulingStats(stats);
+    PrintPhaseSchedulingStats(stats, logState, options.schedulerVerbose);
     w.commit();
     return rc;
 }
 
-int RunSchedulerOnce(const SchedulerOptions& options)
+int RunSchedulerOnce(const SchedulerOptions& options,
+                     SchedulerEventLogState* logState)
 {
     int rc = 0;
     QueueSnapshot snapshot;
+    BeginSchedulerPollLogging(logState);
     {
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
@@ -4031,23 +4225,25 @@ int RunSchedulerOnce(const SchedulerOptions& options)
         if (!options.dryRun)
         {
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
-            RecoverOrphanedRunningExperiments(w);
+            RecoverOrphanedRunningExperiments(w, logState, options.schedulerVerbose);
             rc |= FailInvalidSchedulerPhases(w);
         }
         snapshot = LoadQueueSnapshot(w);
-        PrintQueueSnapshot(snapshot);
+        PrintQueueSnapshot(snapshot, logState, options.schedulerVerbose);
         w.commit();
     }
 
-    rc |= RunTrainJobs(options, snapshot);
-    rc |= RunInferJobs(options, snapshot);
-    rc |= RunAnalyzeJobs(options, snapshot);
+    rc |= RunTrainJobs(options, snapshot, logState);
+    rc |= RunInferJobs(options, snapshot, logState);
+    rc |= RunAnalyzeJobs(options, snapshot, logState);
+    FinishSchedulerPollLogging(logState);
     return rc;
 }
 
 int RunScheduler(const SchedulerOptions& options)
 {
     int recoveryCount = 0;
+    SchedulerEventLogState logState;
     {
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
@@ -4057,7 +4253,9 @@ int RunScheduler(const SchedulerOptions& options)
         if (!options.dryRun)
         {
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
-            recoveryCount = RecoverOrphanedRunningExperiments(w);
+            BeginSchedulerPollLogging(&logState);
+            recoveryCount = RecoverOrphanedRunningExperiments(w, &logState, options.schedulerVerbose);
+            FinishSchedulerPollLogging(&logState);
             if (FailInvalidSchedulerPhases(w) != 0)
             {
                 w.commit();
@@ -4090,7 +4288,7 @@ int RunScheduler(const SchedulerOptions& options)
     int rc = 0;
     do
     {
-        rc |= RunSchedulerOnce(options);
+        rc |= RunSchedulerOnce(options, &logState);
         if (options.schedulerOnce)
             break;
         ::sleep(static_cast<unsigned int>(options.schedulerPollSeconds));
@@ -5053,6 +5251,265 @@ SchedulerStatusCounts LoadSchedulerStatusCounts(pqxx::work& w)
     return counts;
 }
 
+std::string OptionalLongLongText(const std::optional<long long>& value);
+std::string OptionalIntText(const std::optional<int>& value);
+std::string OptionalDoubleText(const std::optional<double>& value, int precision);
+std::string CurrentOperationForStatusJob(const SchedulerStatusJob& job);
+
+bool MatrixParamExists(pqxx::work& w, long long modelId, const std::string& paramName)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 FROM matrix WHERE model_id = $1 AND param_name = $2 LIMIT 1;",
+        modelId,
+        paramName);
+    return !rows.empty();
+}
+
+std::vector<double> LoadMatrixRowValuesOrEmpty(pqxx::work& w,
+                                               long long modelId,
+                                               const std::string& paramName)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT value FROM matrix "
+        "WHERE model_id = $1 AND param_name = $2 AND row_idx = 0 "
+        "ORDER BY col_idx;",
+        modelId,
+        paramName);
+    std::vector<double> values;
+    values.reserve(rows.size());
+    for (const auto& row : rows)
+        values.push_back(row[0].as<double>());
+    return values;
+}
+
+std::string DecodeAsciiMatrixOrUnknown(pqxx::work& w,
+                                       long long modelId,
+                                       const std::string& paramName)
+{
+    try
+    {
+        const std::vector<double> values = LoadMatrixRowValuesOrEmpty(w, modelId, paramName);
+        if (values.empty())
+            return "unknown";
+        std::string decoded;
+        decoded.reserve(values.size());
+        for (double value : values)
+        {
+            const long long code = static_cast<long long>(std::llround(value));
+            if (code <= 0 || code > 255)
+                return "unknown";
+            decoded.push_back(static_cast<char>(code));
+        }
+        return decoded.empty() ? "unknown" : decoded;
+    }
+    catch (const std::exception&)
+    {
+        return "unknown";
+    }
+}
+
+std::pair<std::string, std::string> DecodeRangeMetaOrUnknown(pqxx::work& w,
+                                                             long long modelId,
+                                                             const std::string& paramName)
+{
+    const std::string encoded = DecodeAsciiMatrixOrUnknown(w, modelId, paramName);
+    const size_t sep = encoded.find('|');
+    if (encoded == "unknown" || sep == std::string::npos)
+        return {"unknown", "unknown"};
+    return {encoded.substr(0, sep), encoded.substr(sep + 1)};
+}
+
+std::string TargetTypeNameFromMetaValue(int value)
+{
+    switch (value)
+    {
+        case 0: return "Return";
+        case 1: return "Direction";
+        case 2: return "UpNeutralDownReturn";
+        default: return "unknown";
+    }
+}
+
+std::string OptimizerNameFromMetaValue(int value)
+{
+    if (value == DBIO::PgModelIO::kOptimizerTypeSgd)
+        return "SGD";
+    return "unknown";
+}
+
+std::string OptionalDateRangeText(const std::string& start, const std::string& end)
+{
+    if (start == "unknown" && end == "unknown")
+        return "unknown";
+    return start + " -> " + end;
+}
+
+std::string YesNoText(bool value)
+{
+    return value ? "yes" : "no";
+}
+
+void PrintModelInfoField(const std::string& label, const std::string& value)
+{
+    std::cout << std::left << std::setw(24) << (label + ":") << value << "\n";
+}
+
+ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
+{
+    pqxx::result modelRows = w.exec_params(
+        "SELECT model_id, name, created_at::text, COALESCE(comment, '') "
+        "FROM model WHERE model_id = $1;",
+        modelId);
+    if (modelRows.empty())
+        throw std::runtime_error("model not found");
+
+    ModelInfoRecord info;
+    info.modelId = modelRows[0][0].as<long long>();
+    info.name = modelRows[0][1].as<std::string>();
+    info.createdAt = modelRows[0][2].as<std::string>();
+    info.comment = modelRows[0][3].as<std::string>();
+    if (info.comment.empty())
+        info.comment = "unknown";
+
+    info.symbol = DecodeAsciiMatrixOrUnknown(w, modelId, "train_symbol_meta");
+    const auto trainRange = DecodeRangeMetaOrUnknown(w, modelId, "train_range_meta");
+    info.trainStart = trainRange.first;
+    info.trainEnd = trainRange.second;
+
+    const std::vector<double> trainConfig = LoadMatrixRowValuesOrEmpty(w, modelId, "train_config_meta");
+    if (trainConfig.size() > 1)
+        info.predictionHorizon = static_cast<int>(std::llround(trainConfig[1]));
+    if (trainConfig.size() > 2)
+        info.threshold = trainConfig[2];
+    if (trainConfig.size() > 3)
+        info.windowSize = static_cast<int>(std::llround(trainConfig[3]));
+    if (trainConfig.size() > 10)
+        info.completedEpochs = static_cast<int>(std::llround(trainConfig[10]));
+
+    const std::vector<double> targetMeta = LoadMatrixRowValuesOrEmpty(w, modelId, "target_meta");
+    if (!targetMeta.empty())
+        info.targetType = TargetTypeNameFromMetaValue(static_cast<int>(std::llround(targetMeta[0])));
+
+    const std::vector<double> optimizerMeta = LoadMatrixRowValuesOrEmpty(w, modelId, "optimizer_meta");
+    if (optimizerMeta.size() > 1)
+        info.optimizer = OptimizerNameFromMetaValue(static_cast<int>(std::llround(optimizerMeta[1])));
+    if (optimizerMeta.size() > 2)
+        info.optimizerUpdateCount = static_cast<long long>(std::llround(optimizerMeta[2]));
+
+    pqxx::result experimentRows = w.exec_params(
+        "SELECT target_epochs, checkpoint_interval, "
+        "train_start::date::text, train_end::date::text, "
+        "infer_start::date::text, infer_end::date::text, "
+        "resume_model_id, last_model_id "
+        "FROM experiment "
+        "WHERE last_model_id = $1 OR resume_model_id = $1 "
+        "ORDER BY CASE WHEN last_model_id = $1 THEN 0 ELSE 1 END, updated_at DESC "
+        "LIMIT 1;",
+        modelId);
+    if (!experimentRows.empty())
+    {
+        info.targetEpochs = experimentRows[0][0].as<int>();
+        info.checkpointInterval = experimentRows[0][1].as<int>();
+        if (!experimentRows[0][2].is_null())
+            info.trainStart = experimentRows[0][2].as<std::string>();
+        if (!experimentRows[0][3].is_null())
+            info.trainEnd = experimentRows[0][3].as<std::string>();
+        if (!experimentRows[0][4].is_null())
+            info.inferStart = experimentRows[0][4].as<std::string>();
+        if (!experimentRows[0][5].is_null())
+            info.inferEnd = experimentRows[0][5].as<std::string>();
+        if (!experimentRows[0][6].is_null())
+            info.parentResumeModelId = experimentRows[0][6].as<long long>();
+    }
+
+    pqxx::result analysisRows = w.exec_params(
+        "SELECT target_epochs, completed_epochs "
+        "FROM experiment_analysis_result "
+        "WHERE model_id = $1 "
+        "ORDER BY updated_at DESC "
+        "LIMIT 1;",
+        modelId);
+    if (!analysisRows.empty())
+    {
+        if (!info.targetEpochs.has_value() && !analysisRows[0][0].is_null())
+            info.targetEpochs = analysisRows[0][0].as<int>();
+        if (!info.completedEpochs.has_value() && !analysisRows[0][1].is_null())
+            info.completedEpochs = analysisRows[0][1].as<int>();
+    }
+
+    pqxx::result inferenceRows = w.exec_params(
+        "SELECT from_date::text, to_date::text, completed_epochs "
+        "FROM inference_eval_result "
+        "WHERE model_id = $1 AND status = 'completed' "
+        "ORDER BY completed_at DESC, id DESC "
+        "LIMIT 1;",
+        modelId);
+    if (!inferenceRows.empty())
+    {
+        info.inferStart = inferenceRows[0][0].as<std::string>();
+        info.inferEnd = inferenceRows[0][1].as<std::string>();
+        if (!info.completedEpochs.has_value() && !inferenceRows[0][2].is_null())
+            info.completedEpochs = static_cast<int>(inferenceRows[0][2].as<long long>());
+    }
+
+    info.isCheckpoint =
+        info.comment.find("periodic training checkpoint") != std::string::npos ||
+        std::regex_search(info.name, std::regex{R"(_epoch[0-9]+)"});
+    info.isResumable =
+        MatrixParamExists(w, modelId, "train_config_meta") &&
+        MatrixParamExists(w, modelId, "optimizer_meta") &&
+        MatrixParamExists(w, modelId, "train_symbol_meta") &&
+        MatrixParamExists(w, modelId, "param") &&
+        MatrixParamExists(w, modelId, "bias");
+
+    return info;
+}
+
+int PrintModelInfo(long long modelId)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    ModelInfoRecord info;
+    try
+    {
+        info = LoadModelInfo(w, modelId);
+    }
+    catch (const std::exception& e)
+    {
+        w.commit();
+        if (std::string{e.what()} == "model not found")
+        {
+            std::cerr << "ERROR: model not found." << std::endl;
+            return 1;
+        }
+        throw;
+    }
+    w.commit();
+
+    std::cout << "MODEL INFORMATION\n"
+              << "-----------------\n";
+    PrintModelInfoField("Model ID", std::to_string(info.modelId));
+    PrintModelInfoField("Name", info.name);
+    PrintModelInfoField("Symbol", info.symbol);
+    PrintModelInfoField("Prediction Horizon", OptionalIntText(info.predictionHorizon));
+    PrintModelInfoField("Completed Epochs", OptionalIntText(info.completedEpochs));
+    PrintModelInfoField("Target Epochs", OptionalIntText(info.targetEpochs));
+    PrintModelInfoField("Training Range", OptionalDateRangeText(info.trainStart, info.trainEnd));
+    PrintModelInfoField("Inference Range", OptionalDateRangeText(info.inferStart, info.inferEnd));
+    PrintModelInfoField("Threshold", OptionalDoubleText(info.threshold, 8));
+    PrintModelInfoField("Window Size", OptionalIntText(info.windowSize));
+    PrintModelInfoField("Checkpoint Interval", OptionalIntText(info.checkpointInterval));
+    PrintModelInfoField("Optimizer", info.optimizer);
+    PrintModelInfoField("Optimizer Updates", OptionalLongLongText(info.optimizerUpdateCount));
+    PrintModelInfoField("Target Type", info.targetType);
+    PrintModelInfoField("Created", info.createdAt);
+    PrintModelInfoField("Comment", info.comment);
+    PrintModelInfoField("Checkpoint", YesNoText(info.isCheckpoint));
+    PrintModelInfoField("Resumable", YesNoText(info.isResumable));
+    PrintModelInfoField("Parent Resume Model", OptionalLongLongText(info.parentResumeModelId));
+    return 0;
+}
+
 SchedulerStatusJob RowToSchedulerStatusJob(const pqxx::row& row)
 {
     SchedulerStatusJob job;
@@ -5075,6 +5532,14 @@ SchedulerStatusJob RowToSchedulerStatusJob(const pqxx::row& row)
     job.trainLogPath = OptionalStringCell(row, 14);
     job.inferLogPath = OptionalStringCell(row, 15);
     job.analysisLogPath = OptionalStringCell(row, 16);
+    if (!row[17].is_null())
+    {
+        job.currentEpoch = row[17].as<int>();
+        job.currentEpochFromTable = true;
+    }
+    if (!row[18].is_null())
+        job.pid = row[18].as<int>();
+    job.currentOperation = row[19].is_null() ? "" : row[19].as<std::string>();
     return job;
 }
 
@@ -5108,7 +5573,8 @@ std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
         << "     WHEN e.completed_at IS NULL THEN EXTRACT(EPOCH FROM (now() - e.started_at)) "
         << "     ELSE EXTRACT(EPOCH FROM (e.completed_at - e.started_at)) END AS elapsed_seconds, "
         << "e.started_at::text, e.updated_at::text, e.completed_at::text, e.error_message, "
-        << "e.train_log_path, e.infer_log_path, e.analysis_log_path "
+        << "e.train_log_path, e.infer_log_path, e.analysis_log_path, "
+        << "e.current_epoch, e.worker_pid, e.current_operation "
         << "FROM experiment e "
         << "LEFT JOIN latest_analysis la ON la.experiment_id = e.experiment_id "
         << "LEFT JOIN latest_infer li ON li.model_id = e.last_model_id "
@@ -5131,6 +5597,47 @@ std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
     for (const auto& row : rows)
         jobs.push_back(RowToSchedulerStatusJob(row));
     return jobs;
+}
+
+std::optional<SchedulerStatusJob> LoadSchedulerStatusJobById(pqxx::work& w, long long experimentId)
+{
+    std::ostringstream sql;
+    sql << "WITH latest_analysis AS ("
+        << "  SELECT experiment_id, model_id, MAX(completed_epochs) AS completed_epochs "
+        << "  FROM experiment_analysis_result "
+        << "  WHERE completed_epochs IS NOT NULL "
+        << "  GROUP BY experiment_id, model_id"
+        << "), latest_infer AS ("
+        << "  SELECT model_id, MAX(completed_epochs) AS completed_epochs "
+        << "  FROM inference_eval_result "
+        << "  WHERE completed_epochs IS NOT NULL AND status = 'completed' "
+        << "  GROUP BY model_id"
+        << "), train_meta AS ("
+        << "  SELECT model_id, MAX(round(value)::int) AS completed_epochs "
+        << "  FROM matrix "
+        << "  WHERE param_name = 'train_config_meta' AND row_idx = 0 AND col_idx = 10 "
+        << "  GROUP BY model_id"
+        << ") "
+        << "SELECT e.experiment_id, e.symbol, e.prediction_horizon, e.phase, e.status, "
+        << "e.target_epochs, e.checkpoint_interval, COALESCE(e.last_model_id, e.resume_model_id) AS model_id, "
+        << "COALESCE(la.completed_epochs, li.completed_epochs, tm.completed_epochs) AS completed_epochs, "
+        << "CASE WHEN e.started_at IS NULL THEN NULL "
+        << "     WHEN e.completed_at IS NULL THEN EXTRACT(EPOCH FROM (now() - e.started_at)) "
+        << "     ELSE EXTRACT(EPOCH FROM (e.completed_at - e.started_at)) END AS elapsed_seconds, "
+        << "e.started_at::text, e.updated_at::text, e.completed_at::text, e.error_message, "
+        << "e.train_log_path, e.infer_log_path, e.analysis_log_path, "
+        << "e.current_epoch, e.worker_pid, e.current_operation "
+        << "FROM experiment e "
+        << "LEFT JOIN latest_analysis la ON la.experiment_id = e.experiment_id "
+        << "LEFT JOIN latest_infer li ON li.model_id = e.last_model_id "
+        << "LEFT JOIN train_meta tm ON tm.model_id = COALESCE(e.last_model_id, e.resume_model_id) "
+        << "WHERE e.experiment_id = " << experimentId << " "
+        << "LIMIT 1;";
+
+    pqxx::result rows = w.exec(sql.str());
+    if (rows.empty())
+        return std::nullopt;
+    return RowToSchedulerStatusJob(rows[0]);
 }
 
 void EnrichSchedulerStatusJobFromLogs(SchedulerStatusJob& job,
@@ -5226,25 +5733,28 @@ void EnrichSchedulerStatusJobFromLogs(SchedulerStatusJob& job,
         if (validationAccuracy.has_value())
             job.validationAccuracy = validationAccuracy;
 
-        int currentEpoch = 0;
-        if (job.completedEpochs.has_value())
-            currentEpoch = std::max(currentEpoch, *job.completedEpochs);
-        if (resumeCompleted.has_value())
-            currentEpoch = std::max(currentEpoch, *resumeCompleted);
-        if (metaEpoch.has_value())
-            currentEpoch = std::max(currentEpoch, *metaEpoch);
-        if (epochKv.has_value())
-            currentEpoch = std::max(currentEpoch, *epochKv);
-        if (checkpointEpoch.has_value())
-            currentEpoch = std::max(currentEpoch, *checkpointEpoch);
-        if (currentEpoch > 0)
-            job.currentEpoch = currentEpoch;
+        if (!job.currentEpochFromTable)
+        {
+            int currentEpoch = 0;
+            if (job.completedEpochs.has_value())
+                currentEpoch = std::max(currentEpoch, *job.completedEpochs);
+            if (resumeCompleted.has_value())
+                currentEpoch = std::max(currentEpoch, *resumeCompleted);
+            if (metaEpoch.has_value())
+                currentEpoch = std::max(currentEpoch, *metaEpoch);
+            if (epochKv.has_value())
+                currentEpoch = std::max(currentEpoch, *epochKv);
+            if (checkpointEpoch.has_value())
+                currentEpoch = std::max(currentEpoch, *checkpointEpoch);
+            if (currentEpoch > 0)
+                job.currentEpoch = currentEpoch;
+        }
 
         if (resumeTarget.has_value() && job.targetEpochs <= 0)
             job.targetEpochs = *resumeTarget;
     }
 
-    if (!job.currentEpoch.has_value() && job.completedEpochs.has_value())
+    if (!job.currentEpochFromTable && !job.currentEpoch.has_value() && job.completedEpochs.has_value())
         job.currentEpoch = job.completedEpochs;
 
     if (!job.lastCheckpointEpoch.has_value() && job.completedEpochs.has_value())
@@ -5364,6 +5874,7 @@ void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
               << ",experiment_id=" << job.experimentId
               << ",phase=" << job.phase
               << ",status=" << job.status
+              << ",current_operation=" << CurrentOperationForStatusJob(job)
               << ",symbol=" << job.symbol
               << ",prediction_horizon=" << job.predictionHorizon
               << ",pid=" << OptionalIntText(job.pid)
@@ -5452,6 +5963,94 @@ void PrintStatusJobTable(const std::string& title,
             std::cout << " recent=\"" << *job.recentProgress << "\"";
         std::cout << "\n";
     }
+}
+
+void PrintCompactStatusField(const std::string& label, const std::string& value)
+{
+    std::cout << std::left << std::setw(24) << (label + ":") << value << "\n";
+}
+
+std::string CurrentOperationForStatusJob(const SchedulerStatusJob& job)
+{
+    if (!job.currentOperation.empty())
+        return job.currentOperation;
+    if (job.phase == "train")
+        return "training";
+    if (job.phase == "infer")
+        return "inference";
+    if (job.phase == "analyze")
+        return "analysis";
+    if (job.phase == "done")
+        return "done";
+    return "unknown";
+}
+
+void PrintCompactStatusJob(const SchedulerStatusJob& job)
+{
+    std::cout << "\nExperiment " << job.experimentId << "\n"
+              << "---------------\n";
+    PrintCompactStatusField("Status", job.status);
+    PrintCompactStatusField("Phase", job.phase);
+    PrintCompactStatusField("Symbol", job.symbol);
+    PrintCompactStatusField("Horizon", std::to_string(job.predictionHorizon));
+    PrintCompactStatusField("Model ID", OptionalLongLongText(job.modelId));
+    PrintCompactStatusField("Epoch", OptionalIntText(job.currentEpoch) + " / " + std::to_string(job.targetEpochs));
+    PrintCompactStatusField("Progress", FormatPercentComplete(job));
+    PrintCompactStatusField("Runtime", FormatOptionalDuration(job.elapsedSeconds));
+    PrintCompactStatusField("PID", OptionalIntText(job.pid));
+    PrintCompactStatusField("Operation", CurrentOperationForStatusJob(job));
+    if (job.lastCheckpointModelId.has_value())
+        PrintCompactStatusField("Checkpoint Model", OptionalLongLongText(job.lastCheckpointModelId));
+    if (job.lastCheckpointEpoch.has_value())
+        PrintCompactStatusField("Checkpoint Epoch", OptionalIntText(job.lastCheckpointEpoch));
+    if (!job.errorMessage.empty())
+        PrintCompactStatusField("Error", job.errorMessage);
+}
+
+int PrintCompactExperimentStatus(const SchedulerOptions& options)
+{
+    const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (!RequireSchedulerTables(w))
+        return 1;
+
+    std::vector<SchedulerStatusJob> jobs;
+    if (options.statusExperimentId.has_value())
+    {
+        auto job = LoadSchedulerStatusJobById(w, *options.statusExperimentId);
+        if (!job.has_value())
+        {
+            w.commit();
+            std::cerr << "ERROR: experiment not found." << std::endl;
+            return 1;
+        }
+        jobs.push_back(*job);
+    }
+    else
+    {
+        std::vector<SchedulerStatusJob> train = LoadSchedulerStatusJobs(w, "running", "train", 500, false);
+        std::vector<SchedulerStatusJob> infer = LoadSchedulerStatusJobs(w, "running", "infer", 500, false);
+        std::vector<SchedulerStatusJob> analyze = LoadSchedulerStatusJobs(w, "running", "analyze", 500, false);
+        jobs.reserve(train.size() + infer.size() + analyze.size());
+        jobs.insert(jobs.end(), train.begin(), train.end());
+        jobs.insert(jobs.end(), infer.begin(), infer.end());
+        jobs.insert(jobs.end(), analyze.begin(), analyze.end());
+    }
+    w.commit();
+
+    EnrichSchedulerStatusJobs(jobs, processes);
+
+    if (!options.statusExperimentId.has_value() && jobs.empty())
+    {
+        std::cout << "No running experiments." << std::endl;
+        return 0;
+    }
+
+    std::cout << (options.statusExperimentId.has_value() ? "EXPERIMENT STATUS" : "RUNNING EXPERIMENTS") << "\n";
+    for (const auto& job : jobs)
+        PrintCompactStatusJob(job);
+    return 0;
 }
 
 std::string FormatAggregateResource(const SchedulerResourceAggregate& aggregate)
@@ -6068,9 +6667,13 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
         << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
-        << "[--scheduler-log-dir=PATH] [--dry-run] [--recover-orphans-only]\n"
+        << "[--scheduler-log-dir=PATH] [--scheduler-verbose] [--dry-run] [--recover-orphans-only]\n"
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
+        << "Usage: " << exe
+        << " --status [--experiment-id=ID]\n"
+        << "Usage: " << exe
+        << " --model-info --model=MODEL_ID\n"
         << "Usage: " << exe
         << " --experiment-metadata=ID\n"
         << "Usage: " << exe
@@ -6117,6 +6720,10 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
             return 0;
         }
+        if (options.modelInfo)
+            return PrintModelInfo(*options.modelInfoModelId);
+        if (options.compactStatus)
+            return PrintCompactExperimentStatus(options);
         if (options.queueExperiment || options.queueSweep)
             return QueueExperiments(options);
         if (options.enqueueExperiment)

@@ -21,6 +21,7 @@
 #include <vector>
 #include <stdexcept>
 #include <sstream>
+#include <unistd.h>
 #include <pqxx/pqxx>
 
 #include <device_tags.h>
@@ -3137,6 +3138,37 @@ std::string LstmDbConnectionString()
     return "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName;
 }
 
+void UpdateSchedulerExperimentProgress(const std::optional<long long>& experimentId,
+                                       int completedEpoch,
+                                       const std::string& operation)
+{
+    if (!experimentId.has_value())
+        return;
+    try
+    {
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        w.exec("SET TRANSACTION READ WRITE;");
+        w.exec_params(
+            "UPDATE experiment "
+            "SET current_epoch = $1, worker_pid = $2, current_operation = $3, updated_at = now() "
+            "WHERE experiment_id = $4;",
+            completedEpoch,
+            static_cast<int>(::getpid()),
+            operation,
+            *experimentId);
+        w.commit();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "SCHEDULER_PROGRESS_UPDATE_FAILED"
+                  << ",experiment_id=" << *experimentId
+                  << ",epoch=" << completedEpoch
+                  << ",error=" << e.what()
+                  << std::endl;
+    }
+}
+
 struct LaunchArgs
 {
     std::string fromDate;
@@ -3158,6 +3190,7 @@ struct LaunchArgs
     std::optional<double> headWeightLrMult;
     std::optional<double> headBiasLrMult;
     std::optional<int> checkpointEvery;
+    std::optional<long long> schedulerExperimentId;
     std::optional<long long> inferStartAfterModelId;
     std::optional<RuntimeLogLevel> logLevel;
     bool evalTrading = false;
@@ -3343,6 +3376,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--infer-start-after-model-id requires a model_id value");
             parsed.inferStartAfterModelId = ParseModelIdArg(argv[++i]);
         }
+        else if (arg == "--scheduler-experiment-id")
+        {
+            if (parsed.schedulerExperimentId.has_value())
+                throw std::invalid_argument("--scheduler-experiment-id specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--scheduler-experiment-id requires an experiment_id value");
+            parsed.schedulerExperimentId = ParseModelIdArg(argv[++i]);
+        }
         else if (arg == "--log-level")
         {
             if (parsed.logLevel.has_value())
@@ -3434,6 +3475,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.inferStartAfterModelId.has_value())
                     throw std::invalid_argument("--infer-start-after-model-id specified more than once");
                 parsed.inferStartAfterModelId = ParseModelIdArg(value);
+            }
+            else if (SplitOptionWithValue(arg, "--scheduler-experiment-id", value))
+            {
+                if (parsed.schedulerExperimentId.has_value())
+                    throw std::invalid_argument("--scheduler-experiment-id specified more than once");
+                parsed.schedulerExperimentId = ParseModelIdArg(value);
             }
             else if (SplitOptionWithValue(arg, "--log-level", value))
             {
@@ -6106,6 +6153,9 @@ int main(int argc, const char * argv[])
                         PrintAndResetDistribution();
                     }
                     l.completedEpochs = static_cast<size_t>(e + 1);
+                    UpdateSchedulerExperimentProgress(launchArgs.schedulerExperimentId,
+                                                      static_cast<int>(e + 1),
+                                                      "train");
                     SavePeriodicCheckpointIfDue(launchArgs,
                                                 resumeConfig,
                                                 rawPriceTableName,
