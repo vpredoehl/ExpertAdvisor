@@ -15,8 +15,10 @@ struct MetaAnalysisOptions
     bool metaAnalyze = false;
     bool metaAnalyzeOnce = false;
     bool metaAnalysisReport = false;
+    bool queueMetaRecommendations = false;
     bool outputJson = false;
     bool outputMarkdown = false;
+    bool dryRun = false;
     int limit = 20;
     int intervalSeconds = kDefaultMetaAnalysisIntervalSeconds;
     std::optional<std::string> symbol;

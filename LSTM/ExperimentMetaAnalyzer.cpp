@@ -29,6 +29,12 @@ namespace EA::ExperimentMetaAnalyzer
 
 namespace
 {
+constexpr int kMetaRecommendationCheckpointInterval = 20;
+constexpr const char* kMetaRecommendationTrainStart = "2010-01-01";
+constexpr const char* kMetaRecommendationTrainEnd = "2025-01-01";
+constexpr const char* kMetaRecommendationInferStart = "2025-01-01";
+constexpr const char* kMetaRecommendationInferEnd = "2026-01-01";
+
 volatile std::sig_atomic_t gMetaAnalysisInterrupted = 0;
 
 void HandleMetaAnalysisSignal(int)
@@ -44,7 +50,8 @@ bool IsMetaAnalysisCommand(int argc, const char* argv[])
         const std::string arg{argv[i]};
         if (arg == "--meta-analyze" ||
             arg == "--meta-analyze-once" ||
-            arg == "--meta-analysis-report")
+            arg == "--meta-analysis-report" ||
+            arg == "--queue-meta-recommendations")
             return true;
     }
     return false;
@@ -110,10 +117,14 @@ MetaAnalysisOptions ParseMetaAnalysisArgs(int argc, const char* argv[])
             options.metaAnalyzeOnce = true;
         else if (arg == "--meta-analysis-report")
             options.metaAnalysisReport = true;
+        else if (arg == "--queue-meta-recommendations")
+            options.queueMetaRecommendations = true;
         else if (arg == "--meta-analysis-json")
             options.outputJson = true;
         else if (arg == "--meta-analysis-markdown")
             options.outputMarkdown = true;
+        else if (arg == "--dry-run")
+            options.dryRun = true;
         else if (arg == "--meta-analysis-limit")
             options.limit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--meta-analysis-symbol")
@@ -142,7 +153,8 @@ MetaAnalysisOptions ParseMetaAnalysisArgs(int argc, const char* argv[])
 
     const int commandCount = (options.metaAnalyze ? 1 : 0) +
                              (options.metaAnalyzeOnce ? 1 : 0) +
-                             (options.metaAnalysisReport ? 1 : 0);
+                             (options.metaAnalysisReport ? 1 : 0) +
+                             (options.queueMetaRecommendations ? 1 : 0);
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one meta-analysis command");
     if (options.limit <= 0)
@@ -190,6 +202,13 @@ std::string FormatDouble(double value)
         return "null";
     std::ostringstream oss;
     oss << std::setprecision(10) << value;
+    return oss.str();
+}
+
+std::string FormatDoubleFull(double value)
+{
+    std::ostringstream oss;
+    oss << std::setprecision(17) << value;
     return oss.str();
 }
 
@@ -1349,6 +1368,66 @@ std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(con
     return recs;
 }
 
+std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
+                                                                 const NextExperimentRecommendation& rec)
+{
+    pqxx::result rows = w.exec(
+        "SELECT experiment_id "
+        "FROM experiment "
+        "WHERE symbol = " + w.quote(rec.symbol) + " "
+        "AND prediction_horizon = " + std::to_string(rec.horizon) + " "
+        "AND target_epochs = " + std::to_string(rec.targetEpochs) + " "
+        "AND abs(c_next_threshold - " + FormatDoubleFull(rec.threshold) + ") <= 1e-12 "
+        "AND core_lr_mult IS NOT NULL "
+        "AND abs(core_lr_mult - " + FormatDoubleFull(rec.coreLr) + ") <= 1e-9 "
+        "AND head_lr_mult IS NOT NULL "
+        "AND abs(head_lr_mult - " + FormatDoubleFull(rec.headLr) + ") <= 1e-9 "
+        "ORDER BY experiment_id ASC LIMIT 1;");
+    if (rows.empty())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+long long InsertMetaRecommendationExperiment(pqxx::work& w,
+                                             const NextExperimentRecommendation& rec)
+{
+    std::ostringstream sql;
+    sql << "INSERT INTO experiment ("
+        << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
+        << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
+        << "resume_model_id, duplicate_nonce, status, phase, updated_at"
+        << ") VALUES ("
+        << w.quote(rec.symbol) << ","
+        << rec.horizon << ","
+        << FormatDoubleFull(rec.threshold) << ","
+        << FormatDoubleFull(rec.coreLr) << ","
+        << FormatDoubleFull(rec.headLr) << ","
+        << rec.targetEpochs << ","
+        << kMetaRecommendationCheckpointInterval << ","
+        << w.quote(kMetaRecommendationTrainStart) << "::timestamptz,"
+        << w.quote(kMetaRecommendationTrainEnd) << "::timestamptz,"
+        << w.quote(kMetaRecommendationInferStart) << "::timestamptz,"
+        << w.quote(kMetaRecommendationInferEnd) << "::timestamptz,"
+        << "NULL,"
+        << "0,"
+        << "'pending','train',now()) RETURNING experiment_id;";
+    return w.exec(sql.str())[0][0].as<long long>();
+}
+
+void PrintMetaRecommendationQueueFields(const NextExperimentRecommendation& rec,
+                                        bool includeRecommendationReason = true)
+{
+    std::cout << ",rank=" << rec.rank
+              << ",symbol=" << rec.symbol
+              << ",prediction_horizon=" << rec.horizon
+              << ",target_epochs=" << rec.targetEpochs
+              << ",threshold=" << FormatDouble(rec.threshold)
+              << ",core_lr=" << FormatDouble(rec.coreLr)
+              << ",head_lr=" << FormatDouble(rec.headLr);
+    if (includeRecommendationReason)
+        std::cout << ",reason=" << rec.reason;
+}
+
 std::string GroupStatsJson(const std::vector<GroupStats>& groups)
 {
     std::ostringstream json;
@@ -1971,6 +2050,73 @@ int RunMetaAnalysisOnce(const MetaAnalysisOptions& options)
     return 0;
 }
 
+int QueueMetaRecommendations(const MetaAnalysisOptions& options)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    w.exec("SET TRANSACTION READ WRITE;");
+    if (!RequireMetaAnalysisTables(w))
+        return 2;
+
+    MetaAnalysisResult result = BuildMetaAnalysis(w, options);
+
+    // Queueing intentionally reuses the same leader-neighborhood candidate generator,
+    // then performs a fresh database duplicate check immediately before insert.
+    result.nextExperimentNotes.clear();
+    result.nextExperimentRecommendations = BuildNextExperimentRecommendations(result,
+                                                                              {},
+                                                                              options.limit,
+                                                                              result.nextExperimentNotes);
+
+    int queued = 0;
+    int skipped = 0;
+    int candidates = 0;
+    for (const auto& rec : result.nextExperimentRecommendations)
+    {
+        ++candidates;
+        const std::optional<long long> duplicate = FindExistingExperimentForRecommendation(w, rec);
+        if (duplicate.has_value())
+        {
+            ++skipped;
+            std::cout << "META_RECOMMENDATION_QUEUE_SKIPPED";
+            PrintMetaRecommendationQueueFields(rec, false);
+            std::cout << ",reason=duplicate_existing_experiment"
+                      << ",existing_experiment_id=" << *duplicate
+                      << ",recommendation_reason=" << rec.reason
+                      << std::endl;
+            continue;
+        }
+
+        if (options.dryRun)
+        {
+            std::cout << "META_RECOMMENDATION_QUEUE_DRY_RUN";
+            PrintMetaRecommendationQueueFields(rec);
+            std::cout << std::endl;
+            continue;
+        }
+
+        const long long experimentId = InsertMetaRecommendationExperiment(w, rec);
+        ++queued;
+        std::cout << "META_RECOMMENDATION_QUEUED"
+                  << ",experiment_id=" << experimentId;
+        PrintMetaRecommendationQueueFields(rec);
+        std::cout << std::endl;
+    }
+
+    if (options.dryRun)
+        w.abort();
+    else
+        w.commit();
+
+    std::cout << "META_RECOMMENDATION_QUEUE_SUMMARY"
+              << ",total_recommendations=" << candidates
+              << ",queued=" << queued
+              << ",skipped=" << skipped
+              << ",dry_run=" << (options.dryRun ? 1 : 0)
+              << std::endl;
+    return 0;
+}
+
 int RunContinuousMetaAnalysis(MetaAnalysisOptions options)
 {
     gMetaAnalysisInterrupted = 0;
@@ -2080,6 +2226,8 @@ int RunMetaAnalysisCli(int argc, const char* argv[])
                   << " --meta-analysis-report [--meta-analysis-json|--meta-analysis-markdown] "
                   << "[--meta-analysis-symbol SYMBOL] [--meta-analysis-horizon N] "
                   << "[--meta-analysis-output FILE]\n"
+                  << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
+                  << " --queue-meta-recommendations [--meta-analysis-limit N] [--dry-run]\n"
                   << "Meta-analysis reports include advisory Recommended Next Experiments; "
                   << "they do not queue or launch experiments.\n";
         return 1;
@@ -2089,6 +2237,8 @@ int RunMetaAnalysisCli(int argc, const char* argv[])
     {
         if (options.metaAnalyzeOnce)
             return RunMetaAnalysisOnce(options);
+        if (options.queueMetaRecommendations)
+            return QueueMetaRecommendations(options);
         if (options.metaAnalyze)
             return RunContinuousMetaAnalysis(options);
         if (options.metaAnalysisReport)
