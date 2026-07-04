@@ -6,4 +6,7 @@ xcuserdata/
 *.txt
 *.plpgsql
 .derived-data-log*
+# Generated analysis output
+*.csv
+*_results.csv
 
