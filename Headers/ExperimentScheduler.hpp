@@ -1171,6 +1171,16 @@ inline std::string ReadFileIfExists(const std::optional<std::string>& path)
     return ss.str();
 }
 
+inline std::string ReadFileIfExists(const std::string& path)
+{
+    std::ifstream in{path};
+    if (!in)
+        return {};
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
 inline void WriteTextFile(const std::string& path, const std::string& text)
 {
     std::ofstream out{path};
@@ -1364,6 +1374,58 @@ inline ParsedMetrics ParseMetricsFromLogs(const ExperimentRow& experiment)
     }
 
     return metrics;
+}
+
+inline bool IsValidInferenceLogText(const std::string& text)
+{
+    return text.find("Overall 3-class accuracy") != std::string::npos &&
+           text.find("Overall 3-class confusion matrix") != std::string::npos &&
+           text.find("MODEL_ACCEPTANCE") != std::string::npos;
+}
+
+inline bool HasValidInferenceLogPath(const ExperimentRow& experiment)
+{
+    if (!experiment.inferLogPath.has_value())
+        return false;
+    return IsValidInferenceLogText(ReadFileIfExists(experiment.inferLogPath));
+}
+
+inline std::optional<std::string> DiscoverValidInferenceLog(const ExperimentRow& experiment)
+{
+    if (!experiment.lastModelId.has_value())
+        return std::nullopt;
+
+    const std::string modelNeedle = std::to_string(*experiment.lastModelId);
+    const std::vector<std::filesystem::path> roots = {
+        std::filesystem::current_path(),
+        std::filesystem::current_path() / "experiment_logs"};
+
+    for (const auto& root : roots)
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec))
+            continue;
+
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec))
+        {
+            if (ec)
+                break;
+            if (!entry.is_regular_file(ec))
+                continue;
+
+            const std::string filename = entry.path().filename().string();
+            if (filename.find(modelNeedle) == std::string::npos ||
+                filename.find("infer") == std::string::npos)
+            {
+                continue;
+            }
+
+            const std::string path = entry.path().string();
+            if (IsValidInferenceLogText(ReadFileIfExists(path)))
+                return path;
+        }
+    }
+    return std::nullopt;
 }
 
 inline void ApplyPersistedSymbolToAnalysisExperiment(pqxx::work& w,
@@ -1924,6 +1986,45 @@ inline void MarkExperimentFailed(pqxx::work& w,
         experiment.experimentId);
 }
 
+inline void UpdateInferLogPath(pqxx::work& w,
+                               const ExperimentRow& experiment,
+                               const std::string& inferLogPath)
+{
+    w.exec_params(
+        "UPDATE experiment "
+        "SET infer_log_path = $1, updated_at = now() "
+        "WHERE experiment_id = $2;",
+        inferLogPath,
+        experiment.experimentId);
+}
+
+inline void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
+                                                  const ExperimentRow& experiment,
+                                                  const std::string& sourceMarker,
+                                                  const std::string& reason,
+                                                  const std::optional<std::string>& recoveredLogPath = std::nullopt)
+{
+    if (recoveredLogPath.has_value())
+        UpdateInferLogPath(w, experiment, *recoveredLogPath);
+
+    std::cout << sourceMarker
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+              << ",phase=infer"
+              << ",reason=" << reason;
+    if (recoveredLogPath.has_value())
+        std::cout << ",infer_log_path=" << *recoveredLogPath;
+    else if (experiment.inferLogPath.has_value())
+        std::cout << ",infer_log_path=" << *experiment.inferLogPath;
+    std::cout << std::endl;
+
+    MarkExperimentPendingPhase(w, experiment, "infer", "analyze", 0);
+    std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+              << std::endl;
+}
+
 inline bool TransitionAfterTrainModelAvailable(pqxx::work& w,
                                                const ExperimentRow& experiment,
                                                long long modelId,
@@ -2024,10 +2125,22 @@ inline int RecoverOrphanedRunningExperiments(pqxx::work& w)
         const std::string& phase = state.phase;
         if (RunningProcessExistsForExperiment(experiment, phase))
         {
-            std::cout << "SCHEDULER_RUNNING_EXPERIMENT_PRESENT"
-                      << ",experiment_id=" << experiment.experimentId
-                      << ",phase=" << phase
-                      << std::endl;
+            if (phase == "infer")
+            {
+                std::cout << "SCHEDULER_ORPHAN_INFER_STILL_RUNNING"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+                          << ",phase=infer"
+                          << ",reason=matching_process_exists"
+                          << std::endl;
+            }
+            else
+            {
+                std::cout << "SCHEDULER_RUNNING_EXPERIMENT_PRESENT"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",phase=" << phase
+                          << std::endl;
+            }
             continue;
         }
 
@@ -2041,26 +2154,29 @@ inline int RecoverOrphanedRunningExperiments(pqxx::work& w)
         {
             if (HasCompletedInferenceResult(w, experiment))
             {
-                std::cout << "SCHEDULER_ORPHAN_RECOVERED_INFERENCE"
-                          << ",experiment_id=" << experiment.experimentId
-                          << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
-                          << std::endl;
-                if (HasCompletedAnalysisResult(w, experiment))
-                {
-                    std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
-                              << ",experiment_id=" << experiment.experimentId
-                              << ",model_id=" << *experiment.lastModelId
-                              << std::endl;
-                    MarkExperimentDone(w, experiment, "infer");
-                }
-                else
-                {
-                    MarkExperimentPendingPhase(w, experiment, "infer", "analyze", 0);
-                    std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
-                              << ",experiment_id=" << experiment.experimentId
-                              << ",model_id=" << *experiment.lastModelId
-                              << std::endl;
-                }
+                TransitionRecoveredInferenceToAnalyze(
+                    w,
+                    experiment,
+                    "SCHEDULER_ORPHAN_RECOVERED_INFERENCE_RESULT",
+                    "completed_inference_eval_result");
+            }
+            else if (HasValidInferenceLogPath(experiment))
+            {
+                TransitionRecoveredInferenceToAnalyze(
+                    w,
+                    experiment,
+                    "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
+                    "valid_infer_log_path");
+            }
+            else if (const std::optional<std::string> discoveredLog = DiscoverValidInferenceLog(experiment);
+                     discoveredLog.has_value())
+            {
+                TransitionRecoveredInferenceToAnalyze(
+                    w,
+                    experiment,
+                    "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
+                    "discovered_valid_infer_log",
+                    discoveredLog);
             }
             else
             {
@@ -2068,6 +2184,8 @@ inline int RecoverOrphanedRunningExperiments(pqxx::work& w)
                 MarkExperimentFailed(w, experiment, error);
                 std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
                           << ",experiment_id=" << experiment.experimentId
+                          << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+                          << ",phase=infer"
                           << ",error=" << error
                           << std::endl;
             }
@@ -2360,6 +2478,36 @@ inline int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& sn
             }
             continue;
         }
+        if (HasValidInferenceLogPath(job))
+        {
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "valid_infer_log_path");
+            if (!options.dryRun)
+            {
+                TransitionRecoveredInferenceToAnalyze(
+                    w,
+                    job,
+                    "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
+                    "valid_infer_log_path");
+            }
+            continue;
+        }
+        if (const std::optional<std::string> discoveredLog = DiscoverValidInferenceLog(job);
+            discoveredLog.has_value())
+        {
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "discovered_valid_infer_log");
+            if (!options.dryRun)
+            {
+                TransitionRecoveredInferenceToAnalyze(
+                    w,
+                    job,
+                    "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
+                    "discovered_valid_infer_log",
+                    discoveredLog);
+            }
+            continue;
+        }
         if (RunningProcessExistsForExperiment(job, "infer"))
         {
             ++stats.skipped;
@@ -2484,7 +2632,7 @@ inline int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& 
             }
             continue;
         }
-        if (!HasCompletedInferenceResult(w, job) && !ExistingFilePath(job.inferLogPath))
+        if (!HasCompletedInferenceResult(w, job) && !HasValidInferenceLogPath(job))
         {
             ++stats.skipped;
             LogSkip("analyze", job.experimentId, "infer_log_missing");
