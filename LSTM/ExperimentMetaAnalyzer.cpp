@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <ctime>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -42,6 +43,21 @@ void HandleMetaAnalysisSignal(int)
     gMetaAnalysisInterrupted = 1;
 }
 } // namespace
+
+std::string CurrentUtcTimestamp()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    return out.str();
+}
 
 bool IsMetaAnalysisCommand(int argc, const char* argv[])
 {
@@ -390,7 +406,8 @@ std::vector<ExperimentRecord> LoadExperimentRecords(pqxx::work& w,
         << "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         << "e.status, e.phase, e.resume_model_id, e.last_model_id, "
         << "a.model_id, a.completed_epochs, a.train_accuracy, a.validation_accuracy, "
-        << "a.infer_accuracy, a.accept_rate, a.accept_accuracy, a.leader_score, m.name "
+        << "a.infer_accuracy, a.accept_rate, a.accept_accuracy, a.leader_score, m.name, "
+        << "e.created_at::text, e.completed_at::text "
         << "FROM experiment e "
         << "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
         << "LEFT JOIN model m ON m.model_id = COALESCE(a.model_id, e.last_model_id) "
@@ -429,6 +446,8 @@ std::vector<ExperimentRecord> LoadExperimentRecords(pqxx::work& w,
         record.acceptAccuracy = OptionalDoubleCell(row, 18);
         record.leaderScore = OptionalDoubleCell(row, 19);
         record.modelName = OptionalStringCell(row, 20).value_or("");
+        record.createdAt = OptionalStringCell(row, 21);
+        record.completedAt = OptionalStringCell(row, 22);
         record.dataSource = "scheduler";
         records.push_back(std::move(record));
     }
@@ -1715,6 +1734,7 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << "\"summary\":{"
          << "\"meta_analysis_id\":" << result.metaAnalysisId
          << ",\"scope\":" << JsonString(result.scope)
+         << ",\"generated_at\":" << JsonString(result.generatedAt)
          << ",\"recommendation_epoch_policy\":"
          << JsonString(RecommendationEpochPolicyName(result.recommendationEpochPolicy))
          << ",\"completed_experiments\":" << result.completedExperiments
@@ -1793,38 +1813,23 @@ void AppendMetricTable(std::ostringstream& report,
     }
 }
 
-std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
+void AppendLeaderRowsTable(std::ostringstream& report,
+                           const std::string& title,
+                           const std::vector<LeaderRow>& rows,
+                           int limit)
 {
-    std::ostringstream report;
-    report << "# LSTM Experiment Meta-Analysis\n\n";
-    report << "Scope: `" << result.scope << "`\n\n";
-    report << "## Executive Summary\n\n";
-    report << "- Total experiments: " << result.totalExperiments << "\n";
-    report << "- Completed experiments: " << result.completedExperiments << "\n";
-    report << "- Failed experiments: " << result.failedExperiments << "\n";
-    report << "- Completed models: " << result.completedModels << "\n";
-    report << "- Success rate: " << FormatDouble(result.successRate) << "\n";
-    report << "- Overall confidence: "
-           << ConfidenceForSampleSize(static_cast<size_t>(result.completedExperiments)) << "\n";
+    report << "\n## " << title << "\n\n";
+    if (rows.empty())
+    {
+        report << "No completed experiments with inference metrics are available.\n";
+        return;
+    }
 
-    report << "\n## Data Sources\n\n";
-    report << "- Scheduler experiments analyzed: " << result.dataSources.schedulerExperiments << "\n";
-    report << "- Legacy models reconstructed: " << result.dataSources.legacyModels << "\n";
-    report << "- Merged experiment records: " << result.dataSources.mergedRecords << "\n";
-    report << "- Duplicate models skipped: " << result.dataSources.duplicateModelsSkipped << "\n";
-    report << "- Legacy models with inference metrics: " << result.dataSources.legacyModelsWithInferenceMetrics << "\n";
-    report << "- Legacy models missing inference metrics: " << result.dataSources.legacyModelsMissingInferenceMetrics << "\n";
-    report << "- Scheduler records with metrics: " << result.dataSources.schedulerRecordsWithMetrics << "\n";
-    report << "- Merged records with metrics: " << result.dataSources.mergedRecordsWithMetrics << "\n";
-    report << "- Metric coverage percentage: " << FormatDouble(result.dataSources.metricCoveragePercentage) << "\n";
-    report << "- Coverage percentage: " << FormatDouble(result.dataSources.coveragePercentage) << "\n";
-
-    report << "\n## Current Leaders\n\n";
     report << "| Rank | Experiment | Model | Symbol | Horizon | Epochs | Infer Acc | Accept Acc | Accept Rate | Leader Score |\n";
     report << "|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|\n";
-    for (size_t i = 0; i < result.leaders.size() && static_cast<int>(i) < limit; ++i)
+    for (size_t i = 0; i < rows.size() && static_cast<int>(i) < limit; ++i)
     {
-        const auto& leader = result.leaders[i];
+        const auto& leader = rows[i];
         report << "| " << (i + 1)
                << " | " << leader.experimentId
                << " | " << FormatOptionalLongLong(leader.modelId)
@@ -1837,9 +1842,176 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
                << " | " << FormatOptionalDouble(leader.leaderScore)
                << " |\n";
     }
+}
 
-    AppendMetricTable(report, result.groupStats, "Best Models By Symbol", "symbol", limit);
-    AppendMetricTable(report, result.groupStats, "Best Models By Horizon", "prediction_horizon", limit);
+std::vector<LeaderRow> BestLeadersBySymbol(const std::vector<ExperimentRecord>& records)
+{
+    std::vector<LeaderRow> all = BuildLeaders(records, std::numeric_limits<int>::max());
+    std::set<std::string> seen;
+    std::vector<LeaderRow> best;
+    for (const auto& row : all)
+    {
+        if (seen.insert(row.symbol).second)
+            best.push_back(row);
+    }
+    return best;
+}
+
+std::vector<LeaderRow> BestLeadersByHorizon(const std::vector<ExperimentRecord>& records)
+{
+    std::vector<LeaderRow> all = BuildLeaders(records, std::numeric_limits<int>::max());
+    std::set<int> seen;
+    std::vector<LeaderRow> best;
+    for (const auto& row : all)
+    {
+        if (seen.insert(row.horizon).second)
+            best.push_back(row);
+    }
+    return best;
+}
+
+void AppendCountMapTable(std::ostringstream& report,
+                         const std::string& title,
+                         const std::string& keyColumn,
+                         const std::map<std::string, long long>& counts,
+                         int limit)
+{
+    report << "\n### " << title << "\n\n";
+    if (counts.empty())
+    {
+        report << "No records available.\n";
+        return;
+    }
+
+    std::vector<std::pair<std::string, long long>> rows(counts.begin(), counts.end());
+    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+        if (a.second != b.second)
+            return a.second > b.second;
+        return a.first < b.first;
+    });
+
+    report << "| " << keyColumn << " | Count |\n";
+    report << "|---|---:|\n";
+    for (size_t i = 0; i < rows.size() && static_cast<int>(i) < limit; ++i)
+        report << "| " << rows[i].first << " | " << rows[i].second << " |\n";
+}
+
+void AppendExperimentCoverageTables(std::ostringstream& report,
+                                    const MetaAnalysisResult& result,
+                                    int limit)
+{
+    std::map<std::string, long long> statusPhaseCounts;
+    std::map<std::string, long long> symbolHorizonCounts;
+    for (const auto& record : result.records)
+    {
+        ++statusPhaseCounts[record.status + "/" + record.phase];
+        ++symbolHorizonCounts[record.symbol + "/H" + std::to_string(record.horizon)];
+    }
+
+    report << "\n## Experiment Coverage\n\n";
+    report << "- Scheduler experiments analyzed: " << result.dataSources.schedulerExperiments << "\n";
+    report << "- Legacy models reconstructed: " << result.dataSources.legacyModels << "\n";
+    report << "- Merged experiment records: " << result.dataSources.mergedRecords << "\n";
+    report << "- Duplicate models skipped: " << result.dataSources.duplicateModelsSkipped << "\n";
+    report << "- Legacy models with inference metrics: " << result.dataSources.legacyModelsWithInferenceMetrics << "\n";
+    report << "- Legacy models missing inference metrics: " << result.dataSources.legacyModelsMissingInferenceMetrics << "\n";
+    report << "- Scheduler records with metrics: " << result.dataSources.schedulerRecordsWithMetrics << "\n";
+    report << "- Merged records with metrics: " << result.dataSources.mergedRecordsWithMetrics << "\n";
+    report << "- Metric coverage percentage: " << FormatDouble(result.dataSources.metricCoveragePercentage) << "\n";
+    report << "- Data source coverage percentage: " << FormatDouble(result.dataSources.coveragePercentage) << "\n";
+
+    AppendCountMapTable(report,
+                        "Experiment Count By Status/Phase",
+                        "Status / Phase",
+                        statusPhaseCounts,
+                        limit);
+    AppendCountMapTable(report,
+                        "Experiment Count By Symbol/Horizon",
+                        "Symbol / Horizon",
+                        symbolHorizonCounts,
+                        limit);
+}
+
+void AppendRecentCompletedExperiments(std::ostringstream& report,
+                                      const std::vector<ExperimentRecord>& records,
+                                      int limit)
+{
+    std::vector<const ExperimentRecord*> completed;
+    for (const auto& record : records)
+    {
+        if (record.status == "completed")
+            completed.push_back(&record);
+    }
+
+    std::sort(completed.begin(), completed.end(), [](const ExperimentRecord* a, const ExperimentRecord* b) {
+        const std::string at = a->completedAt.value_or("");
+        const std::string bt = b->completedAt.value_or("");
+        if (at != bt)
+            return at > bt;
+        return a->experimentId > b->experimentId;
+    });
+
+    report << "\n## Recent Completed Experiments\n\n";
+    if (completed.empty())
+    {
+        report << "No completed experiments are available.\n";
+        return;
+    }
+
+    report << "| Experiment | Model | Symbol | Horizon | Epochs | Completed At | Infer Acc | Leader Score | Source |\n";
+    report << "|---:|---:|---|---:|---:|---|---:|---:|---|\n";
+    for (size_t i = 0; i < completed.size() && static_cast<int>(i) < limit; ++i)
+    {
+        const auto& row = *completed[i];
+        report << "| " << row.experimentId
+               << " | " << FormatOptionalLongLong(row.modelId)
+               << " | " << row.symbol
+               << " | " << row.horizon
+               << " | " << row.completedEpochs.value_or(row.targetEpochs)
+               << " | " << row.completedAt.value_or("unknown")
+               << " | " << FormatOptionalDouble(row.inferAccuracy)
+               << " | " << FormatOptionalDouble(row.leaderScore)
+               << " | " << row.dataSource
+               << " |\n";
+    }
+}
+
+std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
+{
+    std::ostringstream report;
+    report << "# LSTM Experiment Meta-Analysis\n\n";
+    report << "Generated: `" << result.generatedAt << "`\n\n";
+
+    report << "## Report Metadata\n\n";
+    report << "| Field | Value |\n";
+    report << "|---|---:|\n";
+    report << "| Scope | `" << result.scope << "` |\n";
+    report << "| Recommendation epoch policy | " << RecommendationEpochPolicyName(result.recommendationEpochPolicy) << " |\n";
+    report << "| Total experiments | " << result.totalExperiments << " |\n";
+    report << "| Completed experiments | " << result.completedExperiments << " |\n";
+    report << "| Failed experiments | " << result.failedExperiments << " |\n";
+    report << "| Completed models | " << result.completedModels << " |\n";
+    report << "| Merged records | " << result.dataSources.mergedRecords << " |\n";
+    report << "| Records with metrics | " << result.dataSources.mergedRecordsWithMetrics << " |\n";
+    report << "| Metric coverage % | " << FormatDouble(result.dataSources.metricCoveragePercentage) << " |\n";
+
+    report << "## Executive Summary\n\n";
+    report << "- Total experiments: " << result.totalExperiments << "\n";
+    report << "- Completed experiments: " << result.completedExperiments << "\n";
+    report << "- Failed experiments: " << result.failedExperiments << "\n";
+    report << "- Completed models: " << result.completedModels << "\n";
+    report << "- Success rate: " << FormatDouble(result.successRate) << "\n";
+    report << "- Overall confidence: "
+           << ConfidenceForSampleSize(static_cast<size_t>(result.completedExperiments)) << "\n";
+
+    AppendLeaderRowsTable(report, "Current Leaders", result.leaders, limit);
+    AppendLeaderRowsTable(report, "Leaders by Symbol", BestLeadersBySymbol(result.records), limit);
+    AppendLeaderRowsTable(report, "Leaders by Horizon", BestLeadersByHorizon(result.records), limit);
+    AppendExperimentCoverageTables(report, result, limit);
+    AppendRecentCompletedExperiments(report, result.records, limit);
+
+    AppendMetricTable(report, result.groupStats, "Symbol Performance Summary", "symbol", limit);
+    AppendMetricTable(report, result.groupStats, "Horizon Performance Summary", "prediction_horizon", limit);
     AppendMetricTable(report, result.groupStats, "Learning Rate Analysis: Core LR", "core_lr_mult", limit);
     AppendMetricTable(report, result.groupStats, "Learning Rate Analysis: Head LR", "head_lr_mult", limit);
     AppendMetricTable(report, result.groupStats, "Epoch Analysis", "target_epochs", limit);
@@ -1925,7 +2097,7 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
         report << "\n";
     }
 
-    report << "## Open Questions\n\n";
+    report << "## Open Questions / Gaps\n\n";
     report << "- Are current leaders repeatable across independent runs?\n";
     report << "- Which symbol/horizon pairs still lack enough completed samples?\n";
     report << "- Do longer epoch runs improve leader_score after the detected plateau points?\n";
@@ -1942,6 +2114,7 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
 {
     MetaAnalysisResult result;
     result.scope = ScopeForOptions(options);
+    result.generatedAt = CurrentUtcTimestamp();
     result.recommendationEpochPolicy = options.recommendationEpochPolicy;
     LoadExperimentCounts(w, options, result);
     std::vector<ExperimentRecord> schedulerRecords = LoadExperimentRecords(w, options);

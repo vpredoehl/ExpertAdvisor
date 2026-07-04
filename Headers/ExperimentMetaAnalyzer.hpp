@@ -48,6 +48,8 @@ struct ExperimentRecord
     std::string status;
     std::string phase;
     bool resumed = false;
+    std::optional<std::string> createdAt;
+    std::optional<std::string> completedAt;
     std::optional<int> completedEpochs;
     std::optional<double> trainAccuracy;
     std::optional<double> validationAccuracy;
@@ -146,6 +148,7 @@ struct PlateauSignal
 struct MetaAnalysisResult
 {
     std::string scope;
+    std::string generatedAt;
     RecommendationEpochPolicy recommendationEpochPolicy = RecommendationEpochPolicy::Highest;
     long long totalExperiments = 0;
     long long completedExperiments = 0;
