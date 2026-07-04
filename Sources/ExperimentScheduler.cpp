@@ -3098,6 +3098,11 @@ std::string CellText(const pqxx::field& field)
     return field.is_null() ? "n/a" : MarkdownCell(field.c_str());
 }
 
+std::string RowCell(const pqxx::row& row, pqxx::row::size_type index)
+{
+    return index < row.size() ? CellText(row[index]) : "n/a";
+}
+
 std::string RenderMarkdownReport(const std::string& title,
                                  const std::vector<std::string>& headers,
                                  const pqxx::result& rows)
@@ -3133,6 +3138,45 @@ std::string RenderMarkdownTable(const std::vector<std::string>& headers,
     for (const auto& row : rows)
     {
         for (pqxx::row::size_type i = 0; i < row.size(); ++i)
+            out << "| " << CellText(row[i]) << " ";
+        out << "|\n";
+    }
+    return out.str();
+}
+
+std::vector<std::string> CompactLeaderHeaders()
+{
+    return {
+        "experiment_id",
+        "model_id",
+        "symbol",
+        "prediction_horizon",
+        "target_epochs",
+        "completed_epochs",
+        "infer_accuracy",
+        "accept_rate",
+        "accept_accuracy",
+        "leader_score"
+    };
+}
+
+std::string RenderCompactLeaderTable(const pqxx::result& rows,
+                                     size_t maxRows = std::numeric_limits<size_t>::max())
+{
+    std::ostringstream out;
+    const std::vector<std::string> headers = CompactLeaderHeaders();
+    for (const std::string& header : headers)
+        out << "| " << header << " ";
+    out << "|\n";
+    for (size_t i = 0; i < headers.size(); ++i)
+        out << "|---";
+    out << "|\n";
+    size_t rowCount = 0;
+    for (const auto& row : rows)
+    {
+        if (rowCount++ >= maxRows)
+            break;
+        for (pqxx::row::size_type i = 0; i < 10 && i < row.size(); ++i)
             out << "| " << CellText(row[i]) << " ";
         out << "|\n";
     }
@@ -3187,11 +3231,97 @@ std::vector<std::string> RecommendationReportHeaders()
         "status",
         "phase",
         "completed_at",
-        "reason"
+        "priority",
+        "recommendation",
+        "suggested_action",
+        "example_command"
     };
 }
 
-std::string RecommendationSelectColumns(const std::string& reasonExpression)
+std::vector<std::string> PruningReportHeaders()
+{
+    return {
+        "experiment_id",
+        "model_id",
+        "symbol",
+        "prediction_horizon",
+        "target_epochs",
+        "completed_epochs",
+        "status",
+        "phase",
+        "infer_accuracy",
+        "accept_rate",
+        "accept_accuracy",
+        "leader_score",
+        "completed_at",
+        "reason",
+        "suggested_action",
+        "example_command"
+    };
+}
+
+struct RecommendationPriorityCounts
+{
+    size_t critical = 0;
+    size_t high = 0;
+    size_t medium = 0;
+    size_t low = 0;
+    size_t informational = 0;
+
+    size_t Total() const
+    {
+        return critical + high + medium + low + informational;
+    }
+};
+
+std::string ActionCliPrefixSql()
+{
+    return "'./DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release";
+}
+
+std::string QueueExperimentCommandSql(const std::string& targetEpochsExpression)
+{
+    return ActionCliPrefixSql() +
+        " --queue-experiment --symbol=' || e.symbol || "
+        "' --prediction-horizon=' || e.prediction_horizon::text || "
+        "' --target-epochs=' || (" + targetEpochsExpression + ")::text || "
+        "' --threshold=' || e.c_next_threshold::text || "
+        "COALESCE(' --core-lr=' || e.core_lr_mult::text, '') || "
+        "COALESCE(' --head-lr=' || e.head_lr_mult::text, '') || "
+        "' --checkpoint-interval=' || e.checkpoint_interval::text";
+}
+
+std::string QueueResumeCommandSql(const std::string& targetEpochsExpression)
+{
+    return ActionCliPrefixSql() +
+        " --queue-experiment --resume-model-id=' || COALESCE(a.model_id, e.last_model_id)::text || "
+        "' --target-epochs=' || (" + targetEpochsExpression + ")::text";
+}
+
+std::string ExperimentControlCommandSql(const std::string& optionName)
+{
+    return ActionCliPrefixSql() + " " + optionName + "=' || e.experiment_id::text";
+}
+
+std::string ExperimentStatusCommandSql()
+{
+    return ActionCliPrefixSql() + " --status --experiment-id=' || e.experiment_id::text";
+}
+
+std::string ExperimentMetadataCommandSql()
+{
+    return ActionCliPrefixSql() + " --experiment-metadata=' || e.experiment_id::text";
+}
+
+std::string StaticCommandSql(const std::string& args)
+{
+    return "'./DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release " + args + "'";
+}
+
+std::string RecommendationSelectColumns(const std::string& priorityExpression,
+                                        const std::string& recommendationExpression,
+                                        const std::string& suggestedActionExpression,
+                                        const std::string& exampleCommandExpression)
 {
     return
         "SELECT e.experiment_id, COALESCE(a.model_id, e.last_model_id), "
@@ -3199,7 +3329,54 @@ std::string RecommendationSelectColumns(const std::string& reasonExpression)
         "COALESCE(a.target_epochs, e.target_epochs), a.completed_epochs, "
         "a.infer_accuracy, a.accept_rate, a.accept_accuracy, a.leader_score, "
         "COALESCE(a.analysis_status, 'n/a'), e.status, e.phase, e.completed_at::text, " +
-        reasonExpression + " AS reason ";
+        priorityExpression + " AS priority, " +
+        recommendationExpression + " AS recommendation, " +
+        suggestedActionExpression + " AS suggested_action, " +
+        exampleCommandExpression + " AS example_command ";
+}
+
+std::string PruningSelectColumns(const std::string& reasonExpression,
+                                 const std::string& suggestedActionExpression,
+                                 const std::string& exampleCommandExpression)
+{
+    return
+        "SELECT e.experiment_id, COALESCE(a.model_id, e.last_model_id), "
+        "COALESCE(a.symbol, e.symbol), COALESCE(a.prediction_horizon, e.prediction_horizon), "
+        "COALESCE(a.target_epochs, e.target_epochs), a.completed_epochs, "
+        "e.status, e.phase, a.infer_accuracy, a.accept_rate, a.accept_accuracy, "
+        "a.leader_score, e.completed_at::text, " +
+        reasonExpression + " AS reason, " +
+        suggestedActionExpression + " AS suggested_action, " +
+        exampleCommandExpression + " AS example_command ";
+}
+
+void AddRecommendationPriority(RecommendationPriorityCounts& counts, const pqxx::row& row)
+{
+    if (row.size() <= 14 || row[14].is_null())
+        return;
+    const std::string priority = row[14].as<std::string>();
+    if (priority == "Critical")
+        ++counts.critical;
+    else if (priority == "High")
+        ++counts.high;
+    else if (priority == "Medium")
+        ++counts.medium;
+    else if (priority == "Low")
+        ++counts.low;
+    else if (priority == "Informational")
+        ++counts.informational;
+}
+
+RecommendationPriorityCounts CountRecommendationPriorities(
+    const std::vector<std::pair<std::string, pqxx::result>>& sections)
+{
+    RecommendationPriorityCounts counts;
+    for (const auto& section : sections)
+    {
+        for (const auto& row : section.second)
+            AddRecommendationPriority(counts, row);
+    }
+    return counts;
 }
 
 std::string RenderRecommendationReport(
@@ -3216,6 +3393,16 @@ std::string RenderRecommendationReport(
         total += section.second.size();
     out << "Total recommendations: " << total << "\n\n";
 
+    const RecommendationPriorityCounts counts = CountRecommendationPriorities(sections);
+    out << "## Priority Summary\n\n";
+    out << "| priority | count |\n";
+    out << "|---|---|\n";
+    out << "| Critical | " << counts.critical << " |\n";
+    out << "| High | " << counts.high << " |\n";
+    out << "| Medium | " << counts.medium << " |\n";
+    out << "| Low | " << counts.low << " |\n";
+    out << "| Informational | " << counts.informational << " |\n\n";
+
     for (const auto& section : sections)
     {
         out << "## " << section.first << "\n\n";
@@ -3226,15 +3413,44 @@ std::string RenderRecommendationReport(
     return out.str();
 }
 
-size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
+std::string RenderPruningReport(
+    const std::vector<std::pair<std::string, pqxx::result>>& sections)
+{
+    std::ostringstream out;
+    out << "# Pruning / Archive Candidates\n\n";
+    out << "This report is advisory only. It identifies scheduler experiment rows and model "
+        << "references that may be obsolete, dominated, failed, cancelled, duplicate, "
+        << "or missing analysis. It does not delete, archive, cancel, pause, retry, "
+        << "resume, move, or mutate anything.\n\n";
+
+    size_t total = 0;
+    for (const auto& section : sections)
+        total += section.second.size();
+    out << "Total candidates: " << total << "\n\n";
+
+    for (const auto& section : sections)
+    {
+        out << "## " << section.first << "\n\n";
+        out << "Rows: " << section.second.size() << "\n\n";
+        out << RenderMarkdownTable(PruningReportHeaders(), section.second);
+        out << "\n";
+    }
+    return out.str();
+}
+
+RecommendationPriorityCounts WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
 {
     std::vector<std::pair<std::string, pqxx::result>> sections;
-    sections.reserve(7);
+    sections.reserve(10);
 
     sections.emplace_back(
         "Continue / Extend Promising Experiments",
         w.exec(
-            RecommendationSelectColumns("'high leader_score; consider extending target_epochs or next checkpoint'") +
+            RecommendationSelectColumns(
+                "'High'",
+                "'high leader_score; consider extending target_epochs or next checkpoint'",
+                "'Queue resumed extension from this model'",
+                QueueResumeCommandSql("GREATEST(e.target_epochs + e.checkpoint_interval, e.target_epochs + 20)")) +
             "FROM experiment_analysis_result a "
             "JOIN experiment e ON e.experiment_id = a.experiment_id "
             "WHERE e.status = 'completed' "
@@ -3252,7 +3468,8 @@ size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
             "  SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
             "         a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
             "         a.accept_accuracy, a.leader_score, a.analysis_status, e.status, e.phase, "
-            "         e.completed_at, "
+            "         e.completed_at, e.c_next_threshold, e.core_lr_mult, e.head_lr_mult, "
+            "         e.checkpoint_interval, "
             "         row_number() OVER (PARTITION BY a.symbol, a.prediction_horizon "
             "                            ORDER BY a.leader_score DESC NULLS LAST, "
             "                                     a.infer_accuracy DESC NULLS LAST, "
@@ -3264,11 +3481,14 @@ size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
             "  AND a.leader_score IS NOT NULL "
             "  AND a.infer_accuracy IS NOT NULL "
             ") "
-            "SELECT experiment_id, model_id, symbol, prediction_horizon, target_epochs, "
-            "completed_epochs, infer_accuracy, accept_rate, accept_accuracy, leader_score, "
-            "analysis_status, status, phase, completed_at::text, "
-            "'replicate current leader for symbol/horizon' AS reason "
-            "FROM ranked "
+            "SELECT e.experiment_id, e.model_id, e.symbol, e.prediction_horizon, e.target_epochs, "
+            "e.completed_epochs, e.infer_accuracy, e.accept_rate, e.accept_accuracy, e.leader_score, "
+            "e.analysis_status, e.status, e.phase, e.completed_at::text, "
+            "'High' AS priority, "
+            "'replicate current leader for symbol/horizon' AS recommendation, "
+            "'Queue another run with the same configuration' AS suggested_action, "
+            "(" + QueueExperimentCommandSql("e.target_epochs") + " || ' --allow-duplicate-experiment') AS example_command "
+            "FROM ranked e "
             "WHERE rn = 1 "
             "ORDER BY leader_score DESC NULLS LAST, infer_accuracy DESC NULLS LAST, "
             "symbol ASC, prediction_horizon ASC "
@@ -3277,7 +3497,18 @@ size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
     sections.emplace_back(
         "Try Nearby Configuration Variants",
         w.exec(
-            RecommendationSelectColumns("'try nearby core/head learning-rate variant around this leader'") +
+            RecommendationSelectColumns(
+                "'Medium'",
+                "'try nearby core/head learning-rate variant around this leader'",
+                "'Queue nearby LR variant'",
+                ActionCliPrefixSql() +
+                    " --queue-experiment --symbol=' || e.symbol || "
+                    "' --prediction-horizon=' || e.prediction_horizon::text || "
+                    "' --target-epochs=' || e.target_epochs::text || "
+                    "' --threshold=' || e.c_next_threshold::text || "
+                    "' --core-lr=' || COALESCE((e.core_lr_mult + 20)::text, '120') || "
+                    "' --head-lr=' || COALESCE((e.head_lr_mult + 10)::text, '50') || "
+                    "' --checkpoint-interval=' || e.checkpoint_interval::text") +
             "FROM experiment_analysis_result a "
             "JOIN experiment e ON e.experiment_id = a.experiment_id "
             "WHERE e.status = 'completed' "
@@ -3294,8 +3525,11 @@ size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
         "Investigate Failures",
         w.exec(
             RecommendationSelectColumns(
+                "'Critical'",
                 "COALESCE('investigate failure: ' || NULLIF(e.error_message, ''), "
-                "'investigate failure logs and configuration')") +
+                "'investigate failure logs and configuration')",
+                "'Review logs; retry failed experiment if still relevant'",
+                ExperimentControlCommandSql("--retry-failed-experiment")) +
             "FROM experiment e "
             "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
             "WHERE e.status = 'failed' "
@@ -3317,13 +3551,219 @@ size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
             "  AND a.analysis_status = 'completed' "
             "  AND a.leader_score IS NOT NULL "
             "  AND a.infer_accuracy IS NOT NULL "
+            "), leaders AS ("
+            "  SELECT eligible.*, row_number() OVER (PARTITION BY symbol, prediction_horizon "
+            "    ORDER BY leader_score DESC, infer_accuracy DESC, experiment_id DESC) AS rn "
+            "  FROM eligible "
+            ") "
+            "SELECT e.experiment_id, COALESCE(a.model_id, e.last_model_id), "
+            "COALESCE(a.symbol, e.symbol), COALESCE(a.prediction_horizon, e.prediction_horizon), "
+            "COALESCE(a.target_epochs, e.target_epochs), a.completed_epochs, "
+            "a.infer_accuracy, a.accept_rate, a.accept_accuracy, a.leader_score, "
+            "COALESCE(a.analysis_status, 'n/a'), e.status, e.phase, e.completed_at::text, "
+            "CASE WHEN e.status = 'running' THEN 'High' "
+            "     WHEN e.status = 'pending' THEN 'Medium' "
+            "     ELSE 'Low' END AS priority, "
+            "('dominated by experiment ' || l.experiment_id::text || "
+            "' for same symbol/horizon') AS recommendation, "
+            "CASE WHEN e.status = 'running' THEN 'Preview pause of running dominated experiment' "
+            "     WHEN e.status = 'pending' THEN 'Preview cancel of pending dominated experiment' "
+            "     ELSE 'No action required' END AS suggested_action, "
+            "CASE WHEN e.status = 'running' THEN " + ExperimentControlCommandSql("--pause-experiment") + " "
+            "     WHEN e.status = 'pending' THEN " + ExperimentControlCommandSql("--cancel-experiment") + " "
+            "     ELSE 'No direct CLI action.' END AS example_command "
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "JOIN leaders l ON l.symbol = e.symbol "
+            "AND l.prediction_horizon = e.prediction_horizon "
+            "AND l.rn = 1 "
+            "WHERE e.experiment_id <> l.experiment_id "
+            "AND e.status IN ('pending', 'running', 'completed') "
+            "AND (a.leader_score IS NULL OR l.leader_score > a.leader_score) "
+            "ORDER BY priority ASC, e.status DESC, e.symbol ASC, e.prediction_horizon ASC, e.experiment_id ASC "
+            "LIMIT 25;"));
+
+    sections.emplace_back(
+        "Fill Coverage Gaps By Symbol/Horizon",
+        w.exec(
+            RecommendationSelectColumns(
+                "'Medium'",
+                "'coverage gap: experiment lacks completed analysis evidence'",
+                "CASE WHEN e.status IN ('pending', 'running') THEN "
+                "'No action required; scheduler will process automatically' "
+                "ELSE 'Queue a coverage experiment with matching symbol/horizon' END",
+                "CASE WHEN e.status IN ('pending', 'running') THEN 'No direct CLI action.' "
+                "ELSE " + QueueExperimentCommandSql("e.target_epochs") + " END") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a "
+            "  ON a.experiment_id = e.experiment_id "
+            "  AND a.analysis_status = 'completed' "
+            "WHERE a.analysis_id IS NULL "
+            "AND e.status <> 'cancelled' "
+            "ORDER BY e.symbol ASC, e.prediction_horizon ASC, e.target_epochs DESC, "
+            "e.created_at ASC, e.experiment_id ASC "
+            "LIMIT 25;"));
+
+    sections.emplace_back(
+        "Run Missing Inference/Analysis Where Metrics Are Absent",
+        w.exec(
+            RecommendationSelectColumns(
+                "'Medium'",
+                "'missing ranking evidence: run or repair inference/analysis metrics'",
+                "CASE WHEN e.status IN ('pending', 'running') THEN "
+                "'No action required; scheduler will process automatically' "
+                "WHEN e.last_model_id IS NOT NULL THEN 'Requeue analysis for this model' "
+                "ELSE 'No direct CLI action' END",
+                "CASE WHEN e.status IN ('pending', 'running') THEN 'No direct CLI action.' "
+                "WHEN e.last_model_id IS NOT NULL THEN " + ExperimentControlCommandSql("--requeue-analysis") + " "
+                "ELSE 'No direct CLI action.' END") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'completed' "
+            "AND (a.analysis_id IS NULL OR a.infer_accuracy IS NULL OR a.leader_score IS NULL) "
+            "ORDER BY e.completed_at DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 25;"));
+
+    sections.emplace_back(
+        "Current Running Experiments",
+        w.exec(
+            RecommendationSelectColumns(
+                "'Informational'",
+                "'running experiment; continue unless operator intervention is required'",
+                "'Monitor running experiment'",
+                ExperimentStatusCommandSql()) +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'running' "
+            "ORDER BY e.started_at ASC NULLS LAST, e.experiment_id ASC "
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Current Pending Queue",
+        w.exec(
+            RecommendationSelectColumns(
+                "'Informational'",
+                "'pending experiment; leave queued unless obsolete or superseded'",
+                "'Leave queued'",
+                "'No direct CLI action.'") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'pending' "
+            "ORDER BY e.created_at ASC, e.experiment_id ASC "
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Completed Experiment Actions",
+        w.exec(
+            "WITH ranked AS ("
+            "  SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+            "         a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "         a.accept_accuracy, a.leader_score, a.analysis_status, e.status, e.phase, "
+            "         e.completed_at, e.c_next_threshold, e.core_lr_mult, e.head_lr_mult, "
+            "         e.checkpoint_interval, "
+            "         row_number() OVER (ORDER BY a.leader_score DESC NULLS LAST, "
+            "           a.infer_accuracy DESC NULLS LAST, e.experiment_id DESC) AS rn "
+            "  FROM experiment_analysis_result a "
+            "  JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "  WHERE e.status = 'completed' "
+            "  AND a.analysis_status = 'completed' "
+            ") "
+            "SELECT e.experiment_id, e.model_id, e.symbol, e.prediction_horizon, "
+            "e.target_epochs, e.completed_epochs, e.infer_accuracy, e.accept_rate, "
+            "e.accept_accuracy, e.leader_score, e.analysis_status, e.status, e.phase, "
+            "e.completed_at::text, "
+            "CASE WHEN e.rn = 1 THEN 'High' ELSE 'Informational' END AS priority, "
+            "CASE WHEN e.rn = 1 THEN 'Leader; replicate or extend' "
+            "     WHEN e.leader_score IS NOT NULL THEN 'Completed comparison point; archive candidate' "
+            "     ELSE 'Completed experiment without ranking evidence' END AS recommendation, "
+            "CASE WHEN e.rn = 1 THEN 'Queue replication of current leader' "
+            "     ELSE 'No action required' END AS suggested_action, "
+            "CASE WHEN e.rn = 1 THEN (" + QueueExperimentCommandSql("e.target_epochs") + " || ' --allow-duplicate-experiment') "
+            "     ELSE 'No direct CLI action.' END AS example_command "
+            "FROM ranked e "
+            "ORDER BY e.rn ASC, e.completed_at DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 25;"));
+
+    const RecommendationPriorityCounts counts = CountRecommendationPriorities(sections);
+
+    const std::filesystem::path path = std::filesystem::path{reportDir} / "recommendations.md";
+    WriteTextFile(path.string(), RenderRecommendationReport(sections));
+    std::cout << "EXPERIMENT_RECOMMENDATION_REPORT_GENERATED"
+              << ",path=" << path.string()
+              << ",recommendations=" << counts.Total()
+              << ",critical=" << counts.critical
+              << ",high=" << counts.high
+              << ",medium=" << counts.medium
+              << ",low=" << counts.low
+              << ",informational=" << counts.informational
+              << std::endl;
+    return counts;
+}
+
+size_t WritePruningArchiveReport(pqxx::work& w, const std::string& reportDir)
+{
+    std::vector<std::pair<std::string, pqxx::result>> sections;
+    sections.reserve(8);
+
+    sections.emplace_back(
+        "Obsolete Checkpoint Candidates",
+        w.exec(
+            PruningSelectColumns(
+                "'superseded by later completed epoch for same symbol/horizon/config; verify references before manual cleanup'",
+                "'Inspect metadata before considering manual archive'",
+                ExperimentMetadataCommandSql()) +
+            "FROM experiment_analysis_result a "
+            "JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "WHERE e.status = 'completed' "
+            "AND a.analysis_status = 'completed' "
+            "AND a.completed_epochs IS NOT NULL "
+            "AND COALESCE(a.model_id, e.last_model_id) IS NOT NULL "
+            "AND EXISTS ("
+            "  SELECT 1 "
+            "  FROM experiment_analysis_result a2 "
+            "  JOIN experiment e2 ON e2.experiment_id = a2.experiment_id "
+            "  WHERE e2.status = 'completed' "
+            "  AND a2.analysis_status = 'completed' "
+            "  AND a2.symbol = a.symbol "
+            "  AND a2.prediction_horizon = a.prediction_horizon "
+            "  AND COALESCE(a2.target_epochs, e2.target_epochs) = COALESCE(a.target_epochs, e.target_epochs) "
+            "  AND abs(e2.c_next_threshold - e.c_next_threshold) <= 1e-12 "
+            "  AND COALESCE(e2.core_lr_mult, '-infinity'::double precision) = COALESCE(e.core_lr_mult, '-infinity'::double precision) "
+            "  AND COALESCE(e2.head_lr_mult, '-infinity'::double precision) = COALESCE(e.head_lr_mult, '-infinity'::double precision) "
+            "  AND a2.completed_epochs > a.completed_epochs "
+            "  AND (a2.leader_score IS NULL OR a.leader_score IS NULL OR a2.leader_score >= a.leader_score) "
+            ") "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM experiment ref "
+            "  WHERE ref.status IN ('pending', 'running') "
+            "  AND (ref.last_model_id = COALESCE(a.model_id, e.last_model_id) "
+            "       OR ref.resume_model_id = COALESCE(a.model_id, e.last_model_id))"
+            ") "
+            "ORDER BY a.symbol ASC, a.prediction_horizon ASC, a.completed_epochs ASC, "
+            "a.leader_score ASC NULLS LAST, e.experiment_id ASC "
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Dominated Completed Experiments",
+        w.exec(
+            "WITH eligible AS ("
+            "  SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+            "         a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "         a.accept_accuracy, a.leader_score, e.status, e.phase, e.completed_at "
+            "  FROM experiment_analysis_result a "
+            "  JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "  WHERE e.status = 'completed' "
+            "  AND a.analysis_status = 'completed' "
+            "  AND a.leader_score IS NOT NULL "
+            "  AND a.infer_accuracy IS NOT NULL "
             ") "
             "SELECT d.experiment_id, d.model_id, d.symbol, d.prediction_horizon, "
-            "d.target_epochs, d.completed_epochs, d.infer_accuracy, d.accept_rate, "
-            "d.accept_accuracy, d.leader_score, d.analysis_status, d.status, d.phase, "
-            "d.completed_at::text, "
+            "d.target_epochs, d.completed_epochs, d.status, d.phase, d.infer_accuracy, "
+            "d.accept_rate, d.accept_accuracy, d.leader_score, d.completed_at::text, "
             "('dominated by experiment ' || x.experiment_id::text || "
-            "' with higher leader_score and no worse comparable accuracy') AS reason "
+            "' with higher leader_score and no worse comparable accuracy') AS reason, "
+            "'No automatic archive; retain if needed for comparison history' AS suggested_action, "
+            "'No direct CLI action.' AS example_command "
             "FROM eligible d "
             "JOIN LATERAL ("
             "  SELECT e2.experiment_id "
@@ -3338,44 +3778,132 @@ size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
             "  ORDER BY e2.leader_score DESC, e2.infer_accuracy DESC, e2.experiment_id DESC "
             "  LIMIT 1 "
             ") x ON true "
-            "ORDER BY d.leader_score ASC NULLS LAST, d.infer_accuracy ASC NULLS LAST, "
-            "d.experiment_id ASC "
-            "LIMIT 25;"));
+            "ORDER BY d.leader_score ASC, d.infer_accuracy ASC, d.experiment_id ASC "
+            "LIMIT 50;"));
 
     sections.emplace_back(
-        "Fill Coverage Gaps By Symbol/Horizon",
+        "Failed Experiment Archive Candidates",
         w.exec(
-            RecommendationSelectColumns("'coverage gap: experiment lacks completed analysis evidence'") +
+            PruningSelectColumns(
+                "COALESCE('terminal failed run: ' || NULLIF(e.error_message, ''), 'terminal failed run')",
+                "'Investigate logs and metadata before manual archive decision'",
+                ExperimentMetadataCommandSql()) +
             "FROM experiment e "
-            "LEFT JOIN experiment_analysis_result a "
-            "  ON a.experiment_id = e.experiment_id "
-            "  AND a.analysis_status = 'completed' "
-            "WHERE a.analysis_id IS NULL "
-            "AND e.status <> 'cancelled' "
-            "ORDER BY e.symbol ASC, e.prediction_horizon ASC, e.target_epochs DESC, "
-            "e.created_at ASC, e.experiment_id ASC "
-            "LIMIT 25;"));
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'failed' "
+            "ORDER BY e.completed_at DESC NULLS LAST, e.updated_at DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 50;"));
 
     sections.emplace_back(
-        "Run Missing Inference/Analysis Where Metrics Are Absent",
+        "Cancelled Experiment Archive Candidates",
         w.exec(
-            RecommendationSelectColumns("'missing ranking evidence: run or repair inference/analysis metrics'") +
+            PruningSelectColumns(
+                "'terminal cancelled run; no automatic cleanup action'",
+                "'No action required unless manually archiving old scheduler rows'",
+                "'No direct CLI action.'") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'cancelled' "
+            "ORDER BY e.completed_at DESC NULLS LAST, e.updated_at DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Duplicate / Superseded Experiment Candidates",
+        w.exec(
+            "WITH ranked AS ("
+            "  SELECT e.*, a.model_id, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "         a.accept_accuracy, a.leader_score, "
+            "         row_number() OVER ("
+            "           PARTITION BY e.symbol, e.prediction_horizon, e.target_epochs, "
+            "                        e.checkpoint_interval, e.train_start, e.train_end, "
+            "                        COALESCE(e.infer_start, '-infinity'::timestamptz), "
+            "                        COALESCE(e.infer_end, '-infinity'::timestamptz), "
+            "                        e.c_next_threshold, "
+            "                        COALESCE(e.core_lr_mult, '-infinity'::double precision), "
+            "                        COALESCE(e.head_lr_mult, '-infinity'::double precision) "
+            "           ORDER BY COALESCE(a.leader_score, '-infinity'::double precision) DESC, "
+            "                    COALESCE(a.infer_accuracy, '-infinity'::double precision) DESC, "
+            "                    e.experiment_id DESC"
+            "         ) AS rn "
+            "  FROM experiment e "
+            "  LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "  WHERE e.status IN ('completed', 'failed', 'cancelled') "
+            ") "
+            "SELECT e.experiment_id, COALESCE(e.model_id, e.last_model_id), e.symbol, "
+            "e.prediction_horizon, e.target_epochs, e.completed_epochs, e.status, e.phase, "
+            "e.infer_accuracy, e.accept_rate, e.accept_accuracy, e.leader_score, "
+            "e.completed_at::text, "
+            "'same symbol/horizon/config group has a higher-ranked or newer terminal experiment' AS reason, "
+            "'Review duplicate/superseded lineage before manual archive' AS suggested_action, "
+            "" + ExperimentMetadataCommandSql() + " AS example_command "
+            "FROM ranked e "
+            "WHERE e.rn > 1 "
+            "ORDER BY e.symbol ASC, e.prediction_horizon ASC, e.target_epochs DESC, "
+            "e.rn ASC, e.experiment_id ASC "
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Old Pending Experiments To Review",
+        w.exec(
+            PruningSelectColumns(
+                "'pending for more than 7 days; verify still relevant before scheduler capacity is used'",
+                "'Inspect current experiment status; cancel only if intentionally obsolete'",
+                ExperimentStatusCommandSql()) +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'pending' "
+            "AND e.created_at < now() - interval '7 days' "
+            "ORDER BY e.created_at ASC, e.experiment_id ASC "
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Models / Checkpoints With Missing Analysis Metrics",
+        w.exec(
+            PruningSelectColumns(
+                "'completed experiment lacks complete inference/analysis metrics'",
+                "CASE WHEN e.phase IN ('infer', 'analyze') AND e.status IN ('pending', 'running') THEN "
+                "'Wait for scheduler; missing metrics are expected while queued/running' "
+                "WHEN e.last_model_id IS NOT NULL THEN 'Inspect status and consider requeue-analysis if appropriate' "
+                "ELSE 'No direct CLI action' END",
+                "CASE WHEN e.status IN ('pending', 'running') THEN " + ExperimentStatusCommandSql() + " "
+                "WHEN e.last_model_id IS NOT NULL THEN " + ExperimentControlCommandSql("--requeue-analysis") + " "
+                "ELSE 'No direct CLI action.' END") +
             "FROM experiment e "
             "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
             "WHERE e.status = 'completed' "
             "AND (a.analysis_id IS NULL OR a.infer_accuracy IS NULL OR a.leader_score IS NULL) "
             "ORDER BY e.completed_at DESC NULLS LAST, e.experiment_id DESC "
-            "LIMIT 25;"));
+            "LIMIT 50;"));
+
+    sections.emplace_back(
+        "Safe Cleanup Command Suggestions",
+        w.exec(
+            "SELECT NULL::bigint, NULL::bigint, 'all'::text, NULL::integer, NULL::integer, "
+            "NULL::integer, 'n/a'::text, 'n/a'::text, NULL::double precision, "
+            "NULL::double precision, NULL::double precision, NULL::double precision, "
+            "NULL::text, "
+            "'refresh reports after any manual archive review' AS reason, "
+            "'Regenerate reports' AS suggested_action, "
+            "" + StaticCommandSql("--generate-experiment-reports") + " AS example_command "
+            "UNION ALL "
+            "SELECT NULL::bigint, NULL::bigint, 'all'::text, NULL::integer, NULL::integer, "
+            "NULL::integer, 'n/a'::text, 'n/a'::text, NULL::double precision, "
+            "NULL::double precision, NULL::double precision, NULL::double precision, "
+            "NULL::text, "
+            "'inspect live scheduler state before pruning decisions' AS reason, "
+            "'Review scheduler status' AS suggested_action, "
+            "" + StaticCommandSql("--scheduler-status") + " AS example_command;"));
 
     size_t total = 0;
     for (const auto& section : sections)
         total += section.second.size();
 
-    const std::filesystem::path path = std::filesystem::path{reportDir} / "recommendations.md";
-    WriteTextFile(path.string(), RenderRecommendationReport(sections));
-    std::cout << "EXPERIMENT_RECOMMENDATION_REPORT_GENERATED"
+    const std::filesystem::path path =
+        std::filesystem::path{reportDir} / "pruning_archive_candidates.md";
+    WriteTextFile(path.string(), RenderPruningReport(sections));
+    std::cout << "EXPERIMENT_PRUNING_REPORT_GENERATED"
               << ",path=" << path.string()
-              << ",recommendations=" << total
+              << ",candidates=" << total
               << std::endl;
     return total;
 }
@@ -3387,6 +3915,91 @@ void WriteReportFile(const std::string& reportDir,
 {
     const std::filesystem::path path = std::filesystem::path{reportDir} / fileName;
     WriteTextFile(path.string(), RenderMarkdownReport(title, ExperimentReportHeaders(), rows));
+}
+
+size_t WriteIndexReport(pqxx::work& w,
+                        const std::string& reportDir,
+                        const pqxx::result& latestLeaderboard,
+                        const pqxx::result& bestBySymbol,
+                        const pqxx::result& bestByHorizon)
+{
+    const pqxx::result generatedAt = w.exec("SELECT now()::text;");
+    const pqxx::result counts = w.exec(
+        "SELECT "
+        "COUNT(*) AS total_experiments, "
+        "COUNT(*) FILTER (WHERE status = 'completed') AS completed_experiments, "
+        "COUNT(*) FILTER (WHERE status = 'failed') AS failed_experiments, "
+        "COUNT(*) FILTER (WHERE status IN ('pending', 'running')) AS pending_running_experiments "
+        "FROM experiment;");
+    const QueueSnapshot queue = LoadQueueSnapshot(w);
+
+    std::ostringstream out;
+    out << "# Experiment Reports Dashboard\n\n";
+    out << "Generated: " << (generatedAt.empty() ? "unknown" : RowCell(generatedAt[0], 0)) << "\n\n";
+
+    out << "## Report Links\n\n";
+    out << "- [Latest Leaderboard](latest_leaderboard.md)\n";
+    out << "- [Best By Symbol](best_by_symbol.md)\n";
+    out << "- [Best By Horizon](best_by_horizon.md)\n";
+    out << "- [Recent Completed Experiments](recent_completed.md)\n";
+    out << "- [Failed Experiments](failures.md)\n";
+    out << "- [Recommendations](recommendations.md)\n";
+    out << "- [Pruning / Archive Candidates](pruning_archive_candidates.md)\n\n";
+
+    out << "## Summary\n\n";
+    out << "| metric | value |\n";
+    out << "|---|---|\n";
+    if (counts.empty())
+    {
+        out << "| total_experiments | unknown |\n";
+        out << "| completed_experiments | unknown |\n";
+        out << "| failed_experiments | unknown |\n";
+        out << "| pending_running_experiments | unknown |\n";
+    }
+    else
+    {
+        out << "| total_experiments | " << RowCell(counts[0], 0) << " |\n";
+        out << "| completed_experiments | " << RowCell(counts[0], 1) << " |\n";
+        out << "| failed_experiments | " << RowCell(counts[0], 2) << " |\n";
+        out << "| pending_running_experiments | " << RowCell(counts[0], 3) << " |\n";
+    }
+    out << "\n";
+
+    out << "## Current Overall Leader\n\n";
+    if (latestLeaderboard.empty())
+        out << "none\n\n";
+    else
+        out << RenderCompactLeaderTable(latestLeaderboard, 1) << "\n";
+
+    out << "## Best By Symbol Summary\n\n";
+    if (bestBySymbol.empty())
+        out << "none\n\n";
+    else
+        out << RenderCompactLeaderTable(bestBySymbol) << "\n";
+
+    out << "## Best By Horizon Summary\n\n";
+    if (bestByHorizon.empty())
+        out << "none\n\n";
+    else
+        out << RenderCompactLeaderTable(bestByHorizon) << "\n";
+
+    out << "## Current Queue / Running Summary\n\n";
+    out << "| phase | pending | running |\n";
+    out << "|---|---|---|\n";
+    out << "| train | " << queue.pendingTrain << " | " << queue.runningTrain << " |\n";
+    out << "| infer | " << queue.pendingInfer << " | " << queue.runningInfer << " |\n";
+    out << "| analyze | " << queue.pendingAnalyze << " | " << queue.runningAnalyze << " |\n\n";
+
+    out << "## Process Note\n\n";
+    out << "Unmanaged process detection is available from `--scheduler-status`; this index does not "
+        << "scan OS processes during report generation.\n";
+
+    const std::filesystem::path path = std::filesystem::path{reportDir} / "index.md";
+    WriteTextFile(path.string(), out.str());
+    std::cout << "EXPERIMENT_REPORT_INDEX_GENERATED"
+              << ",path=" << path.string()
+              << std::endl;
+    return 1;
 }
 
 int GenerateExperimentReports(const std::string& reportDir, bool warnOnly)
@@ -3433,7 +4046,13 @@ int GenerateExperimentReports(const std::string& reportDir, bool warnOnly)
             "WHERE e.status = 'failed' "
             "ORDER BY e.completed_at DESC NULLS LAST, e.updated_at DESC NULLS LAST, e.experiment_id DESC "
             "LIMIT 100;");
-        const size_t recommendationRows = WriteRecommendationReport(w, reportDir);
+        const RecommendationPriorityCounts recommendationRows = WriteRecommendationReport(w, reportDir);
+        const size_t pruningRows = WritePruningArchiveReport(w, reportDir);
+        const size_t indexRows = WriteIndexReport(w,
+                                                  reportDir,
+                                                  latestLeaderboard,
+                                                  bestBySymbol,
+                                                  bestByHorizon);
         w.commit();
 
         WriteReportFile(reportDir, "latest_leaderboard.md", "Latest Leaderboard", latestLeaderboard);
@@ -3449,7 +4068,9 @@ int GenerateExperimentReports(const std::string& reportDir, bool warnOnly)
                   << ",best_by_horizon_rows=" << bestByHorizon.size()
                   << ",recent_completed_rows=" << recentCompleted.size()
                   << ",failure_rows=" << failures.size()
-                  << ",recommendation_rows=" << recommendationRows
+                  << ",recommendation_rows=" << recommendationRows.Total()
+                  << ",pruning_candidate_rows=" << pruningRows
+                  << ",index_rows=" << indexRows
                   << std::endl;
         return 0;
     }
