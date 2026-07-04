@@ -21,6 +21,9 @@
 
 #include <pqxx/pqxx>
 
+#include "CanonicalSymbol.hpp"
+#include "PgModelIO.hpp"
+
 namespace EA::ExperimentScheduler
 {
 
@@ -254,7 +257,7 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--analyze-experiment")
             options.analyzeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--symbol")
-            options.symbol = RequireNextArg(argc, argv, i, arg);
+            options.symbol = EA::CanonicalSymbol::Normalize(RequireNextArg(argc, argv, i, arg));
         else if (arg == "--prediction-horizon")
             options.predictionHorizon = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--c-next-threshold")
@@ -288,13 +291,13 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--scheduler-log-dir")
             options.schedulerLogDir = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--leaderboard-symbol")
-            options.leaderboardSymbol = RequireNextArg(argc, argv, i, arg);
+            options.leaderboardSymbol = EA::CanonicalSymbol::Normalize(RequireNextArg(argc, argv, i, arg));
         else if (arg == "--leaderboard-horizon")
             options.leaderboardHorizon = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--leaderboard-limit")
             options.leaderboardLimit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (SplitOptionWithValue(arg, "--symbol", value))
-            options.symbol = value;
+            options.symbol = EA::CanonicalSymbol::Normalize(value);
         else if (SplitOptionWithValue(arg, "--prediction-horizon", value))
             options.predictionHorizon = ParsePositiveInt("--prediction-horizon", value);
         else if (SplitOptionWithValue(arg, "--c-next-threshold", value))
@@ -330,7 +333,7 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (SplitOptionWithValue(arg, "--analyze-experiment", value))
             options.analyzeExperimentId = ParsePositiveLongLong("--analyze-experiment", value);
         else if (SplitOptionWithValue(arg, "--leaderboard-symbol", value))
-            options.leaderboardSymbol = value;
+            options.leaderboardSymbol = EA::CanonicalSymbol::Normalize(value);
         else if (SplitOptionWithValue(arg, "--leaderboard-horizon", value))
             options.leaderboardHorizon = ParsePositiveInt("--leaderboard-horizon", value);
         else if (SplitOptionWithValue(arg, "--leaderboard-limit", value))
@@ -355,14 +358,14 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
 
 inline void EnsureRequiredEnqueueOptions(const SchedulerOptions& options)
 {
-    if (!options.symbol.has_value() ||
+    if ((!options.symbol.has_value() && !options.resumeModelId.has_value()) ||
         !options.predictionHorizon.has_value() ||
         !options.cNextThreshold.has_value() ||
         !options.targetEpochs.has_value() ||
         !options.trainStart.has_value() ||
         !options.trainEnd.has_value())
     {
-        throw std::invalid_argument("--enqueue-experiment requires --symbol, --prediction-horizon, --c-next-threshold, --target-epochs, --train-start, and --train-end");
+        throw std::invalid_argument("--enqueue-experiment requires --symbol unless --resume-model-id is supplied, plus --prediction-horizon, --c-next-threshold, --target-epochs, --train-start, and --train-end");
     }
     if (options.inferStart.has_value() != options.inferEnd.has_value())
         throw std::invalid_argument("--infer-start and --infer-end must be supplied together");
@@ -407,10 +410,84 @@ inline void SetTransactionReadWrite(pqxx::work& w)
     w.exec("SET TRANSACTION READ WRITE;");
 }
 
-inline std::string DuplicateWhereClause(pqxx::work& w, const SchedulerOptions& options)
+inline void PrintModelSymbolMismatch(const std::string& runtimeSymbol,
+                                     const std::string& modelSymbol)
+{
+    std::cerr << "MODEL_SYMBOL_MISMATCH"
+              << ",runtime=" << runtimeSymbol
+              << ",model=" << modelSymbol
+              << std::endl;
+}
+
+inline void PrintModelSymbolMissing(long long modelId)
+{
+    std::cout << "MODEL_SYMBOL_MISSING"
+              << ",model_id=" << modelId
+              << std::endl;
+}
+
+inline std::optional<std::string> TryLoadPersistedCanonicalSymbol(pqxx::work& w,
+                                                                  long long modelId)
+{
+    try
+    {
+        return DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+}
+
+inline std::string ResolveExperimentCanonicalSymbol(pqxx::work& w,
+                                                    const SchedulerOptions& options)
+{
+    if (!options.resumeModelId.has_value())
+        return EA::CanonicalSymbol::Normalize(*options.symbol);
+
+    const std::optional<std::string> persistedSymbol =
+        TryLoadPersistedCanonicalSymbol(w, *options.resumeModelId);
+    if (persistedSymbol.has_value())
+    {
+        if (options.symbol.has_value())
+        {
+            const std::string runtimeSymbol = EA::CanonicalSymbol::Normalize(*options.symbol);
+            if (runtimeSymbol != *persistedSymbol)
+            {
+                PrintModelSymbolMismatch(runtimeSymbol, *persistedSymbol);
+                throw std::runtime_error("MODEL_SYMBOL_MISMATCH");
+            }
+        }
+        std::cout << "MODEL_SYMBOL"
+                  << ",source=database"
+                  << ",model_id=" << *options.resumeModelId
+                  << ",symbol=" << *persistedSymbol
+                  << std::endl;
+        return *persistedSymbol;
+    }
+
+    PrintModelSymbolMissing(*options.resumeModelId);
+    if (options.symbol.has_value())
+    {
+        const std::string legacySymbol = EA::CanonicalSymbol::Normalize(*options.symbol);
+        std::cout << "MODEL_SYMBOL"
+                  << ",source=legacy"
+                  << ",model_id=" << *options.resumeModelId
+                  << ",symbol=" << legacySymbol
+                  << ",warning=missing_metadata"
+                  << std::endl;
+        return legacySymbol;
+    }
+
+    throw std::runtime_error("resume-model-id is missing train_symbol_meta and --symbol was not supplied for legacy fallback");
+}
+
+inline std::string DuplicateWhereClause(pqxx::work& w,
+                                        const SchedulerOptions& options,
+                                        const std::string& canonicalSymbol)
 {
     std::ostringstream sql;
-    sql << "symbol = " << w.quote(*options.symbol)
+    sql << "symbol = " << w.quote(canonicalSymbol)
         << " AND prediction_horizon = " << *options.predictionHorizon
         << " AND c_next_threshold = " << FormatDouble(*options.cNextThreshold)
         << " AND core_lr_mult IS NOT DISTINCT FROM " << SqlNullable(w, options.coreLrMult)
@@ -438,11 +515,15 @@ inline int EnqueueExperiment(const SchedulerOptions& options)
 {
     EnsureRequiredEnqueueOptions(options);
 
+    std::optional<std::string> dryRunSymbol;
+    if (options.symbol.has_value())
+        dryRunSymbol = EA::CanonicalSymbol::Normalize(*options.symbol);
+
     if (options.dryRun)
     {
         std::cout << "SCHEDULER_DRY_RUN=1" << std::endl;
         std::cout << "EXPERIMENT_ENQUEUE_DRY_RUN"
-                  << ",symbol=" << *options.symbol
+                  << ",symbol=" << (dryRunSymbol.has_value() ? *dryRunSymbol : "database_model")
                   << ",prediction_horizon=" << *options.predictionHorizon
                   << ",c_next_threshold=" << FormatDouble(*options.cNextThreshold)
                   << ",core_lr_mult=" << (options.coreLrMult.has_value() ? FormatDouble(*options.coreLrMult) : "NULL")
@@ -463,17 +544,19 @@ inline int EnqueueExperiment(const SchedulerOptions& options)
     if (!RequireSchedulerTables(w))
         return 1;
 
+    const std::string canonicalSymbol = ResolveExperimentCanonicalSymbol(w, options);
+
     if (!options.allowDuplicateExperiment)
     {
         pqxx::result duplicate = w.exec(
             "SELECT experiment_id FROM experiment WHERE " +
-            DuplicateWhereClause(w, options) +
+            DuplicateWhereClause(w, options, canonicalSymbol) +
             " LIMIT 1;");
         if (!duplicate.empty())
         {
             std::cout << "SCHEDULER_DUPLICATE_REJECTED"
                       << ",experiment_id=" << duplicate[0][0].as<long long>()
-                      << ",symbol=" << *options.symbol
+                      << ",symbol=" << canonicalSymbol
                       << ",prediction_horizon=" << *options.predictionHorizon
                       << std::endl;
             return 1;
@@ -487,7 +570,7 @@ inline int EnqueueExperiment(const SchedulerOptions& options)
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at"
         << ") VALUES ("
-        << w.quote(*options.symbol) << ","
+        << w.quote(canonicalSymbol) << ","
         << *options.predictionHorizon << ","
         << FormatDouble(*options.cNextThreshold) << ","
         << SqlNullable(w, options.coreLrMult) << ","
@@ -508,7 +591,7 @@ inline int EnqueueExperiment(const SchedulerOptions& options)
 
     std::cout << "EXPERIMENT_ENQUEUED"
               << ",experiment_id=" << experimentId
-              << ",symbol=" << *options.symbol
+              << ",symbol=" << canonicalSymbol
               << ",prediction_horizon=" << *options.predictionHorizon
               << ",target_epochs=" << *options.targetEpochs
               << std::endl;
@@ -540,7 +623,7 @@ inline ExperimentRow RowToExperiment(const pqxx::row& row)
 {
     ExperimentRow experiment;
     experiment.experimentId = row[0].as<long long>();
-    experiment.symbol = row[1].as<std::string>();
+    experiment.symbol = EA::CanonicalSymbol::Normalize(row[1].as<std::string>());
     experiment.predictionHorizon = row[2].as<int>();
     experiment.cNextThreshold = row[3].as<double>();
     experiment.coreLrMult = OptionalDoubleCell(row, 4);
@@ -613,6 +696,7 @@ inline std::string LogPathFor(const SchedulerOptions& options,
     std::ostringstream oss;
     oss << options.schedulerLogDir
         << "/experiment_" << experiment.experimentId
+        << "_" << EA::CanonicalSymbol::Normalize(experiment.symbol)
         << "_" << phase << ".log";
     return oss.str();
 }
@@ -620,7 +704,7 @@ inline std::string LogPathFor(const SchedulerOptions& options,
 inline std::string BaseModelName(const ExperimentRow& experiment)
 {
     std::ostringstream oss;
-    oss << experiment.symbol
+    oss << EA::CanonicalSymbol::Normalize(experiment.symbol)
         << "-experiment" << experiment.experimentId
         << "_h" << experiment.predictionHorizon
         << "_e" << experiment.targetEpochs;
@@ -913,6 +997,41 @@ inline ParsedMetrics ParseMetricsFromLogs(const ExperimentRow& experiment)
     return metrics;
 }
 
+inline void ApplyPersistedSymbolToAnalysisExperiment(pqxx::work& w,
+                                                     ExperimentRow& experiment,
+                                                     const ParsedMetrics& metrics)
+{
+    const std::optional<long long> modelId =
+        metrics.modelId.has_value() ? metrics.modelId : experiment.lastModelId;
+    if (!modelId.has_value())
+    {
+        experiment.symbol = EA::CanonicalSymbol::Normalize(experiment.symbol);
+        return;
+    }
+
+    const std::optional<std::string> persistedSymbol =
+        TryLoadPersistedCanonicalSymbol(w, *modelId);
+    if (persistedSymbol.has_value())
+    {
+        experiment.symbol = *persistedSymbol;
+        std::cout << "MODEL_SYMBOL"
+                  << ",source=database"
+                  << ",model_id=" << *modelId
+                  << ",symbol=" << experiment.symbol
+                  << std::endl;
+        return;
+    }
+
+    PrintModelSymbolMissing(*modelId);
+    experiment.symbol = EA::CanonicalSymbol::Normalize(experiment.symbol);
+    std::cout << "MODEL_SYMBOL"
+              << ",source=legacy"
+              << ",model_id=" << *modelId
+              << ",symbol=" << experiment.symbol
+              << ",warning=missing_metadata"
+              << std::endl;
+}
+
 inline bool ApplyStructuredInferenceMetrics(pqxx::work& w,
                                             const ExperimentRow& experiment,
                                             ParsedMetrics& metrics)
@@ -1166,6 +1285,7 @@ inline int AnalyzeExperimentById(long long experimentId, const SchedulerOptions&
               << std::endl;
 
     ParsedMetrics metrics = ParseMetricsFromLogs(experiment);
+    ApplyPersistedSymbolToAnalysisExperiment(w, experiment, metrics);
     const bool usedStructuredInferenceMetrics = ApplyStructuredInferenceMetrics(w, experiment, metrics);
     const std::optional<double> leaderScore = ComputeLeaderScore(metrics);
     UpsertAnalysisResult(w, experiment, metrics, leaderScore);

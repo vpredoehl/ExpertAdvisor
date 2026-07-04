@@ -35,6 +35,7 @@
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
 #include "ExperimentScheduler.hpp"
+#include "CanonicalSymbol.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -193,6 +194,12 @@ struct ModelConfigValidationResult
     bool hasMismatch = false;
     bool metadataGap = false;
 };
+
+void PrintDatabaseModelSymbol(long long modelId, const std::string& symbol);
+void PrintLegacyModelSymbol(long long modelId, const std::string& symbol);
+void PrintMissingModelSymbol(long long modelId);
+void ValidateRuntimeSymbolMatchesModel(const std::optional<std::string>& runtimeSymbol,
+                                       const std::string& modelSymbol);
 
 struct EvalLabelConfig
 {
@@ -3439,7 +3446,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     throw std::invalid_argument("--symbol specified more than once");
                 if (value.empty())
                     throw std::invalid_argument("--symbol requires a non-empty table_name");
-                parsed.symbol = value;
+                parsed.symbol = EA::CanonicalSymbol::Normalize(value);
             }
             else if (SplitOptionWithValue(arg, "--target-epochs", value))
             {
@@ -3634,6 +3641,7 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.trainConfig = LoadRequiredTrainConfigMetaForResume(w, modelId);
     cfg.completedEpoch = cfg.trainConfig.epochsTrained.value_or(0);
     cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+    PrintDatabaseModelSymbol(modelId, cfg.symbol);
     const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
     cfg.fromDate = range.first;
     cfg.toDate = range.second;
@@ -4017,6 +4025,7 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     bool trainSymbolMetaMatches = true;
     bool trainConfigMetaMatches = false;
     bool mismatch = false;
+    std::optional<std::string> decodedModelSymbol;
 
     auto printMismatch = [&](const char* field, const auto& modelValue, const auto& runtimeValue)
     {
@@ -4066,6 +4075,8 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     try
     {
         const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+        decodedModelSymbol = modelSymbol;
+        PrintDatabaseModelSymbol(modelId, modelSymbol);
         if (LogSummary())
             std::cout << "MODEL_TRAIN_SYMBOL_META"
                       << ",model_id=" << modelId
@@ -4073,7 +4084,9 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                       << std::endl;
         if (result.trainConfigMeta.has_value())
             result.trainConfigMeta->symbol = modelSymbol;
-        trainSymbolMetaMatches = compareStringField("symbol", modelSymbol, runtimeSymbol);
+        trainSymbolMetaMatches = compareStringField("symbol",
+                                                    EA::CanonicalSymbol::Normalize(modelSymbol),
+                                                    EA::CanonicalSymbol::Normalize(runtimeSymbol));
     }
     catch (const std::exception& e)
     {
@@ -4083,12 +4096,15 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             trainSymbolMetaMatches = false;
         }
         else
+        {
+            PrintMissingModelSymbol(modelId);
             DiagnosticOut() << "MODEL_CONFIG_WARN"
                             << ",model_id=" << modelId
                             << ",field=symbol"
                             << ",model=missing_legacy_train_symbol_meta"
                             << ",runtime=" << runtimeSymbol
                             << std::endl;
+        }
     }
     try
     {
@@ -4207,6 +4223,8 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                 trainConfigMeta.headBiasLrMult = static_cast<float>(vals[13]);
                 hasTrainConfigHeadBiasLrMult = true;
             }
+            if (decodedModelSymbol.has_value())
+                trainConfigMeta.symbol = *decodedModelSymbol;
             result.trainConfigMeta = trainConfigMeta;
 
             if (LogSummary())
@@ -4331,6 +4349,8 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
     }
     if (!hasTargetMeta)
         missingMinimum.push_back("target_type");
+    if (!hasTrainSymbolMeta)
+        missingMinimum.push_back("symbol");
     if (!hasModelMeta)
     {
         missingMinimum.push_back("feature_count");
@@ -4408,8 +4428,64 @@ long long LatestModelId(pqxx::work& w)
     return r[0][0].as<long long>();
 }
 
-std::optional<std::string> ResolveSymbolFromModelName(const std::string& modelName,
-                                                      const std::vector<std::string>& availableSymbols)
+void PrintDatabaseModelSymbol(long long modelId, const std::string& symbol)
+{
+    if (!LogSummary())
+        return;
+    std::cout << "MODEL_SYMBOL"
+              << ",source=database"
+              << ",model_id=" << modelId
+              << ",symbol=" << symbol
+              << std::endl;
+}
+
+void PrintLegacyModelSymbol(long long modelId, const std::string& symbol)
+{
+    if (!LogSummary())
+        return;
+    std::cout << "MODEL_SYMBOL"
+              << ",source=legacy"
+              << ",model_id=" << modelId
+              << ",symbol=" << symbol
+              << ",warning=missing_metadata"
+              << std::endl;
+}
+
+void PrintMissingModelSymbol(long long modelId)
+{
+    if (!LogSummary())
+        return;
+    std::cout << "MODEL_SYMBOL_MISSING"
+              << ",model_id=" << modelId
+              << std::endl;
+}
+
+void ValidateRuntimeSymbolMatchesModel(const std::optional<std::string>& runtimeSymbol,
+                                       const std::string& modelSymbol)
+{
+    if (!runtimeSymbol.has_value())
+        return;
+
+    const std::string canonicalRuntimeSymbol = EA::CanonicalSymbol::Normalize(*runtimeSymbol);
+    const std::string canonicalModelSymbol = EA::CanonicalSymbol::Normalize(modelSymbol);
+    if (canonicalRuntimeSymbol != canonicalModelSymbol)
+    {
+        std::cerr << "MODEL_SYMBOL_MISMATCH"
+                  << ",runtime=" << canonicalRuntimeSymbol
+                  << ",model=" << canonicalModelSymbol
+                  << std::endl;
+        throw std::runtime_error("MODEL_SYMBOL_MISMATCH");
+    }
+
+    DiagnosticOut() << "INFERENCE_CLI_ARG_REDUNDANT"
+                    << ",param=--symbol"
+                    << ",value=" << canonicalRuntimeSymbol
+                    << ",source=persisted_model"
+                    << std::endl;
+}
+
+std::optional<std::string> ResolveLegacySymbolFromModelName(const std::string& modelName,
+                                                            const std::vector<std::string>& availableSymbols)
 {
     std::optional<std::string> bestMatch;
     for (const auto& symbol : availableSymbols)
@@ -4424,6 +4500,32 @@ std::optional<std::string> ResolveSymbolFromModelName(const std::string& modelNa
         }
     }
     return bestMatch;
+}
+
+std::string ResolveLegacyModelSymbol(long long modelId,
+                                     const std::string& modelName,
+                                     const std::optional<std::string>& runtimeSymbol,
+                                     const std::vector<std::string>& availableSymbols)
+{
+    PrintMissingModelSymbol(modelId);
+    const auto modelNameSymbol = ResolveLegacySymbolFromModelName(modelName, availableSymbols);
+    if (modelNameSymbol.has_value())
+    {
+        const std::string legacySymbol = EA::CanonicalSymbol::Normalize(*modelNameSymbol);
+        if (runtimeSymbol.has_value())
+            ValidateRuntimeSymbolMatchesModel(runtimeSymbol, legacySymbol);
+        PrintLegacyModelSymbol(modelId, legacySymbol);
+        return legacySymbol;
+    }
+
+    if (runtimeSymbol.has_value())
+    {
+        const std::string legacySymbol = EA::CanonicalSymbol::Normalize(*runtimeSymbol);
+        PrintLegacyModelSymbol(modelId, legacySymbol);
+        return legacySymbol;
+    }
+
+    throw std::runtime_error("unable to resolve legacy model symbol; train_symbol_meta is missing");
 }
 
 TrainConfigMeta LoadTrainConfigMetaForInference(pqxx::work& w,
@@ -4462,28 +4564,6 @@ TrainConfigMeta LoadTrainConfigMetaForInference(pqxx::work& w,
     hasCompleteExtendedFields =
         vals.size() >= static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount);
     return meta;
-}
-
-void ValidateRedundantCliString(const char* param,
-                                const std::optional<std::string>& cliValue,
-                                const std::string& modelValue)
-{
-    if (!cliValue.has_value())
-        return;
-    if (*cliValue != modelValue)
-    {
-        std::cerr << "CONFIG_MISMATCH"
-                  << ",param=" << param
-                  << ",model=" << modelValue
-                  << ",cli=" << *cliValue
-                  << std::endl;
-        throw std::runtime_error(std::string("CONFIG_MISMATCH for ") + param);
-    }
-    DiagnosticOut() << "INFERENCE_CLI_ARG_REDUNDANT"
-                    << ",param=" << param
-                    << ",value=" << *cliValue
-                    << ",source=persisted_model"
-                    << std::endl;
 }
 
 template <typename T>
@@ -4541,28 +4621,29 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
     cfg.modelId = modelId;
     cfg.modelName = ModelNameForId(w, modelId);
 
+    std::optional<std::string> databaseSymbol;
     try
     {
-        cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
-        cfg.symbolSource = "metadata";
+        databaseSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     }
     catch (const std::exception&)
     {
-        const auto modelNameSymbol = ResolveSymbolFromModelName(cfg.modelName, availableSymbols);
-        if (modelNameSymbol.has_value())
-        {
-            cfg.symbol = *modelNameSymbol;
-            cfg.symbolSource = "model_name";
-        }
-        else if (launchArgs.symbol.has_value())
-        {
-            cfg.symbol = *launchArgs.symbol;
-            cfg.symbolSource = "cli";
-        }
-        else
-        {
-            throw std::runtime_error("unable to resolve model symbol from train_symbol_meta, model name, or --symbol");
-        }
+    }
+
+    if (databaseSymbol.has_value())
+    {
+        cfg.symbol = *databaseSymbol;
+        cfg.symbolSource = "database";
+        ValidateRuntimeSymbolMatchesModel(launchArgs.symbol, cfg.symbol);
+        PrintDatabaseModelSymbol(modelId, cfg.symbol);
+    }
+    else
+    {
+        cfg.symbol = ResolveLegacyModelSymbol(modelId,
+                                              cfg.modelName,
+                                              launchArgs.symbol,
+                                              availableSymbols);
+        cfg.symbolSource = "legacy";
     }
 
     cfg.trainConfig = LoadTrainConfigMetaForInference(w,
@@ -4604,7 +4685,6 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
         cfg.targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
     }
 
-    ValidateRedundantCliString("--symbol", launchArgs.symbol, cfg.symbol);
     ValidateRedundantCliInteger("--prediction-horizon", launchArgs.predictionHorizon, cfg.trainConfig.predictionHorizon);
     ValidateRedundantCliFloat("--threshold", launchArgs.thresholdLogret, cfg.trainConfig.thresholdLogret);
     ValidateRedundantCliInteger("--window-size", launchArgs.windowSize, cfg.trainConfig.windowSize);
@@ -4655,6 +4735,30 @@ void PrintResolvedInferenceConfig(const PersistedInferenceConfig& cfg)
               << ",label_rule_id=" << cfg.trainConfig.labelRuleId
               << ",source=persisted_model"
               << std::endl;
+}
+
+void ValidateLoadedModelSymbolForSelectedTable(pqxx::work& w,
+                                               long long modelId,
+                                               const std::string& selectedSymbol)
+{
+    std::optional<std::string> databaseSymbol;
+    try
+    {
+        databaseSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+    }
+    catch (const std::exception&)
+    {
+    }
+
+    if (databaseSymbol.has_value())
+    {
+        PrintDatabaseModelSymbol(modelId, *databaseSymbol);
+        ValidateRuntimeSymbolMatchesModel(EA::CanonicalSymbol::Normalize(selectedSymbol), *databaseSymbol);
+        return;
+    }
+
+    PrintMissingModelSymbol(modelId);
+    PrintLegacyModelSymbol(modelId, EA::CanonicalSymbol::Normalize(selectedSymbol));
 }
 
 std::optional<long long> InferenceAnchorModelId(pqxx::work& w, const LaunchArgs& launchArgs)
@@ -5078,6 +5182,7 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         try
         {
             const std::string modelSymbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+            PrintDatabaseModelSymbol(modelId, modelSymbol);
             if (modelSymbol != runtimeSymbol)
                 return configMismatch("symbol", runtimeSymbol, modelSymbol);
         }
@@ -5088,14 +5193,13 @@ bool InferAllCandidateCompatible(pqxx::work& w,
     }
     else
     {
-        const bool candidateNameMatchesSymbol =
-            candidate.name == runtimeSymbol ||
-            candidate.name.rfind(runtimeSymbol + "-", 0) == 0 ||
-            candidate.name.rfind(runtimeSymbol + "_", 0) == 0;
-        if (!candidateNameMatchesSymbol)
+        PrintMissingModelSymbol(modelId);
+        const auto legacySymbol = ResolveLegacySymbolFromModelName(candidate.name, { runtimeSymbol });
+        if (!legacySymbol.has_value())
             return configMismatch("symbol", runtimeSymbol, "missing_train_symbol_meta");
         candidate.legacyMissingSymbol = true;
         candidate.metadataGap = true;
+        PrintLegacyModelSymbol(modelId, *legacySymbol);
     }
 
     if (MatrixParamExists(w, modelId, "target_meta"))
@@ -5675,7 +5779,7 @@ int main(int argc, const char * argv[])
         std::vector<std::string> availableSymbols;
         availableSymbols.reserve(tables.size());
         for (auto tbl : tables)
-            availableSymbols.emplace_back(tbl[0].c_str());
+            availableSymbols.emplace_back(EA::CanonicalSymbol::Normalize(tbl[0].c_str()));
 
         std::optional<PersistedInferenceConfig> inferenceConfig;
         if (!resumeConfig.has_value() && gRuntimeInferenceMode)
@@ -5907,6 +6011,9 @@ int main(int argc, const char * argv[])
                 DiagnosticOut() << "Load latest failed: " << e.what()
                                 << "; using default params" << std::endl;
             }
+
+            if (loadedModelId.has_value())
+                ValidateLoadedModelSymbolForSelectedTable(w_LSTM, *loadedModelId, rawPriceTableName);
 
             if (gRuntimeInferenceMode)
             {

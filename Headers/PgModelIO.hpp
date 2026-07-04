@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "LSTM.hpp"
+#include "CanonicalSymbol.hpp"
 
 
 #pragma clang diagnostic push
@@ -125,8 +126,9 @@ public:
         saveModelMeta(w, modelId, lstm);
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
-        if (!symbol.empty())
-            saveTrainSymbolMeta(w, modelId, symbol);
+        if (symbol.empty())
+            throw std::runtime_error("saveAll requires a canonical training symbol");
+        saveTrainSymbolMeta(w, modelId, symbol);
         if (!fromDate.empty() || !toDate.empty())
             saveTrainRangeMeta(w, modelId, fromDate, toDate);
     }
@@ -219,12 +221,13 @@ public:
     // This keeps metadata in the existing matrix persistence mechanism.
     static void saveTrainSymbolMeta(pqxx::work& w, long long modelId, const std::string& symbol)
     {
-        MatGPU<float> meta(1, symbol.size());
+        const std::string canonicalSymbol = EA::CanonicalSymbol::Normalize(symbol);
+        MatGPU<float> meta(1, canonicalSymbol.size());
         {
             auto low = MetaNN::LowerAccess(meta);
             float* p = low.MutableRawMemory();
-            for (size_t i = 0; i < symbol.size(); ++i)
-                p[i] = static_cast<float>(static_cast<unsigned char>(symbol[i]));
+            for (size_t i = 0; i < canonicalSymbol.size(); ++i)
+                p[i] = static_cast<float>(static_cast<unsigned char>(canonicalSymbol[i]));
         }
         saveParameter(w, modelId, "train_symbol_meta", meta);
     }
@@ -246,7 +249,7 @@ public:
                 throw std::runtime_error("train_symbol_meta contains invalid character code");
             symbol.push_back(static_cast<char>(code));
         }
-        return symbol;
+        return EA::CanonicalSymbol::Normalize(symbol);
     }
 
     static void saveTrainRangeMeta(pqxx::work& w,
