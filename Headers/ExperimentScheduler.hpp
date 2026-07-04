@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -36,6 +37,7 @@ struct SchedulerOptions
     bool printLeaderboard = false;
     bool dryRun = false;
     bool schedulerOnce = false;
+    bool recoverOrphansOnly = false;
     int maxTrainProcs = 1;
     int maxInferProcs = 1;
     int maxAnalyzeProcs = 1;
@@ -253,6 +255,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.dryRun = true;
         else if (arg == "--scheduler-once")
             options.schedulerOnce = true;
+        else if (arg == "--recover-orphans-only")
+            options.recoverOrphansOnly = true;
         else if (arg == "--allow-duplicate-experiment")
             options.allowDuplicateExperiment = true;
         else if (arg == "--analyze-experiment")
@@ -353,6 +357,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.printLeaderboard ? 1 : 0);
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
+    if (options.recoverOrphansOnly && !options.scheduleExperiments)
+        throw std::invalid_argument("--recover-orphans-only requires --schedule-experiments");
 
     return options;
 }
@@ -666,23 +672,56 @@ inline std::vector<ExperimentRow> LoadPendingExperiments(pqxx::work& w,
     return experiments;
 }
 
-inline void RecoverOrphanedRunningExperiments(pqxx::work& w)
+inline std::vector<ExperimentRow> LoadRunningTrainExperiments(pqxx::work& w)
 {
     pqxx::result rows = w.exec(
-        "UPDATE experiment "
-        "SET status = 'failed', "
-        "exit_code = -1, "
-        "error_message = 'SCHEDULER_RECOVERED_ORPHANED_RUNNING_EXPERIMENT', "
-        "completed_at = now(), "
-        "updated_at = now() "
-        "WHERE status = 'running' "
-        "RETURNING experiment_id;");
+        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
+        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
+        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
+        "FROM experiment "
+        "WHERE status = 'running' AND phase = 'train' "
+        "ORDER BY updated_at ASC, experiment_id ASC;");
+
+    std::vector<ExperimentRow> experiments;
+    experiments.reserve(rows.size());
+    for (const auto& row : rows)
+        experiments.push_back(RowToExperiment(row));
+    return experiments;
+}
+
+inline int RecoverOrphanedRunningExperiments(pqxx::work& w);
+
+inline int FailInvalidSchedulerPhases(pqxx::work& w)
+{
+    pqxx::result rows = w.exec(
+        "SELECT experiment_id, phase FROM experiment "
+        "WHERE status IN ('pending', 'running') "
+        "AND phase NOT IN ('train', 'infer', 'analyze', 'done') "
+        "ORDER BY updated_at ASC, experiment_id ASC;");
+
     for (const auto& row : rows)
     {
-        std::cout << "SCHEDULER_RECOVERED_ORPHANED_RUNNING_EXPERIMENT"
-                  << ",experiment_id=" << row[0].as<long long>()
+        const long long experimentId = row[0].as<long long>();
+        const std::string phase = row[1].as<std::string>();
+        w.exec_params(
+            "UPDATE experiment "
+            "SET status = 'failed', "
+            "exit_code = -1, "
+            "error_message = $1, "
+            "completed_at = now(), "
+            "updated_at = now() "
+            "WHERE experiment_id = $2;",
+            "unknown_scheduler_phase:" + phase,
+            experimentId);
+        std::cout << "EXPERIMENT_FAILED"
+                  << ",experiment_id=" << experimentId
+                  << ",phase=" << phase
+                  << ",reason=unknown_scheduler_phase"
                   << std::endl;
     }
+
+    return rows.empty() ? 0 : 1;
 }
 
 inline void EnsureLogDir(const std::string& logDir)
@@ -710,6 +749,35 @@ inline std::string BaseModelName(const ExperimentRow& experiment)
         << "_h" << experiment.predictionHorizon
         << "_e" << experiment.targetEpochs;
     return oss.str();
+}
+
+inline bool RunningTrainProcessExistsForExperiment(const ExperimentRow& experiment)
+{
+    FILE* pipe = ::popen("ps -axo command", "r");
+    if (!pipe)
+        return false;
+
+    const std::string baseModelName = BaseModelName(experiment);
+    const std::string experimentNeedle = "experiment" + std::to_string(experiment.experimentId);
+    char buffer[4096];
+    bool found = false;
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        const std::string command{buffer};
+        if (command.find("LSTM_Release") == std::string::npos ||
+            command.find("--train") == std::string::npos)
+        {
+            continue;
+        }
+        if (command.find(baseModelName) != std::string::npos ||
+            command.find(experimentNeedle) != std::string::npos)
+        {
+            found = true;
+            break;
+        }
+    }
+    ::pclose(pipe);
+    return found;
 }
 
 inline std::string ShellDisplayQuote(const std::string& value)
@@ -923,6 +991,36 @@ inline std::optional<long long> ExtractLastModelId(const std::string& text)
         last = std::stoll((*it)[2].str());
     }
     return last;
+}
+
+inline std::optional<long long> ExtractLastModelIdByRegex(const std::string& text,
+                                                          const std::regex& idRegex,
+                                                          size_t captureIndex)
+{
+    std::optional<long long> last;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), idRegex);
+         it != std::sregex_iterator();
+         ++it)
+    {
+        last = std::stoll((*it)[captureIndex].str());
+    }
+    return last;
+}
+
+inline std::optional<long long> ExtractCompletedTrainModelId(const std::string& text)
+{
+    return ExtractLastModelIdByRegex(
+        text,
+        std::regex{"(Saved model with model_id=|RESUME_SAVED_NEW_MODEL_ID=)([0-9]+)"},
+        2);
+}
+
+inline std::optional<long long> ExtractCheckpointModelId(const std::string& text)
+{
+    return ExtractLastModelIdByRegex(
+        text,
+        std::regex{"CHECKPOINT_SAVE_DONE[^\\n]*model_id=([0-9]+)"},
+        1);
 }
 
 inline std::string ModelIdSearchPatternDescription()
@@ -1152,6 +1250,55 @@ inline bool ApplyStructuredInferenceMetrics(pqxx::work& w,
     return true;
 }
 
+inline bool HasCompletedInferenceResult(pqxx::work& w,
+                                        const ExperimentRow& experiment)
+{
+    if (!TableExists(w, "inference_eval_result") ||
+        !experiment.lastModelId.has_value() ||
+        !experiment.inferStart.has_value() ||
+        !experiment.inferEnd.has_value())
+    {
+        return false;
+    }
+
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 "
+        "FROM inference_eval_result "
+        "WHERE model_id = $1 "
+        "AND symbol = $2 "
+        "AND prediction_horizon = $3 "
+        "AND threshold_logret = $4 "
+        "AND from_date = $5 "
+        "AND to_date = $6 "
+        "AND status = 'completed' "
+        "LIMIT 1;",
+        *experiment.lastModelId,
+        experiment.symbol,
+        experiment.predictionHorizon,
+        experiment.cNextThreshold,
+        experiment.inferStart->substr(0, 10),
+        experiment.inferEnd->substr(0, 10));
+    return !rows.empty();
+}
+
+inline bool HasCompletedAnalysisResult(pqxx::work& w,
+                                       const ExperimentRow& experiment)
+{
+    if (!experiment.lastModelId.has_value())
+        return false;
+
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 "
+        "FROM experiment_analysis_result "
+        "WHERE experiment_id = $1 "
+        "AND model_id = $2 "
+        "AND analysis_status = 'completed' "
+        "LIMIT 1;",
+        experiment.experimentId,
+        *experiment.lastModelId);
+    return !rows.empty();
+}
+
 inline double PredictionImbalancePenalty(const ParsedMetrics& metrics)
 {
     if (!metrics.hasConfusion)
@@ -1327,6 +1474,38 @@ inline void UpsertAnalysisResult(pqxx::work& w,
     w.exec(sql.str());
 }
 
+inline void MarkAnalyzeFailed(pqxx::work& w,
+                              long long experimentId,
+                              const std::string& errorMessage)
+{
+    w.exec_params(
+        "UPDATE experiment "
+        "SET status = 'failed', "
+        "exit_code = -1, "
+        "error_message = $1, "
+        "completed_at = now(), "
+        "updated_at = now() "
+        "WHERE experiment_id = $2;",
+        errorMessage,
+        experimentId);
+}
+
+inline void MarkAnalyzeFailedById(long long experimentId,
+                                  const std::optional<long long>& modelId,
+                                  const std::string& errorMessage)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    MarkAnalyzeFailed(w, experimentId, errorMessage);
+    w.commit();
+    std::cerr << "SCHEDULER_ANALYZE_FAILED"
+              << ",experiment_id=" << experimentId
+              << ",model_id=" << (modelId.has_value() ? std::to_string(*modelId) : "none")
+              << ",error=" << errorMessage
+              << std::endl;
+}
+
 inline int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& options)
 {
     pqxx::connection c{LstmDbConnectionString()};
@@ -1352,14 +1531,38 @@ inline int AnalyzeExperimentById(long long experimentId, const SchedulerOptions&
     }
 
     ExperimentRow experiment = RowToExperiment(rows[0]);
+    if (!experiment.lastModelId.has_value())
+    {
+        MarkAnalyzeFailed(w, experiment.experimentId, "analyze_missing_last_model_id");
+        w.commit();
+        std::cerr << "SCHEDULER_ANALYZE_FAILED"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=none"
+                  << ",error=analyze_missing_last_model_id"
+                  << std::endl;
+        return 1;
+    }
+
+    const long long modelId = *experiment.lastModelId;
+    std::cout << "SCHEDULER_ANALYZE_STARTED"
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << modelId
+              << std::endl;
     std::cout << "EXPERIMENT_ANALYSIS_STARTED"
               << ",experiment_id=" << experiment.experimentId
-              << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+              << ",model_id=" << modelId
               << std::endl;
 
     ParsedMetrics metrics = ParseMetricsFromLogs(experiment);
+    metrics.modelId = modelId;
     ApplyPersistedSymbolToAnalysisExperiment(w, experiment, metrics);
     const bool usedStructuredInferenceMetrics = ApplyStructuredInferenceMetrics(w, experiment, metrics);
+    if (usedStructuredInferenceMetrics)
+    {
+        std::cout << "SCHEDULER_ANALYZE_USING_EXISTING_INFERENCE"
+                  << ",model_id=" << modelId
+                  << std::endl;
+    }
     const std::optional<double> leaderScore = ComputeLeaderScore(metrics);
     UpsertAnalysisResult(w, experiment, metrics, leaderScore);
     w.exec_params(
@@ -1383,6 +1586,15 @@ inline int AnalyzeExperimentById(long long experimentId, const SchedulerOptions&
     if (experiment.analysisLogPath.has_value())
         WriteTextFile(*experiment.analysisLogPath, analysisLog.str());
 
+    std::cout << "SCHEDULER_PHASE_TRANSITION"
+              << ",experiment_id=" << experiment.experimentId
+              << ",from_phase=analyze"
+              << ",to_phase=done"
+              << std::endl;
+    std::cout << "SCHEDULER_PIPELINE_DONE"
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << modelId
+              << std::endl;
     std::cout << "EXPERIMENT_ANALYSIS_SOURCE"
               << ",experiment_id=" << experiment.experimentId
               << ",source=" << (usedStructuredInferenceMetrics ? "inference_eval_result" : "logs")
@@ -1406,6 +1618,10 @@ inline int AnalyzeExperimentById(long long experimentId, const SchedulerOptions&
     std::cout << "EXPERIMENT_ANALYSIS_COMPLETED"
               << ",experiment_id=" << experiment.experimentId
               << ",model_id=" << (metrics.modelId.has_value() ? std::to_string(*metrics.modelId) : "none")
+              << std::endl;
+    std::cout << "SCHEDULER_ANALYZE_COMPLETED"
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << modelId
               << std::endl;
     return 0;
 }
@@ -1448,6 +1664,124 @@ inline void MarkExperimentRunning(pqxx::work& w,
         "WHERE experiment_id = " + std::to_string(experiment.experimentId) + ";");
 }
 
+inline void LogPhaseTransition(long long experimentId,
+                               const std::string& fromPhase,
+                               const std::string& toPhase)
+{
+    std::cout << "SCHEDULER_PHASE_TRANSITION"
+              << ",experiment_id=" << experimentId
+              << ",from_phase=" << fromPhase
+              << ",to_phase=" << toPhase
+              << std::endl;
+}
+
+inline void MarkExperimentPendingPhase(pqxx::work& w,
+                                       const ExperimentRow& experiment,
+                                       const std::string& fromPhase,
+                                       const std::string& toPhase,
+                                       const std::optional<int>& exitCode = std::nullopt)
+{
+    std::ostringstream sql;
+    sql << "UPDATE experiment "
+        << "SET status = 'pending', phase = " << w.quote(toPhase)
+        << ", exit_code = " << (exitCode.has_value() ? std::to_string(*exitCode) : "NULL")
+        << ", error_message = NULL, updated_at = now() "
+        << "WHERE experiment_id = " << experiment.experimentId << ";";
+    w.exec(sql.str());
+    LogPhaseTransition(experiment.experimentId, fromPhase, toPhase);
+    std::cout << "EXPERIMENT_PHASE_CHANGED"
+              << ",experiment_id=" << experiment.experimentId
+              << ",phase=" << toPhase
+              << ",status=pending"
+              << std::endl;
+}
+
+inline void MarkExperimentDone(pqxx::work& w,
+                               const ExperimentRow& experiment,
+                               const std::string& fromPhase)
+{
+    w.exec_params(
+        "UPDATE experiment "
+        "SET status = 'completed', phase = 'done', completed_at = COALESCE(completed_at, now()), updated_at = now() "
+        "WHERE experiment_id = $1;",
+        experiment.experimentId);
+    LogPhaseTransition(experiment.experimentId, fromPhase, "done");
+    std::cout << "SCHEDULER_PIPELINE_DONE"
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+              << std::endl;
+}
+
+inline void MarkExperimentFailed(pqxx::work& w,
+                                 const ExperimentRow& experiment,
+                                 const std::string& errorMessage,
+                                 int exitCode = -1)
+{
+    w.exec_params(
+        "UPDATE experiment "
+        "SET status = 'failed', exit_code = $1, error_message = $2, completed_at = now(), updated_at = now() "
+        "WHERE experiment_id = $3;",
+        exitCode,
+        errorMessage,
+        experiment.experimentId);
+}
+
+inline bool TransitionAfterTrainModelAvailable(pqxx::work& w,
+                                               const ExperimentRow& experiment,
+                                               long long modelId,
+                                               int exitCode,
+                                               const std::string& fromPhase)
+{
+    ExperimentRow updatedExperiment = experiment;
+    updatedExperiment.lastModelId = modelId;
+    w.exec_params(
+        "UPDATE experiment "
+        "SET last_model_id = $1, exit_code = $2, error_message = NULL, updated_at = now() "
+        "WHERE experiment_id = $3;",
+        modelId,
+        exitCode,
+        experiment.experimentId);
+    std::cout << "EXPERIMENT_LAST_MODEL_ID"
+              << ",experiment_id=" << experiment.experimentId
+              << ",model_id=" << modelId
+              << std::endl;
+
+    if (HasCompletedAnalysisResult(w, updatedExperiment))
+    {
+        std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << modelId
+                  << std::endl;
+        MarkExperimentDone(w, updatedExperiment, fromPhase);
+    }
+    else if (HasCompletedInferenceResult(w, updatedExperiment))
+    {
+        std::cout << "SCHEDULER_SKIP_EXISTING_INFERENCE"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << modelId
+                  << std::endl;
+        MarkExperimentPendingPhase(w, updatedExperiment, fromPhase, "analyze", exitCode);
+        std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << modelId
+                  << std::endl;
+    }
+    else if (updatedExperiment.inferStart.has_value() && updatedExperiment.inferEnd.has_value())
+    {
+        MarkExperimentPendingPhase(w, updatedExperiment, fromPhase, "infer", exitCode);
+        std::cout << "SCHEDULER_ENQUEUE_INFER"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << modelId
+                  << std::endl;
+    }
+    else
+    {
+        MarkExperimentFailed(w, updatedExperiment, "train_completed_missing_inference_range", exitCode);
+        return false;
+    }
+    return true;
+}
+
 inline bool CompleteTrainPhase(pqxx::work& w,
                                const ExperimentRow& experiment,
                                int exitCode,
@@ -1459,25 +1793,7 @@ inline bool CompleteTrainPhase(pqxx::work& w,
     const bool success = exitCode == 0 && lastModelId.has_value();
     if (success)
     {
-        const bool shouldInfer = experiment.inferStart.has_value() && experiment.inferEnd.has_value();
-        w.exec_params(
-            "UPDATE experiment "
-            "SET status = 'pending', phase = $1, last_model_id = $2, exit_code = $3, error_message = NULL, updated_at = now() "
-            "WHERE experiment_id = $4;",
-            shouldInfer ? "infer" : "analyze",
-            *lastModelId,
-            exitCode,
-            experiment.experimentId);
-        std::cout << "EXPERIMENT_LAST_MODEL_ID"
-                  << ",experiment_id=" << experiment.experimentId
-                  << ",model_id=" << *lastModelId
-                  << std::endl;
-        std::cout << "EXPERIMENT_PHASE_CHANGED"
-                  << ",experiment_id=" << experiment.experimentId
-                  << ",phase=" << (shouldInfer ? "infer" : "analyze")
-                  << ",status=pending"
-                  << std::endl;
-        return true;
+        return TransitionAfterTrainModelAvailable(w, experiment, *lastModelId, exitCode, "train");
     }
     else
     {
@@ -1500,36 +1816,101 @@ inline bool CompleteTrainPhase(pqxx::work& w,
     }
 }
 
+inline int RecoverOrphanedRunningExperiments(pqxx::work& w)
+{
+    int recoveredOrFailed = 0;
+    const std::vector<ExperimentRow> runningTrainExperiments = LoadRunningTrainExperiments(w);
+    for (const auto& experiment : runningTrainExperiments)
+    {
+        if (RunningTrainProcessExistsForExperiment(experiment))
+        {
+            std::cout << "SCHEDULER_RUNNING_EXPERIMENT_PRESENT"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",phase=train"
+                      << std::endl;
+            continue;
+        }
+
+        ++recoveredOrFailed;
+        std::cout << "SCHEDULER_ORPHAN_DETECTED"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",phase=train"
+                  << std::endl;
+
+        const std::string logText = ReadFileIfExists(experiment.trainLogPath);
+        const std::optional<long long> finalModelId = ExtractCompletedTrainModelId(logText);
+        if (finalModelId.has_value())
+        {
+            std::cout << "SCHEDULER_ORPHAN_RECOVERED_MODEL"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",model_id=" << *finalModelId
+                      << std::endl;
+            TransitionAfterTrainModelAvailable(w, experiment, *finalModelId, 0, "train");
+            continue;
+        }
+
+        const std::optional<long long> checkpointModelId = ExtractCheckpointModelId(logText);
+        if (checkpointModelId.has_value())
+        {
+            const std::string error = "orphaned_running_train_checkpoint_requires_manual_resume";
+            std::cout << "SCHEDULER_ORPHAN_RECOVERED_CHECKPOINT"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",checkpoint_model_id=" << *checkpointModelId
+                      << std::endl;
+            MarkExperimentFailed(w, experiment, error + ";checkpoint_model_id=" + std::to_string(*checkpointModelId));
+            std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",error=" << error
+                      << std::endl;
+            continue;
+        }
+
+        const std::string error = "orphaned_running_train_no_process_no_model";
+        MarkExperimentFailed(w, experiment, error);
+        std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",error=" << error
+                  << std::endl;
+    }
+    return recoveredOrFailed;
+}
+
 inline void CompleteInferPhase(pqxx::work& w,
                                const ExperimentRow& experiment,
                                int exitCode,
                                const std::string& commandDisplay)
 {
+    if (!experiment.lastModelId.has_value())
+    {
+        MarkExperimentFailed(w, experiment, "infer_missing_last_model_id", -1);
+        return;
+    }
+
     if (exitCode == 0)
     {
-        w.exec_params(
-            "UPDATE experiment "
-            "SET status = 'pending', phase = 'analyze', exit_code = $1, error_message = NULL, updated_at = now() "
-            "WHERE experiment_id = $2;",
-            exitCode,
-            experiment.experimentId);
-        std::cout << "EXPERIMENT_PHASE_CHANGED"
-                  << ",experiment_id=" << experiment.experimentId
-                  << ",phase=analyze,status=pending"
-                  << std::endl;
+        if (HasCompletedAnalysisResult(w, experiment))
+        {
+            std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",model_id=" << *experiment.lastModelId
+                      << std::endl;
+            MarkExperimentDone(w, experiment, "infer");
+        }
+        else
+        {
+            MarkExperimentPendingPhase(w, experiment, "infer", "analyze", exitCode);
+            std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",model_id=" << *experiment.lastModelId
+                      << std::endl;
+        }
     }
     else
     {
         const std::string errorMessage =
             "infer_failed;exit_code=" + std::to_string(exitCode) +
             ";command=" + commandDisplay;
-        w.exec_params(
-            "UPDATE experiment "
-            "SET status = 'failed', exit_code = $1, error_message = $2, completed_at = now(), updated_at = now() "
-            "WHERE experiment_id = $3;",
-            exitCode,
-            errorMessage,
-            experiment.experimentId);
+        MarkExperimentFailed(w, experiment, errorMessage, exitCode);
     }
 }
 
@@ -1642,6 +2023,25 @@ inline int RunInferJobs(const SchedulerOptions& options)
     {
         for (const auto& job : jobs)
         {
+            if (!job.lastModelId.has_value())
+            {
+                std::cout << "EXPERIMENT_FAILED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",phase=infer"
+                          << ",dry_run=1"
+                          << ",reason=infer_missing_last_model_id"
+                          << std::endl;
+                continue;
+            }
+            if (HasCompletedInferenceResult(w, job))
+            {
+                std::cout << "SCHEDULER_SKIP_EXISTING_INFERENCE"
+                          << ",experiment_id=" << job.experimentId
+                          << ",model_id=" << *job.lastModelId
+                          << ",dry_run=1"
+                          << std::endl;
+                continue;
+            }
             const std::vector<std::string> command = BuildInferCommand(options, job);
             std::cout << "EXPERIMENT_CHILD_COMMAND"
                       << ",experiment_id=" << job.experimentId
@@ -1659,8 +2059,57 @@ inline int RunInferJobs(const SchedulerOptions& options)
 
     std::vector<RunningExperimentChild> running;
     running.reserve(jobs.size());
+    int rc = 0;
     for (const auto& job : jobs)
     {
+        if (!job.lastModelId.has_value())
+        {
+            pqxx::connection c2{LstmDbConnectionString()};
+            pqxx::work wi{c2};
+            SetTransactionReadWrite(wi);
+            MarkExperimentFailed(wi, job, "infer_missing_last_model_id");
+            wi.commit();
+            std::cout << "EXPERIMENT_FAILED"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=infer"
+                      << ",exit_code=-1"
+                      << std::endl;
+            rc = 1;
+            continue;
+        }
+
+        {
+            pqxx::connection c2{LstmDbConnectionString()};
+            pqxx::work wi{c2};
+            SetTransactionReadWrite(wi);
+            if (HasCompletedInferenceResult(wi, job))
+            {
+                std::cout << "SCHEDULER_SKIP_EXISTING_INFERENCE"
+                          << ",experiment_id=" << job.experimentId
+                          << ",model_id=" << *job.lastModelId
+                          << std::endl;
+                if (HasCompletedAnalysisResult(wi, job))
+                {
+                    std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
+                              << ",experiment_id=" << job.experimentId
+                              << ",model_id=" << *job.lastModelId
+                              << std::endl;
+                    MarkExperimentDone(wi, job, "infer");
+                }
+                else
+                {
+                    MarkExperimentPendingPhase(wi, job, "infer", "analyze");
+                    std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
+                              << ",experiment_id=" << job.experimentId
+                              << ",model_id=" << *job.lastModelId
+                              << std::endl;
+                }
+                wi.commit();
+                continue;
+            }
+            wi.commit();
+        }
+
         const std::string logPath = LogPathFor(options, job, "infer");
         {
             pqxx::connection c2{LstmDbConnectionString()};
@@ -1686,7 +2135,6 @@ inline int RunInferJobs(const SchedulerOptions& options)
         running.push_back(RunningExperimentChild{job, pid, logPath});
     }
 
-    int rc = 0;
     for (const auto& child : running)
     {
         const int exitCode = WaitForChildProcess(child.pid);
@@ -1731,6 +2179,25 @@ inline int RunAnalyzeJobs(const SchedulerOptions& options)
     {
         for (const auto& job : jobs)
         {
+            if (!job.lastModelId.has_value())
+            {
+                std::cout << "SCHEDULER_ANALYZE_FAILED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",model_id=none"
+                          << ",error=analyze_missing_last_model_id"
+                          << ",dry_run=1"
+                          << std::endl;
+                continue;
+            }
+            if (HasCompletedAnalysisResult(w, job))
+            {
+                std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
+                          << ",experiment_id=" << job.experimentId
+                          << ",model_id=" << *job.lastModelId
+                          << ",dry_run=1"
+                          << std::endl;
+                continue;
+            }
             const std::vector<std::string> command = BuildAnalyzeCommand(options, job);
             std::cout << "EXPERIMENT_ANALYSIS_STARTED"
                       << ",experiment_id=" << job.experimentId
@@ -1755,11 +2222,48 @@ inline int RunAnalyzeJobs(const SchedulerOptions& options)
             pqxx::connection c2{LstmDbConnectionString()};
             pqxx::work wa{c2};
             SetTransactionReadWrite(wa);
+            if (!job.lastModelId.has_value())
+            {
+                MarkAnalyzeFailed(wa, job.experimentId, "analyze_missing_last_model_id");
+                wa.commit();
+                std::cerr << "SCHEDULER_ANALYZE_FAILED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",model_id=none"
+                          << ",error=analyze_missing_last_model_id"
+                          << std::endl;
+                rc = 1;
+                continue;
+            }
+            if (HasCompletedAnalysisResult(wa, job))
+            {
+                std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
+                          << ",experiment_id=" << job.experimentId
+                          << ",model_id=" << *job.lastModelId
+                          << std::endl;
+                MarkExperimentDone(wa, job, "analyze");
+                wa.commit();
+                continue;
+            }
+            wa.commit();
+        }
+
+        {
+            pqxx::connection c2{LstmDbConnectionString()};
+            pqxx::work wa{c2};
+            SetTransactionReadWrite(wa);
             const std::string logPath = LogPathFor(options, job, "analysis");
             MarkExperimentRunning(wa, job, "analyze", logPath);
             wa.commit();
         }
-        rc |= AnalyzeExperimentById(job.experimentId, options);
+        try
+        {
+            rc |= AnalyzeExperimentById(job.experimentId, options);
+        }
+        catch (const std::exception& e)
+        {
+            rc = 1;
+            MarkAnalyzeFailedById(job.experimentId, job.lastModelId, e.what());
+        }
     }
     return rc;
 }
@@ -1775,6 +2279,7 @@ inline int RunSchedulerOnce(const SchedulerOptions& options)
 
 inline int RunScheduler(const SchedulerOptions& options)
 {
+    int recoveryCount = 0;
     {
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
@@ -1782,7 +2287,14 @@ inline int RunScheduler(const SchedulerOptions& options)
         if (!RequireSchedulerTables(w))
             return 1;
         if (!options.dryRun)
-            RecoverOrphanedRunningExperiments(w);
+        {
+            recoveryCount = RecoverOrphanedRunningExperiments(w);
+            if (FailInvalidSchedulerPhases(w) != 0)
+            {
+                w.commit();
+                return 1;
+            }
+        }
         w.commit();
     }
 
@@ -1791,9 +2303,20 @@ inline int RunScheduler(const SchedulerOptions& options)
               << ",max_train_procs=" << options.maxTrainProcs
               << ",max_infer_procs=" << options.maxInferProcs
               << ",max_analyze_procs=" << options.maxAnalyzeProcs
+              << ",recover_orphans_only=" << (options.recoverOrphansOnly ? "1" : "0")
               << std::endl;
     if (options.dryRun)
         std::cout << "SCHEDULER_DRY_RUN=1" << std::endl;
+    if (options.recoverOrphansOnly)
+    {
+        std::cout << "SCHEDULER_ORPHAN_RECOVERY_DONE"
+                  << ",recovered_or_failed=" << recoveryCount
+                  << std::endl;
+        std::cout << "SCHEDULER_STOP"
+                  << ",exit_code=0"
+                  << std::endl;
+        return 0;
+    }
 
     int rc = 0;
     do
@@ -1871,7 +2394,7 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
                   << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
                   << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
-                  << "[--scheduler-log-dir=PATH] [--dry-run]\n"
+                  << "[--scheduler-log-dir=PATH] [--dry-run] [--recover-orphans-only]\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
                   << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
                   << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
