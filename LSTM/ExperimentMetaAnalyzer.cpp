@@ -197,6 +197,16 @@ std::string FormatOptionalDouble(const std::optional<double>& value)
     return value.has_value() ? FormatDouble(*value) : "null";
 }
 
+std::string FormatMetricJson(const ScalarStats& stats, double value)
+{
+    return stats.count > 0 ? FormatDouble(value) : "null";
+}
+
+std::string FormatMetricMarkdown(const ScalarStats& stats, double value)
+{
+    return stats.count > 0 ? FormatDouble(value) : "n/a";
+}
+
 std::string FormatOptionalInt(const std::optional<int>& value)
 {
     return value.has_value() ? std::to_string(*value) : "null";
@@ -572,6 +582,27 @@ long long CountDistinctCompletedRecordModels(const std::vector<ExperimentRecord>
     return static_cast<long long>(modelIds.size());
 }
 
+bool HasRankingMetric(const ExperimentRecord& record)
+{
+    return (record.leaderScore.has_value() && std::isfinite(*record.leaderScore)) ||
+           (record.inferAccuracy.has_value() && std::isfinite(*record.inferAccuracy));
+}
+
+long long CountRecordsWithMetrics(const std::vector<ExperimentRecord>& records,
+                                  const std::string& dataSource)
+{
+    return static_cast<long long>(std::count_if(records.begin(), records.end(), [&](const ExperimentRecord& record) {
+        return record.dataSource == dataSource && HasRankingMetric(record);
+    }));
+}
+
+long long CountRecordsWithMetrics(const std::vector<ExperimentRecord>& records)
+{
+    return static_cast<long long>(std::count_if(records.begin(), records.end(), [](const ExperimentRecord& record) {
+        return HasRankingMetric(record);
+    }));
+}
+
 void ApplyMergedCounts(MetaAnalysisResult& result,
                        const std::vector<ExperimentRecord>& schedulerRecords,
                        long long legacyModelCount,
@@ -584,6 +615,15 @@ void ApplyMergedCounts(MetaAnalysisResult& result,
     const long long possibleRecords = result.dataSources.schedulerExperiments + result.dataSources.legacyModels;
     result.dataSources.coveragePercentage = possibleRecords > 0
         ? 100.0 * static_cast<double>(result.dataSources.mergedRecords) / static_cast<double>(possibleRecords)
+        : 0.0;
+    result.dataSources.legacyModelsWithInferenceMetrics = CountRecordsWithMetrics(result.records, "legacy_model");
+    result.dataSources.legacyModelsMissingInferenceMetrics =
+        std::max<long long>(0, result.dataSources.legacyModels - result.dataSources.legacyModelsWithInferenceMetrics);
+    result.dataSources.schedulerRecordsWithMetrics = CountRecordsWithMetrics(result.records, "scheduler");
+    result.dataSources.mergedRecordsWithMetrics = CountRecordsWithMetrics(result.records);
+    result.dataSources.metricCoveragePercentage = result.dataSources.mergedRecords > 0
+        ? 100.0 * static_cast<double>(result.dataSources.mergedRecordsWithMetrics) /
+          static_cast<double>(result.dataSources.mergedRecords)
         : 0.0;
 
     result.completedExperiments = CountCompletedRecords(result.records);
@@ -669,7 +709,10 @@ std::vector<LeaderRow> BuildLeaders(const std::vector<ExperimentRecord>& records
     {
         if (record.status != "completed")
             continue;
-        if (!record.leaderScore.has_value() && !record.inferAccuracy.has_value())
+        if (!HasRankingMetric(record))
+            continue;
+        const double rankingScore = record.leaderScore.value_or(record.inferAccuracy.value_or(-1.0));
+        if (rankingScore <= 0.0)
             continue;
         LeaderRow row;
         row.experimentId = record.experimentId;
@@ -717,6 +760,8 @@ std::vector<PlateauSignal> DetectPlateaus(const std::vector<ExperimentRecord>& r
             continue;
         const auto score = record.leaderScore.has_value() ? record.leaderScore : record.inferAccuracy;
         if (!score.has_value() || !std::isfinite(*score))
+            continue;
+        if (*score <= 0.0)
             continue;
         const int epoch = record.completedEpochs.value_or(record.targetEpochs);
         const std::string key = PlateauKey(record);
@@ -772,9 +817,13 @@ const GroupStats* BestGroup(const std::vector<GroupStats>& groups, const std::st
     const GroupStats* best = nullptr;
     for (const auto& group : groups)
     {
-        if (group.dimension != dimension || group.leaderScore.count == 0)
+        const ScalarStats& rankingStats = group.leaderScore.count > 0 ? group.leaderScore : group.inferAccuracy;
+        if (group.dimension != dimension || rankingStats.count == 0)
             continue;
-        if (!best || group.leaderScore.best > best->leaderScore.best)
+        const ScalarStats& bestStats = best
+            ? (best->leaderScore.count > 0 ? best->leaderScore : best->inferAccuracy)
+            : group.leaderScore;
+        if (!best || rankingStats.best > bestStats.best)
             best = &group;
     }
     return best;
@@ -823,6 +872,40 @@ std::vector<Recommendation> BuildRecommendations(const MetaAnalysisResult& resul
         });
     }
 
+    if (result.dataSources.mergedRecords > 0 &&
+        result.dataSources.mergedRecordsWithMetrics < result.dataSources.mergedRecords)
+    {
+        recs.push_back(Recommendation{
+            priority++,
+            "Run inference analysis for completed models missing metrics.",
+            "Historical model coverage is high, but performance coverage is limited; missing inference rows are excluded from rankings and averages.",
+            "merged_records=" + std::to_string(result.dataSources.mergedRecords) +
+                ", records_with_metrics=" + std::to_string(result.dataSources.mergedRecordsWithMetrics) +
+                ", legacy_missing_inference_metrics=" +
+                std::to_string(result.dataSources.legacyModelsMissingInferenceMetrics),
+            "High: converts existing historical training runs into comparable performance evidence.",
+            ConfidenceForSampleSize(static_cast<size_t>(result.dataSources.mergedRecordsWithMetrics))
+        });
+    }
+
+    for (const auto& group : result.groupStats)
+    {
+        if (group.dimension == "prediction_horizon" &&
+            group.sampleCount >= 5 &&
+            group.inferAccuracy.count == 0)
+        {
+            recs.push_back(Recommendation{
+                priority++,
+                "Populate inference_eval_result for " + group.key + " completed models.",
+                "This horizon has completed historical models but no inference metrics, so it cannot be compared honestly yet.",
+                "samples=" + std::to_string(group.sampleCount) + ", infer_metric_count=0",
+                "High: enables horizon comparisons without treating missing metrics as zero performance.",
+                "Insufficient Evidence"
+            });
+            break;
+        }
+    }
+
     if (!result.leaders.empty())
     {
         const LeaderRow& leader = result.leaders.front();
@@ -841,27 +924,35 @@ std::vector<Recommendation> BuildRecommendations(const MetaAnalysisResult& resul
 
     if (const GroupStats* bestHorizon = BestGroup(result.groupStats, "prediction_horizon"))
     {
+        const ScalarStats& rankingStats = bestHorizon->leaderScore.count > 0
+            ? bestHorizon->leaderScore
+            : bestHorizon->inferAccuracy;
         recs.push_back(Recommendation{
             priority++,
             "Prioritize additional experiments for " + bestHorizon->key + ".",
-            "This horizon currently has the best observed leader_score among horizon groups.",
-            "best_leader_score=" + FormatDouble(bestHorizon->leaderScore.best) +
-                ", samples=" + std::to_string(bestHorizon->sampleCount),
+            "This horizon currently has the best observed metric among horizon groups with inference evidence.",
+            "best_metric=" + FormatDouble(rankingStats.best) +
+                ", samples=" + std::to_string(bestHorizon->sampleCount) +
+                ", metric_count=" + std::to_string(rankingStats.count),
             "High if paired with under-sampled symbols.",
-            ConfidenceForSampleSize(bestHorizon->sampleCount)
+            ConfidenceForSampleSize(rankingStats.count)
         });
     }
 
     if (const GroupStats* bestSymbol = BestGroup(result.groupStats, "symbol"))
     {
+        const ScalarStats& rankingStats = bestSymbol->leaderScore.count > 0
+            ? bestSymbol->leaderScore
+            : bestSymbol->inferAccuracy;
         recs.push_back(Recommendation{
             priority++,
             "Use " + bestSymbol->key + " as the near-term benchmark symbol.",
-            "It has the strongest current symbol-level result.",
-            "best_leader_score=" + FormatDouble(bestSymbol->leaderScore.best) +
-                ", samples=" + std::to_string(bestSymbol->sampleCount),
+            "It has the strongest current symbol-level result among groups with inference evidence.",
+            "best_metric=" + FormatDouble(rankingStats.best) +
+                ", samples=" + std::to_string(bestSymbol->sampleCount) +
+                ", metric_count=" + std::to_string(rankingStats.count),
             "Moderate: benchmark stability improves comparisons across horizons and LR settings.",
-            ConfidenceForSampleSize(bestSymbol->sampleCount)
+            ConfidenceForSampleSize(rankingStats.count)
         });
     }
 
@@ -966,29 +1057,29 @@ std::string GroupStatsJson(const std::vector<GroupStats>& groups)
              << ",\"sample_count\":" << g.sampleCount
              << ",\"confidence\":" << JsonString(ConfidenceForSampleSize(g.sampleCount))
              << ",\"leader_score\":{\"count\":" << g.leaderScore.count
-             << ",\"mean\":" << FormatDouble(g.leaderScore.mean)
-             << ",\"median\":" << FormatDouble(g.leaderScore.median)
-             << ",\"best\":" << FormatDouble(g.leaderScore.best)
-             << ",\"worst\":" << FormatDouble(g.leaderScore.worst)
-             << ",\"stddev\":" << FormatDouble(g.leaderScore.stddev) << "}"
+             << ",\"mean\":" << FormatMetricJson(g.leaderScore, g.leaderScore.mean)
+             << ",\"median\":" << FormatMetricJson(g.leaderScore, g.leaderScore.median)
+             << ",\"best\":" << FormatMetricJson(g.leaderScore, g.leaderScore.best)
+             << ",\"worst\":" << FormatMetricJson(g.leaderScore, g.leaderScore.worst)
+             << ",\"stddev\":" << FormatMetricJson(g.leaderScore, g.leaderScore.stddev) << "}"
              << ",\"infer_accuracy\":{\"count\":" << g.inferAccuracy.count
-             << ",\"mean\":" << FormatDouble(g.inferAccuracy.mean)
-             << ",\"median\":" << FormatDouble(g.inferAccuracy.median)
-             << ",\"best\":" << FormatDouble(g.inferAccuracy.best)
-             << ",\"worst\":" << FormatDouble(g.inferAccuracy.worst)
-             << ",\"stddev\":" << FormatDouble(g.inferAccuracy.stddev) << "}"
+             << ",\"mean\":" << FormatMetricJson(g.inferAccuracy, g.inferAccuracy.mean)
+             << ",\"median\":" << FormatMetricJson(g.inferAccuracy, g.inferAccuracy.median)
+             << ",\"best\":" << FormatMetricJson(g.inferAccuracy, g.inferAccuracy.best)
+             << ",\"worst\":" << FormatMetricJson(g.inferAccuracy, g.inferAccuracy.worst)
+             << ",\"stddev\":" << FormatMetricJson(g.inferAccuracy, g.inferAccuracy.stddev) << "}"
              << ",\"accept_rate\":{\"count\":" << g.acceptRate.count
-             << ",\"mean\":" << FormatDouble(g.acceptRate.mean)
-             << ",\"median\":" << FormatDouble(g.acceptRate.median)
-             << ",\"best\":" << FormatDouble(g.acceptRate.best)
-             << ",\"worst\":" << FormatDouble(g.acceptRate.worst)
-             << ",\"stddev\":" << FormatDouble(g.acceptRate.stddev) << "}"
+             << ",\"mean\":" << FormatMetricJson(g.acceptRate, g.acceptRate.mean)
+             << ",\"median\":" << FormatMetricJson(g.acceptRate, g.acceptRate.median)
+             << ",\"best\":" << FormatMetricJson(g.acceptRate, g.acceptRate.best)
+             << ",\"worst\":" << FormatMetricJson(g.acceptRate, g.acceptRate.worst)
+             << ",\"stddev\":" << FormatMetricJson(g.acceptRate, g.acceptRate.stddev) << "}"
              << ",\"accept_accuracy\":{\"count\":" << g.acceptAccuracy.count
-             << ",\"mean\":" << FormatDouble(g.acceptAccuracy.mean)
-             << ",\"median\":" << FormatDouble(g.acceptAccuracy.median)
-             << ",\"best\":" << FormatDouble(g.acceptAccuracy.best)
-             << ",\"worst\":" << FormatDouble(g.acceptAccuracy.worst)
-             << ",\"stddev\":" << FormatDouble(g.acceptAccuracy.stddev) << "}"
+             << ",\"mean\":" << FormatMetricJson(g.acceptAccuracy, g.acceptAccuracy.mean)
+             << ",\"median\":" << FormatMetricJson(g.acceptAccuracy, g.acceptAccuracy.median)
+             << ",\"best\":" << FormatMetricJson(g.acceptAccuracy, g.acceptAccuracy.best)
+             << ",\"worst\":" << FormatMetricJson(g.acceptAccuracy, g.acceptAccuracy.worst)
+             << ",\"stddev\":" << FormatMetricJson(g.acceptAccuracy, g.acceptAccuracy.stddev) << "}"
              << "}";
     }
     json << "]";
@@ -1089,6 +1180,11 @@ std::string BuildStatisticsJson(const MetaAnalysisResult& result)
          << ",\"merged_record_count\":" << result.dataSources.mergedRecords
          << ",\"duplicate_model_count\":" << result.dataSources.duplicateModelsSkipped
          << ",\"duplicate_models_skipped\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"legacy_models_with_inference_metrics\":" << result.dataSources.legacyModelsWithInferenceMetrics
+         << ",\"legacy_models_missing_inference_metrics\":" << result.dataSources.legacyModelsMissingInferenceMetrics
+         << ",\"scheduler_records_with_metrics\":" << result.dataSources.schedulerRecordsWithMetrics
+         << ",\"merged_records_with_metrics\":" << result.dataSources.mergedRecordsWithMetrics
+         << ",\"metric_coverage_percentage\":" << FormatDouble(result.dataSources.metricCoveragePercentage)
          << ",\"coverage_percentage\":" << FormatDouble(result.dataSources.coveragePercentage)
          << "}"
          << ",\"group_statistics\":" << GroupStatsJson(result.groupStats)
@@ -1110,6 +1206,8 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << ",\"scheduler_experiment_count\":" << result.dataSources.schedulerExperiments
          << ",\"merged_record_count\":" << result.dataSources.mergedRecords
          << ",\"duplicate_model_count\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"merged_records_with_metrics\":" << result.dataSources.mergedRecordsWithMetrics
+         << ",\"metric_coverage_percentage\":" << FormatDouble(result.dataSources.metricCoveragePercentage)
          << "}"
          << ",\"data_sources\":{"
          << "\"scheduler_experiments\":" << result.dataSources.schedulerExperiments
@@ -1118,6 +1216,11 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << ",\"merged_record_count\":" << result.dataSources.mergedRecords
          << ",\"duplicate_model_count\":" << result.dataSources.duplicateModelsSkipped
          << ",\"duplicate_models_skipped\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"legacy_models_with_inference_metrics\":" << result.dataSources.legacyModelsWithInferenceMetrics
+         << ",\"legacy_models_missing_inference_metrics\":" << result.dataSources.legacyModelsMissingInferenceMetrics
+         << ",\"scheduler_records_with_metrics\":" << result.dataSources.schedulerRecordsWithMetrics
+         << ",\"merged_records_with_metrics\":" << result.dataSources.mergedRecordsWithMetrics
+         << ",\"metric_coverage_percentage\":" << FormatDouble(result.dataSources.metricCoveragePercentage)
          << ",\"coverage_percentage\":" << FormatDouble(result.dataSources.coveragePercentage)
          << "}"
          << ",\"statistics\":" << result.statisticsJson
@@ -1140,8 +1243,14 @@ void AppendMetricTable(std::ostringstream& report,
             filtered.push_back(group);
     }
     std::sort(filtered.begin(), filtered.end(), [](const GroupStats& a, const GroupStats& b) {
-        if (a.leaderScore.best != b.leaderScore.best)
-            return a.leaderScore.best > b.leaderScore.best;
+        const bool aHasMetric = a.leaderScore.count > 0 || a.inferAccuracy.count > 0;
+        const bool bHasMetric = b.leaderScore.count > 0 || b.inferAccuracy.count > 0;
+        if (aHasMetric != bHasMetric)
+            return aHasMetric;
+        const ScalarStats& aStats = a.leaderScore.count > 0 ? a.leaderScore : a.inferAccuracy;
+        const ScalarStats& bStats = b.leaderScore.count > 0 ? b.leaderScore : b.inferAccuracy;
+        if (aHasMetric && bHasMetric && aStats.best != bStats.best)
+            return aStats.best > bStats.best;
         return a.sampleCount > b.sampleCount;
     });
 
@@ -1155,10 +1264,10 @@ void AppendMetricTable(std::ostringstream& report,
             break;
         report << "| " << group.key
                << " | " << group.sampleCount
-               << " | " << FormatDouble(group.leaderScore.best)
-               << " | " << FormatDouble(group.leaderScore.mean)
-               << " | " << FormatDouble(group.inferAccuracy.mean)
-               << " | " << FormatDouble(group.acceptRate.mean)
+               << " | " << FormatMetricMarkdown(group.leaderScore, group.leaderScore.best)
+               << " | " << FormatMetricMarkdown(group.leaderScore, group.leaderScore.mean)
+               << " | " << FormatMetricMarkdown(group.inferAccuracy, group.inferAccuracy.mean)
+               << " | " << FormatMetricMarkdown(group.acceptRate, group.acceptRate.mean)
                << " | " << ConfidenceForSampleSize(group.sampleCount)
                << " |\n";
     }
@@ -1183,6 +1292,11 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
     report << "- Legacy models reconstructed: " << result.dataSources.legacyModels << "\n";
     report << "- Merged experiment records: " << result.dataSources.mergedRecords << "\n";
     report << "- Duplicate models skipped: " << result.dataSources.duplicateModelsSkipped << "\n";
+    report << "- Legacy models with inference metrics: " << result.dataSources.legacyModelsWithInferenceMetrics << "\n";
+    report << "- Legacy models missing inference metrics: " << result.dataSources.legacyModelsMissingInferenceMetrics << "\n";
+    report << "- Scheduler records with metrics: " << result.dataSources.schedulerRecordsWithMetrics << "\n";
+    report << "- Merged records with metrics: " << result.dataSources.mergedRecordsWithMetrics << "\n";
+    report << "- Metric coverage percentage: " << FormatDouble(result.dataSources.metricCoveragePercentage) << "\n";
     report << "- Coverage percentage: " << FormatDouble(result.dataSources.coveragePercentage) << "\n";
 
     report << "\n## Current Leaders\n\n";
@@ -1313,6 +1427,15 @@ void PrintMarkers(const MetaAnalysisResult& result)
               << ",merged_records=" << result.dataSources.mergedRecords
               << ",duplicate_models_skipped=" << result.dataSources.duplicateModelsSkipped
               << ",coverage_percentage=" << FormatDouble(result.dataSources.coveragePercentage)
+              << std::endl;
+    std::cout << "META_ANALYSIS_METRIC_COVERAGE"
+              << ",legacy_models=" << result.dataSources.legacyModels
+              << ",legacy_models_with_inference_metrics=" << result.dataSources.legacyModelsWithInferenceMetrics
+              << ",legacy_models_missing_inference_metrics=" << result.dataSources.legacyModelsMissingInferenceMetrics
+              << ",scheduler_records_with_metrics=" << result.dataSources.schedulerRecordsWithMetrics
+              << ",merged_records=" << result.dataSources.mergedRecords
+              << ",merged_records_with_metrics=" << result.dataSources.mergedRecordsWithMetrics
+              << ",metric_coverage_percentage=" << FormatDouble(result.dataSources.metricCoveragePercentage)
               << std::endl;
     std::cout << "META_ANALYSIS_CONFIDENCE"
               << ",scope=" << result.scope

@@ -55,6 +55,11 @@ struct DataSourceSummary
     long long legacyModels = 0;
     long long mergedRecords = 0;
     long long duplicateModelsSkipped = 0;
+    long long legacyModelsWithInferenceMetrics = 0;
+    long long legacyModelsMissingInferenceMetrics = 0;
+    long long schedulerRecordsWithMetrics = 0;
+    long long mergedRecordsWithMetrics = 0;
+    double metricCoveragePercentage = 0.0;
     double coveragePercentage = 0.0;
 };
 
