@@ -11,6 +11,7 @@
 #include <limits>
 #include <optional>
 #include <regex>
+#include <signal.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -96,6 +97,31 @@ struct RunningExperimentChild
     ExperimentRow experiment;
     pid_t pid = -1;
     std::string logPath;
+};
+
+struct RunningExperimentState
+{
+    ExperimentRow experiment;
+    std::string phase;
+};
+
+struct QueueSnapshot
+{
+    int pendingTrain = 0;
+    int pendingInfer = 0;
+    int pendingAnalyze = 0;
+    int runningTrain = 0;
+    int runningInfer = 0;
+    int runningAnalyze = 0;
+};
+
+struct PhaseSchedulingStats
+{
+    std::string phase;
+    int examined = 0;
+    int skipped = 0;
+    int launched = 0;
+    int freeSlots = 0;
 };
 
 struct ParsedMetrics
@@ -387,6 +413,19 @@ inline bool TableExists(pqxx::work& w, const std::string& tableName)
     return !r.empty();
 }
 
+inline bool ModelExists(pqxx::work& w, long long modelId)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM model WHERE model_id = $1 LIMIT 1;",
+        modelId);
+    return !r.empty();
+}
+
+inline bool ExistingFilePath(const std::optional<std::string>& path)
+{
+    return path.has_value() && std::filesystem::exists(*path);
+}
+
 inline bool RequireSchedulerTables(pqxx::work& w)
 {
     std::vector<std::string> missing;
@@ -650,8 +689,7 @@ inline ExperimentRow RowToExperiment(const pqxx::row& row)
 }
 
 inline std::vector<ExperimentRow> LoadPendingExperiments(pqxx::work& w,
-                                                        const std::string& phase,
-                                                        int limit)
+                                                        const std::string& phase)
 {
     pqxx::result rows = w.exec_params(
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
@@ -660,10 +698,8 @@ inline std::vector<ExperimentRow> LoadPendingExperiments(pqxx::work& w,
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 "
-        "ORDER BY updated_at ASC, experiment_id ASC "
-        "LIMIT $2;",
-        phase,
-        limit);
+        "ORDER BY updated_at ASC, experiment_id ASC;",
+        phase);
 
     std::vector<ExperimentRow> experiments;
     experiments.reserve(rows.size());
@@ -672,25 +708,99 @@ inline std::vector<ExperimentRow> LoadPendingExperiments(pqxx::work& w,
     return experiments;
 }
 
-inline std::vector<ExperimentRow> LoadRunningTrainExperiments(pqxx::work& w)
+inline std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
 {
     pqxx::result rows = w.exec(
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, phase "
         "FROM experiment "
-        "WHERE status = 'running' AND phase = 'train' "
+        "WHERE status = 'running' "
         "ORDER BY updated_at ASC, experiment_id ASC;");
 
-    std::vector<ExperimentRow> experiments;
+    std::vector<RunningExperimentState> experiments;
     experiments.reserve(rows.size());
     for (const auto& row : rows)
-        experiments.push_back(RowToExperiment(row));
+        experiments.push_back(RunningExperimentState{RowToExperiment(row), row[17].as<std::string>()});
     return experiments;
 }
 
 inline int RecoverOrphanedRunningExperiments(pqxx::work& w);
+
+inline QueueSnapshot LoadQueueSnapshot(pqxx::work& w)
+{
+    QueueSnapshot snapshot;
+    pqxx::result rows = w.exec(
+        "SELECT phase, status, count(*) "
+        "FROM experiment "
+        "WHERE status IN ('pending', 'running') "
+        "AND phase IN ('train', 'infer', 'analyze') "
+        "GROUP BY phase, status;");
+    for (const auto& row : rows)
+    {
+        const std::string phase = row[0].as<std::string>();
+        const std::string status = row[1].as<std::string>();
+        const int count = row[2].as<int>();
+        if (phase == "train" && status == "pending")
+            snapshot.pendingTrain = count;
+        else if (phase == "infer" && status == "pending")
+            snapshot.pendingInfer = count;
+        else if (phase == "analyze" && status == "pending")
+            snapshot.pendingAnalyze = count;
+        else if (phase == "train" && status == "running")
+            snapshot.runningTrain = count;
+        else if (phase == "infer" && status == "running")
+            snapshot.runningInfer = count;
+        else if (phase == "analyze" && status == "running")
+            snapshot.runningAnalyze = count;
+    }
+    return snapshot;
+}
+
+inline void PrintQueueSnapshot(const QueueSnapshot& snapshot)
+{
+    std::cout << "SCHEDULER_QUEUE"
+              << ",pending_train=" << snapshot.pendingTrain
+              << ",pending_infer=" << snapshot.pendingInfer
+              << ",pending_analyze=" << snapshot.pendingAnalyze
+              << ",running_train=" << snapshot.runningTrain
+              << ",running_infer=" << snapshot.runningInfer
+              << ",running_analyze=" << snapshot.runningAnalyze
+              << std::endl;
+}
+
+inline int RunningCountForPhase(const QueueSnapshot& snapshot, const std::string& phase)
+{
+    if (phase == "train")
+        return snapshot.runningTrain;
+    if (phase == "infer")
+        return snapshot.runningInfer;
+    if (phase == "analyze")
+        return snapshot.runningAnalyze;
+    return 0;
+}
+
+inline void LogSkip(const std::string& phase,
+                    long long experimentId,
+                    const std::string& reason)
+{
+    std::cout << "SCHEDULER_SKIP_" << (phase == "train" ? "TRAIN" : phase == "infer" ? "INFER" : "ANALYZE")
+              << ",experiment_id=" << experimentId
+              << ",reason=" << reason
+              << std::endl;
+}
+
+inline void PrintPhaseSchedulingStats(const PhaseSchedulingStats& stats)
+{
+    std::cout << "SCHEDULER_QUEUE_PHASE"
+              << ",phase=" << stats.phase
+              << ",examined=" << stats.examined
+              << ",skipped=" << stats.skipped
+              << ",launched=" << stats.launched
+              << ",free_slots=" << stats.freeSlots
+              << std::endl;
+}
 
 inline int FailInvalidSchedulerPhases(pqxx::work& w)
 {
@@ -780,6 +890,57 @@ inline bool RunningTrainProcessExistsForExperiment(const ExperimentRow& experime
     return found;
 }
 
+inline bool RunningProcessExistsForExperiment(const ExperimentRow& experiment,
+                                             const std::string& phase)
+{
+    if (phase == "train")
+        return RunningTrainProcessExistsForExperiment(experiment);
+
+    FILE* pipe = ::popen("ps -axo command", "r");
+    if (!pipe)
+        return false;
+
+    const std::string modelNeedle =
+        experiment.lastModelId.has_value() ? "--model=" + std::to_string(*experiment.lastModelId) : "";
+    const std::string analyzeNeedle = "--analyze-experiment=" + std::to_string(experiment.experimentId);
+    char buffer[4096];
+    bool found = false;
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        const std::string command{buffer};
+        if (command.find("LSTM_Release") == std::string::npos)
+            continue;
+
+        if (phase == "infer")
+        {
+            const bool dateRangeMatches =
+                !experiment.inferStart.has_value() ||
+                !experiment.inferEnd.has_value() ||
+                (command.find(experiment.inferStart->substr(0, 10)) != std::string::npos &&
+                 command.find(experiment.inferEnd->substr(0, 10)) != std::string::npos);
+            if (command.find("--infer") != std::string::npos &&
+                command.find("--infer-all") == std::string::npos &&
+                !modelNeedle.empty() &&
+                command.find(modelNeedle) != std::string::npos &&
+                dateRangeMatches)
+            {
+                found = true;
+                break;
+            }
+        }
+        else if (phase == "analyze")
+        {
+            if (command.find(analyzeNeedle) != std::string::npos)
+            {
+                found = true;
+                break;
+            }
+        }
+    }
+    ::pclose(pipe);
+    return found;
+}
+
 inline std::string ShellDisplayQuote(const std::string& value)
 {
     if (value.find_first_of(" \t\n\"'\\$`") == std::string::npos)
@@ -845,15 +1006,42 @@ inline pid_t LaunchChildProcess(const std::vector<std::string>& argv, const std:
     if (fd < 0)
         throw std::runtime_error("failed to open log file '" + logPath + "'");
 
+    int pidPipe[2] = {-1, -1};
+    if (::pipe(pidPipe) != 0)
+    {
+        ::close(fd);
+        throw std::runtime_error("failed to create child pid pipe");
+    }
+
     pid_t pid = ::fork();
     if (pid < 0)
     {
+        ::close(pidPipe[0]);
+        ::close(pidPipe[1]);
         ::close(fd);
         throw std::runtime_error("fork failed");
     }
 
     if (pid == 0)
     {
+        ::close(pidPipe[0]);
+        if (::setsid() < 0)
+            _exit(127);
+
+        const pid_t grandchildPid = ::fork();
+        if (grandchildPid < 0)
+            _exit(127);
+        if (grandchildPid > 0)
+        {
+            const std::string pidText = std::to_string(static_cast<long long>(grandchildPid));
+            (void)::write(pidPipe[1], pidText.c_str(), pidText.size());
+            ::close(pidPipe[1]);
+            ::close(fd);
+            _exit(0);
+        }
+
+        ::close(pidPipe[1]);
+        ::signal(SIGHUP, SIG_IGN);
         ::dup2(fd, STDOUT_FILENO);
         ::dup2(fd, STDERR_FILENO);
         ::close(fd);
@@ -871,8 +1059,18 @@ inline pid_t LaunchChildProcess(const std::vector<std::string>& argv, const std:
         _exit(127);
     }
 
+    ::close(pidPipe[1]);
     ::close(fd);
-    return pid;
+
+    char buffer[64] = {};
+    const ssize_t bytesRead = ::read(pidPipe[0], buffer, sizeof(buffer) - 1);
+    ::close(pidPipe[0]);
+
+    int status = 0;
+    (void)::waitpid(pid, &status, 0);
+    if (bytesRead <= 0)
+        throw std::runtime_error("failed to obtain detached child pid");
+    return static_cast<pid_t>(std::stoll(std::string{buffer, static_cast<size_t>(bytesRead)}));
 }
 
 inline int WaitForChildProcess(pid_t pid)
@@ -1819,14 +2017,16 @@ inline bool CompleteTrainPhase(pqxx::work& w,
 inline int RecoverOrphanedRunningExperiments(pqxx::work& w)
 {
     int recoveredOrFailed = 0;
-    const std::vector<ExperimentRow> runningTrainExperiments = LoadRunningTrainExperiments(w);
-    for (const auto& experiment : runningTrainExperiments)
+    const std::vector<RunningExperimentState> runningExperiments = LoadRunningExperiments(w);
+    for (const auto& state : runningExperiments)
     {
-        if (RunningTrainProcessExistsForExperiment(experiment))
+        const ExperimentRow& experiment = state.experiment;
+        const std::string& phase = state.phase;
+        if (RunningProcessExistsForExperiment(experiment, phase))
         {
             std::cout << "SCHEDULER_RUNNING_EXPERIMENT_PRESENT"
                       << ",experiment_id=" << experiment.experimentId
-                      << ",phase=train"
+                      << ",phase=" << phase
                       << std::endl;
             continue;
         }
@@ -1834,8 +2034,78 @@ inline int RecoverOrphanedRunningExperiments(pqxx::work& w)
         ++recoveredOrFailed;
         std::cout << "SCHEDULER_ORPHAN_DETECTED"
                   << ",experiment_id=" << experiment.experimentId
-                  << ",phase=train"
+                  << ",phase=" << phase
                   << std::endl;
+
+        if (phase == "infer")
+        {
+            if (HasCompletedInferenceResult(w, experiment))
+            {
+                std::cout << "SCHEDULER_ORPHAN_RECOVERED_INFERENCE"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+                          << std::endl;
+                if (HasCompletedAnalysisResult(w, experiment))
+                {
+                    std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
+                              << ",experiment_id=" << experiment.experimentId
+                              << ",model_id=" << *experiment.lastModelId
+                              << std::endl;
+                    MarkExperimentDone(w, experiment, "infer");
+                }
+                else
+                {
+                    MarkExperimentPendingPhase(w, experiment, "infer", "analyze", 0);
+                    std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
+                              << ",experiment_id=" << experiment.experimentId
+                              << ",model_id=" << *experiment.lastModelId
+                              << std::endl;
+                }
+            }
+            else
+            {
+                const std::string error = "orphaned_running_infer_no_process_no_result";
+                MarkExperimentFailed(w, experiment, error);
+                std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",error=" << error
+                          << std::endl;
+            }
+            continue;
+        }
+
+        if (phase == "analyze")
+        {
+            if (HasCompletedAnalysisResult(w, experiment))
+            {
+                std::cout << "SCHEDULER_ORPHAN_RECOVERED_ANALYSIS"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
+                          << std::endl;
+                MarkExperimentDone(w, experiment, "analyze");
+            }
+            else
+            {
+                const std::string error = "orphaned_running_analyze_no_process_no_result";
+                MarkExperimentFailed(w, experiment, error);
+                std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",error=" << error
+                          << std::endl;
+            }
+            continue;
+        }
+
+        if (phase != "train")
+        {
+            const std::string error = "orphaned_running_invalid_phase";
+            MarkExperimentFailed(w, experiment, error);
+            std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",error=" << error
+                      << std::endl;
+            continue;
+        }
 
         const std::string logText = ReadFileIfExists(experiment.trainLogPath);
         const std::optional<long long> finalModelId = ExtractCompletedTrainModelId(logText);
@@ -1914,48 +2184,72 @@ inline void CompleteInferPhase(pqxx::work& w,
     }
 }
 
-inline int RunTrainJobs(const SchedulerOptions& options)
+inline int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    if (!options.dryRun)
+        SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
 
-    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "train", options.maxTrainProcs);
-    if (options.dryRun)
+    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "train");
+    PhaseSchedulingStats stats;
+    stats.phase = "train";
+    stats.examined = static_cast<int>(jobs.size());
+    stats.freeSlots = std::max(0, options.maxTrainProcs - RunningCountForPhase(snapshot, "train"));
+    int freeSlots = stats.freeSlots;
+    int rc = 0;
+
+    EnsureLogDir(options.schedulerLogDir);
+    for (const auto& job : jobs)
     {
-        for (const auto& job : jobs)
+        const std::optional<long long> resumeFrom =
+            job.resumeModelId.has_value() ? job.resumeModelId : job.lastModelId;
+        if (resumeFrom.has_value() && !ModelExists(w, *resumeFrom))
         {
-            const std::vector<std::string> command = BuildTrainCommand(options, job);
+            ++stats.skipped;
+            LogSkip("train", job.experimentId, "model_not_found");
+            if (!options.dryRun)
+                MarkExperimentFailed(w, job, "train_model_not_found");
+            continue;
+        }
+        if (RunningProcessExistsForExperiment(job, "train"))
+        {
+            ++stats.skipped;
+            LogSkip("train", job.experimentId, "already_running");
+            if (!options.dryRun)
+            {
+                MarkExperimentRunning(w, job, "train", LogPathFor(options, job, "train"));
+                if (freeSlots > 0)
+                    --freeSlots;
+            }
+            continue;
+        }
+        if (freeSlots <= 0)
+        {
+            ++stats.skipped;
+            LogSkip("train", job.experimentId, "train_slots_full");
+            continue;
+        }
+
+        const std::string logPath = LogPathFor(options, job, "train");
+        const std::vector<std::string> command = BuildTrainCommand(options, job);
+        const std::string commandDisplay = CommandForDisplay(command);
+        if (options.dryRun)
+        {
             std::cout << "EXPERIMENT_CHILD_COMMAND"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=train"
                       << ",dry_run=1"
-                      << ",argv=" << CommandForDisplay(command)
+                      << ",argv=" << commandDisplay
                       << std::endl;
-        }
-        w.commit();
-        return 0;
-    }
-
-    EnsureLogDir(options.schedulerLogDir);
-    w.commit();
-
-    std::vector<RunningExperimentChild> running;
-    running.reserve(jobs.size());
-    for (const auto& job : jobs)
-    {
-        const std::string logPath = LogPathFor(options, job, "train");
-        {
-            pqxx::connection c2{LstmDbConnectionString()};
-            pqxx::work wt{c2};
-            SetTransactionReadWrite(wt);
-            MarkExperimentRunning(wt, job, "train", logPath);
-            wt.commit();
+            --freeSlots;
+            ++stats.launched;
+            continue;
         }
 
-        const std::vector<std::string> command = BuildTrainCommand(options, job);
-        const std::string commandDisplay = CommandForDisplay(command);
+        MarkExperimentRunning(w, job, "train", logPath);
         if (job.lastModelId.has_value() && !job.resumeModelId.has_value())
         {
             std::cout << "SCHEDULER_RESUME_FROM_LAST_MODEL"
@@ -1973,154 +2267,135 @@ inline int RunTrainJobs(const SchedulerOptions& options)
                   << ",argv=" << commandDisplay
                   << std::endl;
         PrintSchedulerExec(command);
-        const pid_t pid = LaunchChildProcess(command, logPath);
-        running.push_back(RunningExperimentChild{job, pid, logPath});
-    }
-
-    int rc = 0;
-    for (const auto& child : running)
-    {
-        const int exitCode = WaitForChildProcess(child.pid);
-        bool trainSuccess = false;
+        try
         {
-            pqxx::connection c3{LstmDbConnectionString()};
-            pqxx::work wt{c3};
-            SetTransactionReadWrite(wt);
-            const std::vector<std::string> command = BuildTrainCommand(options, child.experiment);
-            trainSuccess = CompleteTrainPhase(wt, child.experiment, exitCode, child.logPath, CommandForDisplay(command));
-            wt.commit();
-        }
-        if (trainSuccess)
-        {
-            std::cout << "EXPERIMENT_COMPLETED"
-                      << ",experiment_id=" << child.experiment.experimentId
+            const pid_t pid = LaunchChildProcess(command, logPath);
+            std::cout << "SCHEDULER_CHILD_DETACHED"
+                      << ",experiment_id=" << job.experimentId
                       << ",phase=train"
-                      << ",exit_code=0"
+                      << ",pid=" << pid
+                      << ",log_path=" << logPath
                       << std::endl;
+            --freeSlots;
+            ++stats.launched;
         }
-        else
+        catch (const std::exception& e)
         {
-            rc = 1;
+            MarkExperimentFailed(w, job, std::string{"train_launch_failed:"} + e.what());
             std::cout << "EXPERIMENT_FAILED"
-                      << ",experiment_id=" << child.experiment.experimentId
+                      << ",experiment_id=" << job.experimentId
                       << ",phase=train"
-                      << ",exit_code=" << exitCode
+                      << ",error=train_launch_failed"
                       << std::endl;
+            rc = 1;
         }
     }
+    PrintPhaseSchedulingStats(stats);
+    w.commit();
     return rc;
 }
 
-inline int RunInferJobs(const SchedulerOptions& options)
+inline int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    if (!options.dryRun)
+        SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
 
-    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "infer", options.maxInferProcs);
-    if (options.dryRun)
-    {
-        for (const auto& job : jobs)
-        {
-            if (!job.lastModelId.has_value())
-            {
-                std::cout << "EXPERIMENT_FAILED"
-                          << ",experiment_id=" << job.experimentId
-                          << ",phase=infer"
-                          << ",dry_run=1"
-                          << ",reason=infer_missing_last_model_id"
-                          << std::endl;
-                continue;
-            }
-            if (HasCompletedInferenceResult(w, job))
-            {
-                std::cout << "SCHEDULER_SKIP_EXISTING_INFERENCE"
-                          << ",experiment_id=" << job.experimentId
-                          << ",model_id=" << *job.lastModelId
-                          << ",dry_run=1"
-                          << std::endl;
-                continue;
-            }
-            const std::vector<std::string> command = BuildInferCommand(options, job);
-            std::cout << "EXPERIMENT_CHILD_COMMAND"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=infer"
-                      << ",dry_run=1"
-                      << ",argv=" << CommandForDisplay(command)
-                      << std::endl;
-        }
-        w.commit();
-        return 0;
-    }
+    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "infer");
+    PhaseSchedulingStats stats;
+    stats.phase = "infer";
+    stats.examined = static_cast<int>(jobs.size());
+    stats.freeSlots = std::max(0, options.maxInferProcs - RunningCountForPhase(snapshot, "infer"));
+    int freeSlots = stats.freeSlots;
+    int rc = 0;
 
     EnsureLogDir(options.schedulerLogDir);
-    w.commit();
-
-    std::vector<RunningExperimentChild> running;
-    running.reserve(jobs.size());
-    int rc = 0;
     for (const auto& job : jobs)
     {
         if (!job.lastModelId.has_value())
         {
-            pqxx::connection c2{LstmDbConnectionString()};
-            pqxx::work wi{c2};
-            SetTransactionReadWrite(wi);
-            MarkExperimentFailed(wi, job, "infer_missing_last_model_id");
-            wi.commit();
-            std::cout << "EXPERIMENT_FAILED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=infer"
-                      << ",exit_code=-1"
-                      << std::endl;
-            rc = 1;
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "missing_model");
+            if (!options.dryRun)
+                MarkExperimentFailed(w, job, "infer_missing_last_model_id");
             continue;
         }
-
+        if (!ModelExists(w, *job.lastModelId))
         {
-            pqxx::connection c2{LstmDbConnectionString()};
-            pqxx::work wi{c2};
-            SetTransactionReadWrite(wi);
-            if (HasCompletedInferenceResult(wi, job))
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "model_not_found");
+            if (!options.dryRun)
+                MarkExperimentFailed(w, job, "infer_model_not_found");
+            continue;
+        }
+        if (HasCompletedInferenceResult(w, job))
+        {
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "existing_inference");
+            if (!options.dryRun)
             {
                 std::cout << "SCHEDULER_SKIP_EXISTING_INFERENCE"
                           << ",experiment_id=" << job.experimentId
                           << ",model_id=" << *job.lastModelId
                           << std::endl;
-                if (HasCompletedAnalysisResult(wi, job))
+                if (HasCompletedAnalysisResult(w, job))
                 {
                     std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
                               << ",experiment_id=" << job.experimentId
                               << ",model_id=" << *job.lastModelId
                               << std::endl;
-                    MarkExperimentDone(wi, job, "infer");
+                    MarkExperimentDone(w, job, "infer");
                 }
                 else
                 {
-                    MarkExperimentPendingPhase(wi, job, "infer", "analyze");
+                    MarkExperimentPendingPhase(w, job, "infer", "analyze");
                     std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
                               << ",experiment_id=" << job.experimentId
                               << ",model_id=" << *job.lastModelId
                               << std::endl;
                 }
-                wi.commit();
-                continue;
             }
-            wi.commit();
+            continue;
+        }
+        if (RunningProcessExistsForExperiment(job, "infer"))
+        {
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "already_running");
+            if (!options.dryRun)
+            {
+                MarkExperimentRunning(w, job, "infer", LogPathFor(options, job, "infer"));
+                if (freeSlots > 0)
+                    --freeSlots;
+            }
+            continue;
+        }
+        if (freeSlots <= 0)
+        {
+            ++stats.skipped;
+            LogSkip("infer", job.experimentId, "infer_slots_full");
+            continue;
         }
 
         const std::string logPath = LogPathFor(options, job, "infer");
-        {
-            pqxx::connection c2{LstmDbConnectionString()};
-            pqxx::work wi{c2};
-            SetTransactionReadWrite(wi);
-            MarkExperimentRunning(wi, job, "infer", logPath);
-            wi.commit();
-        }
-
         const std::vector<std::string> command = BuildInferCommand(options, job);
         const std::string commandDisplay = CommandForDisplay(command);
+        if (options.dryRun)
+        {
+            std::cout << "EXPERIMENT_CHILD_COMMAND"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=infer"
+                      << ",dry_run=1"
+                      << ",argv=" << commandDisplay
+                      << std::endl;
+            --freeSlots;
+            ++stats.launched;
+            continue;
+        }
+
+        MarkExperimentRunning(w, job, "infer", logPath);
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=infer"
@@ -2131,74 +2406,114 @@ inline int RunInferJobs(const SchedulerOptions& options)
                   << ",argv=" << commandDisplay
                   << std::endl;
         PrintSchedulerExec(command);
-        const pid_t pid = LaunchChildProcess(command, logPath);
-        running.push_back(RunningExperimentChild{job, pid, logPath});
-    }
-
-    for (const auto& child : running)
-    {
-        const int exitCode = WaitForChildProcess(child.pid);
+        try
         {
-            pqxx::connection c3{LstmDbConnectionString()};
-            pqxx::work wi{c3};
-            SetTransactionReadWrite(wi);
-            const std::vector<std::string> command = BuildInferCommand(options, child.experiment);
-            CompleteInferPhase(wi, child.experiment, exitCode, CommandForDisplay(command));
-            wi.commit();
-        }
-        if (exitCode == 0)
-        {
-            std::cout << "EXPERIMENT_COMPLETED"
-                      << ",experiment_id=" << child.experiment.experimentId
+            const pid_t pid = LaunchChildProcess(command, logPath);
+            std::cout << "SCHEDULER_CHILD_DETACHED"
+                      << ",experiment_id=" << job.experimentId
                       << ",phase=infer"
-                      << ",exit_code=0"
+                      << ",pid=" << pid
+                      << ",log_path=" << logPath
                       << std::endl;
+            --freeSlots;
+            ++stats.launched;
         }
-        else
+        catch (const std::exception& e)
         {
-            rc = 1;
+            MarkExperimentFailed(w, job, std::string{"infer_launch_failed:"} + e.what());
             std::cout << "EXPERIMENT_FAILED"
-                      << ",experiment_id=" << child.experiment.experimentId
+                      << ",experiment_id=" << job.experimentId
                       << ",phase=infer"
-                      << ",exit_code=" << exitCode
+                      << ",error=infer_launch_failed"
                       << std::endl;
+            rc = 1;
         }
     }
+    PrintPhaseSchedulingStats(stats);
+    w.commit();
     return rc;
 }
 
-inline int RunAnalyzeJobs(const SchedulerOptions& options)
+inline int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& snapshot)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    if (!options.dryRun)
+        SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
 
-    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "analyze", options.maxAnalyzeProcs);
-    if (options.dryRun)
+    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "analyze");
+    PhaseSchedulingStats stats;
+    stats.phase = "analyze";
+    stats.examined = static_cast<int>(jobs.size());
+    stats.freeSlots = std::max(0, options.maxAnalyzeProcs - RunningCountForPhase(snapshot, "analyze"));
+    int freeSlots = stats.freeSlots;
+    int rc = 0;
+
+    EnsureLogDir(options.schedulerLogDir);
+    for (const auto& job : jobs)
     {
-        for (const auto& job : jobs)
+        if (!job.lastModelId.has_value())
         {
-            if (!job.lastModelId.has_value())
-            {
-                std::cout << "SCHEDULER_ANALYZE_FAILED"
-                          << ",experiment_id=" << job.experimentId
-                          << ",model_id=none"
-                          << ",error=analyze_missing_last_model_id"
-                          << ",dry_run=1"
-                          << std::endl;
-                continue;
-            }
-            if (HasCompletedAnalysisResult(w, job))
+            ++stats.skipped;
+            LogSkip("analyze", job.experimentId, "missing_model");
+            if (!options.dryRun)
+                MarkAnalyzeFailed(w, job.experimentId, "analyze_missing_last_model_id");
+            continue;
+        }
+        if (!ModelExists(w, *job.lastModelId))
+        {
+            ++stats.skipped;
+            LogSkip("analyze", job.experimentId, "model_not_found");
+            if (!options.dryRun)
+                MarkAnalyzeFailed(w, job.experimentId, "analyze_model_not_found");
+            continue;
+        }
+        if (HasCompletedAnalysisResult(w, job))
+        {
+            ++stats.skipped;
+            LogSkip("analyze", job.experimentId, "existing_analysis");
+            if (!options.dryRun)
             {
                 std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
                           << ",experiment_id=" << job.experimentId
                           << ",model_id=" << *job.lastModelId
-                          << ",dry_run=1"
                           << std::endl;
-                continue;
+                MarkExperimentDone(w, job, "analyze");
             }
-            const std::vector<std::string> command = BuildAnalyzeCommand(options, job);
+            continue;
+        }
+        if (!HasCompletedInferenceResult(w, job) && !ExistingFilePath(job.inferLogPath))
+        {
+            ++stats.skipped;
+            LogSkip("analyze", job.experimentId, "infer_log_missing");
+            continue;
+        }
+        if (RunningProcessExistsForExperiment(job, "analyze"))
+        {
+            ++stats.skipped;
+            LogSkip("analyze", job.experimentId, "already_running");
+            if (!options.dryRun)
+            {
+                MarkExperimentRunning(w, job, "analyze", LogPathFor(options, job, "analysis"));
+                if (freeSlots > 0)
+                    --freeSlots;
+            }
+            continue;
+        }
+        if (freeSlots <= 0)
+        {
+            ++stats.skipped;
+            LogSkip("analyze", job.experimentId, "analyze_slots_full");
+            continue;
+        }
+
+        const std::string logPath = LogPathFor(options, job, "analysis");
+        const std::vector<std::string> command = BuildAnalyzeCommand(options, job);
+        const std::string commandDisplay = CommandForDisplay(command);
+        if (options.dryRun)
+        {
             std::cout << "EXPERIMENT_ANALYSIS_STARTED"
                       << ",experiment_id=" << job.experimentId
                       << ",dry_run=1"
@@ -2207,73 +2522,76 @@ inline int RunAnalyzeJobs(const SchedulerOptions& options)
                       << ",experiment_id=" << job.experimentId
                       << ",phase=analyze"
                       << ",dry_run=1"
-                      << ",argv=" << CommandForDisplay(command)
+                      << ",argv=" << commandDisplay
                       << std::endl;
-        }
-        w.commit();
-        return 0;
-    }
-    w.commit();
-
-    int rc = 0;
-    for (const auto& job : jobs)
-    {
-        {
-            pqxx::connection c2{LstmDbConnectionString()};
-            pqxx::work wa{c2};
-            SetTransactionReadWrite(wa);
-            if (!job.lastModelId.has_value())
-            {
-                MarkAnalyzeFailed(wa, job.experimentId, "analyze_missing_last_model_id");
-                wa.commit();
-                std::cerr << "SCHEDULER_ANALYZE_FAILED"
-                          << ",experiment_id=" << job.experimentId
-                          << ",model_id=none"
-                          << ",error=analyze_missing_last_model_id"
-                          << std::endl;
-                rc = 1;
-                continue;
-            }
-            if (HasCompletedAnalysisResult(wa, job))
-            {
-                std::cout << "SCHEDULER_SKIP_EXISTING_ANALYSIS"
-                          << ",experiment_id=" << job.experimentId
-                          << ",model_id=" << *job.lastModelId
-                          << std::endl;
-                MarkExperimentDone(wa, job, "analyze");
-                wa.commit();
-                continue;
-            }
-            wa.commit();
+            --freeSlots;
+            ++stats.launched;
+            continue;
         }
 
-        {
-            pqxx::connection c2{LstmDbConnectionString()};
-            pqxx::work wa{c2};
-            SetTransactionReadWrite(wa);
-            const std::string logPath = LogPathFor(options, job, "analysis");
-            MarkExperimentRunning(wa, job, "analyze", logPath);
-            wa.commit();
-        }
+        MarkExperimentRunning(w, job, "analyze", logPath);
+        std::cout << "EXPERIMENT_STARTED"
+                  << ",experiment_id=" << job.experimentId
+                  << ",phase=analyze"
+                  << std::endl;
+        std::cout << "EXPERIMENT_CHILD_COMMAND"
+                  << ",experiment_id=" << job.experimentId
+                  << ",phase=analyze"
+                  << ",argv=" << commandDisplay
+                  << std::endl;
+        PrintSchedulerExec(command);
         try
         {
-            rc |= AnalyzeExperimentById(job.experimentId, options);
+            const pid_t pid = LaunchChildProcess(command, logPath);
+            std::cout << "SCHEDULER_CHILD_DETACHED"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=analyze"
+                      << ",pid=" << pid
+                      << ",log_path=" << logPath
+                      << std::endl;
+            --freeSlots;
+            ++stats.launched;
         }
         catch (const std::exception& e)
         {
+            MarkAnalyzeFailed(w, job.experimentId, std::string{"analyze_launch_failed:"} + e.what());
+            std::cout << "EXPERIMENT_FAILED"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=analyze"
+                      << ",error=analyze_launch_failed"
+                      << std::endl;
             rc = 1;
-            MarkAnalyzeFailedById(job.experimentId, job.lastModelId, e.what());
         }
     }
+    PrintPhaseSchedulingStats(stats);
+    w.commit();
     return rc;
 }
 
 inline int RunSchedulerOnce(const SchedulerOptions& options)
 {
     int rc = 0;
-    rc |= RunTrainJobs(options);
-    rc |= RunInferJobs(options);
-    rc |= RunAnalyzeJobs(options);
+    QueueSnapshot snapshot;
+    {
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        if (!options.dryRun)
+            SetTransactionReadWrite(w);
+        if (!RequireSchedulerTables(w))
+            return 1;
+        if (!options.dryRun)
+        {
+            RecoverOrphanedRunningExperiments(w);
+            rc |= FailInvalidSchedulerPhases(w);
+        }
+        snapshot = LoadQueueSnapshot(w);
+        PrintQueueSnapshot(snapshot);
+        w.commit();
+    }
+
+    rc |= RunTrainJobs(options, snapshot);
+    rc |= RunInferJobs(options, snapshot);
+    rc |= RunAnalyzeJobs(options, snapshot);
     return rc;
 }
 
