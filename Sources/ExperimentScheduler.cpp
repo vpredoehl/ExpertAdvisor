@@ -969,6 +969,22 @@ long long ResolveAutoResumeModelId(pqxx::work& w,
     return candidates.front().modelId;
 }
 
+std::optional<QueueResumeMeta> TryLoadRecoverableModelMeta(pqxx::work& w, long long modelId)
+{
+    try
+    {
+        return LoadQueueResumeMeta(w, modelId);
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "SCHEDULER_ORPHAN_MODEL_UNUSABLE"
+                  << ",model_id=" << modelId
+                  << ",reason=" << e.what()
+                  << std::endl;
+        return std::nullopt;
+    }
+}
+
 [[maybe_unused]] bool ExistingFilePath(const std::optional<std::string>& path)
 {
     return path.has_value() && std::filesystem::exists(*path);
@@ -3263,6 +3279,64 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
     return true;
 }
 
+void RequeueTrainOrphanFromCheckpoint(pqxx::work& w,
+                                      const ExperimentRow& experiment,
+                                      const QueueResumeMeta& meta)
+{
+    w.exec_params(
+        "UPDATE experiment "
+        "SET status = 'pending', phase = 'train', last_model_id = $1, resume_model_id = $1, "
+        "exit_code = NULL, error_message = NULL, updated_at = updated_at "
+        "WHERE experiment_id = $2;",
+        meta.modelId,
+        experiment.experimentId);
+    std::cout << "SCHEDULER_ORPHAN_RECOVERED"
+              << ",experiment_id=" << experiment.experimentId
+              << ",resume_model_id=" << meta.modelId
+              << ",completed_epochs=" << meta.completedEpochs
+              << ",target_epochs=" << experiment.targetEpochs
+              << std::endl;
+    LogPhaseTransition(experiment.experimentId, "train", "train");
+}
+
+bool RecoverTrainOrphanFromModel(pqxx::work& w,
+                                 const ExperimentRow& experiment,
+                                 long long modelId)
+{
+    const std::optional<QueueResumeMeta> meta = TryLoadRecoverableModelMeta(w, modelId);
+    if (!meta.has_value())
+        return false;
+
+    if (meta->symbol != experiment.symbol ||
+        meta->predictionHorizon != experiment.predictionHorizon ||
+        std::fabs(meta->threshold - experiment.cNextThreshold) > 1e-7 ||
+        !SameDate(meta->trainStart, experiment.trainStart) ||
+        !SameDate(meta->trainEnd, experiment.trainEnd))
+    {
+        std::cout << "SCHEDULER_ORPHAN_MODEL_UNUSABLE"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << modelId
+                  << ",reason=config_mismatch"
+                  << std::endl;
+        return false;
+    }
+
+    if (meta->completedEpochs >= experiment.targetEpochs)
+    {
+        std::cout << "SCHEDULER_ORPHAN_ADVANCED"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",model_id=" << modelId
+                  << ",completed_epochs=" << meta->completedEpochs
+                  << ",target_epochs=" << experiment.targetEpochs
+                  << ",next_phase=" << (experiment.inferStart.has_value() && experiment.inferEnd.has_value() ? "infer" : "none")
+                  << std::endl;
+        return TransitionAfterTrainModelAvailable(w, experiment, modelId, 0, "train");
+    }
+
+    RequeueTrainOrphanFromCheckpoint(w, experiment, *meta);
+    return true;
+}
+
 [[maybe_unused]] bool CompleteTrainPhase(pqxx::work& w,
                                const ExperimentRow& experiment,
                                int exitCode,
@@ -3415,31 +3489,42 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w)
                       << ",experiment_id=" << experiment.experimentId
                       << ",model_id=" << *finalModelId
                       << std::endl;
-            TransitionAfterTrainModelAvailable(w, experiment, *finalModelId, 0, "train");
+            if (!RecoverTrainOrphanFromModel(w, experiment, *finalModelId))
+            {
+                const std::string error = "orphaned_running_train_model_unusable";
+                MarkExperimentFailed(w, experiment, error + ";model_id=" + std::to_string(*finalModelId));
+                std::cout << "SCHEDULER_ORPHAN_FAILED"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",reason=model_unusable"
+                          << std::endl;
+            }
             continue;
         }
 
         const std::optional<long long> checkpointModelId = ExtractCheckpointModelId(logText);
         if (checkpointModelId.has_value())
         {
-            const std::string error = "orphaned_running_train_checkpoint_requires_manual_resume";
             std::cout << "SCHEDULER_ORPHAN_RECOVERED_CHECKPOINT"
                       << ",experiment_id=" << experiment.experimentId
                       << ",checkpoint_model_id=" << *checkpointModelId
                       << std::endl;
-            MarkExperimentFailed(w, experiment, error + ";checkpoint_model_id=" + std::to_string(*checkpointModelId));
-            std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
-                      << ",experiment_id=" << experiment.experimentId
-                      << ",error=" << error
-                      << std::endl;
+            if (!RecoverTrainOrphanFromModel(w, experiment, *checkpointModelId))
+            {
+                const std::string error = "orphaned_running_train_checkpoint_unusable";
+                MarkExperimentFailed(w, experiment, error + ";checkpoint_model_id=" + std::to_string(*checkpointModelId));
+                std::cout << "SCHEDULER_ORPHAN_FAILED"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",reason=checkpoint_unusable"
+                          << std::endl;
+            }
             continue;
         }
 
         const std::string error = "orphaned_running_train_no_process_no_model";
         MarkExperimentFailed(w, experiment, error);
-        std::cout << "SCHEDULER_ORPHAN_MARKED_FAILED"
+        std::cout << "SCHEDULER_ORPHAN_FAILED"
                   << ",experiment_id=" << experiment.experimentId
-                  << ",error=" << error
+                  << ",reason=no_recoverable_checkpoint"
                   << std::endl;
     }
     return recoveredOrFailed;
