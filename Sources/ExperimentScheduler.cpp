@@ -264,6 +264,22 @@ struct SchedulerStopCandidate
     std::string rejectionReason;
 };
 
+struct SchedulerDetectedWorker
+{
+    int pid = -1;
+    std::string kind;
+    std::string command;
+    SchedulerProcessResource resource;
+};
+
+struct SchedulerUnmanagedWorker
+{
+    int pid = -1;
+    std::string kind;
+    std::string reason;
+    std::string command;
+};
+
 struct SchedulerStatusProcessSnapshot
 {
     bool processDetectionAvailable = false;
@@ -273,6 +289,7 @@ struct SchedulerStatusProcessSnapshot
     std::map<long long, int> trainPidByExperiment;
     std::map<long long, int> inferPidByExperiment;
     std::map<long long, int> analysisPidByExperiment;
+    std::vector<SchedulerDetectedWorker> workerProcesses;
     SchedulerResourceAggregate schedulerResources;
     SchedulerResourceAggregate trainResources;
     SchedulerResourceAggregate inferResources;
@@ -287,6 +304,23 @@ struct SchedulerStatusProcessSnapshot
     std::optional<double> totalCpuPercent;
     std::optional<double> systemMemoryUsedMb;
     std::optional<double> systemMemoryTotalMb;
+};
+
+struct SchedulerWorkerAccounting
+{
+    int managedTrain = 0;
+    int managedInfer = 0;
+    int managedAnalyze = 0;
+    int unmanagedTrain = 0;
+    int unmanagedInfer = 0;
+    int unmanagedAnalyze = 0;
+    SchedulerResourceAggregate managedTrainResources;
+    SchedulerResourceAggregate managedInferResources;
+    SchedulerResourceAggregate managedAnalysisResources;
+    SchedulerResourceAggregate unmanagedTrainResources;
+    SchedulerResourceAggregate unmanagedInferResources;
+    SchedulerResourceAggregate unmanagedAnalysisResources;
+    std::vector<SchedulerUnmanagedWorker> unmanagedWorkers;
 };
 
 struct SchedulerIntelligenceRecord
@@ -4514,6 +4548,7 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         {
             ++snapshot.trainWorkers;
             AddResourceToAggregate(snapshot.trainResources, resource);
+            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{pid, "train", command, resource});
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.trainPidByExperiment[*experimentId] = pid;
         }
@@ -4521,6 +4556,7 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         {
             ++snapshot.inferWorkers;
             AddResourceToAggregate(snapshot.inferResources, resource);
+            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{pid, "infer", command, resource});
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.inferPidByExperiment[*experimentId] = pid;
         }
@@ -4529,6 +4565,7 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         {
             ++snapshot.analysisWorkers;
             AddResourceToAggregate(snapshot.analysisResources, resource);
+            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{pid, "analyze", command, resource});
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.analysisPidByExperiment[*experimentId] = pid;
         }
@@ -5108,7 +5145,21 @@ void EnrichSchedulerStatusJobFromLogs(SchedulerStatusJob& job,
     if (job.phase == "train")
         assignPid(processes.trainPidByExperiment);
     else if (job.phase == "infer")
+    {
         assignPid(processes.inferPidByExperiment);
+        if (!job.pid.has_value() && job.modelId.has_value())
+        {
+            for (const auto& process : processes.workerProcesses)
+            {
+                if (process.kind == "infer" &&
+                    CommandContainsOptionValue(process.command, "--model", *job.modelId))
+                {
+                    job.pid = process.pid;
+                    break;
+                }
+            }
+        }
+    }
     else if (job.phase == "analyze")
         assignPid(processes.analysisPidByExperiment);
 
@@ -5219,6 +5270,94 @@ void EnrichSchedulerStatusJobs(std::vector<SchedulerStatusJob>& jobs,
         EnrichSchedulerStatusJobFromLogs(job, processes);
 }
 
+bool ContainsPid(const std::vector<int>& pids, int pid)
+{
+    return std::find(pids.begin(), pids.end(), pid) != pids.end();
+}
+
+void AddManagedPid(std::vector<int>& pids, const SchedulerStatusJob& job)
+{
+    if (job.pid.has_value() && !ContainsPid(pids, *job.pid))
+        pids.push_back(*job.pid);
+}
+
+std::string TruncateCommandForStatus(const std::string& command)
+{
+    constexpr size_t kMaxCommandLength = 220;
+    if (command.size() <= kMaxCommandLength)
+        return command;
+    return command.substr(0, kMaxCommandLength - 3) + "...";
+}
+
+SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
+    const SchedulerStatusProcessSnapshot& processes,
+    const std::vector<SchedulerStatusJob>& runningTrain,
+    const std::vector<SchedulerStatusJob>& runningInfer,
+    const std::vector<SchedulerStatusJob>& runningAnalyze)
+{
+    std::vector<int> managedTrainPids;
+    std::vector<int> managedInferPids;
+    std::vector<int> managedAnalyzePids;
+    for (const auto& job : runningTrain)
+        AddManagedPid(managedTrainPids, job);
+    for (const auto& job : runningInfer)
+        AddManagedPid(managedInferPids, job);
+    for (const auto& job : runningAnalyze)
+        AddManagedPid(managedAnalyzePids, job);
+
+    SchedulerWorkerAccounting accounting;
+    for (const auto& process : processes.workerProcesses)
+    {
+        const bool managed =
+            (process.kind == "train" && ContainsPid(managedTrainPids, process.pid)) ||
+            (process.kind == "infer" && ContainsPid(managedInferPids, process.pid)) ||
+            (process.kind == "analyze" && ContainsPid(managedAnalyzePids, process.pid));
+
+        if (managed)
+        {
+            if (process.kind == "train")
+            {
+                ++accounting.managedTrain;
+                AddResourceToAggregate(accounting.managedTrainResources, process.resource);
+            }
+            else if (process.kind == "infer")
+            {
+                ++accounting.managedInfer;
+                AddResourceToAggregate(accounting.managedInferResources, process.resource);
+            }
+            else if (process.kind == "analyze")
+            {
+                ++accounting.managedAnalyze;
+                AddResourceToAggregate(accounting.managedAnalysisResources, process.resource);
+            }
+            continue;
+        }
+
+        if (process.kind == "train")
+        {
+            ++accounting.unmanagedTrain;
+            AddResourceToAggregate(accounting.unmanagedTrainResources, process.resource);
+        }
+        else if (process.kind == "infer")
+        {
+            ++accounting.unmanagedInfer;
+            AddResourceToAggregate(accounting.unmanagedInferResources, process.resource);
+        }
+        else if (process.kind == "analyze")
+        {
+            ++accounting.unmanagedAnalyze;
+            AddResourceToAggregate(accounting.unmanagedAnalysisResources, process.resource);
+        }
+        accounting.unmanagedWorkers.push_back(SchedulerUnmanagedWorker{
+            process.pid,
+            process.kind,
+            "no_matching_running_experiment",
+            TruncateCommandForStatus(process.command)
+        });
+    }
+    return accounting;
+}
+
 void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
 {
     std::cout << "SCHEDULER_STATUS_JOB"
@@ -5325,19 +5464,22 @@ std::string FormatAggregateResource(const SchedulerResourceAggregate& aggregate)
     return oss.str();
 }
 
-std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProcessSnapshot& processes)
+std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProcessSnapshot& processes,
+                                                      const SchedulerWorkerAccounting& accounting)
 {
     std::vector<std::string> warnings;
     if (!processes.processDetectionAvailable)
         warnings.push_back("process detection unavailable");
     if (processes.schedulerPids.size() > 1)
         warnings.push_back("multiple scheduler processes detected: " + std::to_string(processes.schedulerPids.size()));
-    if (processes.maxTrainProcs.has_value() && processes.trainWorkers > *processes.maxTrainProcs)
+    if (processes.maxTrainProcs.has_value() && accounting.managedTrain > *processes.maxTrainProcs)
         warnings.push_back("train worker count exceeds max-train-procs");
-    if (processes.maxInferProcs.has_value() && processes.inferWorkers > *processes.maxInferProcs)
+    if (processes.maxInferProcs.has_value() && accounting.managedInfer > *processes.maxInferProcs)
         warnings.push_back("infer worker count exceeds max-infer-procs");
-    if (processes.maxAnalyzeProcs.has_value() && processes.analysisWorkers > *processes.maxAnalyzeProcs)
+    if (processes.maxAnalyzeProcs.has_value() && accounting.managedAnalyze > *processes.maxAnalyzeProcs)
         warnings.push_back("analysis worker count exceeds max-analyze-procs");
+    if (!accounting.unmanagedWorkers.empty())
+        warnings.push_back("unmanaged LSTM_Release worker processes detected: " + std::to_string(accounting.unmanagedWorkers.size()));
 
     if (processes.systemMemoryUsedMb.has_value() &&
         processes.systemMemoryTotalMb.has_value() &&
@@ -5356,7 +5498,8 @@ std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProce
     return warnings;
 }
 
-void PrintSchedulerResourceUsage(const SchedulerStatusProcessSnapshot& processes)
+void PrintSchedulerResourceUsage(const SchedulerStatusProcessSnapshot& processes,
+                                 const SchedulerWorkerAccounting& accounting)
 {
     std::cout << "\nRESOURCE USAGE\n";
     std::cout << "  total_cpu=" << OptionalPercentText(processes.totalCpuPercent) << "\n";
@@ -5371,9 +5514,30 @@ void PrintSchedulerResourceUsage(const SchedulerStatusProcessSnapshot& processes
     }
     std::cout << "\n";
     std::cout << "  scheduler " << FormatAggregateResource(processes.schedulerResources) << "\n";
-    std::cout << "  train     " << FormatAggregateResource(processes.trainResources) << "\n";
-    std::cout << "  infer     " << FormatAggregateResource(processes.inferResources) << "\n";
-    std::cout << "  analysis  " << FormatAggregateResource(processes.analysisResources) << "\n";
+    std::cout << "  managed train     " << FormatAggregateResource(accounting.managedTrainResources) << "\n";
+    std::cout << "  managed infer     " << FormatAggregateResource(accounting.managedInferResources) << "\n";
+    std::cout << "  managed analysis  " << FormatAggregateResource(accounting.managedAnalysisResources) << "\n";
+    std::cout << "  unmanaged train   " << FormatAggregateResource(accounting.unmanagedTrainResources) << "\n";
+    std::cout << "  unmanaged infer   " << FormatAggregateResource(accounting.unmanagedInferResources) << "\n";
+    std::cout << "  unmanaged analysis " << FormatAggregateResource(accounting.unmanagedAnalysisResources) << "\n";
+}
+
+void PrintUnmanagedWorkers(const SchedulerWorkerAccounting& accounting)
+{
+    std::cout << "\nUNMANAGED LSTM PROCESSES\n";
+    if (accounting.unmanagedWorkers.empty())
+    {
+        std::cout << "  none\n";
+        return;
+    }
+    for (const auto& worker : accounting.unmanagedWorkers)
+    {
+        std::cout << "  pid=" << worker.pid
+                  << " kind=" << worker.kind
+                  << " reason=" << worker.reason
+                  << " command=" << worker.command
+                  << "\n";
+    }
 }
 
 void PrintSchedulerWarnings(const std::vector<std::string>& warnings)
@@ -5704,6 +5868,8 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     EnrichSchedulerStatusJobs(paused, processes);
     EnrichSchedulerStatusJobs(completed, processes);
     EnrichSchedulerStatusJobs(failed, processes);
+    const SchedulerWorkerAccounting workerAccounting =
+        ComputeSchedulerWorkerAccounting(processes, runningTrain, runningInfer, runningAnalyze);
 
     const bool schedulerRunning = !processes.schedulerPids.empty();
     const std::string schedulerPid =
@@ -5738,13 +5904,19 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
               << " infer=" << OptionalIntText(processes.maxInferProcs)
               << " analyze=" << OptionalIntText(processes.maxAnalyzeProcs)
               << "\n";
-    std::cout << "Detected worker processes: train=" << processes.trainWorkers
-              << " infer=" << processes.inferWorkers
-              << " analyze=" << processes.analysisWorkers
+    std::cout << "Detected worker processes:\n"
+              << "  managed train=" << workerAccounting.managedTrain
+              << " infer=" << workerAccounting.managedInfer
+              << " analyze=" << workerAccounting.managedAnalyze
+              << "\n"
+              << "  unmanaged train=" << workerAccounting.unmanagedTrain
+              << " infer=" << workerAccounting.unmanagedInfer
+              << " analyze=" << workerAccounting.unmanagedAnalyze
               << "\n";
 
-    PrintSchedulerResourceUsage(processes);
-    const std::vector<std::string> warnings = BuildSchedulerStatusWarnings(processes);
+    PrintSchedulerResourceUsage(processes, workerAccounting);
+    PrintUnmanagedWorkers(workerAccounting);
+    const std::vector<std::string> warnings = BuildSchedulerStatusWarnings(processes, workerAccounting);
     PrintSchedulerWarnings(warnings);
 
     std::cout << "\nOverall Counts\n"
@@ -5781,6 +5953,12 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",train_workers=" << processes.trainWorkers
                   << ",infer_workers=" << processes.inferWorkers
                   << ",analysis_workers=" << processes.analysisWorkers
+                  << ",managed_train_workers=" << workerAccounting.managedTrain
+                  << ",managed_infer_workers=" << workerAccounting.managedInfer
+                  << ",managed_analysis_workers=" << workerAccounting.managedAnalyze
+                  << ",unmanaged_train_workers=" << workerAccounting.unmanagedTrain
+                  << ",unmanaged_infer_workers=" << workerAccounting.unmanagedInfer
+                  << ",unmanaged_analysis_workers=" << workerAccounting.unmanagedAnalyze
                   << ",poll_seconds=" << OptionalIntText(processes.schedulerPollSeconds)
                   << ",max_train_procs=" << OptionalIntText(processes.maxTrainProcs)
                   << ",max_infer_procs=" << OptionalIntText(processes.maxInferProcs)
@@ -5797,15 +5975,42 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",train_rss_mb=" << OptionalDoubleText(processes.trainResources.rssMb, 0)
                   << ",train_mem_percent=" << OptionalDoubleText(processes.trainResources.memPercent, 1)
                   << ",train_workers=" << processes.trainWorkers
+                  << ",managed_train_cpu_percent=" << OptionalDoubleText(workerAccounting.managedTrainResources.cpuPercent, 1)
+                  << ",managed_train_rss_mb=" << OptionalDoubleText(workerAccounting.managedTrainResources.rssMb, 0)
+                  << ",managed_train_workers=" << workerAccounting.managedTrain
+                  << ",unmanaged_train_cpu_percent=" << OptionalDoubleText(workerAccounting.unmanagedTrainResources.cpuPercent, 1)
+                  << ",unmanaged_train_rss_mb=" << OptionalDoubleText(workerAccounting.unmanagedTrainResources.rssMb, 0)
+                  << ",unmanaged_train_workers=" << workerAccounting.unmanagedTrain
                   << ",infer_cpu_percent=" << OptionalDoubleText(processes.inferResources.cpuPercent, 1)
                   << ",infer_rss_mb=" << OptionalDoubleText(processes.inferResources.rssMb, 0)
                   << ",infer_mem_percent=" << OptionalDoubleText(processes.inferResources.memPercent, 1)
                   << ",infer_workers=" << processes.inferWorkers
+                  << ",managed_infer_cpu_percent=" << OptionalDoubleText(workerAccounting.managedInferResources.cpuPercent, 1)
+                  << ",managed_infer_rss_mb=" << OptionalDoubleText(workerAccounting.managedInferResources.rssMb, 0)
+                  << ",managed_infer_workers=" << workerAccounting.managedInfer
+                  << ",unmanaged_infer_cpu_percent=" << OptionalDoubleText(workerAccounting.unmanagedInferResources.cpuPercent, 1)
+                  << ",unmanaged_infer_rss_mb=" << OptionalDoubleText(workerAccounting.unmanagedInferResources.rssMb, 0)
+                  << ",unmanaged_infer_workers=" << workerAccounting.unmanagedInfer
                   << ",analysis_cpu_percent=" << OptionalDoubleText(processes.analysisResources.cpuPercent, 1)
                   << ",analysis_rss_mb=" << OptionalDoubleText(processes.analysisResources.rssMb, 0)
                   << ",analysis_mem_percent=" << OptionalDoubleText(processes.analysisResources.memPercent, 1)
                   << ",analysis_workers=" << processes.analysisWorkers
+                  << ",managed_analysis_cpu_percent=" << OptionalDoubleText(workerAccounting.managedAnalysisResources.cpuPercent, 1)
+                  << ",managed_analysis_rss_mb=" << OptionalDoubleText(workerAccounting.managedAnalysisResources.rssMb, 0)
+                  << ",managed_analysis_workers=" << workerAccounting.managedAnalyze
+                  << ",unmanaged_analysis_cpu_percent=" << OptionalDoubleText(workerAccounting.unmanagedAnalysisResources.cpuPercent, 1)
+                  << ",unmanaged_analysis_rss_mb=" << OptionalDoubleText(workerAccounting.unmanagedAnalysisResources.rssMb, 0)
+                  << ",unmanaged_analysis_workers=" << workerAccounting.unmanagedAnalyze
                   << std::endl;
+        for (const auto& worker : workerAccounting.unmanagedWorkers)
+        {
+            std::cout << "SCHEDULER_STATUS_UNMANAGED_WORKER"
+                      << ",pid=" << worker.pid
+                      << ",kind=" << worker.kind
+                      << ",reason=" << worker.reason
+                      << ",command=" << worker.command
+                      << std::endl;
+        }
         std::cout << "SCHEDULER_STATUS_COUNT"
                   << ",queued=" << counts.queued
                   << ",paused=" << counts.paused
