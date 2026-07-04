@@ -11,4 +11,6 @@ xcuserdata/
 *_results.csv
 experiment_logs/
 *.md
+nohup.out
+scheduler.log
 

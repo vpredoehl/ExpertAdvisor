@@ -3120,6 +3120,25 @@ std::string RenderMarkdownReport(const std::string& title,
     return out.str();
 }
 
+std::string RenderMarkdownTable(const std::vector<std::string>& headers,
+                                const pqxx::result& rows)
+{
+    std::ostringstream out;
+    for (const std::string& header : headers)
+        out << "| " << header << " ";
+    out << "|\n";
+    for (size_t i = 0; i < headers.size(); ++i)
+        out << "|---";
+    out << "|\n";
+    for (const auto& row : rows)
+    {
+        for (pqxx::row::size_type i = 0; i < row.size(); ++i)
+            out << "| " << CellText(row[i]) << " ";
+        out << "|\n";
+    }
+    return out.str();
+}
+
 pqxx::result ExecReportQuery(pqxx::work& w, const std::string& orderClause, const std::string& limitClause)
 {
     return w.exec(
@@ -3149,6 +3168,216 @@ std::vector<std::string> ExperimentReportHeaders()
         "analysis_status",
         "completed_at"
     };
+}
+
+std::vector<std::string> RecommendationReportHeaders()
+{
+    return {
+        "experiment_id",
+        "model_id",
+        "symbol",
+        "prediction_horizon",
+        "target_epochs",
+        "completed_epochs",
+        "infer_accuracy",
+        "accept_rate",
+        "accept_accuracy",
+        "leader_score",
+        "analysis_status",
+        "status",
+        "phase",
+        "completed_at",
+        "reason"
+    };
+}
+
+std::string RecommendationSelectColumns(const std::string& reasonExpression)
+{
+    return
+        "SELECT e.experiment_id, COALESCE(a.model_id, e.last_model_id), "
+        "COALESCE(a.symbol, e.symbol), COALESCE(a.prediction_horizon, e.prediction_horizon), "
+        "COALESCE(a.target_epochs, e.target_epochs), a.completed_epochs, "
+        "a.infer_accuracy, a.accept_rate, a.accept_accuracy, a.leader_score, "
+        "COALESCE(a.analysis_status, 'n/a'), e.status, e.phase, e.completed_at::text, " +
+        reasonExpression + " AS reason ";
+}
+
+std::string RenderRecommendationReport(
+    const std::vector<std::pair<std::string, pqxx::result>>& sections)
+{
+    std::ostringstream out;
+    out << "# Experiment Recommendations\n\n";
+    out << "This report is advisory only. It is generated from existing scheduler experiment "
+        << "and analysis rows and does not queue, update, cancel, pause, retry, stop, or "
+        << "launch experiments.\n\n";
+
+    size_t total = 0;
+    for (const auto& section : sections)
+        total += section.second.size();
+    out << "Total recommendations: " << total << "\n\n";
+
+    for (const auto& section : sections)
+    {
+        out << "## " << section.first << "\n\n";
+        out << "Rows: " << section.second.size() << "\n\n";
+        out << RenderMarkdownTable(RecommendationReportHeaders(), section.second);
+        out << "\n";
+    }
+    return out.str();
+}
+
+size_t WriteRecommendationReport(pqxx::work& w, const std::string& reportDir)
+{
+    std::vector<std::pair<std::string, pqxx::result>> sections;
+    sections.reserve(7);
+
+    sections.emplace_back(
+        "Continue / Extend Promising Experiments",
+        w.exec(
+            RecommendationSelectColumns("'high leader_score; consider extending target_epochs or next checkpoint'") +
+            "FROM experiment_analysis_result a "
+            "JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "WHERE e.status = 'completed' "
+            "AND a.analysis_status = 'completed' "
+            "AND a.leader_score IS NOT NULL "
+            "AND a.infer_accuracy IS NOT NULL "
+            "ORDER BY a.leader_score DESC NULLS LAST, a.infer_accuracy DESC NULLS LAST, "
+            "a.accept_accuracy DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 10;"));
+
+    sections.emplace_back(
+        "Replicate Current Leaders",
+        w.exec(
+            "WITH ranked AS ("
+            "  SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+            "         a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "         a.accept_accuracy, a.leader_score, a.analysis_status, e.status, e.phase, "
+            "         e.completed_at, "
+            "         row_number() OVER (PARTITION BY a.symbol, a.prediction_horizon "
+            "                            ORDER BY a.leader_score DESC NULLS LAST, "
+            "                                     a.infer_accuracy DESC NULLS LAST, "
+            "                                     e.experiment_id DESC) AS rn "
+            "  FROM experiment_analysis_result a "
+            "  JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "  WHERE e.status = 'completed' "
+            "  AND a.analysis_status = 'completed' "
+            "  AND a.leader_score IS NOT NULL "
+            "  AND a.infer_accuracy IS NOT NULL "
+            ") "
+            "SELECT experiment_id, model_id, symbol, prediction_horizon, target_epochs, "
+            "completed_epochs, infer_accuracy, accept_rate, accept_accuracy, leader_score, "
+            "analysis_status, status, phase, completed_at::text, "
+            "'replicate current leader for symbol/horizon' AS reason "
+            "FROM ranked "
+            "WHERE rn = 1 "
+            "ORDER BY leader_score DESC NULLS LAST, infer_accuracy DESC NULLS LAST, "
+            "symbol ASC, prediction_horizon ASC "
+            "LIMIT 20;"));
+
+    sections.emplace_back(
+        "Try Nearby Configuration Variants",
+        w.exec(
+            RecommendationSelectColumns("'try nearby core/head learning-rate variant around this leader'") +
+            "FROM experiment_analysis_result a "
+            "JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "WHERE e.status = 'completed' "
+            "AND a.analysis_status = 'completed' "
+            "AND a.leader_score IS NOT NULL "
+            "AND a.leader_score > 0 "
+            "AND a.infer_accuracy IS NOT NULL "
+            "AND (e.core_lr_mult IS NOT NULL OR e.head_lr_mult IS NOT NULL) "
+            "ORDER BY a.leader_score DESC NULLS LAST, a.infer_accuracy DESC NULLS LAST, "
+            "e.symbol ASC, e.prediction_horizon ASC, e.experiment_id DESC "
+            "LIMIT 10;"));
+
+    sections.emplace_back(
+        "Investigate Failures",
+        w.exec(
+            RecommendationSelectColumns(
+                "COALESCE('investigate failure: ' || NULLIF(e.error_message, ''), "
+                "'investigate failure logs and configuration')") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'failed' "
+            "ORDER BY e.completed_at DESC NULLS LAST, e.updated_at DESC NULLS LAST, "
+            "e.experiment_id DESC "
+            "LIMIT 25;"));
+
+    sections.emplace_back(
+        "Avoid Or Pause Dominated Configurations",
+        w.exec(
+            "WITH eligible AS ("
+            "  SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+            "         a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "         a.accept_accuracy, a.leader_score, a.analysis_status, e.status, e.phase, "
+            "         e.completed_at "
+            "  FROM experiment_analysis_result a "
+            "  JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "  WHERE e.status = 'completed' "
+            "  AND a.analysis_status = 'completed' "
+            "  AND a.leader_score IS NOT NULL "
+            "  AND a.infer_accuracy IS NOT NULL "
+            ") "
+            "SELECT d.experiment_id, d.model_id, d.symbol, d.prediction_horizon, "
+            "d.target_epochs, d.completed_epochs, d.infer_accuracy, d.accept_rate, "
+            "d.accept_accuracy, d.leader_score, d.analysis_status, d.status, d.phase, "
+            "d.completed_at::text, "
+            "('dominated by experiment ' || x.experiment_id::text || "
+            "' with higher leader_score and no worse comparable accuracy') AS reason "
+            "FROM eligible d "
+            "JOIN LATERAL ("
+            "  SELECT e2.experiment_id "
+            "  FROM eligible e2 "
+            "  WHERE e2.symbol = d.symbol "
+            "  AND e2.prediction_horizon = d.prediction_horizon "
+            "  AND e2.experiment_id <> d.experiment_id "
+            "  AND e2.leader_score > d.leader_score "
+            "  AND e2.infer_accuracy >= d.infer_accuracy "
+            "  AND (d.accept_accuracy IS NULL OR e2.accept_accuracy IS NULL OR "
+            "       e2.accept_accuracy >= d.accept_accuracy) "
+            "  ORDER BY e2.leader_score DESC, e2.infer_accuracy DESC, e2.experiment_id DESC "
+            "  LIMIT 1 "
+            ") x ON true "
+            "ORDER BY d.leader_score ASC NULLS LAST, d.infer_accuracy ASC NULLS LAST, "
+            "d.experiment_id ASC "
+            "LIMIT 25;"));
+
+    sections.emplace_back(
+        "Fill Coverage Gaps By Symbol/Horizon",
+        w.exec(
+            RecommendationSelectColumns("'coverage gap: experiment lacks completed analysis evidence'") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a "
+            "  ON a.experiment_id = e.experiment_id "
+            "  AND a.analysis_status = 'completed' "
+            "WHERE a.analysis_id IS NULL "
+            "AND e.status <> 'cancelled' "
+            "ORDER BY e.symbol ASC, e.prediction_horizon ASC, e.target_epochs DESC, "
+            "e.created_at ASC, e.experiment_id ASC "
+            "LIMIT 25;"));
+
+    sections.emplace_back(
+        "Run Missing Inference/Analysis Where Metrics Are Absent",
+        w.exec(
+            RecommendationSelectColumns("'missing ranking evidence: run or repair inference/analysis metrics'") +
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'completed' "
+            "AND (a.analysis_id IS NULL OR a.infer_accuracy IS NULL OR a.leader_score IS NULL) "
+            "ORDER BY e.completed_at DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 25;"));
+
+    size_t total = 0;
+    for (const auto& section : sections)
+        total += section.second.size();
+
+    const std::filesystem::path path = std::filesystem::path{reportDir} / "recommendations.md";
+    WriteTextFile(path.string(), RenderRecommendationReport(sections));
+    std::cout << "EXPERIMENT_RECOMMENDATION_REPORT_GENERATED"
+              << ",path=" << path.string()
+              << ",recommendations=" << total
+              << std::endl;
+    return total;
 }
 
 void WriteReportFile(const std::string& reportDir,
@@ -3204,6 +3433,7 @@ int GenerateExperimentReports(const std::string& reportDir, bool warnOnly)
             "WHERE e.status = 'failed' "
             "ORDER BY e.completed_at DESC NULLS LAST, e.updated_at DESC NULLS LAST, e.experiment_id DESC "
             "LIMIT 100;");
+        const size_t recommendationRows = WriteRecommendationReport(w, reportDir);
         w.commit();
 
         WriteReportFile(reportDir, "latest_leaderboard.md", "Latest Leaderboard", latestLeaderboard);
@@ -3219,6 +3449,7 @@ int GenerateExperimentReports(const std::string& reportDir, bool warnOnly)
                   << ",best_by_horizon_rows=" << bestByHorizon.size()
                   << ",recent_completed_rows=" << recentCompleted.size()
                   << ",failure_rows=" << failures.size()
+                  << ",recommendation_rows=" << recommendationRows
                   << std::endl;
         return 0;
     }
