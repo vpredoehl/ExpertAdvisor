@@ -10,6 +10,12 @@ namespace EA::ExperimentMetaAnalyzer
 
 constexpr int kDefaultMetaAnalysisIntervalSeconds = 300;
 
+enum class RecommendationEpochPolicy
+{
+    Leader,
+    Highest
+};
+
 struct MetaAnalysisOptions
 {
     bool metaAnalyze = false;
@@ -21,6 +27,7 @@ struct MetaAnalysisOptions
     bool dryRun = false;
     int limit = 20;
     int intervalSeconds = kDefaultMetaAnalysisIntervalSeconds;
+    RecommendationEpochPolicy recommendationEpochPolicy = RecommendationEpochPolicy::Highest;
     std::optional<std::string> symbol;
     std::optional<int> horizon;
     std::optional<std::string> outputFile;
@@ -139,6 +146,7 @@ struct PlateauSignal
 struct MetaAnalysisResult
 {
     std::string scope;
+    RecommendationEpochPolicy recommendationEpochPolicy = RecommendationEpochPolicy::Highest;
     long long totalExperiments = 0;
     long long completedExperiments = 0;
     long long failedExperiments = 0;

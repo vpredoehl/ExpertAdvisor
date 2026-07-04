@@ -104,6 +104,27 @@ int ParsePositiveInt(const std::string& optionName, const std::string& value)
     return static_cast<int>(parsed);
 }
 
+std::string RecommendationEpochPolicyName(RecommendationEpochPolicy policy)
+{
+    switch (policy)
+    {
+        case RecommendationEpochPolicy::Leader:
+            return "leader";
+        case RecommendationEpochPolicy::Highest:
+            return "highest";
+    }
+    return "highest";
+}
+
+RecommendationEpochPolicy ParseRecommendationEpochPolicy(const std::string& value)
+{
+    if (value == "leader")
+        return RecommendationEpochPolicy::Leader;
+    if (value == "highest")
+        return RecommendationEpochPolicy::Highest;
+    throw std::invalid_argument("--recommendation-epoch-policy must be leader or highest");
+}
+
 MetaAnalysisOptions ParseMetaAnalysisArgs(int argc, const char* argv[])
 {
     MetaAnalysisOptions options;
@@ -135,6 +156,9 @@ MetaAnalysisOptions ParseMetaAnalysisArgs(int argc, const char* argv[])
             options.outputFile = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--meta-analysis-interval")
             options.intervalSeconds = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-epoch-policy")
+            options.recommendationEpochPolicy =
+                ParseRecommendationEpochPolicy(RequireNextArg(argc, argv, i, arg));
         else if (SplitOptionWithValue(arg, "--meta-analysis-limit", value))
             options.limit = ParsePositiveInt("--meta-analysis-limit", value);
         else if (SplitOptionWithValue(arg, "--meta-analysis-symbol", value))
@@ -145,6 +169,8 @@ MetaAnalysisOptions ParseMetaAnalysisArgs(int argc, const char* argv[])
             options.outputFile = value;
         else if (SplitOptionWithValue(arg, "--meta-analysis-interval", value))
             options.intervalSeconds = ParsePositiveInt("--meta-analysis-interval", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-epoch-policy", value))
+            options.recommendationEpochPolicy = ParseRecommendationEpochPolicy(value);
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown meta-analysis option '" + arg + "'");
         else
@@ -1194,6 +1220,57 @@ std::vector<const ExperimentRecord*> RankedRecommendationSources(const std::vect
     return sources;
 }
 
+std::vector<const ExperimentRecord*> RankedHighestEpochRecommendationSources(const std::vector<ExperimentRecord>& records)
+{
+    std::map<std::string, std::vector<const ExperimentRecord*>> groups;
+    for (const ExperimentRecord* source : RankedRecommendationSources(records))
+    {
+        const std::string key = source->symbol + "|H" + std::to_string(source->horizon);
+        groups[key].push_back(source);
+    }
+
+    std::vector<const ExperimentRecord*> matureSources;
+    for (const auto& [key, rows] : groups)
+    {
+        int highestEpoch = 0;
+        for (const ExperimentRecord* row : rows)
+            highestEpoch = std::max(highestEpoch, RecommendationTargetEpochs(*row));
+        for (const ExperimentRecord* row : rows)
+        {
+            if (RecommendationTargetEpochs(*row) == highestEpoch)
+            {
+                matureSources.push_back(row);
+                break;
+            }
+        }
+    }
+
+    std::sort(matureSources.begin(), matureSources.end(), [](const ExperimentRecord* a, const ExperimentRecord* b) {
+        const double as = RecommendationRankingScore(*a);
+        const double bs = RecommendationRankingScore(*b);
+        if (as != bs)
+            return as > bs;
+        if (a->symbol != b->symbol)
+            return a->symbol < b->symbol;
+        if (a->horizon != b->horizon)
+            return a->horizon < b->horizon;
+        return a->experimentId < b->experimentId;
+    });
+    return matureSources;
+}
+
+std::vector<const ExperimentRecord*> RecommendationSourcesForPolicy(const std::vector<ExperimentRecord>& records,
+                                                                    RecommendationEpochPolicy policy)
+{
+    if (policy == RecommendationEpochPolicy::Highest)
+    {
+        std::vector<const ExperimentRecord*> sources = RankedHighestEpochRecommendationSources(records);
+        if (!sources.empty())
+            return sources;
+    }
+    return RankedRecommendationSources(records);
+}
+
 void AddNextExperimentCandidate(std::vector<NextExperimentRecommendation>& out,
                                 std::set<std::string>& emittedKeys,
                                 const std::vector<ExistingExperimentConfig>& existingConfigs,
@@ -1305,12 +1382,14 @@ void AddNeighborhoodRecommendations(std::vector<NextExperimentRecommendation>& o
 
 std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(const MetaAnalysisResult& result,
                                                                              const std::vector<ExistingExperimentConfig>& existingConfigs,
+                                                                             RecommendationEpochPolicy epochPolicy,
                                                                              int limit,
                                                                              std::vector<std::string>& notes)
 {
     std::vector<NextExperimentRecommendation> recs;
     std::set<std::string> emittedKeys;
-    const std::vector<const ExperimentRecord*> sources = RankedRecommendationSources(result.records);
+    const std::vector<const ExperimentRecord*> sources =
+        RecommendationSourcesForPolicy(result.records, epochPolicy);
     if (sources.empty())
     {
         notes.push_back("No completed analyzed records with ranking evidence are available for next-experiment recommendations.");
@@ -1327,7 +1406,10 @@ std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(con
         AddNeighborhoodRecommendations(recs, emittedKeys, existingConfigs, source, reason, limit);
     };
 
-    addSource(*sources.front(), "neighbor sweep around current global leader");
+    addSource(*sources.front(),
+              epochPolicy == RecommendationEpochPolicy::Highest
+                  ? "highest-epoch neighborhood around current leader group"
+                  : "neighbor sweep around current global leader");
 
     std::set<std::string> symbolSeen;
     for (const ExperimentRecord* source : sources)
@@ -1336,7 +1418,11 @@ std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(con
             break;
         if (!symbolSeen.insert(source->symbol).second)
             continue;
-        addSource(*source, "best result for symbol " + source->symbol);
+        addSource(*source,
+                  epochPolicy == RecommendationEpochPolicy::Highest
+                      ? "best mature result for symbol " + source->symbol +
+                            " horizon " + std::to_string(source->horizon)
+                      : "best result for symbol " + source->symbol);
     }
 
     std::set<int> horizonSeen;
@@ -1346,7 +1432,10 @@ std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(con
             break;
         if (!horizonSeen.insert(source->horizon).second)
             continue;
-        addSource(*source, "best result for horizon " + std::to_string(source->horizon));
+        addSource(*source,
+                  epochPolicy == RecommendationEpochPolicy::Highest
+                      ? "preferred highest completed epoch count for symbol/horizon"
+                      : "best result for horizon " + std::to_string(source->horizon));
     }
 
     for (const ExperimentRecord* source : sources)
@@ -1626,6 +1715,8 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << "\"summary\":{"
          << "\"meta_analysis_id\":" << result.metaAnalysisId
          << ",\"scope\":" << JsonString(result.scope)
+         << ",\"recommendation_epoch_policy\":"
+         << JsonString(RecommendationEpochPolicyName(result.recommendationEpochPolicy))
          << ",\"completed_experiments\":" << result.completedExperiments
          << ",\"completed_models\":" << result.completedModels
          << ",\"legacy_model_count\":" << result.dataSources.legacyModels
@@ -1800,6 +1891,9 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
     }
 
     report << "## Recommended Next Experiments\n\n";
+    report << "Recommendation epoch policy: "
+           << RecommendationEpochPolicyName(result.recommendationEpochPolicy)
+           << "\n\n";
     if (!result.nextExperimentNotes.empty())
     {
         for (const auto& note : result.nextExperimentNotes)
@@ -1848,6 +1942,7 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
 {
     MetaAnalysisResult result;
     result.scope = ScopeForOptions(options);
+    result.recommendationEpochPolicy = options.recommendationEpochPolicy;
     LoadExperimentCounts(w, options, result);
     std::vector<ExperimentRecord> schedulerRecords = LoadExperimentRecords(w, options);
     const std::set<long long> schedulerModelIds = SchedulerModelIds(schedulerRecords);
@@ -1868,6 +1963,7 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
     const std::vector<ExistingExperimentConfig> existingExperimentConfigs = LoadExistingExperimentConfigs(w);
     result.nextExperimentRecommendations = BuildNextExperimentRecommendations(result,
                                                                               existingExperimentConfigs,
+                                                                              options.recommendationEpochPolicy,
                                                                               options.limit,
                                                                               result.nextExperimentNotes);
     result.statisticsJson = BuildStatisticsJson(result);
@@ -1879,6 +1975,10 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
 
 void PrintMarkers(const MetaAnalysisResult& result)
 {
+    std::cout << "META_ANALYSIS_RECOMMENDATION_POLICY"
+              << ",epoch_policy=" << RecommendationEpochPolicyName(result.recommendationEpochPolicy)
+              << std::endl;
+
     std::cout << "META_ANALYSIS_STATISTIC"
               << ",scope=" << result.scope
               << ",total_experiments=" << result.totalExperiments
@@ -2052,6 +2152,10 @@ int RunMetaAnalysisOnce(const MetaAnalysisOptions& options)
 
 int QueueMetaRecommendations(const MetaAnalysisOptions& options)
 {
+    std::cout << "META_ANALYSIS_RECOMMENDATION_POLICY"
+              << ",epoch_policy=" << RecommendationEpochPolicyName(options.recommendationEpochPolicy)
+              << std::endl;
+
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
     w.exec("SET TRANSACTION READ WRITE;");
@@ -2065,6 +2169,7 @@ int QueueMetaRecommendations(const MetaAnalysisOptions& options)
     result.nextExperimentNotes.clear();
     result.nextExperimentRecommendations = BuildNextExperimentRecommendations(result,
                                                                               {},
+                                                                              options.recommendationEpochPolicy,
                                                                               options.limit,
                                                                               result.nextExperimentNotes);
 
@@ -2217,17 +2322,21 @@ int RunMetaAnalysisCli(int argc, const char* argv[])
                   << " --meta-analyze [--meta-analysis-interval SECONDS] "
                   << "[--meta-analysis-json|--meta-analysis-markdown] "
                   << "[--meta-analysis-limit N] [--meta-analysis-symbol SYMBOL] "
-                  << "[--meta-analysis-horizon N] [--meta-analysis-output FILE]\n"
+                  << "[--meta-analysis-horizon N] [--meta-analysis-output FILE] "
+                  << "[--recommendation-epoch-policy=leader|highest]\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
                   << " --meta-analyze-once [--meta-analysis-json|--meta-analysis-markdown] "
                   << "[--meta-analysis-limit N] [--meta-analysis-symbol SYMBOL] "
-                  << "[--meta-analysis-horizon N] [--meta-analysis-output FILE]\n"
+                  << "[--meta-analysis-horizon N] [--meta-analysis-output FILE] "
+                  << "[--recommendation-epoch-policy=leader|highest]\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
                   << " --meta-analysis-report [--meta-analysis-json|--meta-analysis-markdown] "
                   << "[--meta-analysis-symbol SYMBOL] [--meta-analysis-horizon N] "
-                  << "[--meta-analysis-output FILE]\n"
+                  << "[--meta-analysis-output FILE] "
+                  << "[--recommendation-epoch-policy=leader|highest]\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --queue-meta-recommendations [--meta-analysis-limit N] [--dry-run]\n"
+                  << " --queue-meta-recommendations [--meta-analysis-limit N] "
+                  << "[--recommendation-epoch-policy=leader|highest] [--dry-run]\n"
                   << "Meta-analysis reports include advisory Recommended Next Experiments; "
                   << "they do not queue or launch experiments.\n";
         return 1;
