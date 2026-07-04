@@ -44,8 +44,15 @@ struct SchedulerOptions
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
     bool schedulerStatus = false;
+    std::optional<long long> pauseExperimentId;
+    std::optional<long long> resumeExperimentId;
+    std::optional<long long> cancelExperimentId;
+    std::optional<long long> retryFailedExperimentId;
+    std::optional<long long> requeueAnalysisExperimentId;
+    std::optional<long long> requeueInferenceExperimentId;
     bool help = false;
     bool dryRun = false;
+    bool yes = false;
     bool schedulerOnce = false;
     bool recoverOrphansOnly = false;
     int maxTrainProcs = 1;
@@ -210,10 +217,22 @@ struct SchedulerResourceAggregate
 struct SchedulerStatusCounts
 {
     int queued = 0;
+    int paused = 0;
     int running = 0;
     int completed = 0;
     int failed = 0;
     int cancelled = 0;
+};
+
+struct SchedulerControlExperimentRow
+{
+    long long experimentId = -1;
+    std::string status;
+    std::string phase;
+    std::optional<long long> lastModelId;
+    std::optional<long long> resumeModelId;
+    std::string symbol;
+    int predictionHorizon = 0;
 };
 
 struct SchedulerStatusProcessSnapshot
@@ -314,9 +333,21 @@ inline bool IsExperimentSchedulerCommand(int argc, const char* argv[])
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
             arg == "--scheduler-status" ||
+            arg == "--pause-experiment" ||
+            arg == "--resume-experiment" ||
+            arg == "--cancel-experiment" ||
+            arg == "--retry-failed-experiment" ||
+            arg == "--requeue-analysis" ||
+            arg == "--requeue-inference" ||
             arg == "--help" ||
             arg == "--analyze-experiment" ||
-            arg.rfind("--analyze-experiment=", 0) == 0)
+            arg.rfind("--analyze-experiment=", 0) == 0 ||
+            arg.rfind("--pause-experiment=", 0) == 0 ||
+            arg.rfind("--resume-experiment=", 0) == 0 ||
+            arg.rfind("--cancel-experiment=", 0) == 0 ||
+            arg.rfind("--retry-failed-experiment=", 0) == 0 ||
+            arg.rfind("--requeue-analysis=", 0) == 0 ||
+            arg.rfind("--requeue-inference=", 0) == 0)
             return true;
     }
     return false;
@@ -455,6 +486,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.help = true;
         else if (arg == "--dry-run")
             options.dryRun = true;
+        else if (arg == "--yes")
+            options.yes = true;
         else if (arg == "--scheduler-once")
             options.schedulerOnce = true;
         else if (arg == "--recover-orphans-only")
@@ -463,6 +496,18 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.allowDuplicateExperiment = true;
         else if (arg == "--analyze-experiment")
             options.analyzeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pause-experiment")
+            options.pauseExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--resume-experiment")
+            options.resumeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--cancel-experiment")
+            options.cancelExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--retry-failed-experiment")
+            options.retryFailedExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--requeue-analysis")
+            options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--requeue-inference")
+            options.requeueInferenceExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--symbol")
             options.symbol = EA::CanonicalSymbol::Normalize(RequireNextArg(argc, argv, i, arg));
         else if (arg == "--prediction-horizon")
@@ -557,6 +602,18 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.schedulerLogDir = value;
         else if (SplitOptionWithValue(arg, "--analyze-experiment", value))
             options.analyzeExperimentId = ParsePositiveLongLong("--analyze-experiment", value);
+        else if (SplitOptionWithValue(arg, "--pause-experiment", value))
+            options.pauseExperimentId = ParsePositiveLongLong("--pause-experiment", value);
+        else if (SplitOptionWithValue(arg, "--resume-experiment", value))
+            options.resumeExperimentId = ParsePositiveLongLong("--resume-experiment", value);
+        else if (SplitOptionWithValue(arg, "--cancel-experiment", value))
+            options.cancelExperimentId = ParsePositiveLongLong("--cancel-experiment", value);
+        else if (SplitOptionWithValue(arg, "--retry-failed-experiment", value))
+            options.retryFailedExperimentId = ParsePositiveLongLong("--retry-failed-experiment", value);
+        else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
+            options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
+        else if (SplitOptionWithValue(arg, "--requeue-inference", value))
+            options.requeueInferenceExperimentId = ParsePositiveLongLong("--requeue-inference", value);
         else if (SplitOptionWithValue(arg, "--leaderboard-symbol", value))
             options.leaderboardSymbol = EA::CanonicalSymbol::Normalize(value);
         else if (SplitOptionWithValue(arg, "--leaderboard-horizon", value))
@@ -580,6 +637,12 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
         (options.printLeaderboard ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
+        (options.pauseExperimentId.has_value() ? 1 : 0) +
+        (options.resumeExperimentId.has_value() ? 1 : 0) +
+        (options.cancelExperimentId.has_value() ? 1 : 0) +
+        (options.retryFailedExperimentId.has_value() ? 1 : 0) +
+        (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
+        (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.help ? 1 : 0);
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
@@ -1403,6 +1466,280 @@ inline QueueSnapshot LoadQueueSnapshot(pqxx::work& w)
             snapshot.runningAnalyze = count;
     }
     return snapshot;
+}
+
+inline const char* SchedulerControlActionName(const SchedulerOptions& options)
+{
+    if (options.pauseExperimentId.has_value())
+        return "pause";
+    if (options.resumeExperimentId.has_value())
+        return "resume";
+    if (options.cancelExperimentId.has_value())
+        return "cancel";
+    if (options.retryFailedExperimentId.has_value())
+        return "retry_failed";
+    if (options.requeueAnalysisExperimentId.has_value())
+        return "requeue_analysis";
+    if (options.requeueInferenceExperimentId.has_value())
+        return "requeue_inference";
+    return "unknown";
+}
+
+inline long long SchedulerControlExperimentId(const SchedulerOptions& options)
+{
+    if (options.pauseExperimentId.has_value())
+        return *options.pauseExperimentId;
+    if (options.resumeExperimentId.has_value())
+        return *options.resumeExperimentId;
+    if (options.cancelExperimentId.has_value())
+        return *options.cancelExperimentId;
+    if (options.retryFailedExperimentId.has_value())
+        return *options.retryFailedExperimentId;
+    if (options.requeueAnalysisExperimentId.has_value())
+        return *options.requeueAnalysisExperimentId;
+    if (options.requeueInferenceExperimentId.has_value())
+        return *options.requeueInferenceExperimentId;
+    throw std::invalid_argument("missing scheduler control experiment id");
+}
+
+inline std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx::work& w,
+                                                                                   long long experimentId,
+                                                                                   bool forUpdate)
+{
+    std::ostringstream sql;
+    sql << "SELECT experiment_id, status, phase, last_model_id, resume_model_id, symbol, prediction_horizon "
+        << "FROM experiment WHERE experiment_id = " << experimentId;
+    if (forUpdate)
+        sql << " FOR UPDATE";
+    sql << ";";
+
+    pqxx::result rows = w.exec(sql.str());
+    if (rows.empty())
+        return std::nullopt;
+
+    SchedulerControlExperimentRow row;
+    row.experimentId = rows[0][0].as<long long>();
+    row.status = rows[0][1].as<std::string>();
+    row.phase = rows[0][2].as<std::string>();
+    row.lastModelId = OptionalLongLongCell(rows[0], 3);
+    row.resumeModelId = OptionalLongLongCell(rows[0], 4);
+    row.symbol = rows[0][5].as<std::string>();
+    row.predictionHorizon = rows[0][6].as<int>();
+    return row;
+}
+
+inline std::optional<long long> ControlModelId(const SchedulerControlExperimentRow& row)
+{
+    if (row.lastModelId.has_value())
+        return row.lastModelId;
+    return row.resumeModelId;
+}
+
+inline std::string RetryPhaseForExperiment(const SchedulerControlExperimentRow& row)
+{
+    if (row.phase == "train" || row.phase == "infer" || row.phase == "analyze")
+        return row.phase;
+    if (row.phase == "done" && ControlModelId(row).has_value())
+        return "analyze";
+    return "train";
+}
+
+inline void PrintSchedulerControlAttempt(const std::string& action,
+                                         const SchedulerControlExperimentRow& row)
+{
+    std::cout << "SCHEDULER_CONTROL_ATTEMPT"
+              << ",action=" << action
+              << ",experiment_id=" << row.experimentId
+              << ",current_status=" << row.status
+              << ",current_phase=" << row.phase
+              << std::endl;
+}
+
+inline void PrintSchedulerControlRejected(const std::string& action,
+                                          long long experimentId,
+                                          const std::string& reason)
+{
+    std::cout << "SCHEDULER_CONTROL_REJECTED"
+              << ",action=" << action
+              << ",experiment_id=" << experimentId
+              << ",reason=" << reason
+              << std::endl;
+}
+
+inline void PrintSchedulerControlTransition(const SchedulerControlExperimentRow& row,
+                                            const std::string& newStatus,
+                                            const std::string& newPhase)
+{
+    std::cout << "Experiment " << row.experimentId << "\n"
+              << "Current: status=" << row.status << " phase=" << row.phase << "\n"
+              << "Requested: status=" << newStatus << " phase=" << newPhase << "\n";
+}
+
+inline void PrintSchedulerControlApplied(const std::string& action,
+                                         long long experimentId,
+                                         const std::string& newStatus,
+                                         const std::string& newPhase)
+{
+    std::cout << "SCHEDULER_CONTROL_APPLIED"
+              << ",action=" << action
+              << ",experiment_id=" << experimentId
+              << ",new_status=" << newStatus
+              << ",new_phase=" << newPhase
+              << std::endl;
+}
+
+inline std::optional<std::string> ValidateSchedulerControlTransition(const SchedulerOptions& options,
+                                                                     const SchedulerControlExperimentRow& row,
+                                                                     std::string& newStatus,
+                                                                     std::string& newPhase)
+{
+    newStatus = row.status;
+    newPhase = row.phase;
+
+    if (options.pauseExperimentId.has_value())
+    {
+        if (row.status != "pending")
+            return "pause_requires_pending_status";
+        newStatus = "paused";
+        return std::nullopt;
+    }
+    if (options.resumeExperimentId.has_value())
+    {
+        if (row.status != "paused")
+            return "resume_requires_paused_status";
+        newStatus = "pending";
+        return std::nullopt;
+    }
+    if (options.cancelExperimentId.has_value())
+    {
+        if (row.status == "running")
+            return "running_experiment_cannot_be_cancelled";
+        if (row.status != "pending" && row.status != "paused")
+            return "cancel_requires_pending_or_paused_status";
+        newStatus = "cancelled";
+        return std::nullopt;
+    }
+    if (options.retryFailedExperimentId.has_value())
+    {
+        if (row.status != "failed")
+            return "retry_requires_failed_status";
+        newStatus = "pending";
+        newPhase = RetryPhaseForExperiment(row);
+        return std::nullopt;
+    }
+    if (options.requeueAnalysisExperimentId.has_value())
+    {
+        if (row.status == "running")
+            return "running_experiment_cannot_be_requeued";
+        if (!ControlModelId(row).has_value())
+            return "requeue_analysis_requires_model_id";
+        newStatus = "pending";
+        newPhase = "analyze";
+        return std::nullopt;
+    }
+    if (options.requeueInferenceExperimentId.has_value())
+    {
+        if (row.status == "running")
+            return "running_experiment_cannot_be_requeued";
+        if (!ControlModelId(row).has_value())
+            return "requeue_inference_requires_model_id";
+        newStatus = "pending";
+        newPhase = "infer";
+        return std::nullopt;
+    }
+
+    return "unknown_scheduler_control_action";
+}
+
+inline void ApplySchedulerControlTransition(pqxx::work& w,
+                                            const std::string& action,
+                                            const SchedulerControlExperimentRow& row,
+                                            const std::string& newStatus,
+                                            const std::string& newPhase)
+{
+    std::ostringstream sql;
+    sql << "UPDATE experiment SET status = " << w.quote(newStatus)
+        << ", phase = " << w.quote(newPhase)
+        << ", updated_at = now()";
+
+    if (action == "cancel")
+    {
+        sql << ", completed_at = now()";
+    }
+    else if (action == "retry_failed" ||
+             action == "requeue_analysis" ||
+             action == "requeue_inference")
+    {
+        sql << ", started_at = NULL"
+            << ", completed_at = NULL"
+            << ", exit_code = NULL"
+            << ", error_message = NULL";
+    }
+
+    sql << " WHERE experiment_id = " << row.experimentId << ";";
+    w.exec(sql.str());
+}
+
+inline int RunSchedulerControlCommand(const SchedulerOptions& options)
+{
+    const std::string action = SchedulerControlActionName(options);
+    const long long experimentId = SchedulerControlExperimentId(options);
+    const bool willApply = options.yes && !options.dryRun;
+
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (willApply)
+        SetTransactionReadWrite(w);
+    if (!RequireSchedulerTables(w))
+        return 2;
+
+    std::optional<SchedulerControlExperimentRow> row =
+        LoadSchedulerControlExperiment(w, experimentId, willApply);
+    if (!row.has_value())
+    {
+        PrintSchedulerControlRejected(action, experimentId, "experiment_not_found");
+        w.commit();
+        return 1;
+    }
+
+    PrintSchedulerControlAttempt(action, *row);
+
+    std::string newStatus;
+    std::string newPhase;
+    if (const std::optional<std::string> rejection =
+            ValidateSchedulerControlTransition(options, *row, newStatus, newPhase);
+        rejection.has_value())
+    {
+        PrintSchedulerControlRejected(action, experimentId, *rejection);
+        w.commit();
+        return 1;
+    }
+
+    PrintSchedulerControlTransition(*row, newStatus, newPhase);
+
+    if (options.dryRun)
+    {
+        std::cout << "SCHEDULER_CONTROL_DRY_RUN"
+                  << ",action=" << action
+                  << ",experiment_id=" << experimentId
+                  << ",new_status=" << newStatus
+                  << ",new_phase=" << newPhase
+                  << std::endl;
+        w.commit();
+        return 0;
+    }
+
+    if (!options.yes)
+    {
+        std::cout << "Use --yes to apply." << std::endl;
+        w.commit();
+        return 0;
+    }
+
+    ApplySchedulerControlTransition(w, action, *row, newStatus, newPhase);
+    PrintSchedulerControlApplied(action, experimentId, newStatus, newPhase);
+    w.commit();
+    return 0;
 }
 
 inline void PrintQueueSnapshot(const QueueSnapshot& snapshot)
@@ -3941,6 +4278,8 @@ inline SchedulerStatusCounts LoadSchedulerStatusCounts(pqxx::work& w)
         const int count = row[1].as<int>();
         if (status == "pending")
             counts.queued = count;
+        else if (status == "paused")
+            counts.paused = count;
         else if (status == "running")
             counts.running = count;
         else if (status == "completed")
@@ -4629,6 +4968,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
     std::vector<SchedulerStatusJob> runningInfer = LoadSchedulerStatusJobs(w, "running", "infer", 50, false);
     std::vector<SchedulerStatusJob> runningAnalyze = LoadSchedulerStatusJobs(w, "running", "analyze", 50, false);
     std::vector<SchedulerStatusJob> queued = LoadSchedulerStatusJobs(w, "pending", std::nullopt, 50, false);
+    std::vector<SchedulerStatusJob> paused = LoadSchedulerStatusJobs(w, "paused", std::nullopt, 50, false);
     std::vector<SchedulerStatusJob> completed = LoadSchedulerStatusJobs(w, "completed", std::nullopt, 10, true);
     std::vector<SchedulerStatusJob> failed = LoadSchedulerStatusJobs(w, "failed", std::nullopt, 20, true);
     w.commit();
@@ -4637,6 +4977,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
     EnrichSchedulerStatusJobs(runningInfer, processes);
     EnrichSchedulerStatusJobs(runningAnalyze, processes);
     EnrichSchedulerStatusJobs(queued, processes);
+    EnrichSchedulerStatusJobs(paused, processes);
     EnrichSchedulerStatusJobs(completed, processes);
     EnrichSchedulerStatusJobs(failed, processes);
 
@@ -4684,6 +5025,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
 
     std::cout << "\nOverall Counts\n"
               << "  queued=" << counts.queued
+              << " paused=" << counts.paused
               << " running=" << counts.running
               << " completed=" << counts.completed
               << " failed=" << counts.failed
@@ -4703,6 +5045,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
     PrintStatusJobTable("Active Inference Jobs", runningInfer, useColor, false, false);
     PrintStatusJobTable("Active Analysis Jobs", runningAnalyze, useColor, false, false);
     PrintStatusJobTable("Queued Jobs", queued, useColor, false, false);
+    PrintStatusJobTable("Paused Jobs", paused, useColor, false, false);
     PrintStatusJobTable("Recent Completed Experiments", completed, useColor, false, false);
     PrintStatusJobTable("Failed Experiments Summary", failed, useColor, false, true);
 
@@ -4741,6 +5084,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
                   << std::endl;
         std::cout << "SCHEDULER_STATUS_COUNT"
                   << ",queued=" << counts.queued
+                  << ",paused=" << counts.paused
                   << ",running=" << counts.running
                   << ",completed=" << counts.completed
                   << ",failed=" << counts.failed
@@ -4760,6 +5104,8 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
         for (const auto& job : runningAnalyze)
             PrintSchedulerStatusJobMachine(job);
         for (const auto& job : queued)
+            PrintSchedulerStatusJobMachine(job);
+        for (const auto& job : paused)
             PrintSchedulerStatusJobMachine(job);
     }
 
@@ -4797,6 +5143,10 @@ inline void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
         << "Usage: " << exe
+        << " --pause-experiment=ID | --resume-experiment=ID | --cancel-experiment=ID | "
+        << "--retry-failed-experiment=ID | --requeue-inference=ID | --requeue-analysis=ID "
+        << "[--dry-run] [--yes]\n"
+        << "Usage: " << exe
         << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
         << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
         << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n"
@@ -4833,6 +5183,13 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunScheduler(options);
         if (options.schedulerStatus)
             return PrintSchedulerStatus(options);
+        if (options.pauseExperimentId.has_value() ||
+            options.resumeExperimentId.has_value() ||
+            options.cancelExperimentId.has_value() ||
+            options.retryFailedExperimentId.has_value() ||
+            options.requeueAnalysisExperimentId.has_value() ||
+            options.requeueInferenceExperimentId.has_value())
+            return RunSchedulerControlCommand(options);
         if (options.analyzeExperimentId.has_value())
             return AnalyzeExperimentById(*options.analyzeExperimentId, options);
         if (options.analyzeCompletedExperiments)
