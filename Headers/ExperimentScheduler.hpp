@@ -166,9 +166,22 @@ struct SchedulerStatusJob
     std::string phase;
     std::string status;
     int targetEpochs = 0;
+    int checkpointInterval = 0;
     std::optional<long long> modelId;
     std::optional<int> completedEpochs;
+    std::optional<int> currentEpoch;
+    std::optional<int> lastCheckpointEpoch;
+    std::optional<long long> lastCheckpointModelId;
+    std::optional<int> nextCheckpointEpoch;
+    std::optional<double> loss;
+    std::optional<double> validationAccuracy;
     std::optional<double> elapsedSeconds;
+    std::optional<double> etaSeconds;
+    std::optional<int> pid;
+    std::optional<std::string> recentProgress;
+    std::optional<std::string> trainLogPath;
+    std::optional<std::string> inferLogPath;
+    std::optional<std::string> analysisLogPath;
     std::string startedAt;
     std::string updatedAt;
     std::string completedAt;
@@ -188,6 +201,9 @@ struct SchedulerStatusProcessSnapshot
 {
     bool processDetectionAvailable = false;
     std::vector<int> schedulerPids;
+    std::map<long long, int> trainPidByExperiment;
+    std::map<long long, int> inferPidByExperiment;
+    std::map<long long, int> analysisPidByExperiment;
     int trainWorkers = 0;
     int inferWorkers = 0;
     int analysisWorkers = 0;
@@ -3474,10 +3490,11 @@ inline std::string OptionalDoubleText(const std::optional<double>& value, int pr
 
 inline std::string FormatPercentComplete(const SchedulerStatusJob& job)
 {
-    if (!job.completedEpochs.has_value() || job.targetEpochs <= 0)
+    const std::optional<int> epoch = job.currentEpoch.has_value() ? job.currentEpoch : job.completedEpochs;
+    if (!epoch.has_value() || job.targetEpochs <= 0)
         return "unknown";
     const double percent = std::min(100.0,
-                                    100.0 * static_cast<double>(*job.completedEpochs) /
+                                    100.0 * static_cast<double>(*epoch) /
                                         static_cast<double>(job.targetEpochs));
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(1) << percent << "%";
@@ -3528,6 +3545,135 @@ inline std::string EstimateEta(const SchedulerStatusJob& job)
     return FormatDurationSeconds(secondsPerEpoch * static_cast<double>(job.targetEpochs - *job.completedEpochs));
 }
 
+inline std::optional<double> EstimateEtaSeconds(const SchedulerStatusJob& job)
+{
+    if (!job.currentEpoch.has_value() ||
+        !job.elapsedSeconds.has_value() ||
+        *job.currentEpoch <= 0 ||
+        job.targetEpochs <= 0 ||
+        *job.currentEpoch >= job.targetEpochs)
+    {
+        return std::nullopt;
+    }
+
+    const double secondsPerEpoch = *job.elapsedSeconds / static_cast<double>(*job.currentEpoch);
+    return secondsPerEpoch * static_cast<double>(job.targetEpochs - *job.currentEpoch);
+}
+
+inline std::string FormatProgressBar(const SchedulerStatusJob& job)
+{
+    constexpr int width = 20;
+    if (!job.currentEpoch.has_value() || job.targetEpochs <= 0)
+        return "[--------------------] unknown";
+
+    const double clamped = std::clamp(static_cast<double>(*job.currentEpoch) /
+                                          static_cast<double>(job.targetEpochs),
+                                      0.0,
+                                      1.0);
+    const int filled = static_cast<int>(std::llround(clamped * width));
+    std::ostringstream oss;
+    oss << "[";
+    for (int i = 0; i < width; ++i)
+        oss << (i < filled ? "#" : "-");
+    oss << "] " << std::fixed << std::setprecision(1) << (100.0 * clamped) << "%";
+    return oss.str();
+}
+
+inline std::string ReadFileTailIfExists(const std::optional<std::string>& path,
+                                        std::streamoff maxBytes = 262144)
+{
+    if (!path.has_value() || path->empty())
+        return {};
+
+    std::ifstream in(*path, std::ios::binary);
+    if (!in)
+        return {};
+
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    if (size <= 0)
+        return {};
+
+    const std::streamoff start = std::max<std::streamoff>(0, size - maxBytes);
+    in.seekg(start, std::ios::beg);
+    std::string text;
+    text.resize(static_cast<size_t>(size - start));
+    in.read(text.data(), static_cast<std::streamsize>(text.size()));
+    return text;
+}
+
+inline std::optional<int> ExtractLastIntFromText(const std::string& text,
+                                                 const std::regex& regex)
+{
+    std::optional<int> value;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), regex);
+         it != std::sregex_iterator();
+         ++it)
+    {
+        value = std::stoi((*it)[1].str());
+    }
+    return value;
+}
+
+inline std::optional<long long> ExtractLastLongLongFromText(const std::string& text,
+                                                            const std::regex& regex)
+{
+    std::optional<long long> value;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), regex);
+         it != std::sregex_iterator();
+         ++it)
+    {
+        value = std::stoll((*it)[1].str());
+    }
+    return value;
+}
+
+inline std::optional<double> ExtractLastDoubleFromText(const std::string& text,
+                                                       const std::regex& regex)
+{
+    std::optional<double> value;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), regex);
+         it != std::sregex_iterator();
+         ++it)
+    {
+        value = std::stod((*it)[1].str());
+    }
+    return value;
+}
+
+inline std::optional<std::string> ExtractLastProgressLine(const std::string& text)
+{
+    std::optional<std::string> value;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        if (line.find("CHECKPOINT_SAVE") != std::string::npos ||
+            line.find("EPOCH_3CLASS_ACCURACY") != std::string::npos ||
+            line.find("Saved model with model_id=") != std::string::npos ||
+            line.find("RESUME_") != std::string::npos ||
+            line.find("Overall 3-class accuracy") != std::string::npos ||
+            line.find("EXPERIMENT_ANALYSIS_") != std::string::npos)
+        {
+            if (line.size() > 160)
+                value = line.substr(0, 157) + "...";
+            else
+                value = line;
+        }
+    }
+    return value;
+}
+
+inline std::optional<long long> ExtractExperimentIdFromCommand(const std::string& command)
+{
+    std::smatch match;
+    if (std::regex_search(command, match, std::regex{R"(experiment([0-9]+))"}))
+        return std::stoll(match[1].str());
+    if (std::regex_search(command, match, std::regex{R"(--analyze-experiment(?:=|\s+)([0-9]+))"}))
+        return std::stoll(match[1].str());
+    return std::nullopt;
+}
+
 inline std::string ReadCommandOutput(const std::string& command)
 {
     std::string output;
@@ -3555,7 +3701,7 @@ inline std::optional<int> ExtractCommandIntOption(const std::string& command,
 inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
 {
     SchedulerStatusProcessSnapshot snapshot;
-    const std::string psOutput = ReadCommandOutput("ps -axo pid=,command=");
+    const std::string psOutput = ReadCommandOutput("ps -axo pid=,command= 2>/dev/null");
     if (psOutput.empty())
         return snapshot;
 
@@ -3595,15 +3741,21 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         else if (command.find("--train") != std::string::npos)
         {
             ++snapshot.trainWorkers;
+            if (const auto experimentId = ExtractExperimentIdFromCommand(command))
+                snapshot.trainPidByExperiment[*experimentId] = pid;
         }
         else if (command.find("--infer") != std::string::npos)
         {
             ++snapshot.inferWorkers;
+            if (const auto experimentId = ExtractExperimentIdFromCommand(command))
+                snapshot.inferPidByExperiment[*experimentId] = pid;
         }
         else if (command.find("--analyze-experiment") != std::string::npos ||
                  command.find("--analyze-completed-experiments") != std::string::npos)
         {
             ++snapshot.analysisWorkers;
+            if (const auto experimentId = ExtractExperimentIdFromCommand(command))
+                snapshot.analysisPidByExperiment[*experimentId] = pid;
         }
     }
     return snapshot;
@@ -3643,15 +3795,19 @@ inline SchedulerStatusJob RowToSchedulerStatusJob(const pqxx::row& row)
     job.phase = row[3].as<std::string>();
     job.status = row[4].as<std::string>();
     job.targetEpochs = row[5].as<int>();
-    job.modelId = OptionalLongLongCell(row, 6);
-    if (!row[7].is_null())
-        job.completedEpochs = row[7].as<int>();
+    job.checkpointInterval = row[6].as<int>();
+    job.modelId = OptionalLongLongCell(row, 7);
     if (!row[8].is_null())
-        job.elapsedSeconds = row[8].as<double>();
-    job.startedAt = row[9].is_null() ? "" : row[9].as<std::string>();
-    job.updatedAt = row[10].is_null() ? "" : row[10].as<std::string>();
-    job.completedAt = row[11].is_null() ? "" : row[11].as<std::string>();
-    job.errorMessage = row[12].is_null() ? "" : row[12].as<std::string>();
+        job.completedEpochs = row[8].as<int>();
+    if (!row[9].is_null())
+        job.elapsedSeconds = row[9].as<double>();
+    job.startedAt = row[10].is_null() ? "" : row[10].as<std::string>();
+    job.updatedAt = row[11].is_null() ? "" : row[11].as<std::string>();
+    job.completedAt = row[12].is_null() ? "" : row[12].as<std::string>();
+    job.errorMessage = row[13].is_null() ? "" : row[13].as<std::string>();
+    job.trainLogPath = OptionalStringCell(row, 14);
+    job.inferLogPath = OptionalStringCell(row, 15);
+    job.analysisLogPath = OptionalStringCell(row, 16);
     return job;
 }
 
@@ -3679,12 +3835,13 @@ inline std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
         << "  GROUP BY model_id"
         << ") "
         << "SELECT e.experiment_id, e.symbol, e.prediction_horizon, e.phase, e.status, "
-        << "e.target_epochs, COALESCE(e.last_model_id, e.resume_model_id) AS model_id, "
+        << "e.target_epochs, e.checkpoint_interval, COALESCE(e.last_model_id, e.resume_model_id) AS model_id, "
         << "COALESCE(la.completed_epochs, li.completed_epochs, tm.completed_epochs) AS completed_epochs, "
         << "CASE WHEN e.started_at IS NULL THEN NULL "
         << "     WHEN e.completed_at IS NULL THEN EXTRACT(EPOCH FROM (now() - e.started_at)) "
         << "     ELSE EXTRACT(EPOCH FROM (e.completed_at - e.started_at)) END AS elapsed_seconds, "
-        << "e.started_at::text, e.updated_at::text, e.completed_at::text, e.error_message "
+        << "e.started_at::text, e.updated_at::text, e.completed_at::text, e.error_message, "
+        << "e.train_log_path, e.infer_log_path, e.analysis_log_path "
         << "FROM experiment e "
         << "LEFT JOIN latest_analysis la ON la.experiment_id = e.experiment_id "
         << "LEFT JOIN latest_infer li ON li.model_id = e.last_model_id "
@@ -3709,6 +3866,118 @@ inline std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
     return jobs;
 }
 
+inline void EnrichSchedulerStatusJobFromLogs(SchedulerStatusJob& job,
+                                             const SchedulerStatusProcessSnapshot& processes)
+{
+    const auto assignPid = [&](const std::map<long long, int>& pids) {
+        const auto it = pids.find(job.experimentId);
+        if (it != pids.end())
+            job.pid = it->second;
+    };
+
+    if (job.phase == "train")
+        assignPid(processes.trainPidByExperiment);
+    else if (job.phase == "infer")
+        assignPid(processes.inferPidByExperiment);
+    else if (job.phase == "analyze")
+        assignPid(processes.analysisPidByExperiment);
+
+    std::optional<std::string> logPath;
+    if (job.phase == "train")
+        logPath = job.trainLogPath;
+    else if (job.phase == "infer")
+        logPath = job.inferLogPath;
+    else if (job.phase == "analyze")
+        logPath = job.analysisLogPath;
+
+    const std::string tail = ReadFileTailIfExists(logPath);
+    if (!tail.empty())
+    {
+        job.recentProgress = ExtractLastProgressLine(tail);
+
+        const auto resumeCompleted = ExtractLastIntFromText(
+            tail,
+            std::regex{R"(RESUME_COMPLETED_EPOCH=([0-9]+))"});
+        const auto resumeTarget = ExtractLastIntFromText(
+            tail,
+            std::regex{R"(RESUME_TARGET_EPOCH=([0-9]+))"});
+        const auto metaEpoch = ExtractLastIntFromText(
+            tail,
+            std::regex{R"(epochs_trained=([0-9]+))"});
+        const auto epochKv = ExtractLastIntFromText(
+            tail,
+            std::regex{R"((?:^|[,[:space:]])(?:epoch|current_epoch|completed_epoch|completed_epochs)=([0-9]+))"});
+        const auto checkpointEpoch = ExtractLastIntFromText(
+            tail,
+            std::regex{R"(CHECKPOINT_SAVE_DONE[^[:cntrl:]]*epoch=([0-9]+))"});
+        const auto checkpointModel = ExtractLastLongLongFromText(
+            tail,
+            std::regex{R"(CHECKPOINT_SAVE_DONE[^[:cntrl:]]*model_id=([0-9]+))"});
+        const auto finalModel = ExtractLastLongLongFromText(
+            tail,
+            std::regex{R"((?:Saved model with model_id=|RESUME_SAVED_NEW_MODEL_ID=)([0-9]+))"});
+        const auto loss = ExtractLastDoubleFromText(
+            tail,
+            std::regex{R"((?:^|[,[:space:]])(?:loss|loss_last|weighted_loss)=([0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?))"});
+        const auto validationAccuracy = ExtractLastDoubleFromText(
+            tail,
+            std::regex{R"((?:validation_accuracy|val_accuracy|acc)=([0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?))"});
+
+        if (checkpointEpoch.has_value())
+            job.lastCheckpointEpoch = checkpointEpoch;
+        if (checkpointModel.has_value())
+            job.lastCheckpointModelId = checkpointModel;
+        else if (finalModel.has_value())
+            job.lastCheckpointModelId = finalModel;
+        if (loss.has_value())
+            job.loss = loss;
+        if (validationAccuracy.has_value())
+            job.validationAccuracy = validationAccuracy;
+
+        int currentEpoch = 0;
+        if (job.completedEpochs.has_value())
+            currentEpoch = std::max(currentEpoch, *job.completedEpochs);
+        if (resumeCompleted.has_value())
+            currentEpoch = std::max(currentEpoch, *resumeCompleted);
+        if (metaEpoch.has_value())
+            currentEpoch = std::max(currentEpoch, *metaEpoch);
+        if (epochKv.has_value())
+            currentEpoch = std::max(currentEpoch, *epochKv);
+        if (checkpointEpoch.has_value())
+            currentEpoch = std::max(currentEpoch, *checkpointEpoch);
+        if (currentEpoch > 0)
+            job.currentEpoch = currentEpoch;
+
+        if (resumeTarget.has_value() && job.targetEpochs <= 0)
+            job.targetEpochs = *resumeTarget;
+    }
+
+    if (!job.currentEpoch.has_value() && job.completedEpochs.has_value())
+        job.currentEpoch = job.completedEpochs;
+
+    if (!job.lastCheckpointEpoch.has_value() && job.completedEpochs.has_value())
+        job.lastCheckpointEpoch = job.completedEpochs;
+    if (!job.lastCheckpointModelId.has_value() && job.modelId.has_value())
+        job.lastCheckpointModelId = job.modelId;
+
+    if (job.checkpointInterval > 0 && job.currentEpoch.has_value() && job.targetEpochs > 0)
+    {
+        const int next = std::min(job.targetEpochs,
+                                  ((*job.currentEpoch / job.checkpointInterval) + 1) * job.checkpointInterval);
+        if (next > *job.currentEpoch)
+            job.nextCheckpointEpoch = next;
+    }
+
+    job.etaSeconds = EstimateEtaSeconds(job);
+}
+
+inline void EnrichSchedulerStatusJobs(std::vector<SchedulerStatusJob>& jobs,
+                                      const SchedulerStatusProcessSnapshot& processes)
+{
+    for (auto& job : jobs)
+        EnrichSchedulerStatusJobFromLogs(job, processes);
+}
+
 inline void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
 {
     std::cout << "SCHEDULER_STATUS_JOB"
@@ -3717,9 +3986,22 @@ inline void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
               << ",status=" << job.status
               << ",symbol=" << job.symbol
               << ",prediction_horizon=" << job.predictionHorizon
+              << ",pid=" << OptionalIntText(job.pid)
+              << ",current_epoch=" << OptionalIntText(job.currentEpoch)
               << ",target_epochs=" << job.targetEpochs
+              << ",percent_complete=" << (job.currentEpoch.has_value() && job.targetEpochs > 0
+                                               ? OptionalDoubleText(100.0 * static_cast<double>(*job.currentEpoch) /
+                                                                        static_cast<double>(job.targetEpochs),
+                                                                    1)
+                                               : "unknown")
               << ",completed_epochs=" << OptionalIntText(job.completedEpochs)
               << ",model_id=" << OptionalLongLongText(job.modelId)
+              << ",last_checkpoint_epoch=" << OptionalIntText(job.lastCheckpointEpoch)
+              << ",last_checkpoint_model_id=" << OptionalLongLongText(job.lastCheckpointModelId)
+              << ",next_checkpoint_epoch=" << OptionalIntText(job.nextCheckpointEpoch)
+              << ",eta_seconds=" << OptionalDoubleText(job.etaSeconds, 0)
+              << ",loss=" << OptionalDoubleText(job.loss, 6)
+              << ",validation_accuracy=" << OptionalDoubleText(job.validationAccuracy, 4)
               << std::endl;
 }
 
@@ -3729,6 +4011,7 @@ inline void PrintStatusJobTable(const std::string& title,
                                 bool showEta,
                                 bool showError)
 {
+    (void)showEta;
     std::cout << "\n" << title << "\n";
     if (jobs.empty())
     {
@@ -3738,20 +4021,48 @@ inline void PrintStatusJobTable(const std::string& title,
 
     for (const auto& job : jobs)
     {
+        const bool active = job.status == "running" &&
+                            (job.phase == "train" || job.phase == "infer" || job.phase == "analyze");
+        if (!active)
+        {
+            std::cout << "  experiment_id=" << job.experimentId
+                      << " symbol=" << job.symbol
+                      << " H=" << job.predictionHorizon
+                      << " phase=" << job.phase
+                      << " status=" << ColorForStatus(job.status, useColor)
+                      << " model_id=" << OptionalLongLongText(job.modelId)
+                      << " completed_epochs=" << OptionalIntText(job.completedEpochs)
+                      << " target_epochs=" << job.targetEpochs
+                      << " percent=" << FormatPercentComplete(job)
+                      << " elapsed=" << FormatOptionalDuration(job.elapsedSeconds);
+            if (showError && !job.errorMessage.empty())
+                std::cout << " error=" << job.errorMessage;
+            std::cout << "\n";
+            continue;
+        }
+
         std::cout << "  experiment_id=" << job.experimentId
                   << " symbol=" << job.symbol
                   << " H=" << job.predictionHorizon
                   << " phase=" << job.phase
                   << " status=" << ColorForStatus(job.status, useColor)
-                  << " model_id=" << OptionalLongLongText(job.modelId)
-                  << " completed_epochs=" << OptionalIntText(job.completedEpochs)
+                  << " pid=" << OptionalIntText(job.pid)
+                  << "\n";
+        std::cout << "    model_id=" << OptionalLongLongText(job.modelId)
+                  << " current_epoch=" << OptionalIntText(job.currentEpoch)
                   << " target_epochs=" << job.targetEpochs
-                  << " percent=" << FormatPercentComplete(job)
-                  << " elapsed=" << FormatOptionalDuration(job.elapsedSeconds);
-        if (showEta)
-            std::cout << " eta=" << EstimateEta(job);
-        if (showError && !job.errorMessage.empty())
-            std::cout << " error=" << job.errorMessage;
+                  << " progress=" << FormatProgressBar(job)
+                  << "\n";
+        std::cout << "    elapsed=" << FormatOptionalDuration(job.elapsedSeconds)
+                  << " eta=" << (job.etaSeconds.has_value() ? FormatDurationSeconds(*job.etaSeconds) : "unknown")
+                  << " last_checkpoint_epoch=" << OptionalIntText(job.lastCheckpointEpoch)
+                  << " last_checkpoint_model_id=" << OptionalLongLongText(job.lastCheckpointModelId)
+                  << " next_checkpoint_epoch=" << OptionalIntText(job.nextCheckpointEpoch)
+                  << "\n";
+        std::cout << "    loss=" << OptionalDoubleText(job.loss, 6)
+                  << " validation_accuracy=" << OptionalDoubleText(job.validationAccuracy, 4);
+        if (job.recentProgress.has_value())
+            std::cout << " recent=\"" << *job.recentProgress << "\"";
         std::cout << "\n";
     }
 }
@@ -3768,13 +4079,20 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
 
     const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
     const SchedulerStatusCounts counts = LoadSchedulerStatusCounts(w);
-    const std::vector<SchedulerStatusJob> runningTrain = LoadSchedulerStatusJobs(w, "running", "train", 50, false);
-    const std::vector<SchedulerStatusJob> runningInfer = LoadSchedulerStatusJobs(w, "running", "infer", 50, false);
-    const std::vector<SchedulerStatusJob> runningAnalyze = LoadSchedulerStatusJobs(w, "running", "analyze", 50, false);
-    const std::vector<SchedulerStatusJob> queued = LoadSchedulerStatusJobs(w, "pending", std::nullopt, 50, false);
-    const std::vector<SchedulerStatusJob> completed = LoadSchedulerStatusJobs(w, "completed", std::nullopt, 10, true);
-    const std::vector<SchedulerStatusJob> failed = LoadSchedulerStatusJobs(w, "failed", std::nullopt, 20, true);
+    std::vector<SchedulerStatusJob> runningTrain = LoadSchedulerStatusJobs(w, "running", "train", 50, false);
+    std::vector<SchedulerStatusJob> runningInfer = LoadSchedulerStatusJobs(w, "running", "infer", 50, false);
+    std::vector<SchedulerStatusJob> runningAnalyze = LoadSchedulerStatusJobs(w, "running", "analyze", 50, false);
+    std::vector<SchedulerStatusJob> queued = LoadSchedulerStatusJobs(w, "pending", std::nullopt, 50, false);
+    std::vector<SchedulerStatusJob> completed = LoadSchedulerStatusJobs(w, "completed", std::nullopt, 10, true);
+    std::vector<SchedulerStatusJob> failed = LoadSchedulerStatusJobs(w, "failed", std::nullopt, 20, true);
     w.commit();
+
+    EnrichSchedulerStatusJobs(runningTrain, processes);
+    EnrichSchedulerStatusJobs(runningInfer, processes);
+    EnrichSchedulerStatusJobs(runningAnalyze, processes);
+    EnrichSchedulerStatusJobs(queued, processes);
+    EnrichSchedulerStatusJobs(completed, processes);
+    EnrichSchedulerStatusJobs(failed, processes);
 
     const bool schedulerRunning = !processes.schedulerPids.empty();
     const std::string schedulerPid =
