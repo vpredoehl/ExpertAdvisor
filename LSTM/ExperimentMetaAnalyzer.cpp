@@ -23,6 +23,7 @@
 #include <pqxx/pqxx>
 
 #include "CanonicalSymbol.hpp"
+#include "RunMetadata.hpp"
 #include "SupportedSymbols.hpp"
 
 namespace EA::ExperimentMetaAnalyzer
@@ -83,6 +84,85 @@ std::string LstmDbConnectionString()
 {
     return "hostaddr=" + GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1") +
            " user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+}
+
+std::string SqlNullableBool(const std::optional<bool>& value)
+{
+    if (!value.has_value())
+        return "NULL";
+    return *value ? "TRUE" : "FALSE";
+}
+
+bool TableExists(pqxx::work& w, const std::string& tableName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
+        tableName);
+    return !r.empty();
+}
+
+bool ColumnExists(pqxx::work& w,
+                  const std::string& tableName,
+                  const std::string& columnName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1;",
+        tableName,
+        columnName);
+    return !r.empty();
+}
+
+bool ExperimentRunMetadataColumnsExist(pqxx::work& w)
+{
+    return ColumnExists(w, "experiment", "git_commit") &&
+           ColumnExists(w, "experiment", "git_branch") &&
+           ColumnExists(w, "experiment", "git_dirty") &&
+           ColumnExists(w, "experiment", "build_config") &&
+           ColumnExists(w, "experiment", "compiler_version") &&
+           ColumnExists(w, "experiment", "schema_version") &&
+           ColumnExists(w, "experiment", "scheduler_version") &&
+           ColumnExists(w, "experiment", "binary_name") &&
+           ColumnExists(w, "experiment", "invocation_mode") &&
+           ColumnExists(w, "experiment", "run_metadata_captured_at");
+}
+
+std::string CurrentSchemaVersion(pqxx::work& w)
+{
+    if (!TableExists(w, "schema_migrations"))
+        return "unknown";
+    pqxx::result rows = w.exec(
+        "SELECT version FROM schema_migrations "
+        "ORDER BY applied_at DESC, version DESC LIMIT 1;");
+    if (rows.empty() || rows[0][0].is_null())
+        return "unknown";
+    return rows[0][0].as<std::string>();
+}
+
+void AppendRunMetadataColumns(std::ostringstream& sql)
+{
+    sql << ", git_commit, git_branch, git_dirty, build_config, compiler_version, "
+        << "schema_version, scheduler_version, binary_name, invocation_mode, "
+        << "run_metadata_captured_at";
+}
+
+void AppendRunMetadataValues(std::ostringstream& sql,
+                             pqxx::work& w,
+                             const EA::RunMetadata::Snapshot& metadata,
+                             const std::string& schemaVersion)
+{
+    sql << ","
+        << w.quote(metadata.gitCommit) << ","
+        << w.quote(metadata.gitBranch) << ","
+        << SqlNullableBool(metadata.gitDirty) << ","
+        << w.quote(metadata.buildConfig) << ","
+        << w.quote(metadata.compilerVersion) << ","
+        << w.quote(schemaVersion) << ","
+        << w.quote(metadata.schedulerVersion) << ","
+        << w.quote(metadata.binaryName) << ","
+        << w.quote(metadata.invocationMode) << ","
+        << "now()";
 }
 
 bool SplitOptionWithValue(const std::string& arg,
@@ -204,15 +284,6 @@ MetaAnalysisOptions ParseMetaAnalysisArgs(int argc, const char* argv[])
     if (options.intervalSeconds <= 0)
         throw std::invalid_argument("--meta-analysis-interval must be positive");
     return options;
-}
-
-bool TableExists(pqxx::work& w, const std::string& tableName)
-{
-    pqxx::result r = w.exec_params(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
-        tableName);
-    return !r.empty();
 }
 
 bool RequireMetaAnalysisTables(pqxx::work& w)
@@ -1499,12 +1570,19 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
 long long InsertMetaRecommendationExperiment(pqxx::work& w,
                                              const NextExperimentRecommendation& rec)
 {
+    const bool includeRunMetadata = ExperimentRunMetadataColumnsExist(w);
+    const EA::RunMetadata::Snapshot runMetadata =
+        EA::RunMetadata::Capture("LSTM_Release", "queue_meta_recommendations");
+    const std::string schemaVersion = CurrentSchemaVersion(w);
+
     std::ostringstream sql;
     sql << "INSERT INTO experiment ("
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
-        << "resume_model_id, duplicate_nonce, status, phase, updated_at"
-        << ") VALUES ("
+        << "resume_model_id, duplicate_nonce, status, phase, updated_at";
+    if (includeRunMetadata)
+        AppendRunMetadataColumns(sql);
+    sql << ") VALUES ("
         << w.quote(rec.symbol) << ","
         << rec.horizon << ","
         << FormatDoubleFull(rec.threshold) << ","
@@ -1518,7 +1596,10 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << w.quote(kMetaRecommendationInferEnd) << "::timestamptz,"
         << "NULL,"
         << "0,"
-        << "'pending','train',now()) RETURNING experiment_id;";
+        << "'pending','train',now()";
+    if (includeRunMetadata)
+        AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
+    sql << ") RETURNING experiment_id;";
     return w.exec(sql.str())[0][0].as<long long>();
 }
 
@@ -1735,6 +1816,13 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << "\"meta_analysis_id\":" << result.metaAnalysisId
          << ",\"scope\":" << JsonString(result.scope)
          << ",\"generated_at\":" << JsonString(result.generatedAt)
+         << ",\"generated_git_commit\":" << JsonString(result.generatedGitCommit)
+         << ",\"generated_git_branch\":" << JsonString(result.generatedGitBranch)
+         << ",\"generated_git_dirty\":" << JsonString(result.generatedGitDirty)
+         << ",\"generated_build_config\":" << JsonString(result.generatedBuildConfig)
+         << ",\"generated_compiler_version\":" << JsonString(result.generatedCompilerVersion)
+         << ",\"generated_schema_version\":" << JsonString(result.generatedSchemaVersion)
+         << ",\"generated_scheduler_version\":" << JsonString(result.generatedSchedulerVersion)
          << ",\"recommendation_epoch_policy\":"
          << JsonString(RecommendationEpochPolicyName(result.recommendationEpochPolicy))
          << ",\"completed_experiments\":" << result.completedExperiments
@@ -1986,6 +2074,13 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
     report << "| Field | Value |\n";
     report << "|---|---:|\n";
     report << "| Scope | `" << result.scope << "` |\n";
+    report << "| Generated git commit | " << result.generatedGitCommit << " |\n";
+    report << "| Generated git branch | " << result.generatedGitBranch << " |\n";
+    report << "| Generated git dirty | " << result.generatedGitDirty << " |\n";
+    report << "| Generated build config | " << result.generatedBuildConfig << " |\n";
+    report << "| Generated compiler | " << result.generatedCompilerVersion << " |\n";
+    report << "| Schema version | " << result.generatedSchemaVersion << " |\n";
+    report << "| Scheduler/app version | " << result.generatedSchedulerVersion << " |\n";
     report << "| Recommendation epoch policy | " << RecommendationEpochPolicyName(result.recommendationEpochPolicy) << " |\n";
     report << "| Total experiments | " << result.totalExperiments << " |\n";
     report << "| Completed experiments | " << result.completedExperiments << " |\n";
@@ -2115,6 +2210,17 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
     MetaAnalysisResult result;
     result.scope = ScopeForOptions(options);
     result.generatedAt = CurrentUtcTimestamp();
+    const EA::RunMetadata::Snapshot runMetadata =
+        EA::RunMetadata::Capture("LSTM_Release", "meta_analysis");
+    result.generatedGitCommit = runMetadata.gitCommit;
+    result.generatedGitBranch = runMetadata.gitBranch;
+    result.generatedGitDirty = runMetadata.gitDirty.has_value()
+        ? (*runMetadata.gitDirty ? "1" : "0")
+        : "unknown";
+    result.generatedBuildConfig = runMetadata.buildConfig;
+    result.generatedCompilerVersion = runMetadata.compilerVersion;
+    result.generatedSchemaVersion = CurrentSchemaVersion(w);
+    result.generatedSchedulerVersion = runMetadata.schedulerVersion;
     result.recommendationEpochPolicy = options.recommendationEpochPolicy;
     LoadExperimentCounts(w, options, result);
     std::vector<ExperimentRecord> schedulerRecords = LoadExperimentRecords(w, options);

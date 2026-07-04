@@ -28,6 +28,7 @@
 #include "CanonicalSymbol.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
+#include "RunMetadata.hpp"
 #include "SupportedSymbols.hpp"
 
 namespace EA::ExperimentScheduler
@@ -46,6 +47,7 @@ struct SchedulerOptions
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
     bool schedulerStatus = false;
+    std::optional<long long> experimentMetadataId;
     std::optional<long long> stopExperimentId;
     bool stopAllExperiments = false;
     std::optional<long long> pauseExperimentId;
@@ -360,6 +362,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
             arg == "--scheduler-status" ||
+            arg == "--experiment-metadata" ||
             arg == "--stop-experiment" ||
             arg == "--stop-all-experiments" ||
             arg == "--pause-experiment" ||
@@ -377,7 +380,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--cancel-experiment=", 0) == 0 ||
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
-            arg.rfind("--requeue-inference=", 0) == 0)
+            arg.rfind("--requeue-inference=", 0) == 0 ||
+            arg.rfind("--experiment-metadata=", 0) == 0)
             return true;
     }
     return false;
@@ -408,6 +412,13 @@ std::string SqlNullable(pqxx::work& w, const std::optional<double>& value)
 std::string SqlNullable(pqxx::work& w, const std::optional<long long>& value)
 {
     return value.has_value() ? w.quote(*value) : "NULL";
+}
+
+std::string SqlNullableBool(const std::optional<bool>& value)
+{
+    if (!value.has_value())
+        return "NULL";
+    return *value ? "TRUE" : "FALSE";
 }
 
 std::string FormatDouble(double value)
@@ -512,6 +523,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.printLeaderboard = true;
         else if (arg == "--scheduler-status")
             options.schedulerStatus = true;
+        else if (arg == "--experiment-metadata")
+            options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--help")
             options.help = true;
         else if (arg == "--dry-run")
@@ -660,6 +673,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.leaderboardLimit = ParsePositiveInt("--leaderboard-limit", value);
         else if (SplitOptionWithValue(arg, "--log-level", value))
             options.logLevel = value;
+        else if (SplitOptionWithValue(arg, "--experiment-metadata", value))
+            options.experimentMetadataId = ParsePositiveLongLong("--experiment-metadata", value);
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -675,6 +690,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
         (options.printLeaderboard ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
+        (options.experimentMetadataId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
@@ -718,6 +734,96 @@ bool TableExists(pqxx::work& w, const std::string& tableName)
         "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
         tableName);
     return !r.empty();
+}
+
+bool ColumnExists(pqxx::work& w,
+                  const std::string& tableName,
+                  const std::string& columnName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1;",
+        tableName,
+        columnName);
+    return !r.empty();
+}
+
+bool ExperimentRunMetadataColumnsExist(pqxx::work& w)
+{
+    return ColumnExists(w, "experiment", "git_commit") &&
+           ColumnExists(w, "experiment", "git_branch") &&
+           ColumnExists(w, "experiment", "git_dirty") &&
+           ColumnExists(w, "experiment", "build_config") &&
+           ColumnExists(w, "experiment", "compiler_version") &&
+           ColumnExists(w, "experiment", "schema_version") &&
+           ColumnExists(w, "experiment", "scheduler_version") &&
+           ColumnExists(w, "experiment", "binary_name") &&
+           ColumnExists(w, "experiment", "invocation_mode") &&
+           ColumnExists(w, "experiment", "run_metadata_captured_at");
+}
+
+std::string CurrentSchemaVersion(pqxx::work& w)
+{
+    if (!TableExists(w, "schema_migrations"))
+        return "unknown";
+    pqxx::result rows = w.exec(
+        "SELECT version FROM schema_migrations "
+        "ORDER BY applied_at DESC, version DESC LIMIT 1;");
+    if (rows.empty() || rows[0][0].is_null())
+        return "unknown";
+    return rows[0][0].as<std::string>();
+}
+
+void AppendRunMetadataColumns(std::ostringstream& sql)
+{
+    sql << ", git_commit, git_branch, git_dirty, build_config, compiler_version, "
+        << "schema_version, scheduler_version, binary_name, invocation_mode, "
+        << "run_metadata_captured_at";
+}
+
+void AppendRunMetadataValues(std::ostringstream& sql,
+                             pqxx::work& w,
+                             const EA::RunMetadata::Snapshot& metadata,
+                             const std::string& schemaVersion)
+{
+    sql << ","
+        << w.quote(metadata.gitCommit) << ","
+        << w.quote(metadata.gitBranch) << ","
+        << SqlNullableBool(metadata.gitDirty) << ","
+        << w.quote(metadata.buildConfig) << ","
+        << w.quote(metadata.compilerVersion) << ","
+        << w.quote(schemaVersion) << ","
+        << w.quote(metadata.schedulerVersion) << ","
+        << w.quote(metadata.binaryName) << ","
+        << w.quote(metadata.invocationMode) << ","
+        << "now()";
+}
+
+void BackfillMissingExperimentRunMetadata(pqxx::work& w,
+                                          const std::string& binaryName,
+                                          const std::string& invocationMode)
+{
+    if (!ExperimentRunMetadataColumnsExist(w))
+        return;
+
+    const EA::RunMetadata::Snapshot metadata =
+        EA::RunMetadata::Capture(binaryName, invocationMode);
+    const std::string schemaVersion = CurrentSchemaVersion(w);
+    w.exec(
+        "UPDATE experiment SET "
+        "git_commit = COALESCE(git_commit, " + w.quote(metadata.gitCommit) + "), "
+        "git_branch = COALESCE(git_branch, " + w.quote(metadata.gitBranch) + "), "
+        "git_dirty = COALESCE(git_dirty, " + SqlNullableBool(metadata.gitDirty) + "), "
+        "build_config = COALESCE(build_config, " + w.quote(metadata.buildConfig) + "), "
+        "compiler_version = COALESCE(compiler_version, " + w.quote(metadata.compilerVersion) + "), "
+        "schema_version = COALESCE(schema_version, " + w.quote(schemaVersion) + "), "
+        "scheduler_version = COALESCE(scheduler_version, " + w.quote(metadata.schedulerVersion) + "), "
+        "binary_name = COALESCE(binary_name, " + w.quote(metadata.binaryName) + "), "
+        "invocation_mode = COALESCE(invocation_mode, " + w.quote(invocationMode) + "), "
+        "run_metadata_captured_at = COALESCE(run_metadata_captured_at, now()), "
+        "updated_at = updated_at "
+        "WHERE run_metadata_captured_at IS NULL "
+        "AND status IN ('pending', 'running');");
 }
 
 bool ModelExists(pqxx::work& w, long long modelId)
@@ -1111,12 +1217,22 @@ long long InsertExperimentRecord(pqxx::work& w,
                                         const std::string& canonicalSymbol,
                                         long long duplicateNonce)
 {
+    const bool includeRunMetadata = ExperimentRunMetadataColumnsExist(w);
+    const std::string invocationMode = options.queueSweep
+        ? "queue_sweep"
+        : (options.queueExperiment ? "queue_experiment" : "enqueue_experiment");
+    const EA::RunMetadata::Snapshot runMetadata =
+        EA::RunMetadata::Capture(options.selfPath, invocationMode);
+    const std::string schemaVersion = CurrentSchemaVersion(w);
+
     std::ostringstream sql;
     sql << "INSERT INTO experiment ("
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
-        << "resume_model_id, duplicate_nonce, status, phase, updated_at"
-        << ") VALUES ("
+        << "resume_model_id, duplicate_nonce, status, phase, updated_at";
+    if (includeRunMetadata)
+        AppendRunMetadataColumns(sql);
+    sql << ") VALUES ("
         << w.quote(canonicalSymbol) << ","
         << *options.predictionHorizon << ","
         << FormatDouble(*options.cNextThreshold) << ","
@@ -1130,7 +1246,10 @@ long long InsertExperimentRecord(pqxx::work& w,
         << SqlNullable(w, options.inferEnd) << "::timestamptz,"
         << SqlNullable(w, options.resumeModelId) << ","
         << duplicateNonce << ","
-        << "'pending','train',now()) RETURNING experiment_id;";
+        << "'pending','train',now()";
+    if (includeRunMetadata)
+        AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
+    sql << ") RETURNING experiment_id;";
 
     pqxx::result inserted = w.exec(sql.str());
     return inserted[0][0].as<long long>();
@@ -1392,6 +1511,83 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
               << ",duplicates=" << duplicates
               << std::endl;
     return created > 0 ? 0 : (duplicates > 0 ? 3 : 0);
+}
+
+std::string FormatOptionalMetadataString(const pqxx::row& row, int index)
+{
+    return row[index].is_null() ? "unknown" : row[index].as<std::string>();
+}
+
+std::string FormatOptionalMetadataBool(const pqxx::row& row, int index)
+{
+    if (row[index].is_null())
+        return "unknown";
+    return row[index].as<bool>() ? "1" : "0";
+}
+
+int PrintExperimentMetadata(long long experimentId)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (!RequireSchedulerTables(w))
+        return 1;
+
+    if (!ExperimentRunMetadataColumnsExist(w))
+    {
+        pqxx::result exists = w.exec_params(
+            "SELECT 1 FROM experiment WHERE experiment_id = $1 LIMIT 1;",
+            experimentId);
+        if (exists.empty())
+        {
+            std::cerr << "EXPERIMENT_METADATA_FAILED"
+                      << ",experiment_id=" << experimentId
+                      << ",reason=not_found"
+                      << std::endl;
+            return 1;
+        }
+        std::cout << "EXPERIMENT_METADATA"
+                  << ",experiment_id=" << experimentId
+                  << ",metadata_available=0"
+                  << ",reason=migration_required"
+                  << std::endl;
+        return 0;
+    }
+
+    pqxx::result rows = w.exec_params(
+        "SELECT experiment_id, symbol, prediction_horizon, status, phase, "
+        "git_commit, git_branch, git_dirty, build_config, compiler_version, "
+        "schema_version, scheduler_version, binary_name, invocation_mode, "
+        "run_metadata_captured_at::text "
+        "FROM experiment WHERE experiment_id = $1 LIMIT 1;",
+        experimentId);
+    if (rows.empty())
+    {
+        std::cerr << "EXPERIMENT_METADATA_FAILED"
+                  << ",experiment_id=" << experimentId
+                  << ",reason=not_found"
+                  << std::endl;
+        return 1;
+    }
+
+    const auto& row = rows[0];
+    std::cout << "EXPERIMENT_METADATA"
+              << ",experiment_id=" << row[0].as<long long>()
+              << ",symbol=" << row[1].as<std::string>()
+              << ",prediction_horizon=" << row[2].as<int>()
+              << ",status=" << row[3].as<std::string>()
+              << ",phase=" << row[4].as<std::string>()
+              << ",git_commit=" << FormatOptionalMetadataString(row, 5)
+              << ",git_branch=" << FormatOptionalMetadataString(row, 6)
+              << ",dirty=" << FormatOptionalMetadataBool(row, 7)
+              << ",build_config=" << FormatOptionalMetadataString(row, 8)
+              << ",compiler_version=" << FormatOptionalMetadataString(row, 9)
+              << ",schema_version=" << FormatOptionalMetadataString(row, 10)
+              << ",scheduler_version=" << FormatOptionalMetadataString(row, 11)
+              << ",binary_name=" << FormatOptionalMetadataString(row, 12)
+              << ",invocation_mode=" << FormatOptionalMetadataString(row, 13)
+              << ",captured_at=" << FormatOptionalMetadataString(row, 14)
+              << std::endl;
+    return 0;
 }
 
 std::optional<double> OptionalDoubleCell(const pqxx::row& row, int index)
@@ -3764,6 +3960,7 @@ int RunSchedulerOnce(const SchedulerOptions& options)
             return 1;
         if (!options.dryRun)
         {
+            BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             RecoverOrphanedRunningExperiments(w);
             rc |= FailInvalidSchedulerPhases(w);
         }
@@ -3789,6 +3986,7 @@ int RunScheduler(const SchedulerOptions& options)
             return 1;
         if (!options.dryRun)
         {
+            BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             recoveryCount = RecoverOrphanedRunningExperiments(w);
             if (FailInvalidSchedulerPhases(w) != 0)
             {
@@ -5633,6 +5831,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
         << "Usage: " << exe
+        << " --experiment-metadata=ID\n"
+        << "Usage: " << exe
         << " --pause-experiment=ID | --resume-experiment=ID | --cancel-experiment=ID | "
         << "--retry-failed-experiment=ID | --requeue-inference=ID | --requeue-analysis=ID "
         << "[--dry-run] [--yes]\n"
@@ -5684,6 +5884,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunStopExperimentCommand(options);
         if (options.schedulerStatus)
             return PrintSchedulerStatus(options);
+        if (options.experimentMetadataId.has_value())
+            return PrintExperimentMetadata(*options.experimentMetadataId);
         if (options.pauseExperimentId.has_value() ||
             options.resumeExperimentId.has_value() ||
             options.cancelExperimentId.has_value() ||

@@ -149,6 +149,13 @@ struct MetaAnalysisResult
 {
     std::string scope;
     std::string generatedAt;
+    std::string generatedGitCommit = "unknown";
+    std::string generatedGitBranch = "unknown";
+    std::string generatedGitDirty = "unknown";
+    std::string generatedBuildConfig = "unknown";
+    std::string generatedCompilerVersion = "unknown";
+    std::string generatedSchemaVersion = "unknown";
+    std::string generatedSchedulerVersion = "unknown";
     RecommendationEpochPolicy recommendationEpochPolicy = RecommendationEpochPolicy::Highest;
     long long totalExperiments = 0;
     long long completedExperiments = 0;
