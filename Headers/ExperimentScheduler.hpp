@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <regex>
 #include <signal.h>
@@ -42,6 +43,7 @@ struct SchedulerOptions
     bool analyzeCompletedExperiments = false;
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
+    bool schedulerStatus = false;
     bool help = false;
     bool dryRun = false;
     bool schedulerOnce = false;
@@ -71,6 +73,7 @@ struct SchedulerOptions
     std::optional<std::string> leaderboardSymbol;
     std::optional<int> leaderboardHorizon;
     int leaderboardLimit = 20;
+    std::string logLevel = "summary";
 };
 
 struct QueueDefaults
@@ -155,6 +158,45 @@ struct QueueSnapshot
     int runningAnalyze = 0;
 };
 
+struct SchedulerStatusJob
+{
+    long long experimentId = -1;
+    std::string symbol;
+    int predictionHorizon = 0;
+    std::string phase;
+    std::string status;
+    int targetEpochs = 0;
+    std::optional<long long> modelId;
+    std::optional<int> completedEpochs;
+    std::optional<double> elapsedSeconds;
+    std::string startedAt;
+    std::string updatedAt;
+    std::string completedAt;
+    std::string errorMessage;
+};
+
+struct SchedulerStatusCounts
+{
+    int queued = 0;
+    int running = 0;
+    int completed = 0;
+    int failed = 0;
+    int cancelled = 0;
+};
+
+struct SchedulerStatusProcessSnapshot
+{
+    bool processDetectionAvailable = false;
+    std::vector<int> schedulerPids;
+    int trainWorkers = 0;
+    int inferWorkers = 0;
+    int analysisWorkers = 0;
+    std::optional<int> maxTrainProcs;
+    std::optional<int> maxInferProcs;
+    std::optional<int> maxAnalyzeProcs;
+    std::optional<int> schedulerPollSeconds;
+};
+
 struct PhaseSchedulingStats
 {
     std::string phase;
@@ -191,6 +233,7 @@ inline bool IsExperimentSchedulerCommand(int argc, const char* argv[])
             arg == "--queue-sweep" ||
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
+            arg == "--scheduler-status" ||
             arg == "--help" ||
             arg == "--analyze-experiment" ||
             arg.rfind("--analyze-experiment=", 0) == 0)
@@ -326,6 +369,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.analyzeCompletedExperiments = true;
         else if (arg == "--print-experiment-leaderboard")
             options.printLeaderboard = true;
+        else if (arg == "--scheduler-status")
+            options.schedulerStatus = true;
         else if (arg == "--help")
             options.help = true;
         else if (arg == "--dry-run")
@@ -386,6 +431,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.leaderboardHorizon = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--leaderboard-limit")
             options.leaderboardLimit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--log-level")
+            options.logLevel = RequireNextArg(argc, argv, i, arg);
         else if (SplitOptionWithValue(arg, "--symbol", value))
             options.symbol = EA::CanonicalSymbol::Normalize(value);
         else if (SplitOptionWithValue(arg, "--prediction-horizon", value))
@@ -436,6 +483,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.leaderboardHorizon = ParsePositiveInt("--leaderboard-horizon", value);
         else if (SplitOptionWithValue(arg, "--leaderboard-limit", value))
             options.leaderboardLimit = ParsePositiveInt("--leaderboard-limit", value);
+        else if (SplitOptionWithValue(arg, "--log-level", value))
+            options.logLevel = value;
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -450,11 +499,16 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.analyzeCompletedExperiments ? 1 : 0) +
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
         (options.printLeaderboard ? 1 : 0) +
+        (options.schedulerStatus ? 1 : 0) +
         (options.help ? 1 : 0);
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
     if (options.recoverOrphansOnly && !options.scheduleExperiments)
         throw std::invalid_argument("--recover-orphans-only requires --schedule-experiments");
+    if (options.logLevel != "quiet" &&
+        options.logLevel != "summary" &&
+        options.logLevel != "diagnostic")
+        throw std::invalid_argument("--log-level must be quiet, summary, or diagnostic");
 
     return options;
 }
@@ -3366,6 +3420,461 @@ inline int PrintLeaderboard(const SchedulerOptions& options)
     return 0;
 }
 
+inline bool SchedulerStatusShouldEmitMachineRecords(const SchedulerOptions& options)
+{
+    return options.logLevel == "summary" || options.logLevel == "diagnostic";
+}
+
+inline bool UseAnsiColors()
+{
+    const char* term = std::getenv("TERM");
+    return ::isatty(STDOUT_FILENO) && term && std::string{term} != "dumb";
+}
+
+inline std::string Colorize(const std::string& value,
+                            const std::string& ansiCode,
+                            bool useColor)
+{
+    if (!useColor)
+        return value;
+    return "\033[" + ansiCode + "m" + value + "\033[0m";
+}
+
+inline std::string ColorForStatus(const std::string& status, bool useColor)
+{
+    if (status == "running")
+        return Colorize(status, "32", useColor);
+    if (status == "pending")
+        return Colorize(status, "33", useColor);
+    if (status == "completed" || status == "done")
+        return Colorize(status, "34", useColor);
+    if (status == "failed")
+        return Colorize(status, "31", useColor);
+    return status;
+}
+
+inline std::string OptionalLongLongText(const std::optional<long long>& value)
+{
+    return value.has_value() ? std::to_string(*value) : "unknown";
+}
+
+inline std::string OptionalIntText(const std::optional<int>& value)
+{
+    return value.has_value() ? std::to_string(*value) : "unknown";
+}
+
+inline std::string OptionalDoubleText(const std::optional<double>& value, int precision = 1)
+{
+    if (!value.has_value())
+        return "unknown";
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(precision) << *value;
+    return oss.str();
+}
+
+inline std::string FormatPercentComplete(const SchedulerStatusJob& job)
+{
+    if (!job.completedEpochs.has_value() || job.targetEpochs <= 0)
+        return "unknown";
+    const double percent = std::min(100.0,
+                                    100.0 * static_cast<double>(*job.completedEpochs) /
+                                        static_cast<double>(job.targetEpochs));
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1) << percent << "%";
+    return oss.str();
+}
+
+inline std::string FormatDurationSeconds(double seconds)
+{
+    if (seconds < 0.0 || !std::isfinite(seconds))
+        return "unknown";
+    long long total = static_cast<long long>(std::llround(seconds));
+    const long long days = total / 86400;
+    total %= 86400;
+    const long long hours = total / 3600;
+    total %= 3600;
+    const long long minutes = total / 60;
+    const long long secs = total % 60;
+
+    std::ostringstream oss;
+    if (days > 0)
+        oss << days << "d ";
+    if (hours > 0 || days > 0)
+        oss << hours << "h ";
+    if (minutes > 0 || hours > 0 || days > 0)
+        oss << minutes << "m ";
+    oss << secs << "s";
+    return oss.str();
+}
+
+inline std::string FormatOptionalDuration(const std::optional<double>& seconds)
+{
+    return seconds.has_value() ? FormatDurationSeconds(*seconds) : "unknown";
+}
+
+inline std::string EstimateEta(const SchedulerStatusJob& job)
+{
+    if (!job.completedEpochs.has_value() ||
+        !job.elapsedSeconds.has_value() ||
+        *job.completedEpochs <= 0 ||
+        job.targetEpochs <= 0)
+    {
+        return "unknown";
+    }
+    if (*job.completedEpochs >= job.targetEpochs)
+        return "0s";
+
+    const double secondsPerEpoch = *job.elapsedSeconds / static_cast<double>(*job.completedEpochs);
+    return FormatDurationSeconds(secondsPerEpoch * static_cast<double>(job.targetEpochs - *job.completedEpochs));
+}
+
+inline std::string ReadCommandOutput(const std::string& command)
+{
+    std::string output;
+    FILE* pipe = ::popen(command.c_str(), "r");
+    if (!pipe)
+        return output;
+
+    char buffer[4096];
+    while (std::fgets(buffer, sizeof(buffer), pipe))
+        output += buffer;
+    ::pclose(pipe);
+    return output;
+}
+
+inline std::optional<int> ExtractCommandIntOption(const std::string& command,
+                                                  const std::string& option)
+{
+    const std::regex regex(option + R"((?:=|\s+)([0-9]+))");
+    std::smatch match;
+    if (!std::regex_search(command, match, regex))
+        return std::nullopt;
+    return ParsePositiveInt(option, match[1].str());
+}
+
+inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
+{
+    SchedulerStatusProcessSnapshot snapshot;
+    const std::string psOutput = ReadCommandOutput("ps -axo pid=,command=");
+    if (psOutput.empty())
+        return snapshot;
+
+    snapshot.processDetectionAvailable = true;
+    std::istringstream stream(psOutput);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        if (line.empty())
+            continue;
+        std::istringstream lineStream(line);
+        int pid = -1;
+        lineStream >> pid;
+        std::string command;
+        std::getline(lineStream, command);
+        if (pid <= 0)
+            continue;
+
+        const bool isLstm = command.find("LSTM_Release") != std::string::npos ||
+                            command.find("/LSTM ") != std::string::npos ||
+                            command.find(" LSTM ") != std::string::npos;
+        if (!isLstm)
+            continue;
+
+        if (command.find("--schedule-experiments") != std::string::npos)
+        {
+            snapshot.schedulerPids.push_back(pid);
+            if (!snapshot.maxTrainProcs.has_value())
+                snapshot.maxTrainProcs = ExtractCommandIntOption(command, "--max-train-procs");
+            if (!snapshot.maxInferProcs.has_value())
+                snapshot.maxInferProcs = ExtractCommandIntOption(command, "--max-infer-procs");
+            if (!snapshot.maxAnalyzeProcs.has_value())
+                snapshot.maxAnalyzeProcs = ExtractCommandIntOption(command, "--max-analyze-procs");
+            if (!snapshot.schedulerPollSeconds.has_value())
+                snapshot.schedulerPollSeconds = ExtractCommandIntOption(command, "--scheduler-poll-seconds");
+        }
+        else if (command.find("--train") != std::string::npos)
+        {
+            ++snapshot.trainWorkers;
+        }
+        else if (command.find("--infer") != std::string::npos)
+        {
+            ++snapshot.inferWorkers;
+        }
+        else if (command.find("--analyze-experiment") != std::string::npos ||
+                 command.find("--analyze-completed-experiments") != std::string::npos)
+        {
+            ++snapshot.analysisWorkers;
+        }
+    }
+    return snapshot;
+}
+
+inline SchedulerStatusCounts LoadSchedulerStatusCounts(pqxx::work& w)
+{
+    SchedulerStatusCounts counts;
+    pqxx::result rows = w.exec(
+        "SELECT status, count(*) "
+        "FROM experiment "
+        "GROUP BY status;");
+    for (const auto& row : rows)
+    {
+        const std::string status = row[0].as<std::string>();
+        const int count = row[1].as<int>();
+        if (status == "pending")
+            counts.queued = count;
+        else if (status == "running")
+            counts.running = count;
+        else if (status == "completed")
+            counts.completed = count;
+        else if (status == "failed")
+            counts.failed = count;
+        else if (status == "cancelled")
+            counts.cancelled = count;
+    }
+    return counts;
+}
+
+inline SchedulerStatusJob RowToSchedulerStatusJob(const pqxx::row& row)
+{
+    SchedulerStatusJob job;
+    job.experimentId = row[0].as<long long>();
+    job.symbol = row[1].as<std::string>();
+    job.predictionHorizon = row[2].as<int>();
+    job.phase = row[3].as<std::string>();
+    job.status = row[4].as<std::string>();
+    job.targetEpochs = row[5].as<int>();
+    job.modelId = OptionalLongLongCell(row, 6);
+    if (!row[7].is_null())
+        job.completedEpochs = row[7].as<int>();
+    if (!row[8].is_null())
+        job.elapsedSeconds = row[8].as<double>();
+    job.startedAt = row[9].is_null() ? "" : row[9].as<std::string>();
+    job.updatedAt = row[10].is_null() ? "" : row[10].as<std::string>();
+    job.completedAt = row[11].is_null() ? "" : row[11].as<std::string>();
+    job.errorMessage = row[12].is_null() ? "" : row[12].as<std::string>();
+    return job;
+}
+
+inline std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
+                                                               const std::string& status,
+                                                               const std::optional<std::string>& phase,
+                                                               int limit,
+                                                               bool newestFirst)
+{
+    std::ostringstream sql;
+    sql << "WITH latest_analysis AS ("
+        << "  SELECT experiment_id, model_id, MAX(completed_epochs) AS completed_epochs "
+        << "  FROM experiment_analysis_result "
+        << "  WHERE completed_epochs IS NOT NULL "
+        << "  GROUP BY experiment_id, model_id"
+        << "), latest_infer AS ("
+        << "  SELECT model_id, MAX(completed_epochs) AS completed_epochs "
+        << "  FROM inference_eval_result "
+        << "  WHERE completed_epochs IS NOT NULL AND status = 'completed' "
+        << "  GROUP BY model_id"
+        << "), train_meta AS ("
+        << "  SELECT model_id, MAX(round(value)::int) AS completed_epochs "
+        << "  FROM matrix "
+        << "  WHERE param_name = 'train_config_meta' AND row_idx = 0 AND col_idx = 10 "
+        << "  GROUP BY model_id"
+        << ") "
+        << "SELECT e.experiment_id, e.symbol, e.prediction_horizon, e.phase, e.status, "
+        << "e.target_epochs, COALESCE(e.last_model_id, e.resume_model_id) AS model_id, "
+        << "COALESCE(la.completed_epochs, li.completed_epochs, tm.completed_epochs) AS completed_epochs, "
+        << "CASE WHEN e.started_at IS NULL THEN NULL "
+        << "     WHEN e.completed_at IS NULL THEN EXTRACT(EPOCH FROM (now() - e.started_at)) "
+        << "     ELSE EXTRACT(EPOCH FROM (e.completed_at - e.started_at)) END AS elapsed_seconds, "
+        << "e.started_at::text, e.updated_at::text, e.completed_at::text, e.error_message "
+        << "FROM experiment e "
+        << "LEFT JOIN latest_analysis la ON la.experiment_id = e.experiment_id "
+        << "LEFT JOIN latest_infer li ON li.model_id = e.last_model_id "
+        << "LEFT JOIN train_meta tm ON tm.model_id = COALESCE(e.last_model_id, e.resume_model_id) "
+        << "WHERE e.status = " << w.quote(status) << " ";
+    if (phase.has_value())
+        sql << "AND e.phase = " << w.quote(*phase) << " ";
+    sql << "ORDER BY ";
+    if (status == "pending")
+        sql << "e.updated_at ASC, e.experiment_id ASC ";
+    else if (newestFirst)
+        sql << "COALESCE(e.completed_at, e.updated_at) DESC, e.experiment_id DESC ";
+    else
+        sql << "COALESCE(e.started_at, e.updated_at) ASC, e.experiment_id ASC ";
+    sql << "LIMIT " << limit << ";";
+
+    pqxx::result rows = w.exec(sql.str());
+    std::vector<SchedulerStatusJob> jobs;
+    jobs.reserve(rows.size());
+    for (const auto& row : rows)
+        jobs.push_back(RowToSchedulerStatusJob(row));
+    return jobs;
+}
+
+inline void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
+{
+    std::cout << "SCHEDULER_STATUS_JOB"
+              << ",experiment_id=" << job.experimentId
+              << ",phase=" << job.phase
+              << ",status=" << job.status
+              << ",symbol=" << job.symbol
+              << ",prediction_horizon=" << job.predictionHorizon
+              << ",target_epochs=" << job.targetEpochs
+              << ",completed_epochs=" << OptionalIntText(job.completedEpochs)
+              << ",model_id=" << OptionalLongLongText(job.modelId)
+              << std::endl;
+}
+
+inline void PrintStatusJobTable(const std::string& title,
+                                const std::vector<SchedulerStatusJob>& jobs,
+                                bool useColor,
+                                bool showEta,
+                                bool showError)
+{
+    std::cout << "\n" << title << "\n";
+    if (jobs.empty())
+    {
+        std::cout << "  none\n";
+        return;
+    }
+
+    for (const auto& job : jobs)
+    {
+        std::cout << "  experiment_id=" << job.experimentId
+                  << " symbol=" << job.symbol
+                  << " H=" << job.predictionHorizon
+                  << " phase=" << job.phase
+                  << " status=" << ColorForStatus(job.status, useColor)
+                  << " model_id=" << OptionalLongLongText(job.modelId)
+                  << " completed_epochs=" << OptionalIntText(job.completedEpochs)
+                  << " target_epochs=" << job.targetEpochs
+                  << " percent=" << FormatPercentComplete(job)
+                  << " elapsed=" << FormatOptionalDuration(job.elapsedSeconds);
+        if (showEta)
+            std::cout << " eta=" << EstimateEta(job);
+        if (showError && !job.errorMessage.empty())
+            std::cout << " error=" << job.errorMessage;
+        std::cout << "\n";
+    }
+}
+
+inline int PrintSchedulerStatus(const SchedulerOptions& options)
+{
+    const bool useColor = UseAnsiColors();
+    const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
+
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (!RequireSchedulerTables(w))
+        return 1;
+
+    const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
+    const SchedulerStatusCounts counts = LoadSchedulerStatusCounts(w);
+    const std::vector<SchedulerStatusJob> runningTrain = LoadSchedulerStatusJobs(w, "running", "train", 50, false);
+    const std::vector<SchedulerStatusJob> runningInfer = LoadSchedulerStatusJobs(w, "running", "infer", 50, false);
+    const std::vector<SchedulerStatusJob> runningAnalyze = LoadSchedulerStatusJobs(w, "running", "analyze", 50, false);
+    const std::vector<SchedulerStatusJob> queued = LoadSchedulerStatusJobs(w, "pending", std::nullopt, 50, false);
+    const std::vector<SchedulerStatusJob> completed = LoadSchedulerStatusJobs(w, "completed", std::nullopt, 10, true);
+    const std::vector<SchedulerStatusJob> failed = LoadSchedulerStatusJobs(w, "failed", std::nullopt, 20, true);
+    w.commit();
+
+    const bool schedulerRunning = !processes.schedulerPids.empty();
+    const std::string schedulerPid =
+        schedulerRunning ? std::to_string(processes.schedulerPids.front()) : "unknown";
+
+    std::cout << "Scheduler Status\n";
+    if (schedulerRunning)
+    {
+        std::cout << "Scheduler process: "
+                  << Colorize("running", "32", useColor)
+                  << " pid=" << schedulerPid;
+        if (processes.schedulerPids.size() > 1)
+            std::cout << " additional_pids=" << (processes.schedulerPids.size() - 1);
+        std::cout << "\n";
+    }
+    else if (!processes.processDetectionAvailable)
+    {
+        std::cout << "Scheduler process: unknown (process detection unavailable)\n";
+    }
+    else
+    {
+        std::cout << Colorize("Scheduler process not detected.", "31", useColor) << "\n";
+    }
+
+    std::cout << "Poll interval: "
+              << (processes.schedulerPollSeconds.has_value()
+                      ? std::to_string(*processes.schedulerPollSeconds) + "s"
+                      : "unknown")
+              << "\n";
+    std::cout << "Configured worker limits: train="
+              << OptionalIntText(processes.maxTrainProcs)
+              << " infer=" << OptionalIntText(processes.maxInferProcs)
+              << " analyze=" << OptionalIntText(processes.maxAnalyzeProcs)
+              << "\n";
+    std::cout << "Detected worker processes: train=" << processes.trainWorkers
+              << " infer=" << processes.inferWorkers
+              << " analyze=" << processes.analysisWorkers
+              << "\n";
+
+    std::cout << "\nOverall Counts\n"
+              << "  queued=" << counts.queued
+              << " running=" << counts.running
+              << " completed=" << counts.completed
+              << " failed=" << counts.failed
+              << " cancelled=" << counts.cancelled
+              << "\n";
+    std::cout << "  pending_train=" << queueSnapshot.pendingTrain
+              << " pending_infer=" << queueSnapshot.pendingInfer
+              << " pending_analyze=" << queueSnapshot.pendingAnalyze
+              << " running_train=" << queueSnapshot.runningTrain
+              << " running_infer=" << queueSnapshot.runningInfer
+              << " running_analyze=" << queueSnapshot.runningAnalyze
+              << "\n";
+
+    PrintStatusJobTable("Active Training Jobs", runningTrain, useColor, true, false);
+    PrintStatusJobTable("Active Inference Jobs", runningInfer, useColor, false, false);
+    PrintStatusJobTable("Active Analysis Jobs", runningAnalyze, useColor, false, false);
+    PrintStatusJobTable("Queued Jobs", queued, useColor, false, false);
+    PrintStatusJobTable("Recent Completed Experiments", completed, useColor, false, false);
+    PrintStatusJobTable("Failed Experiments Summary", failed, useColor, false, true);
+
+    if (SchedulerStatusShouldEmitMachineRecords(options))
+    {
+        std::cout << "\nSCHEDULER_STATUS"
+                  << ",running=" << (schedulerRunning ? "1" : "0")
+                  << ",pid=" << (schedulerRunning ? schedulerPid : "unknown")
+                  << ",train_workers=" << processes.trainWorkers
+                  << ",infer_workers=" << processes.inferWorkers
+                  << ",analysis_workers=" << processes.analysisWorkers
+                  << ",poll_seconds=" << OptionalIntText(processes.schedulerPollSeconds)
+                  << ",max_train_procs=" << OptionalIntText(processes.maxTrainProcs)
+                  << ",max_infer_procs=" << OptionalIntText(processes.maxInferProcs)
+                  << ",max_analyze_procs=" << OptionalIntText(processes.maxAnalyzeProcs)
+                  << std::endl;
+        std::cout << "SCHEDULER_STATUS_COUNT"
+                  << ",queued=" << counts.queued
+                  << ",running=" << counts.running
+                  << ",completed=" << counts.completed
+                  << ",failed=" << counts.failed
+                  << ",cancelled=" << counts.cancelled
+                  << ",pending_train=" << queueSnapshot.pendingTrain
+                  << ",pending_infer=" << queueSnapshot.pendingInfer
+                  << ",pending_analyze=" << queueSnapshot.pendingAnalyze
+                  << ",running_train=" << queueSnapshot.runningTrain
+                  << ",running_infer=" << queueSnapshot.runningInfer
+                  << ",running_analyze=" << queueSnapshot.runningAnalyze
+                  << std::endl;
+        for (const auto& job : runningTrain)
+            PrintSchedulerStatusJobMachine(job);
+        for (const auto& job : runningInfer)
+            PrintSchedulerStatusJobMachine(job);
+        for (const auto& job : runningAnalyze)
+            PrintSchedulerStatusJobMachine(job);
+        for (const auto& job : queued)
+            PrintSchedulerStatusJobMachine(job);
+    }
+
+    return 0;
+}
+
 inline void PrintExperimentSchedulerHelp(const char* executable)
 {
     const std::string exe = executable ? executable : "LSTM_Release";
@@ -3394,6 +3903,8 @@ inline void PrintExperimentSchedulerHelp(const char* executable)
         << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
         << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
         << "[--scheduler-log-dir=PATH] [--dry-run] [--recover-orphans-only]\n"
+        << "Usage: " << exe
+        << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
         << "Usage: " << exe
         << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
         << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
@@ -3429,6 +3940,8 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
             return EnqueueExperiment(options);
         if (options.scheduleExperiments)
             return RunScheduler(options);
+        if (options.schedulerStatus)
+            return PrintSchedulerStatus(options);
         if (options.analyzeExperimentId.has_value())
             return AnalyzeExperimentById(*options.analyzeExperimentId, options);
         if (options.analyzeCompletedExperiments)
