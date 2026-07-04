@@ -46,6 +46,16 @@ struct ExperimentRecord
     std::optional<double> acceptRate;
     std::optional<double> acceptAccuracy;
     std::optional<double> leaderScore;
+    std::string dataSource;
+};
+
+struct DataSourceSummary
+{
+    long long schedulerExperiments = 0;
+    long long legacyModels = 0;
+    long long mergedRecords = 0;
+    long long duplicateModelsSkipped = 0;
+    double coveragePercentage = 0.0;
 };
 
 struct ScalarStats
@@ -120,6 +130,7 @@ struct MetaAnalysisResult
     std::vector<LeaderRow> leaders;
     std::vector<PlateauSignal> plateauSignals;
     std::vector<Recommendation> recommendations;
+    DataSourceSummary dataSources;
     std::string statisticsJson;
     std::string recommendationsJson;
     std::string leaderboardJson;

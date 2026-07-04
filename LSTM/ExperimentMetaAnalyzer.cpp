@@ -373,6 +373,127 @@ std::vector<ExperimentRecord> LoadExperimentRecords(pqxx::work& w,
         record.acceptAccuracy = OptionalDoubleCell(row, 18);
         record.leaderScore = OptionalDoubleCell(row, 19);
         record.modelName = OptionalStringCell(row, 20).value_or("");
+        record.dataSource = "scheduler";
+        records.push_back(std::move(record));
+    }
+    return records;
+}
+
+double PredictionImbalancePenaltyFromFractions(const std::optional<double>& predDown,
+                                               const std::optional<double>& predNeutral,
+                                               const std::optional<double>& predUp)
+{
+    if (!predDown.has_value() || !predNeutral.has_value() || !predUp.has_value())
+        return 1.0;
+    const double maxPredFrac = std::max({*predDown, *predNeutral, *predUp});
+    if (maxPredFrac <= 0.60)
+        return 1.0;
+    return std::max(0.25, 1.0 - ((maxPredFrac - 0.60) / 0.40));
+}
+
+std::optional<double> ComputeLegacyLeaderScore(const std::optional<double>& inferAccuracy,
+                                               const std::optional<double>& acceptAccuracy,
+                                               const std::optional<double>& predDown,
+                                               const std::optional<double>& predNeutral,
+                                               const std::optional<double>& predUp)
+{
+    if (!inferAccuracy.has_value())
+        return std::nullopt;
+    const double acceptedAccuracy = acceptAccuracy.value_or(*inferAccuracy);
+    const double penalty = PredictionImbalancePenaltyFromFractions(predDown, predNeutral, predUp);
+    return (*inferAccuracy) * (0.75 + 0.25 * acceptedAccuracy) * penalty;
+}
+
+std::vector<ExperimentRecord> LoadLegacyExperimentRecords(pqxx::work& w,
+                                                          const MetaAnalysisOptions& options,
+                                                          const std::set<long long>& schedulerModelIds,
+                                                          long long& legacyModelCount,
+                                                          long long& duplicateModelsSkipped)
+{
+    std::ostringstream sql;
+    sql << "WITH cfg AS ("
+        << "  SELECT model_id,"
+        << "         max(value) FILTER (WHERE col_idx = 1) AS prediction_horizon,"
+        << "         max(value) FILTER (WHERE col_idx = 2) AS threshold_logret,"
+        << "         max(value) FILTER (WHERE col_idx = 10) AS completed_epochs,"
+        << "         max(value) FILTER (WHERE col_idx = 11) AS core_lr_mult,"
+        << "         max(value) FILTER (WHERE col_idx = 12) AS head_weight_lr_mult "
+        << "  FROM matrix "
+        << "  WHERE param_name = 'train_config_meta' AND row_idx = 0 "
+        << "  GROUP BY model_id"
+        << "), sym AS ("
+        << "  SELECT model_id, string_agg(chr(round(value)::int), '' ORDER BY col_idx) AS symbol "
+        << "  FROM matrix "
+        << "  WHERE param_name = 'train_symbol_meta' AND row_idx = 0 "
+        << "  GROUP BY model_id"
+        << "), latest_eval AS ("
+        << "  SELECT DISTINCT ON (model_id) model_id, completed_epochs AS eval_completed_epochs, accuracy, "
+        << "         accept_model, pred_down, pred_neutral, pred_up "
+        << "  FROM inference_eval_result "
+        << "  WHERE status = 'completed' "
+        << "  ORDER BY model_id, completed_at DESC, id DESC"
+        << ") "
+        << "SELECT m.model_id, m.name, m.comment, sym.symbol, "
+        << "       cfg.prediction_horizon, cfg.threshold_logret, cfg.completed_epochs, "
+        << "       cfg.core_lr_mult, cfg.head_weight_lr_mult, "
+        << "       latest_eval.eval_completed_epochs, latest_eval.accuracy, latest_eval.accept_model, "
+        << "       latest_eval.pred_down, latest_eval.pred_neutral, latest_eval.pred_up "
+        << "FROM model m "
+        << "LEFT JOIN cfg ON cfg.model_id = m.model_id "
+        << "LEFT JOIN sym ON sym.model_id = m.model_id "
+        << "LEFT JOIN latest_eval ON latest_eval.model_id = m.model_id "
+        << "WHERE cfg.model_id IS NOT NULL ";
+    if (options.symbol.has_value())
+        sql << "AND sym.symbol = " << w.quote(*options.symbol) << " ";
+    if (options.horizon.has_value())
+        sql << "AND cfg.prediction_horizon = " << *options.horizon << " ";
+    sql << "ORDER BY m.model_id;";
+
+    pqxx::result rows = w.exec(sql.str());
+    legacyModelCount = static_cast<long long>(rows.size());
+    std::vector<ExperimentRecord> records;
+    records.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        const long long modelId = row[0].as<long long>();
+        if (schedulerModelIds.count(modelId))
+        {
+            ++duplicateModelsSkipped;
+            continue;
+        }
+
+        ExperimentRecord record;
+        record.experimentId = -modelId;
+        record.modelId = modelId;
+        record.modelName = OptionalStringCell(row, 1).value_or("");
+        const std::string comment = OptionalStringCell(row, 2).value_or("");
+        record.symbol = OptionalStringCell(row, 3).value_or("unknown");
+        record.horizon = row[4].is_null() ? 0 : static_cast<int>(std::llround(row[4].as<double>()));
+        record.threshold = OptionalDoubleCell(row, 5).value_or(0.0);
+        record.completedEpochs = OptionalDoubleCell(row, 9).has_value()
+            ? std::optional<int>{static_cast<int>(std::llround(*OptionalDoubleCell(row, 9)))}
+            : (OptionalDoubleCell(row, 6).has_value()
+                ? std::optional<int>{static_cast<int>(std::llround(*OptionalDoubleCell(row, 6)))}
+                : std::nullopt);
+        record.targetEpochs = record.completedEpochs.value_or(0);
+        record.coreLr = OptionalDoubleCell(row, 7);
+        record.headLr = OptionalDoubleCell(row, 8);
+        record.status = "completed";
+        record.phase = "done";
+        record.resumed = (comment.find("resumed") != std::string::npos);
+        record.inferAccuracy = OptionalDoubleCell(row, 10);
+        if (!row[11].is_null())
+            record.acceptRate = row[11].as<bool>() ? 1.0 : 0.0;
+        record.acceptAccuracy = record.inferAccuracy;
+        const std::optional<double> predDown = OptionalDoubleCell(row, 12);
+        const std::optional<double> predNeutral = OptionalDoubleCell(row, 13);
+        const std::optional<double> predUp = OptionalDoubleCell(row, 14);
+        record.leaderScore = ComputeLegacyLeaderScore(record.inferAccuracy,
+                                                      record.acceptAccuracy,
+                                                      predDown,
+                                                      predNeutral,
+                                                      predUp);
+        record.dataSource = "legacy_model";
         records.push_back(std::move(record));
     }
     return records;
@@ -416,6 +537,61 @@ void LoadExperimentCounts(pqxx::work& w,
     result.runningExperiments = row[3].as<long long>();
     result.pendingExperiments = row[4].as<long long>();
     result.completedModels = CountDistinctCompletedModels(w, options);
+    const long long terminal = result.completedExperiments + result.failedExperiments;
+    result.successRate = terminal > 0
+        ? static_cast<double>(result.completedExperiments) / static_cast<double>(terminal)
+        : 0.0;
+}
+
+std::set<long long> SchedulerModelIds(const std::vector<ExperimentRecord>& records)
+{
+    std::set<long long> modelIds;
+    for (const auto& record : records)
+    {
+        if (record.modelId.has_value())
+            modelIds.insert(*record.modelId);
+    }
+    return modelIds;
+}
+
+long long CountCompletedRecords(const std::vector<ExperimentRecord>& records)
+{
+    return static_cast<long long>(std::count_if(records.begin(), records.end(), [](const ExperimentRecord& record) {
+        return record.status == "completed";
+    }));
+}
+
+long long CountDistinctCompletedRecordModels(const std::vector<ExperimentRecord>& records)
+{
+    std::set<long long> modelIds;
+    for (const auto& record : records)
+    {
+        if (record.status == "completed" && record.modelId.has_value())
+            modelIds.insert(*record.modelId);
+    }
+    return static_cast<long long>(modelIds.size());
+}
+
+void ApplyMergedCounts(MetaAnalysisResult& result,
+                       const std::vector<ExperimentRecord>& schedulerRecords,
+                       long long legacyModelCount,
+                       long long duplicateModelsSkipped)
+{
+    result.dataSources.schedulerExperiments = static_cast<long long>(schedulerRecords.size());
+    result.dataSources.legacyModels = legacyModelCount;
+    result.dataSources.duplicateModelsSkipped = duplicateModelsSkipped;
+    result.dataSources.mergedRecords = static_cast<long long>(result.records.size());
+    const long long possibleRecords = result.dataSources.schedulerExperiments + result.dataSources.legacyModels;
+    result.dataSources.coveragePercentage = possibleRecords > 0
+        ? 100.0 * static_cast<double>(result.dataSources.mergedRecords) / static_cast<double>(possibleRecords)
+        : 0.0;
+
+    result.completedExperiments = CountCompletedRecords(result.records);
+    result.completedModels = CountDistinctCompletedRecordModels(result.records);
+    result.totalExperiments = result.completedExperiments +
+                              result.failedExperiments +
+                              result.runningExperiments +
+                              result.pendingExperiments;
     const long long terminal = result.completedExperiments + result.failedExperiments;
     result.successRate = terminal > 0
         ? static_cast<double>(result.completedExperiments) / static_cast<double>(terminal)
@@ -906,6 +1082,15 @@ std::string BuildStatisticsJson(const MetaAnalysisResult& result)
          << ",\"success_rate\":" << FormatDouble(result.successRate)
          << ",\"confidence\":" << JsonString(ConfidenceForSampleSize(static_cast<size_t>(result.completedExperiments)))
          << "}"
+         << ",\"data_sources\":{"
+         << "\"scheduler_experiments\":" << result.dataSources.schedulerExperiments
+         << ",\"legacy_model_count\":" << result.dataSources.legacyModels
+         << ",\"legacy_models\":" << result.dataSources.legacyModels
+         << ",\"merged_record_count\":" << result.dataSources.mergedRecords
+         << ",\"duplicate_model_count\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"duplicate_models_skipped\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"coverage_percentage\":" << FormatDouble(result.dataSources.coveragePercentage)
+         << "}"
          << ",\"group_statistics\":" << GroupStatsJson(result.groupStats)
          << ",\"plateau_signals\":" << PlateauJson(result.plateauSignals)
          << "}";
@@ -921,6 +1106,19 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << ",\"scope\":" << JsonString(result.scope)
          << ",\"completed_experiments\":" << result.completedExperiments
          << ",\"completed_models\":" << result.completedModels
+         << ",\"legacy_model_count\":" << result.dataSources.legacyModels
+         << ",\"scheduler_experiment_count\":" << result.dataSources.schedulerExperiments
+         << ",\"merged_record_count\":" << result.dataSources.mergedRecords
+         << ",\"duplicate_model_count\":" << result.dataSources.duplicateModelsSkipped
+         << "}"
+         << ",\"data_sources\":{"
+         << "\"scheduler_experiments\":" << result.dataSources.schedulerExperiments
+         << ",\"legacy_model_count\":" << result.dataSources.legacyModels
+         << ",\"legacy_models\":" << result.dataSources.legacyModels
+         << ",\"merged_record_count\":" << result.dataSources.mergedRecords
+         << ",\"duplicate_model_count\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"duplicate_models_skipped\":" << result.dataSources.duplicateModelsSkipped
+         << ",\"coverage_percentage\":" << FormatDouble(result.dataSources.coveragePercentage)
          << "}"
          << ",\"statistics\":" << result.statisticsJson
          << ",\"leaderboards\":" << result.leaderboardJson
@@ -979,6 +1177,13 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
     report << "- Success rate: " << FormatDouble(result.successRate) << "\n";
     report << "- Overall confidence: "
            << ConfidenceForSampleSize(static_cast<size_t>(result.completedExperiments)) << "\n";
+
+    report << "\n## Data Sources\n\n";
+    report << "- Scheduler experiments analyzed: " << result.dataSources.schedulerExperiments << "\n";
+    report << "- Legacy models reconstructed: " << result.dataSources.legacyModels << "\n";
+    report << "- Merged experiment records: " << result.dataSources.mergedRecords << "\n";
+    report << "- Duplicate models skipped: " << result.dataSources.duplicateModelsSkipped << "\n";
+    report << "- Coverage percentage: " << FormatDouble(result.dataSources.coveragePercentage) << "\n";
 
     report << "\n## Current Leaders\n\n";
     report << "| Rank | Experiment | Model | Symbol | Horizon | Epochs | Infer Acc | Accept Acc | Accept Rate | Leader Score |\n";
@@ -1069,7 +1274,18 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
     MetaAnalysisResult result;
     result.scope = ScopeForOptions(options);
     LoadExperimentCounts(w, options, result);
-    result.records = LoadExperimentRecords(w, options);
+    std::vector<ExperimentRecord> schedulerRecords = LoadExperimentRecords(w, options);
+    const std::set<long long> schedulerModelIds = SchedulerModelIds(schedulerRecords);
+    long long legacyModelCount = 0;
+    long long duplicateModelsSkipped = 0;
+    std::vector<ExperimentRecord> legacyRecords = LoadLegacyExperimentRecords(w,
+                                                                               options,
+                                                                               schedulerModelIds,
+                                                                               legacyModelCount,
+                                                                               duplicateModelsSkipped);
+    result.records = schedulerRecords;
+    result.records.insert(result.records.end(), legacyRecords.begin(), legacyRecords.end());
+    ApplyMergedCounts(result, schedulerRecords, legacyModelCount, duplicateModelsSkipped);
     result.groupStats = BuildAllGroupStats(result.records);
     result.leaders = BuildLeaders(result.records, options.limit);
     result.plateauSignals = DetectPlateaus(result.records);
@@ -1090,6 +1306,13 @@ void PrintMarkers(const MetaAnalysisResult& result)
               << ",failed_experiments=" << result.failedExperiments
               << ",completed_models=" << result.completedModels
               << ",success_rate=" << FormatDouble(result.successRate)
+              << std::endl;
+    std::cout << "META_ANALYSIS_DATA_SOURCE"
+              << ",scheduler_experiments=" << result.dataSources.schedulerExperiments
+              << ",legacy_models=" << result.dataSources.legacyModels
+              << ",merged_records=" << result.dataSources.mergedRecords
+              << ",duplicate_models_skipped=" << result.dataSources.duplicateModelsSkipped
+              << ",coverage_percentage=" << FormatDouble(result.dataSources.coveragePercentage)
               << std::endl;
     std::cout << "META_ANALYSIS_CONFIDENCE"
               << ",scope=" << result.scope
