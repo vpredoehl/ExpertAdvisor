@@ -3138,11 +3138,42 @@ std::string LstmDbConnectionString()
     return "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName;
 }
 
+std::optional<long long> ResolveSchedulerExperimentIdForCurrentProcess()
+{
+    try
+    {
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        pqxx::result rows = w.exec_params(
+            "SELECT experiment_id "
+            "FROM experiment "
+            "WHERE worker_pid = $1 "
+            "AND status = 'running' "
+            "AND phase = 'train' "
+            "ORDER BY updated_at DESC "
+            "LIMIT 2;",
+            static_cast<int>(::getpid()));
+        w.commit();
+        if (rows.size() == 1)
+            return rows[0][0].as<long long>();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "SCHEDULER_PROGRESS_EXPERIMENT_LOOKUP_FAILED"
+                  << ",pid=" << static_cast<int>(::getpid())
+                  << ",error=" << e.what()
+                  << std::endl;
+    }
+    return std::nullopt;
+}
+
 void UpdateSchedulerExperimentProgress(const std::optional<long long>& experimentId,
                                        int completedEpoch,
                                        const std::string& operation)
 {
-    if (!experimentId.has_value())
+    const std::optional<long long> effectiveExperimentId =
+        experimentId.has_value() ? experimentId : ResolveSchedulerExperimentIdForCurrentProcess();
+    if (!effectiveExperimentId.has_value())
         return;
     try
     {
@@ -3156,13 +3187,13 @@ void UpdateSchedulerExperimentProgress(const std::optional<long long>& experimen
             completedEpoch,
             static_cast<int>(::getpid()),
             operation,
-            *experimentId);
+            *effectiveExperimentId);
         w.commit();
     }
     catch (const std::exception& e)
     {
         std::cerr << "SCHEDULER_PROGRESS_UPDATE_FAILED"
-                  << ",experiment_id=" << *experimentId
+                  << ",experiment_id=" << *effectiveExperimentId
                   << ",epoch=" << completedEpoch
                   << ",error=" << e.what()
                   << std::endl;
@@ -6155,7 +6186,7 @@ int main(int argc, const char * argv[])
                     l.completedEpochs = static_cast<size_t>(e + 1);
                     UpdateSchedulerExperimentProgress(launchArgs.schedulerExperimentId,
                                                       static_cast<int>(e + 1),
-                                                      "train");
+                                                      "training");
                     SavePeriodicCheckpointIfDue(launchArgs,
                                                 resumeConfig,
                                                 rawPriceTableName,

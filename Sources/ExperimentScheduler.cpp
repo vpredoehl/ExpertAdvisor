@@ -2528,6 +2528,93 @@ std::string ReadFileIfExists(const std::string& path)
     return ss.str();
 }
 
+int CountCompletedTrainingEpochsFromLog(const std::string& logText)
+{
+    if (logText.empty())
+        return 0;
+    const std::regex epochDoneRegex{R"(\bEPOCH_3CLASS_ACCURACY\b)"};
+    const int epochsCompletedInThisProcess =
+        static_cast<int>(std::distance(std::sregex_iterator(logText.begin(), logText.end(), epochDoneRegex),
+                                       std::sregex_iterator()));
+
+    int resumedFromEpoch = 0;
+    const std::regex resumeRegex{R"(RESUME_COMPLETED_EPOCH=([0-9]+))"};
+    for (std::sregex_iterator it{logText.begin(), logText.end(), resumeRegex}, end; it != end; ++it)
+        resumedFromEpoch = std::stoi((*it)[1].str());
+
+    int checkpointEpoch = 0;
+    const std::regex checkpointRegex{R"(CHECKPOINT_SAVE_DONE[^[:cntrl:]]*epoch=([0-9]+))"};
+    for (std::sregex_iterator it{logText.begin(), logText.end(), checkpointRegex}, end; it != end; ++it)
+        checkpointEpoch = std::stoi((*it)[1].str());
+
+    return std::max(checkpointEpoch, resumedFromEpoch + epochsCompletedInThisProcess);
+}
+
+void BackfillRunningTrainingProgressFromLogs(pqxx::work& w,
+                                             const std::optional<long long>& experimentId)
+{
+    std::ostringstream sql;
+    sql << "SELECT experiment_id, train_log_path, current_epoch "
+        << "FROM experiment "
+        << "WHERE status = 'running' "
+        << "AND phase = 'train' "
+        << "AND train_log_path IS NOT NULL ";
+    if (experimentId.has_value())
+        sql << "AND experiment_id = " << *experimentId << " ";
+    sql << "ORDER BY experiment_id ASC;";
+
+    pqxx::result rows = w.exec(sql.str());
+    for (const auto& row : rows)
+    {
+        const long long id = row[0].as<long long>();
+        const std::string logPath = row[1].as<std::string>();
+        const std::optional<int> currentEpoch =
+            row[2].is_null() ? std::optional<int>{} : std::optional<int>{row[2].as<int>()};
+        const int completedEpochs = CountCompletedTrainingEpochsFromLog(ReadFileIfExists(logPath));
+        if (completedEpochs <= 0)
+            continue;
+        if (currentEpoch.has_value() && *currentEpoch >= completedEpochs)
+            continue;
+
+        w.exec_params(
+            "UPDATE experiment "
+            "SET current_epoch = $1, current_operation = 'training', updated_at = now() "
+            "WHERE experiment_id = $2 "
+            "AND status = 'running' "
+            "AND phase = 'train' "
+            "AND (current_epoch IS NULL OR current_epoch < $1);",
+            completedEpochs,
+            id);
+    }
+}
+
+void PersistDiscoveredRunningTrainingMetadata(const std::vector<SchedulerStatusJob>& jobs)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    for (const auto& job : jobs)
+    {
+        if (job.status != "running" || job.phase != "train")
+            continue;
+        if (!job.pid.has_value() && !job.currentEpoch.has_value())
+            continue;
+
+        std::ostringstream sql;
+        sql << "UPDATE experiment SET current_operation = 'training'";
+        if (job.pid.has_value())
+            sql << ", worker_pid = " << *job.pid;
+        if (job.currentEpoch.has_value())
+            sql << ", current_epoch = GREATEST(COALESCE(current_epoch, 0), " << *job.currentEpoch << ")";
+        sql << ", updated_at = now() "
+            << "WHERE experiment_id = " << job.experimentId << " "
+            << "AND status = 'running' "
+            << "AND phase = 'train';";
+        w.exec(sql.str());
+    }
+    w.commit();
+}
+
 void WriteTextFile(const std::string& path, const std::string& text)
 {
     std::ofstream out{path};
@@ -6012,8 +6099,10 @@ int PrintCompactExperimentStatus(const SchedulerOptions& options)
     const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
+    BackfillRunningTrainingProgressFromLogs(w, options.statusExperimentId);
 
     std::vector<SchedulerStatusJob> jobs;
     if (options.statusExperimentId.has_value())
@@ -6040,6 +6129,7 @@ int PrintCompactExperimentStatus(const SchedulerOptions& options)
     w.commit();
 
     EnrichSchedulerStatusJobs(jobs, processes);
+    PersistDiscoveredRunningTrainingMetadata(jobs);
 
     if (!options.statusExperimentId.has_value() && jobs.empty())
     {
@@ -6445,8 +6535,10 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
 
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
+    SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
+    BackfillRunningTrainingProgressFromLogs(w, std::nullopt);
 
     const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
     const SchedulerStatusCounts counts = LoadSchedulerStatusCounts(w);
@@ -6467,6 +6559,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     EnrichSchedulerStatusJobs(paused, processes);
     EnrichSchedulerStatusJobs(completed, processes);
     EnrichSchedulerStatusJobs(failed, processes);
+    PersistDiscoveredRunningTrainingMetadata(runningTrain);
     const SchedulerWorkerAccounting workerAccounting =
         ComputeSchedulerWorkerAccounting(processes, runningTrain, runningInfer, runningAnalyze);
 
