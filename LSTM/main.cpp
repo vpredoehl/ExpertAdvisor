@@ -35,6 +35,7 @@
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
 #include "ExperimentScheduler.hpp"
+#include "ExperimentMetaAnalyzer.hpp"
 #include "CanonicalSymbol.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
@@ -5718,6 +5719,8 @@ int main(int argc, const char * argv[])
         return RunLabelGridDiagnostic3Class(argv[2], argv[3]);
     if (argc >= 4 && std::string(argv[1]) == "--feature-trainability-3class")
         return RunFeatureTrainability3Class(argv[2], argv[3]);
+    if (EA::ExperimentMetaAnalyzer::IsMetaAnalysisCommand(argc, argv))
+        return EA::ExperimentMetaAnalyzer::RunMetaAnalysisCli(argc, argv);
     if (EA::ExperimentScheduler::IsExperimentSchedulerCommand(argc, argv))
         return EA::ExperimentScheduler::RunExperimentSchedulerCli(argc, argv);
 
