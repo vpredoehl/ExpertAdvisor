@@ -178,6 +178,9 @@ struct SchedulerStatusJob
     std::optional<double> elapsedSeconds;
     std::optional<double> etaSeconds;
     std::optional<int> pid;
+    std::optional<double> cpuPercent;
+    std::optional<double> memPercent;
+    std::optional<double> rssMb;
     std::optional<std::string> recentProgress;
     std::optional<std::string> trainLogPath;
     std::optional<std::string> inferLogPath;
@@ -186,6 +189,22 @@ struct SchedulerStatusJob
     std::string updatedAt;
     std::string completedAt;
     std::string errorMessage;
+};
+
+struct SchedulerProcessResource
+{
+    int pid = -1;
+    double cpuPercent = 0.0;
+    double memPercent = 0.0;
+    double rssMb = 0.0;
+};
+
+struct SchedulerResourceAggregate
+{
+    int workers = 0;
+    double cpuPercent = 0.0;
+    double memPercent = 0.0;
+    double rssMb = 0.0;
 };
 
 struct SchedulerStatusCounts
@@ -201,9 +220,14 @@ struct SchedulerStatusProcessSnapshot
 {
     bool processDetectionAvailable = false;
     std::vector<int> schedulerPids;
+    std::map<int, SchedulerProcessResource> resourcesByPid;
     std::map<long long, int> trainPidByExperiment;
     std::map<long long, int> inferPidByExperiment;
     std::map<long long, int> analysisPidByExperiment;
+    SchedulerResourceAggregate schedulerResources;
+    SchedulerResourceAggregate trainResources;
+    SchedulerResourceAggregate inferResources;
+    SchedulerResourceAggregate analysisResources;
     int trainWorkers = 0;
     int inferWorkers = 0;
     int analysisWorkers = 0;
@@ -211,6 +235,9 @@ struct SchedulerStatusProcessSnapshot
     std::optional<int> maxInferProcs;
     std::optional<int> maxAnalyzeProcs;
     std::optional<int> schedulerPollSeconds;
+    std::optional<double> totalCpuPercent;
+    std::optional<double> systemMemoryUsedMb;
+    std::optional<double> systemMemoryTotalMb;
 };
 
 struct PhaseSchedulingStats
@@ -3488,6 +3515,16 @@ inline std::string OptionalDoubleText(const std::optional<double>& value, int pr
     return oss.str();
 }
 
+inline std::string OptionalPercentText(const std::optional<double>& value, int precision = 1)
+{
+    return value.has_value() ? OptionalDoubleText(value, precision) + "%" : "unknown";
+}
+
+inline std::string OptionalMbText(const std::optional<double>& value, int precision = 0)
+{
+    return value.has_value() ? OptionalDoubleText(value, precision) + " MB" : "unknown";
+}
+
 inline std::string FormatPercentComplete(const SchedulerStatusJob& job)
 {
     const std::optional<int> epoch = job.currentEpoch.has_value() ? job.currentEpoch : job.completedEpochs;
@@ -3698,10 +3735,82 @@ inline std::optional<int> ExtractCommandIntOption(const std::string& command,
     return ParsePositiveInt(option, match[1].str());
 }
 
+inline void AddResourceToAggregate(SchedulerResourceAggregate& aggregate,
+                                   const SchedulerProcessResource& resource)
+{
+    ++aggregate.workers;
+    aggregate.cpuPercent += resource.cpuPercent;
+    aggregate.memPercent += resource.memPercent;
+    aggregate.rssMb += resource.rssMb;
+}
+
+inline std::optional<double> ParseFirstDoubleFromText(const std::string& text)
+{
+    std::smatch match;
+    if (!std::regex_search(text, match, std::regex{R"(([0-9]+(?:\.[0-9]+)?))"}))
+        return std::nullopt;
+    return std::stod(match[1].str());
+}
+
+inline std::optional<double> LoadSystemMemoryTotalMb()
+{
+    const std::string output = ReadCommandOutput("sysctl -n hw.memsize 2>/dev/null");
+    std::smatch match;
+    if (!std::regex_search(output, match, std::regex{R"(([0-9]+))"}))
+        return std::nullopt;
+    const double bytes = std::stod(match[1].str());
+    return bytes / (1024.0 * 1024.0);
+}
+
+inline std::optional<double> ExtractVmStatPages(const std::string& text,
+                                                const std::string& label)
+{
+    const std::regex regex(label + R"(:\s+([0-9]+)\.)");
+    std::smatch match;
+    if (!std::regex_search(text, match, regex))
+        return std::nullopt;
+    return std::stod(match[1].str());
+}
+
+inline std::optional<double> LoadSystemMemoryUsedMb()
+{
+    const std::string output = ReadCommandOutput("vm_stat 2>/dev/null");
+    if (output.empty())
+        return std::nullopt;
+
+    double pageSize = 4096.0;
+    std::smatch pageMatch;
+    if (std::regex_search(output, pageMatch, std::regex{R"(page size of ([0-9]+) bytes)"}))
+        pageSize = std::stod(pageMatch[1].str());
+
+    double usedPages = 0.0;
+    bool found = false;
+    const std::vector<std::string> labels = {
+        "Pages active",
+        "Pages inactive",
+        "Pages speculative",
+        "Pages wired down",
+        "Pages occupied by compressor"
+    };
+    for (const auto& label : labels)
+    {
+        if (const auto pages = ExtractVmStatPages(output, label))
+        {
+            usedPages += *pages;
+            found = true;
+        }
+    }
+    if (!found)
+        return std::nullopt;
+    return usedPages * pageSize / (1024.0 * 1024.0);
+}
+
 inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
 {
     SchedulerStatusProcessSnapshot snapshot;
-    const std::string psOutput = ReadCommandOutput("ps -axo pid=,command= 2>/dev/null");
+    const std::string psOutput = ReadCommandOutput("ps -axo pid=,pcpu=,pmem=,rss=,command= 2>/dev/null");
+    snapshot.systemMemoryTotalMb = LoadSystemMemoryTotalMb();
+    snapshot.systemMemoryUsedMb = LoadSystemMemoryUsedMb();
     if (psOutput.empty())
         return snapshot;
 
@@ -3714,11 +3823,24 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
             continue;
         std::istringstream lineStream(line);
         int pid = -1;
+        double cpuPercent = 0.0;
+        double memPercent = 0.0;
+        long long rssKb = 0;
         lineStream >> pid;
+        lineStream >> cpuPercent;
+        lineStream >> memPercent;
+        lineStream >> rssKb;
         std::string command;
         std::getline(lineStream, command);
         if (pid <= 0)
             continue;
+
+        SchedulerProcessResource resource;
+        resource.pid = pid;
+        resource.cpuPercent = cpuPercent;
+        resource.memPercent = memPercent;
+        resource.rssMb = static_cast<double>(rssKb) / 1024.0;
+        snapshot.resourcesByPid[pid] = resource;
 
         const bool isLstm = command.find("LSTM_Release") != std::string::npos ||
                             command.find("/LSTM ") != std::string::npos ||
@@ -3729,6 +3851,7 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         if (command.find("--schedule-experiments") != std::string::npos)
         {
             snapshot.schedulerPids.push_back(pid);
+            AddResourceToAggregate(snapshot.schedulerResources, resource);
             if (!snapshot.maxTrainProcs.has_value())
                 snapshot.maxTrainProcs = ExtractCommandIntOption(command, "--max-train-procs");
             if (!snapshot.maxInferProcs.has_value())
@@ -3741,12 +3864,14 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         else if (command.find("--train") != std::string::npos)
         {
             ++snapshot.trainWorkers;
+            AddResourceToAggregate(snapshot.trainResources, resource);
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.trainPidByExperiment[*experimentId] = pid;
         }
         else if (command.find("--infer") != std::string::npos)
         {
             ++snapshot.inferWorkers;
+            AddResourceToAggregate(snapshot.inferResources, resource);
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.inferPidByExperiment[*experimentId] = pid;
         }
@@ -3754,10 +3879,15 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
                  command.find("--analyze-completed-experiments") != std::string::npos)
         {
             ++snapshot.analysisWorkers;
+            AddResourceToAggregate(snapshot.analysisResources, resource);
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.analysisPidByExperiment[*experimentId] = pid;
         }
     }
+    snapshot.totalCpuPercent = snapshot.schedulerResources.cpuPercent +
+                               snapshot.trainResources.cpuPercent +
+                               snapshot.inferResources.cpuPercent +
+                               snapshot.analysisResources.cpuPercent;
     return snapshot;
 }
 
@@ -3882,6 +4012,17 @@ inline void EnrichSchedulerStatusJobFromLogs(SchedulerStatusJob& job,
     else if (job.phase == "analyze")
         assignPid(processes.analysisPidByExperiment);
 
+    if (job.pid.has_value())
+    {
+        const auto resourceIt = processes.resourcesByPid.find(*job.pid);
+        if (resourceIt != processes.resourcesByPid.end())
+        {
+            job.cpuPercent = resourceIt->second.cpuPercent;
+            job.memPercent = resourceIt->second.memPercent;
+            job.rssMb = resourceIt->second.rssMb;
+        }
+    }
+
     std::optional<std::string> logPath;
     if (job.phase == "train")
         logPath = job.trainLogPath;
@@ -3987,6 +4128,9 @@ inline void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
               << ",symbol=" << job.symbol
               << ",prediction_horizon=" << job.predictionHorizon
               << ",pid=" << OptionalIntText(job.pid)
+              << ",cpu_percent=" << OptionalDoubleText(job.cpuPercent, 1)
+              << ",rss_mb=" << OptionalDoubleText(job.rssMb, 0)
+              << ",mem_percent=" << OptionalDoubleText(job.memPercent, 1)
               << ",current_epoch=" << OptionalIntText(job.currentEpoch)
               << ",target_epochs=" << job.targetEpochs
               << ",percent_complete=" << (job.currentEpoch.has_value() && job.targetEpochs > 0
@@ -4048,6 +4192,10 @@ inline void PrintStatusJobTable(const std::string& title,
                   << " status=" << ColorForStatus(job.status, useColor)
                   << " pid=" << OptionalIntText(job.pid)
                   << "\n";
+        std::cout << "    cpu=" << OptionalPercentText(job.cpuPercent)
+                  << " rss=" << OptionalMbText(job.rssMb)
+                  << " mem=" << OptionalPercentText(job.memPercent)
+                  << "\n";
         std::cout << "    model_id=" << OptionalLongLongText(job.modelId)
                   << " current_epoch=" << OptionalIntText(job.currentEpoch)
                   << " target_epochs=" << job.targetEpochs
@@ -4065,6 +4213,79 @@ inline void PrintStatusJobTable(const std::string& title,
             std::cout << " recent=\"" << *job.recentProgress << "\"";
         std::cout << "\n";
     }
+}
+
+inline std::string FormatAggregateResource(const SchedulerResourceAggregate& aggregate)
+{
+    std::ostringstream oss;
+    oss << "workers=" << aggregate.workers
+        << " cpu=" << std::fixed << std::setprecision(1) << aggregate.cpuPercent << "%"
+        << " rss=" << std::fixed << std::setprecision(0) << aggregate.rssMb << " MB"
+        << " mem=" << std::fixed << std::setprecision(1) << aggregate.memPercent << "%";
+    return oss.str();
+}
+
+inline std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProcessSnapshot& processes)
+{
+    std::vector<std::string> warnings;
+    if (!processes.processDetectionAvailable)
+        warnings.push_back("process detection unavailable");
+    if (processes.schedulerPids.size() > 1)
+        warnings.push_back("multiple scheduler processes detected: " + std::to_string(processes.schedulerPids.size()));
+    if (processes.maxTrainProcs.has_value() && processes.trainWorkers > *processes.maxTrainProcs)
+        warnings.push_back("train worker count exceeds max-train-procs");
+    if (processes.maxInferProcs.has_value() && processes.inferWorkers > *processes.maxInferProcs)
+        warnings.push_back("infer worker count exceeds max-infer-procs");
+    if (processes.maxAnalyzeProcs.has_value() && processes.analysisWorkers > *processes.maxAnalyzeProcs)
+        warnings.push_back("analysis worker count exceeds max-analyze-procs");
+
+    if (processes.systemMemoryUsedMb.has_value() &&
+        processes.systemMemoryTotalMb.has_value() &&
+        *processes.systemMemoryTotalMb > 0.0)
+    {
+        const double fraction = *processes.systemMemoryUsedMb / *processes.systemMemoryTotalMb;
+        if (fraction >= 0.90)
+            warnings.push_back("system memory usage is high");
+        const double workerRss = processes.trainResources.rssMb +
+                                 processes.inferResources.rssMb +
+                                 processes.analysisResources.rssMb;
+        if (workerRss / *processes.systemMemoryTotalMb >= 0.80)
+            warnings.push_back("worker RSS is high relative to system memory");
+    }
+
+    return warnings;
+}
+
+inline void PrintSchedulerResourceUsage(const SchedulerStatusProcessSnapshot& processes)
+{
+    std::cout << "\nRESOURCE USAGE\n";
+    std::cout << "  total_cpu=" << OptionalPercentText(processes.totalCpuPercent) << "\n";
+    std::cout << "  system_memory_used=" << OptionalMbText(processes.systemMemoryUsedMb)
+              << " total=" << OptionalMbText(processes.systemMemoryTotalMb);
+    if (processes.systemMemoryUsedMb.has_value() &&
+        processes.systemMemoryTotalMb.has_value() &&
+        *processes.systemMemoryTotalMb > 0.0)
+    {
+        const double pct = 100.0 * *processes.systemMemoryUsedMb / *processes.systemMemoryTotalMb;
+        std::cout << " used_percent=" << OptionalPercentText(pct);
+    }
+    std::cout << "\n";
+    std::cout << "  scheduler " << FormatAggregateResource(processes.schedulerResources) << "\n";
+    std::cout << "  train     " << FormatAggregateResource(processes.trainResources) << "\n";
+    std::cout << "  infer     " << FormatAggregateResource(processes.inferResources) << "\n";
+    std::cout << "  analysis  " << FormatAggregateResource(processes.analysisResources) << "\n";
+}
+
+inline void PrintSchedulerWarnings(const std::vector<std::string>& warnings)
+{
+    std::cout << "\nWARNINGS\n";
+    if (warnings.empty())
+    {
+        std::cout << "  none\n";
+        return;
+    }
+    for (const auto& warning : warnings)
+        std::cout << "  " << warning << "\n";
 }
 
 inline int PrintSchedulerStatus(const SchedulerOptions& options)
@@ -4132,6 +4353,10 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
               << " analyze=" << processes.analysisWorkers
               << "\n";
 
+    PrintSchedulerResourceUsage(processes);
+    const std::vector<std::string> warnings = BuildSchedulerStatusWarnings(processes);
+    PrintSchedulerWarnings(warnings);
+
     std::cout << "\nOverall Counts\n"
               << "  queued=" << counts.queued
               << " running=" << counts.running
@@ -4166,6 +4391,26 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",max_train_procs=" << OptionalIntText(processes.maxTrainProcs)
                   << ",max_infer_procs=" << OptionalIntText(processes.maxInferProcs)
                   << ",max_analyze_procs=" << OptionalIntText(processes.maxAnalyzeProcs)
+                  << std::endl;
+        std::cout << "SCHEDULER_STATUS_RESOURCE"
+                  << ",total_cpu_percent=" << OptionalDoubleText(processes.totalCpuPercent, 1)
+                  << ",system_memory_used_mb=" << OptionalDoubleText(processes.systemMemoryUsedMb, 0)
+                  << ",system_memory_total_mb=" << OptionalDoubleText(processes.systemMemoryTotalMb, 0)
+                  << ",scheduler_cpu_percent=" << OptionalDoubleText(processes.schedulerResources.cpuPercent, 1)
+                  << ",scheduler_rss_mb=" << OptionalDoubleText(processes.schedulerResources.rssMb, 0)
+                  << ",scheduler_mem_percent=" << OptionalDoubleText(processes.schedulerResources.memPercent, 1)
+                  << ",train_cpu_percent=" << OptionalDoubleText(processes.trainResources.cpuPercent, 1)
+                  << ",train_rss_mb=" << OptionalDoubleText(processes.trainResources.rssMb, 0)
+                  << ",train_mem_percent=" << OptionalDoubleText(processes.trainResources.memPercent, 1)
+                  << ",train_workers=" << processes.trainWorkers
+                  << ",infer_cpu_percent=" << OptionalDoubleText(processes.inferResources.cpuPercent, 1)
+                  << ",infer_rss_mb=" << OptionalDoubleText(processes.inferResources.rssMb, 0)
+                  << ",infer_mem_percent=" << OptionalDoubleText(processes.inferResources.memPercent, 1)
+                  << ",infer_workers=" << processes.inferWorkers
+                  << ",analysis_cpu_percent=" << OptionalDoubleText(processes.analysisResources.cpuPercent, 1)
+                  << ",analysis_rss_mb=" << OptionalDoubleText(processes.analysisResources.rssMb, 0)
+                  << ",analysis_mem_percent=" << OptionalDoubleText(processes.analysisResources.memPercent, 1)
+                  << ",analysis_workers=" << processes.analysisWorkers
                   << std::endl;
         std::cout << "SCHEDULER_STATUS_COUNT"
                   << ",queued=" << counts.queued
