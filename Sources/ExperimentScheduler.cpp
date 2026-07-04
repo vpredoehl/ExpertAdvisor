@@ -49,6 +49,8 @@ struct SchedulerOptions
     bool analyzeCompletedExperiments = false;
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
+    bool generateExperimentReports = false;
+    bool autoGenerateReports = false;
     bool schedulerStatus = false;
     bool backfillExperimentMetadata = false;
     std::optional<long long> experimentMetadataId;
@@ -74,6 +76,7 @@ struct SchedulerOptions
     int maxAnalyzeProcs = 1;
     int schedulerPollSeconds = 30;
     std::string schedulerLogDir = "experiment_logs";
+    std::string experimentReportDir = "experiment_reports";
     std::string selfPath;
 
     std::optional<std::string> symbol;
@@ -441,6 +444,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--queue-sweep" ||
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
+            arg == "--generate-experiment-reports" ||
             arg == "--scheduler-status" ||
             arg == "--backfill-experiment-metadata" ||
             arg == "--experiment-metadata" ||
@@ -601,6 +605,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.analyzeCompletedExperiments = true;
         else if (arg == "--print-experiment-leaderboard")
             options.printLeaderboard = true;
+        else if (arg == "--generate-experiment-reports")
+            options.generateExperimentReports = true;
         else if (arg == "--scheduler-status")
             options.schedulerStatus = true;
         else if (arg == "--backfill-experiment-metadata")
@@ -621,6 +627,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.force = true;
         else if (arg == "--scheduler-verbose")
             options.schedulerVerbose = true;
+        else if (arg == "--auto-generate-reports")
+            options.autoGenerateReports = true;
         else if (arg == "--scheduler-once")
             options.schedulerOnce = true;
         else if (arg == "--recover-orphans-only")
@@ -687,6 +695,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.schedulerPollSeconds = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--scheduler-log-dir")
             options.schedulerLogDir = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--experiment-report-dir")
+            options.experimentReportDir = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--leaderboard-symbol")
             options.leaderboardSymbol = EA::CanonicalSymbol::Normalize(RequireNextArg(argc, argv, i, arg));
         else if (arg == "--leaderboard-horizon")
@@ -737,6 +747,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.schedulerPollSeconds = ParsePositiveInt("--scheduler-poll-seconds", value);
         else if (SplitOptionWithValue(arg, "--scheduler-log-dir", value))
             options.schedulerLogDir = value;
+        else if (SplitOptionWithValue(arg, "--experiment-report-dir", value))
+            options.experimentReportDir = value;
         else if (SplitOptionWithValue(arg, "--analyze-experiment", value))
             options.analyzeExperimentId = ParsePositiveLongLong("--analyze-experiment", value);
         else if (SplitOptionWithValue(arg, "--stop-experiment", value))
@@ -783,6 +795,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.analyzeCompletedExperiments ? 1 : 0) +
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
         (options.printLeaderboard ? 1 : 0) +
+        (options.generateExperimentReports ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
         (options.backfillExperimentMetadata ? 1 : 0) +
         (options.experimentMetadataId.has_value() ? 1 : 0) +
@@ -805,6 +818,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument("--experiment-id is only valid with --status");
     if (options.recoverOrphansOnly && !options.scheduleExperiments)
         throw std::invalid_argument("--recover-orphans-only requires --schedule-experiments");
+    if (options.autoGenerateReports &&
+        !options.scheduleExperiments &&
+        !options.analyzeExperimentId.has_value())
+    {
+        throw std::invalid_argument("--auto-generate-reports requires --schedule-experiments or --analyze-experiment");
+    }
     if (options.logLevel != "quiet" &&
         options.logLevel != "summary" &&
         options.logLevel != "diagnostic")
@@ -2503,6 +2522,10 @@ std::vector<std::string> BuildAnalyzeCommand(const SchedulerOptions& options,
     std::vector<std::string> argv;
     argv.push_back(options.selfPath);
     AddCliOption(argv, "--analyze-experiment", std::to_string(experiment.experimentId));
+    if (options.autoGenerateReports)
+        AddCliFlag(argv, "--auto-generate-reports");
+    if (options.experimentReportDir != "experiment_reports")
+        AddCliOption(argv, "--experiment-report-dir", options.experimentReportDir);
     return argv;
 }
 
@@ -3052,6 +3075,169 @@ std::string MetricSql(pqxx::work& w, const std::optional<std::string>& value)
     return value.has_value() ? (*value ? "TRUE" : "FALSE") : "NULL";
 }
 
+std::string MarkdownCell(std::string value)
+{
+    if (value.empty())
+        return "n/a";
+    std::replace(value.begin(), value.end(), '\n', ' ');
+    std::replace(value.begin(), value.end(), '\r', ' ');
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char ch : value)
+    {
+        if (ch == '|')
+            escaped += "\\|";
+        else
+            escaped.push_back(ch);
+    }
+    return escaped;
+}
+
+std::string CellText(const pqxx::field& field)
+{
+    return field.is_null() ? "n/a" : MarkdownCell(field.c_str());
+}
+
+std::string RenderMarkdownReport(const std::string& title,
+                                 const std::vector<std::string>& headers,
+                                 const pqxx::result& rows)
+{
+    std::ostringstream out;
+    out << "# " << title << "\n\n";
+    out << "Rows: " << rows.size() << "\n\n";
+    for (const std::string& header : headers)
+        out << "| " << header << " ";
+    out << "|\n";
+    for (size_t i = 0; i < headers.size(); ++i)
+        out << "|---";
+    out << "|\n";
+    for (const auto& row : rows)
+    {
+        for (pqxx::row::size_type i = 0; i < row.size(); ++i)
+            out << "| " << CellText(row[i]) << " ";
+        out << "|\n";
+    }
+    return out.str();
+}
+
+pqxx::result ExecReportQuery(pqxx::work& w, const std::string& orderClause, const std::string& limitClause)
+{
+    return w.exec(
+        std::string{
+        "SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+        "a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+        "a.accept_accuracy, a.leader_score, a.analysis_status, e.completed_at::text "
+        "FROM experiment_analysis_result a "
+        "JOIN experiment e ON e.experiment_id = a.experiment_id "
+        "WHERE a.analysis_status = 'completed' "} +
+        orderClause + " " + limitClause + ";");
+}
+
+std::vector<std::string> ExperimentReportHeaders()
+{
+    return {
+        "experiment_id",
+        "model_id",
+        "symbol",
+        "prediction_horizon",
+        "target_epochs",
+        "completed_epochs",
+        "infer_accuracy",
+        "accept_rate",
+        "accept_accuracy",
+        "leader_score",
+        "analysis_status",
+        "completed_at"
+    };
+}
+
+void WriteReportFile(const std::string& reportDir,
+                     const std::string& fileName,
+                     const std::string& title,
+                     const pqxx::result& rows)
+{
+    const std::filesystem::path path = std::filesystem::path{reportDir} / fileName;
+    WriteTextFile(path.string(), RenderMarkdownReport(title, ExperimentReportHeaders(), rows));
+}
+
+int GenerateExperimentReports(const std::string& reportDir, bool warnOnly)
+{
+    try
+    {
+        std::filesystem::create_directories(reportDir);
+
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        if (!RequireSchedulerTables(w))
+            return warnOnly ? 0 : 1;
+
+        const pqxx::result latestLeaderboard = ExecReportQuery(
+            w,
+            "ORDER BY a.leader_score DESC NULLS LAST, a.infer_accuracy DESC NULLS LAST, e.experiment_id DESC",
+            "LIMIT 100");
+        const pqxx::result bestBySymbol = w.exec(
+            "SELECT DISTINCT ON (a.symbol) e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+            "a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "a.accept_accuracy, a.leader_score, a.analysis_status, e.completed_at::text "
+            "FROM experiment_analysis_result a "
+            "JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "WHERE a.analysis_status = 'completed' "
+            "ORDER BY a.symbol ASC, a.leader_score DESC NULLS LAST, a.infer_accuracy DESC NULLS LAST, e.experiment_id DESC;");
+        const pqxx::result bestByHorizon = w.exec(
+            "SELECT DISTINCT ON (a.prediction_horizon) e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+            "a.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "a.accept_accuracy, a.leader_score, a.analysis_status, e.completed_at::text "
+            "FROM experiment_analysis_result a "
+            "JOIN experiment e ON e.experiment_id = a.experiment_id "
+            "WHERE a.analysis_status = 'completed' "
+            "ORDER BY a.prediction_horizon ASC, a.leader_score DESC NULLS LAST, a.infer_accuracy DESC NULLS LAST, e.experiment_id DESC;");
+        const pqxx::result recentCompleted = ExecReportQuery(
+            w,
+            "ORDER BY e.completed_at DESC NULLS LAST, e.experiment_id DESC",
+            "LIMIT 100");
+        const pqxx::result failures = w.exec(
+            "SELECT e.experiment_id, COALESCE(a.model_id, e.last_model_id), e.symbol, e.prediction_horizon, "
+            "e.target_epochs, a.completed_epochs, a.infer_accuracy, a.accept_rate, "
+            "a.accept_accuracy, a.leader_score, COALESCE(a.analysis_status, e.status), e.completed_at::text "
+            "FROM experiment e "
+            "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+            "WHERE e.status = 'failed' "
+            "ORDER BY e.completed_at DESC NULLS LAST, e.updated_at DESC NULLS LAST, e.experiment_id DESC "
+            "LIMIT 100;");
+        w.commit();
+
+        WriteReportFile(reportDir, "latest_leaderboard.md", "Latest Leaderboard", latestLeaderboard);
+        WriteReportFile(reportDir, "best_by_symbol.md", "Best By Symbol", bestBySymbol);
+        WriteReportFile(reportDir, "best_by_horizon.md", "Best By Horizon", bestByHorizon);
+        WriteReportFile(reportDir, "recent_completed.md", "Recent Completed Experiments", recentCompleted);
+        WriteReportFile(reportDir, "failures.md", "Failed Experiments", failures);
+
+        std::cout << "EXPERIMENT_REPORTS_GENERATED"
+                  << ",dir=" << reportDir
+                  << ",latest_leaderboard_rows=" << latestLeaderboard.size()
+                  << ",best_by_symbol_rows=" << bestBySymbol.size()
+                  << ",best_by_horizon_rows=" << bestByHorizon.size()
+                  << ",recent_completed_rows=" << recentCompleted.size()
+                  << ",failure_rows=" << failures.size()
+                  << std::endl;
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "EXPERIMENT_REPORT_GENERATION_WARNING"
+                  << ",error=" << e.what()
+                  << std::endl;
+        return warnOnly ? 0 : 1;
+    }
+}
+
+void TryGenerateExperimentReports(const SchedulerOptions& options)
+{
+    if (!options.autoGenerateReports)
+        return;
+    (void)GenerateExperimentReports(options.experimentReportDir, true);
+}
+
 void UpsertAnalysisResult(pqxx::work& w,
                                  const ExperimentRow& experiment,
                                  const ParsedMetrics& metrics,
@@ -3317,6 +3503,7 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
               << ",experiment_id=" << experiment.experimentId
               << ",model_id=" << modelId
               << std::endl;
+    TryGenerateExperimentReports(options);
     return 0;
 }
 
@@ -4177,6 +4364,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
     stats.freeSlots = std::max(0, options.maxAnalyzeProcs - RunningCountForPhase(snapshot, "analyze"));
     int freeSlots = stats.freeSlots;
     int rc = 0;
+    bool reportsNeeded = false;
 
     EnsureLogDir(options.schedulerLogDir);
     for (const auto& job : jobs)
@@ -4208,6 +4396,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
                           << ",model_id=" << *job.lastModelId
                           << std::endl;
                 MarkExperimentDone(w, job, "analyze");
+                reportsNeeded = true;
             }
             continue;
         }
@@ -4293,6 +4482,8 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
     }
     PrintPhaseSchedulingStats(stats, logState, options.schedulerVerbose);
     w.commit();
+    if (reportsNeeded)
+        TryGenerateExperimentReports(options);
     return rc;
 }
 
@@ -6760,9 +6951,12 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
         << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
-        << "[--scheduler-log-dir=PATH] [--scheduler-verbose] [--dry-run] [--recover-orphans-only]\n"
+        << "[--scheduler-log-dir=PATH] [--auto-generate-reports] [--experiment-report-dir=PATH] "
+        << "[--scheduler-verbose] [--dry-run] [--recover-orphans-only]\n"
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
+        << "Usage: " << exe
+        << " --generate-experiment-reports [--experiment-report-dir=PATH]\n"
         << "Usage: " << exe
         << " --status [--experiment-id=ID]\n"
         << "Usage: " << exe
@@ -6829,6 +7023,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return PrintSchedulerStatus(options);
         if (options.backfillExperimentMetadata)
             return BackfillExperimentMetadata(options);
+        if (options.generateExperimentReports)
+            return GenerateExperimentReports(options.experimentReportDir, false);
         if (options.experimentMetadataId.has_value())
             return PrintExperimentMetadata(*options.experimentMetadataId);
         if (options.pauseExperimentId.has_value() ||
