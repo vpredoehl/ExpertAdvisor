@@ -183,12 +183,19 @@ void BackfillMissingExperimentRunMetadata(pqxx::work& w,
                                           const std::string& binaryName,
                                           const std::string& invocationMode)
 {
+    (void)BackfillMissingExperimentRunMetadataWithCount(w, binaryName, invocationMode);
+}
+
+long long BackfillMissingExperimentRunMetadataWithCount(pqxx::work& w,
+                                                        const std::string& binaryName,
+                                                        const std::string& invocationMode)
+{
     if (!ExperimentRunMetadataColumnsExist(w))
-        return;
+        return 0;
 
     const Snapshot metadata = Capture(binaryName, invocationMode);
     const std::string schemaVersion = CurrentSchemaVersion(w);
-    w.exec(
+    pqxx::result updated = w.exec(
         "UPDATE experiment SET "
         "git_commit = COALESCE(git_commit, " + w.quote(metadata.gitCommit) + "), "
         "git_branch = COALESCE(git_branch, " + w.quote(metadata.gitBranch) + "), "
@@ -202,7 +209,9 @@ void BackfillMissingExperimentRunMetadata(pqxx::work& w,
         "run_metadata_captured_at = COALESCE(run_metadata_captured_at, now()), "
         "updated_at = updated_at "
         "WHERE run_metadata_captured_at IS NULL "
-        "AND status IN ('pending', 'running');");
+        "AND status IN ('pending', 'running') "
+        "RETURNING experiment_id;");
+    return static_cast<long long>(updated.size());
 }
 
 } // namespace EA::RunMetadata

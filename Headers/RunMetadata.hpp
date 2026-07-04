@@ -44,4 +44,8 @@ void BackfillMissingExperimentRunMetadata(pqxx::work& w,
                                           const std::string& binaryName,
                                           const std::string& invocationMode);
 
+long long BackfillMissingExperimentRunMetadataWithCount(pqxx::work& w,
+                                                        const std::string& binaryName,
+                                                        const std::string& invocationMode);
+
 } // namespace EA::RunMetadata

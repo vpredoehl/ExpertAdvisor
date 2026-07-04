@@ -47,6 +47,7 @@ struct SchedulerOptions
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
     bool schedulerStatus = false;
+    bool backfillExperimentMetadata = false;
     std::optional<long long> experimentMetadataId;
     std::optional<long long> stopExperimentId;
     bool stopAllExperiments = false;
@@ -362,6 +363,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
             arg == "--scheduler-status" ||
+            arg == "--backfill-experiment-metadata" ||
             arg == "--experiment-metadata" ||
             arg == "--stop-experiment" ||
             arg == "--stop-all-experiments" ||
@@ -516,6 +518,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.printLeaderboard = true;
         else if (arg == "--scheduler-status")
             options.schedulerStatus = true;
+        else if (arg == "--backfill-experiment-metadata")
+            options.backfillExperimentMetadata = true;
         else if (arg == "--experiment-metadata")
             options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--help")
@@ -683,6 +687,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
         (options.printLeaderboard ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
+        (options.backfillExperimentMetadata ? 1 : 0) +
         (options.experimentMetadataId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
@@ -1489,6 +1494,49 @@ int PrintExperimentMetadata(long long experimentId)
               << ",binary_name=" << FormatOptionalMetadataString(row, 12)
               << ",invocation_mode=" << FormatOptionalMetadataString(row, 13)
               << ",captured_at=" << FormatOptionalMetadataString(row, 14)
+              << std::endl;
+    return 0;
+}
+
+long long CountExperimentMetadataBackfillEligible(pqxx::work& w)
+{
+    pqxx::result rows = w.exec(
+        "SELECT count(*) "
+        "FROM experiment "
+        "WHERE run_metadata_captured_at IS NULL "
+        "AND status IN ('pending', 'running');");
+    return rows[0][0].as<long long>();
+}
+
+int BackfillExperimentMetadata(const SchedulerOptions& options)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    if (!RequireSchedulerTables(w))
+        return 1;
+
+    if (!EA::RunMetadata::ExperimentRunMetadataColumnsExist(w))
+    {
+        std::cerr << "EXPERIMENT_METADATA_BACKFILL_FAILED"
+                  << ",reason=migration_required"
+                  << std::endl;
+        return 1;
+    }
+
+    const long long eligible = CountExperimentMetadataBackfillEligible(w);
+    const EA::RunMetadata::Snapshot metadata =
+        EA::RunMetadata::Capture(options.selfPath, "metadata_backfill");
+    const std::string schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
+    const long long updated = EA::RunMetadata::BackfillMissingExperimentRunMetadataWithCount(
+        w, options.selfPath, "metadata_backfill");
+    w.commit();
+
+    std::cout << "EXPERIMENT_METADATA_BACKFILL"
+              << ",updated=" << updated
+              << ",eligible=" << eligible
+              << ",schema_version=" << schemaVersion
+              << ",dirty=" << EA::RunMetadata::SqlNullableBool(metadata.gitDirty)
               << std::endl;
     return 0;
 }
@@ -5736,6 +5784,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --experiment-metadata=ID\n"
         << "Usage: " << exe
+        << " --backfill-experiment-metadata\n"
+        << "Usage: " << exe
         << " --pause-experiment=ID | --resume-experiment=ID | --cancel-experiment=ID | "
         << "--retry-failed-experiment=ID | --requeue-inference=ID | --requeue-analysis=ID "
         << "[--dry-run] [--yes]\n"
@@ -5787,6 +5837,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunStopExperimentCommand(options);
         if (options.schedulerStatus)
             return PrintSchedulerStatus(options);
+        if (options.backfillExperimentMetadata)
+            return BackfillExperimentMetadata(options);
         if (options.experimentMetadataId.has_value())
             return PrintExperimentMetadata(*options.experimentMetadataId);
         if (options.pauseExperimentId.has_value() ||
