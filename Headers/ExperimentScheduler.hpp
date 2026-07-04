@@ -240,6 +240,43 @@ struct SchedulerStatusProcessSnapshot
     std::optional<double> systemMemoryTotalMb;
 };
 
+struct SchedulerIntelligenceRecord
+{
+    long long experimentId = -1;
+    std::optional<long long> modelId;
+    std::string symbol;
+    int predictionHorizon = 0;
+    std::optional<double> leaderScore;
+    std::optional<double> inferAccuracy;
+    std::optional<double> acceptAccuracy;
+    int targetEpochs = 0;
+    std::optional<int> completedEpochs;
+};
+
+struct SchedulerDominatedRecord
+{
+    SchedulerIntelligenceRecord dominated;
+    long long dominatingExperimentId = -1;
+    std::optional<double> dominatingLeaderScore;
+    std::optional<double> leaderScoreDelta;
+};
+
+struct SchedulerIntelligenceSnapshot
+{
+    std::optional<SchedulerIntelligenceRecord> overallLeader;
+    std::optional<SchedulerIntelligenceRecord> recentBest24h;
+    std::vector<SchedulerIntelligenceRecord> leadersBySymbol;
+    std::vector<SchedulerIntelligenceRecord> leadersByHorizon;
+    std::vector<SchedulerIntelligenceRecord> top5;
+    std::vector<SchedulerIntelligenceRecord> worst5;
+    std::vector<SchedulerDominatedRecord> dominated;
+    long long completedToday = 0;
+    long long failedToday = 0;
+    int waitingTrain = 0;
+    int waitingInfer = 0;
+    int waitingAnalyze = 0;
+};
+
 struct PhaseSchedulingStats
 {
     std::string phase;
@@ -4288,6 +4325,293 @@ inline void PrintSchedulerWarnings(const std::vector<std::string>& warnings)
         std::cout << "  " << warning << "\n";
 }
 
+inline SchedulerIntelligenceRecord RowToIntelligenceRecord(const pqxx::row& row)
+{
+    SchedulerIntelligenceRecord record;
+    record.experimentId = row[0].as<long long>();
+    record.modelId = OptionalLongLongCell(row, 1);
+    record.symbol = row[2].is_null() ? "unknown" : row[2].as<std::string>();
+    record.predictionHorizon = row[3].is_null() ? 0 : row[3].as<int>();
+    record.leaderScore = OptionalDoubleCell(row, 4);
+    record.inferAccuracy = OptionalDoubleCell(row, 5);
+    record.acceptAccuracy = OptionalDoubleCell(row, 6);
+    record.targetEpochs = row[7].is_null() ? 0 : row[7].as<int>();
+    if (!row[8].is_null())
+        record.completedEpochs = row[8].as<int>();
+    return record;
+}
+
+inline std::vector<SchedulerIntelligenceRecord> RowsToIntelligenceRecords(const pqxx::result& rows)
+{
+    std::vector<SchedulerIntelligenceRecord> records;
+    records.reserve(rows.size());
+    for (const auto& row : rows)
+        records.push_back(RowToIntelligenceRecord(row));
+    return records;
+}
+
+inline std::string IntelligenceBaseSql()
+{
+    return
+        "WITH eligible AS ("
+        "  SELECT e.experiment_id, a.model_id, a.symbol, a.prediction_horizon, "
+        "         a.leader_score, a.infer_accuracy, a.accept_accuracy, "
+        "         a.target_epochs, a.completed_epochs, "
+        "         e.completed_at, a.updated_at "
+        "  FROM experiment_analysis_result a "
+        "  JOIN experiment e ON e.experiment_id = a.experiment_id "
+        "  WHERE e.status = 'completed' "
+        "    AND a.analysis_status = 'completed' "
+        "    AND a.leader_score IS NOT NULL "
+        "    AND a.infer_accuracy IS NOT NULL "
+        ")";
+}
+
+inline SchedulerIntelligenceSnapshot LoadSchedulerIntelligenceSnapshot(pqxx::work& w,
+                                                                       const QueueSnapshot& queueSnapshot)
+{
+    SchedulerIntelligenceSnapshot snapshot;
+    snapshot.waitingTrain = queueSnapshot.pendingTrain;
+    snapshot.waitingInfer = queueSnapshot.pendingInfer;
+    snapshot.waitingAnalyze = queueSnapshot.pendingAnalyze;
+
+    pqxx::result counts = w.exec(
+        "SELECT "
+        "COUNT(*) FILTER (WHERE status = 'completed' AND completed_at >= date_trunc('day', now())), "
+        "COUNT(*) FILTER (WHERE status = 'failed' AND completed_at >= date_trunc('day', now())) "
+        "FROM experiment;");
+    if (!counts.empty())
+    {
+        snapshot.completedToday = counts[0][0].as<long long>();
+        snapshot.failedToday = counts[0][1].as<long long>();
+    }
+
+    const std::string base = IntelligenceBaseSql();
+
+    pqxx::result overall = w.exec(base +
+        " SELECT experiment_id, model_id, symbol, prediction_horizon, leader_score, infer_accuracy, accept_accuracy, "
+        "        target_epochs, completed_epochs "
+        " FROM eligible "
+        " ORDER BY leader_score DESC NULLS LAST, infer_accuracy DESC NULLS LAST, experiment_id DESC "
+        " LIMIT 1;");
+    if (!overall.empty())
+        snapshot.overallLeader = RowToIntelligenceRecord(overall[0]);
+
+    pqxx::result recent = w.exec(base +
+        " SELECT experiment_id, model_id, symbol, prediction_horizon, leader_score, infer_accuracy, accept_accuracy, "
+        "        target_epochs, completed_epochs "
+        " FROM eligible "
+        " WHERE completed_at >= now() - interval '24 hours' "
+        " ORDER BY leader_score DESC NULLS LAST, infer_accuracy DESC NULLS LAST, experiment_id DESC "
+        " LIMIT 1;");
+    if (!recent.empty())
+        snapshot.recentBest24h = RowToIntelligenceRecord(recent[0]);
+
+    pqxx::result bySymbol = w.exec(base +
+        " SELECT experiment_id, model_id, symbol, prediction_horizon, leader_score, infer_accuracy, accept_accuracy, "
+        "        target_epochs, completed_epochs "
+        " FROM ("
+        "   SELECT eligible.*, row_number() OVER (PARTITION BY symbol ORDER BY leader_score DESC, infer_accuracy DESC, experiment_id DESC) AS rn "
+        "   FROM eligible"
+        " ) ranked "
+        " WHERE rn = 1 "
+        " ORDER BY symbol ASC "
+        " LIMIT 20;");
+    snapshot.leadersBySymbol = RowsToIntelligenceRecords(bySymbol);
+
+    pqxx::result byHorizon = w.exec(base +
+        " SELECT experiment_id, model_id, symbol, prediction_horizon, leader_score, infer_accuracy, accept_accuracy, "
+        "        target_epochs, completed_epochs "
+        " FROM ("
+        "   SELECT eligible.*, row_number() OVER (PARTITION BY prediction_horizon ORDER BY leader_score DESC, infer_accuracy DESC, experiment_id DESC) AS rn "
+        "   FROM eligible"
+        " ) ranked "
+        " WHERE rn = 1 "
+        " ORDER BY prediction_horizon ASC "
+        " LIMIT 20;");
+    snapshot.leadersByHorizon = RowsToIntelligenceRecords(byHorizon);
+
+    pqxx::result top = w.exec(base +
+        " SELECT experiment_id, model_id, symbol, prediction_horizon, leader_score, infer_accuracy, accept_accuracy, "
+        "        target_epochs, completed_epochs "
+        " FROM eligible "
+        " ORDER BY leader_score DESC NULLS LAST, infer_accuracy DESC NULLS LAST, experiment_id DESC "
+        " LIMIT 5;");
+    snapshot.top5 = RowsToIntelligenceRecords(top);
+
+    pqxx::result worst = w.exec(base +
+        " SELECT experiment_id, model_id, symbol, prediction_horizon, leader_score, infer_accuracy, accept_accuracy, "
+        "        target_epochs, completed_epochs "
+        " FROM eligible "
+        " ORDER BY leader_score ASC NULLS LAST, infer_accuracy ASC NULLS LAST, experiment_id ASC "
+        " LIMIT 5;");
+    snapshot.worst5 = RowsToIntelligenceRecords(worst);
+
+    pqxx::result dominatedRows = w.exec(base +
+        " SELECT d.experiment_id, d.model_id, d.symbol, d.prediction_horizon, d.leader_score, d.infer_accuracy, d.accept_accuracy, "
+        "        d.target_epochs, d.completed_epochs, x.experiment_id AS dominating_experiment_id, "
+        "        x.leader_score AS dominating_leader_score, (x.leader_score - d.leader_score) AS leader_score_delta "
+        " FROM eligible d "
+        " JOIN LATERAL ("
+        "   SELECT e2.experiment_id, e2.leader_score "
+        "   FROM eligible e2 "
+        "   WHERE e2.symbol = d.symbol "
+        "     AND e2.prediction_horizon = d.prediction_horizon "
+        "     AND e2.experiment_id <> d.experiment_id "
+        "     AND e2.leader_score > d.leader_score "
+        "     AND e2.infer_accuracy >= d.infer_accuracy "
+        "     AND (d.accept_accuracy IS NULL OR e2.accept_accuracy IS NULL OR e2.accept_accuracy >= d.accept_accuracy) "
+        "   ORDER BY e2.leader_score DESC, e2.infer_accuracy DESC, e2.experiment_id DESC "
+        "   LIMIT 1 "
+        " ) x ON true "
+        " ORDER BY leader_score_delta DESC NULLS LAST, d.leader_score ASC "
+        " LIMIT 10;");
+    snapshot.dominated.reserve(dominatedRows.size());
+    for (const auto& row : dominatedRows)
+    {
+        SchedulerDominatedRecord record;
+        record.dominated = RowToIntelligenceRecord(row);
+        record.dominatingExperimentId = row[9].as<long long>();
+        record.dominatingLeaderScore = OptionalDoubleCell(row, 10);
+        record.leaderScoreDelta = OptionalDoubleCell(row, 11);
+        snapshot.dominated.push_back(record);
+    }
+
+    return snapshot;
+}
+
+inline void PrintIntelligenceRecord(const SchedulerIntelligenceRecord& record,
+                                    const std::string& prefix = "  ")
+{
+    std::cout << prefix
+              << "experiment_id=" << record.experimentId
+              << " model_id=" << OptionalLongLongText(record.modelId)
+              << " symbol=" << record.symbol
+              << " H=" << record.predictionHorizon
+              << " leader_score=" << OptionalDoubleText(record.leaderScore, 4)
+              << " infer_accuracy=" << OptionalDoubleText(record.inferAccuracy, 4)
+              << " accept_accuracy=" << OptionalDoubleText(record.acceptAccuracy, 4)
+              << "\n";
+}
+
+inline void PrintIntelligenceList(const std::string& title,
+                                  const std::vector<SchedulerIntelligenceRecord>& records)
+{
+    std::cout << "\n" << title << "\n";
+    if (records.empty())
+    {
+        std::cout << "  none\n";
+        return;
+    }
+    for (const auto& record : records)
+        PrintIntelligenceRecord(record);
+}
+
+inline void PrintExperimentIntelligence(const SchedulerIntelligenceSnapshot& intelligence)
+{
+    std::cout << "\nEXPERIMENT INTELLIGENCE\n";
+    std::cout << "Completed today: " << intelligence.completedToday
+              << " failed today: " << intelligence.failedToday
+              << " waiting train=" << intelligence.waitingTrain
+              << " infer=" << intelligence.waitingInfer
+              << " analyze=" << intelligence.waitingAnalyze
+              << "\n";
+
+    std::cout << "\nOverall leader:\n";
+    if (intelligence.overallLeader.has_value())
+        PrintIntelligenceRecord(*intelligence.overallLeader);
+    else
+        std::cout << "  none\n";
+
+    std::cout << "\nBest completed in last 24h:\n";
+    if (intelligence.recentBest24h.has_value())
+        PrintIntelligenceRecord(*intelligence.recentBest24h);
+    else
+        std::cout << "  none\n";
+
+    PrintIntelligenceList("Leaders by symbol:", intelligence.leadersBySymbol);
+    PrintIntelligenceList("Leaders by horizon:", intelligence.leadersByHorizon);
+    PrintIntelligenceList("Top 5:", intelligence.top5);
+    PrintIntelligenceList("Worst 5:", intelligence.worst5);
+
+    std::cout << "\nDominated candidates:\n";
+    if (intelligence.dominated.empty())
+    {
+        std::cout << "  none\n";
+    }
+    else
+    {
+        for (const auto& record : intelligence.dominated)
+        {
+            std::cout << "  experiment_id=" << record.dominated.experimentId
+                      << " symbol=" << record.dominated.symbol
+                      << " H=" << record.dominated.predictionHorizon
+                      << " leader_score=" << OptionalDoubleText(record.dominated.leaderScore, 4)
+                      << " dominated_by=" << record.dominatingExperimentId
+                      << " leader_score_delta=" << OptionalDoubleText(record.leaderScoreDelta, 4)
+                      << "\n";
+        }
+    }
+}
+
+inline void PrintSchedulerStatusLeaderMachine(const std::string& scope,
+                                              const SchedulerIntelligenceRecord& record,
+                                              const std::optional<std::string>& scopeValue = std::nullopt)
+{
+    std::cout << "SCHEDULER_STATUS_LEADER"
+              << ",scope=" << scope;
+    if (scopeValue.has_value())
+        std::cout << "," << *scopeValue;
+    std::cout << ",experiment_id=" << record.experimentId
+              << ",model_id=" << OptionalLongLongText(record.modelId)
+              << ",symbol=" << record.symbol
+              << ",prediction_horizon=" << record.predictionHorizon
+              << ",leader_score=" << OptionalDoubleText(record.leaderScore, 4)
+              << ",infer_accuracy=" << OptionalDoubleText(record.inferAccuracy, 4)
+              << ",accept_accuracy=" << OptionalDoubleText(record.acceptAccuracy, 4)
+              << std::endl;
+}
+
+inline void PrintExperimentIntelligenceMachine(const SchedulerIntelligenceSnapshot& intelligence)
+{
+    std::cout << "SCHEDULER_STATUS_INTELLIGENCE"
+              << ",completed_today=" << intelligence.completedToday
+              << ",failed_today=" << intelligence.failedToday
+              << ",waiting_train=" << intelligence.waitingTrain
+              << ",waiting_infer=" << intelligence.waitingInfer
+              << ",waiting_analyze=" << intelligence.waitingAnalyze
+              << ",dominated_count=" << intelligence.dominated.size()
+              << ",overall_leader_experiment_id="
+              << (intelligence.overallLeader.has_value()
+                      ? std::to_string(intelligence.overallLeader->experimentId)
+                      : "unknown")
+              << ",overall_leader_score="
+              << (intelligence.overallLeader.has_value()
+                      ? OptionalDoubleText(intelligence.overallLeader->leaderScore, 4)
+                      : "unknown")
+              << std::endl;
+
+    if (intelligence.overallLeader.has_value())
+        PrintSchedulerStatusLeaderMachine("overall", *intelligence.overallLeader);
+    if (intelligence.recentBest24h.has_value())
+        PrintSchedulerStatusLeaderMachine("recent_24h", *intelligence.recentBest24h);
+    for (const auto& record : intelligence.leadersBySymbol)
+        PrintSchedulerStatusLeaderMachine("symbol", record, "symbol=" + record.symbol);
+    for (const auto& record : intelligence.leadersByHorizon)
+        PrintSchedulerStatusLeaderMachine("horizon", record, "prediction_horizon=" + std::to_string(record.predictionHorizon));
+    for (const auto& record : intelligence.dominated)
+    {
+        std::cout << "SCHEDULER_STATUS_DOMINATED"
+                  << ",experiment_id=" << record.dominated.experimentId
+                  << ",dominated_by_experiment_id=" << record.dominatingExperimentId
+                  << ",symbol=" << record.dominated.symbol
+                  << ",prediction_horizon=" << record.dominated.predictionHorizon
+                  << ",leader_score=" << OptionalDoubleText(record.dominated.leaderScore, 4)
+                  << ",dominating_leader_score=" << OptionalDoubleText(record.dominatingLeaderScore, 4)
+                  << std::endl;
+    }
+}
+
 inline int PrintSchedulerStatus(const SchedulerOptions& options)
 {
     const bool useColor = UseAnsiColors();
@@ -4300,6 +4624,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
 
     const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
     const SchedulerStatusCounts counts = LoadSchedulerStatusCounts(w);
+    const SchedulerIntelligenceSnapshot intelligence = LoadSchedulerIntelligenceSnapshot(w, queueSnapshot);
     std::vector<SchedulerStatusJob> runningTrain = LoadSchedulerStatusJobs(w, "running", "train", 50, false);
     std::vector<SchedulerStatusJob> runningInfer = LoadSchedulerStatusJobs(w, "running", "infer", 50, false);
     std::vector<SchedulerStatusJob> runningAnalyze = LoadSchedulerStatusJobs(w, "running", "analyze", 50, false);
@@ -4372,6 +4697,8 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
               << " running_analyze=" << queueSnapshot.runningAnalyze
               << "\n";
 
+    PrintExperimentIntelligence(intelligence);
+
     PrintStatusJobTable("Active Training Jobs", runningTrain, useColor, true, false);
     PrintStatusJobTable("Active Inference Jobs", runningInfer, useColor, false, false);
     PrintStatusJobTable("Active Analysis Jobs", runningAnalyze, useColor, false, false);
@@ -4425,6 +4752,7 @@ inline int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",running_infer=" << queueSnapshot.runningInfer
                   << ",running_analyze=" << queueSnapshot.runningAnalyze
                   << std::endl;
+        PrintExperimentIntelligenceMachine(intelligence);
         for (const auto& job : runningTrain)
             PrintSchedulerStatusJobMachine(job);
         for (const auto& job : runningInfer)
