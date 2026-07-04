@@ -1036,6 +1036,319 @@ std::vector<Recommendation> BuildRecommendations(const MetaAnalysisResult& resul
     return recs;
 }
 
+std::string ConfigDoubleKey(double value)
+{
+    std::ostringstream oss;
+    oss << std::setprecision(12) << value;
+    return oss.str();
+}
+
+int RecommendationTargetEpochs(const ExperimentRecord& record)
+{
+    return std::max(record.targetEpochs, record.completedEpochs.value_or(0));
+}
+
+std::string ExperimentConfigKey(const std::string& symbol,
+                                int horizon,
+                                int targetEpochs,
+                                double threshold,
+                                double coreLr,
+                                double headLr)
+{
+    std::ostringstream key;
+    key << symbol
+        << "|H" << horizon
+        << "|epochs=" << targetEpochs
+        << "|threshold=" << ConfigDoubleKey(threshold)
+        << "|core=" << ConfigDoubleKey(coreLr)
+        << "|head=" << ConfigDoubleKey(headLr);
+    return key.str();
+}
+
+std::optional<std::string> ExperimentConfigKey(const ExperimentRecord& record)
+{
+    if (record.symbol.empty() ||
+        record.symbol == "unknown" ||
+        record.horizon <= 0 ||
+        RecommendationTargetEpochs(record) <= 0 ||
+        record.threshold <= 0.0 ||
+        !record.coreLr.has_value() ||
+        !record.headLr.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return ExperimentConfigKey(record.symbol,
+                               record.horizon,
+                               RecommendationTargetEpochs(record),
+                               record.threshold,
+                               *record.coreLr,
+                               *record.headLr);
+}
+
+struct ExistingExperimentConfig
+{
+    std::string symbol;
+    int horizon = 0;
+    int targetEpochs = 0;
+    double threshold = 0.0;
+    double coreLr = 0.0;
+    double headLr = 0.0;
+};
+
+bool NearlyEqual(double a, double b, double epsilon)
+{
+    return std::abs(a - b) <= epsilon;
+}
+
+bool MatchesExistingExperimentConfig(const ExistingExperimentConfig& existing,
+                                     const std::string& symbol,
+                                     int horizon,
+                                     int targetEpochs,
+                                     double threshold,
+                                     double coreLr,
+                                     double headLr)
+{
+    return existing.symbol == symbol &&
+           existing.horizon == horizon &&
+           existing.targetEpochs == targetEpochs &&
+           NearlyEqual(existing.threshold, threshold, 1e-12) &&
+           NearlyEqual(existing.coreLr, coreLr, 1e-9) &&
+           NearlyEqual(existing.headLr, headLr, 1e-9);
+}
+
+std::vector<ExistingExperimentConfig> LoadExistingExperimentConfigs(pqxx::work& w)
+{
+    pqxx::result rows = w.exec(
+        "SELECT symbol, prediction_horizon, target_epochs, "
+        "c_next_threshold, core_lr_mult, head_lr_mult "
+        "FROM experiment "
+        "WHERE core_lr_mult IS NOT NULL "
+        "AND head_lr_mult IS NOT NULL;");
+
+    std::vector<ExistingExperimentConfig> configs;
+    configs.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        ExistingExperimentConfig config;
+        config.symbol = row[0].as<std::string>();
+        config.horizon = row[1].as<int>();
+        config.targetEpochs = row[2].as<int>();
+        config.threshold = row[3].as<double>();
+        config.coreLr = row[4].as<double>();
+        config.headLr = row[5].as<double>();
+        configs.push_back(std::move(config));
+    }
+    return configs;
+}
+
+double RecommendationRankingScore(const ExperimentRecord& record)
+{
+    if (record.leaderScore.has_value() && std::isfinite(*record.leaderScore))
+        return *record.leaderScore;
+    if (record.inferAccuracy.has_value() && std::isfinite(*record.inferAccuracy))
+        return *record.inferAccuracy;
+    return -1.0;
+}
+
+std::vector<const ExperimentRecord*> RankedRecommendationSources(const std::vector<ExperimentRecord>& records)
+{
+    std::vector<const ExperimentRecord*> sources;
+    for (const auto& record : records)
+    {
+        if (record.status != "completed")
+            continue;
+        if (!HasRankingMetric(record))
+            continue;
+        if (RecommendationRankingScore(record) <= 0.0)
+            continue;
+        sources.push_back(&record);
+    }
+
+    std::sort(sources.begin(), sources.end(), [](const ExperimentRecord* a, const ExperimentRecord* b) {
+        const double as = RecommendationRankingScore(*a);
+        const double bs = RecommendationRankingScore(*b);
+        if (as != bs)
+            return as > bs;
+        return a->experimentId < b->experimentId;
+    });
+    return sources;
+}
+
+void AddNextExperimentCandidate(std::vector<NextExperimentRecommendation>& out,
+                                std::set<std::string>& emittedKeys,
+                                const std::vector<ExistingExperimentConfig>& existingConfigs,
+                                const ExperimentRecord& source,
+                                double coreLr,
+                                double headLr,
+                                const std::string& reason,
+                                int limit)
+{
+    if (static_cast<int>(out.size()) >= limit)
+        return;
+    if (coreLr <= 0.0 || headLr <= 0.0)
+        return;
+
+    const int targetEpochs = RecommendationTargetEpochs(source);
+    const std::string key = ExperimentConfigKey(source.symbol,
+                                                source.horizon,
+                                                targetEpochs,
+                                                source.threshold,
+                                                coreLr,
+                                                headLr);
+    for (const auto& existing : existingConfigs)
+    {
+        if (MatchesExistingExperimentConfig(existing,
+                                            source.symbol,
+                                            source.horizon,
+                                            targetEpochs,
+                                            source.threshold,
+                                            coreLr,
+                                            headLr))
+        {
+            return;
+        }
+    }
+    if (!emittedKeys.insert(key).second)
+        return;
+
+    NextExperimentRecommendation rec;
+    rec.rank = static_cast<int>(out.size()) + 1;
+    rec.symbol = source.symbol;
+    rec.horizon = source.horizon;
+    rec.targetEpochs = targetEpochs;
+    rec.threshold = source.threshold;
+    rec.coreLr = coreLr;
+    rec.headLr = headLr;
+    rec.reason = reason;
+    rec.sourceLeaderExperimentId = source.experimentId;
+    rec.sourceModelId = source.modelId;
+    out.push_back(std::move(rec));
+}
+
+bool CanBuildNeighborhoodRecommendation(const ExperimentRecord& source)
+{
+    return source.symbol != "unknown" &&
+           source.horizon > 0 &&
+           RecommendationTargetEpochs(source) > 0 &&
+           source.threshold > 0.0 &&
+           source.coreLr.has_value() &&
+           source.headLr.has_value();
+}
+
+void AddNeighborhoodRecommendations(std::vector<NextExperimentRecommendation>& out,
+                                    std::set<std::string>& emittedKeys,
+                                    const std::vector<ExistingExperimentConfig>& existingConfigs,
+                                    const ExperimentRecord& source,
+                                    const std::string& sourceReason,
+                                    int limit)
+{
+    if (static_cast<int>(out.size()) >= limit)
+        return;
+    if (!CanBuildNeighborhoodRecommendation(source))
+        return;
+
+    const double core = *source.coreLr;
+    const double head = *source.headLr;
+    AddNextExperimentCandidate(out,
+                               emittedKeys,
+                               existingConfigs,
+                               source,
+                               core - 20.0,
+                               head,
+                               sourceReason + " / fills missing core_lr neighborhood",
+                               limit);
+    AddNextExperimentCandidate(out,
+                               emittedKeys,
+                               existingConfigs,
+                               source,
+                               core + 20.0,
+                               head,
+                               sourceReason + " / fills missing core_lr neighborhood",
+                               limit);
+    AddNextExperimentCandidate(out,
+                               emittedKeys,
+                               existingConfigs,
+                               source,
+                               core,
+                               head - 10.0,
+                               sourceReason + " / tests head_lr sensitivity near leader",
+                               limit);
+    AddNextExperimentCandidate(out,
+                               emittedKeys,
+                               existingConfigs,
+                               source,
+                               core,
+                               head + 10.0,
+                               sourceReason + " / tests head_lr sensitivity near leader",
+                               limit);
+}
+
+std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(const MetaAnalysisResult& result,
+                                                                             const std::vector<ExistingExperimentConfig>& existingConfigs,
+                                                                             int limit,
+                                                                             std::vector<std::string>& notes)
+{
+    std::vector<NextExperimentRecommendation> recs;
+    std::set<std::string> emittedKeys;
+    const std::vector<const ExperimentRecord*> sources = RankedRecommendationSources(result.records);
+    if (sources.empty())
+    {
+        notes.push_back("No completed analyzed records with ranking evidence are available for next-experiment recommendations.");
+        return recs;
+    }
+
+    int skippedMissingConfig = 0;
+    auto addSource = [&](const ExperimentRecord& source, const std::string& reason) {
+        if (!CanBuildNeighborhoodRecommendation(source))
+        {
+            ++skippedMissingConfig;
+            return;
+        }
+        AddNeighborhoodRecommendations(recs, emittedKeys, existingConfigs, source, reason, limit);
+    };
+
+    addSource(*sources.front(), "neighbor sweep around current global leader");
+
+    std::set<std::string> symbolSeen;
+    for (const ExperimentRecord* source : sources)
+    {
+        if (static_cast<int>(recs.size()) >= limit)
+            break;
+        if (!symbolSeen.insert(source->symbol).second)
+            continue;
+        addSource(*source, "best result for symbol " + source->symbol);
+    }
+
+    std::set<int> horizonSeen;
+    for (const ExperimentRecord* source : sources)
+    {
+        if (static_cast<int>(recs.size()) >= limit)
+            break;
+        if (!horizonSeen.insert(source->horizon).second)
+            continue;
+        addSource(*source, "best result for horizon " + std::to_string(source->horizon));
+    }
+
+    for (const ExperimentRecord* source : sources)
+    {
+        if (static_cast<int>(recs.size()) >= limit)
+            break;
+        addSource(*source, "promising completed configuration");
+    }
+
+    if (skippedMissingConfig > 0)
+    {
+        notes.push_back("Skipped " + std::to_string(skippedMissingConfig) +
+                        " completed leader records because core_lr, head_lr, threshold, or target_epochs metadata was unavailable.");
+    }
+    if (recs.empty())
+    {
+        notes.push_back("No queueable nearby sweep candidates remained after duplicate filtering against existing experiment configurations.");
+    }
+    return recs;
+}
+
 std::string GroupStatsJson(const std::vector<GroupStats>& groups)
 {
     std::ostringstream json;
@@ -1123,6 +1436,46 @@ std::string RecommendationsJson(const std::vector<Recommendation>& recs)
              << ",\"expected_information_gain\":" << JsonString(r.expectedInformationGain)
              << ",\"confidence\":" << JsonString(r.confidence)
              << "}";
+    }
+    json << "]";
+    return json.str();
+}
+
+std::string NextExperimentRecommendationsJson(const std::vector<NextExperimentRecommendation>& recs)
+{
+    std::ostringstream json;
+    json << "[";
+    for (size_t i = 0; i < recs.size(); ++i)
+    {
+        const auto& r = recs[i];
+        if (i)
+            json << ",";
+        json << "{"
+             << "\"rank\":" << r.rank
+             << ",\"symbol\":" << JsonString(r.symbol)
+             << ",\"prediction_horizon\":" << r.horizon
+             << ",\"target_epochs\":" << r.targetEpochs
+             << ",\"threshold\":" << FormatDouble(r.threshold)
+             << ",\"core_lr\":" << FormatDouble(r.coreLr)
+             << ",\"head_lr\":" << FormatDouble(r.headLr)
+             << ",\"reason\":" << JsonString(r.reason)
+             << ",\"source_leader_experiment_id\":" << r.sourceLeaderExperimentId
+             << ",\"source_model_id\":" << FormatOptionalLongLong(r.sourceModelId)
+             << "}";
+    }
+    json << "]";
+    return json.str();
+}
+
+std::string StringVectorJson(const std::vector<std::string>& values)
+{
+    std::ostringstream json;
+    json << "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i)
+            json << ",";
+        json << JsonString(values[i]);
     }
     json << "]";
     return json.str();
@@ -1220,6 +1573,9 @@ std::string BuildCombinedJson(const MetaAnalysisResult& result)
          << ",\"statistics\":" << result.statisticsJson
          << ",\"leaderboards\":" << result.leaderboardJson
          << ",\"recommendations\":" << result.recommendationsJson
+         << ",\"next_experiment_recommendations\":"
+         << NextExperimentRecommendationsJson(result.nextExperimentRecommendations)
+         << ",\"next_experiment_notes\":" << StringVectorJson(result.nextExperimentNotes)
          << "}";
     return json.str();
 }
@@ -1364,6 +1720,38 @@ std::string BuildMarkdownReport(const MetaAnalysisResult& result, int limit)
         report << "- Confidence: " << rec.confidence << "\n\n";
     }
 
+    report << "## Recommended Next Experiments\n\n";
+    if (!result.nextExperimentNotes.empty())
+    {
+        for (const auto& note : result.nextExperimentNotes)
+            report << "- Note: " << note << "\n";
+        report << "\n";
+    }
+    if (result.nextExperimentRecommendations.empty())
+    {
+        report << "No queueable next-experiment candidates were generated from completed analyzed results.\n\n";
+    }
+    else
+    {
+        report << "| Rank | Symbol | Horizon | Target Epochs | Threshold | Core LR | Head LR | Reason | Source Leader Experiment | Source Model |\n";
+        report << "|---:|---|---:|---:|---:|---:|---:|---|---:|---:|\n";
+        for (const auto& rec : result.nextExperimentRecommendations)
+        {
+            report << "| " << rec.rank
+                   << " | " << rec.symbol
+                   << " | " << rec.horizon
+                   << " | " << rec.targetEpochs
+                   << " | " << FormatDouble(rec.threshold)
+                   << " | " << FormatDouble(rec.coreLr)
+                   << " | " << FormatDouble(rec.headLr)
+                   << " | " << rec.reason
+                   << " | " << rec.sourceLeaderExperimentId
+                   << " | " << FormatOptionalLongLong(rec.sourceModelId)
+                   << " |\n";
+        }
+        report << "\n";
+    }
+
     report << "## Open Questions\n\n";
     report << "- Are current leaders repeatable across independent runs?\n";
     report << "- Which symbol/horizon pairs still lack enough completed samples?\n";
@@ -1398,6 +1786,11 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
     result.leaders = BuildLeaders(result.records, options.limit);
     result.plateauSignals = DetectPlateaus(result.records);
     result.recommendations = BuildRecommendations(result);
+    const std::vector<ExistingExperimentConfig> existingExperimentConfigs = LoadExistingExperimentConfigs(w);
+    result.nextExperimentRecommendations = BuildNextExperimentRecommendations(result,
+                                                                              existingExperimentConfigs,
+                                                                              options.limit,
+                                                                              result.nextExperimentNotes);
     result.statisticsJson = BuildStatisticsJson(result);
     result.recommendationsJson = RecommendationsJson(result.recommendations);
     result.leaderboardJson = LeadersJson(result.leaders);
@@ -1474,6 +1867,40 @@ void PrintMarkers(const MetaAnalysisResult& result)
         std::cout << "META_ANALYSIS_NEXT_EXPERIMENT"
                   << ",priority=" << rec.priority
                   << ",action=" << rec.action
+                  << std::endl;
+    }
+
+    for (const auto& note : result.nextExperimentNotes)
+    {
+        std::cout << "META_ANALYSIS_RECOMMENDATION_NOTE"
+                  << ",note=" << note
+                  << std::endl;
+    }
+
+    for (const auto& rec : result.nextExperimentRecommendations)
+    {
+        std::cout << "META_ANALYSIS_RECOMMENDATION"
+                  << ",rank=" << rec.rank
+                  << ",symbol=" << rec.symbol
+                  << ",prediction_horizon=" << rec.horizon
+                  << ",target_epochs=" << rec.targetEpochs
+                  << ",core_lr=" << FormatDouble(rec.coreLr)
+                  << ",head_lr=" << FormatDouble(rec.headLr)
+                  << ",threshold=" << FormatDouble(rec.threshold)
+                  << ",reason=" << rec.reason
+                  << ",source_leader_experiment_id=" << rec.sourceLeaderExperimentId
+                  << ",source_model_id=" << FormatOptionalLongLong(rec.sourceModelId)
+                  << std::endl;
+        std::cout << "META_ANALYSIS_NEXT_EXPERIMENT"
+                  << ",rank=" << rec.rank
+                  << ",symbol=" << rec.symbol
+                  << ",prediction_horizon=" << rec.horizon
+                  << ",target_epochs=" << rec.targetEpochs
+                  << ",core_lr=" << FormatDouble(rec.coreLr)
+                  << ",head_lr=" << FormatDouble(rec.headLr)
+                  << ",threshold=" << FormatDouble(rec.threshold)
+                  << ",source_leader_experiment_id=" << rec.sourceLeaderExperimentId
+                  << ",source_model_id=" << FormatOptionalLongLong(rec.sourceModelId)
                   << std::endl;
     }
 }
@@ -1652,7 +2079,9 @@ int RunMetaAnalysisCli(int argc, const char* argv[])
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
                   << " --meta-analysis-report [--meta-analysis-json|--meta-analysis-markdown] "
                   << "[--meta-analysis-symbol SYMBOL] [--meta-analysis-horizon N] "
-                  << "[--meta-analysis-output FILE]\n";
+                  << "[--meta-analysis-output FILE]\n"
+                  << "Meta-analysis reports include advisory Recommended Next Experiments; "
+                  << "they do not queue or launch experiments.\n";
         return 1;
     }
 

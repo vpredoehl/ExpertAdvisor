@@ -108,6 +108,20 @@ struct Recommendation
     std::string confidence;
 };
 
+struct NextExperimentRecommendation
+{
+    int rank = 0;
+    std::string symbol;
+    int horizon = 0;
+    int targetEpochs = 0;
+    double threshold = 0.0;
+    double coreLr = 0.0;
+    double headLr = 0.0;
+    std::string reason;
+    long long sourceLeaderExperimentId = -1;
+    std::optional<long long> sourceModelId;
+};
+
 struct PlateauSignal
 {
     std::string key;
@@ -135,6 +149,8 @@ struct MetaAnalysisResult
     std::vector<LeaderRow> leaders;
     std::vector<PlateauSignal> plateauSignals;
     std::vector<Recommendation> recommendations;
+    std::vector<NextExperimentRecommendation> nextExperimentRecommendations;
+    std::vector<std::string> nextExperimentNotes;
     DataSourceSummary dataSources;
     std::string statisticsJson;
     std::string recommendationsJson;
