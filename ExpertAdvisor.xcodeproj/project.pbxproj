@@ -24,6 +24,8 @@
 		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 		0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
 		0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
+		0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
+		0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
 		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
 		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
 		0A1000082F70000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
@@ -140,6 +142,7 @@
 		08F4FCB32F11F5DF00260473 /* MetaNNXC.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = MetaNNXC.xcodeproj; path = MetaNN/MetaNNXC.xcodeproj; sourceTree = "<group>"; };
 		0A10000B2F70000100AAA001 /* LSTM_Release */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM_Release; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ExperimentMetaAnalyzer.cpp; sourceTree = "<group>"; };
+		0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentScheduler.cpp; path = Sources/ExperimentScheduler.cpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -221,6 +224,7 @@
 				084426892ED8E755002DEB21 /* main.cpp */,
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */,
+				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
 			);
 			path = LSTM;
@@ -404,6 +408,7 @@
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
+				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
 			);
@@ -417,6 +422,7 @@
 				0A1000022F70000100AAA001 /* main.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
+				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
 			);
