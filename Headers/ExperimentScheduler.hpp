@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -44,6 +45,8 @@ struct SchedulerOptions
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
     bool schedulerStatus = false;
+    std::optional<long long> stopExperimentId;
+    bool stopAllExperiments = false;
     std::optional<long long> pauseExperimentId;
     std::optional<long long> resumeExperimentId;
     std::optional<long long> cancelExperimentId;
@@ -53,6 +56,7 @@ struct SchedulerOptions
     bool help = false;
     bool dryRun = false;
     bool yes = false;
+    bool force = false;
     bool schedulerOnce = false;
     bool recoverOrphansOnly = false;
     int maxTrainProcs = 1;
@@ -206,6 +210,13 @@ struct SchedulerProcessResource
     double rssMb = 0.0;
 };
 
+struct SchedulerProcessInfo
+{
+    int pid = -1;
+    std::string command;
+    SchedulerProcessResource resource;
+};
+
 struct SchedulerResourceAggregate
 {
     int workers = 0;
@@ -235,9 +246,24 @@ struct SchedulerControlExperimentRow
     int predictionHorizon = 0;
 };
 
+struct SchedulerStopExperiment
+{
+    ExperimentRow experiment;
+    std::string status;
+    std::string phase;
+};
+
+struct SchedulerStopCandidate
+{
+    SchedulerStopExperiment experiment;
+    std::optional<int> pid;
+    std::string rejectionReason;
+};
+
 struct SchedulerStatusProcessSnapshot
 {
     bool processDetectionAvailable = false;
+    std::vector<SchedulerProcessInfo> processes;
     std::vector<int> schedulerPids;
     std::map<int, SchedulerProcessResource> resourcesByPid;
     std::map<long long, int> trainPidByExperiment;
@@ -333,6 +359,8 @@ inline bool IsExperimentSchedulerCommand(int argc, const char* argv[])
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
             arg == "--scheduler-status" ||
+            arg == "--stop-experiment" ||
+            arg == "--stop-all-experiments" ||
             arg == "--pause-experiment" ||
             arg == "--resume-experiment" ||
             arg == "--cancel-experiment" ||
@@ -342,6 +370,7 @@ inline bool IsExperimentSchedulerCommand(int argc, const char* argv[])
             arg == "--help" ||
             arg == "--analyze-experiment" ||
             arg.rfind("--analyze-experiment=", 0) == 0 ||
+            arg.rfind("--stop-experiment=", 0) == 0 ||
             arg.rfind("--pause-experiment=", 0) == 0 ||
             arg.rfind("--resume-experiment=", 0) == 0 ||
             arg.rfind("--cancel-experiment=", 0) == 0 ||
@@ -488,6 +517,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.dryRun = true;
         else if (arg == "--yes")
             options.yes = true;
+        else if (arg == "--force")
+            options.force = true;
         else if (arg == "--scheduler-once")
             options.schedulerOnce = true;
         else if (arg == "--recover-orphans-only")
@@ -496,6 +527,10 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.allowDuplicateExperiment = true;
         else if (arg == "--analyze-experiment")
             options.analyzeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--stop-experiment")
+            options.stopExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--stop-all-experiments")
+            options.stopAllExperiments = true;
         else if (arg == "--pause-experiment")
             options.pauseExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--resume-experiment")
@@ -602,6 +637,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.schedulerLogDir = value;
         else if (SplitOptionWithValue(arg, "--analyze-experiment", value))
             options.analyzeExperimentId = ParsePositiveLongLong("--analyze-experiment", value);
+        else if (SplitOptionWithValue(arg, "--stop-experiment", value))
+            options.stopExperimentId = ParsePositiveLongLong("--stop-experiment", value);
         else if (SplitOptionWithValue(arg, "--pause-experiment", value))
             options.pauseExperimentId = ParsePositiveLongLong("--pause-experiment", value);
         else if (SplitOptionWithValue(arg, "--resume-experiment", value))
@@ -637,6 +674,8 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
         (options.printLeaderboard ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
+        (options.stopExperimentId.has_value() ? 1 : 0) +
+        (options.stopAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
         (options.resumeExperimentId.has_value() ? 1 : 0) +
         (options.cancelExperimentId.has_value() ? 1 : 0) +
@@ -4215,6 +4254,7 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         resource.memPercent = memPercent;
         resource.rssMb = static_cast<double>(rssKb) / 1024.0;
         snapshot.resourcesByPid[pid] = resource;
+        snapshot.processes.push_back(SchedulerProcessInfo{pid, command, resource});
 
         const bool isLstm = command.find("LSTM_Release") != std::string::npos ||
                             command.find("/LSTM ") != std::string::npos ||
@@ -4263,6 +4303,455 @@ inline SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
                                snapshot.inferResources.cpuPercent +
                                snapshot.analysisResources.cpuPercent;
     return snapshot;
+}
+
+inline std::optional<long long> ExtractCommandLongLongOption(const std::string& command,
+                                                             const std::string& option)
+{
+    const std::regex regex(option + R"((?:=|\s+)([0-9]+))");
+    std::smatch match;
+    if (!std::regex_search(command, match, regex))
+        return std::nullopt;
+    return ParsePositiveLongLong(option, match[1].str());
+}
+
+inline bool CommandContainsOptionValue(const std::string& command,
+                                       const std::string& option,
+                                       long long value)
+{
+    const std::string valueText = std::to_string(value);
+    return command.find(option + "=" + valueText) != std::string::npos ||
+           command.find(option + " " + valueText) != std::string::npos;
+}
+
+inline bool ProcessStillExists(pid_t pid)
+{
+    if (pid <= 0)
+        return false;
+    if (::kill(pid, 0) == 0)
+        return true;
+    return errno == EPERM;
+}
+
+inline bool WaitForProcessExit(pid_t pid, int attempts = 30, useconds_t sleepMicros = 100000)
+{
+    for (int i = 0; i < attempts; ++i)
+    {
+        if (!ProcessStillExists(pid))
+            return true;
+        ::usleep(sleepMicros);
+    }
+    return !ProcessStillExists(pid);
+}
+
+inline bool IsSchedulerWorkerCommand(const std::string& command, const std::string& phase)
+{
+    const bool isLstm = command.find("LSTM_Release") != std::string::npos ||
+                        command.find("/LSTM ") != std::string::npos ||
+                        command.find(" LSTM ") != std::string::npos;
+    if (!isLstm)
+        return false;
+    if (command.find("--schedule-experiments") != std::string::npos ||
+        command.find("--scheduler-status") != std::string::npos)
+    {
+        return false;
+    }
+    if (phase == "train")
+        return command.find("--train") != std::string::npos;
+    if (phase == "infer")
+        return command.find("--infer") != std::string::npos &&
+               command.find("--infer-all") == std::string::npos;
+    if (phase == "analyze")
+        return command.find("--analyze-experiment") != std::string::npos;
+    return false;
+}
+
+inline bool CommandMatchesStopExperiment(const std::string& command,
+                                         const SchedulerStopExperiment& stopExperiment)
+{
+    const ExperimentRow& experiment = stopExperiment.experiment;
+    if (!IsSchedulerWorkerCommand(command, stopExperiment.phase))
+        return false;
+
+    if (const auto commandExperimentId = ExtractExperimentIdFromCommand(command);
+        commandExperimentId.has_value() && *commandExperimentId == experiment.experimentId)
+    {
+        return true;
+    }
+
+    if (stopExperiment.phase == "train")
+    {
+        if (command.find(BaseModelName(experiment)) != std::string::npos)
+            return true;
+        const std::optional<long long> resumeFrom =
+            experiment.resumeModelId.has_value() ? experiment.resumeModelId : experiment.lastModelId;
+        return resumeFrom.has_value() &&
+               CommandContainsOptionValue(command, "--resume-model-id", *resumeFrom);
+    }
+
+    if (stopExperiment.phase == "infer")
+    {
+        if (!experiment.lastModelId.has_value() ||
+            !CommandContainsOptionValue(command, "--model", *experiment.lastModelId))
+        {
+            return false;
+        }
+        const bool datesMatch =
+            !experiment.inferStart.has_value() ||
+            !experiment.inferEnd.has_value() ||
+            (command.find(experiment.inferStart->substr(0, 10)) != std::string::npos &&
+             command.find(experiment.inferEnd->substr(0, 10)) != std::string::npos);
+        return datesMatch;
+    }
+
+    return false;
+}
+
+inline std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
+                                                                 long long experimentId,
+                                                                 bool forUpdate)
+{
+    std::ostringstream sql;
+    sql << "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
+        << "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
+        << "train_start::text, train_end::text, infer_start::text, infer_end::text, "
+        << "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
+        << "status, phase "
+        << "FROM experiment WHERE experiment_id = " << experimentId;
+    if (forUpdate)
+        sql << " FOR UPDATE";
+    sql << ";";
+
+    pqxx::result rows = w.exec(sql.str());
+    if (rows.empty())
+        return std::nullopt;
+
+    SchedulerStopExperiment result;
+    result.experiment = RowToExperiment(rows[0]);
+    result.status = rows[0][17].as<std::string>();
+    result.phase = rows[0][18].as<std::string>();
+    return result;
+}
+
+inline std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
+{
+    pqxx::result rows = w.exec(
+        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
+        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
+        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
+        "status, phase "
+        "FROM experiment "
+        "WHERE status = 'running' AND phase IN ('train', 'infer', 'analyze') "
+        "ORDER BY updated_at ASC, experiment_id ASC;");
+
+    std::vector<SchedulerStopExperiment> experiments;
+    experiments.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        SchedulerStopExperiment item;
+        item.experiment = RowToExperiment(row);
+        item.status = row[17].as<std::string>();
+        item.phase = row[18].as<std::string>();
+        experiments.push_back(item);
+    }
+    return experiments;
+}
+
+inline SchedulerStopCandidate BuildStopCandidate(const SchedulerStopExperiment& experiment,
+                                                 const SchedulerStatusProcessSnapshot& processes)
+{
+    SchedulerStopCandidate candidate;
+    candidate.experiment = experiment;
+
+    if (experiment.status != "running")
+    {
+        candidate.rejectionReason = "experiment_not_running";
+        return candidate;
+    }
+    if (experiment.phase != "train" &&
+        experiment.phase != "infer" &&
+        experiment.phase != "analyze")
+    {
+        candidate.rejectionReason = "invalid_running_phase";
+        return candidate;
+    }
+    if (!processes.processDetectionAvailable)
+    {
+        candidate.rejectionReason = "process_detection_unavailable";
+        return candidate;
+    }
+
+    std::vector<int> matchedPids;
+    for (const auto& process : processes.processes)
+    {
+        if (CommandMatchesStopExperiment(process.command, experiment))
+            matchedPids.push_back(process.pid);
+    }
+
+    std::sort(matchedPids.begin(), matchedPids.end());
+    matchedPids.erase(std::unique(matchedPids.begin(), matchedPids.end()), matchedPids.end());
+    if (matchedPids.empty())
+    {
+        candidate.rejectionReason = "pid_not_found";
+        return candidate;
+    }
+    if (matchedPids.size() > 1)
+    {
+        candidate.rejectionReason = "ambiguous_pid_match";
+        return candidate;
+    }
+
+    candidate.pid = matchedPids.front();
+    return candidate;
+}
+
+inline void PrintSchedulerStopAttempt(const SchedulerStopCandidate& candidate, bool force)
+{
+    std::cout << "SCHEDULER_STOP_ATTEMPT"
+              << ",experiment_id=" << candidate.experiment.experiment.experimentId
+              << ",phase=" << candidate.experiment.phase
+              << ",pid=" << (candidate.pid.has_value() ? std::to_string(*candidate.pid) : "unknown")
+              << ",force=" << (force ? "1" : "0")
+              << std::endl;
+}
+
+inline void PrintSchedulerStopRejected(long long experimentId, const std::string& reason)
+{
+    std::cout << "SCHEDULER_STOP_REJECTED"
+              << ",experiment_id=" << experimentId
+              << ",reason=" << reason
+              << std::endl;
+}
+
+inline void PrintSchedulerStopPreview(const SchedulerStopCandidate& candidate, bool force)
+{
+    const auto& row = candidate.experiment;
+    std::cout << "Experiment " << row.experiment.experimentId << "\n"
+              << "Current: status=" << row.status << " phase=" << row.phase << "\n"
+              << "Matched PID: " << (candidate.pid.has_value() ? std::to_string(*candidate.pid) : "unknown") << "\n"
+              << "Requested: stop worker with SIGTERM";
+    if (force)
+        std::cout << " then SIGKILL if still running";
+    std::cout << "\n";
+}
+
+inline bool SignalProcessForStop(const SchedulerStopCandidate& candidate,
+                                 bool force,
+                                 std::string& errorMessage,
+                                 bool& usedSigkill)
+{
+    usedSigkill = false;
+    if (!candidate.pid.has_value())
+    {
+        errorMessage = "pid_not_found";
+        return false;
+    }
+
+    const pid_t pid = static_cast<pid_t>(*candidate.pid);
+    const long long experimentId = candidate.experiment.experiment.experimentId;
+    if (!ProcessStillExists(pid))
+        return true;
+
+    std::cout << "SCHEDULER_STOP_SIGNAL"
+              << ",experiment_id=" << experimentId
+              << ",pid=" << pid
+              << ",signal=SIGTERM"
+              << std::endl;
+    if (::kill(pid, SIGTERM) != 0 && errno != ESRCH)
+    {
+        errorMessage = "sigterm_failed";
+        return false;
+    }
+    if (WaitForProcessExit(pid))
+        return true;
+
+    if (!force)
+    {
+        errorMessage = "process_still_running";
+        return false;
+    }
+
+    std::cout << "SCHEDULER_STOP_SIGNAL"
+              << ",experiment_id=" << experimentId
+              << ",pid=" << pid
+              << ",signal=SIGKILL"
+              << std::endl;
+    usedSigkill = true;
+    if (::kill(pid, SIGKILL) != 0 && errno != ESRCH)
+    {
+        errorMessage = "sigkill_failed";
+        return false;
+    }
+    if (WaitForProcessExit(pid))
+        return true;
+
+    errorMessage = "process_still_running";
+    return false;
+}
+
+inline void MarkExperimentStopped(pqxx::work& w,
+                                  long long experimentId,
+                                  const std::string& errorMessage,
+                                  int exitCode)
+{
+    w.exec_params(
+        "UPDATE experiment "
+        "SET status = 'cancelled', completed_at = now(), updated_at = now(), "
+        "exit_code = $1, error_message = $2 "
+        "WHERE experiment_id = $3;",
+        exitCode,
+        errorMessage,
+        experimentId);
+}
+
+inline bool ApplyStopCandidate(const SchedulerStopCandidate& originalCandidate,
+                               const SchedulerOptions& options,
+                               std::string& failureReason)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    if (!RequireSchedulerTables(w))
+    {
+        failureReason = "scheduler_tables_missing";
+        return false;
+    }
+
+    const long long experimentId = originalCandidate.experiment.experiment.experimentId;
+    const std::optional<SchedulerStopExperiment> locked = LoadStopExperiment(w, experimentId, true);
+    if (!locked.has_value())
+    {
+        failureReason = "experiment_not_found";
+        return false;
+    }
+
+    const SchedulerStatusProcessSnapshot freshProcesses = LoadSchedulerStatusProcessSnapshot();
+    SchedulerStopCandidate candidate = BuildStopCandidate(*locked, freshProcesses);
+    if (!candidate.pid.has_value())
+    {
+        failureReason = candidate.rejectionReason;
+        w.commit();
+        return false;
+    }
+    if (originalCandidate.pid.has_value() && candidate.pid != originalCandidate.pid)
+    {
+        failureReason = "pid_changed";
+        w.commit();
+        return false;
+    }
+
+    std::string signalError;
+    bool usedSigkill = false;
+    if (!SignalProcessForStop(candidate, options.force, signalError, usedSigkill))
+    {
+        failureReason = signalError;
+        w.commit();
+        return false;
+    }
+
+    const std::string message = options.force ? "force_stopped_by_user" : "stopped_by_user";
+    MarkExperimentStopped(w, experimentId, message, usedSigkill ? 137 : 143);
+    std::cout << "SCHEDULER_STOP_APPLIED"
+              << ",experiment_id=" << experimentId
+              << ",new_status=cancelled"
+              << ",new_phase=" << locked->phase
+              << ",error_message=" << message
+              << std::endl;
+    w.commit();
+    return true;
+}
+
+inline int RunStopExperimentCommand(const SchedulerOptions& options)
+{
+    const bool isStopAll = options.stopAllExperiments;
+    const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
+
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (!RequireSchedulerTables(w))
+        return 2;
+
+    std::vector<SchedulerStopExperiment> experiments;
+    if (isStopAll)
+    {
+        experiments = LoadRunningStopExperiments(w);
+    }
+    else
+    {
+        const std::optional<SchedulerStopExperiment> experiment =
+            LoadStopExperiment(w, *options.stopExperimentId, false);
+        if (!experiment.has_value())
+        {
+            PrintSchedulerStopRejected(*options.stopExperimentId, "experiment_not_found");
+            w.commit();
+            return 1;
+        }
+        experiments.push_back(*experiment);
+    }
+    w.commit();
+
+    int matched = 0;
+    int stopped = 0;
+    int rejected = 0;
+    int failed = 0;
+
+    for (const auto& experiment : experiments)
+    {
+        SchedulerStopCandidate candidate = BuildStopCandidate(experiment, processes);
+        if (!candidate.pid.has_value())
+        {
+            ++rejected;
+            PrintSchedulerStopRejected(experiment.experiment.experimentId, candidate.rejectionReason);
+            continue;
+        }
+
+        ++matched;
+        PrintSchedulerStopAttempt(candidate, options.force);
+        PrintSchedulerStopPreview(candidate, options.force);
+
+        if (options.dryRun)
+        {
+            std::cout << "SCHEDULER_STOP_DRY_RUN"
+                      << ",experiment_id=" << experiment.experiment.experimentId
+                      << ",phase=" << experiment.phase
+                      << ",pid=" << *candidate.pid
+                      << std::endl;
+            continue;
+        }
+
+        if (!options.yes)
+        {
+            std::cout << "Use --yes to apply." << std::endl;
+            continue;
+        }
+
+        std::string failureReason;
+        if (ApplyStopCandidate(candidate, options, failureReason))
+        {
+            ++stopped;
+        }
+        else
+        {
+            ++failed;
+            std::cout << "SCHEDULER_STOP_FAILED"
+                      << ",experiment_id=" << experiment.experiment.experimentId
+                      << ",reason=" << failureReason
+                      << std::endl;
+        }
+    }
+
+    if (isStopAll)
+    {
+        std::cout << "SCHEDULER_STOP_ALL_SUMMARY"
+                  << ",matched=" << matched
+                  << ",stopped=" << stopped
+                  << ",rejected=" << rejected
+                  << ",failed=" << failed
+                  << std::endl;
+    }
+
+    return failed > 0 || (!isStopAll && rejected > 0) ? 1 : 0;
 }
 
 inline SchedulerStatusCounts LoadSchedulerStatusCounts(pqxx::work& w)
@@ -5147,6 +5636,8 @@ inline void PrintExperimentSchedulerHelp(const char* executable)
         << "--retry-failed-experiment=ID | --requeue-inference=ID | --requeue-analysis=ID "
         << "[--dry-run] [--yes]\n"
         << "Usage: " << exe
+        << " --stop-experiment=ID | --stop-all-experiments [--dry-run] [--yes] [--force]\n"
+        << "Usage: " << exe
         << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
         << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
         << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n"
@@ -5181,6 +5672,8 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
             return EnqueueExperiment(options);
         if (options.scheduleExperiments)
             return RunScheduler(options);
+        if (options.stopExperimentId.has_value() || options.stopAllExperiments)
+            return RunStopExperimentCommand(options);
         if (options.schedulerStatus)
             return PrintSchedulerStatus(options);
         if (options.pauseExperimentId.has_value() ||
