@@ -121,7 +121,8 @@ inline bool IsExperimentSchedulerCommand(int argc, const char* argv[])
             arg == "--enqueue-experiment" ||
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
-            arg == "--analyze-experiment")
+            arg == "--analyze-experiment" ||
+            arg.rfind("--analyze-experiment=", 0) == 0)
             return true;
     }
     return false;
@@ -739,6 +740,34 @@ inline std::string CommandForDisplay(const std::vector<std::string>& argv)
     return oss.str();
 }
 
+inline void AddCliFlag(std::vector<std::string>& argv, const std::string& optionName)
+{
+    argv.push_back(optionName);
+}
+
+inline void AddCliOption(std::vector<std::string>& argv,
+                         const std::string& optionName,
+                         const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument(optionName + " requires a non-empty value");
+    argv.push_back(optionName + "=" + value);
+}
+
+inline void AddCliPositional(std::vector<std::string>& argv, const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument("positional argument must not be empty");
+    argv.push_back(value);
+}
+
+inline void PrintSchedulerExec(const std::vector<std::string>& argv)
+{
+    std::cout << "SCHEDULER_EXEC: "
+              << CommandForDisplay(argv)
+              << std::endl;
+}
+
 inline pid_t LaunchChildProcess(const std::vector<std::string>& argv, const std::string& logPath)
 {
     if (argv.empty())
@@ -810,43 +839,30 @@ inline std::vector<std::string> BuildTrainCommand(const SchedulerOptions& option
 {
     std::vector<std::string> argv;
     argv.push_back(options.selfPath);
-    argv.push_back("--train");
-    argv.push_back("--log-level");
-    argv.push_back("summary");
-    argv.push_back("--checkpoint-every");
-    argv.push_back(std::to_string(experiment.checkpointInterval));
-    argv.push_back("--new-model-name");
-    argv.push_back(BaseModelName(experiment));
+    AddCliFlag(argv, "--train");
+    AddCliOption(argv, "--log-level", "summary");
+    AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
+    AddCliOption(argv, "--new-model-name", BaseModelName(experiment));
 
     const std::optional<long long> resumeFrom =
         experiment.resumeModelId.has_value() ? experiment.resumeModelId : experiment.lastModelId;
     if (resumeFrom.has_value())
     {
-        if (!experiment.resumeModelId.has_value())
-        {
-            std::cout << "SCHEDULER_RESUME_FROM_LAST_MODEL"
-                      << ",experiment_id=" << experiment.experimentId
-                      << ",model_id=" << *resumeFrom
-                      << std::endl;
-        }
-        argv.push_back("--resume-model-id");
-        argv.push_back(std::to_string(*resumeFrom));
-        argv.push_back("--target-epochs");
-        argv.push_back(std::to_string(experiment.targetEpochs));
+        AddCliOption(argv, "--resume-model-id", std::to_string(*resumeFrom));
+        AddCliOption(argv, "--target-epochs", std::to_string(experiment.targetEpochs));
         return argv;
     }
 
-    argv.push_back("--symbol");
-    argv.push_back(experiment.symbol);
-    argv.push_back("--prediction-horizon=" + std::to_string(experiment.predictionHorizon));
-    argv.push_back("--threshold=" + FormatDouble(experiment.cNextThreshold));
-    argv.push_back("--epochs=" + std::to_string(experiment.targetEpochs));
+    AddCliOption(argv, "--symbol", experiment.symbol);
+    AddCliOption(argv, "--prediction-horizon", std::to_string(experiment.predictionHorizon));
+    AddCliOption(argv, "--threshold", FormatDouble(experiment.cNextThreshold));
+    AddCliOption(argv, "--epochs", std::to_string(experiment.targetEpochs));
     if (experiment.coreLrMult.has_value())
-        argv.push_back("--core-lr-mult=" + FormatDouble(*experiment.coreLrMult));
+        AddCliOption(argv, "--core-lr-mult", FormatDouble(*experiment.coreLrMult));
     if (experiment.headLrMult.has_value())
-        argv.push_back("--head-weight-lr-mult=" + FormatDouble(*experiment.headLrMult));
-    argv.push_back(experiment.trainStart.substr(0, 10));
-    argv.push_back(experiment.trainEnd.substr(0, 10));
+        AddCliOption(argv, "--head-weight-lr-mult", FormatDouble(*experiment.headLrMult));
+    AddCliPositional(argv, experiment.trainStart.substr(0, 10));
+    AddCliPositional(argv, experiment.trainEnd.substr(0, 10));
     return argv;
 }
 
@@ -860,13 +876,20 @@ inline std::vector<std::string> BuildInferCommand(const SchedulerOptions& option
 
     std::vector<std::string> argv;
     argv.push_back(options.selfPath);
-    argv.push_back("--infer");
-    argv.push_back("--model");
-    argv.push_back(std::to_string(*experiment.lastModelId));
-    argv.push_back("--log-level");
-    argv.push_back("summary");
-    argv.push_back(experiment.inferStart->substr(0, 10));
-    argv.push_back(experiment.inferEnd->substr(0, 10));
+    AddCliFlag(argv, "--infer");
+    AddCliOption(argv, "--model", std::to_string(*experiment.lastModelId));
+    AddCliOption(argv, "--log-level", "summary");
+    AddCliPositional(argv, experiment.inferStart->substr(0, 10));
+    AddCliPositional(argv, experiment.inferEnd->substr(0, 10));
+    return argv;
+}
+
+inline std::vector<std::string> BuildAnalyzeCommand(const SchedulerOptions& options,
+                                                    const ExperimentRow& experiment)
+{
+    std::vector<std::string> argv;
+    argv.push_back(options.selfPath);
+    AddCliOption(argv, "--analyze-experiment", std::to_string(experiment.experimentId));
     return argv;
 }
 
@@ -900,6 +923,56 @@ inline std::optional<long long> ExtractLastModelId(const std::string& text)
         last = std::stoll((*it)[2].str());
     }
     return last;
+}
+
+inline std::string ModelIdSearchPatternDescription()
+{
+    return "Saved model with model_id=;Created new model_id=;RESUME_SAVED_NEW_MODEL_ID=;CHECKPOINT_SAVE_DONE model_id=";
+}
+
+inline std::string LastLines(const std::string& text, size_t lineCount)
+{
+    std::vector<std::string> lines;
+    std::istringstream input{text};
+    std::string line;
+    while (std::getline(input, line))
+    {
+        lines.push_back(line);
+        if (lines.size() > lineCount)
+            lines.erase(lines.begin());
+    }
+
+    std::ostringstream out;
+    for (const auto& item : lines)
+        out << item << "\n";
+    return out.str();
+}
+
+inline void PrintModelIdDetectionWarning(long long experimentId,
+                                         const std::string& logPath,
+                                         const std::string& logText)
+{
+    std::cout << "SCHEDULER_MODEL_ID_PARSE_WARNING"
+              << ",experiment_id=" << experimentId
+              << ",log_path=" << logPath
+              << ",patterns=" << ShellDisplayQuote(ModelIdSearchPatternDescription())
+              << std::endl;
+    std::cout << "SCHEDULER_TRAIN_LOG_TAIL_BEGIN"
+              << ",experiment_id=" << experimentId
+              << ",lines=50"
+              << std::endl;
+    std::istringstream tail{LastLines(logText, 50)};
+    std::string line;
+    while (std::getline(tail, line))
+    {
+        std::cout << "SCHEDULER_TRAIN_LOG_TAIL"
+                  << ",experiment_id=" << experimentId
+                  << ",line=" << line
+                  << std::endl;
+    }
+    std::cout << "SCHEDULER_TRAIN_LOG_TAIL_END"
+              << ",experiment_id=" << experimentId
+              << std::endl;
 }
 
 inline std::optional<double> ExtractLastDouble(const std::string& text, const std::regex& regex)
@@ -1375,10 +1448,11 @@ inline void MarkExperimentRunning(pqxx::work& w,
         "WHERE experiment_id = " + std::to_string(experiment.experimentId) + ";");
 }
 
-inline void CompleteTrainPhase(pqxx::work& w,
+inline bool CompleteTrainPhase(pqxx::work& w,
                                const ExperimentRow& experiment,
                                int exitCode,
-                               const std::string& logPath)
+                               const std::string& logPath,
+                               const std::string& commandDisplay)
 {
     const std::string logText = ReadFileIfExists(logPath);
     const std::optional<long long> lastModelId = ExtractLastModelId(logText);
@@ -1403,22 +1477,33 @@ inline void CompleteTrainPhase(pqxx::work& w,
                   << ",phase=" << (shouldInfer ? "infer" : "analyze")
                   << ",status=pending"
                   << std::endl;
+        return true;
     }
     else
     {
+        const std::string failureReason = lastModelId.has_value() ? "train_failed" : "train_failed_no_model_id";
+        if (exitCode == 0 && !lastModelId.has_value())
+            PrintModelIdDetectionWarning(experiment.experimentId, logPath, logText);
+        const std::string errorMessage =
+            failureReason +
+            ";exit_code=" + std::to_string(exitCode) +
+            ";command=" + commandDisplay +
+            ";model_id_patterns=" + ModelIdSearchPatternDescription();
         w.exec_params(
             "UPDATE experiment "
             "SET status = 'failed', exit_code = $1, error_message = $2, completed_at = now(), updated_at = now() "
             "WHERE experiment_id = $3;",
             exitCode,
-            lastModelId.has_value() ? "train_failed" : "train_failed_no_model_id",
+            errorMessage,
             experiment.experimentId);
+        return false;
     }
 }
 
 inline void CompleteInferPhase(pqxx::work& w,
                                const ExperimentRow& experiment,
-                               int exitCode)
+                               int exitCode,
+                               const std::string& commandDisplay)
 {
     if (exitCode == 0)
     {
@@ -1435,11 +1520,15 @@ inline void CompleteInferPhase(pqxx::work& w,
     }
     else
     {
+        const std::string errorMessage =
+            "infer_failed;exit_code=" + std::to_string(exitCode) +
+            ";command=" + commandDisplay;
         w.exec_params(
             "UPDATE experiment "
-            "SET status = 'failed', exit_code = $1, error_message = 'infer_failed', completed_at = now(), updated_at = now() "
-            "WHERE experiment_id = $2;",
+            "SET status = 'failed', exit_code = $1, error_message = $2, completed_at = now(), updated_at = now() "
+            "WHERE experiment_id = $3;",
             exitCode,
+            errorMessage,
             experiment.experimentId);
     }
 }
@@ -1485,6 +1574,14 @@ inline int RunTrainJobs(const SchedulerOptions& options)
         }
 
         const std::vector<std::string> command = BuildTrainCommand(options, job);
+        const std::string commandDisplay = CommandForDisplay(command);
+        if (job.lastModelId.has_value() && !job.resumeModelId.has_value())
+        {
+            std::cout << "SCHEDULER_RESUME_FROM_LAST_MODEL"
+                      << ",experiment_id=" << job.experimentId
+                      << ",model_id=" << *job.lastModelId
+                      << std::endl;
+        }
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=train"
@@ -1492,8 +1589,9 @@ inline int RunTrainJobs(const SchedulerOptions& options)
         std::cout << "EXPERIMENT_CHILD_COMMAND"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=train"
-                  << ",argv=" << CommandForDisplay(command)
+                  << ",argv=" << commandDisplay
                   << std::endl;
+        PrintSchedulerExec(command);
         const pid_t pid = LaunchChildProcess(command, logPath);
         running.push_back(RunningExperimentChild{job, pid, logPath});
     }
@@ -1502,14 +1600,16 @@ inline int RunTrainJobs(const SchedulerOptions& options)
     for (const auto& child : running)
     {
         const int exitCode = WaitForChildProcess(child.pid);
+        bool trainSuccess = false;
         {
             pqxx::connection c3{LstmDbConnectionString()};
             pqxx::work wt{c3};
             SetTransactionReadWrite(wt);
-            CompleteTrainPhase(wt, child.experiment, exitCode, child.logPath);
+            const std::vector<std::string> command = BuildTrainCommand(options, child.experiment);
+            trainSuccess = CompleteTrainPhase(wt, child.experiment, exitCode, child.logPath, CommandForDisplay(command));
             wt.commit();
         }
-        if (exitCode == 0)
+        if (trainSuccess)
         {
             std::cout << "EXPERIMENT_COMPLETED"
                       << ",experiment_id=" << child.experiment.experimentId
@@ -1571,6 +1671,7 @@ inline int RunInferJobs(const SchedulerOptions& options)
         }
 
         const std::vector<std::string> command = BuildInferCommand(options, job);
+        const std::string commandDisplay = CommandForDisplay(command);
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=infer"
@@ -1578,8 +1679,9 @@ inline int RunInferJobs(const SchedulerOptions& options)
         std::cout << "EXPERIMENT_CHILD_COMMAND"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=infer"
-                  << ",argv=" << CommandForDisplay(command)
+                  << ",argv=" << commandDisplay
                   << std::endl;
+        PrintSchedulerExec(command);
         const pid_t pid = LaunchChildProcess(command, logPath);
         running.push_back(RunningExperimentChild{job, pid, logPath});
     }
@@ -1592,7 +1694,8 @@ inline int RunInferJobs(const SchedulerOptions& options)
             pqxx::connection c3{LstmDbConnectionString()};
             pqxx::work wi{c3};
             SetTransactionReadWrite(wi);
-            CompleteInferPhase(wi, child.experiment, exitCode);
+            const std::vector<std::string> command = BuildInferCommand(options, child.experiment);
+            CompleteInferPhase(wi, child.experiment, exitCode, CommandForDisplay(command));
             wi.commit();
         }
         if (exitCode == 0)
@@ -1628,9 +1731,16 @@ inline int RunAnalyzeJobs(const SchedulerOptions& options)
     {
         for (const auto& job : jobs)
         {
+            const std::vector<std::string> command = BuildAnalyzeCommand(options, job);
             std::cout << "EXPERIMENT_ANALYSIS_STARTED"
                       << ",experiment_id=" << job.experimentId
                       << ",dry_run=1"
+                      << std::endl;
+            std::cout << "EXPERIMENT_CHILD_COMMAND"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=analyze"
+                      << ",dry_run=1"
+                      << ",argv=" << CommandForDisplay(command)
                       << std::endl;
         }
         w.commit();
@@ -1754,18 +1864,18 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
     {
         std::cerr << "Argument error: " << e.what() << "\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --enqueue-experiment --symbol SYMBOL --prediction-horizon N --c-next-threshold VALUE "
-                  << "--core-lr-mult VALUE --head-lr-mult VALUE --target-epochs N --checkpoint-interval N "
-                  << "--train-start YYYY-MM-DD --train-end YYYY-MM-DD [--infer-start YYYY-MM-DD --infer-end YYYY-MM-DD] "
-                  << "[--resume-model-id MODEL_ID] [--allow-duplicate-experiment]\n"
+                  << " --enqueue-experiment --symbol=SYMBOL --prediction-horizon=N --c-next-threshold=VALUE "
+                  << "--core-lr-mult=VALUE --head-lr-mult=VALUE --target-epochs=N --checkpoint-interval=N "
+                  << "--train-start=YYYY-MM-DD --train-end=YYYY-MM-DD [--infer-start=YYYY-MM-DD --infer-end=YYYY-MM-DD] "
+                  << "[--resume-model-id=MODEL_ID] [--allow-duplicate-experiment]\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --schedule-experiments [--max-train-procs N] [--max-infer-procs N] "
-                  << "[--max-analyze-procs N] [--scheduler-poll-seconds N] [--scheduler-once] "
-                  << "[--scheduler-log-dir PATH] [--dry-run]\n"
+                  << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
+                  << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
+                  << "[--scheduler-log-dir=PATH] [--dry-run]\n"
                   << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --analyze-experiment EXPERIMENT_ID | --analyze-completed-experiments | "
-                  << "--print-experiment-leaderboard [--leaderboard-symbol SYMBOL] "
-                  << "[--leaderboard-horizon N] [--leaderboard-limit N]\n";
+                  << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
+                  << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
+                  << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n";
         return 1;
     }
 
