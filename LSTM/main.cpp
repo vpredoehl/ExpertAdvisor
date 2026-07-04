@@ -34,6 +34,7 @@
 #include "PgModelIO.hpp"
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
+#include "ExperimentScheduler.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -5613,6 +5614,8 @@ int main(int argc, const char * argv[])
         return RunLabelGridDiagnostic3Class(argv[2], argv[3]);
     if (argc >= 4 && std::string(argv[1]) == "--feature-trainability-3class")
         return RunFeatureTrainability3Class(argv[2], argv[3]);
+    if (EA::ExperimentScheduler::IsExperimentSchedulerCommand(argc, argv))
+        return EA::ExperimentScheduler::RunExperimentSchedulerCli(argc, argv);
 
     LaunchArgs launchArgs;
     try

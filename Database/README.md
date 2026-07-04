@@ -23,7 +23,7 @@ create indexes, and grant privileges to the runtime user `pqxx`.
 
 The LSTM runtime user `pqxx` should not need schema-creation privileges after
 migrations are applied. It only needs DML privileges on runtime tables such as
-`inference_eval_result`.
+`inference_eval_result`, `experiment`, and `experiment_analysis_result`.
 
 Applied migrations are tracked in `schema_migrations`:
 
@@ -31,3 +31,11 @@ Applied migrations are tracked in `schema_migrations`:
 - `filename text not null`
 - `checksum text not null`
 - `applied_at timestamptz not null default now()`
+
+Experiment scheduling tables are created by:
+
+- `005_experiment_scheduler.sql`: `experiment`
+- `006_experiment_analysis.sql`: `experiment_analysis_result`
+
+The scheduler and analyzer expect these migrations to be applied before running
+`--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
