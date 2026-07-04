@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -25,6 +26,8 @@
 
 #include "CanonicalSymbol.hpp"
 #include "PgModelIO.hpp"
+#include "Params.hpp"
+#include "SupportedSymbols.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -33,9 +36,13 @@ struct SchedulerOptions
 {
     bool scheduleExperiments = false;
     bool enqueueExperiment = false;
+    bool queueExperiment = false;
+    bool queueSweep = false;
+    bool autoResume = false;
     bool analyzeCompletedExperiments = false;
     std::optional<long long> analyzeExperimentId;
     bool printLeaderboard = false;
+    bool help = false;
     bool dryRun = false;
     bool schedulerOnce = false;
     bool recoverOrphansOnly = false;
@@ -52,6 +59,7 @@ struct SchedulerOptions
     std::optional<double> coreLrMult;
     std::optional<double> headLrMult;
     std::optional<int> targetEpochs;
+    std::optional<int> epochs;
     int checkpointInterval = 20;
     std::optional<std::string> trainStart;
     std::optional<std::string> trainEnd;
@@ -63,6 +71,38 @@ struct SchedulerOptions
     std::optional<std::string> leaderboardSymbol;
     std::optional<int> leaderboardHorizon;
     int leaderboardLimit = 20;
+};
+
+struct QueueDefaults
+{
+    double threshold = default_c_next_threshold;
+    double coreLrMult = default_core_lr_mult;
+    double headLrMult = default_head_weight_lr_mult;
+    int checkpointInterval = 20;
+    std::string trainStart = "2010-01-01";
+    std::string trainEnd = "2025-01-01";
+    std::string inferStart = "2025-01-01";
+    std::string inferEnd = "2026-01-01";
+};
+
+struct QueueResumeMeta
+{
+    long long modelId = -1;
+    std::string symbol;
+    int predictionHorizon = 0;
+    double threshold = 0.0;
+    std::string trainStart;
+    std::string trainEnd;
+    int completedEpochs = 0;
+    std::optional<double> coreLrMult;
+    std::optional<double> headLrMult;
+};
+
+struct AutoResumeCandidate
+{
+    long long modelId = -1;
+    std::string name;
+    int completedEpochs = 0;
 };
 
 struct ExperimentRow
@@ -147,8 +187,11 @@ inline bool IsExperimentSchedulerCommand(int argc, const char* argv[])
         const std::string arg{argv[i]};
         if (arg == "--schedule-experiments" ||
             arg == "--enqueue-experiment" ||
+            arg == "--queue-experiment" ||
+            arg == "--queue-sweep" ||
             arg == "--analyze-completed-experiments" ||
             arg == "--print-experiment-leaderboard" ||
+            arg == "--help" ||
             arg == "--analyze-experiment" ||
             arg.rfind("--analyze-experiment=", 0) == 0)
             return true;
@@ -273,10 +316,18 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.scheduleExperiments = true;
         else if (arg == "--enqueue-experiment")
             options.enqueueExperiment = true;
+        else if (arg == "--queue-experiment")
+            options.queueExperiment = true;
+        else if (arg == "--queue-sweep")
+            options.queueSweep = true;
+        else if (arg == "--auto-resume")
+            options.autoResume = true;
         else if (arg == "--analyze-completed-experiments")
             options.analyzeCompletedExperiments = true;
         else if (arg == "--print-experiment-leaderboard")
             options.printLeaderboard = true;
+        else if (arg == "--help")
+            options.help = true;
         else if (arg == "--dry-run")
             options.dryRun = true;
         else if (arg == "--scheduler-once")
@@ -293,12 +344,20 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.predictionHorizon = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--c-next-threshold")
             options.cNextThreshold = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--threshold")
+            options.cNextThreshold = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--core-lr-mult")
+            options.coreLrMult = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--core-lr")
             options.coreLrMult = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--head-lr-mult")
             options.headLrMult = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--head-lr")
+            options.headLrMult = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--target-epochs")
             options.targetEpochs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--epochs")
+            options.epochs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--checkpoint-interval")
             options.checkpointInterval = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--train-start")
@@ -333,12 +392,20 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.predictionHorizon = ParsePositiveInt("--prediction-horizon", value);
         else if (SplitOptionWithValue(arg, "--c-next-threshold", value))
             options.cNextThreshold = ParsePositiveDouble("--c-next-threshold", value);
+        else if (SplitOptionWithValue(arg, "--threshold", value))
+            options.cNextThreshold = ParsePositiveDouble("--threshold", value);
         else if (SplitOptionWithValue(arg, "--core-lr-mult", value))
             options.coreLrMult = ParsePositiveDouble("--core-lr-mult", value);
+        else if (SplitOptionWithValue(arg, "--core-lr", value))
+            options.coreLrMult = ParsePositiveDouble("--core-lr", value);
         else if (SplitOptionWithValue(arg, "--head-lr-mult", value))
             options.headLrMult = ParsePositiveDouble("--head-lr-mult", value);
+        else if (SplitOptionWithValue(arg, "--head-lr", value))
+            options.headLrMult = ParsePositiveDouble("--head-lr", value);
         else if (SplitOptionWithValue(arg, "--target-epochs", value))
             options.targetEpochs = ParsePositiveInt("--target-epochs", value);
+        else if (SplitOptionWithValue(arg, "--epochs", value))
+            options.epochs = ParsePositiveInt("--epochs", value);
         else if (SplitOptionWithValue(arg, "--checkpoint-interval", value))
             options.checkpointInterval = ParsePositiveInt("--checkpoint-interval", value);
         else if (SplitOptionWithValue(arg, "--train-start", value))
@@ -378,9 +445,12 @@ inline SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     const int commandCount =
         (options.scheduleExperiments ? 1 : 0) +
         (options.enqueueExperiment ? 1 : 0) +
+        (options.queueExperiment ? 1 : 0) +
+        (options.queueSweep ? 1 : 0) +
         (options.analyzeCompletedExperiments ? 1 : 0) +
         (options.analyzeExperimentId.has_value() ? 1 : 0) +
-        (options.printLeaderboard ? 1 : 0);
+        (options.printLeaderboard ? 1 : 0) +
+        (options.help ? 1 : 0);
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
     if (options.recoverOrphansOnly && !options.scheduleExperiments)
@@ -419,6 +489,233 @@ inline bool ModelExists(pqxx::work& w, long long modelId)
         "SELECT 1 FROM model WHERE model_id = $1 LIMIT 1;",
         modelId);
     return !r.empty();
+}
+
+inline std::string DateOnly(const std::string& value)
+{
+    return value.size() >= 10 ? value.substr(0, 10) : value;
+}
+
+inline bool SameDate(const std::string& lhs, const std::string& rhs)
+{
+    return DateOnly(lhs) == DateOnly(rhs);
+}
+
+inline QueueResumeMeta LoadQueueResumeMeta(pqxx::work& w, long long modelId)
+{
+    if (!ModelExists(w, modelId))
+        throw std::runtime_error("resume model_id not found");
+
+    auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "train_config_meta");
+    auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "train_config_meta");
+    if (dims.n_rows != 1 ||
+        dims.n_cols < DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount ||
+        vals.size() < static_cast<size_t>(DBIO::PgModelIO::kTrainConfigMetaExtendedFieldCount))
+        throw std::runtime_error("resume requires complete train_config_meta with 14 fields");
+
+    QueueResumeMeta meta;
+    meta.modelId = modelId;
+    meta.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
+    meta.predictionHorizon = static_cast<int>(std::llround(vals[1]));
+    meta.threshold = vals[2];
+    meta.completedEpochs = static_cast<int>(std::llround(vals[10]));
+    meta.coreLrMult = vals[11];
+    meta.headLrMult = vals[12];
+    const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
+    meta.trainStart = DateOnly(range.first);
+    meta.trainEnd = DateOnly(range.second);
+    return meta;
+}
+
+inline void PrintQueueResumeMeta(const char* marker,
+                                 const QueueResumeMeta& meta,
+                                 int targetEpochs)
+{
+    std::cout << marker
+              << ",resume_model_id=" << meta.modelId
+              << ",symbol=" << meta.symbol
+              << ",prediction_horizon=" << meta.predictionHorizon
+              << ",threshold=" << FormatDouble(meta.threshold)
+              << ",completed_epochs=" << meta.completedEpochs
+              << ",target_epochs=" << targetEpochs
+              << ",train_start=" << meta.trainStart
+              << ",train_end=" << meta.trainEnd
+              << std::endl;
+}
+
+inline void ThrowQueueResumeInvalid(const std::string& reason,
+                                    long long modelId,
+                                    const std::string& detail = {})
+{
+    std::cout << "QUEUE_RESUME_INVALID"
+              << ",resume_model_id=" << modelId
+              << ",reason=" << reason;
+    if (!detail.empty())
+        std::cout << ",detail=" << detail;
+    std::cout << std::endl;
+    throw std::invalid_argument("QUEUE_RESUME_INVALID:" + reason);
+}
+
+inline void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
+                                            const QueueResumeMeta& meta)
+{
+    if (!options.targetEpochs.has_value())
+        ThrowQueueResumeInvalid("missing_target_epochs", meta.modelId);
+    if (*options.targetEpochs <= meta.completedEpochs)
+    {
+        ThrowQueueResumeInvalid("target_epochs_not_greater_than_completed_epoch",
+                                meta.modelId,
+                                "completed_epochs=" + std::to_string(meta.completedEpochs) +
+                                ";target_epochs=" + std::to_string(*options.targetEpochs));
+    }
+
+    if (options.symbol.has_value() &&
+        EA::CanonicalSymbol::Normalize(*options.symbol) != meta.symbol)
+    {
+        ThrowQueueResumeInvalid("symbol_mismatch",
+                                meta.modelId,
+                                "model=" + meta.symbol + ";runtime=" + *options.symbol);
+    }
+    if (options.predictionHorizon.has_value() &&
+        *options.predictionHorizon != meta.predictionHorizon)
+    {
+        ThrowQueueResumeInvalid("prediction_horizon_mismatch",
+                                meta.modelId,
+                                "model=" + std::to_string(meta.predictionHorizon) +
+                                ";runtime=" + std::to_string(*options.predictionHorizon));
+    }
+    if (options.cNextThreshold.has_value() &&
+        std::fabs(*options.cNextThreshold - meta.threshold) > 1e-7)
+    {
+        ThrowQueueResumeInvalid("threshold_mismatch",
+                                meta.modelId,
+                                "model=" + FormatDouble(meta.threshold) +
+                                ";runtime=" + FormatDouble(*options.cNextThreshold));
+    }
+    if (options.trainStart.has_value() && !SameDate(*options.trainStart, meta.trainStart))
+    {
+        ThrowQueueResumeInvalid("train_start_mismatch",
+                                meta.modelId,
+                                "model=" + meta.trainStart + ";runtime=" + *options.trainStart);
+    }
+    if (options.trainEnd.has_value() && !SameDate(*options.trainEnd, meta.trainEnd))
+    {
+        ThrowQueueResumeInvalid("train_end_mismatch",
+                                meta.modelId,
+                                "model=" + meta.trainEnd + ";runtime=" + *options.trainEnd);
+    }
+
+    options.symbol = meta.symbol;
+    options.predictionHorizon = meta.predictionHorizon;
+    options.cNextThreshold = meta.threshold;
+    options.trainStart = meta.trainStart;
+    options.trainEnd = meta.trainEnd;
+    options.coreLrMult = meta.coreLrMult;
+    options.headLrMult = meta.headLrMult;
+
+    PrintQueueResumeMeta("QUEUE_RESUME_MODEL", meta, *options.targetEpochs);
+}
+
+inline std::vector<AutoResumeCandidate> LoadAutoResumeCandidates(pqxx::work& w,
+                                                                 const SchedulerOptions& options)
+{
+    const std::string canonicalSymbol = EA::CanonicalSymbol::Normalize(*options.symbol);
+    const std::string trainRange = DateOnly(*options.trainStart) + "|" + DateOnly(*options.trainEnd);
+
+    std::ostringstream sql;
+    sql << "WITH cfg AS ("
+        << "  SELECT model_id,"
+        << "         max(value) FILTER (WHERE col_idx = 1) AS prediction_horizon,"
+        << "         max(value) FILTER (WHERE col_idx = 2) AS threshold_logret,"
+        << "         max(value) FILTER (WHERE col_idx = 10) AS completed_epochs"
+        << "  FROM matrix"
+        << "  WHERE param_name = 'train_config_meta' AND row_idx = 0"
+        << "  GROUP BY model_id"
+        << "), sym AS ("
+        << "  SELECT model_id, string_agg(chr(round(value)::int), '' ORDER BY col_idx) AS symbol"
+        << "  FROM matrix"
+        << "  WHERE param_name = 'train_symbol_meta' AND row_idx = 0"
+        << "  GROUP BY model_id"
+        << "), rng AS ("
+        << "  SELECT model_id, string_agg(chr(round(value)::int), '' ORDER BY col_idx) AS train_range"
+        << "  FROM matrix"
+        << "  WHERE param_name = 'train_range_meta' AND row_idx = 0"
+        << "  GROUP BY model_id"
+        << ") "
+        << "SELECT m.model_id, COALESCE(m.name, ''), round(cfg.completed_epochs)::int "
+        << "FROM model m "
+        << "JOIN cfg ON cfg.model_id = m.model_id "
+        << "JOIN sym ON sym.model_id = m.model_id "
+        << "JOIN rng ON rng.model_id = m.model_id "
+        << "WHERE sym.symbol = " << w.quote(canonicalSymbol)
+        << " AND round(cfg.prediction_horizon)::int = " << *options.predictionHorizon
+        << " AND abs(cfg.threshold_logret - " << FormatDouble(*options.cNextThreshold) << ") <= 1e-7"
+        << " AND rng.train_range = " << w.quote(trainRange)
+        << " AND round(cfg.completed_epochs)::int < " << *options.targetEpochs
+        << " ORDER BY round(cfg.completed_epochs)::int DESC, m.model_id DESC;";
+
+    pqxx::result rows = w.exec(sql.str());
+    std::vector<AutoResumeCandidate> candidates;
+    candidates.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        candidates.push_back(AutoResumeCandidate{
+            row[0].as<long long>(),
+            row[1].as<std::string>(),
+            row[2].as<int>()
+        });
+    }
+    return candidates;
+}
+
+inline long long ResolveAutoResumeModelId(pqxx::work& w,
+                                          const SchedulerOptions& options)
+{
+    const std::vector<AutoResumeCandidate> candidates = LoadAutoResumeCandidates(w, options);
+    if (candidates.empty())
+    {
+        std::cout << "QUEUE_RESUME_AUTO_NO_MATCH"
+                  << ",symbol=" << *options.symbol
+                  << ",prediction_horizon=" << *options.predictionHorizon
+                  << ",threshold=" << FormatDouble(*options.cNextThreshold)
+                  << ",target_epochs=" << *options.targetEpochs
+                  << ",train_start=" << *options.trainStart
+                  << ",train_end=" << *options.trainEnd
+                  << std::endl;
+        throw std::invalid_argument("QUEUE_RESUME_AUTO_NO_MATCH");
+    }
+
+    const int bestCompletedEpochs = candidates.front().completedEpochs;
+    int tiedBestCount = 0;
+    for (const auto& candidate : candidates)
+    {
+        if (candidate.completedEpochs == bestCompletedEpochs)
+            ++tiedBestCount;
+    }
+
+    for (const auto& candidate : candidates)
+    {
+        std::cout << "QUEUE_RESUME_AUTO_CANDIDATE"
+                  << ",model_id=" << candidate.modelId
+                  << ",name=" << candidate.name
+                  << ",completed_epochs=" << candidate.completedEpochs
+                  << std::endl;
+    }
+
+    if (tiedBestCount > 1)
+    {
+        std::cout << "QUEUE_RESUME_AUTO_AMBIGUOUS"
+                  << ",best_completed_epochs=" << bestCompletedEpochs
+                  << ",candidate_count=" << candidates.size()
+                  << std::endl;
+        throw std::invalid_argument("QUEUE_RESUME_AUTO_AMBIGUOUS");
+    }
+
+    std::cout << "QUEUE_RESUME_AUTO_SELECTED"
+              << ",resume_model_id=" << candidates.front().modelId
+              << ",completed_epochs=" << candidates.front().completedEpochs
+              << std::endl;
+    return candidates.front().modelId;
 }
 
 inline bool ExistingFilePath(const std::optional<std::string>& path)
@@ -551,10 +848,55 @@ inline std::string DuplicateWhereClause(pqxx::work& w,
     return sql.str();
 }
 
+inline std::string QueueDuplicateWhereClause(pqxx::work& w,
+                                             const SchedulerOptions& options,
+                                             const std::string& canonicalSymbol)
+{
+    std::ostringstream sql;
+    sql << "symbol = " << w.quote(canonicalSymbol)
+        << " AND prediction_horizon = " << *options.predictionHorizon
+        << " AND target_epochs = " << *options.targetEpochs
+        << " AND c_next_threshold = " << FormatDouble(*options.cNextThreshold)
+        << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
+        << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
+        << " AND status NOT IN ('failed', 'cancelled')";
+    return sql.str();
+}
+
 inline long long CurrentDuplicateNonce()
 {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     return std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+}
+
+inline long long InsertExperimentRecord(pqxx::work& w,
+                                        const SchedulerOptions& options,
+                                        const std::string& canonicalSymbol,
+                                        long long duplicateNonce)
+{
+    std::ostringstream sql;
+    sql << "INSERT INTO experiment ("
+        << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
+        << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
+        << "resume_model_id, duplicate_nonce, status, phase, updated_at"
+        << ") VALUES ("
+        << w.quote(canonicalSymbol) << ","
+        << *options.predictionHorizon << ","
+        << FormatDouble(*options.cNextThreshold) << ","
+        << SqlNullable(w, options.coreLrMult) << ","
+        << SqlNullable(w, options.headLrMult) << ","
+        << *options.targetEpochs << ","
+        << options.checkpointInterval << ","
+        << w.quote(*options.trainStart) << "::timestamptz,"
+        << w.quote(*options.trainEnd) << "::timestamptz,"
+        << SqlNullable(w, options.inferStart) << "::timestamptz,"
+        << SqlNullable(w, options.inferEnd) << "::timestamptz,"
+        << SqlNullable(w, options.resumeModelId) << ","
+        << duplicateNonce << ","
+        << "'pending','train',now()) RETURNING experiment_id;";
+
+    pqxx::result inserted = w.exec(sql.str());
+    return inserted[0][0].as<long long>();
 }
 
 inline int EnqueueExperiment(const SchedulerOptions& options)
@@ -610,29 +952,7 @@ inline int EnqueueExperiment(const SchedulerOptions& options)
     }
 
     const long long duplicateNonce = options.allowDuplicateExperiment ? CurrentDuplicateNonce() : 0;
-    std::ostringstream sql;
-    sql << "INSERT INTO experiment ("
-        << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
-        << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
-        << "resume_model_id, duplicate_nonce, status, phase, updated_at"
-        << ") VALUES ("
-        << w.quote(canonicalSymbol) << ","
-        << *options.predictionHorizon << ","
-        << FormatDouble(*options.cNextThreshold) << ","
-        << SqlNullable(w, options.coreLrMult) << ","
-        << SqlNullable(w, options.headLrMult) << ","
-        << *options.targetEpochs << ","
-        << options.checkpointInterval << ","
-        << w.quote(*options.trainStart) << "::timestamptz,"
-        << w.quote(*options.trainEnd) << "::timestamptz,"
-        << SqlNullable(w, options.inferStart) << "::timestamptz,"
-        << SqlNullable(w, options.inferEnd) << "::timestamptz,"
-        << SqlNullable(w, options.resumeModelId) << ","
-        << duplicateNonce << ","
-        << "'pending','train',now()) RETURNING experiment_id;";
-
-    pqxx::result inserted = w.exec(sql.str());
-    const long long experimentId = inserted[0][0].as<long long>();
+    const long long experimentId = InsertExperimentRecord(w, options, canonicalSymbol, duplicateNonce);
     w.commit();
 
     std::cout << "EXPERIMENT_ENQUEUED"
@@ -642,6 +962,199 @@ inline int EnqueueExperiment(const SchedulerOptions& options)
               << ",target_epochs=" << *options.targetEpochs
               << std::endl;
     return 0;
+}
+
+inline SchedulerOptions ApplyQueueDefaults(SchedulerOptions options)
+{
+    const QueueDefaults defaults;
+    if (!options.cNextThreshold.has_value())
+        options.cNextThreshold = defaults.threshold;
+    if (!options.coreLrMult.has_value())
+        options.coreLrMult = defaults.coreLrMult;
+    if (!options.headLrMult.has_value())
+        options.headLrMult = defaults.headLrMult;
+    if (options.checkpointInterval <= 0)
+        options.checkpointInterval = defaults.checkpointInterval;
+    if (!options.trainStart.has_value())
+        options.trainStart = defaults.trainStart;
+    if (!options.trainEnd.has_value())
+        options.trainEnd = defaults.trainEnd;
+    if (!options.inferStart.has_value())
+        options.inferStart = defaults.inferStart;
+    if (!options.inferEnd.has_value())
+        options.inferEnd = defaults.inferEnd;
+    return options;
+}
+
+inline void EnsureRequiredQueueOptions(const SchedulerOptions& options)
+{
+    if (options.epochs.has_value())
+        throw std::invalid_argument("--queue-experiment/--queue-sweep use --target-epochs as the absolute final epoch; --epochs is not supported");
+    if (options.autoResume && !options.queueExperiment)
+        throw std::invalid_argument("--auto-resume is supported only with --queue-experiment");
+    if (options.autoResume && options.resumeModelId.has_value())
+        throw std::invalid_argument("--auto-resume cannot be combined with --resume-model-id");
+    if (options.queueSweep && options.resumeModelId.has_value())
+        throw std::invalid_argument("--queue-sweep does not support --resume-model-id");
+    if (options.queueSweep && options.autoResume)
+        throw std::invalid_argument("--queue-sweep does not support --auto-resume");
+    if (!options.targetEpochs.has_value())
+        throw std::invalid_argument("--queue-experiment/--queue-sweep require --target-epochs");
+    if (!options.resumeModelId.has_value() && !options.autoResume && !options.predictionHorizon.has_value())
+        throw std::invalid_argument("--queue-experiment/--queue-sweep require --prediction-horizon");
+    if (options.queueExperiment && !options.symbol.has_value())
+    {
+        if (!options.resumeModelId.has_value())
+            throw std::invalid_argument("--queue-experiment requires --symbol unless --resume-model-id is supplied");
+    }
+    if (options.queueSweep && options.symbol.has_value())
+        throw std::invalid_argument("--queue-sweep queues all supported symbols; do not pass --symbol");
+}
+
+inline void PrintQueueConfig(const char* marker,
+                             const SchedulerOptions& options,
+                             const std::string& canonicalSymbol,
+                             const std::optional<long long>& experimentId = std::nullopt)
+{
+    std::cout << marker;
+    if (experimentId.has_value())
+        std::cout << ",experiment_id=" << *experimentId;
+    std::cout << ",symbol=" << canonicalSymbol
+              << ",prediction_horizon=" << *options.predictionHorizon
+              << ",target_epochs=" << *options.targetEpochs
+              << ",resume_model_id=" << (options.resumeModelId.has_value() ? std::to_string(*options.resumeModelId) : "NULL")
+              << ",threshold=" << FormatDouble(*options.cNextThreshold)
+              << ",core_lr=" << (options.coreLrMult.has_value() ? FormatDouble(*options.coreLrMult) : "NULL")
+              << ",head_lr=" << (options.headLrMult.has_value() ? FormatDouble(*options.headLrMult) : "NULL")
+              << ",checkpoint_interval=" << options.checkpointInterval
+              << ",train_start=" << *options.trainStart
+              << ",train_end=" << *options.trainEnd
+              << ",infer_start=" << (options.inferStart.has_value() ? *options.inferStart : "NULL")
+              << ",infer_end=" << (options.inferEnd.has_value() ? *options.inferEnd : "NULL")
+              << std::endl;
+}
+
+inline std::optional<long long> FindQueueDuplicate(pqxx::work& w,
+                                                   const SchedulerOptions& options,
+                                                   const std::string& canonicalSymbol)
+{
+    pqxx::result duplicate = w.exec(
+        "SELECT experiment_id FROM experiment WHERE " +
+        QueueDuplicateWhereClause(w, options, canonicalSymbol) +
+        " ORDER BY experiment_id ASC LIMIT 1;");
+    if (duplicate.empty())
+        return std::nullopt;
+    return duplicate[0][0].as<long long>();
+}
+
+inline bool QueueOneExperiment(pqxx::work& w,
+                               const SchedulerOptions& options,
+                               const std::string& canonicalSymbol)
+{
+    const std::optional<long long> duplicateExperimentId =
+        FindQueueDuplicate(w, options, canonicalSymbol);
+    if (duplicateExperimentId.has_value())
+    {
+        PrintQueueConfig("QUEUE_ALREADY_EXISTS", options, canonicalSymbol, duplicateExperimentId);
+        return false;
+    }
+
+    const long long experimentId = InsertExperimentRecord(w, options, canonicalSymbol, 0);
+    PrintQueueConfig("QUEUE_EXPERIMENT_CREATED", options, canonicalSymbol, experimentId);
+    return true;
+}
+
+inline int QueueExperiments(const SchedulerOptions& rawOptions)
+{
+    SchedulerOptions options = rawOptions;
+
+    if (options.resumeModelId.has_value() && options.epochs.has_value())
+    {
+        ThrowQueueResumeInvalid("epochs_conflicts_with_absolute_target_epochs",
+                                *options.resumeModelId);
+    }
+
+    if (options.dryRun && !options.resumeModelId.has_value() && !options.autoResume)
+    {
+        options = ApplyQueueDefaults(options);
+        EnsureRequiredQueueOptions(options);
+        std::cout << "SCHEDULER_DRY_RUN=1" << std::endl;
+        const auto& symbols = options.queueSweep
+            ? EA::SupportedSymbols::TrainingSymbols()
+            : std::vector<std::string>{EA::CanonicalSymbol::Normalize(*options.symbol)};
+        for (const auto& symbol : symbols)
+            PrintQueueConfig("QUEUE_EXPERIMENT_DRY_RUN", options, EA::CanonicalSymbol::Normalize(symbol));
+        return 0;
+    }
+
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    if (!RequireSchedulerTables(w))
+        return 2;
+
+    if (options.autoResume)
+    {
+        options = ApplyQueueDefaults(options);
+        EnsureRequiredQueueOptions(options);
+        options.resumeModelId = ResolveAutoResumeModelId(w, options);
+        options.autoResume = false;
+    }
+
+    if (options.resumeModelId.has_value())
+    {
+        if (rawOptions.coreLrMult.has_value())
+            ThrowQueueResumeInvalid("core_lr_override_not_allowed_in_resume", *options.resumeModelId);
+        if (rawOptions.headLrMult.has_value())
+            ThrowQueueResumeInvalid("head_lr_override_not_allowed_in_resume", *options.resumeModelId);
+        const QueueResumeMeta meta = LoadQueueResumeMeta(w, *options.resumeModelId);
+        MergeResumeMetaIntoQueueOptions(options, meta);
+    }
+
+    options = ApplyQueueDefaults(options);
+    EnsureRequiredQueueOptions(options);
+
+    if (options.dryRun)
+    {
+        std::cout << "SCHEDULER_DRY_RUN=1" << std::endl;
+        const auto& symbols = options.queueSweep
+            ? EA::SupportedSymbols::TrainingSymbols()
+            : std::vector<std::string>{EA::CanonicalSymbol::Normalize(*options.symbol)};
+        for (const auto& symbol : symbols)
+            PrintQueueConfig("QUEUE_EXPERIMENT_DRY_RUN", options, EA::CanonicalSymbol::Normalize(symbol));
+        w.commit();
+        return 0;
+    }
+
+    int created = 0;
+    int duplicates = 0;
+    if (options.queueSweep)
+    {
+        for (const auto& symbol : EA::SupportedSymbols::TrainingSymbols())
+        {
+            SchedulerOptions perSymbol = options;
+            perSymbol.symbol = EA::CanonicalSymbol::Normalize(symbol);
+            if (QueueOneExperiment(w, perSymbol, *perSymbol.symbol))
+                ++created;
+            else
+                ++duplicates;
+        }
+    }
+    else
+    {
+        const std::string canonicalSymbol = EA::CanonicalSymbol::Normalize(*options.symbol);
+        if (QueueOneExperiment(w, options, canonicalSymbol))
+            ++created;
+        else
+            ++duplicates;
+    }
+
+    w.commit();
+    std::cout << "QUEUE_DONE"
+              << ",created=" << created
+              << ",duplicates=" << duplicates
+              << std::endl;
+    return created > 0 ? 0 : (duplicates > 0 ? 3 : 0);
 }
 
 inline std::optional<double> OptionalDoubleCell(const pqxx::row& row, int index)
@@ -1924,6 +2437,17 @@ inline void MarkExperimentRunning(pqxx::work& w,
         "WHERE experiment_id = " + std::to_string(experiment.experimentId) + ";");
 }
 
+inline void PersistExperimentRunningBeforeLaunch(const ExperimentRow& experiment,
+                                                 const std::string& phase,
+                                                 const std::string& logPath)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    SetTransactionReadWrite(w);
+    MarkExperimentRunning(w, experiment, phase, logPath);
+    w.commit();
+}
+
 inline void LogPhaseTransition(long long experimentId,
                                const std::string& fromPhase,
                                const std::string& toPhase)
@@ -2367,7 +2891,7 @@ inline int RunTrainJobs(const SchedulerOptions& options, const QueueSnapshot& sn
             continue;
         }
 
-        MarkExperimentRunning(w, job, "train", logPath);
+        PersistExperimentRunningBeforeLaunch(job, "train", logPath);
         if (job.lastModelId.has_value() && !job.resumeModelId.has_value())
         {
             std::cout << "SCHEDULER_RESUME_FROM_LAST_MODEL"
@@ -2543,7 +3067,7 @@ inline int RunInferJobs(const SchedulerOptions& options, const QueueSnapshot& sn
             continue;
         }
 
-        MarkExperimentRunning(w, job, "infer", logPath);
+        PersistExperimentRunningBeforeLaunch(job, "infer", logPath);
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=infer"
@@ -2677,7 +3201,7 @@ inline int RunAnalyzeJobs(const SchedulerOptions& options, const QueueSnapshot& 
             continue;
         }
 
-        MarkExperimentRunning(w, job, "analyze", logPath);
+        PersistExperimentRunningBeforeLaunch(job, "analyze", logPath);
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=analyze"
@@ -2842,6 +3366,41 @@ inline int PrintLeaderboard(const SchedulerOptions& options)
     return 0;
 }
 
+inline void PrintExperimentSchedulerHelp(const char* executable)
+{
+    const std::string exe = executable ? executable : "LSTM_Release";
+    std::cout
+        << "Usage: " << exe << " --queue-experiment --symbol=SYMBOL --prediction-horizon=N --target-epochs=N "
+        << "[--threshold=VALUE] [--core-lr=VALUE] [--head-lr=VALUE] [--checkpoint-interval=N] "
+        << "[--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD]\n"
+        << "Example: " << exe << " --queue-experiment --symbol=eurusdrmp --prediction-horizon=12 --target-epochs=240\n"
+        << "Resume: " << exe << " --queue-experiment --resume-model-id=MODEL_ID --target-epochs=240 "
+        << "[--checkpoint-interval=N] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD]\n"
+        << "Auto-resume: " << exe << " --queue-experiment --auto-resume --symbol=SYMBOL --prediction-horizon=N "
+        << "--target-epochs=240 [--threshold=VALUE] [--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD]\n"
+        << "Usage: " << exe << " --queue-sweep --prediction-horizon=N --target-epochs=N "
+        << "[--threshold=VALUE] [--core-lr=VALUE] [--head-lr=VALUE] [--checkpoint-interval=N]\n"
+        << "Example: " << exe << " --queue-sweep --prediction-horizon=12 --target-epochs=240\n"
+        << "Supported sweep symbols:";
+    for (const auto& symbol : EA::SupportedSymbols::TrainingSymbols())
+        std::cout << " " << symbol;
+    std::cout << "\n"
+        << "Usage: " << exe
+        << " --enqueue-experiment --symbol=SYMBOL --prediction-horizon=N --c-next-threshold=VALUE "
+        << "--core-lr-mult=VALUE --head-lr-mult=VALUE --target-epochs=N --checkpoint-interval=N "
+        << "--train-start=YYYY-MM-DD --train-end=YYYY-MM-DD [--infer-start=YYYY-MM-DD --infer-end=YYYY-MM-DD] "
+        << "[--resume-model-id=MODEL_ID] [--allow-duplicate-experiment]\n"
+        << "Usage: " << exe
+        << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
+        << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
+        << "[--scheduler-log-dir=PATH] [--dry-run] [--recover-orphans-only]\n"
+        << "Usage: " << exe
+        << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
+        << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
+        << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n"
+        << "Queue exit codes: 0=created, 1=invalid_arguments, 2=database_error, 3=duplicates_only\n";
+}
+
 inline int RunExperimentSchedulerCli(int argc, const char* argv[])
 {
     SchedulerOptions options;
@@ -2852,24 +3411,20 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --enqueue-experiment --symbol=SYMBOL --prediction-horizon=N --c-next-threshold=VALUE "
-                  << "--core-lr-mult=VALUE --head-lr-mult=VALUE --target-epochs=N --checkpoint-interval=N "
-                  << "--train-start=YYYY-MM-DD --train-end=YYYY-MM-DD [--infer-start=YYYY-MM-DD --infer-end=YYYY-MM-DD] "
-                  << "[--resume-model-id=MODEL_ID] [--allow-duplicate-experiment]\n"
-                  << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
-                  << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
-                  << "[--scheduler-log-dir=PATH] [--dry-run] [--recover-orphans-only]\n"
-                  << "Usage: " << (argc > 0 ? argv[0] : "LSTM_Release")
-                  << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
-                  << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
-                  << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n";
+                  << std::endl;
+        PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
         return 1;
     }
 
     try
     {
+        if (options.help)
+        {
+            PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
+            return 0;
+        }
+        if (options.queueExperiment || options.queueSweep)
+            return QueueExperiments(options);
         if (options.enqueueExperiment)
             return EnqueueExperiment(options);
         if (options.scheduleExperiments)
@@ -2880,6 +3435,13 @@ inline int RunExperimentSchedulerCli(int argc, const char* argv[])
             return AnalyzeCompletedExperiments();
         if (options.printLeaderboard)
             return PrintLeaderboard(options);
+    }
+    catch (const pqxx::failure& e)
+    {
+        std::cerr << "EXPERIMENT_DATABASE_ERROR"
+                  << ",error=" << e.what()
+                  << std::endl;
+        return 2;
     }
     catch (const std::exception& e)
     {

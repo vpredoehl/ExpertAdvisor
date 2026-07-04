@@ -37,6 +37,7 @@
 #include "ExperimentScheduler.hpp"
 #include "ExperimentMetaAnalyzer.hpp"
 #include "CanonicalSymbol.hpp"
+#include "FxPriceSanity.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -383,11 +384,6 @@ struct Phase2ScalarStats
     }
 };
 
-bool IsSaneFxPrice(double v)
-{
-    return std::isfinite(v) && v > 0.0 && v >= 0.2 && v <= 2.0;
-}
-
 void PrintPhase2ScalarLine(const char* label,
                            const std::string& rangeKind,
                            const std::string& fromDate,
@@ -429,8 +425,8 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
     constexpr size_t kDiagBadRowLimit = 50;
     constexpr double kNearZeroStdThreshold = 1e-6;
     constexpr double kFeatureAbsMaxWarnThreshold = 50.0;
-    constexpr double kRawFxLowerBound = 0.2;
-    constexpr double kRawFxUpperBound = 2.0;
+    const std::string tensorSymbol = tensor.TableName();
+    const auto rawFxBounds = EA::FxPriceSanity::BoundsForSymbol(tensorSymbol);
 
     DiagnosticOut() << "DIAG_DATA_CONFIG"
               << ",range_kind=" << rangeKind
@@ -510,10 +506,10 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
         rawHighStats.add(rawHigh);
         rawLowStats.add(rawLow);
 
-        const bool badOpen = !IsSaneFxPrice(rawOpen);
-        const bool badClose = !IsSaneFxPrice(rawClose);
-        const bool badHigh = !IsSaneFxPrice(rawHigh);
-        const bool badLow = !IsSaneFxPrice(rawLow);
+        const bool badOpen = !EA::FxPriceSanity::IsSanePrice(rawOpen, rawFxBounds);
+        const bool badClose = !EA::FxPriceSanity::IsSanePrice(rawClose, rawFxBounds);
+        const bool badHigh = !EA::FxPriceSanity::IsSanePrice(rawHigh, rawFxBounds);
+        const bool badLow = !EA::FxPriceSanity::IsSanePrice(rawLow, rawFxBounds);
         const bool highLtLow = std::isfinite(rawHigh) && std::isfinite(rawLow) && rawHigh < rawLow;
         if (badOpen || badClose || badHigh || badLow || highLtLow)
         {
@@ -528,13 +524,14 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                           << ",close=" << rawClose
                           << ",high=" << rawHigh
                           << ",low=" << rawLow
+                          << ",symbol=" << tensorSymbol
                           << ",bad_open=" << static_cast<int>(badOpen)
                           << ",bad_close=" << static_cast<int>(badClose)
                           << ",bad_high=" << static_cast<int>(badHigh)
                           << ",bad_low=" << static_cast<int>(badLow)
                           << ",high_lt_low=" << static_cast<int>(highLtLow)
-                          << ",sane_lower_bound=" << kRawFxLowerBound
-                          << ",sane_upper_bound=" << kRawFxUpperBound
+                          << ",sane_lower_bound=" << rawFxBounds.lower
+                          << ",sane_upper_bound=" << rawFxBounds.upper
                           << std::endl;
                 ++badRawRowPrinted;
             }
@@ -736,8 +733,8 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
             const auto futureIt = tensor.begin() + static_cast<std::ptrdiff_t>(futureRow);
             const double futureHigh = static_cast<double>(tensor.RawHighAtIterator(futureIt));
             const double futureLow = static_cast<double>(tensor.RawLowAtIterator(futureIt));
-            const bool badFutureHigh = !IsSaneFxPrice(futureHigh);
-            const bool badFutureLow = !IsSaneFxPrice(futureLow);
+            const bool badFutureHigh = !EA::FxPriceSanity::IsSanePrice(futureHigh, rawFxBounds);
+            const bool badFutureLow = !EA::FxPriceSanity::IsSanePrice(futureLow, rawFxBounds);
             const bool futureHighLtLow = std::isfinite(futureHigh) && std::isfinite(futureLow) && futureHigh < futureLow;
             if (!(badFutureHigh || badFutureLow || futureHighLtLow))
                 continue;
@@ -756,9 +753,12 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
                           << ",future_dt=" << tensor.RawTimeAtIterator(futureIt)
                           << ",future_high=" << futureHigh
                           << ",future_low=" << futureLow
+                          << ",symbol=" << tensorSymbol
                           << ",bad_high=" << static_cast<int>(badFutureHigh)
                           << ",bad_low=" << static_cast<int>(badFutureLow)
                           << ",high_lt_low=" << static_cast<int>(futureHighLtLow)
+                          << ",sane_lower_bound=" << rawFxBounds.lower
+                          << ",sane_upper_bound=" << rawFxBounds.upper
                           << ",assigned_class=" << info.assignedClass
                           << ",terminal_logret=" << info.terminalLogReturn
                           << ",up_hit=" << static_cast<int>(info.upHit)

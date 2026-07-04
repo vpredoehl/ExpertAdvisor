@@ -22,6 +22,7 @@
 #include <pqxx/pqxx>
 
 #include "CanonicalSymbol.hpp"
+#include "SupportedSymbols.hpp"
 
 namespace EA::ExperimentMetaAnalyzer
 {
@@ -831,14 +832,7 @@ const GroupStats* BestGroup(const std::vector<GroupStats>& groups, const std::st
 
 std::vector<std::string> KnownSymbols()
 {
-    return {
-        "audcadrmp",
-        "audusdrmp",
-        "eurusdrmp",
-        "gbpusdrmp",
-        "usdcadrmp",
-        "usdpjyrmp"
-    };
+    return EA::SupportedSymbols::TrainingSymbols();
 }
 
 std::optional<std::string> SymbolFromScope(const std::string& scope)

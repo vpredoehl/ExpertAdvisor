@@ -7,6 +7,7 @@
 //
 
 #include "db_cursor_iterator.hpp"
+#include "FxPriceSanity.hpp"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -19,8 +20,6 @@
 
 namespace
 {
-constexpr float kFxLowerBound = 0.2f;
-constexpr float kFxUpperBound = 2.0f;
 constexpr size_t kDiagLimit = 50;
 
 bool ParseTimestampStrict(const char* text, PriceTP& out)
@@ -62,10 +61,6 @@ bool ParseFloatStrict(const char* text, float& out)
     return true;
 }
 
-bool IsSaneFxPrice(float v)
-{
-    return std::isfinite(v) && v >= kFxLowerBound && v <= kFxUpperBound;
-}
 }
 
 
@@ -137,10 +132,12 @@ bool db_input_iterator<Feature>::ReadPP()
         }
         throw std::runtime_error("DB feature parse failed");
     }
-    const bool badOpen = !IsSaneFxPrice(parsed.open);
-    const bool badClose = !IsSaneFxPrice(parsed.close);
-    const bool badHigh = !IsSaneFxPrice(parsed.high);
-    const bool badLow = !IsSaneFxPrice(parsed.low);
+    const std::string symbol = EA::FxPriceSanity::ExtractSymbol(cur->cursorName).value_or(cur->cursorName);
+    const auto sanityBounds = EA::FxPriceSanity::BoundsForSymbol(symbol);
+    const bool badOpen = !EA::FxPriceSanity::IsSanePrice(parsed.open, sanityBounds);
+    const bool badClose = !EA::FxPriceSanity::IsSanePrice(parsed.close, sanityBounds);
+    const bool badHigh = !EA::FxPriceSanity::IsSanePrice(parsed.high, sanityBounds);
+    const bool badLow = !EA::FxPriceSanity::IsSanePrice(parsed.low, sanityBounds);
     const bool highLtLow = std::isfinite(parsed.high) && std::isfinite(parsed.low) && parsed.high < parsed.low;
     if ((badOpen || badClose || badHigh || badLow || highLtLow) &&
         cur->badRowDiagCount < kDiagLimit)
@@ -153,13 +150,14 @@ bool db_input_iterator<Feature>::ReadPP()
                   << ",close=" << parsed.close
                   << ",high=" << parsed.high
                   << ",low=" << parsed.low
+                  << ",symbol=" << symbol
                   << ",bad_open=" << static_cast<int>(badOpen)
                   << ",bad_close=" << static_cast<int>(badClose)
                   << ",bad_high=" << static_cast<int>(badHigh)
                   << ",bad_low=" << static_cast<int>(badLow)
                   << ",high_lt_low=" << static_cast<int>(highLtLow)
-                  << ",sane_lower_bound=" << kFxLowerBound
-                  << ",sane_upper_bound=" << kFxUpperBound
+                  << ",sane_lower_bound=" << sanityBounds.lower
+                  << ",sane_upper_bound=" << sanityBounds.upper
                   << ",query=" << cur->queryText
                   << std::endl;
         ++cur->badRowDiagCount;

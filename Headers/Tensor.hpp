@@ -98,6 +98,7 @@ public:
 
     
     Tensor(string name) : table { name }    {}
+    const string& TableName() const { return table; }
     
     void Add(Feature f);
     
