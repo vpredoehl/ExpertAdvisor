@@ -45,21 +45,6 @@ void HandleMetaAnalysisSignal(int)
 }
 } // namespace
 
-std::string CurrentUtcTimestamp()
-{
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-#if defined(_WIN32)
-    gmtime_s(&tm, &t);
-#else
-    gmtime_r(&t, &tm);
-#endif
-    std::ostringstream out;
-    out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-    return out.str();
-}
-
 bool IsMetaAnalysisCommand(int argc, const char* argv[])
 {
     for (int i = 1; i < argc; ++i)
@@ -86,13 +71,6 @@ std::string LstmDbConnectionString()
            " user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
 }
 
-std::string SqlNullableBool(const std::optional<bool>& value)
-{
-    if (!value.has_value())
-        return "NULL";
-    return *value ? "TRUE" : "FALSE";
-}
-
 bool TableExists(pqxx::work& w, const std::string& tableName)
 {
     pqxx::result r = w.exec_params(
@@ -100,69 +78,6 @@ bool TableExists(pqxx::work& w, const std::string& tableName)
         "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
         tableName);
     return !r.empty();
-}
-
-bool ColumnExists(pqxx::work& w,
-                  const std::string& tableName,
-                  const std::string& columnName)
-{
-    pqxx::result r = w.exec_params(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1;",
-        tableName,
-        columnName);
-    return !r.empty();
-}
-
-bool ExperimentRunMetadataColumnsExist(pqxx::work& w)
-{
-    return ColumnExists(w, "experiment", "git_commit") &&
-           ColumnExists(w, "experiment", "git_branch") &&
-           ColumnExists(w, "experiment", "git_dirty") &&
-           ColumnExists(w, "experiment", "build_config") &&
-           ColumnExists(w, "experiment", "compiler_version") &&
-           ColumnExists(w, "experiment", "schema_version") &&
-           ColumnExists(w, "experiment", "scheduler_version") &&
-           ColumnExists(w, "experiment", "binary_name") &&
-           ColumnExists(w, "experiment", "invocation_mode") &&
-           ColumnExists(w, "experiment", "run_metadata_captured_at");
-}
-
-std::string CurrentSchemaVersion(pqxx::work& w)
-{
-    if (!TableExists(w, "schema_migrations"))
-        return "unknown";
-    pqxx::result rows = w.exec(
-        "SELECT version FROM schema_migrations "
-        "ORDER BY applied_at DESC, version DESC LIMIT 1;");
-    if (rows.empty() || rows[0][0].is_null())
-        return "unknown";
-    return rows[0][0].as<std::string>();
-}
-
-void AppendRunMetadataColumns(std::ostringstream& sql)
-{
-    sql << ", git_commit, git_branch, git_dirty, build_config, compiler_version, "
-        << "schema_version, scheduler_version, binary_name, invocation_mode, "
-        << "run_metadata_captured_at";
-}
-
-void AppendRunMetadataValues(std::ostringstream& sql,
-                             pqxx::work& w,
-                             const EA::RunMetadata::Snapshot& metadata,
-                             const std::string& schemaVersion)
-{
-    sql << ","
-        << w.quote(metadata.gitCommit) << ","
-        << w.quote(metadata.gitBranch) << ","
-        << SqlNullableBool(metadata.gitDirty) << ","
-        << w.quote(metadata.buildConfig) << ","
-        << w.quote(metadata.compilerVersion) << ","
-        << w.quote(schemaVersion) << ","
-        << w.quote(metadata.schedulerVersion) << ","
-        << w.quote(metadata.binaryName) << ","
-        << w.quote(metadata.invocationMode) << ","
-        << "now()";
 }
 
 bool SplitOptionWithValue(const std::string& arg,
@@ -1570,10 +1485,10 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
 long long InsertMetaRecommendationExperiment(pqxx::work& w,
                                              const NextExperimentRecommendation& rec)
 {
-    const bool includeRunMetadata = ExperimentRunMetadataColumnsExist(w);
+    const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
     const EA::RunMetadata::Snapshot runMetadata =
         EA::RunMetadata::Capture("LSTM_Release", "queue_meta_recommendations");
-    const std::string schemaVersion = CurrentSchemaVersion(w);
+    const std::string schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
 
     std::ostringstream sql;
     sql << "INSERT INTO experiment ("
@@ -1581,7 +1496,7 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
     if (includeRunMetadata)
-        AppendRunMetadataColumns(sql);
+        EA::RunMetadata::AppendRunMetadataColumns(sql);
     sql << ") VALUES ("
         << w.quote(rec.symbol) << ","
         << rec.horizon << ","
@@ -1598,7 +1513,7 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << "0,"
         << "'pending','train',now()";
     if (includeRunMetadata)
-        AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
+        EA::RunMetadata::AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
     sql << ") RETURNING experiment_id;";
     return w.exec(sql.str())[0][0].as<long long>();
 }
@@ -2209,7 +2124,7 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
 {
     MetaAnalysisResult result;
     result.scope = ScopeForOptions(options);
-    result.generatedAt = CurrentUtcTimestamp();
+    result.generatedAt = EA::RunMetadata::CurrentUtcTimestamp();
     const EA::RunMetadata::Snapshot runMetadata =
         EA::RunMetadata::Capture("LSTM_Release", "meta_analysis");
     result.generatedGitCommit = runMetadata.gitCommit;
@@ -2219,7 +2134,7 @@ MetaAnalysisResult BuildMetaAnalysis(pqxx::work& w, const MetaAnalysisOptions& o
         : "unknown";
     result.generatedBuildConfig = runMetadata.buildConfig;
     result.generatedCompilerVersion = runMetadata.compilerVersion;
-    result.generatedSchemaVersion = CurrentSchemaVersion(w);
+    result.generatedSchemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
     result.generatedSchedulerVersion = runMetadata.schedulerVersion;
     result.recommendationEpochPolicy = options.recommendationEpochPolicy;
     LoadExperimentCounts(w, options, result);

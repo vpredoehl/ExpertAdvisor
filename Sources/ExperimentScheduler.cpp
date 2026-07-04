@@ -414,13 +414,6 @@ std::string SqlNullable(pqxx::work& w, const std::optional<long long>& value)
     return value.has_value() ? w.quote(*value) : "NULL";
 }
 
-std::string SqlNullableBool(const std::optional<bool>& value)
-{
-    if (!value.has_value())
-        return "NULL";
-    return *value ? "TRUE" : "FALSE";
-}
-
 std::string FormatDouble(double value)
 {
     std::ostringstream oss;
@@ -734,96 +727,6 @@ bool TableExists(pqxx::work& w, const std::string& tableName)
         "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
         tableName);
     return !r.empty();
-}
-
-bool ColumnExists(pqxx::work& w,
-                  const std::string& tableName,
-                  const std::string& columnName)
-{
-    pqxx::result r = w.exec_params(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1;",
-        tableName,
-        columnName);
-    return !r.empty();
-}
-
-bool ExperimentRunMetadataColumnsExist(pqxx::work& w)
-{
-    return ColumnExists(w, "experiment", "git_commit") &&
-           ColumnExists(w, "experiment", "git_branch") &&
-           ColumnExists(w, "experiment", "git_dirty") &&
-           ColumnExists(w, "experiment", "build_config") &&
-           ColumnExists(w, "experiment", "compiler_version") &&
-           ColumnExists(w, "experiment", "schema_version") &&
-           ColumnExists(w, "experiment", "scheduler_version") &&
-           ColumnExists(w, "experiment", "binary_name") &&
-           ColumnExists(w, "experiment", "invocation_mode") &&
-           ColumnExists(w, "experiment", "run_metadata_captured_at");
-}
-
-std::string CurrentSchemaVersion(pqxx::work& w)
-{
-    if (!TableExists(w, "schema_migrations"))
-        return "unknown";
-    pqxx::result rows = w.exec(
-        "SELECT version FROM schema_migrations "
-        "ORDER BY applied_at DESC, version DESC LIMIT 1;");
-    if (rows.empty() || rows[0][0].is_null())
-        return "unknown";
-    return rows[0][0].as<std::string>();
-}
-
-void AppendRunMetadataColumns(std::ostringstream& sql)
-{
-    sql << ", git_commit, git_branch, git_dirty, build_config, compiler_version, "
-        << "schema_version, scheduler_version, binary_name, invocation_mode, "
-        << "run_metadata_captured_at";
-}
-
-void AppendRunMetadataValues(std::ostringstream& sql,
-                             pqxx::work& w,
-                             const EA::RunMetadata::Snapshot& metadata,
-                             const std::string& schemaVersion)
-{
-    sql << ","
-        << w.quote(metadata.gitCommit) << ","
-        << w.quote(metadata.gitBranch) << ","
-        << SqlNullableBool(metadata.gitDirty) << ","
-        << w.quote(metadata.buildConfig) << ","
-        << w.quote(metadata.compilerVersion) << ","
-        << w.quote(schemaVersion) << ","
-        << w.quote(metadata.schedulerVersion) << ","
-        << w.quote(metadata.binaryName) << ","
-        << w.quote(metadata.invocationMode) << ","
-        << "now()";
-}
-
-void BackfillMissingExperimentRunMetadata(pqxx::work& w,
-                                          const std::string& binaryName,
-                                          const std::string& invocationMode)
-{
-    if (!ExperimentRunMetadataColumnsExist(w))
-        return;
-
-    const EA::RunMetadata::Snapshot metadata =
-        EA::RunMetadata::Capture(binaryName, invocationMode);
-    const std::string schemaVersion = CurrentSchemaVersion(w);
-    w.exec(
-        "UPDATE experiment SET "
-        "git_commit = COALESCE(git_commit, " + w.quote(metadata.gitCommit) + "), "
-        "git_branch = COALESCE(git_branch, " + w.quote(metadata.gitBranch) + "), "
-        "git_dirty = COALESCE(git_dirty, " + SqlNullableBool(metadata.gitDirty) + "), "
-        "build_config = COALESCE(build_config, " + w.quote(metadata.buildConfig) + "), "
-        "compiler_version = COALESCE(compiler_version, " + w.quote(metadata.compilerVersion) + "), "
-        "schema_version = COALESCE(schema_version, " + w.quote(schemaVersion) + "), "
-        "scheduler_version = COALESCE(scheduler_version, " + w.quote(metadata.schedulerVersion) + "), "
-        "binary_name = COALESCE(binary_name, " + w.quote(metadata.binaryName) + "), "
-        "invocation_mode = COALESCE(invocation_mode, " + w.quote(invocationMode) + "), "
-        "run_metadata_captured_at = COALESCE(run_metadata_captured_at, now()), "
-        "updated_at = updated_at "
-        "WHERE run_metadata_captured_at IS NULL "
-        "AND status IN ('pending', 'running');");
 }
 
 bool ModelExists(pqxx::work& w, long long modelId)
@@ -1217,13 +1120,13 @@ long long InsertExperimentRecord(pqxx::work& w,
                                         const std::string& canonicalSymbol,
                                         long long duplicateNonce)
 {
-    const bool includeRunMetadata = ExperimentRunMetadataColumnsExist(w);
+    const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
     const std::string invocationMode = options.queueSweep
         ? "queue_sweep"
         : (options.queueExperiment ? "queue_experiment" : "enqueue_experiment");
     const EA::RunMetadata::Snapshot runMetadata =
         EA::RunMetadata::Capture(options.selfPath, invocationMode);
-    const std::string schemaVersion = CurrentSchemaVersion(w);
+    const std::string schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
 
     std::ostringstream sql;
     sql << "INSERT INTO experiment ("
@@ -1231,7 +1134,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
     if (includeRunMetadata)
-        AppendRunMetadataColumns(sql);
+        EA::RunMetadata::AppendRunMetadataColumns(sql);
     sql << ") VALUES ("
         << w.quote(canonicalSymbol) << ","
         << *options.predictionHorizon << ","
@@ -1248,7 +1151,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << duplicateNonce << ","
         << "'pending','train',now()";
     if (includeRunMetadata)
-        AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
+        EA::RunMetadata::AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
     sql << ") RETURNING experiment_id;";
 
     pqxx::result inserted = w.exec(sql.str());
@@ -1532,7 +1435,7 @@ int PrintExperimentMetadata(long long experimentId)
     if (!RequireSchedulerTables(w))
         return 1;
 
-    if (!ExperimentRunMetadataColumnsExist(w))
+    if (!EA::RunMetadata::ExperimentRunMetadataColumnsExist(w))
     {
         pqxx::result exists = w.exec_params(
             "SELECT 1 FROM experiment WHERE experiment_id = $1 LIMIT 1;",
@@ -3960,7 +3863,7 @@ int RunSchedulerOnce(const SchedulerOptions& options)
             return 1;
         if (!options.dryRun)
         {
-            BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
+            EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             RecoverOrphanedRunningExperiments(w);
             rc |= FailInvalidSchedulerPhases(w);
         }
@@ -3986,7 +3889,7 @@ int RunScheduler(const SchedulerOptions& options)
             return 1;
         if (!options.dryRun)
         {
-            BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
+            EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             recoveryCount = RecoverOrphanedRunningExperiments(w);
             if (FailInvalidSchedulerPhases(w) != 0)
             {

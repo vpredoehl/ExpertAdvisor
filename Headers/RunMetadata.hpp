@@ -1,10 +1,10 @@
 #pragma once
 
-#include <array>
-#include <cstdio>
+#include <iosfwd>
 #include <optional>
-#include <sstream>
 #include <string>
+
+#include <pqxx/pqxx>
 
 namespace EA::RunMetadata
 {
@@ -23,73 +23,25 @@ struct Snapshot
     std::string invocationMode;
 };
 
-inline std::string Trim(std::string value)
-{
-    while (!value.empty() && (value.back() == '\n' || value.back() == '\r' ||
-                              value.back() == ' ' || value.back() == '\t'))
-        value.pop_back();
-    size_t first = 0;
-    while (first < value.size() &&
-           (value[first] == ' ' || value[first] == '\t' ||
-            value[first] == '\n' || value[first] == '\r'))
-        ++first;
-    return value.substr(first);
-}
+Snapshot Capture(const std::string& binaryName,
+                 const std::string& invocationMode);
 
-inline std::optional<std::string> CaptureCommandOutput(const char* command)
-{
-    FILE* pipe = popen(command, "r");
-    if (!pipe)
-        return std::nullopt;
+std::string CurrentUtcTimestamp();
+std::string SqlNullableBool(const std::optional<bool>& value);
 
-    std::array<char, 256> buffer{};
-    std::ostringstream out;
-    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr)
-        out << buffer.data();
-    const int rc = pclose(pipe);
-    if (rc != 0)
-        return std::nullopt;
-    return Trim(out.str());
-}
+bool ColumnExists(pqxx::work& w,
+                  const std::string& tableName,
+                  const std::string& columnName);
+bool ExperimentRunMetadataColumnsExist(pqxx::work& w);
+std::string CurrentSchemaVersion(pqxx::work& w);
 
-inline Snapshot Capture(const std::string& binaryName,
-                        const std::string& invocationMode)
-{
-    Snapshot snapshot;
-    snapshot.binaryName = binaryName;
-    snapshot.invocationMode = invocationMode;
-
-#if defined(NDEBUG)
-    snapshot.buildConfig = "Release";
-#else
-    snapshot.buildConfig = "Debug";
-#endif
-
-#if defined(__clang_version__)
-    snapshot.compilerVersion = __clang_version__;
-#elif defined(__VERSION__)
-    snapshot.compilerVersion = __VERSION__;
-#else
-    snapshot.compilerVersion = "unknown";
-#endif
-
-    if (const auto commit = CaptureCommandOutput("git rev-parse HEAD 2>/dev/null");
-        commit.has_value() && !commit->empty())
-    {
-        snapshot.gitCommit = *commit;
-    }
-    if (const auto branch = CaptureCommandOutput("git branch --show-current 2>/dev/null");
-        branch.has_value() && !branch->empty())
-    {
-        snapshot.gitBranch = *branch;
-    }
-    if (const auto status = CaptureCommandOutput("git status --porcelain 2>/dev/null");
-        status.has_value())
-    {
-        snapshot.gitDirty = !status->empty();
-    }
-
-    return snapshot;
-}
+void AppendRunMetadataColumns(std::ostringstream& sql);
+void AppendRunMetadataValues(std::ostringstream& sql,
+                             pqxx::work& w,
+                             const Snapshot& metadata,
+                             const std::string& schemaVersion);
+void BackfillMissingExperimentRunMetadata(pqxx::work& w,
+                                          const std::string& binaryName,
+                                          const std::string& invocationMode);
 
 } // namespace EA::RunMetadata
