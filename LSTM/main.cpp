@@ -3925,6 +3925,19 @@ std::string UniqueModelName(pqxx::work& w, const std::string& desiredName)
     throw std::runtime_error("unable to allocate unique model name for checkpoint '" + desiredName + "'");
 }
 
+void LinkModelToSchedulerExperimentIfPresent(pqxx::work& w,
+                                             long long modelId,
+                                             const std::optional<long long>& schedulerExperimentId)
+{
+    if (!schedulerExperimentId.has_value())
+        return;
+
+    w.exec_params(
+        "UPDATE model SET experiment_id = $1 WHERE model_id = $2;",
+        *schedulerExperimentId,
+        modelId);
+}
+
 void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
                                  const std::optional<ResumeCheckpointConfig>& resumeConfig,
                                  const std::string& rawPriceTableName,
@@ -3969,7 +3982,10 @@ void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
                   << std::endl;
 
     const long long checkpointModelId =
-        DBIO::PgModelIO::createModel(wCheckpoint, checkpointName, "periodic training checkpoint");
+        DBIO::PgModelIO::createModel(wCheckpoint,
+                                     checkpointName,
+                                     "periodic training checkpoint",
+                                     launchArgs.schedulerExperimentId);
     DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm, rawPriceTableName, fromDate, toDate);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
@@ -6249,7 +6265,10 @@ int main(int argc, const char * argv[])
                     if (resumeConfig.has_value())
                     {
                         const std::string resumeModelName = launchArgs.newModelName.value_or(rawPriceTableName + "-resume-model");
-                        modelId = DBIO::PgModelIO::createModel(w_LSTM, resumeModelName, "resumed trained parameters");
+                        modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                                               resumeModelName,
+                                                               "resumed trained parameters",
+                                                               launchArgs.schedulerExperimentId);
                         std::cout << "Created new model_id=" << modelId
                                   << " (resumed from model_id=" << resumeConfig->sourceModelId << ")"
                                   << std::endl;
@@ -6261,20 +6280,30 @@ int main(int argc, const char * argv[])
                                 pqxx::result rLatest = w_LSTM.exec("SELECT max(model_id) FROM model;");
                                 if (!rLatest.empty() && !rLatest[0][0].is_null()) {
                                     modelId = rLatest[0][0].as<long long>();
+                                    LinkModelToSchedulerExperimentIfPresent(w_LSTM, modelId, launchArgs.schedulerExperimentId);
                                     std::cout << "Overwriting latest model_id=" << modelId << " (started from scratch, overwrite enabled)" << std::endl;
                                 } else {
-                                    modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                                    modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                                                           rawPriceTableName + "-model",
+                                                                           "trained parameters",
+                                                                           launchArgs.schedulerExperimentId);
                                     std::cout << "Created new model_id=" << modelId << " (no existing model to overwrite)" << std::endl;
                                 }
                             } catch (const std::exception& e)
                             {
                                 std::cout << "Fetch latest model_id failed (" << e.what() << "); creating new snapshot" << std::endl;
-                                modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                                modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                                                       rawPriceTableName + "-model",
+                                                                       "trained parameters",
+                                                                       launchArgs.schedulerExperimentId);
                             }
                         else
                         {
                             // Create a new snapshot when saving (do not overwrite existing)
-                            modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                            modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                                                   rawPriceTableName + "-model",
+                                                                   "trained parameters",
+                                                                   launchArgs.schedulerExperimentId);
                             std::cout << "Created new model_id=" << modelId << " (started from scratch)" << std::endl;
                         }
                     else
@@ -6282,17 +6311,24 @@ int main(int argc, const char * argv[])
                             if (loadedModelId.has_value())
                             {
                                 modelId = *loadedModelId;
+                                LinkModelToSchedulerExperimentIfPresent(w_LSTM, modelId, launchArgs.schedulerExperimentId);
                                 std::cout << "Overwriting existing model_id=" << modelId << std::endl;
                             }
                             else
                             {
-                                modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                                modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                                                       rawPriceTableName + "-model",
+                                                                       "trained parameters",
+                                                                       launchArgs.schedulerExperimentId);
                                 std::cout << "Created new model_id=" << modelId << " (no prior model to overwrite)" << std::endl;
                             }
                         else
                         {
                             // Create a new snapshot when saving (do not overwrite existing)
-                            modelId = DBIO::PgModelIO::createModel(w_LSTM, rawPriceTableName + "-model", "trained parameters");
+                            modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                                                   rawPriceTableName + "-model",
+                                                                   "trained parameters",
+                                                                   launchArgs.schedulerExperimentId);
                             std::cout << "Created new model_id=" << modelId << std::endl;
                         }
 

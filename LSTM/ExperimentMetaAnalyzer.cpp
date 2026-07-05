@@ -80,6 +80,16 @@ bool TableExists(pqxx::work& w, const std::string& tableName)
     return !r.empty();
 }
 
+bool ColumnExists(pqxx::work& w, const std::string& tableName, const std::string& columnName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1;",
+        tableName,
+        columnName);
+    return !r.empty();
+}
+
 bool SplitOptionWithValue(const std::string& arg,
                                  const std::string& optionName,
                                  std::string& value)
@@ -471,6 +481,7 @@ std::vector<ExperimentRecord> LoadLegacyExperimentRecords(pqxx::work& w,
                                                           long long& legacyModelCount,
                                                           long long& duplicateModelsSkipped)
 {
+    const bool hasModelExperimentId = ColumnExists(w, "model", "experiment_id");
     std::ostringstream sql;
     sql << "WITH cfg AS ("
         << "  SELECT model_id,"
@@ -494,7 +505,9 @@ std::vector<ExperimentRecord> LoadLegacyExperimentRecords(pqxx::work& w,
         << "  WHERE status = 'completed' "
         << "  ORDER BY model_id, completed_at DESC, id DESC"
         << ") "
-        << "SELECT m.model_id, m.name, m.comment, sym.symbol, "
+        << "SELECT m.model_id, "
+        << (hasModelExperimentId ? "m.experiment_id" : "NULL::bigint")
+        << ", m.name, m.comment, sym.symbol, "
         << "       cfg.prediction_horizon, cfg.threshold_logret, cfg.completed_epochs, "
         << "       cfg.core_lr_mult, cfg.head_weight_lr_mult, "
         << "       latest_eval.eval_completed_epochs, latest_eval.accuracy, latest_eval.accept_model, "
@@ -517,7 +530,7 @@ std::vector<ExperimentRecord> LoadLegacyExperimentRecords(pqxx::work& w,
     for (const auto& row : rows)
     {
         const long long modelId = row[0].as<long long>();
-        if (schedulerModelIds.count(modelId))
+        if (!row[1].is_null() || schedulerModelIds.count(modelId))
         {
             ++duplicateModelsSkipped;
             continue;
@@ -526,29 +539,29 @@ std::vector<ExperimentRecord> LoadLegacyExperimentRecords(pqxx::work& w,
         ExperimentRecord record;
         record.experimentId = -modelId;
         record.modelId = modelId;
-        record.modelName = OptionalStringCell(row, 1).value_or("");
-        const std::string comment = OptionalStringCell(row, 2).value_or("");
-        record.symbol = OptionalStringCell(row, 3).value_or("unknown");
-        record.horizon = row[4].is_null() ? 0 : static_cast<int>(std::llround(row[4].as<double>()));
-        record.threshold = OptionalDoubleCell(row, 5).value_or(0.0);
-        record.completedEpochs = OptionalDoubleCell(row, 9).has_value()
-            ? std::optional<int>{static_cast<int>(std::llround(*OptionalDoubleCell(row, 9)))}
-            : (OptionalDoubleCell(row, 6).has_value()
-                ? std::optional<int>{static_cast<int>(std::llround(*OptionalDoubleCell(row, 6)))}
+        record.modelName = OptionalStringCell(row, 2).value_or("");
+        const std::string comment = OptionalStringCell(row, 3).value_or("");
+        record.symbol = OptionalStringCell(row, 4).value_or("unknown");
+        record.horizon = row[5].is_null() ? 0 : static_cast<int>(std::llround(row[5].as<double>()));
+        record.threshold = OptionalDoubleCell(row, 6).value_or(0.0);
+        record.completedEpochs = OptionalDoubleCell(row, 10).has_value()
+            ? std::optional<int>{static_cast<int>(std::llround(*OptionalDoubleCell(row, 10)))}
+            : (OptionalDoubleCell(row, 7).has_value()
+                ? std::optional<int>{static_cast<int>(std::llround(*OptionalDoubleCell(row, 7)))}
                 : std::nullopt);
         record.targetEpochs = record.completedEpochs.value_or(0);
-        record.coreLr = OptionalDoubleCell(row, 7);
-        record.headLr = OptionalDoubleCell(row, 8);
+        record.coreLr = OptionalDoubleCell(row, 8);
+        record.headLr = OptionalDoubleCell(row, 9);
         record.status = "completed";
         record.phase = "done";
         record.resumed = (comment.find("resumed") != std::string::npos);
-        record.inferAccuracy = OptionalDoubleCell(row, 10);
-        if (!row[11].is_null())
-            record.acceptRate = row[11].as<bool>() ? 1.0 : 0.0;
+        record.inferAccuracy = OptionalDoubleCell(row, 11);
+        if (!row[12].is_null())
+            record.acceptRate = row[12].as<bool>() ? 1.0 : 0.0;
         record.acceptAccuracy = record.inferAccuracy;
-        const std::optional<double> predDown = OptionalDoubleCell(row, 12);
-        const std::optional<double> predNeutral = OptionalDoubleCell(row, 13);
-        const std::optional<double> predUp = OptionalDoubleCell(row, 14);
+        const std::optional<double> predDown = OptionalDoubleCell(row, 13);
+        const std::optional<double> predNeutral = OptionalDoubleCell(row, 14);
+        const std::optional<double> predUp = OptionalDoubleCell(row, 15);
         record.leaderScore = ComputeLegacyLeaderScore(record.inferAccuracy,
                                                       record.acceptAccuracy,
                                                       predDown,

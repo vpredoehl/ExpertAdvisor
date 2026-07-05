@@ -54,6 +54,7 @@ struct SchedulerOptions
     bool schedulerStatus = false;
     bool backfillExperimentMetadata = false;
     std::optional<long long> experimentMetadataId;
+    std::optional<long long> listExperimentModelsId;
     std::optional<long long> modelInfoModelId;
     std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
@@ -376,6 +377,7 @@ struct SchedulerIntelligenceSnapshot
 struct ModelInfoRecord
 {
     long long modelId = -1;
+    std::optional<long long> experimentId;
     std::string name = "unknown";
     std::string createdAt = "unknown";
     std::string comment = "unknown";
@@ -450,6 +452,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--scheduler-status" ||
             arg == "--backfill-experiment-metadata" ||
             arg == "--experiment-metadata" ||
+            arg == "--list-experiment-models" ||
             arg == "--stop-experiment" ||
             arg == "--stop-all-experiments" ||
             arg == "--pause-experiment" ||
@@ -470,6 +473,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
             arg.rfind("--requeue-inference=", 0) == 0 ||
+            arg.rfind("--list-experiment-models=", 0) == 0 ||
             arg.rfind("--experiment-metadata=", 0) == 0)
             return true;
     }
@@ -615,6 +619,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.backfillExperimentMetadata = true;
         else if (arg == "--experiment-metadata")
             options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-models")
+            options.listExperimentModelsId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--model")
             options.modelInfoModelId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--experiment-id")
@@ -787,6 +793,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (SplitOptionWithValue(arg, "--experiment-metadata", value))
             options.experimentMetadataId = ParsePositiveLongLong("--experiment-metadata", value);
+        else if (SplitOptionWithValue(arg, "--list-experiment-models", value))
+            options.listExperimentModelsId = ParsePositiveLongLong("--list-experiment-models", value);
         else if (SplitOptionWithValue(arg, "--model", value))
             options.modelInfoModelId = ParsePositiveLongLong("--model", value);
         else if (SplitOptionWithValue(arg, "--experiment-id", value))
@@ -811,6 +819,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.schedulerStatus ? 1 : 0) +
         (options.backfillExperimentMetadata ? 1 : 0) +
         (options.experimentMetadataId.has_value() ? 1 : 0) +
+        (options.listExperimentModelsId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
@@ -865,6 +874,16 @@ bool TableExists(pqxx::work& w, const std::string& tableName)
         "SELECT 1 FROM information_schema.tables "
         "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
         tableName);
+    return !r.empty();
+}
+
+bool ColumnExists(pqxx::work& w, const std::string& tableName, const std::string& columnName)
+{
+    pqxx::result r = w.exec_params(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1;",
+        tableName,
+        columnName);
     return !r.empty();
 }
 
@@ -1117,6 +1136,30 @@ std::optional<QueueResumeMeta> TryLoadRecoverableModelMeta(pqxx::work& w, long l
                   << std::endl;
         return std::nullopt;
     }
+}
+
+std::optional<long long> FindLatestModelForExperiment(pqxx::work& w, long long experimentId)
+{
+    if (!ColumnExists(w, "model", "experiment_id"))
+        return std::nullopt;
+
+    pqxx::result rows = w.exec_params(
+        "WITH cfg AS ("
+        "  SELECT model_id, max(value) FILTER (WHERE col_idx = 10) AS completed_epochs "
+        "  FROM matrix "
+        "  WHERE param_name = 'train_config_meta' AND row_idx = 0 "
+        "  GROUP BY model_id"
+        ") "
+        "SELECT m.model_id "
+        "FROM model m "
+        "LEFT JOIN cfg ON cfg.model_id = m.model_id "
+        "WHERE m.experiment_id = $1 "
+        "ORDER BY cfg.completed_epochs DESC NULLS LAST, m.model_id DESC "
+        "LIMIT 1;",
+        experimentId);
+    if (rows.empty())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
 }
 
 [[maybe_unused]] bool ExistingFilePath(const std::optional<std::string>& path)
@@ -4675,7 +4718,9 @@ bool RecoverTrainOrphanFromModel(pqxx::work& w,
                                const std::string& commandDisplay)
 {
     const std::string logText = ReadFileIfExists(logPath);
-    const std::optional<long long> lastModelId = ExtractLastModelId(logText);
+    std::optional<long long> lastModelId = ExtractLastModelId(logText);
+    if (!lastModelId.has_value())
+        lastModelId = FindLatestModelForExperiment(w, experiment.experimentId);
     const bool success = exitCode == 0 && lastModelId.has_value();
     if (success)
     {
@@ -4829,6 +4874,26 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
                       << ",experiment_id=" << experiment.experimentId
                       << ",error=" << error
                       << std::endl;
+            continue;
+        }
+
+        const std::optional<long long> linkedModelId = FindLatestModelForExperiment(w, experiment.experimentId);
+        if (linkedModelId.has_value())
+        {
+            std::cout << "SCHEDULER_ORPHAN_RECOVERED_MODEL"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",model_id=" << *linkedModelId
+                      << ",source=model_experiment_id"
+                      << std::endl;
+            if (!RecoverTrainOrphanFromModel(w, experiment, *linkedModelId))
+            {
+                const std::string error = "orphaned_running_train_model_unusable";
+                MarkExperimentFailed(w, experiment, error + ";model_id=" + std::to_string(*linkedModelId));
+                std::cout << "SCHEDULER_ORPHAN_FAILED"
+                          << ",experiment_id=" << experiment.experimentId
+                          << ",reason=model_unusable"
+                          << std::endl;
+            }
             continue;
         }
 
@@ -6510,8 +6575,11 @@ void PrintModelInfoField(const std::string& label, const std::string& value)
 
 ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
 {
+    const bool hasModelExperimentId = ColumnExists(w, "model", "experiment_id");
     pqxx::result modelRows = w.exec_params(
-        "SELECT model_id, name, created_at::text, COALESCE(comment, '') "
+        "SELECT model_id, " +
+        std::string{hasModelExperimentId ? "experiment_id" : "NULL::bigint"} +
+        ", name, created_at::text, COALESCE(comment, '') "
         "FROM model WHERE model_id = $1;",
         modelId);
     if (modelRows.empty())
@@ -6519,9 +6587,11 @@ ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
 
     ModelInfoRecord info;
     info.modelId = modelRows[0][0].as<long long>();
-    info.name = modelRows[0][1].as<std::string>();
-    info.createdAt = modelRows[0][2].as<std::string>();
-    info.comment = modelRows[0][3].as<std::string>();
+    if (!modelRows[0][1].is_null())
+        info.experimentId = modelRows[0][1].as<long long>();
+    info.name = modelRows[0][2].as<std::string>();
+    info.createdAt = modelRows[0][3].as<std::string>();
+    info.comment = modelRows[0][4].as<std::string>();
     if (info.comment.empty())
         info.comment = "unknown";
 
@@ -6550,16 +6620,20 @@ ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
     if (optimizerMeta.size() > 2)
         info.optimizerUpdateCount = static_cast<long long>(std::llround(optimizerMeta[2]));
 
-    pqxx::result experimentRows = w.exec_params(
-        "SELECT target_epochs, checkpoint_interval, "
-        "train_start::date::text, train_end::date::text, "
-        "infer_start::date::text, infer_end::date::text, "
-        "resume_model_id, last_model_id "
-        "FROM experiment "
-        "WHERE last_model_id = $1 OR resume_model_id = $1 "
-        "ORDER BY CASE WHEN last_model_id = $1 THEN 0 ELSE 1 END, updated_at DESC "
-        "LIMIT 1;",
-        modelId);
+    std::ostringstream experimentSql;
+    experimentSql
+        << "SELECT target_epochs, checkpoint_interval, "
+        << "train_start::date::text, train_end::date::text, "
+        << "infer_start::date::text, infer_end::date::text, "
+        << "resume_model_id, last_model_id "
+        << "FROM experiment "
+        << "WHERE experiment_id = "
+        << (info.experimentId.has_value() ? std::to_string(*info.experimentId) : "NULL")
+        << " OR last_model_id = " << modelId
+        << " OR resume_model_id = " << modelId
+        << " ORDER BY CASE WHEN last_model_id = " << modelId << " THEN 0 ELSE 1 END, updated_at DESC "
+        << "LIMIT 1;";
+    pqxx::result experimentRows = w.exec(experimentSql.str());
     if (!experimentRows.empty())
     {
         info.targetEpochs = experimentRows[0][0].as<int>();
@@ -6643,6 +6717,7 @@ int PrintModelInfo(long long modelId)
     std::cout << "MODEL INFORMATION\n"
               << "-----------------\n";
     PrintModelInfoField("Model ID", std::to_string(info.modelId));
+    PrintModelInfoField("Experiment ID", OptionalLongLongText(info.experimentId));
     PrintModelInfoField("Name", info.name);
     PrintModelInfoField("Symbol", info.symbol);
     PrintModelInfoField("Prediction Horizon", OptionalIntText(info.predictionHorizon));
@@ -6661,6 +6736,44 @@ int PrintModelInfo(long long modelId)
     PrintModelInfoField("Checkpoint", YesNoText(info.isCheckpoint));
     PrintModelInfoField("Resumable", YesNoText(info.isResumable));
     PrintModelInfoField("Parent Resume Model", OptionalLongLongText(info.parentResumeModelId));
+    return 0;
+}
+
+int ListExperimentModels(long long experimentId)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (!ColumnExists(w, "model", "experiment_id"))
+        throw std::runtime_error("model.experiment_id is missing; run ./migrate_lstm_db.sh");
+    const std::string legacyPattern = "%experiment" + std::to_string(experimentId) + "%";
+    pqxx::result rows = w.exec_params(
+        "SELECT model_id, experiment_id, COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
+        "FROM model "
+        "WHERE experiment_id = $1 "
+        "   OR (experiment_id IS NULL AND COALESCE(name, '') LIKE $2) "
+        "ORDER BY model_id;",
+        experimentId,
+        legacyPattern);
+    w.commit();
+
+    std::cout << "EXPERIMENT_MODELS"
+              << ",experiment_id=" << experimentId
+              << ",count=" << rows.size()
+              << std::endl;
+    for (const auto& row : rows)
+    {
+        std::cout << "EXPERIMENT_MODEL"
+                  << ",model_id=" << row[0].as<long long>()
+                  << ",experiment_id=";
+        if (row[1].is_null())
+            std::cout << "legacy_null";
+        else
+            std::cout << row[1].as<long long>();
+        std::cout << ",name=" << row[2].as<std::string>()
+                  << ",created_at=" << row[3].as<std::string>()
+                  << ",comment=" << row[4].as<std::string>()
+                  << std::endl;
+    }
     return 0;
 }
 
@@ -7841,6 +7954,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --experiment-metadata=ID\n"
         << "Usage: " << exe
+        << " --list-experiment-models=ID\n"
+        << "Usage: " << exe
         << " --backfill-experiment-metadata\n"
         << "Usage: " << exe
         << " --pause-experiment=ID | --resume-experiment=ID | --cancel-experiment=ID | "
@@ -7904,6 +8019,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return GenerateExperimentReports(options.experimentReportDir, false);
         if (options.experimentMetadataId.has_value())
             return PrintExperimentMetadata(*options.experimentMetadataId);
+        if (options.listExperimentModelsId.has_value())
+            return ListExperimentModels(*options.listExperimentModelsId);
         if (options.pauseExperimentId.has_value() ||
             options.resumeExperimentId.has_value() ||
             options.cancelExperimentId.has_value() ||

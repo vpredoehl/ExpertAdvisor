@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 #include "LSTM.hpp"
@@ -82,12 +83,26 @@ public:
     static constexpr int kOptimizerMetaFieldCount = 5;
 
     // Create a new row in `model` table and return model_id
-    static long long createModel(pqxx::work& w, const std::string& name, const std::string& comment)
+    static long long createModel(pqxx::work& w,
+                                 const std::string& name,
+                                 const std::string& comment,
+                                 std::optional<long long> experimentId = std::nullopt)
     {
-        pqxx::result r = w.exec_params(
-            "INSERT INTO model (name, comment) VALUES ($1, $2) RETURNING model_id;",
-            name, comment
-        );
+        pqxx::result r;
+        if (experimentId.has_value())
+        {
+            r = w.exec_params(
+                "INSERT INTO model (name, comment, experiment_id) VALUES ($1, $2, $3) RETURNING model_id;",
+                name,
+                comment,
+                *experimentId);
+        }
+        else
+        {
+            r = w.exec_params(
+                "INSERT INTO model (name, comment) VALUES ($1, $2) RETURNING model_id;",
+                name, comment);
+        }
         if (r.empty()) throw std::runtime_error("createModel failed to return model_id");
         return r[0][0].as<long long>();
     }
