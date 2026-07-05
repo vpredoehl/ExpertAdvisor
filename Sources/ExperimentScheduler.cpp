@@ -55,6 +55,7 @@ struct SchedulerOptions
     bool backfillExperimentMetadata = false;
     std::optional<long long> experimentMetadataId;
     std::optional<long long> listExperimentModelsId;
+    std::optional<long long> listExperimentLineageId;
     std::optional<long long> modelInfoModelId;
     std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
@@ -400,6 +401,15 @@ struct ModelInfoRecord
     std::optional<long long> parentResumeModelId;
 };
 
+struct ExperimentModelRow
+{
+    long long modelId = -1;
+    std::optional<long long> experimentId;
+    std::string name;
+    std::string createdAt;
+    std::string comment;
+};
+
 struct PhaseSchedulingStats
 {
     std::string phase;
@@ -453,6 +463,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--backfill-experiment-metadata" ||
             arg == "--experiment-metadata" ||
             arg == "--list-experiment-models" ||
+            arg == "--list-experiment-lineage" ||
             arg == "--stop-experiment" ||
             arg == "--stop-all-experiments" ||
             arg == "--pause-experiment" ||
@@ -474,6 +485,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--requeue-analysis=", 0) == 0 ||
             arg.rfind("--requeue-inference=", 0) == 0 ||
             arg.rfind("--list-experiment-models=", 0) == 0 ||
+            arg.rfind("--list-experiment-lineage=", 0) == 0 ||
             arg.rfind("--experiment-metadata=", 0) == 0)
             return true;
     }
@@ -621,6 +633,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--list-experiment-models")
             options.listExperimentModelsId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-lineage")
+            options.listExperimentLineageId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--model")
             options.modelInfoModelId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--experiment-id")
@@ -795,6 +809,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.experimentMetadataId = ParsePositiveLongLong("--experiment-metadata", value);
         else if (SplitOptionWithValue(arg, "--list-experiment-models", value))
             options.listExperimentModelsId = ParsePositiveLongLong("--list-experiment-models", value);
+        else if (SplitOptionWithValue(arg, "--list-experiment-lineage", value))
+            options.listExperimentLineageId = ParsePositiveLongLong("--list-experiment-lineage", value);
         else if (SplitOptionWithValue(arg, "--model", value))
             options.modelInfoModelId = ParsePositiveLongLong("--model", value);
         else if (SplitOptionWithValue(arg, "--experiment-id", value))
@@ -820,6 +836,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.backfillExperimentMetadata ? 1 : 0) +
         (options.experimentMetadataId.has_value() ? 1 : 0) +
         (options.listExperimentModelsId.has_value() ? 1 : 0) +
+        (options.listExperimentLineageId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
@@ -6754,40 +6771,194 @@ int PrintModelInfo(long long modelId)
     return 0;
 }
 
+std::vector<ExperimentModelRow> LoadExperimentModelRows(pqxx::work& w, long long experimentId)
+{
+    const bool hasExperimentId = ColumnExists(w, "model", "experiment_id");
+    const std::string legacyPattern = "%experiment" + std::to_string(experimentId) + "%";
+    pqxx::result rows;
+    if (hasExperimentId)
+    {
+        rows = w.exec_params(
+            "SELECT model_id, experiment_id, COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
+            "FROM model "
+            "WHERE experiment_id = $1 "
+            "   OR (experiment_id IS NULL AND COALESCE(name, '') LIKE $2) "
+            "ORDER BY model_id;",
+            experimentId,
+            legacyPattern);
+    }
+    else
+    {
+        rows = w.exec_params(
+            "SELECT model_id, NULL::bigint AS experiment_id, COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
+            "FROM model "
+            "WHERE COALESCE(name, '') LIKE $1 "
+            "ORDER BY model_id;",
+            legacyPattern);
+    }
+
+    std::vector<ExperimentModelRow> models;
+    models.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        ExperimentModelRow model;
+        model.modelId = row[0].as<long long>();
+        if (!row[1].is_null())
+            model.experimentId = row[1].as<long long>();
+        model.name = row[2].as<std::string>();
+        model.createdAt = row[3].as<std::string>();
+        model.comment = row[4].as<std::string>();
+        models.push_back(std::move(model));
+    }
+    return models;
+}
+
+std::optional<ExperimentModelRow> LoadModelRowById(pqxx::work& w, long long modelId)
+{
+    const bool hasExperimentId = ColumnExists(w, "model", "experiment_id");
+    pqxx::result rows = w.exec_params(
+        "SELECT model_id, " +
+        std::string{hasExperimentId ? "experiment_id" : "NULL::bigint"} +
+        ", COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
+        "FROM model WHERE model_id = $1;",
+        modelId);
+    if (rows.empty())
+        return std::nullopt;
+
+    ExperimentModelRow model;
+    model.modelId = rows[0][0].as<long long>();
+    if (!rows[0][1].is_null())
+        model.experimentId = rows[0][1].as<long long>();
+    model.name = rows[0][2].as<std::string>();
+    model.createdAt = rows[0][3].as<std::string>();
+    model.comment = rows[0][4].as<std::string>();
+    return model;
+}
+
+std::string ExperimentIdText(const std::optional<long long>& experimentId)
+{
+    return experimentId.has_value() ? std::to_string(*experimentId) : "legacy_null";
+}
+
+std::string ModelLineageRole(const ExperimentModelRow& model,
+                             const std::optional<long long>& lastModelId)
+{
+    if (lastModelId.has_value() && model.modelId == *lastModelId)
+        return "final";
+    if (model.comment.find("periodic training checkpoint") != std::string::npos ||
+        std::regex_search(model.name, std::regex{R"(_epoch[0-9]+)"}))
+    {
+        return "checkpoint";
+    }
+    return "created";
+}
+
+void PrintExperimentLineageModel(const std::string& marker,
+                                 const ExperimentModelRow& model,
+                                 const std::string& role)
+{
+    std::cout << marker
+              << ",model_id=" << model.modelId
+              << ",experiment_id=" << ExperimentIdText(model.experimentId)
+              << ",role=" << role
+              << ",name=" << model.name
+              << ",created_at=" << model.createdAt
+              << ",comment=" << model.comment
+              << std::endl;
+}
+
 int ListExperimentModels(long long experimentId)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
-    if (!ColumnExists(w, "model", "experiment_id"))
-        throw std::runtime_error("model.experiment_id is missing; run ./migrate_lstm_db.sh");
-    const std::string legacyPattern = "%experiment" + std::to_string(experimentId) + "%";
-    pqxx::result rows = w.exec_params(
-        "SELECT model_id, experiment_id, COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
-        "FROM model "
-        "WHERE experiment_id = $1 "
-        "   OR (experiment_id IS NULL AND COALESCE(name, '') LIKE $2) "
-        "ORDER BY model_id;",
-        experimentId,
-        legacyPattern);
+    std::vector<ExperimentModelRow> models = LoadExperimentModelRows(w, experimentId);
     w.commit();
 
     std::cout << "EXPERIMENT_MODELS"
               << ",experiment_id=" << experimentId
-              << ",count=" << rows.size()
+              << ",count=" << models.size()
               << std::endl;
-    for (const auto& row : rows)
+    for (const auto& model : models)
     {
         std::cout << "EXPERIMENT_MODEL"
-                  << ",model_id=" << row[0].as<long long>()
-                  << ",experiment_id=";
-        if (row[1].is_null())
-            std::cout << "legacy_null";
-        else
-            std::cout << row[1].as<long long>();
-        std::cout << ",name=" << row[2].as<std::string>()
-                  << ",created_at=" << row[3].as<std::string>()
-                  << ",comment=" << row[4].as<std::string>()
+                  << ",model_id=" << model.modelId
+                  << ",experiment_id=" << ExperimentIdText(model.experimentId)
+                  << ",name=" << model.name
+                  << ",created_at=" << model.createdAt
+                  << ",comment=" << model.comment
                   << std::endl;
+    }
+    return 0;
+}
+
+int ListExperimentLineage(long long experimentId)
+{
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    pqxx::result experiments = w.exec_params(
+        "SELECT experiment_id, symbol, prediction_horizon, target_epochs, "
+        "resume_model_id, last_model_id, status, phase "
+        "FROM experiment WHERE experiment_id = $1;",
+        experimentId);
+    if (experiments.empty())
+    {
+        w.commit();
+        std::cerr << "ERROR: experiment not found." << std::endl;
+        return 1;
+    }
+
+    const auto& experiment = experiments[0];
+    std::optional<long long> resumeModelId;
+    std::optional<long long> lastModelId;
+    if (!experiment[4].is_null())
+        resumeModelId = experiment[4].as<long long>();
+    if (!experiment[5].is_null())
+        lastModelId = experiment[5].as<long long>();
+
+    std::optional<ExperimentModelRow> resumeSource;
+    if (resumeModelId.has_value())
+        resumeSource = LoadModelRowById(w, *resumeModelId);
+    std::vector<ExperimentModelRow> models = LoadExperimentModelRows(w, experimentId);
+    w.commit();
+
+    std::cout << "EXPERIMENT_LINEAGE"
+              << ",experiment_id=" << experiment[0].as<long long>()
+              << ",symbol=" << experiment[1].as<std::string>()
+              << ",prediction_horizon=" << experiment[2].as<int>()
+              << ",target_epochs=" << experiment[3].as<int>()
+              << ",resume_model_id=" << (resumeModelId.has_value() ? std::to_string(*resumeModelId) : "none")
+              << ",last_model_id=" << (lastModelId.has_value() ? std::to_string(*lastModelId) : "none")
+              << ",status=" << experiment[6].as<std::string>()
+              << ",phase=" << experiment[7].as<std::string>()
+              << ",created_model_count=" << models.size()
+              << std::endl;
+
+    if (resumeModelId.has_value())
+    {
+        if (resumeSource.has_value())
+        {
+            PrintExperimentLineageModel("EXPERIMENT_LINEAGE_RESUME_SOURCE",
+                                        *resumeSource,
+                                        "resume_source");
+        }
+        else
+        {
+            std::cout << "EXPERIMENT_LINEAGE_RESUME_SOURCE"
+                      << ",model_id=" << *resumeModelId
+                      << ",experiment_id=unknown"
+                      << ",role=resume_source"
+                      << ",name=unknown"
+                      << ",created_at=unknown"
+                      << ",comment=model_not_found"
+                      << std::endl;
+        }
+    }
+
+    for (const auto& model : models)
+    {
+        PrintExperimentLineageModel("EXPERIMENT_LINEAGE_MODEL",
+                                    model,
+                                    ModelLineageRole(model, lastModelId));
     }
     return 0;
 }
@@ -7971,6 +8142,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --list-experiment-models=ID\n"
         << "Usage: " << exe
+        << " --list-experiment-lineage=ID\n"
+        << "Usage: " << exe
         << " --backfill-experiment-metadata\n"
         << "Usage: " << exe
         << " --pause-experiment=ID | --resume-experiment=ID | --cancel-experiment=ID | "
@@ -8036,6 +8209,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return PrintExperimentMetadata(*options.experimentMetadataId);
         if (options.listExperimentModelsId.has_value())
             return ListExperimentModels(*options.listExperimentModelsId);
+        if (options.listExperimentLineageId.has_value())
+            return ListExperimentLineage(*options.listExperimentLineageId);
         if (options.pauseExperimentId.has_value() ||
             options.resumeExperimentId.has_value() ||
             options.cancelExperimentId.has_value() ||
