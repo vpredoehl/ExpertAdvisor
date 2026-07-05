@@ -6620,20 +6620,35 @@ ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
     if (optimizerMeta.size() > 2)
         info.optimizerUpdateCount = static_cast<long long>(std::llround(optimizerMeta[2]));
 
-    std::ostringstream experimentSql;
-    experimentSql
-        << "SELECT target_epochs, checkpoint_interval, "
-        << "train_start::date::text, train_end::date::text, "
-        << "infer_start::date::text, infer_end::date::text, "
-        << "resume_model_id, last_model_id "
-        << "FROM experiment "
-        << "WHERE experiment_id = "
-        << (info.experimentId.has_value() ? std::to_string(*info.experimentId) : "NULL")
-        << " OR last_model_id = " << modelId
-        << " OR resume_model_id = " << modelId
-        << " ORDER BY CASE WHEN last_model_id = " << modelId << " THEN 0 ELSE 1 END, updated_at DESC "
-        << "LIMIT 1;";
-    pqxx::result experimentRows = w.exec(experimentSql.str());
+    pqxx::result experimentRows;
+    if (info.experimentId.has_value())
+    {
+        experimentRows = w.exec_params(
+            "SELECT target_epochs, checkpoint_interval, "
+            "train_start::date::text, train_end::date::text, "
+            "infer_start::date::text, infer_end::date::text, "
+            "resume_model_id, last_model_id "
+            "FROM experiment "
+            "WHERE experiment_id = $1 OR last_model_id = $2 OR resume_model_id = $2 "
+            "ORDER BY CASE WHEN experiment_id = $1 THEN 0 WHEN last_model_id = $2 THEN 1 ELSE 2 END, "
+            "updated_at DESC "
+            "LIMIT 1;",
+            *info.experimentId,
+            modelId);
+    }
+    else
+    {
+        experimentRows = w.exec_params(
+            "SELECT target_epochs, checkpoint_interval, "
+            "train_start::date::text, train_end::date::text, "
+            "infer_start::date::text, infer_end::date::text, "
+            "resume_model_id, last_model_id "
+            "FROM experiment "
+            "WHERE last_model_id = $1 OR resume_model_id = $1 "
+            "ORDER BY CASE WHEN last_model_id = $1 THEN 0 ELSE 1 END, updated_at DESC "
+            "LIMIT 1;",
+            modelId);
+    }
     if (!experimentRows.empty())
     {
         info.targetEpochs = experimentRows[0][0].as<int>();

@@ -3932,8 +3932,28 @@ void LinkModelToSchedulerExperimentIfPresent(pqxx::work& w,
     if (!schedulerExperimentId.has_value())
         return;
 
+    pqxx::result current = w.exec_params(
+        "SELECT experiment_id FROM model WHERE model_id = $1 FOR UPDATE;",
+        modelId);
+    if (current.empty())
+        throw std::runtime_error("MODEL_EXPERIMENT_LINK_FAILED model_not_found model_id=" + std::to_string(modelId));
+
+    if (!current[0][0].is_null())
+    {
+        const long long existingExperimentId = current[0][0].as<long long>();
+        if (existingExperimentId == *schedulerExperimentId)
+            return;
+
+        std::cerr << "MODEL_EXPERIMENT_LINK_CONFLICT"
+                  << ",model_id=" << modelId
+                  << ",existing_experiment_id=" << existingExperimentId
+                  << ",requested_experiment_id=" << *schedulerExperimentId
+                  << std::endl;
+        throw std::runtime_error("MODEL_EXPERIMENT_LINK_CONFLICT model_id=" + std::to_string(modelId));
+    }
+
     w.exec_params(
-        "UPDATE model SET experiment_id = $1 WHERE model_id = $2;",
+        "UPDATE model SET experiment_id = $1 WHERE model_id = $2 AND experiment_id IS NULL;",
         *schedulerExperimentId,
         modelId);
 }
