@@ -55,6 +55,7 @@ struct SchedulerOptions
     bool schedulerStatus = false;
     bool backfillExperimentMetadata = false;
     bool backupDatabase = false;
+    std::optional<std::string> backupOutputPath;
     std::optional<long long> experimentMetadataId;
     std::optional<long long> listExperimentModelsId;
     std::optional<long long> listExperimentLineageId;
@@ -466,6 +467,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--scheduler-status" ||
             arg == "--backfill-experiment-metadata" ||
             arg == "--backup-database" ||
+            arg == "--backup-output" ||
             arg == "--experiment-metadata" ||
             arg == "--list-experiment-models" ||
             arg == "--list-experiment-lineage" ||
@@ -490,6 +492,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
             arg.rfind("--requeue-inference=", 0) == 0 ||
+            arg.rfind("--backup-output=", 0) == 0 ||
             arg.rfind("--list-experiment-models=", 0) == 0 ||
             arg.rfind("--list-experiment-lineage=", 0) == 0 ||
             arg.rfind("--experiment-metadata=", 0) == 0)
@@ -564,6 +567,62 @@ int RunProcessAndWait(const std::vector<std::string>& args)
     if (WIFSIGNALED(status))
         return 128 + WTERMSIG(status);
     return 1;
+}
+
+std::string JsonEscape(const std::string& value)
+{
+    std::ostringstream out;
+    for (const char ch : value)
+    {
+        switch (ch)
+        {
+            case '\\':
+                out << "\\\\";
+                break;
+            case '"':
+                out << "\\\"";
+                break;
+            case '\b':
+                out << "\\b";
+                break;
+            case '\f':
+                out << "\\f";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(ch) < 0x20)
+                {
+                    out << "\\u"
+                        << std::hex << std::setw(4) << std::setfill('0')
+                        << static_cast<int>(static_cast<unsigned char>(ch))
+                        << std::dec << std::setfill(' ');
+                }
+                else
+                {
+                    out << ch;
+                }
+                break;
+        }
+    }
+    return out.str();
+}
+
+std::string JsonString(const std::string& value)
+{
+    return "\"" + JsonEscape(value) + "\"";
+}
+
+std::string JsonOptionalLongLong(const std::optional<long long>& value)
+{
+    return value.has_value() ? std::to_string(*value) : "null";
 }
 
 std::string SqlNullable(pqxx::work& w, const std::optional<std::string>& value)
@@ -693,6 +752,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.backfillExperimentMetadata = true;
         else if (arg == "--backup-database")
             options.backupDatabase = true;
+        else if (arg == "--backup-output")
+        {
+            options.backupOutputPath = RequireNextArg(argc, argv, i, arg);
+            if (options.backupOutputPath->empty())
+                throw std::invalid_argument("--backup-output requires a non-empty path");
+        }
         else if (arg == "--experiment-metadata")
             options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--list-experiment-models")
@@ -871,6 +936,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--lstm-profile-output requires a non-empty path");
             options.lstmProfileOutputPath = value;
         }
+        else if (SplitOptionWithValue(arg, "--backup-output", value))
+        {
+            if (value.empty())
+                throw std::invalid_argument("--backup-output requires a non-empty path");
+            options.backupOutputPath = value;
+        }
         else if (SplitOptionWithValue(arg, "--experiment-metadata", value))
             options.experimentMetadataId = ParsePositiveLongLong("--experiment-metadata", value);
         else if (SplitOptionWithValue(arg, "--list-experiment-models", value))
@@ -915,6 +986,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.help ? 1 : 0);
     if (options.includeParentModels && !options.listExperimentLineageId.has_value())
         throw std::invalid_argument("--include-parent-models is only valid with --list-experiment-lineage=ID");
+    if (options.backupOutputPath.has_value() && !options.backupDatabase)
+        throw std::invalid_argument("--backup-output is only valid with --backup-database");
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
     if (options.modelInfo && !options.modelInfoModelId.has_value())
@@ -961,6 +1034,21 @@ bool TableExists(pqxx::work& w, const std::string& tableName)
         "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
         tableName);
     return !r.empty();
+}
+
+std::optional<long long> CountRowsIfTableExists(pqxx::work& w, const std::string& tableName)
+{
+    if (!TableExists(w, tableName))
+        return std::nullopt;
+
+    if (tableName == "model")
+        return w.exec("SELECT count(*) FROM model;").one_row()[0].as<long long>();
+    if (tableName == "experiment")
+        return w.exec("SELECT count(*) FROM experiment;").one_row()[0].as<long long>();
+    if (tableName == "experiment_analysis_result")
+        return w.exec("SELECT count(*) FROM experiment_analysis_result;").one_row()[0].as<long long>();
+
+    throw std::invalid_argument("unsupported backup manifest row count table: " + tableName);
 }
 
 bool ColumnExists(pqxx::work& w, const std::string& tableName, const std::string& columnName)
@@ -1820,23 +1908,131 @@ int BackfillExperimentMetadata(const SchedulerOptions& options)
     return 0;
 }
 
-int BackupDatabase()
+struct BackupManifestStats
+{
+    std::string schemaVersion = "unknown";
+    std::optional<long long> modelCount;
+    std::optional<long long> experimentCount;
+    std::optional<long long> analysisCount;
+};
+
+BackupManifestStats LoadBackupManifestStats()
+{
+    BackupManifestStats stats;
+    try
+    {
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        stats.schemaVersion = EA::RunMetadata::CurrentSchemaVersion(w);
+        stats.modelCount = CountRowsIfTableExists(w, "model");
+        stats.experimentCount = CountRowsIfTableExists(w, "experiment");
+        stats.analysisCount = CountRowsIfTableExists(w, "experiment_analysis_result");
+        w.commit();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "DATABASE_BACKUP_MANIFEST_WARNING"
+                  << ",reason=metadata_query_failed"
+                  << ",error=" << JsonString(e.what())
+                  << std::endl;
+    }
+    return stats;
+}
+
+bool WriteBackupManifest(const std::filesystem::path& manifestPath,
+                         const std::string& database,
+                         const std::filesystem::path& backupPath,
+                         uintmax_t sizeBytes,
+                         const std::string& gitCommit)
+{
+    const BackupManifestStats stats = LoadBackupManifestStats();
+    std::ofstream out{manifestPath};
+    if (!out)
+        return false;
+
+    out << "{\n"
+        << "  \"database\": " << JsonString(database) << ",\n"
+        << "  \"backup_path\": " << JsonString(backupPath.string()) << ",\n"
+        << "  \"size_bytes\": " << sizeBytes << ",\n"
+        << "  \"git_commit\": " << JsonString(gitCommit) << ",\n"
+        << "  \"created_at\": " << JsonString(EA::RunMetadata::CurrentUtcTimestamp()) << ",\n"
+        << "  \"format\": \"custom\",\n"
+        << "  \"includes_schema\": true,\n"
+        << "  \"includes_data\": true,\n"
+        << "  \"schema_version\": " << JsonString(stats.schemaVersion) << ",\n"
+        << "  \"model_count\": " << JsonOptionalLongLong(stats.modelCount) << ",\n"
+        << "  \"experiment_count\": " << JsonOptionalLongLong(stats.experimentCount) << ",\n"
+        << "  \"analysis_count\": " << JsonOptionalLongLong(stats.analysisCount) << "\n"
+        << "}\n";
+    return static_cast<bool>(out);
+}
+
+int BackupDatabase(const SchedulerOptions& options)
 {
     const std::string database = GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
     const std::string host = GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1");
     const std::string user = GetEnvOrDefault("LSTM_DB_USER", "pqxx");
     const std::string gitCommit = ShortGitCommit();
+    const bool overwrite = options.backupOutputPath.has_value();
 
-    const std::filesystem::path backupDir{"Database/backups"};
-    std::filesystem::create_directories(backupDir);
+    std::filesystem::path backupPath;
+    if (overwrite)
+    {
+        backupPath = std::filesystem::path{*options.backupOutputPath};
+        if (backupPath.empty() || backupPath.filename().empty())
+        {
+            std::cerr << "DATABASE_BACKUP_FAILED"
+                      << ",database=" << database
+                      << ",path=" << backupPath.string()
+                      << ",reason=invalid_output_path"
+                      << std::endl;
+            return 1;
+        }
+    }
+    else
+    {
+        const std::filesystem::path backupDir{"Database/backups"};
+        backupPath = backupDir / (database + "_" + CurrentLocalFilenameTimestamp() + "_" + gitCommit + ".dump");
+    }
 
-    const std::filesystem::path backupPath =
-        backupDir / (database + "_" + CurrentLocalFilenameTimestamp() + "_" + gitCommit + ".dump");
+    const std::filesystem::path parent = backupPath.parent_path();
+    if (!parent.empty())
+    {
+        std::error_code mkdirEc;
+        std::filesystem::create_directories(parent, mkdirEc);
+        if (mkdirEc)
+        {
+            std::cerr << "DATABASE_BACKUP_FAILED"
+                      << ",database=" << database
+                      << ",path=" << backupPath.string()
+                      << ",reason=parent_directory_create_failed"
+                      << ",error=" << JsonString(mkdirEc.message())
+                      << std::endl;
+            return 1;
+        }
+    }
+
+    std::error_code dirEc;
+    if (std::filesystem::is_directory(backupPath, dirEc))
+    {
+        std::cerr << "DATABASE_BACKUP_FAILED"
+                  << ",database=" << database
+                  << ",path=" << backupPath.string()
+                  << ",reason=output_path_is_directory"
+                  << std::endl;
+        return 1;
+    }
+
+    const std::filesystem::path manifestPath{backupPath.string() + ".json"};
 
     std::cout << "DATABASE_BACKUP_STARTED"
               << ",database=" << database
               << ",path=" << backupPath.string()
               << ",git_commit=" << gitCommit
+              << ",format=custom"
+              << ",includes_schema=1"
+              << ",includes_data=1"
+              << ",overwrite=" << (overwrite ? 1 : 0)
               << std::endl;
 
     const std::vector<std::string> args = {
@@ -1856,6 +2052,8 @@ int BackupDatabase()
                   << ",exit_code=" << rc;
         if (rc == 127)
             std::cerr << ",reason=pg_dump_not_found";
+        else
+            std::cerr << ",reason=pg_dump_failed";
         std::cerr << std::endl;
         return 1;
     }
@@ -1865,11 +2063,27 @@ int BackupDatabase()
     if (ec)
         throw std::runtime_error("database backup created but file size is unavailable: " + ec.message());
 
+    if (!WriteBackupManifest(manifestPath, database, backupPath, sizeBytes, gitCommit))
+    {
+        std::cerr << "DATABASE_BACKUP_FAILED"
+                  << ",database=" << database
+                  << ",path=" << backupPath.string()
+                  << ",manifest_path=" << manifestPath.string()
+                  << ",reason=manifest_write_failed"
+                  << std::endl;
+        return 1;
+    }
+
     std::cout << "DATABASE_BACKUP_COMPLETE"
               << ",database=" << database
               << ",path=" << backupPath.string()
+              << ",manifest_path=" << manifestPath.string()
               << ",size_bytes=" << sizeBytes
               << ",git_commit=" << gitCommit
+              << ",format=custom"
+              << ",includes_schema=1"
+              << ",includes_data=1"
+              << ",overwrite=" << (overwrite ? 1 : 0)
               << std::endl;
     return 0;
 }
@@ -8339,7 +8553,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --generate-experiment-reports [--experiment-report-dir=PATH]\n"
         << "Usage: " << exe
-        << " --backup-database\n"
+        << " --backup-database [--backup-output=PATH]\n"
         << "Usage: " << exe
         << " --status [--experiment-id=ID]\n"
         << "Usage: " << exe
@@ -8362,6 +8576,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
         << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
         << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n"
+        << "Backup note: --backup-database writes a PostgreSQL custom-format dump with schema and data; "
+        << "migrations remain schema history, and --backup-output=Database/backups/LSTM_latest.dump overwrites a stable file.\n"
         << "Queue exit codes: 0=created, 1=invalid_arguments, 2=database_error, 3=duplicates_only\n";
 }
 
@@ -8413,7 +8629,7 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         if (options.generateExperimentReports)
             return GenerateExperimentReports(options.experimentReportDir, false);
         if (options.backupDatabase)
-            return BackupDatabase();
+            return BackupDatabase(options);
         if (options.experimentMetadataId.has_value())
             return PrintExperimentMetadata(*options.experimentMetadataId);
         if (options.listExperimentModelsId.has_value())

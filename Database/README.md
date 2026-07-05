@@ -49,9 +49,23 @@ important migrations or research milestones:
 ./DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release --backup-database
 ```
 
-Backups are written under `Database/backups/` as `.dump` files. They are data
-and runtime state snapshots. Migrations are schema history, not data backups.
+Backups are written under `Database/backups/` as `.dump` files by default and
+include both schema and data. A JSON manifest is written beside each dump with
+the code commit, schema version, and table counts when available.
+
+To overwrite a stable snapshot path instead of creating a timestamped dump on
+each run:
+
+```bash
+./DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release \
+  --backup-database \
+  --backup-output=Database/backups/LSTM_latest.dump
+```
+
+Backups are data and runtime state snapshots. Migrations remain the
+source-controlled schema history, not data backups.
 
 Run backups before `./migrate_lstm_db.sh` when you need a rollback point. Dump
-files are ignored by default to avoid accidental large commits, but can be
-committed manually for explicit milestones if desired.
+files are ignored by default to avoid accidental large commits. The stable
+`Database/backups/LSTM_latest.dump` path is explicitly allowed by `.gitignore`
+for deliberate milestone snapshots.
