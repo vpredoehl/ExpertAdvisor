@@ -3958,6 +3958,46 @@ void LinkModelToSchedulerExperimentIfPresent(pqxx::work& w,
         modelId);
 }
 
+void LinkModelParentIfPresent(pqxx::work& w,
+                              long long modelId,
+                              const std::optional<long long>& parentModelId)
+{
+    if (!parentModelId.has_value())
+        return;
+
+    pqxx::result current = w.exec_params(
+        "SELECT parent_model_id FROM model WHERE model_id = $1 FOR UPDATE;",
+        modelId);
+    if (current.empty())
+        throw std::runtime_error("MODEL_PARENT_LINK_FAILED model_not_found model_id=" + std::to_string(modelId));
+
+    if (!current[0][0].is_null())
+    {
+        const long long existingParentModelId = current[0][0].as<long long>();
+        if (existingParentModelId == *parentModelId)
+            return;
+
+        std::cerr << "MODEL_PARENT_LINK_CONFLICT"
+                  << ",model_id=" << modelId
+                  << ",existing_parent_model_id=" << existingParentModelId
+                  << ",requested_parent_model_id=" << *parentModelId
+                  << std::endl;
+        throw std::runtime_error("MODEL_PARENT_LINK_CONFLICT model_id=" + std::to_string(modelId));
+    }
+
+    w.exec_params(
+        "UPDATE model SET parent_model_id = $1 WHERE model_id = $2 AND parent_model_id IS NULL;",
+        *parentModelId,
+        modelId);
+}
+
+std::optional<long long> ParentModelIdForResume(const std::optional<ResumeCheckpointConfig>& resumeConfig)
+{
+    if (!resumeConfig.has_value())
+        return std::nullopt;
+    return resumeConfig->sourceModelId;
+}
+
 void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
                                  const std::optional<ResumeCheckpointConfig>& resumeConfig,
                                  const std::string& rawPriceTableName,
@@ -4005,7 +4045,8 @@ void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
         DBIO::PgModelIO::createModel(wCheckpoint,
                                      checkpointName,
                                      "periodic training checkpoint",
-                                     launchArgs.schedulerExperimentId);
+                                     launchArgs.schedulerExperimentId,
+                                     ParentModelIdForResume(resumeConfig));
     DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm, rawPriceTableName, fromDate, toDate);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
@@ -6288,7 +6329,8 @@ int main(int argc, const char * argv[])
                         modelId = DBIO::PgModelIO::createModel(w_LSTM,
                                                                resumeModelName,
                                                                "resumed trained parameters",
-                                                               launchArgs.schedulerExperimentId);
+                                                               launchArgs.schedulerExperimentId,
+                                                               ParentModelIdForResume(resumeConfig));
                         std::cout << "Created new model_id=" << modelId
                                   << " (resumed from model_id=" << resumeConfig->sourceModelId << ")"
                                   << std::endl;
@@ -6301,6 +6343,7 @@ int main(int argc, const char * argv[])
                                 if (!rLatest.empty() && !rLatest[0][0].is_null()) {
                                     modelId = rLatest[0][0].as<long long>();
                                     LinkModelToSchedulerExperimentIfPresent(w_LSTM, modelId, launchArgs.schedulerExperimentId);
+                                    LinkModelParentIfPresent(w_LSTM, modelId, ParentModelIdForResume(resumeConfig));
                                     std::cout << "Overwriting latest model_id=" << modelId << " (started from scratch, overwrite enabled)" << std::endl;
                                 } else {
                                     modelId = DBIO::PgModelIO::createModel(w_LSTM,
@@ -6332,6 +6375,7 @@ int main(int argc, const char * argv[])
                             {
                                 modelId = *loadedModelId;
                                 LinkModelToSchedulerExperimentIfPresent(w_LSTM, modelId, launchArgs.schedulerExperimentId);
+                                LinkModelParentIfPresent(w_LSTM, modelId, ParentModelIdForResume(resumeConfig));
                                 std::cout << "Overwriting existing model_id=" << modelId << std::endl;
                             }
                             else

@@ -56,6 +56,7 @@ struct SchedulerOptions
     std::optional<long long> experimentMetadataId;
     std::optional<long long> listExperimentModelsId;
     std::optional<long long> listExperimentLineageId;
+    bool includeParentModels = false;
     std::optional<long long> modelInfoModelId;
     std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
@@ -405,6 +406,7 @@ struct ExperimentModelRow
 {
     long long modelId = -1;
     std::optional<long long> experimentId;
+    std::optional<long long> parentModelId;
     std::string name;
     std::string createdAt;
     std::string comment;
@@ -464,6 +466,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--experiment-metadata" ||
             arg == "--list-experiment-models" ||
             arg == "--list-experiment-lineage" ||
+            arg == "--include-parent-models" ||
             arg == "--stop-experiment" ||
             arg == "--stop-all-experiments" ||
             arg == "--pause-experiment" ||
@@ -635,6 +638,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.listExperimentModelsId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--list-experiment-lineage")
             options.listExperimentLineageId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--include-parent-models")
+            options.includeParentModels = true;
         else if (arg == "--model")
             options.modelInfoModelId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--experiment-id")
@@ -846,6 +851,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.help ? 1 : 0);
+    if (options.includeParentModels && !options.listExperimentLineageId.has_value())
+        throw std::invalid_argument("--include-parent-models is only valid with --list-experiment-lineage=ID");
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
     if (options.modelInfo && !options.modelInfoModelId.has_value())
@@ -6774,12 +6781,15 @@ int PrintModelInfo(long long modelId)
 std::vector<ExperimentModelRow> LoadExperimentModelRows(pqxx::work& w, long long experimentId)
 {
     const bool hasExperimentId = ColumnExists(w, "model", "experiment_id");
+    const bool hasParentModelId = ColumnExists(w, "model", "parent_model_id");
     const std::string legacyPattern = "%experiment" + std::to_string(experimentId) + "%";
     pqxx::result rows;
     if (hasExperimentId)
     {
         rows = w.exec_params(
-            "SELECT model_id, experiment_id, COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
+            "SELECT model_id, experiment_id, " +
+            std::string{hasParentModelId ? "parent_model_id" : "NULL::bigint"} +
+            ", COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
             "FROM model "
             "WHERE experiment_id = $1 "
             "   OR (experiment_id IS NULL AND COALESCE(name, '') LIKE $2) "
@@ -6790,7 +6800,9 @@ std::vector<ExperimentModelRow> LoadExperimentModelRows(pqxx::work& w, long long
     else
     {
         rows = w.exec_params(
-            "SELECT model_id, NULL::bigint AS experiment_id, COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
+            "SELECT model_id, NULL::bigint AS experiment_id, " +
+            std::string{hasParentModelId ? "parent_model_id" : "NULL::bigint"} +
+            ", COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
             "FROM model "
             "WHERE COALESCE(name, '') LIKE $1 "
             "ORDER BY model_id;",
@@ -6805,9 +6817,11 @@ std::vector<ExperimentModelRow> LoadExperimentModelRows(pqxx::work& w, long long
         model.modelId = row[0].as<long long>();
         if (!row[1].is_null())
             model.experimentId = row[1].as<long long>();
-        model.name = row[2].as<std::string>();
-        model.createdAt = row[3].as<std::string>();
-        model.comment = row[4].as<std::string>();
+        if (!row[2].is_null())
+            model.parentModelId = row[2].as<long long>();
+        model.name = row[3].as<std::string>();
+        model.createdAt = row[4].as<std::string>();
+        model.comment = row[5].as<std::string>();
         models.push_back(std::move(model));
     }
     return models;
@@ -6816,9 +6830,12 @@ std::vector<ExperimentModelRow> LoadExperimentModelRows(pqxx::work& w, long long
 std::optional<ExperimentModelRow> LoadModelRowById(pqxx::work& w, long long modelId)
 {
     const bool hasExperimentId = ColumnExists(w, "model", "experiment_id");
+    const bool hasParentModelId = ColumnExists(w, "model", "parent_model_id");
     pqxx::result rows = w.exec_params(
         "SELECT model_id, " +
         std::string{hasExperimentId ? "experiment_id" : "NULL::bigint"} +
+        ", " +
+        std::string{hasParentModelId ? "parent_model_id" : "NULL::bigint"} +
         ", COALESCE(name, ''), created_at::text, COALESCE(comment, '') "
         "FROM model WHERE model_id = $1;",
         modelId);
@@ -6829,15 +6846,22 @@ std::optional<ExperimentModelRow> LoadModelRowById(pqxx::work& w, long long mode
     model.modelId = rows[0][0].as<long long>();
     if (!rows[0][1].is_null())
         model.experimentId = rows[0][1].as<long long>();
-    model.name = rows[0][2].as<std::string>();
-    model.createdAt = rows[0][3].as<std::string>();
-    model.comment = rows[0][4].as<std::string>();
+    if (!rows[0][2].is_null())
+        model.parentModelId = rows[0][2].as<long long>();
+    model.name = rows[0][3].as<std::string>();
+    model.createdAt = rows[0][4].as<std::string>();
+    model.comment = rows[0][5].as<std::string>();
     return model;
 }
 
 std::string ExperimentIdText(const std::optional<long long>& experimentId)
 {
     return experimentId.has_value() ? std::to_string(*experimentId) : "legacy_null";
+}
+
+std::string ParentModelIdText(const std::optional<long long>& parentModelId)
+{
+    return parentModelId.has_value() ? std::to_string(*parentModelId) : "none";
 }
 
 std::string ModelLineageRole(const ExperimentModelRow& model,
@@ -6855,16 +6879,66 @@ std::string ModelLineageRole(const ExperimentModelRow& model,
 
 void PrintExperimentLineageModel(const std::string& marker,
                                  const ExperimentModelRow& model,
-                                 const std::string& role)
+                                 const std::string& role,
+                                 bool includeParentModelId = false)
 {
     std::cout << marker
               << ",model_id=" << model.modelId
-              << ",experiment_id=" << ExperimentIdText(model.experimentId)
-              << ",role=" << role
+              << ",experiment_id=" << ExperimentIdText(model.experimentId);
+    if (includeParentModelId)
+        std::cout << ",parent_model_id=" << ParentModelIdText(model.parentModelId);
+    std::cout << ",role=" << role
               << ",name=" << model.name
               << ",created_at=" << model.createdAt
               << ",comment=" << model.comment
               << std::endl;
+}
+
+std::vector<ExperimentModelRow> LoadAncestorModels(pqxx::work& w,
+                                                   long long startModelId,
+                                                   long long experimentId)
+{
+    std::vector<ExperimentModelRow> ancestors;
+    std::set<long long> seen;
+    long long currentModelId = startModelId;
+    constexpr int kMaxLineageDepth = 100;
+
+    for (int depth = 0; depth < kMaxLineageDepth; ++depth)
+    {
+        const std::optional<ExperimentModelRow> current = LoadModelRowById(w, currentModelId);
+        if (!current.has_value() || !current->parentModelId.has_value())
+            return ancestors;
+
+        const long long parentModelId = *current->parentModelId;
+        if (!seen.insert(parentModelId).second)
+        {
+            std::cout << "EXPERIMENT_LINEAGE_ANCESTRY_CYCLE"
+                      << ",experiment_id=" << experimentId
+                      << ",model_id=" << parentModelId
+                      << std::endl;
+            return ancestors;
+        }
+
+        std::optional<ExperimentModelRow> parent = LoadModelRowById(w, parentModelId);
+        if (!parent.has_value())
+        {
+            std::cout << "EXPERIMENT_LINEAGE_ANCESTRY_MISSING_PARENT"
+                      << ",experiment_id=" << experimentId
+                      << ",model_id=" << currentModelId
+                      << ",parent_model_id=" << parentModelId
+                      << std::endl;
+            return ancestors;
+        }
+
+        ancestors.push_back(*parent);
+        currentModelId = parentModelId;
+    }
+
+    std::cout << "EXPERIMENT_LINEAGE_ANCESTRY_DEPTH_LIMIT"
+              << ",experiment_id=" << experimentId
+              << ",max_depth=" << kMaxLineageDepth
+              << std::endl;
+    return ancestors;
 }
 
 int ListExperimentModels(long long experimentId)
@@ -6891,7 +6965,7 @@ int ListExperimentModels(long long experimentId)
     return 0;
 }
 
-int ListExperimentLineage(long long experimentId)
+int ListExperimentLineage(long long experimentId, bool includeParentModels)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -6918,6 +6992,9 @@ int ListExperimentLineage(long long experimentId)
     std::optional<ExperimentModelRow> resumeSource;
     if (resumeModelId.has_value())
         resumeSource = LoadModelRowById(w, *resumeModelId);
+    std::vector<ExperimentModelRow> ancestors;
+    if (includeParentModels && resumeModelId.has_value())
+        ancestors = LoadAncestorModels(w, *resumeModelId, experimentId);
     std::vector<ExperimentModelRow> models = LoadExperimentModelRows(w, experimentId);
     w.commit();
 
@@ -6929,9 +7006,20 @@ int ListExperimentLineage(long long experimentId)
               << ",resume_model_id=" << (resumeModelId.has_value() ? std::to_string(*resumeModelId) : "none")
               << ",last_model_id=" << (lastModelId.has_value() ? std::to_string(*lastModelId) : "none")
               << ",status=" << experiment[6].as<std::string>()
-              << ",phase=" << experiment[7].as<std::string>()
-              << ",created_model_count=" << models.size()
+              << ",phase=" << experiment[7].as<std::string>();
+    if (includeParentModels)
+        std::cout << ",include_parent_models=1"
+                  << ",ancestor_count=" << ancestors.size();
+    std::cout << ",created_model_count=" << models.size()
               << std::endl;
+
+    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it)
+    {
+        PrintExperimentLineageModel("EXPERIMENT_LINEAGE_ANCESTOR",
+                                    *it,
+                                    "ancestor",
+                                    true);
+    }
 
     if (resumeModelId.has_value())
     {
@@ -6946,6 +7034,7 @@ int ListExperimentLineage(long long experimentId)
             std::cout << "EXPERIMENT_LINEAGE_RESUME_SOURCE"
                       << ",model_id=" << *resumeModelId
                       << ",experiment_id=unknown"
+                      << ",parent_model_id=unknown"
                       << ",role=resume_source"
                       << ",name=unknown"
                       << ",created_at=unknown"
@@ -8142,7 +8231,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --list-experiment-models=ID\n"
         << "Usage: " << exe
-        << " --list-experiment-lineage=ID\n"
+        << " --list-experiment-lineage=ID [--include-parent-models]\n"
         << "Usage: " << exe
         << " --backfill-experiment-metadata\n"
         << "Usage: " << exe
@@ -8210,7 +8299,7 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         if (options.listExperimentModelsId.has_value())
             return ListExperimentModels(*options.listExperimentModelsId);
         if (options.listExperimentLineageId.has_value())
-            return ListExperimentLineage(*options.listExperimentLineageId);
+            return ListExperimentLineage(*options.listExperimentLineageId, options.includeParentModels);
         if (options.pauseExperimentId.has_value() ||
             options.resumeExperimentId.has_value() ||
             options.cancelExperimentId.has_value() ||

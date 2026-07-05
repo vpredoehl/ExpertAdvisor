@@ -86,16 +86,34 @@ public:
     static long long createModel(pqxx::work& w,
                                  const std::string& name,
                                  const std::string& comment,
-                                 std::optional<long long> experimentId = std::nullopt)
+                                 std::optional<long long> experimentId = std::nullopt,
+                                 std::optional<long long> parentModelId = std::nullopt)
     {
         pqxx::result r;
-        if (experimentId.has_value())
+        if (experimentId.has_value() && parentModelId.has_value())
+        {
+            r = w.exec_params(
+                "INSERT INTO model (name, comment, experiment_id, parent_model_id) VALUES ($1, $2, $3, $4) RETURNING model_id;",
+                name,
+                comment,
+                *experimentId,
+                *parentModelId);
+        }
+        else if (experimentId.has_value())
         {
             r = w.exec_params(
                 "INSERT INTO model (name, comment, experiment_id) VALUES ($1, $2, $3) RETURNING model_id;",
                 name,
                 comment,
                 *experimentId);
+        }
+        else if (parentModelId.has_value())
+        {
+            r = w.exec_params(
+                "INSERT INTO model (name, comment, parent_model_id) VALUES ($1, $2, $3) RETURNING model_id;",
+                name,
+                comment,
+                *parentModelId);
         }
         else
         {
