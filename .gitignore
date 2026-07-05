@@ -13,4 +13,5 @@ experiment_logs/
 *.md
 nohup.out
 scheduler.log
-
+Database/backups/
+*.dump

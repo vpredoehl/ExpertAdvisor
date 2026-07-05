@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cerrno>
@@ -53,6 +54,7 @@ struct SchedulerOptions
     bool autoGenerateReports = false;
     bool schedulerStatus = false;
     bool backfillExperimentMetadata = false;
+    bool backupDatabase = false;
     std::optional<long long> experimentMetadataId;
     std::optional<long long> listExperimentModelsId;
     std::optional<long long> listExperimentLineageId;
@@ -463,6 +465,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--generate-experiment-reports" ||
             arg == "--scheduler-status" ||
             arg == "--backfill-experiment-metadata" ||
+            arg == "--backup-database" ||
             arg == "--experiment-metadata" ||
             arg == "--list-experiment-models" ||
             arg == "--list-experiment-lineage" ||
@@ -505,6 +508,62 @@ std::string LstmDbConnectionString()
 {
     return "hostaddr=" + GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1") +
            " user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+}
+
+std::string CurrentLocalFilenameTimestamp()
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%d_%H%M%S");
+    return out.str();
+}
+
+std::string ShortGitCommit()
+{
+    const EA::RunMetadata::Snapshot metadata =
+        EA::RunMetadata::Capture("LSTM_Release", "backup-database");
+    if (metadata.gitCommit == "unknown" || metadata.gitCommit.empty())
+        return "unknown";
+    return metadata.gitCommit.substr(0, std::min<size_t>(7, metadata.gitCommit.size()));
+}
+
+int RunProcessAndWait(const std::vector<std::string>& args)
+{
+    if (args.empty())
+        throw std::invalid_argument("RunProcessAndWait requires argv");
+
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args)
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+
+    const pid_t pid = ::fork();
+    if (pid < 0)
+        throw std::runtime_error("fork failed for " + args.front() + ": errno=" + std::to_string(errno));
+
+    if (pid == 0)
+    {
+        ::execvp(argv[0], argv.data());
+        ::_exit(errno == ENOENT ? 127 : 126);
+    }
+
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0)
+    {
+        if (errno == EINTR)
+            continue;
+        throw std::runtime_error("waitpid failed for " + args.front() + ": errno=" + std::to_string(errno));
+    }
+
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+    return 1;
 }
 
 std::string SqlNullable(pqxx::work& w, const std::optional<std::string>& value)
@@ -632,6 +691,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.schedulerStatus = true;
         else if (arg == "--backfill-experiment-metadata")
             options.backfillExperimentMetadata = true;
+        else if (arg == "--backup-database")
+            options.backupDatabase = true;
         else if (arg == "--experiment-metadata")
             options.experimentMetadataId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--list-experiment-models")
@@ -839,6 +900,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.generateExperimentReports ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
         (options.backfillExperimentMetadata ? 1 : 0) +
+        (options.backupDatabase ? 1 : 0) +
         (options.experimentMetadataId.has_value() ? 1 : 0) +
         (options.listExperimentModelsId.has_value() ? 1 : 0) +
         (options.listExperimentLineageId.has_value() ? 1 : 0) +
@@ -1754,6 +1816,60 @@ int BackfillExperimentMetadata(const SchedulerOptions& options)
               << ",eligible=" << eligible
               << ",schema_version=" << schemaVersion
               << ",dirty=" << EA::RunMetadata::SqlNullableBool(metadata.gitDirty)
+              << std::endl;
+    return 0;
+}
+
+int BackupDatabase()
+{
+    const std::string database = GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+    const std::string host = GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1");
+    const std::string user = GetEnvOrDefault("LSTM_DB_USER", "pqxx");
+    const std::string gitCommit = ShortGitCommit();
+
+    const std::filesystem::path backupDir{"Database/backups"};
+    std::filesystem::create_directories(backupDir);
+
+    const std::filesystem::path backupPath =
+        backupDir / (database + "_" + CurrentLocalFilenameTimestamp() + "_" + gitCommit + ".dump");
+
+    std::cout << "DATABASE_BACKUP_STARTED"
+              << ",database=" << database
+              << ",path=" << backupPath.string()
+              << ",git_commit=" << gitCommit
+              << std::endl;
+
+    const std::vector<std::string> args = {
+        "pg_dump",
+        "-h", host,
+        "-U", user,
+        "-d", database,
+        "-Fc",
+        "-f", backupPath.string()
+    };
+    const int rc = RunProcessAndWait(args);
+    if (rc != 0)
+    {
+        std::cerr << "DATABASE_BACKUP_FAILED"
+                  << ",database=" << database
+                  << ",path=" << backupPath.string()
+                  << ",exit_code=" << rc;
+        if (rc == 127)
+            std::cerr << ",reason=pg_dump_not_found";
+        std::cerr << std::endl;
+        return 1;
+    }
+
+    std::error_code ec;
+    const uintmax_t sizeBytes = std::filesystem::file_size(backupPath, ec);
+    if (ec)
+        throw std::runtime_error("database backup created but file size is unavailable: " + ec.message());
+
+    std::cout << "DATABASE_BACKUP_COMPLETE"
+              << ",database=" << database
+              << ",path=" << backupPath.string()
+              << ",size_bytes=" << sizeBytes
+              << ",git_commit=" << gitCommit
               << std::endl;
     return 0;
 }
@@ -8223,6 +8339,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --generate-experiment-reports [--experiment-report-dir=PATH]\n"
         << "Usage: " << exe
+        << " --backup-database\n"
+        << "Usage: " << exe
         << " --status [--experiment-id=ID]\n"
         << "Usage: " << exe
         << " --model-info --model=MODEL_ID\n"
@@ -8294,6 +8412,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return BackfillExperimentMetadata(options);
         if (options.generateExperimentReports)
             return GenerateExperimentReports(options.experimentReportDir, false);
+        if (options.backupDatabase)
+            return BackupDatabase();
         if (options.experimentMetadataId.has_value())
             return PrintExperimentMetadata(*options.experimentMetadataId);
         if (options.listExperimentModelsId.has_value())

@@ -39,3 +39,19 @@ Experiment scheduling tables are created by:
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
+
+## Database Backups
+
+Use the LSTM executable to create a PostgreSQL custom-format snapshot before
+important migrations or research milestones:
+
+```bash
+./DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release --backup-database
+```
+
+Backups are written under `Database/backups/` as `.dump` files. They are data
+and runtime state snapshots. Migrations are schema history, not data backups.
+
+Run backups before `./migrate_lstm_db.sh` when you need a rollback point. Dump
+files are ignored by default to avoid accidental large commits, but can be
+committed manually for explicit milestones if desired.
