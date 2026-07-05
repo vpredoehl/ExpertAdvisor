@@ -11,9 +11,12 @@
 #include <algorithm>
 #include <limits>
 #include <iostream>
+#include <filesystem>
+#include <fstream>
 #include <chrono>
 #include <iomanip>
 #include <array>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <sstream>
@@ -66,6 +69,7 @@ void EA::LSTM::PrintMatrixSummary(const char* label,
                                const EA::LSTM::EAMatrix& m,
                                size_t maxPrint = 16)
 {
+    HotspotScope hotspot("host_diagnostics_data_copy");
     MetaNN::NSMetalMatMul::WaitForAll();
     auto ev = MetaNN::Evaluate(m);
     MetaNN::Matrix<float, MetaNN::DeviceTags::CPU> host(ev.Shape()[0], ev.Shape()[1]);
@@ -374,6 +378,7 @@ static double FroNormDeltaHost(const Mat& a, const Mat& b)
 template <typename Mat>
 static double FroNormEvalHost(const Mat& m)
 {
+    EA::LSTM::HotspotScope hotspot("host_diagnostics_data_copy");
     // Make sure any queued GPU work is finished before we read host-visible memory.
     MetaNN::NSMetalMatMul::WaitForAll();
     auto ev = MetaNN::Evaluate(m);
@@ -394,6 +399,7 @@ static double FroNormEvalHost(const Mat& m)
 template <typename Mat>
 static bool MatrixAllFiniteHost(const char* name, const Mat& m)
 {
+    EA::LSTM::HotspotScope hotspot("host_diagnostics_data_copy");
     MetaNN::NSMetalMatMul::WaitForAll();
     auto ev = MetaNN::Evaluate(m);
     auto low = MetaNN::LowerAccess(ev);
@@ -542,6 +548,59 @@ constexpr size_t kReturnFeatureCount =
 constexpr size_t mini_batch_windows = MINI_BATCH_WINDOWS;
 
 const size_t effectiveMiniBatchWindows = std::max<size_t>(1, std::min<size_t>(mini_batch_windows, static_cast<size_t>(LSTM_MAX_MINI_BATCH_WINDOWS)));
+
+namespace {
+struct LSTMHotspotCounter
+{
+    size_t calls = 0;
+    double totalUs = 0.0;
+};
+
+bool g_lstmHotspotProfilingEnabled = false;
+std::map<std::string, LSTMHotspotCounter> g_lstmHotspotCounters;
+
+const char* LSTMHotspotMetalCandidate(const std::string& name)
+{
+    if (name == "window_batch_build" ||
+        name == "appended_return_features" ||
+        name == "concat_cols" ||
+        name == "d_gates_batch_packing" ||
+        name == "gate_accumulator_split_merge" ||
+        name == "host_diagnostics_data_copy")
+        return "high";
+    if (name == "matmul_bias_gate_preactivation" ||
+        name == "gate_state_fused" ||
+        name == "backward_gemms" ||
+        name == "optimizer_update" ||
+        name == "gradient_clipping")
+        return "medium";
+    return "low";
+}
+
+std::vector<std::pair<std::string, LSTMHotspotCounter>> LSTMHotspotRowsSorted()
+{
+    std::vector<std::pair<std::string, LSTMHotspotCounter>> rows(
+        g_lstmHotspotCounters.begin(),
+        g_lstmHotspotCounters.end());
+    std::sort(rows.begin(), rows.end(),
+              [](const auto& a, const auto& b)
+              {
+                  if (a.second.totalUs != b.second.totalUs)
+                      return a.second.totalUs > b.second.totalUs;
+                  return a.first < b.first;
+              });
+    return rows;
+}
+
+double LSTMHotspotTotalUs()
+{
+    double total = 0.0;
+    for (const auto& item : g_lstmHotspotCounters)
+        total += item.second.totalUs;
+    return total;
+}
+}
+
 struct LSTMScopedProfileTimer
 {
     std::chrono::steady_clock::time_point t0;
@@ -557,6 +616,108 @@ struct LSTMScopedProfileTimer
         accum_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
     }
 };
+
+EA::LSTM::HotspotScope::HotspotScope(const char* name)
+    : name_(name),
+      enabled_(EA::LSTM::HotspotProfilingEnabled()),
+      start_(enabled_ ? std::chrono::steady_clock::now()
+                      : std::chrono::steady_clock::time_point{})
+{}
+
+EA::LSTM::HotspotScope::~HotspotScope()
+{
+    if (!enabled_ || name_ == nullptr)
+        return;
+    const auto end = std::chrono::steady_clock::now();
+    const double elapsedUs = std::chrono::duration<double, std::micro>(end - start_).count();
+    EA::LSTM::RecordHotspot(name_, elapsedUs);
+}
+
+void EA::LSTM::ConfigureHotspotProfiler(bool enabled, std::optional<std::string> outputPath)
+{
+    (void)outputPath;
+    g_lstmHotspotProfilingEnabled = enabled;
+    g_lstmHotspotCounters.clear();
+}
+
+bool EA::LSTM::HotspotProfilingEnabled()
+{
+    return g_lstmHotspotProfilingEnabled;
+}
+
+void EA::LSTM::RecordHotspot(const char* name, double elapsedUs)
+{
+    if (!g_lstmHotspotProfilingEnabled || name == nullptr)
+        return;
+    auto& counter = g_lstmHotspotCounters[std::string{name}];
+    ++counter.calls;
+    counter.totalUs += elapsedUs;
+}
+
+void EA::LSTM::PrintHotspotProfileSummary()
+{
+    if (!g_lstmHotspotProfilingEnabled)
+        return;
+
+    const double totalUs = LSTMHotspotTotalUs();
+    for (const auto& row : LSTMHotspotRowsSorted())
+    {
+        const double totalMs = row.second.totalUs / 1000.0;
+        const double avgUs = row.second.calls
+            ? (row.second.totalUs / static_cast<double>(row.second.calls))
+            : 0.0;
+        const double pct = totalUs > 0.0 ? (100.0 * row.second.totalUs / totalUs) : 0.0;
+        std::cout << "LSTM_PROFILE_HOTSPOT"
+                  << ",name=" << row.first
+                  << ",calls=" << row.second.calls
+                  << ",total_ms=" << totalMs
+                  << ",avg_us=" << avgUs
+                  << ",percent=" << pct
+                  << ",metal_candidate=" << LSTMHotspotMetalCandidate(row.first)
+                  << std::endl;
+    }
+}
+
+bool EA::LSTM::WriteHotspotProfileReport(const std::string& outputPath)
+{
+    if (!g_lstmHotspotProfilingEnabled || outputPath.empty())
+        return false;
+
+    const std::filesystem::path path{outputPath};
+    if (path.has_parent_path())
+        std::filesystem::create_directories(path.parent_path());
+
+    std::ofstream out(path);
+    if (!out)
+        return false;
+
+    const double totalUs = LSTMHotspotTotalUs();
+    out << "# LSTM Hotspot Profile\n\n";
+    out << "Profiling is runtime opt-in and aggregates elapsed wall-clock time only. "
+        << "It does not alter LSTM math, optimizer behavior, model serialization, "
+        << "scheduler behavior, or database state.\n\n";
+    out << "| rank | name | calls | total_ms | avg_us | percent | metal_candidate |\n";
+    out << "|---|---|---|---|---|---|---|\n";
+
+    size_t rank = 1;
+    for (const auto& row : LSTMHotspotRowsSorted())
+    {
+        const double totalMs = row.second.totalUs / 1000.0;
+        const double avgUs = row.second.calls
+            ? (row.second.totalUs / static_cast<double>(row.second.calls))
+            : 0.0;
+        const double pct = totalUs > 0.0 ? (100.0 * row.second.totalUs / totalUs) : 0.0;
+        out << "| " << rank++
+            << " | " << row.first
+            << " | " << row.second.calls
+            << " | " << totalMs
+            << " | " << avgUs
+            << " | " << pct
+            << " | " << LSTMHotspotMetalCandidate(row.first)
+            << " |\n";
+    }
+    return true;
+}
 
 
 // Random helpers: uniform real in [low, high] and symmetric [-limit, limit]
@@ -1775,6 +1936,7 @@ inline size_t EA::LSTM::AppendMultiHorizonReturnFeatures(const Window& batch,
                                                          float* dst,
                                                          size_t dstOffset) const
 {
+    HotspotScope hotspot("appended_return_features");
     size_t written = 0;
 #if LSTM_RET_HORIZON_1
     dst[dstOffset + written] = ComputeLookbackLogReturn(batch, rowIdx, 1) * EA::LSTM::kFeatScale;
@@ -1934,6 +2096,7 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
                       h_ref);
 
     {
+        HotspotScope hotspot("gate_state_fused");
         auto lowGates = MetaNN::LowerAccess(gates_batch);
         auto lowPrevC = MetaNN::LowerAccess(prevCellState);
         auto lowI = MetaNN::LowerAccess(gate_i_batch);
@@ -2026,6 +2189,7 @@ inline void EA::LSTM::ComputeGateStateBatchFromContiguous(const EAMatrix& gates_
     validate_same("h", h_batch, h_ref);
 #else
     {
+        HotspotScope hotspot("gate_state_fused");
         auto lowGates = MetaNN::LowerAccess(gates_batch);
         auto lowPrevC = MetaNN::LowerAccess(prevCellState);
         auto lowI = MetaNN::LowerAccess(gate_i_batch);
@@ -2095,6 +2259,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
                                        ForwardBatchScratch& scratch,
                                        LSTMBatchProfile* profile) const -> BatchStepCache
 {
+    HotspotScope forwardHotspot("forward_step_batch");
     const size_t B = x_t.Shape()[0];
     const size_t H = prevHiddenState.Shape()[1];
     const size_t expectedCols = x_t.Shape()[1] + H;
@@ -2143,6 +2308,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         if (profile)
         {
             LSTMScopedProfileTimer timer(profile->dot_plus_bias_us);
+            HotspotScope hotspot("matmul_bias_gate_preactivation");
             auto lowA = MetaNN::LowerAccess(xh_concat_batch);
             auto lowB = MetaNN::LowerAccess(W_cat_dyn);
             auto lowBias = MetaNN::LowerAccess(bias);
@@ -2164,6 +2330,7 @@ inline auto EA::LSTM::forwardStepBatch(const EAMatrix& x_t,
         else
 #endif
         {
+            HotspotScope hotspot("matmul_bias_gate_preactivation");
             auto lowA = MetaNN::LowerAccess(xh_concat_batch);
             auto lowB = MetaNN::LowerAccess(W_cat_dyn);
             auto lowBias = MetaNN::LowerAccess(bias);
@@ -2570,6 +2737,7 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
                                         EAMatrix& d_c,
                                         GateAccumulators& A) const
 {
+    HotspotScope backwardHotspot("backward_step_batch");
     const size_t B = d_h.Shape()[0];
     const size_t H = d_h.Shape()[1];
 
@@ -2664,6 +2832,7 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     // backward GEMMs can stay fused on the Metal path.
     EAMatrix d_gates_batch(B, 4 * H);
     {
+        HotspotScope hotspot("d_gates_batch_packing");
         auto lowDst = MetaNN::LowerAccess(d_gates_batch);
         float* dst = lowDst.MutableRawMemory();
 
@@ -2704,7 +2873,10 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
     auto db_catH = db_cat_expr.EvalRegister();
     auto dh_prevH = dh_prev_expr.EvalRegister();
 
-    MetaNN::EvalPlan::Inst().Eval();
+    {
+        HotspotScope hotspot("backward_gemms");
+        MetaNN::EvalPlan::Inst().Eval();
+    }
 
     auto addColsToGateAccum = [&](auto& dst, const EAMatrix& src, size_t colOffset)
     {
@@ -2723,10 +2895,13 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
                 dptr[r * dstCols + c] += static_cast<AccumScalar>(sptr[r * srcCols + (colOffset + c)]);
     };
 
-    addColsToGateAccum(A.dW_i, dW_catH.Data(), 0 * H);
-    addColsToGateAccum(A.dW_f, dW_catH.Data(), 1 * H);
-    addColsToGateAccum(A.dW_g, dW_catH.Data(), 2 * H);
-    addColsToGateAccum(A.dW_o, dW_catH.Data(), 3 * H);
+    {
+        HotspotScope hotspot("gate_accumulator_split_merge");
+        addColsToGateAccum(A.dW_i, dW_catH.Data(), 0 * H);
+        addColsToGateAccum(A.dW_f, dW_catH.Data(), 1 * H);
+        addColsToGateAccum(A.dW_g, dW_catH.Data(), 2 * H);
+        addColsToGateAccum(A.dW_o, dW_catH.Data(), 3 * H);
+    }
 
     auto addBiasColsToGateAccum = [&](auto& dst, const EAMatrix& src, size_t colOffset)
     {
@@ -2740,10 +2915,13 @@ inline void EA::LSTM::backwardStepBatch(const BatchStepCache& sc,
             dptr[c] += static_cast<AccumScalar>(sptr[colOffset + c]);
     };
 
-    addBiasColsToGateAccum(A.db_i, db_catH.Data(), 0 * H);
-    addBiasColsToGateAccum(A.db_f, db_catH.Data(), 1 * H);
-    addBiasColsToGateAccum(A.db_g, db_catH.Data(), 2 * H);
-    addBiasColsToGateAccum(A.db_o, db_catH.Data(), 3 * H);
+    {
+        HotspotScope hotspot("gate_accumulator_split_merge");
+        addBiasColsToGateAccum(A.db_i, db_catH.Data(), 0 * H);
+        addBiasColsToGateAccum(A.db_f, db_catH.Data(), 1 * H);
+        addBiasColsToGateAccum(A.db_g, db_catH.Data(), 2 * H);
+        addBiasColsToGateAccum(A.db_o, db_catH.Data(), 3 * H);
+    }
 
     {
         static size_t s_phase3RecurrentBackflowDiagCount = 0;
@@ -2824,6 +3002,7 @@ inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
                                      MetaNN::Matrix<AccumScalar, MetaNN::DeviceTags::Metal>& d_bias_accum,
                                      size_t H) const
 {
+    HotspotScope hotspot("gate_accumulator_split_merge");
     auto writeCols = [&](auto& dst, size_t colOffset, const auto& src){
         auto lowD = MetaNN::LowerAccess(dst); auto* dptr = lowD.MutableRawMemory();
         auto lowS = MetaNN::LowerAccess(src); const auto* sptr = lowS.RawMemory();
@@ -3175,6 +3354,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     std::array<Phase3LabelReturnSeparationStats, direction_output_size> phase3LabelReturnStats {};
     auto buildWindowBatch = [&](auto first, auto last) -> WindowBatch
     {
+        HotspotScope hotspot("window_batch_build");
 #if LSTM_BATCH_PROFILE
         LSTMScopedProfileTimer timer(profile.build_window_batch_us);
 #endif
@@ -5478,6 +5658,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 #if LSTM_USE_GRAD_CLIP
         if (gradsFinite)
         {
+            HotspotScope hotspot("gradient_clipping");
             ClipMatrixInPlace(d_param_f, LSTM_GRAD_CLIP_THRESHOLD, "d_param");
             ClipMatrixInPlace(d_bias_f, LSTM_GRAD_CLIP_THRESHOLD, "d_bias");
             ClipMatrixInPlace(d_headW_f, LSTM_GRAD_CLIP_THRESHOLD, "d_headW");
@@ -5846,8 +6027,11 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             }
             else
             {
-                SGDUpdate(param, d_param_f, lrCore);
-                SGDUpdate(bias,  d_bias_f,  lrCore);
+                {
+                    HotspotScope hotspot("optimizer_update");
+                    SGDUpdate(param, d_param_f, lrCore);
+                    SGDUpdate(bias,  d_bias_f,  lrCore);
+                }
                 if (targetType == TargetType::UpNeutralDownReturn) {
                     const double directionHeadWeightGradNorm = FroNormEvalHost(d_headDirW_f);
                     const double directionHeadBiasGradNorm = FroNormEvalHost(d_headDirB_f);
@@ -5905,13 +6089,17 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                     const auto dirBiasBeforeUpdate = DirectionBiasValues3(returnHeadDirBias);
                     PrintDirectionBiasByClassDiag(phase3ClipFullDiagIdx, "pre_update", dirBiasBeforeUpdate);
 
-                    SGDUpdate(returnHeadDirWeight, d_headDirW_f, directionHeadWeightLr);
-                    SGDUpdate(returnHeadDirBias, d_headDirB_f, directionHeadBiasLr);
+                    {
+                        HotspotScope hotspot("optimizer_update");
+                        SGDUpdate(returnHeadDirWeight, d_headDirW_f, directionHeadWeightLr);
+                        SGDUpdate(returnHeadDirBias, d_headDirB_f, directionHeadBiasLr);
+                    }
 
                     const auto dirBiasAfterUpdate = DirectionBiasValues3(returnHeadDirBias);
                     PrintDirectionBiasByClassDiag(phase3ClipFullDiagIdx, "post_update", dirBiasAfterUpdate);
                     PrintDirectionBiasDeltaByClassDiag(phase3ClipFullDiagIdx, dirBiasBeforeUpdate, dirBiasAfterUpdate);
                 } else {
+                    HotspotScope hotspot("optimizer_update");
                     SGDUpdate(returnHeadWeight, d_headW_f, lrHead);
                     SGDUpdate(returnHeadBias,   d_headB_f, lrHead);
                 }

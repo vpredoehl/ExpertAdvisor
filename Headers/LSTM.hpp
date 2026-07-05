@@ -30,6 +30,9 @@
 #endif
 #include <MetaNN/meta_nn.h>
 #include <array>
+#include <chrono>
+#include <optional>
+#include <string>
 #include <vector>
 #include <tuple>
 
@@ -167,6 +170,26 @@ public:
     std::vector<float> RollingPredictNextClose(const Window& batch, bool resetAtStart = true);
     
     static void PrintAndResetEpochBuckets();
+    static void ConfigureHotspotProfiler(bool enabled,
+                                         std::optional<std::string> outputPath = std::nullopt);
+    static bool HotspotProfilingEnabled();
+    static void RecordHotspot(const char* name, double elapsedUs);
+    static void PrintHotspotProfileSummary();
+    static bool WriteHotspotProfileReport(const std::string& outputPath);
+
+    class HotspotScope
+    {
+    public:
+        explicit HotspotScope(const char* name);
+        ~HotspotScope();
+        HotspotScope(const HotspotScope&) = delete;
+        HotspotScope& operator=(const HotspotScope&) = delete;
+
+    private:
+        const char* name_ = nullptr;
+        bool enabled_ = false;
+        std::chrono::steady_clock::time_point start_;
+    };
 private:
     using AccumScalar = float;
     

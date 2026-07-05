@@ -31,6 +31,7 @@ template <typename T, typename DevT>
 inline void FillConcatCols(MetaNN::Matrix<T, DevT>& out,
                            const std::vector<MetaNN::Matrix<T, DevT>>& mats)
 {
+    EA::LSTM::HotspotScope hotspot("concat_cols");
     const size_t rows = out.Shape()[0];
     const size_t totalCols = out.Shape()[1];
 

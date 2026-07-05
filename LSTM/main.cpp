@@ -3224,9 +3224,33 @@ struct LaunchArgs
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> inferStartAfterModelId;
     std::optional<RuntimeLogLevel> logLevel;
+    std::optional<std::string> lstmProfileOutputPath;
     bool evalTrading = false;
     bool inferAll = false;
     bool forceInfer = false;
+    bool lstmProfileHotspots = false;
+};
+
+struct LSTMHotspotProfileFinalizer
+{
+    bool enabled = false;
+    std::optional<std::string> outputPath;
+
+    ~LSTMHotspotProfileFinalizer()
+    {
+        if (!enabled)
+            return;
+
+        EA::LSTM::PrintHotspotProfileSummary();
+        if (outputPath.has_value())
+        {
+            const bool wrote = EA::LSTM::WriteHotspotProfileReport(*outputPath);
+            std::cout << "LSTM_PROFILE_REPORT"
+                      << ",path=" << *outputPath
+                      << ",written=" << (wrote ? 1 : 0)
+                      << std::endl;
+        }
+    }
 };
 
 long long ParseModelIdArg(const std::string& value)
@@ -3456,6 +3480,10 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         {
             parsed.forceInfer = true;
         }
+        else if (arg == "--lstm-profile-hotspots")
+        {
+            parsed.lstmProfileHotspots = true;
+        }
         else
         {
             std::string value;
@@ -3518,6 +3546,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.logLevel.has_value())
                     throw std::invalid_argument("--log-level specified more than once");
                 parsed.logLevel = ParseRuntimeLogLevel(value);
+            }
+            else if (SplitOptionWithValue(arg, "--lstm-profile-output", value))
+            {
+                if (parsed.lstmProfileOutputPath.has_value())
+                    throw std::invalid_argument("--lstm-profile-output specified more than once");
+                if (value.empty())
+                    throw std::invalid_argument("--lstm-profile-output requires a non-empty path");
+                parsed.lstmProfileOutputPath = value;
             }
             else if (SplitOptionWithValue(arg, "--symbol", value))
             {
@@ -3586,7 +3622,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -5816,11 +5852,18 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
     }
+
+    EA::LSTM::ConfigureHotspotProfiler(launchArgs.lstmProfileHotspots,
+                                       launchArgs.lstmProfileOutputPath);
+    LSTMHotspotProfileFinalizer hotspotProfileFinalizer{
+        launchArgs.lstmProfileHotspots,
+        launchArgs.lstmProfileOutputPath
+    };
 
     pqxx::connection c_forex { ForexDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { LstmDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };

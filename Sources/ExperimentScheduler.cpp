@@ -77,6 +77,8 @@ struct SchedulerOptions
     int schedulerPollSeconds = 30;
     std::string schedulerLogDir = "experiment_logs";
     std::string experimentReportDir = "experiment_reports";
+    bool lstmProfileHotspots = false;
+    std::optional<std::string> lstmProfileOutputPath;
     std::string selfPath;
 
     std::optional<std::string> symbol;
@@ -627,6 +629,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.force = true;
         else if (arg == "--scheduler-verbose")
             options.schedulerVerbose = true;
+        else if (arg == "--lstm-profile-hotspots")
+            options.lstmProfileHotspots = true;
         else if (arg == "--auto-generate-reports")
             options.autoGenerateReports = true;
         else if (arg == "--scheduler-once")
@@ -705,6 +709,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.leaderboardLimit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--log-level")
             options.logLevel = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--lstm-profile-output")
+            options.lstmProfileOutputPath = RequireNextArg(argc, argv, i, arg);
         else if (SplitOptionWithValue(arg, "--symbol", value))
             options.symbol = EA::CanonicalSymbol::Normalize(value);
         else if (SplitOptionWithValue(arg, "--prediction-horizon", value))
@@ -773,6 +779,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.leaderboardLimit = ParsePositiveInt("--leaderboard-limit", value);
         else if (SplitOptionWithValue(arg, "--log-level", value))
             options.logLevel = value;
+        else if (SplitOptionWithValue(arg, "--lstm-profile-output", value))
+        {
+            if (value.empty())
+                throw std::invalid_argument("--lstm-profile-output requires a non-empty path");
+            options.lstmProfileOutputPath = value;
+        }
         else if (SplitOptionWithValue(arg, "--experiment-metadata", value))
             options.experimentMetadataId = ParsePositiveLongLong("--experiment-metadata", value);
         else if (SplitOptionWithValue(arg, "--model", value))
@@ -2348,6 +2360,16 @@ void AddCliOption(std::vector<std::string>& argv,
     argv.push_back(optionName + "=" + value);
 }
 
+void AddLstmProfileOptions(std::vector<std::string>& argv,
+                           const SchedulerOptions& options)
+{
+    if (!options.lstmProfileHotspots)
+        return;
+    AddCliFlag(argv, "--lstm-profile-hotspots");
+    if (options.lstmProfileOutputPath.has_value())
+        AddCliOption(argv, "--lstm-profile-output", *options.lstmProfileOutputPath);
+}
+
 void AddCliPositional(std::vector<std::string>& argv, const std::string& value)
 {
     if (value.empty())
@@ -2475,6 +2497,7 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
     AddCliOption(argv, "--new-model-name", BaseModelName(experiment));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
+    AddLstmProfileOptions(argv, options);
 
     const std::optional<long long> resumeFrom =
         experiment.resumeModelId.has_value() ? experiment.resumeModelId : experiment.lastModelId;
@@ -2511,6 +2534,7 @@ std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(*experiment.lastModelId));
     AddCliOption(argv, "--log-level", "summary");
+    AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, experiment.inferStart->substr(0, 10));
     AddCliPositional(argv, experiment.inferEnd->substr(0, 10));
     return argv;
@@ -7804,6 +7828,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --schedule-experiments [--max-train-procs=N] [--max-infer-procs=N] "
         << "[--max-analyze-procs=N] [--scheduler-poll-seconds=N] [--scheduler-once] "
         << "[--scheduler-log-dir=PATH] [--auto-generate-reports] [--experiment-report-dir=PATH] "
+        << "[--lstm-profile-hotspots] [--lstm-profile-output=PATH] "
         << "[--scheduler-verbose] [--dry-run] [--recover-orphans-only]\n"
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
