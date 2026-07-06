@@ -3200,6 +3200,167 @@ void UpdateSchedulerExperimentProgress(const std::optional<long long>& experimen
     }
 }
 
+bool SchedulerExperimentColumnExists(pqxx::work& w, const std::string& columnName)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'experiment' AND column_name = $1 LIMIT 1;",
+        columnName);
+    return !rows.empty();
+}
+
+struct CheckpointStopConfig
+{
+    int requestedEpoch = 0;
+    int effectiveEpoch = 0;
+};
+
+std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional<long long>& experimentId,
+                                                             int startEpoch,
+                                                             int targetEpochs,
+                                                             const std::optional<int>& checkpointEvery)
+{
+    if (!experimentId.has_value() || !checkpointEvery.has_value() || *checkpointEvery <= 0)
+        return std::nullopt;
+
+    try
+    {
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        if (!SchedulerExperimentColumnExists(w, "stop_after_checkpoint_epoch"))
+        {
+            w.commit();
+            return std::nullopt;
+        }
+
+        pqxx::result rows = w.exec_params(
+            "SELECT stop_after_checkpoint_epoch FROM experiment WHERE experiment_id = $1;",
+            *experimentId);
+        w.commit();
+        if (rows.empty() || rows[0][0].is_null())
+            return std::nullopt;
+
+        const int requestedEpoch = rows[0][0].as<int>();
+        if (requestedEpoch <= 0)
+        {
+            std::cout << "CHECKPOINT_STOP_IGNORED"
+                      << " reason=invalid_requested_epoch"
+                      << " experiment_id=" << *experimentId
+                      << " requested_epoch=" << requestedEpoch
+                      << std::endl;
+            return std::nullopt;
+        }
+        if (requestedEpoch >= targetEpochs)
+        {
+            std::cout << "CHECKPOINT_STOP_IGNORED"
+                      << " reason=requested_epoch_not_before_target"
+                      << " experiment_id=" << *experimentId
+                      << " requested_epoch=" << requestedEpoch
+                      << " target_epochs=" << targetEpochs
+                      << std::endl;
+            return std::nullopt;
+        }
+
+        const int interval = *checkpointEvery;
+        int effectiveEpoch = ((requestedEpoch + interval - 1) / interval) * interval;
+        if (effectiveEpoch <= startEpoch)
+            effectiveEpoch = ((startEpoch + interval) / interval) * interval;
+        if (effectiveEpoch >= targetEpochs)
+        {
+            std::cout << "CHECKPOINT_STOP_IGNORED"
+                      << " reason=effective_epoch_not_before_target"
+                      << " experiment_id=" << *experimentId
+                      << " requested_epoch=" << requestedEpoch
+                      << " effective_epoch=" << effectiveEpoch
+                      << " target_epochs=" << targetEpochs
+                      << std::endl;
+            return std::nullopt;
+        }
+
+        std::cout << "CHECKPOINT_STOP_REQUESTED"
+                  << " experiment_id=" << *experimentId
+                  << " requested_epoch=" << requestedEpoch
+                  << " effective_epoch=" << effectiveEpoch
+                  << std::endl;
+        return CheckpointStopConfig{requestedEpoch, effectiveEpoch};
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "CHECKPOINT_STOP_IGNORED"
+                  << " reason=config_load_failed"
+                  << " experiment_id=" << *experimentId
+                  << " error=" << e.what()
+                  << std::endl;
+        return std::nullopt;
+    }
+}
+
+bool RecordCheckpointStopReached(const std::optional<long long>& experimentId,
+                                 int epoch,
+                                 long long modelId)
+{
+    if (!experimentId.has_value())
+        return false;
+
+    try
+    {
+        pqxx::connection c{LstmDbConnectionString()};
+        pqxx::work w{c};
+        w.exec("SET TRANSACTION READ WRITE;");
+        if (!SchedulerExperimentColumnExists(w, "stopped_at_checkpoint_epoch") ||
+            !SchedulerExperimentColumnExists(w, "stopped_at_checkpoint_model_id"))
+        {
+            w.commit();
+            std::cout << "CHECKPOINT_STOP_IGNORED"
+                      << " reason=migration_required"
+                      << " experiment_id=" << *experimentId
+                      << std::endl;
+            return false;
+        }
+
+        w.exec_params(
+            "UPDATE experiment "
+            "SET current_epoch = $1, "
+            "worker_pid = NULL, "
+            "current_operation = 'checkpoint_stopped', "
+            "stopped_at_checkpoint_epoch = $1, "
+            "stopped_at_checkpoint_model_id = $2, "
+            "last_model_id = $2, "
+            "status = 'pending', "
+            "phase = CASE WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL THEN 'infer' ELSE 'analyze' END, "
+            "exit_code = 0, "
+            "error_message = NULL, "
+            "updated_at = now() "
+            "WHERE experiment_id = $3 AND status = 'running' AND phase = 'train';",
+            epoch,
+            modelId,
+            *experimentId);
+        w.commit();
+
+        std::cout << "CHECKPOINT_STOP_REACHED"
+                  << " experiment_id=" << *experimentId
+                  << " epoch=" << epoch
+                  << " model_id=" << modelId
+                  << std::endl;
+        std::cout << "CHECKPOINT_STOP_ADVANCE_TO_INFER"
+                  << " experiment_id=" << *experimentId
+                  << " model_id=" << modelId
+                  << std::endl;
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "CHECKPOINT_STOP_IGNORED"
+                  << " reason=record_failed"
+                  << " experiment_id=" << *experimentId
+                  << " epoch=" << epoch
+                  << " model_id=" << modelId
+                  << " error=" << e.what()
+                  << std::endl;
+        return false;
+    }
+}
+
 struct LaunchArgs
 {
     std::string fromDate;
@@ -3998,30 +4159,30 @@ std::optional<long long> ParentModelIdForResume(const std::optional<ResumeCheckp
     return resumeConfig->sourceModelId;
 }
 
-void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
-                                 const std::optional<ResumeCheckpointConfig>& resumeConfig,
-                                 const std::string& rawPriceTableName,
-                                 const std::string& fromDate,
-                                 const std::string& toDate,
-                                 EA::LSTM& lstm)
+std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
+                                                     const std::optional<ResumeCheckpointConfig>& resumeConfig,
+                                                     const std::string& rawPriceTableName,
+                                                     const std::string& fromDate,
+                                                     const std::string& toDate,
+                                                     EA::LSTM& lstm)
 {
     if (!launchArgs.checkpointEvery.has_value() || *launchArgs.checkpointEvery <= 0)
-        return;
+        return std::nullopt;
     if (gRuntimeInferenceMode)
     {
         DiagnosticOut() << "CHECKPOINT_SAVE_SKIPPED reason=inference_mode" << std::endl;
-        return;
+        return std::nullopt;
     }
     if constexpr (!save_enable)
     {
         DiagnosticOut() << "CHECKPOINT_SAVE_SKIPPED reason=save_disabled" << std::endl;
-        return;
+        return std::nullopt;
     }
 
     const size_t completedEpoch = lstm.completedEpochs;
     const size_t checkpointEvery = static_cast<size_t>(*launchArgs.checkpointEvery);
     if (completedEpoch == 0 || completedEpoch % checkpointEvery != 0)
-        return;
+        return std::nullopt;
 
     const std::string baseName = CheckpointBaseModelName(launchArgs, resumeConfig, rawPriceTableName);
     const std::string requestedName = EpochCheckpointModelName(baseName, completedEpoch);
@@ -4054,6 +4215,7 @@ void SavePeriodicCheckpointIfDue(const LaunchArgs& launchArgs,
               << " model_id=" << checkpointModelId
               << " name=" << checkpointName
               << std::endl;
+    return checkpointModelId;
 }
 
 const char* DirectionLabelRuleName()
@@ -6247,6 +6409,12 @@ int main(int argc, const char * argv[])
                 const int startEpoch = resumeConfig.has_value()
                     ? static_cast<int>(resumeConfig->completedEpoch)
                     : 0;
+                const std::optional<CheckpointStopConfig> checkpointStopConfig =
+                    LoadCheckpointStopConfig(launchArgs.schedulerExperimentId,
+                                             startEpoch,
+                                             epoch_count,
+                                             launchArgs.checkpointEvery);
+                bool checkpointStopReached = false;
                 for(auto e = startEpoch; e < epoch_count; e++)
                 {
                     t.ForEachBatch( [&](auto b)
@@ -6307,13 +6475,35 @@ int main(int argc, const char * argv[])
                     UpdateSchedulerExperimentProgress(launchArgs.schedulerExperimentId,
                                                       static_cast<int>(e + 1),
                                                       "training");
-                    SavePeriodicCheckpointIfDue(launchArgs,
-                                                resumeConfig,
-                                                rawPriceTableName,
-                                                fromDate,
-                                                toDate,
-                                                l);
+                    const std::optional<long long> checkpointModelId =
+                        SavePeriodicCheckpointIfDue(launchArgs,
+                                                    resumeConfig,
+                                                    rawPriceTableName,
+                                                    fromDate,
+                                                    toDate,
+                                                    l);
+                    if (checkpointStopConfig.has_value() &&
+                        static_cast<int>(e + 1) >= checkpointStopConfig->effectiveEpoch)
+                    {
+                        if (!checkpointModelId.has_value())
+                        {
+                            std::cout << "CHECKPOINT_STOP_IGNORED"
+                                      << " reason=checkpoint_not_saved"
+                                      << " experiment_id=" << *launchArgs.schedulerExperimentId
+                                      << " epoch=" << (e + 1)
+                                      << std::endl;
+                        }
+                        else if (RecordCheckpointStopReached(launchArgs.schedulerExperimentId,
+                                                             static_cast<int>(e + 1),
+                                                             *checkpointModelId))
+                        {
+                            checkpointStopReached = true;
+                            break;
+                        }
+                    }
                 }
+                if (checkpointStopReached)
+                    return 0;
             // Persist trained model parameters to DB
             try
             {
