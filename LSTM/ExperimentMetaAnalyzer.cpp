@@ -406,6 +406,7 @@ std::vector<ExperimentRecord> LoadExperimentRecords(pqxx::work& w,
         << "e.created_at::text, e.completed_at::text "
         << "FROM experiment e "
         << "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+        << "AND COALESCE(a.analysis_scope, 'final') = 'final' "
         << "LEFT JOIN model m ON m.model_id = COALESCE(a.model_id, e.last_model_id) "
         << "WHERE 1=1 ";
     if (options.symbol.has_value())
@@ -579,6 +580,7 @@ long long CountDistinctCompletedModels(pqxx::work& w, const MetaAnalysisOptions&
     sql << "SELECT count(DISTINCT COALESCE(a.model_id, e.last_model_id)) "
         << "FROM experiment e "
         << "LEFT JOIN experiment_analysis_result a ON a.experiment_id = e.experiment_id "
+        << "AND COALESCE(a.analysis_scope, 'final') = 'final' "
         << "WHERE e.status = 'completed' "
         << "AND COALESCE(a.model_id, e.last_model_id) IS NOT NULL ";
     if (options.symbol.has_value())
