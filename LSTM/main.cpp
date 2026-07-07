@@ -3216,7 +3216,7 @@ struct CheckpointStopConfig
 };
 
 std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional<long long>& experimentId,
-                                                             int startEpoch,
+                                                             int checkpointEpoch,
                                                              int targetEpochs,
                                                              const std::optional<int>& checkpointEvery)
 {
@@ -3262,9 +3262,7 @@ std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional
         }
 
         const int interval = *checkpointEvery;
-        int effectiveEpoch = ((requestedEpoch + interval - 1) / interval) * interval;
-        if (effectiveEpoch <= startEpoch)
-            effectiveEpoch = ((startEpoch + interval) / interval) * interval;
+        const int effectiveEpoch = ((requestedEpoch + interval - 1) / interval) * interval;
         if (effectiveEpoch >= targetEpochs)
         {
             std::cout << "CHECKPOINT_STOP_IGNORED"
@@ -3276,11 +3274,20 @@ std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional
                       << std::endl;
             return std::nullopt;
         }
+        if (checkpointEpoch < effectiveEpoch)
+            return std::nullopt;
 
         std::cout << "CHECKPOINT_STOP_REQUESTED"
                   << " experiment_id=" << *experimentId
                   << " requested_epoch=" << requestedEpoch
                   << " effective_epoch=" << effectiveEpoch
+                  << " checkpoint_epoch=" << checkpointEpoch
+                  << std::endl;
+        std::cout << "CHECKPOINT_STOP_LIVE_REQUEST_DETECTED"
+                  << " experiment_id=" << *experimentId
+                  << " requested_epoch=" << requestedEpoch
+                  << " effective_epoch=" << effectiveEpoch
+                  << " checkpoint_epoch=" << checkpointEpoch
                   << std::endl;
         return CheckpointStopConfig{requestedEpoch, effectiveEpoch};
     }
@@ -6409,11 +6416,6 @@ int main(int argc, const char * argv[])
                 const int startEpoch = resumeConfig.has_value()
                     ? static_cast<int>(resumeConfig->completedEpoch)
                     : 0;
-                const std::optional<CheckpointStopConfig> checkpointStopConfig =
-                    LoadCheckpointStopConfig(launchArgs.schedulerExperimentId,
-                                             startEpoch,
-                                             epoch_count,
-                                             launchArgs.checkpointEvery);
                 bool checkpointStopReached = false;
                 for(auto e = startEpoch; e < epoch_count; e++)
                 {
@@ -6482,20 +6484,17 @@ int main(int argc, const char * argv[])
                                                     fromDate,
                                                     toDate,
                                                     l);
-                    if (checkpointStopConfig.has_value() &&
-                        static_cast<int>(e + 1) >= checkpointStopConfig->effectiveEpoch)
+                    if (checkpointModelId.has_value())
                     {
-                        if (!checkpointModelId.has_value())
-                        {
-                            std::cout << "CHECKPOINT_STOP_IGNORED"
-                                      << " reason=checkpoint_not_saved"
-                                      << " experiment_id=" << *launchArgs.schedulerExperimentId
-                                      << " epoch=" << (e + 1)
-                                      << std::endl;
-                        }
-                        else if (RecordCheckpointStopReached(launchArgs.schedulerExperimentId,
-                                                             static_cast<int>(e + 1),
-                                                             *checkpointModelId))
+                        const std::optional<CheckpointStopConfig> checkpointStopConfig =
+                            LoadCheckpointStopConfig(launchArgs.schedulerExperimentId,
+                                                     static_cast<int>(e + 1),
+                                                     epoch_count,
+                                                     launchArgs.checkpointEvery);
+                        if (checkpointStopConfig.has_value() &&
+                            RecordCheckpointStopReached(launchArgs.schedulerExperimentId,
+                                                        static_cast<int>(e + 1),
+                                                        *checkpointModelId))
                         {
                             checkpointStopReached = true;
                             break;
