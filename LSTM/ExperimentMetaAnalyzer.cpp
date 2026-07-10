@@ -504,6 +504,7 @@ std::vector<ExperimentRecord> LoadLegacyExperimentRecords(pqxx::work& w,
         << "         accept_model, pred_down, pred_neutral, pred_up "
         << "  FROM inference_eval_result "
         << "  WHERE status = 'completed' "
+        << "  AND inference_scope = 'final' AND checkpoint_eval_id IS NULL "
         << "  ORDER BY model_id, completed_at DESC, id DESC"
         << ") "
         << "SELECT m.model_id, "

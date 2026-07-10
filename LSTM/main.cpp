@@ -3719,6 +3719,7 @@ struct LaunchArgs
     std::optional<double> headBiasLrMult;
     std::optional<int> checkpointEvery;
     std::optional<long long> schedulerExperimentId;
+    std::optional<long long> schedulerCheckpointEvalId;
     std::optional<long long> inferStartAfterModelId;
     std::optional<RuntimeLogLevel> logLevel;
     std::optional<std::string> lstmProfileOutputPath;
@@ -3936,6 +3937,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--scheduler-experiment-id requires an experiment_id value");
             parsed.schedulerExperimentId = ParseModelIdArg(argv[++i]);
         }
+        else if (arg == "--scheduler-checkpoint-eval-id")
+        {
+            if (parsed.schedulerCheckpointEvalId.has_value())
+                throw std::invalid_argument("--scheduler-checkpoint-eval-id specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--scheduler-checkpoint-eval-id requires a checkpoint_eval_id value");
+            parsed.schedulerCheckpointEvalId = ParseModelIdArg(argv[++i]);
+        }
         else if (arg == "--log-level")
         {
             if (parsed.logLevel.has_value())
@@ -4038,6 +4047,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                     throw std::invalid_argument("--scheduler-experiment-id specified more than once");
                 parsed.schedulerExperimentId = ParseModelIdArg(value);
             }
+            else if (SplitOptionWithValue(arg, "--scheduler-checkpoint-eval-id", value))
+            {
+                if (parsed.schedulerCheckpointEvalId.has_value())
+                    throw std::invalid_argument("--scheduler-checkpoint-eval-id specified more than once");
+                parsed.schedulerCheckpointEvalId = ParseModelIdArg(value);
+            }
             else if (SplitOptionWithValue(arg, "--log-level", value))
             {
                 if (parsed.logLevel.has_value())
@@ -4087,6 +4102,8 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
 
     if (parsed.resumeModelId.has_value())
     {
+        if (parsed.schedulerCheckpointEvalId.has_value())
+            throw std::invalid_argument("--scheduler-checkpoint-eval-id cannot be combined with --resume-model-id");
         if (parsed.inferAll)
             throw std::invalid_argument("--infer-all cannot be combined with --resume-model-id");
         if (parsed.inferStartAfterModelId.has_value())
@@ -4108,6 +4125,23 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         throw std::invalid_argument("--infer-start-after-model-id requires --infer-all");
     if (parsed.forceInfer && !parsed.inferAll)
         throw std::invalid_argument("--force-infer requires --infer-all");
+    if (parsed.schedulerCheckpointEvalId.has_value())
+    {
+        if (!parsed.inferenceMode.has_value() || !*parsed.inferenceMode)
+            throw std::invalid_argument("--scheduler-checkpoint-eval-id requires explicit --infer");
+        if (!parsed.modelId.has_value())
+            throw std::invalid_argument("--scheduler-checkpoint-eval-id requires --model=<checkpoint_model_id>");
+        if (parsed.inferAll)
+            throw std::invalid_argument("--scheduler-checkpoint-eval-id cannot be combined with --infer-all");
+        if (parsed.schedulerExperimentId.has_value())
+            throw std::invalid_argument("--scheduler-checkpoint-eval-id cannot be combined with --scheduler-experiment-id");
+    }
+    if (parsed.schedulerExperimentId.has_value() &&
+        parsed.inferenceMode.has_value() && *parsed.inferenceMode &&
+        (!parsed.modelId.has_value() || parsed.inferAll))
+    {
+        throw std::invalid_argument("scheduler-managed final inference requires one explicit --model");
+    }
     if (parsed.inferAll)
     {
         if (!parsed.inferenceMode.has_value() || !*parsed.inferenceMode)
@@ -5496,6 +5530,194 @@ struct InferenceIdentity
     std::string toDate;
 };
 
+struct SchedulerInferencePersistenceContext
+{
+    std::string inferenceScope = "final";
+    long long modelId = -1;
+    std::optional<long long> schedulerExperimentId;
+    std::optional<long long> checkpointEvalId;
+    std::optional<long long> parentExperimentId;
+    std::optional<long long> checkpointModelId;
+    std::optional<int> checkpointEpoch;
+    std::string evalStatus = "unknown";
+};
+
+bool InferenceEvalResultScopeColumnsExist(pqxx::work& w)
+{
+    return SchedulerTableExists(w, "inference_eval_result") &&
+           SchedulerColumnExists(w, "inference_eval_result", "inference_scope") &&
+           SchedulerColumnExists(w, "inference_eval_result", "checkpoint_eval_id") &&
+           SchedulerColumnExists(w, "inference_eval_result", "parent_experiment_id") &&
+           SchedulerColumnExists(w, "inference_eval_result", "checkpoint_epoch");
+}
+
+std::string DatePrefix(const std::string& value)
+{
+    return value.substr(0, std::min<size_t>(10, value.size()));
+}
+
+void LogCheckpointInferencePersistenceFailure(
+    const SchedulerInferencePersistenceContext& context,
+    const std::string& error)
+{
+    std::cerr << "CHECKPOINT_INFER_RESULT_PERSIST_FAILED"
+              << ",checkpoint_eval_id=" << context.checkpointEvalId.value_or(-1)
+              << ",parent_experiment_id=" << context.parentExperimentId.value_or(-1)
+              << ",checkpoint_model_id=" << context.checkpointModelId.value_or(context.modelId)
+              << ",checkpoint_epoch=" << context.checkpointEpoch.value_or(-1)
+              << ",model_id=" << context.modelId
+              << ",inference_scope=checkpoint"
+              << ",status=" << context.evalStatus
+              << ",error=" << error
+              << std::endl;
+}
+
+SchedulerInferencePersistenceContext ResolveSchedulerInferencePersistenceContext(
+    pqxx::work& w,
+    const LaunchArgs& launchArgs,
+    const std::string& resolvedSymbol,
+    const std::string& fromDate,
+    const std::string& toDate)
+{
+    SchedulerInferencePersistenceContext context;
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        context.inferenceScope = "checkpoint";
+        context.checkpointEvalId = *launchArgs.schedulerCheckpointEvalId;
+    }
+    if (launchArgs.modelId.has_value())
+        context.modelId = *launchArgs.modelId;
+
+    if (!launchArgs.modelId.has_value())
+        throw std::runtime_error("scheduler inference persistence requires an explicit model_id");
+    if (!InferenceEvalResultScopeColumnsExist(w))
+    {
+        if (context.inferenceScope == "checkpoint")
+            LogCheckpointInferencePersistenceFailure(context, "migration_018_required");
+        throw std::runtime_error("migration 018 is required for scheduler inference persistence");
+    }
+
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        auto reject = [&](const std::string& error) -> void
+        {
+            LogCheckpointInferencePersistenceFailure(context, error);
+            throw std::runtime_error(error);
+        };
+
+        pqxx::result rows = w.exec_params(
+            "SELECT ce.checkpoint_eval_id, "
+            "COALESCE(ce.parent_experiment_id, ce.experiment_id), ce.experiment_id, "
+            "ce.checkpoint_model_id, ce.checkpoint_epoch, ce.status, ce.phase, "
+            "ce.symbol, ce.prediction_horizon, e.symbol, e.prediction_horizon, "
+            "e.c_next_threshold, e.infer_start::date::text, e.infer_end::date::text, "
+            "m.experiment_id, "
+            "(SELECT MAX(round(mx.value)::int) FROM matrix mx "
+            " WHERE mx.model_id = ce.checkpoint_model_id "
+            " AND mx.param_name = 'train_config_meta' "
+            " AND mx.row_idx = 0 AND mx.col_idx = 10) "
+            "FROM experiment_checkpoint_eval ce "
+            "JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
+            "JOIN model m ON m.model_id = ce.checkpoint_model_id "
+            "WHERE ce.checkpoint_eval_id = $1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty())
+            reject("checkpoint_eval_not_found");
+
+        const pqxx::row row = rows[0];
+        context.parentExperimentId = row[1].as<long long>();
+        const long long legacyExperimentId = row[2].as<long long>();
+        const long long checkpointModelId = row[3].as<long long>();
+        context.checkpointModelId = checkpointModelId;
+        context.checkpointEpoch = row[4].as<int>();
+        context.evalStatus = row[5].as<std::string>();
+        const std::string evalPhase = row[6].as<std::string>();
+        const std::optional<std::string> evalSymbol =
+            row[7].is_null() ? std::optional<std::string>{} :
+                               std::optional<std::string>{EA::CanonicalSymbol::Normalize(row[7].as<std::string>())};
+        const std::optional<int> evalHorizon =
+            row[8].is_null() ? std::optional<int>{} : std::optional<int>{row[8].as<int>()};
+        const std::string parentSymbol = EA::CanonicalSymbol::Normalize(row[9].as<std::string>());
+        const int parentHorizon = row[10].as<int>();
+        const double parentThreshold = row[11].as<double>();
+        const std::optional<std::string> parentInferStart =
+            row[12].is_null() ? std::optional<std::string>{} : std::optional<std::string>{row[12].as<std::string>()};
+        const std::optional<std::string> parentInferEnd =
+            row[13].is_null() ? std::optional<std::string>{} : std::optional<std::string>{row[13].as<std::string>()};
+        const std::optional<long long> modelExperimentId =
+            row[14].is_null() ? std::optional<long long>{} : std::optional<long long>{row[14].as<long long>()};
+        const std::optional<int> modelCompletedEpoch =
+            row[15].is_null() ? std::optional<int>{} : std::optional<int>{row[15].as<int>()};
+
+        if (checkpointModelId != context.modelId)
+            reject("checkpoint_model_id_mismatch");
+        if (legacyExperimentId != *context.parentExperimentId)
+            reject("checkpoint_parent_experiment_id_mismatch");
+        if (!modelExperimentId.has_value() || *modelExperimentId != *context.parentExperimentId)
+            reject("checkpoint_model_parent_experiment_id_mismatch");
+        if (evalPhase != "infer")
+            reject("checkpoint_eval_not_in_infer_phase");
+        if (context.evalStatus != "pending" && context.evalStatus != "running")
+            reject("checkpoint_eval_not_pending_or_running");
+        if (evalSymbol.has_value() && *evalSymbol != parentSymbol)
+            reject("checkpoint_eval_symbol_parent_mismatch");
+        if (evalHorizon.has_value() && *evalHorizon != parentHorizon)
+            reject("checkpoint_eval_horizon_parent_mismatch");
+        if (parentSymbol != EA::CanonicalSymbol::Normalize(resolvedSymbol))
+            reject("checkpoint_runtime_symbol_parent_mismatch");
+        if (parentHorizon != static_cast<int>(prediction_horizon))
+            reject("checkpoint_runtime_horizon_parent_mismatch");
+        if (std::fabs(parentThreshold - static_cast<double>(c_next_threshold)) > 1e-7)
+            reject("checkpoint_runtime_threshold_parent_mismatch");
+        if (!parentInferStart.has_value() || !parentInferEnd.has_value())
+            reject("checkpoint_parent_missing_infer_range");
+        if (*parentInferStart != DatePrefix(fromDate) || *parentInferEnd != DatePrefix(toDate))
+            reject("checkpoint_runtime_infer_range_parent_mismatch");
+        if (modelCompletedEpoch.has_value() && *modelCompletedEpoch != *context.checkpointEpoch)
+            reject("checkpoint_model_completed_epoch_mismatch");
+
+        return context;
+    }
+
+    if (!launchArgs.schedulerExperimentId.has_value())
+        throw std::runtime_error("missing scheduler inference identity");
+
+    context.schedulerExperimentId = *launchArgs.schedulerExperimentId;
+    pqxx::result rows = w.exec_params(
+        "SELECT e.experiment_id, e.last_model_id, e.status, e.phase, e.symbol, "
+        "e.prediction_horizon, e.c_next_threshold, e.infer_start::date::text, "
+        "e.infer_end::date::text, m.experiment_id "
+        "FROM experiment e "
+        "JOIN model m ON m.model_id = $2 "
+        "WHERE e.experiment_id = $1;",
+        *launchArgs.schedulerExperimentId,
+        *launchArgs.modelId);
+    if (rows.empty())
+        throw std::runtime_error("scheduler_final_experiment_not_found");
+    const pqxx::row row = rows[0];
+    if (row[1].is_null() || row[1].as<long long>() != context.modelId)
+        throw std::runtime_error("scheduler_final_model_id_mismatch");
+    context.evalStatus = row[2].as<std::string>();
+    if (context.evalStatus != "pending" && context.evalStatus != "running")
+        throw std::runtime_error("scheduler_final_experiment_not_pending_or_running");
+    if (row[3].as<std::string>() != "infer")
+        throw std::runtime_error("scheduler_final_experiment_not_in_infer_phase");
+    if (EA::CanonicalSymbol::Normalize(row[4].as<std::string>()) !=
+        EA::CanonicalSymbol::Normalize(resolvedSymbol))
+        throw std::runtime_error("scheduler_final_symbol_mismatch");
+    if (row[5].as<int>() != static_cast<int>(prediction_horizon))
+        throw std::runtime_error("scheduler_final_horizon_mismatch");
+    if (std::fabs(row[6].as<double>() - static_cast<double>(c_next_threshold)) > 1e-7)
+        throw std::runtime_error("scheduler_final_threshold_mismatch");
+    if (row[7].is_null() || row[8].is_null() ||
+        row[7].as<std::string>() != DatePrefix(fromDate) ||
+        row[8].as<std::string>() != DatePrefix(toDate))
+        throw std::runtime_error("scheduler_final_infer_range_mismatch");
+    if (row[9].is_null() || row[9].as<long long>() != *launchArgs.schedulerExperimentId)
+        throw std::runtime_error("scheduler_final_model_experiment_id_mismatch");
+    return context;
+}
+
 struct InferAllSkipDetail
 {
     std::string reason = "CONFIG_MISMATCH";
@@ -5540,22 +5762,13 @@ InferenceIdentity BuildInferenceIdentity(long long modelId,
     return identity;
 }
 
-bool InferenceEvalResultTableExists(pqxx::work& w)
-{
-    pqxx::result exists = w.exec(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_name = 'inference_eval_result' "
-        "LIMIT 1;");
-    return !exists.empty();
-}
-
 bool RequireInferenceEvalResultTable(pqxx::work& w)
 {
-    if (InferenceEvalResultTableExists(w))
+    if (InferenceEvalResultScopeColumnsExist(w))
         return true;
 
     std::cerr << "DATABASE_MIGRATION_REQUIRED"
-              << ",missing=inference_eval_result"
+              << ",missing=inference_eval_result_scope"
               << ",command=./migrate_lstm_db.sh"
               << std::endl;
     return false;
@@ -5572,7 +5785,8 @@ std::optional<InferAllSummaryRow> LoadCompletedInferenceResult(pqxx::work& w,
         "WHERE model_id = $1 AND symbol = $2 AND prediction_horizon = $3 "
         "AND threshold_logret = $4 AND window_size = $5 AND label_rule_id = $6 "
         "AND target_type = $7 AND from_date = $8 AND to_date = $9 "
-        "AND status = 'completed' "
+        "AND status = 'completed' AND inference_scope = 'final' "
+        "AND checkpoint_eval_id IS NULL "
         "ORDER BY completed_at DESC LIMIT 1;",
         identity.modelId,
         identity.symbol,
@@ -5609,22 +5823,6 @@ void PersistCompletedInferenceResult(pqxx::work& w,
                                       const InferenceIdentity& identity,
                                       const InferAllSummaryRow& row)
 {
-    w.exec_params(
-        "DELETE FROM inference_eval_result "
-        "WHERE model_id = $1 AND symbol = $2 AND prediction_horizon = $3 "
-        "AND threshold_logret = $4 AND window_size = $5 AND label_rule_id = $6 "
-        "AND target_type = $7 AND from_date = $8 AND to_date = $9 "
-        "AND status = 'completed';",
-        identity.modelId,
-        identity.symbol,
-        static_cast<long long>(identity.predictionHorizon),
-        identity.thresholdLogret,
-        static_cast<long long>(identity.windowSize),
-        identity.labelRuleId,
-        identity.targetType,
-        identity.fromDate,
-        identity.toDate);
-
     const long long completedEpochs = row.completedEpochs.has_value()
         ? static_cast<long long>(*row.completedEpochs)
         : -1;
@@ -5632,8 +5830,19 @@ void PersistCompletedInferenceResult(pqxx::work& w,
         "INSERT INTO inference_eval_result ("
         "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
         "from_date, to_date, completed_epochs, accuracy, accept_model, reject_reason, "
-        "pred_down, pred_neutral, pred_up, status, completed_at"
-        ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint, -1),$11,$12,$13,$14,$15,$16,'completed',now());",
+        "pred_down, pred_neutral, pred_up, status, completed_at, inference_scope, "
+        "checkpoint_eval_id, parent_experiment_id, checkpoint_epoch"
+        ") VALUES ("
+        "$1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint, -1),$11,$12,$13,$14,$15,$16,"
+        "'completed',now(),'final',NULL,NULL,NULL"
+        ") ON CONFLICT ("
+        "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, "
+        "target_type, from_date, to_date"
+        ") WHERE status = 'completed' AND inference_scope = 'final' DO UPDATE SET "
+        "completed_epochs = EXCLUDED.completed_epochs, accuracy = EXCLUDED.accuracy, "
+        "accept_model = EXCLUDED.accept_model, reject_reason = EXCLUDED.reject_reason, "
+        "pred_down = EXCLUDED.pred_down, pred_neutral = EXCLUDED.pred_neutral, "
+        "pred_up = EXCLUDED.pred_up, completed_at = now();",
         identity.modelId,
         identity.symbol,
         static_cast<long long>(identity.predictionHorizon),
@@ -5663,8 +5872,12 @@ void PersistFailedInferenceResult(pqxx::work& w,
     w.exec_params(
         "INSERT INTO inference_eval_result ("
         "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
-        "from_date, to_date, completed_epochs, reject_reason, status, completed_at"
-        ") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint, -1),$11,'failed',now());",
+        "from_date, to_date, completed_epochs, reject_reason, status, completed_at, inference_scope, "
+        "checkpoint_eval_id, parent_experiment_id, checkpoint_epoch"
+        ") VALUES ("
+        "$1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10::bigint, -1),$11,'failed',now(),"
+        "'final',NULL,NULL,NULL"
+        ");",
         identity.modelId,
         identity.symbol,
         static_cast<long long>(identity.predictionHorizon),
@@ -5676,6 +5889,106 @@ void PersistFailedInferenceResult(pqxx::work& w,
         identity.toDate,
         completedEpochs,
         error);
+}
+
+void PersistCompletedCheckpointInferenceResult(
+    pqxx::work& w,
+    const InferenceIdentity& identity,
+    const InferAllSummaryRow& row,
+    const SchedulerInferencePersistenceContext& context)
+{
+    if (context.inferenceScope != "checkpoint" ||
+        !context.checkpointEvalId.has_value() ||
+        !context.parentExperimentId.has_value() ||
+        !context.checkpointEpoch.has_value())
+    {
+        throw std::runtime_error("incomplete_checkpoint_inference_persistence_context");
+    }
+    if (identity.modelId != context.modelId)
+        throw std::runtime_error("checkpoint_persistence_model_id_mismatch");
+
+    pqxx::result existing = w.exec_params(
+        "SELECT id, model_id, parent_experiment_id, checkpoint_epoch, status "
+        "FROM inference_eval_result "
+        "WHERE checkpoint_eval_id = $1 AND inference_scope = 'checkpoint' "
+        "FOR UPDATE;",
+        *context.checkpointEvalId);
+    if (!existing.empty())
+    {
+        const bool identityMatches =
+            existing[0][1].as<long long>() == identity.modelId &&
+            !existing[0][2].is_null() &&
+            existing[0][2].as<long long>() == *context.parentExperimentId &&
+            !existing[0][3].is_null() &&
+            existing[0][3].as<int>() == *context.checkpointEpoch;
+        if (!identityMatches)
+            throw std::runtime_error("existing_checkpoint_inference_result_identity_mismatch");
+        if (existing[0][4].as<std::string>() == "completed")
+        {
+            std::cout << "CHECKPOINT_INFER_RESULT_DUPLICATE"
+                      << ",checkpoint_eval_id=" << *context.checkpointEvalId
+                      << ",parent_experiment_id=" << *context.parentExperimentId
+                      << ",checkpoint_model_id=" << context.checkpointModelId.value_or(context.modelId)
+                      << ",checkpoint_epoch=" << *context.checkpointEpoch
+                      << ",model_id=" << identity.modelId
+                      << ",inference_scope=checkpoint"
+                      << ",status=completed"
+                      << std::endl;
+            return;
+        }
+    }
+
+    const long long completedEpochs = row.completedEpochs.has_value()
+        ? static_cast<long long>(*row.completedEpochs)
+        : static_cast<long long>(*context.checkpointEpoch);
+    w.exec_params(
+        "INSERT INTO inference_eval_result ("
+        "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
+        "from_date, to_date, completed_epochs, accuracy, accept_model, reject_reason, "
+        "pred_down, pred_neutral, pred_up, status, completed_at, inference_scope, "
+        "checkpoint_eval_id, parent_experiment_id, checkpoint_epoch"
+        ") VALUES ("
+        "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,"
+        "'completed',now(),'checkpoint',$17,$18,$19"
+        ") ON CONFLICT (checkpoint_eval_id) WHERE inference_scope = 'checkpoint' DO UPDATE SET "
+        "model_id = EXCLUDED.model_id, symbol = EXCLUDED.symbol, "
+        "prediction_horizon = EXCLUDED.prediction_horizon, threshold_logret = EXCLUDED.threshold_logret, "
+        "window_size = EXCLUDED.window_size, label_rule_id = EXCLUDED.label_rule_id, "
+        "target_type = EXCLUDED.target_type, from_date = EXCLUDED.from_date, to_date = EXCLUDED.to_date, "
+        "completed_epochs = EXCLUDED.completed_epochs, accuracy = EXCLUDED.accuracy, "
+        "accept_model = EXCLUDED.accept_model, reject_reason = EXCLUDED.reject_reason, "
+        "pred_down = EXCLUDED.pred_down, pred_neutral = EXCLUDED.pred_neutral, "
+        "pred_up = EXCLUDED.pred_up, status = 'completed', completed_at = now(), "
+        "parent_experiment_id = EXCLUDED.parent_experiment_id, checkpoint_epoch = EXCLUDED.checkpoint_epoch;",
+        identity.modelId,
+        identity.symbol,
+        static_cast<long long>(identity.predictionHorizon),
+        identity.thresholdLogret,
+        static_cast<long long>(identity.windowSize),
+        identity.labelRuleId,
+        identity.targetType,
+        identity.fromDate,
+        identity.toDate,
+        completedEpochs,
+        row.accuracy,
+        row.acceptance.acceptModel,
+        row.acceptance.rejectReason,
+        row.acceptance.predFrac[0],
+        row.acceptance.predFrac[1],
+        row.acceptance.predFrac[2],
+        *context.checkpointEvalId,
+        *context.parentExperimentId,
+        *context.checkpointEpoch);
+
+    std::cout << "CHECKPOINT_INFER_RESULT_PERSISTED"
+              << ",checkpoint_eval_id=" << *context.checkpointEvalId
+              << ",parent_experiment_id=" << *context.parentExperimentId
+              << ",checkpoint_model_id=" << context.checkpointModelId.value_or(context.modelId)
+              << ",checkpoint_epoch=" << *context.checkpointEpoch
+              << ",model_id=" << identity.modelId
+              << ",inference_scope=checkpoint"
+              << ",status=completed"
+              << std::endl;
 }
 
 InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
@@ -6446,6 +6759,7 @@ int main(int argc, const char * argv[])
     w_LSTM.exec("SET TRANSACTION READ WRITE;");
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
     std::optional<ResumeCheckpointConfig> resumeConfig;
+    std::optional<SchedulerInferencePersistenceContext> schedulerInferenceContext;
 
     if (launchArgs.resumeModelId.has_value())
     {
@@ -6511,6 +6825,20 @@ int main(int argc, const char * argv[])
                                 << ",symbol=" << *launchArgs.symbol
                                 << std::endl;
             }
+        }
+
+        if (gRuntimeInferenceMode &&
+            (launchArgs.schedulerExperimentId.has_value() ||
+             launchArgs.schedulerCheckpointEvalId.has_value()))
+        {
+            if (!inferenceConfig.has_value())
+                throw std::runtime_error("scheduler inference could not resolve persisted model configuration");
+            schedulerInferenceContext = ResolveSchedulerInferencePersistenceContext(
+                w_LSTM,
+                launchArgs,
+                inferenceConfig->symbol,
+                fromDate,
+                toDate);
         }
 
         DiagnosticOut() << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
@@ -6716,17 +7044,77 @@ int main(int argc, const char * argv[])
 
             if (gRuntimeInferenceMode)
             {
-                (void)RunInferenceEvaluation(w_LSTM,
-                                             launchArgs,
-                                             l,
-                                             t,
-                                             loadedModelId,
-                                             loadSource,
-                                             requestedTargetType,
-                                             rawPriceTableName,
-                                             fromDate,
-                                             toDate,
-                                             false);
+                const InferenceEvaluationResult evaluation =
+                    RunInferenceEvaluation(w_LSTM,
+                                           launchArgs,
+                                           l,
+                                           t,
+                                           loadedModelId,
+                                           loadSource,
+                                           requestedTargetType,
+                                           rawPriceTableName,
+                                           fromDate,
+                                           toDate,
+                                           false);
+                if (schedulerInferenceContext.has_value())
+                {
+                    try
+                    {
+                        if (!loadedModelId.has_value() ||
+                            *loadedModelId != schedulerInferenceContext->modelId)
+                        {
+                            throw std::runtime_error("loaded_model_id_does_not_match_scheduler_inference_identity");
+                        }
+
+                        const InferenceIdentity identity =
+                            BuildInferenceIdentity(*loadedModelId,
+                                                   rawPriceTableName,
+                                                   requestedTargetType,
+                                                   fromDate,
+                                                   toDate);
+                        InferAllSummaryRow row;
+                        row.modelId = *loadedModelId;
+                        row.name = schedulerInferenceContext->inferenceScope + "-scheduler-inference";
+                        row.completedEpochs = evaluation.completedEpochs;
+                        row.accuracy = evaluation.accuracy;
+                        row.acceptance = evaluation.acceptance;
+
+                        if (schedulerInferenceContext->inferenceScope == "checkpoint")
+                        {
+                            PersistCompletedCheckpointInferenceResult(w_LSTM,
+                                                                      identity,
+                                                                      row,
+                                                                      *schedulerInferenceContext);
+                        }
+                        else
+                        {
+                            PersistCompletedInferenceResult(w_LSTM, identity, row);
+                            std::cout << "SCHEDULER_INFER_RESULT_PERSISTED"
+                                      << ",experiment_id="
+                                      << schedulerInferenceContext->schedulerExperimentId.value_or(-1)
+                                      << ",model_id=" << identity.modelId
+                                      << ",inference_scope=final"
+                                      << ",status=completed"
+                                      << std::endl;
+                        }
+                        w_LSTM.commit();
+                    }
+                    catch (const std::exception& e)
+                    {
+                        if (schedulerInferenceContext->inferenceScope == "checkpoint")
+                            LogCheckpointInferencePersistenceFailure(*schedulerInferenceContext, e.what());
+                        else
+                            std::cerr << "SCHEDULER_INFER_RESULT_PERSIST_FAILED"
+                                      << ",experiment_id="
+                                      << schedulerInferenceContext->schedulerExperimentId.value_or(-1)
+                                      << ",model_id=" << schedulerInferenceContext->modelId
+                                      << ",inference_scope=final"
+                                      << ",status=failed"
+                                      << ",error=" << e.what()
+                                      << std::endl;
+                        return 1;
+                    }
+                }
                 DiagnosticOut() << "runtime_infer=true; skipping model save" << std::endl;
                 break;
             }

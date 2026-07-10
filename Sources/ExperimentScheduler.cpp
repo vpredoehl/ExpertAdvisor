@@ -68,6 +68,7 @@ struct SchedulerOptions
     std::optional<long long> resumeExperimentId;
     std::optional<long long> cancelExperimentId;
     std::optional<long long> retryFailedExperimentId;
+    std::optional<long long> retryCheckpointEvalId;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -566,6 +567,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--resume-experiment" ||
             arg == "--cancel-experiment" ||
             arg == "--retry-failed-experiment" ||
+            arg == "--retry-checkpoint-eval" ||
             arg == "--requeue-analysis" ||
             arg == "--requeue-inference" ||
             arg == "--stop-after-checkpoint" ||
@@ -589,6 +591,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--resume-experiment=", 0) == 0 ||
             arg.rfind("--cancel-experiment=", 0) == 0 ||
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
+            arg.rfind("--retry-checkpoint-eval=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
             arg.rfind("--requeue-inference=", 0) == 0 ||
             arg.rfind("--stop-after-checkpoint=", 0) == 0 ||
@@ -983,6 +986,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.cancelExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--retry-failed-experiment")
             options.retryFailedExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--retry-checkpoint-eval")
+            options.retryCheckpointEvalId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1147,6 +1152,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.cancelExperimentId = ParsePositiveLongLong("--cancel-experiment", value);
         else if (SplitOptionWithValue(arg, "--retry-failed-experiment", value))
             options.retryFailedExperimentId = ParsePositiveLongLong("--retry-failed-experiment", value);
+        else if (SplitOptionWithValue(arg, "--retry-checkpoint-eval", value))
+            options.retryCheckpointEvalId = ParsePositiveLongLong("--retry-checkpoint-eval", value);
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -1264,6 +1271,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.resumeExperimentId.has_value() ? 1 : 0) +
         (options.cancelExperimentId.has_value() ? 1 : 0) +
         (options.retryFailedExperimentId.has_value() ? 1 : 0) +
+        (options.retryCheckpointEvalId.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2878,6 +2886,104 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
     return 0;
 }
 
+int RunRetryCheckpointEvalCommand(const SchedulerOptions& options)
+{
+    if (!options.retryCheckpointEvalId.has_value())
+        throw std::invalid_argument("missing checkpoint_eval_id for retry");
+
+    pqxx::connection c{LstmDbConnectionString()};
+    pqxx::work w{c};
+    if (!options.dryRun)
+        SetTransactionReadWrite(w);
+    if (!TableExists(w, "experiment_checkpoint_eval"))
+    {
+        std::cerr << "DATABASE_MIGRATION_REQUIRED"
+                  << ",missing=experiment_checkpoint_eval"
+                  << ",command=./migrate_lstm_db.sh"
+                  << std::endl;
+        return 2;
+    }
+
+    std::ostringstream selectSql;
+    selectSql
+        << "SELECT checkpoint_eval_id, COALESCE(parent_experiment_id, experiment_id), "
+        << "checkpoint_model_id, checkpoint_epoch, status, phase "
+        << "FROM experiment_checkpoint_eval "
+        << "WHERE checkpoint_eval_id = $1";
+    if (!options.dryRun)
+        selectSql << " FOR UPDATE";
+    selectSql << ";";
+    pqxx::result rows = w.exec_params(selectSql.str(), *options.retryCheckpointEvalId);
+    if (rows.empty())
+    {
+        std::cerr << "CHECKPOINT_EVAL_RETRY_REJECTED"
+                  << ",checkpoint_eval_id=" << *options.retryCheckpointEvalId
+                  << ",reason=checkpoint_eval_not_found"
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+
+    const long long checkpointEvalId = rows[0][0].as<long long>();
+    const long long parentExperimentId = rows[0][1].as<long long>();
+    const long long checkpointModelId = rows[0][2].as<long long>();
+    const int checkpointEpoch = rows[0][3].as<int>();
+    const std::string status = rows[0][4].as<std::string>();
+    const std::string phase = rows[0][5].as<std::string>();
+    if (status != "failed")
+    {
+        std::cerr << "CHECKPOINT_EVAL_RETRY_REJECTED"
+                  << ",checkpoint_eval_id=" << checkpointEvalId
+                  << ",parent_experiment_id=" << parentExperimentId
+                  << ",checkpoint_model_id=" << checkpointModelId
+                  << ",checkpoint_epoch=" << checkpointEpoch
+                  << ",status=" << status
+                  << ",phase=" << phase
+                  << ",reason=retry_requires_failed_status"
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+    if (phase != "infer")
+    {
+        std::cerr << "CHECKPOINT_EVAL_RETRY_REJECTED"
+                  << ",checkpoint_eval_id=" << checkpointEvalId
+                  << ",parent_experiment_id=" << parentExperimentId
+                  << ",checkpoint_model_id=" << checkpointModelId
+                  << ",checkpoint_epoch=" << checkpointEpoch
+                  << ",status=" << status
+                  << ",phase=" << phase
+                  << ",reason=retry_requires_failed_infer_phase"
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+
+    if (!options.dryRun)
+    {
+        w.exec_params(
+            "UPDATE experiment_checkpoint_eval "
+            "SET status = 'pending', phase = 'infer', worker_pid = NULL, "
+            "started_at = NULL, completed_at = NULL, infer_started_at = NULL, "
+            "infer_completed_at = NULL, analyze_started_at = NULL, analyze_completed_at = NULL, "
+            "analysis_id = NULL, analysis_log_path = NULL, error_message = NULL, updated_at = now() "
+            "WHERE checkpoint_eval_id = $1;",
+            checkpointEvalId);
+    }
+    w.commit();
+
+    std::cout << "CHECKPOINT_EVAL_RETRY_REQUESTED"
+              << ",checkpoint_eval_id=" << checkpointEvalId
+              << ",parent_experiment_id=" << parentExperimentId
+              << ",checkpoint_model_id=" << checkpointModelId
+              << ",checkpoint_epoch=" << checkpointEpoch
+              << ",model_id=" << checkpointModelId
+              << ",inference_scope=checkpoint"
+              << ",status=" << (options.dryRun ? "dry_run" : "pending")
+              << std::endl;
+    return 0;
+}
+
 bool HasCheckpointControlCommand(const SchedulerOptions& options)
 {
     return options.stopAfterCheckpoint.has_value() ||
@@ -3717,6 +3823,7 @@ std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
     argv.push_back(options.selfPath);
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(*experiment.lastModelId));
+    AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, experiment.inferStart->substr(0, 10));
@@ -3761,6 +3868,7 @@ std::vector<std::string> BuildCheckpointEvalInferCommand(const SchedulerOptions&
     argv.push_back(options.selfPath);
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(eval.checkpointModelId));
+    AddCliOption(argv, "--scheduler-checkpoint-eval-id", std::to_string(eval.checkpointEvalId));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, eval.experiment.inferStart->substr(0, 10));
@@ -4360,6 +4468,8 @@ bool ApplyStructuredInferenceMetrics(pqxx::work& w,
         "AND from_date = $5 "
         "AND to_date = $6 "
         "AND status = 'completed' "
+        "AND inference_scope = 'final' "
+        "AND checkpoint_eval_id IS NULL "
         "ORDER BY completed_at DESC LIMIT 1;",
         *experiment.lastModelId,
         experiment.symbol,
@@ -4406,6 +4516,8 @@ bool HasCompletedInferenceResult(pqxx::work& w,
         "AND from_date = $5 "
         "AND to_date = $6 "
         "AND status = 'completed' "
+        "AND inference_scope = 'final' "
+        "AND checkpoint_eval_id IS NULL "
         "LIMIT 1;",
         *experiment.lastModelId,
         experiment.symbol,
@@ -4414,6 +4526,63 @@ bool HasCompletedInferenceResult(pqxx::work& w,
         experiment.inferStart->substr(0, 10),
         experiment.inferEnd->substr(0, 10));
     return !rows.empty();
+}
+
+std::optional<long long> FindCompletedCheckpointInferenceResultId(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval)
+{
+    if (!TableExists(w, "inference_eval_result") ||
+        !ColumnExists(w, "inference_eval_result", "checkpoint_eval_id"))
+    {
+        return std::nullopt;
+    }
+
+    pqxx::result rows = w.exec_params(
+        "SELECT id "
+        "FROM inference_eval_result "
+        "WHERE checkpoint_eval_id = $1 "
+        "AND model_id = $2 "
+        "AND inference_scope = 'checkpoint' "
+        "AND status = 'completed' "
+        "LIMIT 1;",
+        eval.checkpointEvalId,
+        eval.checkpointModelId);
+    if (rows.empty())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+bool ApplyStructuredCheckpointInferenceMetrics(pqxx::work& w,
+                                               const CheckpointEvalRow& eval,
+                                               ParsedMetrics& metrics)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT accuracy, accept_model, COALESCE(reject_reason, ''), completed_epochs "
+        "FROM inference_eval_result "
+        "WHERE checkpoint_eval_id = $1 "
+        "AND model_id = $2 "
+        "AND inference_scope = 'checkpoint' "
+        "AND status = 'completed' "
+        "LIMIT 1;",
+        eval.checkpointEvalId,
+        eval.checkpointModelId);
+    if (rows.empty())
+        return false;
+
+    if (!rows[0][0].is_null())
+        metrics.inferAccuracy = rows[0][0].as<double>();
+    if (!rows[0][1].is_null())
+        metrics.acceptModel = rows[0][1].as<bool>();
+    const std::string rejectReason = rows[0][2].as<std::string>();
+    if (!rejectReason.empty())
+        metrics.rejectReason = rejectReason;
+    if (!rows[0][3].is_null())
+        metrics.completedEpochs = rows[0][3].as<int>();
+    metrics.modelId = eval.checkpointModelId;
+    metrics.acceptAccuracy = metrics.inferAccuracy;
+    metrics.acceptRate = metrics.acceptModel.has_value() && *metrics.acceptModel ? 1.0 : 0.0;
+    return true;
 }
 
 bool HasCompletedAnalysisResult(pqxx::work& w,
@@ -7229,6 +7398,63 @@ int CountRows(pqxx::work& w, const std::string& sql)
     return w.exec(sql).one_row()[0].as<int>();
 }
 
+void LogCheckpointEvalInferenceResultFound(const CheckpointEvalRow& eval,
+                                           long long inferenceResultId)
+{
+    std::cout << "CHECKPOINT_EVAL_INFER_RESULT_FOUND"
+              << ",checkpoint_eval_id=" << eval.checkpointEvalId
+              << ",parent_experiment_id=" << eval.experiment.experimentId
+              << ",checkpoint_model_id=" << eval.checkpointModelId
+              << ",checkpoint_epoch=" << eval.checkpointEpoch
+              << ",model_id=" << eval.checkpointModelId
+              << ",inference_scope=checkpoint"
+              << ",status=completed"
+              << ",inference_result_id=" << inferenceResultId
+              << std::endl;
+}
+
+void AdvanceCheckpointEvalToAnalyze(pqxx::work& w,
+                                    const CheckpointEvalRow& eval,
+                                    long long inferenceResultId,
+                                    bool hasInferCompletedAt)
+{
+    LogCheckpointEvalInferenceResultFound(eval, inferenceResultId);
+    std::ostringstream sql;
+    sql << "UPDATE experiment_checkpoint_eval "
+        << "SET status = 'pending', phase = 'analyze', worker_pid = NULL, "
+        << "completed_at = NULL, error_message = NULL, updated_at = now()";
+    if (hasInferCompletedAt)
+        sql << ", infer_completed_at = COALESCE(infer_completed_at, now())";
+    sql << " WHERE checkpoint_eval_id = $1;";
+    w.exec_params(sql.str(), eval.checkpointEvalId);
+
+    std::cout << "CHECKPOINT_EVAL_ADVANCED_TO_ANALYZE"
+              << ",checkpoint_eval_id=" << eval.checkpointEvalId
+              << ",parent_experiment_id=" << eval.experiment.experimentId
+              << ",checkpoint_model_id=" << eval.checkpointModelId
+              << ",checkpoint_epoch=" << eval.checkpointEpoch
+              << ",model_id=" << eval.checkpointModelId
+              << ",inference_scope=checkpoint"
+              << ",status=pending"
+              << ",inference_result_id=" << inferenceResultId
+              << std::endl;
+}
+
+void LogCheckpointEvalInferenceResultMissing(const CheckpointEvalRow& eval,
+                                             const std::string& error)
+{
+    std::cout << "CHECKPOINT_EVAL_INFER_RESULT_MISSING"
+              << ",checkpoint_eval_id=" << eval.checkpointEvalId
+              << ",parent_experiment_id=" << eval.experiment.experimentId
+              << ",checkpoint_model_id=" << eval.checkpointModelId
+              << ",checkpoint_epoch=" << eval.checkpointEpoch
+              << ",model_id=" << eval.checkpointModelId
+              << ",inference_scope=checkpoint"
+              << ",status=missing"
+              << ",error=" << error
+              << std::endl;
+}
+
 int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
 {
     pqxx::connection c{LstmDbConnectionString()};
@@ -7245,24 +7471,20 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
     {
         if (SchedulerPidStillExists(eval.workerPid))
             continue;
-        if (HasCompletedInferenceResult(w, eval.experiment))
+        const std::optional<long long> inferenceResultId =
+            FindCompletedCheckpointInferenceResultId(w, eval);
+        if (inferenceResultId.has_value())
         {
-            std::ostringstream sql;
-            sql << "UPDATE experiment_checkpoint_eval "
-                << "SET status = 'pending', phase = 'analyze', worker_pid = NULL, completed_at = now(), updated_at = now()";
-            if (hasInferCompletedAt)
-                sql << ", infer_completed_at = now()";
-            sql << " WHERE checkpoint_eval_id = $1;";
-            w.exec_params(sql.str(), eval.checkpointEvalId);
-            std::cout << "CHECKPOINT_EVAL_COMPLETED"
-                      << " experiment_id=" << eval.experiment.experimentId
-                      << " phase=infer"
-                      << " epoch=" << eval.checkpointEpoch
-                      << " model_id=" << eval.checkpointModelId
-                      << std::endl;
+            AdvanceCheckpointEvalToAnalyze(w,
+                                           eval,
+                                           *inferenceResultId,
+                                           hasInferCompletedAt);
         }
         else
         {
+            LogCheckpointEvalInferenceResultMissing(
+                eval,
+                "infer_worker_exited_without_completed_result");
             w.exec_params(
                 "UPDATE experiment_checkpoint_eval "
                 "SET status = 'failed', worker_pid = NULL, completed_at = now(), updated_at = now(), "
@@ -7314,21 +7536,14 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
                       << std::endl;
             continue;
         }
-        if (HasCompletedInferenceResult(w, eval.experiment))
+        const std::optional<long long> inferenceResultId =
+            FindCompletedCheckpointInferenceResultId(w, eval);
+        if (inferenceResultId.has_value())
         {
-            std::ostringstream sql;
-            sql << "UPDATE experiment_checkpoint_eval "
-                << "SET phase = 'analyze', updated_at = now()";
-            if (hasInferCompletedAt)
-                sql << ", infer_completed_at = COALESCE(infer_completed_at, now())";
-            sql << " WHERE checkpoint_eval_id = $1;";
-            w.exec_params(sql.str(), eval.checkpointEvalId);
-            std::cout << "CHECKPOINT_EVAL_COMPLETED"
-                      << " experiment_id=" << eval.experiment.experimentId
-                      << " phase=infer"
-                      << " epoch=" << eval.checkpointEpoch
-                      << " model_id=" << eval.checkpointModelId
-                      << std::endl;
+            AdvanceCheckpointEvalToAnalyze(w,
+                                           eval,
+                                           *inferenceResultId,
+                                           hasInferCompletedAt);
             continue;
         }
 
@@ -7439,8 +7654,11 @@ int RunCheckpointEvalAnalyzeJobs(const SchedulerOptions& options)
             sql << " WHERE checkpoint_eval_id = $1;";
             w.exec_params(sql.str(), eval.checkpointEvalId);
         }
-        if (!HasCompletedInferenceResult(w, eval.experiment))
+        const std::optional<long long> inferenceResultId =
+            FindCompletedCheckpointInferenceResultId(w, eval);
+        if (!inferenceResultId.has_value())
         {
+            LogCheckpointEvalInferenceResultMissing(eval, "missing_completed_checkpoint_inference");
             std::ostringstream sql;
             sql << "UPDATE experiment_checkpoint_eval "
                 << "SET status = 'failed', completed_at = now(), updated_at = now(), error_message = 'missing_completed_inference'";
@@ -7462,7 +7680,8 @@ int RunCheckpointEvalAnalyzeJobs(const SchedulerOptions& options)
         ParsedMetrics metrics;
         metrics.modelId = eval.checkpointModelId;
         ApplyPersistedSymbolToAnalysisExperiment(w, eval.experiment, metrics);
-        (void)ApplyStructuredInferenceMetrics(w, eval.experiment, metrics);
+        if (!ApplyStructuredCheckpointInferenceMetrics(w, eval, metrics))
+            throw std::runtime_error("checkpoint inference result disappeared during analysis");
         const std::optional<double> leaderScore = ComputeLeaderScore(metrics);
         AnalysisScopeOptions analysisScope;
         analysisScope.scope = "checkpoint";
@@ -8756,6 +8975,7 @@ ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
         "SELECT from_date::text, to_date::text, completed_epochs "
         "FROM inference_eval_result "
         "WHERE model_id = $1 AND status = 'completed' "
+        "AND inference_scope = 'final' AND checkpoint_eval_id IS NULL "
         "ORDER BY completed_at DESC, id DESC "
         "LIMIT 1;",
         modelId);
@@ -9189,6 +9409,7 @@ std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
         << "  SELECT model_id, MAX(completed_epochs) AS completed_epochs "
         << "  FROM inference_eval_result "
         << "  WHERE completed_epochs IS NOT NULL AND status = 'completed' "
+        << "  AND inference_scope = 'final' AND checkpoint_eval_id IS NULL "
         << "  GROUP BY model_id"
         << "), train_meta AS ("
         << "  SELECT model_id, MAX(round(value)::int) AS completed_epochs "
@@ -9306,6 +9527,7 @@ std::optional<SchedulerStatusJob> LoadSchedulerStatusJobById(pqxx::work& w, long
         << "  SELECT model_id, MAX(completed_epochs) AS completed_epochs "
         << "  FROM inference_eval_result "
         << "  WHERE completed_epochs IS NOT NULL AND status = 'completed' "
+        << "  AND inference_scope = 'final' AND checkpoint_eval_id IS NULL "
         << "  GROUP BY model_id"
         << "), train_meta AS ("
         << "  SELECT model_id, MAX(round(value)::int) AS completed_epochs "
@@ -10558,6 +10780,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--retry-failed-experiment=ID | --requeue-inference=ID | --requeue-analysis=ID "
         << "[--dry-run] [--yes]\n"
         << "Usage: " << exe
+        << " --retry-checkpoint-eval=CHECKPOINT_EVAL_ID [--dry-run]\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -10616,6 +10840,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunScheduler(options);
         if (options.stopExperimentId.has_value() || options.stopAllExperiments)
             return RunStopExperimentCommand(options);
+        if (options.retryCheckpointEvalId.has_value())
+            return RunRetryCheckpointEvalCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);
         if (options.schedulerStatus)
