@@ -2,6 +2,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -70,6 +71,12 @@ struct SchedulerOptions
     std::optional<long long> retryFailedExperimentId;
     std::optional<long long> retryCheckpointEvalId;
     std::optional<long long> evaluateCheckpointPolicyEvalId;
+    std::optional<long long> enableContinuationPolicyExperimentId;
+    std::optional<long long> disableContinuationPolicyExperimentId;
+    std::optional<std::pair<long long, std::string>> setContinuationPolicy;
+    std::optional<long long> evaluateContinuationExperimentId;
+    std::optional<long long> queueContinuationExperimentId;
+    std::optional<long long> continuationStatusExperimentId;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -94,6 +101,7 @@ struct SchedulerOptions
     std::string checkpointPolicyStopMode = "next_checkpoint";
     int checkpointPolicyGraceEvals = 1;
     std::set<std::string> checkpointPolicySetKeys;
+    bool queueContinuationCandidateExcluded = false;
     bool help = false;
     bool dryRun = false;
     bool yes = false;
@@ -550,6 +558,88 @@ struct CheckpointPolicyEvaluationResult
     std::string reason;
 };
 
+struct ContinuationPolicyConfig
+{
+    long long sourceExperimentId = -1;
+    ExperimentRow source;
+    std::string status;
+    std::string phase;
+    bool enabled = false;
+    std::optional<int> targetEpochs;
+    int minEvals = 2;
+    int patience = 2;
+    std::optional<double> minLeaderScore;
+    std::optional<double> minInferAccuracy;
+    std::optional<double> minImprovement;
+    std::optional<double> maxDegradation;
+    std::optional<int> topN;
+    std::string scope = "symbol_horizon";
+    std::string trendMode = "none";
+    std::string sourceMode = "best_checkpoint";
+    bool includeExcluded = false;
+    bool candidateExcluded = false;
+    long long policyRevision = 1;
+    std::optional<std::string> lastDecision;
+    std::optional<std::string> lastReason;
+    std::optional<long long> selectedModelId;
+    std::optional<long long> queuedExperimentId;
+    std::optional<long long> continuationSourceExperimentId;
+    std::optional<long long> continuationSourceModelId;
+    std::optional<int> continuationSourceEpoch;
+    std::optional<long long> continuationDecisionId;
+    int continuationGeneration = 1;
+};
+
+struct ContinuationPolicyUpdate
+{
+    std::set<std::string> keys;
+    std::optional<int> targetEpochs;
+    int minEvals = 2;
+    int patience = 2;
+    std::optional<double> minLeaderScore;
+    std::optional<double> minInferAccuracy;
+    std::optional<double> minImprovement;
+    std::optional<double> maxDegradation;
+    std::optional<int> topN;
+    std::string scope = "symbol_horizon";
+    std::string trendMode = "none";
+    std::string sourceMode = "best_checkpoint";
+    bool includeExcluded = false;
+    bool candidateExcluded = false;
+};
+
+struct ContinuationEvidence
+{
+    long long analysisId = -1;
+    std::optional<long long> checkpointEvalId;
+    long long modelId = -1;
+    int completedEpoch = 0;
+    std::optional<double> leaderScore;
+    std::optional<double> inferAccuracy;
+    std::optional<bool> acceptModel;
+    std::string analysisScope;
+    std::string completedAt;
+    std::string updatedAt;
+};
+
+struct ContinuationEvaluation
+{
+    bool persisted = false;
+    bool reused = false;
+    bool alreadyQueued = false;
+    long long decisionId = -1;
+    std::string decision = "skipped";
+    std::string reason;
+    ContinuationEvidence selected;
+    int evidenceCount = 0;
+    std::optional<int> rankValue;
+    std::optional<std::string> trendMetric;
+    std::optional<double> trendValue;
+    std::string policyHash;
+    std::string evidenceWatermark;
+    std::optional<long long> queuedExperimentId;
+};
+
 bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
 {
     for (int i = 1; i < argc; ++i)
@@ -580,6 +670,12 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--retry-failed-experiment" ||
             arg == "--retry-checkpoint-eval" ||
             arg == "--evaluate-checkpoint-policy" ||
+            arg == "--enable-continuation-policy" ||
+            arg == "--disable-continuation-policy" ||
+            arg == "--set-continuation-policy" ||
+            arg == "--evaluate-continuation" ||
+            arg == "--queue-continuation" ||
+            arg == "--continuation-status" ||
             arg == "--requeue-analysis" ||
             arg == "--requeue-inference" ||
             arg == "--stop-after-checkpoint" ||
@@ -605,6 +701,12 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
             arg.rfind("--retry-checkpoint-eval=", 0) == 0 ||
             arg.rfind("--evaluate-checkpoint-policy=", 0) == 0 ||
+            arg.rfind("--enable-continuation-policy=", 0) == 0 ||
+            arg.rfind("--disable-continuation-policy=", 0) == 0 ||
+            arg.rfind("--set-continuation-policy=", 0) == 0 ||
+            arg.rfind("--evaluate-continuation=", 0) == 0 ||
+            arg.rfind("--queue-continuation=", 0) == 0 ||
+            arg.rfind("--continuation-status=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
             arg.rfind("--requeue-inference=", 0) == 0 ||
             arg.rfind("--stop-after-checkpoint=", 0) == 0 ||
@@ -867,6 +969,40 @@ double ParsePositiveFiniteDouble(const std::string& optionName, const std::strin
     return parsed;
 }
 
+double ParseFiniteDouble(const std::string& optionName, const std::string& value)
+{
+    size_t consumed = 0;
+    double parsed = 0.0;
+    try
+    {
+        parsed = std::stod(value, &consumed);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'");
+    }
+    if (consumed != value.size() || !std::isfinite(parsed))
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'");
+    return parsed;
+}
+
+double ParseNonNegativeFiniteDouble(const std::string& optionName, const std::string& value)
+{
+    const double parsed = ParseFiniteDouble(optionName, value);
+    if (parsed < 0.0)
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'");
+    return parsed;
+}
+
+bool ParseBoolean(const std::string& optionName, const std::string& value)
+{
+    if (value == "true" || value == "1")
+        return true;
+    if (value == "false" || value == "0")
+        return false;
+    throw std::invalid_argument("invalid " + optionName + " value '" + value + "'; expected true or false");
+}
+
 std::pair<long long, std::string> ParseExperimentConfigPair(const std::string& optionName,
                                                             const std::string& value)
 {
@@ -1045,6 +1181,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.retryCheckpointEvalId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--evaluate-checkpoint-policy")
             options.evaluateCheckpointPolicyEvalId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--enable-continuation-policy")
+            options.enableContinuationPolicyExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--disable-continuation-policy")
+            options.disableContinuationPolicyExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--set-continuation-policy")
+            options.setContinuationPolicy = ParseExperimentConfigPair(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--evaluate-continuation")
+            options.evaluateContinuationExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--queue-continuation")
+            options.queueContinuationExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--continuation-status")
+            options.continuationStatusExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1081,6 +1229,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (arg == "--checkpoint-policy")
             options.queueCheckpointPolicy = true;
+        else if (arg == "--continuation-candidate-excluded")
+            options.queueContinuationCandidateExcluded = true;
         else if (arg == "--checkpoint-policy-min-leader-score")
             options.checkpointPolicyMinLeaderScore = ParsePositiveFiniteDouble(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--checkpoint-policy-min-infer-accuracy")
@@ -1213,6 +1363,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.retryCheckpointEvalId = ParsePositiveLongLong("--retry-checkpoint-eval", value);
         else if (SplitOptionWithValue(arg, "--evaluate-checkpoint-policy", value))
             options.evaluateCheckpointPolicyEvalId = ParsePositiveLongLong("--evaluate-checkpoint-policy", value);
+        else if (SplitOptionWithValue(arg, "--enable-continuation-policy", value))
+            options.enableContinuationPolicyExperimentId = ParsePositiveLongLong("--enable-continuation-policy", value);
+        else if (SplitOptionWithValue(arg, "--disable-continuation-policy", value))
+            options.disableContinuationPolicyExperimentId = ParsePositiveLongLong("--disable-continuation-policy", value);
+        else if (SplitOptionWithValue(arg, "--set-continuation-policy", value))
+            options.setContinuationPolicy = ParseExperimentConfigPair("--set-continuation-policy", value);
+        else if (SplitOptionWithValue(arg, "--evaluate-continuation", value))
+            options.evaluateContinuationExperimentId = ParsePositiveLongLong("--evaluate-continuation", value);
+        else if (SplitOptionWithValue(arg, "--queue-continuation", value))
+            options.queueContinuationExperimentId = ParsePositiveLongLong("--queue-continuation", value);
+        else if (SplitOptionWithValue(arg, "--continuation-status", value))
+            options.continuationStatusExperimentId = ParsePositiveLongLong("--continuation-status", value);
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -1253,6 +1415,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--checkpoint-policy does not accept a value; use --checkpoint-policy");
             options.queueCheckpointPolicy = true;
         }
+        else if (SplitOptionWithValue(arg, "--continuation-candidate-excluded", value))
+            options.queueContinuationCandidateExcluded = ParseBoolean("--continuation-candidate-excluded", value);
         else if (SplitOptionWithValue(arg, "--checkpoint-policy-min-leader-score", value))
             options.checkpointPolicyMinLeaderScore = ParsePositiveFiniteDouble("--checkpoint-policy-min-leader-score", value);
         else if (SplitOptionWithValue(arg, "--checkpoint-policy-min-infer-accuracy", value))
@@ -1332,6 +1496,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.retryFailedExperimentId.has_value() ? 1 : 0) +
         (options.retryCheckpointEvalId.has_value() ? 1 : 0) +
         (options.evaluateCheckpointPolicyEvalId.has_value() ? 1 : 0) +
+        (options.enableContinuationPolicyExperimentId.has_value() ? 1 : 0) +
+        (options.disableContinuationPolicyExperimentId.has_value() ? 1 : 0) +
+        (options.setContinuationPolicy.has_value() ? 1 : 0) +
+        (options.evaluateContinuationExperimentId.has_value() ? 1 : 0) +
+        (options.queueContinuationExperimentId.has_value() ? 1 : 0) +
+        (options.continuationStatusExperimentId.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -1350,6 +1520,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument("--include-parent-models is only valid with --list-experiment-lineage=ID");
     if (options.backupOutputPath.has_value() && !options.backupDatabase)
         throw std::invalid_argument("--backup-output is only valid with --backup-database");
+    if (options.queueContinuationCandidateExcluded && !options.queueExperiment)
+        throw std::invalid_argument("--continuation-candidate-excluded is only valid with --queue-experiment");
     if ((options.queueCheckpointInfer ||
          options.queueCheckpointInferMinEpoch.has_value() ||
          options.queueCheckpointInferInterval.has_value()) &&
@@ -1889,6 +2061,8 @@ long long InsertExperimentRecord(pqxx::work& w,
     const bool hasCheckpointPolicyScope = ColumnExists(w, "experiment", "checkpoint_policy_scope");
     const bool hasCheckpointPolicyStopMode = ColumnExists(w, "experiment", "checkpoint_policy_stop_mode");
     const bool hasCheckpointPolicyGraceEvals = ColumnExists(w, "experiment", "checkpoint_policy_grace_evals");
+    const bool hasContinuationCandidateExcluded =
+        ColumnExists(w, "experiment", "continuation_candidate_excluded");
     if (options.queueCheckpointPolicy &&
         (!hasCheckpointPolicyEnabled ||
          !hasCheckpointPolicyScope ||
@@ -1897,6 +2071,8 @@ long long InsertExperimentRecord(pqxx::work& w,
     {
         throw std::runtime_error("checkpoint policy migration required; run ./migrate_lstm_db.sh");
     }
+    if (options.queueContinuationCandidateExcluded && !hasContinuationCandidateExcluded)
+        throw std::runtime_error("continuation policy migration required; run ./migrate_lstm_db.sh");
     const std::string invocationMode = options.queueSweep
         ? "queue_sweep"
         : (options.queueExperiment ? "queue_experiment" : "enqueue_experiment");
@@ -1931,6 +2107,8 @@ long long InsertExperimentRecord(pqxx::work& w,
         sql << ", checkpoint_policy_stop_mode";
     if (hasCheckpointPolicyGraceEvals)
         sql << ", checkpoint_policy_grace_evals";
+    if (hasContinuationCandidateExcluded)
+        sql << ", continuation_candidate_excluded";
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataColumns(sql);
     sql << ") VALUES ("
@@ -1970,6 +2148,8 @@ long long InsertExperimentRecord(pqxx::work& w,
         sql << "," << w.quote(options.checkpointPolicyStopMode);
     if (hasCheckpointPolicyGraceEvals)
         sql << "," << options.checkpointPolicyGraceEvals;
+    if (hasContinuationCandidateExcluded)
+        sql << "," << (options.queueContinuationCandidateExcluded ? "true" : "false");
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
     sql << ") RETURNING experiment_id;";
@@ -2126,6 +2306,8 @@ void PrintQueueConfig(const char* marker,
               << (options.queueCheckpointInferInterval.has_value() ? std::to_string(*options.queueCheckpointInferInterval) : "NULL")
               << ",checkpoint_policy=" << (options.queueCheckpointPolicy ? "1" : "0")
               << ",checkpoint_policy_rules=" << CheckpointPolicyRuleText(options)
+              << ",continuation_candidate_excluded="
+              << (options.queueContinuationCandidateExcluded ? "1" : "0")
               << ",train_start=" << *options.trainStart
               << ",train_end=" << *options.trainEnd
               << ",infer_start=" << (options.inferStart.has_value() ? *options.inferStart : "NULL")
@@ -2877,7 +3059,9 @@ void ApplySchedulerControlTransition(pqxx::work& w,
         sql << ", started_at = NULL"
             << ", completed_at = NULL"
             << ", exit_code = NULL"
-            << ", error_message = NULL";
+            << ", error_message = NULL"
+            << ", worker_pid = NULL"
+            << ", current_operation = NULL";
     }
 
     sql << " WHERE experiment_id = " << row.experimentId << ";";
@@ -6675,6 +6859,1739 @@ int RunEvaluateCheckpointPolicyCommand(const SchedulerOptions& options)
     return 0;
 }
 
+bool ContinuationPolicySchemaExists(pqxx::work& w)
+{
+    return TableExists(w, "experiment_continuation_decision") &&
+           ColumnExists(w, "experiment", "continuation_policy_enabled") &&
+           ColumnExists(w, "experiment", "continuation_policy_target_epochs") &&
+           ColumnExists(w, "experiment", "continuation_policy_revision") &&
+           ColumnExists(w, "experiment", "continuation_candidate_excluded") &&
+           ColumnExists(w, "experiment", "continuation_source_experiment_id") &&
+           ColumnExists(w, "experiment", "continuation_decision_id") &&
+           ColumnExists(w, "model", "experiment_id") &&
+           ColumnExists(w, "experiment_analysis_result", "analysis_scope") &&
+           ColumnExists(w, "experiment_checkpoint_eval", "analysis_id");
+}
+
+std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
+    pqxx::work& w,
+    long long sourceExperimentId,
+    bool lockRow)
+{
+    if (!ContinuationPolicySchemaExists(w))
+        return std::nullopt;
+
+    std::string sql =
+        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
+        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
+        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
+        "status, phase, continuation_policy_enabled, continuation_policy_target_epochs, "
+        "continuation_policy_min_evals, continuation_policy_patience, "
+        "continuation_policy_min_leader_score, continuation_policy_min_infer_accuracy, "
+        "continuation_policy_min_improvement, continuation_policy_max_degradation, "
+        "continuation_policy_top_n, continuation_policy_scope, continuation_policy_trend_mode, "
+        "continuation_policy_source_mode, continuation_policy_include_excluded, "
+        "continuation_candidate_excluded, continuation_policy_revision, "
+        "continuation_policy_last_decision, continuation_policy_last_reason, "
+        "continuation_policy_selected_model_id, continuation_policy_queued_experiment_id, "
+        "continuation_source_experiment_id, continuation_source_model_id, "
+        "continuation_source_epoch, continuation_decision_id, continuation_generation "
+        "FROM experiment WHERE experiment_id = $1";
+    if (lockRow)
+        sql += " FOR UPDATE";
+    sql += ";";
+
+    pqxx::result rows = w.exec_params(sql, sourceExperimentId);
+    if (rows.empty())
+        return std::nullopt;
+
+    const pqxx::row& row = rows[0];
+    ContinuationPolicyConfig config;
+    config.sourceExperimentId = sourceExperimentId;
+    config.source = RowToExperiment(row);
+    config.status = row[17].as<std::string>();
+    config.phase = row[18].as<std::string>();
+    config.enabled = row[19].as<bool>();
+    if (!row[20].is_null())
+        config.targetEpochs = row[20].as<int>();
+    config.minEvals = row[21].as<int>();
+    config.patience = row[22].as<int>();
+    config.minLeaderScore = OptionalDoubleCell(row, 23);
+    config.minInferAccuracy = OptionalDoubleCell(row, 24);
+    config.minImprovement = OptionalDoubleCell(row, 25);
+    config.maxDegradation = OptionalDoubleCell(row, 26);
+    if (!row[27].is_null())
+        config.topN = row[27].as<int>();
+    config.scope = row[28].as<std::string>();
+    config.trendMode = row[29].as<std::string>();
+    config.sourceMode = row[30].as<std::string>();
+    config.includeExcluded = row[31].as<bool>();
+    config.candidateExcluded = row[32].as<bool>();
+    config.policyRevision = row[33].as<long long>();
+    config.lastDecision = OptionalStringCell(row, 34);
+    config.lastReason = OptionalStringCell(row, 35);
+    config.selectedModelId = OptionalLongLongCell(row, 36);
+    config.queuedExperimentId = OptionalLongLongCell(row, 37);
+    config.continuationSourceExperimentId = OptionalLongLongCell(row, 38);
+    config.continuationSourceModelId = OptionalLongLongCell(row, 39);
+    if (!row[40].is_null())
+        config.continuationSourceEpoch = row[40].as<int>();
+    config.continuationDecisionId = OptionalLongLongCell(row, 41);
+    config.continuationGeneration = row[42].as<int>();
+    return config;
+}
+
+bool ValidContinuationScope(const std::string& value)
+{
+    return value == "symbol_horizon" || value == "horizon" || value == "global";
+}
+
+bool ValidContinuationTrendMode(const std::string& value)
+{
+    return value == "none" || value == "non_degrading" || value == "improving";
+}
+
+bool ValidContinuationSourceMode(const std::string& value)
+{
+    return value == "best_checkpoint" ||
+           value == "latest_checkpoint" ||
+           value == "final_model";
+}
+
+std::optional<std::string> ContinuationPolicyConfigurationError(
+    const ContinuationPolicyConfig& config,
+    bool requireSelectionConfig)
+{
+    if (config.targetEpochs.has_value() && *config.targetEpochs <= 0)
+        return "target_epochs_must_be_positive";
+    if (config.minEvals <= 0)
+        return "min_evals_must_be_positive";
+    if (config.patience <= 0)
+        return "patience_must_be_positive";
+    if (config.minLeaderScore.has_value() && !std::isfinite(*config.minLeaderScore))
+        return "min_leader_score_must_be_finite";
+    if (config.minInferAccuracy.has_value() && !std::isfinite(*config.minInferAccuracy))
+        return "min_infer_accuracy_must_be_finite";
+    if (config.minImprovement.has_value() &&
+        (!std::isfinite(*config.minImprovement) || *config.minImprovement < 0.0))
+        return "min_improvement_must_be_non_negative_and_finite";
+    if (config.maxDegradation.has_value() &&
+        (!std::isfinite(*config.maxDegradation) || *config.maxDegradation < 0.0))
+        return "max_degradation_must_be_non_negative_and_finite";
+    if (config.topN.has_value() && *config.topN <= 0)
+        return "top_n_must_be_positive";
+    if (!ValidContinuationScope(config.scope))
+        return "invalid_scope";
+    if (!ValidContinuationTrendMode(config.trendMode))
+        return "invalid_trend_mode";
+    if (!ValidContinuationSourceMode(config.sourceMode))
+        return "invalid_source_mode";
+    if (config.trendMode == "none" &&
+        (config.minImprovement.has_value() || config.maxDegradation.has_value()))
+        return "trend_none_requires_null_trend_thresholds";
+    if (config.trendMode == "non_degrading" &&
+        (!config.maxDegradation.has_value() || config.minImprovement.has_value()))
+        return "non_degrading_requires_only_max_degradation";
+    if (config.trendMode == "improving" &&
+        (!config.minImprovement.has_value() || config.maxDegradation.has_value()))
+        return "improving_requires_only_min_improvement";
+    if (requireSelectionConfig && !config.targetEpochs.has_value())
+        return "target_epochs_required";
+    if (requireSelectionConfig && config.candidateExcluded && !config.includeExcluded)
+        return "excluded_candidate_requires_include_excluded";
+    if (requireSelectionConfig &&
+        !config.minLeaderScore.has_value() &&
+        !config.minInferAccuracy.has_value() &&
+        !config.topN.has_value() &&
+        config.trendMode == "none")
+    {
+        return "at_least_one_threshold_ranking_or_trend_criterion_required";
+    }
+    return std::nullopt;
+}
+
+std::string ContinuationOptionalDoubleText(const std::optional<double>& value)
+{
+    return value.has_value() ? FormatDouble(*value) : "NULL";
+}
+
+std::string ContinuationOptionalIntText(const std::optional<int>& value)
+{
+    return value.has_value() ? std::to_string(*value) : "NULL";
+}
+
+std::string ContinuationPolicyCanonicalText(const ContinuationPolicyConfig& config)
+{
+    std::ostringstream out;
+    out << "target_epochs=" << ContinuationOptionalIntText(config.targetEpochs)
+        << "|min_evals=" << config.minEvals
+        << "|patience=" << config.patience
+        << "|min_leader_score=" << ContinuationOptionalDoubleText(config.minLeaderScore)
+        << "|min_infer_accuracy=" << ContinuationOptionalDoubleText(config.minInferAccuracy)
+        << "|min_improvement=" << ContinuationOptionalDoubleText(config.minImprovement)
+        << "|max_degradation=" << ContinuationOptionalDoubleText(config.maxDegradation)
+        << "|top_n=" << ContinuationOptionalIntText(config.topN)
+        << "|scope=" << config.scope
+        << "|trend_mode=" << config.trendMode
+        << "|source_mode=" << config.sourceMode
+        << "|include_excluded=" << (config.includeExcluded ? "true" : "false")
+        << "|candidate_excluded=" << (config.candidateExcluded ? "true" : "false");
+    return out.str();
+}
+
+std::string StableFnv1aHash(const std::string& value)
+{
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (const unsigned char ch : value)
+    {
+        hash ^= static_cast<uint64_t>(ch);
+        hash *= UINT64_C(1099511628211);
+    }
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return out.str();
+}
+
+ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
+{
+    ContinuationPolicyUpdate update;
+    for (const std::string& item : SplitCommaSeparated(text))
+    {
+        const size_t equals = item.find('=');
+        if (equals == std::string::npos || equals == 0 || equals + 1 >= item.size())
+            throw std::invalid_argument("--set-continuation-policy requires key=value pairs");
+        const std::string key = item.substr(0, equals);
+        const std::string value = item.substr(equals + 1);
+        update.keys.insert(key);
+        const bool clearValue = value == "null";
+
+        if (key == "target_epochs")
+        {
+            if (!clearValue)
+                update.targetEpochs = ParsePositiveInt(key, value);
+        }
+        else if (key == "min_evals")
+            update.minEvals = ParsePositiveInt(key, value);
+        else if (key == "patience")
+            update.patience = ParsePositiveInt(key, value);
+        else if (key == "min_leader_score")
+        {
+            if (!clearValue)
+                update.minLeaderScore = ParseFiniteDouble(key, value);
+        }
+        else if (key == "min_infer_accuracy")
+        {
+            if (!clearValue)
+                update.minInferAccuracy = ParseFiniteDouble(key, value);
+        }
+        else if (key == "min_improvement")
+        {
+            if (!clearValue)
+                update.minImprovement = ParseNonNegativeFiniteDouble(key, value);
+        }
+        else if (key == "max_degradation")
+        {
+            if (!clearValue)
+                update.maxDegradation = ParseNonNegativeFiniteDouble(key, value);
+        }
+        else if (key == "top_n")
+        {
+            if (!clearValue)
+                update.topN = ParsePositiveInt(key, value);
+        }
+        else if (key == "scope")
+            update.scope = value;
+        else if (key == "trend_mode")
+            update.trendMode = value;
+        else if (key == "source_mode")
+            update.sourceMode = value;
+        else if (key == "include_excluded")
+            update.includeExcluded = ParseBoolean(key, value);
+        else if (key == "candidate_excluded")
+            update.candidateExcluded = ParseBoolean(key, value);
+        else
+            throw std::invalid_argument("unsupported continuation policy key '" + key + "'");
+    }
+    if (update.keys.empty())
+        throw std::invalid_argument("--set-continuation-policy requires at least one key=value pair");
+    return update;
+}
+
+void ApplyContinuationPolicyUpdate(ContinuationPolicyConfig& config,
+                                   const ContinuationPolicyUpdate& update)
+{
+    if (update.keys.count("target_epochs"))
+        config.targetEpochs = update.targetEpochs;
+    if (update.keys.count("min_evals"))
+        config.minEvals = update.minEvals;
+    if (update.keys.count("patience"))
+        config.patience = update.patience;
+    if (update.keys.count("min_leader_score"))
+        config.minLeaderScore = update.minLeaderScore;
+    if (update.keys.count("min_infer_accuracy"))
+        config.minInferAccuracy = update.minInferAccuracy;
+    if (update.keys.count("min_improvement"))
+        config.minImprovement = update.minImprovement;
+    if (update.keys.count("max_degradation"))
+        config.maxDegradation = update.maxDegradation;
+    if (update.keys.count("top_n"))
+        config.topN = update.topN;
+    if (update.keys.count("scope"))
+        config.scope = update.scope;
+    if (update.keys.count("trend_mode"))
+        config.trendMode = update.trendMode;
+    if (update.keys.count("source_mode"))
+        config.sourceMode = update.sourceMode;
+    if (update.keys.count("include_excluded"))
+        config.includeExcluded = update.includeExcluded;
+    if (update.keys.count("candidate_excluded"))
+        config.candidateExcluded = update.candidateExcluded;
+}
+
+std::vector<ContinuationEvidence> LoadContinuationEvidence(
+    pqxx::work& w,
+    const ContinuationPolicyConfig& config)
+{
+    pqxx::result rows = w.exec_params(
+        "WITH cfg AS ("
+        "  SELECT model_id, round(max(value) FILTER (WHERE col_idx = 10))::integer AS completed_epoch "
+        "  FROM matrix "
+        "  WHERE param_name = 'train_config_meta' AND row_idx = 0 "
+        "  GROUP BY model_id "
+        "  HAVING count(DISTINCT col_idx) FILTER (WHERE col_idx BETWEEN 0 AND 13) >= 14"
+        ") "
+        "SELECT a.analysis_id, ce.checkpoint_eval_id, a.model_id, cfg.completed_epoch, "
+        "       a.leader_score, a.infer_accuracy, ir.accept_model, a.analysis_scope, "
+        "       COALESCE(ce.analyze_completed_at, ce.completed_at, a.updated_at)::text, "
+        "       a.updated_at::text "
+        "FROM experiment e "
+        "JOIN experiment_checkpoint_eval ce ON ce.parent_experiment_id = e.experiment_id "
+        "JOIN experiment_analysis_result a ON a.analysis_id = ce.analysis_id "
+        "JOIN model m ON m.model_id = ce.checkpoint_model_id AND m.experiment_id = e.experiment_id "
+        "JOIN cfg ON cfg.model_id = m.model_id "
+        "LEFT JOIN inference_eval_result ir "
+        "  ON ir.checkpoint_eval_id = ce.checkpoint_eval_id "
+        " AND ir.model_id = ce.checkpoint_model_id "
+        " AND ir.inference_scope = 'checkpoint' AND ir.status = 'completed' "
+        "WHERE e.experiment_id = $1 "
+        "AND ce.status = 'completed' AND ce.phase = 'done' "
+        "AND ce.symbol = e.symbol AND ce.prediction_horizon = e.prediction_horizon "
+        "AND a.analysis_scope = 'checkpoint' AND a.analysis_status = 'completed' "
+        "AND a.checkpoint_eval_id = ce.checkpoint_eval_id "
+        "AND a.parent_experiment_id = e.experiment_id "
+        "AND a.experiment_id = e.experiment_id "
+        "AND a.model_id = ce.checkpoint_model_id "
+        "AND a.checkpoint_epoch = ce.checkpoint_epoch "
+        "AND a.completed_epochs = ce.checkpoint_epoch "
+        "AND a.symbol = e.symbol AND a.prediction_horizon = e.prediction_horizon "
+        "AND cfg.completed_epoch = ce.checkpoint_epoch "
+        "UNION ALL "
+        "SELECT a.analysis_id, NULL::bigint, a.model_id, cfg.completed_epoch, "
+        "       a.leader_score, a.infer_accuracy, ir.accept_model, a.analysis_scope, "
+        "       a.updated_at::text, a.updated_at::text "
+        "FROM experiment e "
+        "JOIN experiment_analysis_result a "
+        "  ON a.experiment_id = e.experiment_id AND a.model_id = e.last_model_id "
+        "JOIN model m ON m.model_id = a.model_id AND m.experiment_id = e.experiment_id "
+        "JOIN cfg ON cfg.model_id = m.model_id "
+        "LEFT JOIN LATERAL ("
+        "  SELECT ier.accept_model FROM inference_eval_result ier "
+        "  WHERE ier.model_id = a.model_id "
+        "  AND ier.inference_scope = 'final' AND ier.status = 'completed' "
+        "  ORDER BY ier.completed_at DESC, ier.id DESC LIMIT 1"
+        ") ir ON true "
+        "WHERE e.experiment_id = $1 "
+        "AND a.analysis_scope = 'final' AND a.analysis_status = 'completed' "
+        "AND a.checkpoint_eval_id IS NULL AND a.parent_experiment_id IS NULL "
+        "AND a.checkpoint_epoch IS NULL "
+        "AND a.completed_epochs = cfg.completed_epoch "
+        "AND a.symbol = e.symbol AND a.prediction_horizon = e.prediction_horizon "
+        "ORDER BY completed_epoch ASC, 9 ASC, checkpoint_eval_id ASC NULLS LAST, analysis_id ASC;",
+        config.sourceExperimentId);
+
+    std::vector<ContinuationEvidence> evidence;
+    evidence.reserve(rows.size());
+    for (const pqxx::row& row : rows)
+    {
+        ContinuationEvidence point;
+        point.analysisId = row[0].as<long long>();
+        point.checkpointEvalId = OptionalLongLongCell(row, 1);
+        point.modelId = row[2].as<long long>();
+        point.completedEpoch = row[3].as<int>();
+        point.leaderScore = OptionalDoubleCell(row, 4);
+        point.inferAccuracy = OptionalDoubleCell(row, 5);
+        if (!row[6].is_null())
+            point.acceptModel = row[6].as<bool>();
+        point.analysisScope = row[7].as<std::string>();
+        point.completedAt = row[8].as<std::string>();
+        point.updatedAt = row[9].as<std::string>();
+        evidence.push_back(std::move(point));
+    }
+    return evidence;
+}
+
+bool PreferContinuationEvidenceAtSameEpoch(const ContinuationEvidence& candidate,
+                                           const ContinuationEvidence& current)
+{
+    const bool candidateFinal = candidate.analysisScope == "final";
+    const bool currentFinal = current.analysisScope == "final";
+    if (candidateFinal != currentFinal)
+        return candidateFinal;
+    const long long candidateEval = candidate.checkpointEvalId.value_or(std::numeric_limits<long long>::max());
+    const long long currentEval = current.checkpointEvalId.value_or(std::numeric_limits<long long>::max());
+    if (candidateEval != currentEval)
+        return candidateEval < currentEval;
+    return candidate.analysisId < current.analysisId;
+}
+
+std::vector<ContinuationEvidence> DeduplicateContinuationEvidence(
+    const std::vector<ContinuationEvidence>& raw)
+{
+    std::map<int, ContinuationEvidence> byEpoch;
+    for (const ContinuationEvidence& point : raw)
+    {
+        auto it = byEpoch.find(point.completedEpoch);
+        if (it == byEpoch.end() || PreferContinuationEvidenceAtSameEpoch(point, it->second))
+            byEpoch[point.completedEpoch] = point;
+    }
+
+    std::vector<ContinuationEvidence> result;
+    result.reserve(byEpoch.size());
+    for (const auto& [epoch, point] : byEpoch)
+    {
+        (void)epoch;
+        result.push_back(point);
+    }
+    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.completedEpoch != rhs.completedEpoch)
+            return lhs.completedEpoch < rhs.completedEpoch;
+        if (lhs.completedAt != rhs.completedAt)
+            return lhs.completedAt < rhs.completedAt;
+        const long long lhsIdentity = lhs.checkpointEvalId.value_or(lhs.analysisId);
+        const long long rhsIdentity = rhs.checkpointEvalId.value_or(rhs.analysisId);
+        return lhsIdentity < rhsIdentity;
+    });
+    return result;
+}
+
+std::string ContinuationEvidenceWatermark(
+    const std::vector<ContinuationEvidence>& evidence)
+{
+    std::ostringstream canonical;
+    canonical << "count=" << evidence.size();
+    for (const ContinuationEvidence& point : evidence)
+    {
+        canonical << "|epoch=" << point.completedEpoch
+                  << ":scope=" << point.analysisScope
+                  << ":analysis=" << point.analysisId
+                  << ":eval=" << (point.checkpointEvalId.has_value()
+                                        ? std::to_string(*point.checkpointEvalId)
+                                        : "NULL")
+                  << ":model=" << point.modelId
+                  << ":leader=" << ContinuationOptionalDoubleText(point.leaderScore)
+                  << ":infer=" << ContinuationOptionalDoubleText(point.inferAccuracy)
+                  << ":updated=" << point.updatedAt;
+    }
+    return StableFnv1aHash(canonical.str());
+}
+
+bool BetterBestContinuationSource(const ContinuationEvidence& lhs,
+                                  const ContinuationEvidence& rhs)
+{
+    if (lhs.leaderScore.has_value() != rhs.leaderScore.has_value())
+        return lhs.leaderScore.has_value();
+    if (lhs.leaderScore.has_value() && *lhs.leaderScore != *rhs.leaderScore)
+        return *lhs.leaderScore > *rhs.leaderScore;
+    if (lhs.inferAccuracy.has_value() != rhs.inferAccuracy.has_value())
+        return lhs.inferAccuracy.has_value();
+    if (lhs.inferAccuracy.has_value() && *lhs.inferAccuracy != *rhs.inferAccuracy)
+        return *lhs.inferAccuracy > *rhs.inferAccuracy;
+    if (lhs.completedEpoch != rhs.completedEpoch)
+        return lhs.completedEpoch > rhs.completedEpoch;
+    if (lhs.modelId != rhs.modelId)
+        return lhs.modelId < rhs.modelId;
+    return lhs.analysisId < rhs.analysisId;
+}
+
+bool IsCheckpointContinuationSource(const ContinuationEvidence& point)
+{
+    return point.analysisScope == "checkpoint" &&
+           point.checkpointEvalId.has_value();
+}
+
+bool IsFinalContinuationSource(const ContinuationPolicyConfig& config,
+                               const ContinuationEvidence& point)
+{
+    return point.analysisScope == "final" &&
+           !point.checkpointEvalId.has_value() &&
+           config.source.lastModelId.has_value() &&
+           point.modelId == *config.source.lastModelId;
+}
+
+std::optional<ContinuationEvidence> SelectContinuationSourceEvidence(
+    const ContinuationPolicyConfig& config,
+    const std::vector<ContinuationEvidence>& raw)
+{
+    if (config.sourceMode == "best_checkpoint")
+    {
+        std::optional<ContinuationEvidence> selected;
+        for (const ContinuationEvidence& point : raw)
+        {
+            if (!IsCheckpointContinuationSource(point))
+                continue;
+            if (!selected.has_value() ||
+                BetterBestContinuationSource(point, *selected))
+            {
+                selected = point;
+            }
+        }
+        return selected;
+    }
+    if (config.sourceMode == "latest_checkpoint")
+    {
+        std::optional<ContinuationEvidence> selected;
+        for (const ContinuationEvidence& point : raw)
+        {
+            if (!IsCheckpointContinuationSource(point))
+                continue;
+            if (!selected.has_value() ||
+                point.completedEpoch > selected->completedEpoch ||
+                (point.completedEpoch == selected->completedEpoch &&
+                 *point.checkpointEvalId < *selected->checkpointEvalId) ||
+                (point.completedEpoch == selected->completedEpoch &&
+                 *point.checkpointEvalId == *selected->checkpointEvalId &&
+                 point.analysisId < selected->analysisId))
+            {
+                selected = point;
+            }
+        }
+        return selected;
+    }
+    if (config.sourceMode == "final_model")
+    {
+        for (const ContinuationEvidence& point : raw)
+        {
+            if (IsFinalContinuationSource(config, point))
+                return point;
+        }
+    }
+    return std::nullopt;
+}
+
+bool ValidateContinuationResumeSource(pqxx::work& w,
+                                      const ContinuationPolicyConfig& config,
+                                      const ContinuationEvidence& selected,
+                                      QueueResumeMeta* loadedMeta,
+                                      std::string& reason)
+{
+    pqxx::result owner = w.exec_params(
+        "SELECT experiment_id FROM model WHERE model_id = $1;",
+        selected.modelId);
+    if (owner.size() != 1 || owner[0][0].is_null() ||
+        owner[0][0].as<long long>() != config.sourceExperimentId)
+    {
+        reason = "source_model_ownership_mismatch";
+        return false;
+    }
+
+    QueueResumeMeta meta;
+    try
+    {
+        meta = LoadQueueResumeMeta(w, selected.modelId);
+    }
+    catch (const std::exception& e)
+    {
+        reason = "source_model_not_resumable:" + std::string{e.what()};
+        return false;
+    }
+
+    if (meta.completedEpochs != selected.completedEpoch)
+    {
+        reason = "source_model_completed_epoch_mismatch";
+        return false;
+    }
+    if (!config.targetEpochs.has_value() || meta.completedEpochs >= *config.targetEpochs)
+    {
+        reason = "source_model_epoch_not_below_target";
+        return false;
+    }
+    if (meta.symbol != config.source.symbol ||
+        meta.predictionHorizon != config.source.predictionHorizon ||
+        std::fabs(meta.threshold - config.source.cNextThreshold) > 1e-7 ||
+        !SameDate(meta.trainStart, config.source.trainStart) ||
+        !SameDate(meta.trainEnd, config.source.trainEnd))
+    {
+        reason = "source_model_resume_metadata_mismatch";
+        return false;
+    }
+    if (loadedMeta)
+        *loadedMeta = meta;
+    return true;
+}
+
+std::optional<long long> FindEquivalentContinuationExperiment(
+    pqxx::work& w,
+    long long sourceExperimentId,
+    long long sourceModelId,
+    int targetEpochs)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT experiment_id FROM experiment "
+        "WHERE experiment_id <> $1 "
+        "AND resume_model_id = $2 "
+        "AND target_epochs = $3 "
+        "ORDER BY (continuation_source_model_id IS NOT NULL) DESC, experiment_id ASC "
+        "LIMIT 1;",
+        sourceExperimentId,
+        sourceModelId,
+        targetEpochs);
+    if (rows.empty())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+struct ContinuationRankingCandidate
+{
+    long long sourceExperimentId = -1;
+    ContinuationEvidence selected;
+};
+
+struct ContinuationRankResult
+{
+    std::optional<int> rankValue;
+    std::string populationWatermark;
+};
+
+bool BetterContinuationRankCandidate(const ContinuationRankingCandidate& lhs,
+                                     const ContinuationRankingCandidate& rhs)
+{
+    if (lhs.selected.leaderScore.has_value() != rhs.selected.leaderScore.has_value())
+        return lhs.selected.leaderScore.has_value();
+    if (lhs.selected.leaderScore.has_value() &&
+        *lhs.selected.leaderScore != *rhs.selected.leaderScore)
+    {
+        return *lhs.selected.leaderScore > *rhs.selected.leaderScore;
+    }
+    if (lhs.selected.inferAccuracy.has_value() != rhs.selected.inferAccuracy.has_value())
+        return lhs.selected.inferAccuracy.has_value();
+    if (lhs.selected.inferAccuracy.has_value() &&
+        *lhs.selected.inferAccuracy != *rhs.selected.inferAccuracy)
+    {
+        return *lhs.selected.inferAccuracy > *rhs.selected.inferAccuracy;
+    }
+    if (lhs.selected.completedEpoch != rhs.selected.completedEpoch)
+        return lhs.selected.completedEpoch > rhs.selected.completedEpoch;
+    if (lhs.sourceExperimentId != rhs.sourceExperimentId)
+        return lhs.sourceExperimentId < rhs.sourceExperimentId;
+    return lhs.selected.modelId < rhs.selected.modelId;
+}
+
+ContinuationRankResult RankContinuationSource(
+    pqxx::work& w,
+    const ContinuationPolicyConfig& evaluatedConfig,
+    const ContinuationEvidence& evaluatedSelection)
+{
+    ContinuationRankResult result;
+    std::ostringstream sql;
+    sql << "SELECT experiment_id FROM experiment "
+        << "WHERE status = 'completed' AND phase = 'done' ";
+    if (!evaluatedConfig.includeExcluded)
+        sql << "AND continuation_candidate_excluded = false ";
+    if (evaluatedConfig.scope == "symbol_horizon")
+    {
+        sql << "AND symbol = " << w.quote(evaluatedConfig.source.symbol)
+            << " AND prediction_horizon = " << evaluatedConfig.source.predictionHorizon << " ";
+    }
+    else if (evaluatedConfig.scope == "horizon")
+    {
+        sql << "AND prediction_horizon = " << evaluatedConfig.source.predictionHorizon << " ";
+    }
+    else if (evaluatedConfig.scope != "global")
+    {
+        return result;
+    }
+    sql << "ORDER BY experiment_id ASC;";
+
+    pqxx::result ids = w.exec(sql.str());
+    std::vector<ContinuationRankingCandidate> candidates;
+    for (const pqxx::row& idRow : ids)
+    {
+        const long long candidateId = idRow[0].as<long long>();
+        std::optional<ContinuationPolicyConfig> loaded =
+            LoadContinuationPolicyConfig(w, candidateId, false);
+        if (!loaded.has_value())
+            continue;
+
+        ContinuationPolicyConfig candidateConfig = *loaded;
+        candidateConfig.targetEpochs = evaluatedConfig.targetEpochs;
+        candidateConfig.sourceMode = evaluatedConfig.sourceMode;
+        candidateConfig.includeExcluded = evaluatedConfig.includeExcluded;
+
+        const std::vector<ContinuationEvidence> raw =
+            LoadContinuationEvidence(w, candidateConfig);
+        const std::vector<ContinuationEvidence> distinct =
+            DeduplicateContinuationEvidence(raw);
+        if (static_cast<int>(distinct.size()) < evaluatedConfig.minEvals)
+            continue;
+        if (evaluatedConfig.trendMode != "none" &&
+            static_cast<int>(distinct.size()) < evaluatedConfig.patience)
+        {
+            continue;
+        }
+
+        const std::optional<ContinuationEvidence> selected =
+            SelectContinuationSourceEvidence(candidateConfig, raw);
+        if (!selected.has_value())
+            continue;
+        if (!selected->leaderScore.has_value() && !selected->inferAccuracy.has_value())
+            continue;
+
+        std::string resumeReason;
+        if (!ValidateContinuationResumeSource(
+                w,
+                candidateConfig,
+                *selected,
+                nullptr,
+                resumeReason))
+        {
+            continue;
+        }
+
+        if (candidateId != evaluatedConfig.sourceExperimentId &&
+            FindEquivalentContinuationExperiment(
+                w,
+                candidateId,
+                selected->modelId,
+                *evaluatedConfig.targetEpochs).has_value())
+        {
+            continue;
+        }
+
+        candidates.push_back(ContinuationRankingCandidate{candidateId, *selected});
+    }
+
+    std::sort(candidates.begin(), candidates.end(), BetterContinuationRankCandidate);
+    std::ostringstream population;
+    population << "count=" << candidates.size();
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        population << "|source=" << candidates[i].sourceExperimentId
+                   << ":model=" << candidates[i].selected.modelId
+                   << ":epoch=" << candidates[i].selected.completedEpoch
+                   << ":analysis=" << candidates[i].selected.analysisId
+                   << ":leader="
+                   << ContinuationOptionalDoubleText(candidates[i].selected.leaderScore)
+                   << ":infer="
+                   << ContinuationOptionalDoubleText(candidates[i].selected.inferAccuracy);
+        if (candidates[i].sourceExperimentId == evaluatedConfig.sourceExperimentId &&
+            candidates[i].selected.modelId == evaluatedSelection.modelId)
+        {
+            result.rankValue = static_cast<int>(i + 1);
+        }
+    }
+    result.populationWatermark = StableFnv1aHash(population.str());
+    return result;
+}
+
+enum class ContinuationTrendResult
+{
+    Pass,
+    Reject,
+    Insufficient
+};
+
+ContinuationTrendResult EvaluateContinuationTrend(
+    const ContinuationPolicyConfig& config,
+    const std::vector<ContinuationEvidence>& evidence,
+    std::optional<std::string>& metric,
+    std::optional<double>& trendValue,
+    std::string& reason)
+{
+    if (config.trendMode == "none")
+        return ContinuationTrendResult::Pass;
+    if (static_cast<int>(evidence.size()) < config.patience)
+    {
+        reason = "trend_requires_patience_distinct_epochs";
+        return ContinuationTrendResult::Insufficient;
+    }
+
+    const auto windowBegin = evidence.end() - config.patience;
+    bool allLeader = true;
+    bool allInfer = true;
+    for (auto it = windowBegin; it != evidence.end(); ++it)
+    {
+        allLeader = allLeader && it->leaderScore.has_value();
+        allInfer = allInfer && it->inferAccuracy.has_value();
+    }
+
+    double first = 0.0;
+    double latest = 0.0;
+    if (allLeader)
+    {
+        metric = "leader_score";
+        first = *windowBegin->leaderScore;
+        latest = *evidence.back().leaderScore;
+    }
+    else if (allInfer)
+    {
+        metric = "infer_accuracy";
+        first = *windowBegin->inferAccuracy;
+        latest = *evidence.back().inferAccuracy;
+    }
+    else
+    {
+        reason = "trend_window_has_no_complete_single_metric";
+        return ContinuationTrendResult::Insufficient;
+    }
+
+    trendValue = latest - first;
+    if (config.trendMode == "non_degrading")
+    {
+        if (*trendValue >= -*config.maxDegradation)
+            return ContinuationTrendResult::Pass;
+        reason = "trend_delta_below_negative_max_degradation";
+        return ContinuationTrendResult::Reject;
+    }
+    if (config.trendMode == "improving")
+    {
+        if (*trendValue >= *config.minImprovement)
+            return ContinuationTrendResult::Pass;
+        reason = "trend_delta_below_min_improvement";
+        return ContinuationTrendResult::Reject;
+    }
+    reason = "unsupported_trend_mode";
+    return ContinuationTrendResult::Insufficient;
+}
+
+void PrintContinuationPolicyLog(const std::string& marker,
+                                const ContinuationPolicyConfig& config,
+                                const ContinuationEvaluation& evaluation)
+{
+    std::cout << marker
+              << ",source_experiment_id=" << config.sourceExperimentId
+              << ",source_model_id=" << evaluation.selected.modelId
+              << ",source_epoch=" << evaluation.selected.completedEpoch
+              << ",checkpoint_eval_id="
+              << (evaluation.selected.checkpointEvalId.has_value()
+                      ? std::to_string(*evaluation.selected.checkpointEvalId)
+                      : "NULL")
+              << ",analysis_id=" << evaluation.selected.analysisId
+              << ",analysis_scope="
+              << (evaluation.selected.analysisScope.empty()
+                      ? "NULL"
+                      : evaluation.selected.analysisScope)
+              << ",symbol=" << config.source.symbol
+              << ",prediction_horizon=" << config.source.predictionHorizon
+              << ",evidence_count=" << evaluation.evidenceCount
+              << ",patience_window=" << config.patience
+              << ",leader_score=" << ContinuationOptionalDoubleText(evaluation.selected.leaderScore)
+              << ",infer_accuracy=" << ContinuationOptionalDoubleText(evaluation.selected.inferAccuracy)
+              << ",trend_metric="
+              << (evaluation.trendMetric.has_value() ? *evaluation.trendMetric : "NULL")
+              << ",trend_value=" << ContinuationOptionalDoubleText(evaluation.trendValue)
+              << ",rank=" << ContinuationOptionalIntText(evaluation.rankValue)
+              << ",rank_scope=" << config.scope
+              << ",target_epochs="
+              << (config.targetEpochs.has_value() ? std::to_string(*config.targetEpochs) : "NULL")
+              << ",continuation_decision_id="
+              << (evaluation.decisionId > 0 ? std::to_string(evaluation.decisionId) : "NULL")
+              << ",policy_revision=" << config.policyRevision
+              << ",policy_hash="
+              << (evaluation.policyHash.empty() ? "NULL" : evaluation.policyHash)
+              << ",evidence_watermark="
+              << (evaluation.evidenceWatermark.empty() ? "NULL" : evaluation.evidenceWatermark)
+              << ",queued_experiment_id="
+              << (evaluation.queuedExperimentId.has_value()
+                      ? std::to_string(*evaluation.queuedExperimentId)
+                      : "NULL")
+              << ",decision=" << evaluation.decision
+              << ",reason=" << evaluation.reason
+              << std::endl;
+}
+
+std::string ContinuationDecisionMarker(const std::string& decision)
+{
+    if (decision == "eligible")
+        return "CONTINUATION_POLICY_ELIGIBLE";
+    if (decision == "insufficient_evidence")
+        return "CONTINUATION_POLICY_INSUFFICIENT_EVIDENCE";
+    if (decision == "rejected_threshold")
+        return "CONTINUATION_POLICY_REJECTED_THRESHOLD";
+    if (decision == "rejected_rank")
+        return "CONTINUATION_POLICY_REJECTED_RANK";
+    if (decision == "rejected_trend")
+        return "CONTINUATION_POLICY_REJECTED_TREND";
+    if (decision == "already_continued" || decision == "continuation_queued")
+        return "CONTINUATION_POLICY_ALREADY_CONTINUED";
+    if (decision == "error")
+        return "CONTINUATION_POLICY_ERROR";
+    return "CONTINUATION_POLICY_SKIPPED";
+}
+
+std::optional<pqxx::row> LoadContinuationDecisionForUpdate(
+    pqxx::work& w,
+    long long sourceExperimentId,
+    int targetEpochs,
+    pqxx::result& storage)
+{
+    storage = w.exec_params(
+        "SELECT continuation_decision_id, source_model_id, source_analysis_id, "
+        "source_checkpoint_eval_id, source_epoch, decision, reason, leader_score, "
+        "infer_accuracy, rank_value, rank_scope, observed_eval_count, patience_window, "
+        "trend_metric, trend_value, policy_revision, policy_hash, evidence_watermark, "
+        "queued_experiment_id "
+        "FROM experiment_continuation_decision "
+        "WHERE source_experiment_id = $1 AND target_epochs = $2 FOR UPDATE;",
+        sourceExperimentId,
+        targetEpochs);
+    if (storage.empty())
+        return std::nullopt;
+    return storage[0];
+}
+
+void FillContinuationEvaluationFromDecisionRow(
+    ContinuationEvaluation& evaluation,
+    const pqxx::row& row)
+{
+    evaluation.decisionId = row[0].as<long long>();
+    evaluation.selected.modelId = row[1].as<long long>();
+    evaluation.selected.analysisId = row[2].as<long long>();
+    evaluation.selected.checkpointEvalId = OptionalLongLongCell(row, 3);
+    evaluation.selected.completedEpoch = row[4].as<int>();
+    evaluation.decision = row[5].as<std::string>();
+    evaluation.reason = row[6].as<std::string>();
+    evaluation.selected.leaderScore = OptionalDoubleCell(row, 7);
+    evaluation.selected.inferAccuracy = OptionalDoubleCell(row, 8);
+    if (!row[9].is_null())
+        evaluation.rankValue = row[9].as<int>();
+    evaluation.evidenceCount = row[11].as<int>();
+    evaluation.trendMetric = OptionalStringCell(row, 13);
+    evaluation.trendValue = OptionalDoubleCell(row, 14);
+    evaluation.policyHash = row[16].as<std::string>();
+    evaluation.evidenceWatermark = row[17].as<std::string>();
+    evaluation.queuedExperimentId = OptionalLongLongCell(row, 18);
+    evaluation.alreadyQueued = evaluation.queuedExperimentId.has_value();
+}
+
+long long PersistContinuationDecision(pqxx::work& w,
+                                      const ContinuationPolicyConfig& config,
+                                      const ContinuationEvaluation& evaluation,
+                                      const std::optional<long long>& existingDecisionId)
+{
+    std::ostringstream sql;
+    if (!existingDecisionId.has_value())
+    {
+        sql << "INSERT INTO experiment_continuation_decision ("
+            << "source_experiment_id, source_model_id, source_analysis_id, "
+            << "source_checkpoint_eval_id, source_epoch, target_epochs, decision, reason, "
+            << "leader_score, infer_accuracy, rank_value, rank_scope, observed_eval_count, "
+            << "patience_window, trend_metric, trend_value, policy_revision, policy_hash, "
+            << "evidence_watermark, queued_experiment_id, updated_at) VALUES ("
+            << config.sourceExperimentId << ","
+            << evaluation.selected.modelId << ","
+            << evaluation.selected.analysisId << ","
+            << SqlNullable(w, evaluation.selected.checkpointEvalId) << ","
+            << evaluation.selected.completedEpoch << ","
+            << *config.targetEpochs << ","
+            << w.quote(evaluation.decision) << ","
+            << w.quote(evaluation.reason) << ","
+            << SqlNullable(w, evaluation.selected.leaderScore) << ","
+            << SqlNullable(w, evaluation.selected.inferAccuracy) << ","
+            << SqlNullable(w, evaluation.rankValue) << ","
+            << w.quote(config.scope) << ","
+            << evaluation.evidenceCount << ","
+            << config.patience << ","
+            << SqlNullable(w, evaluation.trendMetric) << ","
+            << SqlNullable(w, evaluation.trendValue) << ","
+            << config.policyRevision << ","
+            << w.quote(evaluation.policyHash) << ","
+            << w.quote(evaluation.evidenceWatermark) << ","
+            << SqlNullable(w, evaluation.queuedExperimentId) << ",now()) "
+            << "RETURNING continuation_decision_id;";
+    }
+    else
+    {
+        sql << "UPDATE experiment_continuation_decision SET "
+            << "source_model_id=" << evaluation.selected.modelId << ","
+            << "source_analysis_id=" << evaluation.selected.analysisId << ","
+            << "source_checkpoint_eval_id=" << SqlNullable(w, evaluation.selected.checkpointEvalId) << ","
+            << "source_epoch=" << evaluation.selected.completedEpoch << ","
+            << "decision=" << w.quote(evaluation.decision) << ","
+            << "reason=" << w.quote(evaluation.reason) << ","
+            << "leader_score=" << SqlNullable(w, evaluation.selected.leaderScore) << ","
+            << "infer_accuracy=" << SqlNullable(w, evaluation.selected.inferAccuracy) << ","
+            << "rank_value=" << SqlNullable(w, evaluation.rankValue) << ","
+            << "rank_scope=" << w.quote(config.scope) << ","
+            << "observed_eval_count=" << evaluation.evidenceCount << ","
+            << "patience_window=" << config.patience << ","
+            << "trend_metric=" << SqlNullable(w, evaluation.trendMetric) << ","
+            << "trend_value=" << SqlNullable(w, evaluation.trendValue) << ","
+            << "policy_revision=" << config.policyRevision << ","
+            << "policy_hash=" << w.quote(evaluation.policyHash) << ","
+            << "evidence_watermark=" << w.quote(evaluation.evidenceWatermark) << ","
+            << "updated_at=now() "
+            << "WHERE continuation_decision_id=" << *existingDecisionId
+            << " AND queued_experiment_id IS NULL "
+            << "RETURNING continuation_decision_id;";
+    }
+
+    pqxx::result persisted = w.exec(sql.str());
+    if (persisted.size() != 1)
+        throw std::runtime_error("continuation decision changed concurrently or is already queued");
+    const long long decisionId = persisted[0][0].as<long long>();
+
+    w.exec_params(
+        "UPDATE experiment SET "
+        "continuation_policy_last_decision = $1, "
+        "continuation_policy_last_decision_at = now(), "
+        "continuation_policy_last_reason = $2, "
+        "continuation_policy_selected_model_id = $3, "
+        "continuation_policy_queued_experiment_id = $4, "
+        "updated_at = now() "
+        "WHERE experiment_id = $5;",
+        evaluation.decision,
+        evaluation.reason,
+        evaluation.selected.modelId,
+        evaluation.queuedExperimentId,
+        config.sourceExperimentId);
+    return decisionId;
+}
+
+ContinuationEvaluation EvaluateContinuationPolicy(
+    pqxx::work& w,
+    long long sourceExperimentId,
+    ContinuationPolicyConfig* loadedConfig)
+{
+    ContinuationEvaluation evaluation;
+    std::optional<ContinuationPolicyConfig> configOption =
+        LoadContinuationPolicyConfig(w, sourceExperimentId, true);
+    if (!configOption.has_value())
+    {
+        ContinuationPolicyConfig missing;
+        missing.sourceExperimentId = sourceExperimentId;
+        evaluation.reason = ContinuationPolicySchemaExists(w)
+            ? "source_experiment_not_found"
+            : "migration_required";
+        if (loadedConfig)
+            *loadedConfig = missing;
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_ERROR", missing, evaluation);
+        return evaluation;
+    }
+    ContinuationPolicyConfig config = *configOption;
+    if (loadedConfig)
+        *loadedConfig = config;
+
+    if (!config.enabled)
+    {
+        evaluation.reason = "continuation_policy_disabled";
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+        return evaluation;
+    }
+    const std::optional<std::string> configError =
+        ContinuationPolicyConfigurationError(config, true);
+    if (configError.has_value())
+    {
+        evaluation.reason = "invalid_configuration:" + *configError;
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_ERROR", config, evaluation);
+        return evaluation;
+    }
+    if (config.status != "completed" || config.phase != "done")
+    {
+        evaluation.reason = "source_requires_completed_done";
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+        return evaluation;
+    }
+    if (config.candidateExcluded && !config.includeExcluded)
+    {
+        evaluation.reason = "source_candidate_excluded";
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+        return evaluation;
+    }
+
+    const std::vector<ContinuationEvidence> rawEvidence =
+        LoadContinuationEvidence(w, config);
+    const std::vector<ContinuationEvidence> evidence =
+        DeduplicateContinuationEvidence(rawEvidence);
+    evaluation.evidenceCount = static_cast<int>(evidence.size());
+    evaluation.evidenceWatermark = ContinuationEvidenceWatermark(evidence);
+    evaluation.policyHash = StableFnv1aHash(ContinuationPolicyCanonicalText(config));
+
+    const std::optional<ContinuationEvidence> selected =
+        SelectContinuationSourceEvidence(config, rawEvidence);
+    if (!selected.has_value())
+    {
+        evaluation.reason = "no_valid_source_analysis_for_source_mode";
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+        return evaluation;
+    }
+    evaluation.selected = *selected;
+
+    if (evidence.empty() || evidence.back().completedEpoch >= *config.targetEpochs)
+    {
+        evaluation.reason = "target_epochs_not_greater_than_source_completed_epoch";
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+        return evaluation;
+    }
+
+    std::string resumeReason;
+    if (!ValidateContinuationResumeSource(
+            w,
+            config,
+            evaluation.selected,
+            nullptr,
+            resumeReason))
+    {
+        evaluation.reason = resumeReason;
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+        return evaluation;
+    }
+
+    if (config.topN.has_value())
+    {
+        const ContinuationRankResult rank = RankContinuationSource(
+            w,
+            config,
+            evaluation.selected);
+        evaluation.rankValue = rank.rankValue;
+        evaluation.evidenceWatermark = StableFnv1aHash(
+            evaluation.evidenceWatermark + "|ranking_population=" + rank.populationWatermark);
+    }
+
+    evaluation.decision = "evaluating";
+    evaluation.reason = "policy_revision=" + std::to_string(config.policyRevision) +
+                        ";policy_hash=" + evaluation.policyHash +
+                        ";evidence_watermark=" + evaluation.evidenceWatermark +
+                        ";rules=" + ContinuationPolicyCanonicalText(config);
+    PrintContinuationPolicyLog("CONTINUATION_POLICY_EVALUATING", config, evaluation);
+
+    pqxx::result existingStorage;
+    std::optional<pqxx::row> existing = LoadContinuationDecisionForUpdate(
+        w,
+        sourceExperimentId,
+        *config.targetEpochs,
+        existingStorage);
+    if (existing.has_value() && !(*existing)[18].is_null())
+    {
+        FillContinuationEvaluationFromDecisionRow(evaluation, *existing);
+        evaluation.reused = true;
+        evaluation.alreadyQueued = true;
+        evaluation.reason = "continuation_already_queued";
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_ALREADY_CONTINUED", config, evaluation);
+        return evaluation;
+    }
+
+    const std::optional<long long> equivalent = FindEquivalentContinuationExperiment(
+        w,
+        sourceExperimentId,
+        evaluation.selected.modelId,
+        *config.targetEpochs);
+    if (equivalent.has_value())
+    {
+        evaluation.decision = "already_continued";
+        evaluation.reason = "equivalent_resume_experiment_exists";
+        evaluation.queuedExperimentId = equivalent;
+    }
+    else if (existing.has_value() &&
+             (*existing)[15].as<long long>() == config.policyRevision &&
+             (*existing)[16].as<std::string>() == evaluation.policyHash &&
+             (*existing)[17].as<std::string>() == evaluation.evidenceWatermark)
+    {
+        FillContinuationEvaluationFromDecisionRow(evaluation, *existing);
+        evaluation.reused = true;
+        evaluation.persisted = true;
+        PrintContinuationPolicyLog(ContinuationDecisionMarker(evaluation.decision), config, evaluation);
+        return evaluation;
+    }
+    else if (!evaluation.selected.leaderScore.has_value() &&
+             !evaluation.selected.inferAccuracy.has_value())
+    {
+        evaluation.decision = "insufficient_evidence";
+        evaluation.reason = "selected_analysis_has_no_rankable_metric";
+    }
+    else if (evaluation.evidenceCount < config.minEvals)
+    {
+        evaluation.decision = "insufficient_evidence";
+        evaluation.reason = "observed_eval_count_below_min_evals";
+    }
+    else
+    {
+        std::string trendReason;
+        const ContinuationTrendResult trendResult = EvaluateContinuationTrend(
+            config,
+            evidence,
+            evaluation.trendMetric,
+            evaluation.trendValue,
+            trendReason);
+        if (trendResult == ContinuationTrendResult::Insufficient)
+        {
+            evaluation.decision = "insufficient_evidence";
+            evaluation.reason = trendReason;
+        }
+        else
+        {
+            std::vector<std::string> failedThresholds;
+            if (config.minLeaderScore.has_value() &&
+                (!evaluation.selected.leaderScore.has_value() ||
+                 *evaluation.selected.leaderScore < *config.minLeaderScore))
+            {
+                failedThresholds.push_back("leader_score");
+            }
+            if (config.minInferAccuracy.has_value() &&
+                (!evaluation.selected.inferAccuracy.has_value() ||
+                 *evaluation.selected.inferAccuracy < *config.minInferAccuracy))
+            {
+                failedThresholds.push_back("infer_accuracy");
+            }
+
+            if (!failedThresholds.empty())
+            {
+                evaluation.decision = "rejected_threshold";
+                evaluation.reason = "failed_thresholds=" + JoinCheckpointPolicyRules(failedThresholds);
+            }
+            else
+            {
+                if (config.topN.has_value() &&
+                    (!evaluation.rankValue.has_value() || *evaluation.rankValue > *config.topN))
+                {
+                    evaluation.decision = "rejected_rank";
+                    evaluation.reason = "rank_outside_top_n";
+                }
+                else if (trendResult == ContinuationTrendResult::Reject)
+                {
+                    evaluation.decision = "rejected_trend";
+                    evaluation.reason = trendReason;
+                }
+                else
+                {
+                    evaluation.decision = "eligible";
+                    evaluation.reason = "all_configured_gates_passed";
+                }
+            }
+        }
+    }
+
+    const std::optional<long long> existingDecisionId = existing.has_value()
+        ? std::optional<long long>{(*existing)[0].as<long long>()}
+        : std::nullopt;
+    evaluation.decisionId = PersistContinuationDecision(
+        w,
+        config,
+        evaluation,
+        existingDecisionId);
+    evaluation.persisted = true;
+
+    PrintContinuationPolicyLog("CONTINUATION_POLICY_DECISION_PERSISTED", config, evaluation);
+    PrintContinuationPolicyLog(ContinuationDecisionMarker(evaluation.decision), config, evaluation);
+    return evaluation;
+}
+
+bool ValidateEnabledContinuationPolicySource(
+    pqxx::work& w,
+    const ContinuationPolicyConfig& config,
+    std::string& reason)
+{
+    const std::optional<std::string> configError =
+        ContinuationPolicyConfigurationError(config, true);
+    if (configError.has_value())
+    {
+        reason = *configError;
+        return false;
+    }
+    if (config.status != "completed" || config.phase != "done")
+    {
+        reason = "source_requires_completed_done";
+        return false;
+    }
+
+    const std::vector<ContinuationEvidence> raw = LoadContinuationEvidence(w, config);
+    const std::vector<ContinuationEvidence> evidence = DeduplicateContinuationEvidence(raw);
+    if (evidence.empty())
+    {
+        reason = "source_has_no_completed_analysis_evidence";
+        return false;
+    }
+    if (evidence.back().completedEpoch >= *config.targetEpochs)
+    {
+        reason = "target_epochs_not_greater_than_source_completed_epoch";
+        return false;
+    }
+    const std::optional<ContinuationEvidence> selected =
+        SelectContinuationSourceEvidence(config, raw);
+    if (!selected.has_value())
+    {
+        reason = "no_valid_source_analysis_for_source_mode";
+        return false;
+    }
+    return ValidateContinuationResumeSource(w, config, *selected, nullptr, reason);
+}
+
+std::string ContinuationPolicyDisplayText(const ContinuationPolicyConfig& config)
+{
+    return ContinuationPolicyCanonicalText(config) +
+           "|policy_revision=" + std::to_string(config.policyRevision);
+}
+
+long long ContinuationControlExperimentId(const SchedulerOptions& options)
+{
+    if (options.enableContinuationPolicyExperimentId.has_value())
+        return *options.enableContinuationPolicyExperimentId;
+    if (options.disableContinuationPolicyExperimentId.has_value())
+        return *options.disableContinuationPolicyExperimentId;
+    if (options.setContinuationPolicy.has_value())
+        return options.setContinuationPolicy->first;
+    throw std::invalid_argument("missing continuation policy experiment id");
+}
+
+bool HasContinuationControlCommand(const SchedulerOptions& options)
+{
+    return options.enableContinuationPolicyExperimentId.has_value() ||
+           options.disableContinuationPolicyExperimentId.has_value() ||
+           options.setContinuationPolicy.has_value();
+}
+
+int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
+{
+    const long long sourceExperimentId = ContinuationControlExperimentId(options);
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work w{connection};
+    SetTransactionReadWrite(w);
+    if (!ContinuationPolicySchemaExists(w))
+    {
+        std::cerr << "DATABASE_MIGRATION_REQUIRED,command=./migrate_lstm_db.sh,missing=continuation_policy_schema"
+                  << std::endl;
+        w.commit();
+        return 2;
+    }
+
+    std::optional<ContinuationPolicyConfig> loaded =
+        LoadContinuationPolicyConfig(w, sourceExperimentId, true);
+    if (!loaded.has_value())
+    {
+        std::cerr << "CONTINUATION_POLICY_ERROR"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",reason=source_experiment_not_found"
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+    ContinuationPolicyConfig config = *loaded;
+
+    if (options.enableContinuationPolicyExperimentId.has_value() ||
+        options.disableContinuationPolicyExperimentId.has_value())
+    {
+        const bool enabled = options.enableContinuationPolicyExperimentId.has_value();
+        if (enabled)
+        {
+            config.enabled = true;
+            std::string reason;
+            if (!ValidateEnabledContinuationPolicySource(w, config, reason))
+            {
+                std::cerr << "CONTINUATION_POLICY_ERROR"
+                          << ",source_experiment_id=" << sourceExperimentId
+                          << ",reason=" << reason
+                          << std::endl;
+                w.commit();
+                return 1;
+            }
+        }
+
+        w.exec_params(
+            "UPDATE experiment SET continuation_policy_enabled = $1, updated_at = now() "
+            "WHERE experiment_id = $2;",
+            enabled,
+            sourceExperimentId);
+        w.commit();
+        std::cout << (enabled ? "CONTINUATION_POLICY_ENABLED" : "CONTINUATION_POLICY_DISABLED")
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",history_preserved=1"
+                  << std::endl;
+        return 0;
+    }
+
+    ContinuationPolicyUpdate update;
+    try
+    {
+        update = ParseContinuationPolicyUpdate(options.setContinuationPolicy->second);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "CONTINUATION_POLICY_ERROR"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",reason=" << e.what()
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+    ContinuationPolicyConfig resulting = config;
+    ApplyContinuationPolicyUpdate(resulting, update);
+
+    const std::optional<std::string> configError =
+        ContinuationPolicyConfigurationError(resulting, resulting.enabled);
+    if (configError.has_value())
+    {
+        std::cerr << "CONTINUATION_POLICY_ERROR"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",reason=" << *configError
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+    if (resulting.enabled)
+    {
+        std::string reason;
+        if (!ValidateEnabledContinuationPolicySource(w, resulting, reason))
+        {
+            std::cerr << "CONTINUATION_POLICY_ERROR"
+                      << ",source_experiment_id=" << sourceExperimentId
+                      << ",reason=" << reason
+                      << std::endl;
+            w.commit();
+            return 1;
+        }
+    }
+
+    const bool changed = ContinuationPolicyCanonicalText(config) !=
+                         ContinuationPolicyCanonicalText(resulting);
+    std::ostringstream sql;
+    sql << "UPDATE experiment SET updated_at = now()";
+    if (update.keys.count("target_epochs"))
+        sql << ", continuation_policy_target_epochs = " << SqlNullable(w, update.targetEpochs);
+    if (update.keys.count("min_evals"))
+        sql << ", continuation_policy_min_evals = " << update.minEvals;
+    if (update.keys.count("patience"))
+        sql << ", continuation_policy_patience = " << update.patience;
+    if (update.keys.count("min_leader_score"))
+        sql << ", continuation_policy_min_leader_score = " << SqlNullable(w, update.minLeaderScore);
+    if (update.keys.count("min_infer_accuracy"))
+        sql << ", continuation_policy_min_infer_accuracy = " << SqlNullable(w, update.minInferAccuracy);
+    if (update.keys.count("min_improvement"))
+        sql << ", continuation_policy_min_improvement = " << SqlNullable(w, update.minImprovement);
+    if (update.keys.count("max_degradation"))
+        sql << ", continuation_policy_max_degradation = " << SqlNullable(w, update.maxDegradation);
+    if (update.keys.count("top_n"))
+        sql << ", continuation_policy_top_n = " << SqlNullable(w, update.topN);
+    if (update.keys.count("scope"))
+        sql << ", continuation_policy_scope = " << w.quote(update.scope);
+    if (update.keys.count("trend_mode"))
+        sql << ", continuation_policy_trend_mode = " << w.quote(update.trendMode);
+    if (update.keys.count("source_mode"))
+        sql << ", continuation_policy_source_mode = " << w.quote(update.sourceMode);
+    if (update.keys.count("include_excluded"))
+        sql << ", continuation_policy_include_excluded = "
+            << (update.includeExcluded ? "true" : "false");
+    if (update.keys.count("candidate_excluded"))
+        sql << ", continuation_candidate_excluded = "
+            << (update.candidateExcluded ? "true" : "false");
+    if (changed)
+        sql << ", continuation_policy_revision = continuation_policy_revision + 1";
+    sql << " WHERE experiment_id = " << sourceExperimentId
+        << " RETURNING continuation_policy_revision;";
+    pqxx::result updated = w.exec(sql.str());
+    resulting.policyRevision = updated[0][0].as<long long>();
+    w.commit();
+
+    std::cout << "CONTINUATION_POLICY_SET"
+              << ",source_experiment_id=" << sourceExperimentId
+              << ",changed=" << (changed ? "1" : "0")
+              << ",config=" << ContinuationPolicyDisplayText(resulting)
+              << std::endl;
+    return 0;
+}
+
+int RunEvaluateContinuationCommand(const SchedulerOptions& options)
+{
+    const long long sourceExperimentId = *options.evaluateContinuationExperimentId;
+    try
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work w{connection};
+        SetTransactionReadWrite(w);
+        ContinuationPolicyConfig config;
+        ContinuationEvaluation evaluation = EvaluateContinuationPolicy(
+            w,
+            sourceExperimentId,
+            &config);
+        if (!evaluation.persisted && !evaluation.reused && !evaluation.alreadyQueued)
+        {
+            w.commit();
+            return 1;
+        }
+        w.commit();
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "CONTINUATION_POLICY_ERROR"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",reason=" << e.what()
+                  << std::endl;
+        return 1;
+    }
+}
+
+int RunQueueContinuationCommand(const SchedulerOptions& options)
+{
+    const long long sourceExperimentId = *options.queueContinuationExperimentId;
+    try
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work w{connection};
+        SetTransactionReadWrite(w);
+
+        ContinuationPolicyConfig config;
+        ContinuationEvaluation evaluation = EvaluateContinuationPolicy(
+            w,
+            sourceExperimentId,
+            &config);
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUE_REQUESTED", config, evaluation);
+
+        if (evaluation.alreadyQueued || evaluation.queuedExperimentId.has_value())
+        {
+            PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUE_DUPLICATE", config, evaluation);
+            w.commit();
+            return 3;
+        }
+        if (!evaluation.persisted && !evaluation.reused)
+        {
+            evaluation.reason = "continuation_evaluation_not_persisted";
+            PrintContinuationPolicyLog("CONTINUATION_POLICY_ERROR", config, evaluation);
+            w.commit();
+            return 1;
+        }
+        if (evaluation.decision != "eligible")
+        {
+            evaluation.reason = "current_decision_not_eligible:" + evaluation.decision;
+            PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
+            w.commit();
+            return 1;
+        }
+
+        pqxx::result decisionRows = w.exec_params(
+            "SELECT decision, policy_revision, policy_hash, evidence_watermark, queued_experiment_id "
+            "FROM experiment_continuation_decision "
+            "WHERE continuation_decision_id = $1 FOR UPDATE;",
+            evaluation.decisionId);
+        if (decisionRows.size() != 1 ||
+            decisionRows[0][0].as<std::string>() != "eligible" ||
+            decisionRows[0][1].as<long long>() != config.policyRevision ||
+            decisionRows[0][2].as<std::string>() != evaluation.policyHash ||
+            decisionRows[0][3].as<std::string>() != evaluation.evidenceWatermark ||
+            !decisionRows[0][4].is_null())
+        {
+            throw std::runtime_error("continuation decision changed before queueing");
+        }
+
+        const std::optional<long long> duplicate = FindEquivalentContinuationExperiment(
+            w,
+            sourceExperimentId,
+            evaluation.selected.modelId,
+            *config.targetEpochs);
+        if (duplicate.has_value())
+        {
+            evaluation.queuedExperimentId = duplicate;
+            evaluation.reason = "equivalent_resume_experiment_exists";
+            PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUE_DUPLICATE", config, evaluation);
+            w.commit();
+            return 3;
+        }
+
+        QueueResumeMeta resumeMeta;
+        std::string resumeReason;
+        if (!ValidateContinuationResumeSource(
+                w,
+                config,
+                evaluation.selected,
+                &resumeMeta,
+                resumeReason))
+        {
+            throw std::runtime_error(resumeReason);
+        }
+
+        SchedulerOptions child;
+        child.selfPath = options.selfPath;
+        child.queueExperiment = true;
+        child.resumeModelId = evaluation.selected.modelId;
+        child.targetEpochs = config.targetEpochs;
+        child.checkpointInterval = config.source.checkpointInterval;
+        child.inferStart = config.source.inferStart;
+        child.inferEnd = config.source.inferEnd;
+        child.queueContinuationCandidateExcluded = config.candidateExcluded;
+        MergeResumeMetaIntoQueueOptions(child, resumeMeta);
+        EnsureRequiredQueueOptions(child);
+
+        const long long childExperimentId = InsertExperimentRecord(
+            w,
+            child,
+            config.source.symbol,
+            0);
+        const int childGeneration = config.continuationSourceExperimentId.has_value()
+            ? config.continuationGeneration + 1
+            : 1;
+        pqxx::result childUpdated = w.exec_params(
+            "UPDATE experiment SET "
+            "parent_experiment_id = $1, "
+            "continuation_source_experiment_id = $1, "
+            "continuation_source_model_id = $2, "
+            "continuation_source_epoch = $3, "
+            "continuation_decision_id = $4, "
+            "continuation_generation = $5, "
+            "continuation_candidate_excluded = $6, "
+            "continuation_policy_enabled = false, "
+            "updated_at = now() "
+            "WHERE experiment_id = $7 "
+            "RETURNING experiment_id;",
+            sourceExperimentId,
+            evaluation.selected.modelId,
+            evaluation.selected.completedEpoch,
+            evaluation.decisionId,
+            childGeneration,
+            config.candidateExcluded,
+            childExperimentId);
+        if (childUpdated.size() != 1)
+            throw std::runtime_error("failed to persist continuation experiment lineage");
+
+        pqxx::result decisionUpdated = w.exec_params(
+            "UPDATE experiment_continuation_decision SET "
+            "decision = 'continuation_queued', "
+            "reason = 'continuation_experiment_created', "
+            "queued_experiment_id = $1, updated_at = now() "
+            "WHERE continuation_decision_id = $2 AND queued_experiment_id IS NULL "
+            "RETURNING continuation_decision_id;",
+            childExperimentId,
+            evaluation.decisionId);
+        if (decisionUpdated.size() != 1)
+            throw std::runtime_error("continuation decision was queued concurrently");
+        w.exec_params(
+            "UPDATE experiment SET "
+            "continuation_policy_last_decision = 'continuation_queued', "
+            "continuation_policy_last_decision_at = now(), "
+            "continuation_policy_last_reason = 'continuation_experiment_created', "
+            "continuation_policy_selected_model_id = $1, "
+            "continuation_policy_queued_experiment_id = $2, "
+            "updated_at = now() "
+            "WHERE experiment_id = $3;",
+            evaluation.selected.modelId,
+            childExperimentId,
+            sourceExperimentId);
+
+        evaluation.decision = "continuation_queued";
+        evaluation.reason = "continuation_experiment_created";
+        evaluation.queuedExperimentId = childExperimentId;
+        w.commit();
+        PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUED", config, evaluation);
+        return 0;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "CONTINUATION_POLICY_ERROR"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",reason=" << e.what()
+                  << std::endl;
+        return 1;
+    }
+}
+
+int RunContinuationStatusCommand(const SchedulerOptions& options)
+{
+    const long long sourceExperimentId = *options.continuationStatusExperimentId;
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work w{connection};
+    SetTransactionReadWrite(w);
+    if (!ContinuationPolicySchemaExists(w))
+    {
+        std::cerr << "DATABASE_MIGRATION_REQUIRED,command=./migrate_lstm_db.sh,missing=continuation_policy_schema"
+                  << std::endl;
+        w.commit();
+        return 2;
+    }
+    const std::optional<ContinuationPolicyConfig> config =
+        LoadContinuationPolicyConfig(w, sourceExperimentId, false);
+    if (!config.has_value())
+    {
+        std::cerr << "CONTINUATION_POLICY_ERROR"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",reason=source_experiment_not_found"
+                  << std::endl;
+        w.commit();
+        return 1;
+    }
+
+    pqxx::result decisions = w.exec_params(
+        "SELECT continuation_decision_id, source_model_id, source_epoch, target_epochs, "
+        "decision, reason, queued_experiment_id, policy_revision, policy_hash, evidence_watermark "
+        "FROM experiment_continuation_decision "
+        "WHERE source_experiment_id = $1 "
+        "ORDER BY updated_at DESC, continuation_decision_id DESC LIMIT 1;",
+        sourceExperimentId);
+    w.commit();
+
+    std::cout << "CONTINUATION STATUS\n";
+    std::cout << "  Experiment: " << sourceExperimentId << "\n";
+    std::cout << "  Continuation Policy: " << (config->enabled ? "enabled" : "disabled") << "\n";
+    std::cout << "  Continuation Candidate: "
+              << (config->candidateExcluded ? "excluded" : "production-eligible") << "\n";
+    std::cout << "  Continuation Target: "
+              << (config->targetEpochs.has_value() ? std::to_string(*config->targetEpochs) : "not configured")
+              << "\n";
+    std::cout << "  Continuation Rules: " << ContinuationPolicyDisplayText(*config) << "\n";
+    std::cout << "  Continuation Last: decision="
+              << (config->lastDecision.has_value() ? *config->lastDecision : "none")
+              << " reason=" << (config->lastReason.has_value() ? *config->lastReason : "none")
+              << "\n";
+    std::cout << "  Continuation Policy Selection: model_id="
+              << (config->selectedModelId.has_value() ? std::to_string(*config->selectedModelId) : "none");
+    if (!decisions.empty())
+        std::cout << " epoch=" << decisions[0][2].as<int>();
+    else
+        std::cout << " epoch=none";
+    std::cout << "\n";
+    std::cout << "  Continuation Queued Experiment: "
+              << (config->queuedExperimentId.has_value()
+                      ? std::to_string(*config->queuedExperimentId)
+                      : "none")
+              << "\n";
+    const bool hasContinuationLineage =
+        config->continuationSourceExperimentId.has_value() ||
+        config->continuationSourceModelId.has_value() ||
+        config->continuationSourceEpoch.has_value() ||
+        config->continuationDecisionId.has_value();
+    std::cout << "  Continuation Source Experiment: "
+              << (config->continuationSourceExperimentId.has_value()
+                      ? std::to_string(*config->continuationSourceExperimentId)
+                      : "none")
+              << "\n";
+    std::cout << "  Continuation Source Model: "
+              << (config->continuationSourceModelId.has_value()
+                      ? std::to_string(*config->continuationSourceModelId)
+                      : "none")
+              << "\n";
+    std::cout << "  Continuation Source Epoch: "
+              << (config->continuationSourceEpoch.has_value()
+                      ? std::to_string(*config->continuationSourceEpoch)
+                      : "none")
+              << "\n";
+    std::cout << "  Continuation Decision: "
+              << (config->continuationDecisionId.has_value()
+                      ? std::to_string(*config->continuationDecisionId)
+                      : "none")
+              << "\n";
+    std::cout << "  Continuation Generation: "
+              << (hasContinuationLineage
+                      ? std::to_string(config->continuationGeneration)
+                      : "none")
+              << "\n";
+    if (!decisions.empty())
+    {
+        std::cout << "  Decision Identity: id=" << decisions[0][0].as<long long>()
+                  << " policy_revision=" << decisions[0][7].as<long long>()
+                  << " policy_hash=" << decisions[0][8].as<std::string>()
+                  << " evidence_watermark=" << decisions[0][9].as<std::string>()
+                  << "\n";
+    }
+    return 0;
+}
+
 void MarkAnalyzeFailed(pqxx::work& w,
                               long long experimentId,
                               const std::string& errorMessage)
@@ -8687,6 +10604,11 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
 
         if (command.find("--schedule-experiments") != std::string::npos)
         {
+            const bool isSchedulerWrapper =
+                command.find("SCREEN -dmS") != std::string::npos ||
+                command.find("login -pflq") != std::string::npos;
+            if (isSchedulerWrapper)
+                continue;
             snapshot.schedulerPids.push_back(pid);
             AddResourceToAggregate(snapshot.schedulerResources, resource);
             if (!snapshot.maxTrainProcs.has_value())
@@ -11178,6 +13100,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "[--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD] "
         << "[--checkpoint-infer] [--checkpoint-infer-min-epoch=N] [--checkpoint-infer-interval=N] "
         << "[--checkpoint-policy --checkpoint-policy-min-leader-score=VALUE|--checkpoint-policy-min-infer-accuracy=VALUE|--checkpoint-policy-top-n=N]\n"
+        << "Validation sources may add --continuation-candidate-excluded; they remain ineligible unless include_excluded=true is configured explicitly.\n"
         << "Example: " << exe << " --queue-experiment --symbol=eurusdrmp --prediction-horizon=12 --target-epochs=240\n"
         << "Resume: " << exe << " --queue-experiment --resume-model-id=MODEL_ID --target-epochs=240 "
         << "[--checkpoint-interval=N] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD]\n"
@@ -11229,6 +13152,18 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --retry-checkpoint-eval=CHECKPOINT_EVAL_ID [--dry-run]\n"
         << "Usage: " << exe
         << " --evaluate-checkpoint-policy=CHECKPOINT_EVAL_ID\n"
+        << "Usage: " << exe
+        << " --enable-continuation-policy=EXPERIMENT_ID | --disable-continuation-policy=EXPERIMENT_ID | "
+        << "--set-continuation-policy=EXPERIMENT_ID:key=value,key=value\n"
+        << "Continuation keys: target_epochs, min_evals, patience, min_leader_score, "
+        << "min_infer_accuracy, min_improvement, max_degradation, top_n, scope, trend_mode, "
+        << "source_mode, include_excluded, candidate_excluded\n"
+        << "Continuation gates use AND semantics. trend_delta=latest_metric-first_metric; "
+        << "non_degrading requires trend_delta>=-max_degradation and improving requires "
+        << "trend_delta>=min_improvement. trend_mode defaults to none.\n"
+        << "Usage: " << exe
+        << " --evaluate-continuation=EXPERIMENT_ID | --queue-continuation=EXPERIMENT_ID | "
+        << "--continuation-status=EXPERIMENT_ID\n"
         << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
@@ -11292,6 +13227,14 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunRetryCheckpointEvalCommand(options);
         if (options.evaluateCheckpointPolicyEvalId.has_value())
             return RunEvaluateCheckpointPolicyCommand(options);
+        if (HasContinuationControlCommand(options))
+            return RunContinuationPolicyControlCommand(options);
+        if (options.evaluateContinuationExperimentId.has_value())
+            return RunEvaluateContinuationCommand(options);
+        if (options.queueContinuationExperimentId.has_value())
+            return RunQueueContinuationCommand(options);
+        if (options.continuationStatusExperimentId.has_value())
+            return RunContinuationStatusCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);
         if (options.schedulerStatus)
