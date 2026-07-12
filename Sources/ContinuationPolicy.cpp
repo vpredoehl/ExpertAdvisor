@@ -85,6 +85,11 @@ bool ParseBoolean(const std::string& optionName, const std::string& value)
         "invalid " + optionName + " value '" + value + "'; expected true or false");
 }
 
+std::string InvalidTargetSequenceValue(const std::string& value)
+{
+    return "invalid target_sequence value '" + value + "'";
+}
+
 } // namespace
 
 bool ValidContinuationScope(const std::string& value)
@@ -104,16 +109,96 @@ bool ValidContinuationSourceMode(const std::string& value)
            value == "final_model";
 }
 
+bool ValidContinuationProgressionMode(const std::string& value)
+{
+    return value == "fixed_increment" || value == "target_sequence";
+}
+
+std::optional<std::string> EffectiveContinuationProgressionMode(
+    const ContinuationPolicyConfig& config)
+{
+    if (config.progressionMode.has_value())
+        return config.progressionMode;
+    if (config.targetIncrement.has_value())
+        return "fixed_increment";
+    return std::nullopt;
+}
+
+std::vector<int> ParseContinuationTargetSequence(const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument("target_sequence_required");
+
+    std::vector<int> sequence;
+    std::set<int> seen;
+    size_t begin = 0;
+    while (begin <= value.size())
+    {
+        const size_t delimiter = value.find(':', begin);
+        const size_t end = delimiter == std::string::npos ? value.size() : delimiter;
+        if (end == begin)
+            throw std::invalid_argument(InvalidTargetSequenceValue(value));
+        const std::string item = value.substr(begin, end - begin);
+        size_t consumed = 0;
+        long long parsed = 0;
+        try
+        {
+            parsed = std::stoll(item, &consumed, 10);
+        }
+        catch (const std::exception&)
+        {
+            throw std::invalid_argument(InvalidTargetSequenceValue(value));
+        }
+        if (consumed != item.size() || parsed > std::numeric_limits<int>::max() ||
+            parsed < std::numeric_limits<int>::min())
+            throw std::invalid_argument(InvalidTargetSequenceValue(value));
+        const int target = static_cast<int>(parsed);
+        if (target <= 0)
+            throw std::invalid_argument("target_sequence_contains_nonpositive_value");
+        if (!seen.insert(target).second)
+            throw std::invalid_argument("target_sequence_contains_duplicate");
+        if (!sequence.empty() && target < sequence.back())
+            throw std::invalid_argument("target_sequence_must_be_strictly_increasing");
+        sequence.push_back(target);
+        if (delimiter == std::string::npos)
+            break;
+        begin = delimiter + 1;
+    }
+    return sequence;
+}
+
+std::string ContinuationTargetSequenceText(
+    const std::optional<std::vector<int>>& sequence,
+    const std::string& nullText)
+{
+    if (!sequence.has_value())
+        return nullText;
+    std::ostringstream out;
+    for (size_t index = 0; index < sequence->size(); ++index)
+    {
+        if (index != 0)
+            out << ':';
+        out << (*sequence)[index];
+    }
+    return out.str();
+}
+
 ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
 {
     ContinuationPolicyUpdate update;
     for (const std::string& item : SplitCommaSeparated(text))
     {
         const size_t equals = item.find('=');
-        if (equals == std::string::npos || equals == 0 || equals + 1 >= item.size())
+        if (equals == std::string::npos || equals == 0)
             throw std::invalid_argument("--set-continuation-policy requires key=value pairs");
         const std::string key = item.substr(0, equals);
         const std::string value = item.substr(equals + 1);
+        if (value.empty())
+        {
+            if (key == "target_sequence")
+                throw std::invalid_argument("target_sequence_required");
+            throw std::invalid_argument("--set-continuation-policy requires key=value pairs");
+        }
         update.keys.insert(key);
         const bool clearValue = value == "null";
 
@@ -163,6 +248,11 @@ ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
             update.candidateExcluded = ParseBoolean(key, value);
         else if (key == "inherit_to_child")
             update.inheritToChild = ParseBoolean(key, value);
+        else if (key == "progression_mode")
+        {
+            if (!clearValue)
+                update.progressionMode = value;
+        }
         else if (key == "target_increment")
         {
             if (!clearValue)
@@ -172,6 +262,11 @@ ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
         {
             if (!clearValue)
                 update.maxTargetEpochs = ParsePositiveInt(key, value);
+        }
+        else if (key == "target_sequence")
+        {
+            if (!clearValue)
+                update.targetSequence = ParseContinuationTargetSequence(value);
         }
         else
             throw std::invalid_argument("unsupported continuation policy key '" + key + "'");
@@ -199,8 +294,10 @@ void ApplyContinuationPolicyUpdate(
     if (update.keys.count("include_excluded")) config.includeExcluded = update.includeExcluded;
     if (update.keys.count("candidate_excluded")) config.candidateExcluded = update.candidateExcluded;
     if (update.keys.count("inherit_to_child")) config.inheritToChild = update.inheritToChild;
+    if (update.keys.count("progression_mode")) config.progressionMode = update.progressionMode;
     if (update.keys.count("target_increment")) config.targetIncrement = update.targetIncrement;
     if (update.keys.count("max_target_epochs")) config.maxTargetEpochs = update.maxTargetEpochs;
+    if (update.keys.count("target_sequence")) config.targetSequence = update.targetSequence;
 }
 
 std::optional<std::string> ContinuationPolicyConfigurationError(
@@ -225,9 +322,71 @@ std::optional<std::string> ContinuationPolicyConfigurationError(
     if (!ValidContinuationScope(config.scope)) return "invalid_scope";
     if (!ValidContinuationTrendMode(config.trendMode)) return "invalid_trend_mode";
     if (!ValidContinuationSourceMode(config.sourceMode)) return "invalid_source_mode";
+    if (config.progressionMode.has_value() &&
+        !ValidContinuationProgressionMode(*config.progressionMode))
+        return "invalid_progression_mode";
+
+    if (config.targetSequence.has_value())
+    {
+        if (config.targetSequence->empty())
+            return "target_sequence_required";
+        std::set<int> seen;
+        std::optional<int> previous;
+        for (const int target : *config.targetSequence)
+        {
+            if (target <= 0)
+                return "target_sequence_contains_nonpositive_value";
+            if (!seen.insert(target).second)
+                return "target_sequence_contains_duplicate";
+            if (previous.has_value() && target < *previous)
+                return "target_sequence_must_be_strictly_increasing";
+            previous = target;
+        }
+    }
+
+    const std::optional<std::string> progressionMode =
+        EffectiveContinuationProgressionMode(config);
+    if (progressionMode == "target_sequence")
+    {
+        if (!config.targetSequence.has_value() || config.targetSequence->empty())
+            return "target_sequence_required";
+        if (config.targetIncrement.has_value())
+            return "target_increment_disallowed_for_target_sequence";
+        if (config.maxTargetEpochs.has_value() &&
+            *config.maxTargetEpochs != config.targetSequence->back())
+            return "max_target_conflicts_with_sequence";
+
+        const bool terminal = config.inheritanceStatus == "max_target_reached";
+        if (terminal)
+        {
+            if (config.source.targetEpochs != config.targetSequence->back())
+                return "sequence_has_no_target_after_current_epoch";
+            if (config.targetEpochs.has_value())
+                return "policy_target_is_not_next_sequence_target";
+        }
+        else
+        {
+            const SequenceContinuationTargetDerivation sequenceTarget =
+                DeriveSequenceContinuationChildPolicy(
+                    config.source.targetEpochs,
+                    config.targetEpochs,
+                    config.targetSequence);
+            if (!sequenceTarget.error.empty())
+                return sequenceTarget.error;
+        }
+    }
+    else
+    {
+        if (config.targetSequence.has_value())
+            return "fixed_increment_disallows_target_sequence";
+        if (config.progressionMode == "fixed_increment" &&
+            !config.targetIncrement.has_value())
+            return "fixed_increment_requires_target_increment";
+    }
+
     if (config.targetIncrement.has_value() && *config.targetIncrement <= 0)
         return "target_increment_must_be_positive";
-    if (config.maxTargetEpochs.has_value())
+    if (progressionMode != "target_sequence" && config.maxTargetEpochs.has_value())
     {
         if (*config.maxTargetEpochs <= 0) return "max_target_epochs_must_be_positive";
         const bool terminal = config.inheritanceStatus == "max_target_reached";
@@ -237,7 +396,7 @@ std::optional<std::string> ContinuationPolicyConfigurationError(
         if (config.targetEpochs.has_value() && *config.targetEpochs > *config.maxTargetEpochs)
             return "policy_target_exceeds_max_target";
     }
-    if (config.inheritToChild)
+    if (config.inheritToChild && progressionMode != "target_sequence")
     {
         const ContinuationTargetDerivation target =
             DeriveContinuationChildPolicyTarget(config.targetEpochs, config.targetIncrement);
@@ -285,8 +444,22 @@ std::string ContinuationPolicySemanticCanonicalText(const ContinuationPolicyConf
         << "|source_mode=" << config.sourceMode
         << "|include_excluded=" << (config.includeExcluded ? "true" : "false")
         << "|candidate_excluded=" << (config.candidateExcluded ? "true" : "false")
-        << "|inherit_to_child=" << (config.inheritToChild ? "true" : "false")
-        << "|target_increment=" << ContinuationOptionalIntText(config.targetIncrement);
+        << "|inherit_to_child=" << (config.inheritToChild ? "true" : "false");
+    if (EffectiveContinuationProgressionMode(config) == "target_sequence")
+    {
+        out << "|progression_mode=target_sequence|target_sequence=[";
+        if (config.targetSequence.has_value())
+        {
+            for (size_t index = 0; index < config.targetSequence->size(); ++index)
+            {
+                if (index != 0)
+                    out << ',';
+                out << (*config.targetSequence)[index];
+            }
+        }
+        out << ']';
+    }
+    out << "|target_increment=" << ContinuationOptionalIntText(config.targetIncrement);
     if (config.maxTargetEpochs.has_value())
         out << "|max_target_epochs=" << *config.maxTargetEpochs;
     return out.str();

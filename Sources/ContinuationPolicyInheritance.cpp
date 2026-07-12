@@ -45,6 +45,78 @@ BoundedContinuationTargetDerivation DeriveBoundedContinuationChildPolicy(
     return {false, next.targetEpochs, {}};
 }
 
+SequenceContinuationTargetDerivation DeriveSequenceContinuationChildPolicy(
+    int currentExperimentTargetEpochs,
+    const std::optional<int>& policyTargetEpochs,
+    const std::optional<std::vector<int>>& targetSequence)
+{
+    SequenceContinuationTargetDerivation result;
+    if (!targetSequence.has_value() || targetSequence->empty())
+    {
+        result.error = "target_sequence_required";
+        return result;
+    }
+    for (size_t index = 0; index < targetSequence->size(); ++index)
+    {
+        const int value = (*targetSequence)[index];
+        if (value <= 0)
+        {
+            result.error = "target_sequence_contains_nonpositive_value";
+            return result;
+        }
+        if (index != 0)
+        {
+            if (value == (*targetSequence)[index - 1])
+            {
+                result.error = "target_sequence_contains_duplicate";
+                return result;
+            }
+            if (value < (*targetSequence)[index - 1])
+            {
+                result.error = "target_sequence_must_be_strictly_increasing";
+                return result;
+            }
+        }
+    }
+    if (!policyTargetEpochs.has_value())
+    {
+        result.error = "policy_target_not_in_sequence";
+        return result;
+    }
+
+    size_t policyIndex = targetSequence->size();
+    size_t nextIndex = targetSequence->size();
+    for (size_t index = 0; index < targetSequence->size(); ++index)
+    {
+        if ((*targetSequence)[index] == *policyTargetEpochs)
+            policyIndex = index;
+        if (nextIndex == targetSequence->size() &&
+            (*targetSequence)[index] > currentExperimentTargetEpochs)
+            nextIndex = index;
+    }
+    if (policyIndex == targetSequence->size())
+    {
+        result.error = "policy_target_not_in_sequence";
+        return result;
+    }
+    if (nextIndex == targetSequence->size())
+    {
+        result.error = "sequence_has_no_target_after_current_epoch";
+        return result;
+    }
+    if (policyIndex != nextIndex)
+    {
+        result.error = "policy_target_is_not_next_sequence_target";
+        return result;
+    }
+
+    result.childTrainingTargetEpochs = *policyTargetEpochs;
+    result.terminal = policyIndex + 1 == targetSequence->size();
+    if (!result.terminal)
+        result.inheritedPolicyTargetEpochs = (*targetSequence)[policyIndex + 1];
+    return result;
+}
+
 ContinuationChildPolicyPlan PlanContinuationChildPolicy(
     const ContinuationPolicyConfig& sourceConfig)
 {
@@ -55,15 +127,40 @@ ContinuationChildPolicyPlan PlanContinuationChildPolicy(
     plan.inherit = true;
     if (!sourceConfig.targetEpochs.has_value())
         throw std::runtime_error("inherit_to_child_requires_target_epochs");
-    const BoundedContinuationTargetDerivation boundedTarget =
-        DeriveBoundedContinuationChildPolicy(
-            *sourceConfig.targetEpochs,
-            sourceConfig.targetIncrement,
-            sourceConfig.maxTargetEpochs);
-    if (!boundedTarget.error.empty())
-        throw std::runtime_error(boundedTarget.error);
+    plan.progressionMode =
+        EffectiveContinuationProgressionMode(sourceConfig).value_or("fixed_increment");
+    plan.childTrainingTargetEpochs = *sourceConfig.targetEpochs;
+    if (plan.progressionMode == "target_sequence")
+    {
+        const SequenceContinuationTargetDerivation sequenceTarget =
+            DeriveSequenceContinuationChildPolicy(
+                sourceConfig.source.targetEpochs,
+                sourceConfig.targetEpochs,
+                sourceConfig.targetSequence);
+        if (!sequenceTarget.error.empty())
+            throw std::runtime_error(sequenceTarget.error);
+        plan.terminal = sequenceTarget.terminal;
+        plan.inheritedPolicyTargetEpochs =
+            sequenceTarget.inheritedPolicyTargetEpochs;
+        plan.progressionDiagnostic =
+            plan.terminal ? "target_sequence_terminal" : "target_sequence_advanced";
+    }
+    else
+    {
+        const BoundedContinuationTargetDerivation boundedTarget =
+            DeriveBoundedContinuationChildPolicy(
+                *sourceConfig.targetEpochs,
+                sourceConfig.targetIncrement,
+                sourceConfig.maxTargetEpochs);
+        if (!boundedTarget.error.empty())
+            throw std::runtime_error(boundedTarget.error);
+        plan.terminal = boundedTarget.terminal;
+        plan.inheritedPolicyTargetEpochs =
+            boundedTarget.inheritedPolicyTargetEpochs;
+        plan.progressionDiagnostic =
+            plan.terminal ? "fixed_increment_terminal" : "fixed_increment_advanced";
+    }
 
-    plan.terminal = boundedTarget.terminal;
     plan.sourcePolicyHash = ContinuationPolicySemanticHash(sourceConfig);
     plan.inheritedPolicy = sourceConfig;
     plan.inheritedPolicy.source.targetEpochs = *sourceConfig.targetEpochs;
@@ -77,7 +174,7 @@ ContinuationChildPolicyPlan PlanContinuationChildPolicy(
     }
     else
     {
-        plan.targetEpochs = *boundedTarget.inheritedPolicyTargetEpochs;
+        plan.targetEpochs = *plan.inheritedPolicyTargetEpochs;
         plan.inheritedPolicy.targetEpochs = plan.targetEpochs;
     }
     plan.inheritedPolicy.policyRevision = 1;

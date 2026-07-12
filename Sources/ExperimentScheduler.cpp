@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cerrno>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -36,6 +38,7 @@
 #include "RunMetadata.hpp"
 #include "SchedulerChildStatus.hpp"
 #include "SupportedSymbols.hpp"
+#include "WorkerLifecycleDiagnostics.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -221,11 +224,15 @@ struct SchedulerOwnedChild
     pid_t pid = -1;
     long long experimentId = -1;
     std::string phase;
+    std::string operation;
+    std::string commandLine;
     std::optional<long long> expectedModelId;
     std::optional<long long> checkpointEvalId;
     std::string logPath;
     std::string launchedAt;
+    double launchedEpoch = 0.0;
     std::optional<ObservedChildStatus> observedStatus;
+    ChildLifecycleDiagnosticState diagnosticState;
 };
 
 std::map<pid_t, SchedulerOwnedChild> gSchedulerOwnedChildren;
@@ -241,6 +248,7 @@ struct CheckpointEvalRow
     std::optional<int> workerPid;
     std::optional<std::string> inferLogPath;
     std::optional<std::string> analysisLogPath;
+    double inferStartedEpoch = 0.0;
 };
 
 struct RunningExperimentState
@@ -248,6 +256,7 @@ struct RunningExperimentState
     ExperimentRow experiment;
     std::string phase;
     std::optional<int> workerPid;
+    double attemptStartedEpoch = 0.0;
 };
 
 struct QueueSnapshot
@@ -825,6 +834,23 @@ std::string SqlNullable(pqxx::work& w, const std::optional<int>& value)
 std::string SqlNullable(pqxx::work& w, const std::optional<long long>& value)
 {
     return value.has_value() ? w.quote(*value) : "NULL";
+}
+
+std::string SqlContinuationTargetSequence(
+    const std::optional<std::vector<int>>& sequence)
+{
+    if (!sequence.has_value())
+        return "NULL";
+    std::ostringstream out;
+    out << "ARRAY[";
+    for (size_t index = 0; index < sequence->size(); ++index)
+    {
+        if (index != 0)
+            out << ',';
+        out << (*sequence)[index];
+    }
+    out << "]::integer[]";
+    return out.str();
 }
 
 std::string FormatDouble(double value)
@@ -1890,6 +1916,49 @@ std::optional<long long> FindLatestModelForExperiment(pqxx::work& w, long long e
     return rows[0][0].as<long long>();
 }
 
+std::optional<long long> FindLatestModelForExperimentSince(
+    pqxx::work& w,
+    long long experimentId,
+    double attemptStartedEpoch)
+{
+    if (!ColumnExists(w, "model", "experiment_id"))
+        return std::nullopt;
+
+    pqxx::result rows = w.exec_params(
+        "WITH cfg AS ("
+        "  SELECT model_id, max(value) FILTER (WHERE col_idx = 10) AS completed_epochs "
+        "  FROM matrix "
+        "  WHERE param_name = 'train_config_meta' AND row_idx = 0 "
+        "  GROUP BY model_id"
+        ") "
+        "SELECT m.model_id "
+        "FROM model m "
+        "LEFT JOIN cfg ON cfg.model_id = m.model_id "
+        "WHERE m.experiment_id = $1 "
+        "AND m.created_at >= to_timestamp($2) "
+        "ORDER BY cfg.completed_epochs DESC NULLS LAST, m.model_id DESC "
+        "LIMIT 1;",
+        experimentId,
+        attemptStartedEpoch);
+    if (rows.empty())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+bool ModelWasCreatedForAttempt(pqxx::work& w,
+                               long long modelId,
+                               long long experimentId,
+                               double attemptStartedEpoch)
+{
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 FROM model WHERE model_id = $1 AND experiment_id = $2 "
+        "AND created_at >= to_timestamp($3) LIMIT 1;",
+        modelId,
+        experimentId,
+        attemptStartedEpoch);
+    return !rows.empty();
+}
+
 [[maybe_unused]] bool ExistingFilePath(const std::optional<std::string>& path)
 {
     return path.has_value() && std::filesystem::exists(*path);
@@ -1902,6 +1971,9 @@ bool RequireSchedulerTables(pqxx::work& w)
         missing.push_back("experiment");
     if (!TableExists(w, "experiment_analysis_result"))
         missing.push_back("experiment_analysis_result");
+    if (TableExists(w, "experiment") &&
+        !ColumnExists(w, "experiment", "worker_started_at"))
+        missing.push_back("experiment.worker_started_at");
 
     if (missing.empty())
         return true;
@@ -2810,7 +2882,8 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, phase, worker_pid "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, phase, worker_pid, "
+        "extract(epoch from COALESCE(worker_started_at, updated_at))::double precision "
         "FROM experiment "
         "WHERE status = 'running' "
         "ORDER BY updated_at ASC, experiment_id ASC;");
@@ -2821,7 +2894,8 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
         experiments.push_back(RunningExperimentState{
             RowToExperiment(row),
             row[17].as<std::string>(),
-            row[18].is_null() ? std::nullopt : std::optional<int>{row[18].as<int>()}});
+            row[18].is_null() ? std::nullopt : std::optional<int>{row[18].as<int>()},
+            row[19].as<double>()});
     return experiments;
 }
 
@@ -3062,6 +3136,7 @@ void ApplySchedulerControlTransition(pqxx::work& w,
              action == "requeue_inference")
     {
         sql << ", started_at = NULL"
+            << ", worker_started_at = NULL"
             << ", completed_at = NULL"
             << ", exit_code = NULL"
             << ", error_message = NULL"
@@ -4068,6 +4143,44 @@ void PrintSchedulerExec(const std::vector<std::string>& argv)
               << std::endl;
 }
 
+class SchedulerChildLaunchError : public std::runtime_error
+{
+public:
+    SchedulerChildLaunchError(int errorNumber, const std::string& message)
+        : std::runtime_error(message), errorNumber_(errorNumber)
+    {
+    }
+
+    int ErrorNumber() const { return errorNumber_; }
+
+private:
+    int errorNumber_ = 0;
+};
+
+int SchedulerChildLaunchErrorNumber(const std::exception& error)
+{
+    const auto* launchError = dynamic_cast<const SchedulerChildLaunchError*>(&error);
+    return launchError != nullptr ? launchError->ErrorNumber() : EIO;
+}
+
+[[noreturn]] void ThrowSchedulerChildLaunchError(
+    long long experimentId,
+    const std::string& phase,
+    const std::string& commandLine,
+    int errorNumber,
+    const std::string& context)
+{
+    std::cout << SchedulerChildLaunchFailureDiagnostic(
+                     experimentId,
+                     phase,
+                     errorNumber,
+                     commandLine)
+              << std::endl;
+    throw SchedulerChildLaunchError(
+        errorNumber,
+        context + ": " + std::strerror(errorNumber));
+}
+
 pid_t LaunchChildProcess(const std::vector<std::string>& argv,
                          const std::string& logPath,
                          long long experimentId,
@@ -4076,11 +4189,25 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
                          const std::optional<long long>& checkpointEvalId = std::nullopt)
 {
     if (argv.empty())
-        throw std::runtime_error("empty child argv");
+        ThrowSchedulerChildLaunchError(
+            experimentId, phase, "", EINVAL, "empty child argv");
+
+    const std::string commandLine = CommandForDisplay(argv);
+    const double launchStartedEpoch =
+        std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
 
     const int fd = ::open(logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0)
-        throw std::runtime_error("failed to open log file '" + logPath + "'");
+    {
+        const int openError = errno;
+        ThrowSchedulerChildLaunchError(
+            experimentId,
+            phase,
+            commandLine,
+            openError,
+            "failed to open log file '" + logPath + "'");
+    }
 
     std::vector<char*> childArgv;
     childArgv.reserve(argv.size() + 1);
@@ -4094,8 +4221,10 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
     pid_t pid = ::fork();
     if (pid < 0)
     {
+        const int forkError = errno;
         ::close(fd);
-        throw std::runtime_error("fork failed");
+        ThrowSchedulerChildLaunchError(
+            experimentId, phase, commandLine, forkError, "fork failed");
     }
 
     if (pid == 0)
@@ -4131,11 +4260,23 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
     child.pid = pid;
     child.experimentId = experimentId;
     child.phase = phase;
+    child.operation = phase;
+    child.commandLine = commandLine;
     child.expectedModelId = expectedModelId;
     child.checkpointEvalId = checkpointEvalId;
     child.logPath = logPath;
     child.launchedAt = EA::RunMetadata::CurrentUtcTimestamp();
+    child.launchedEpoch = launchStartedEpoch;
     gSchedulerOwnedChildren.emplace(pid, std::move(child));
+    std::cout << "SCHEDULER_CHILD_LAUNCHED"
+              << ",experiment_id=" << experimentId
+              << ",worker_pid=" << pid
+              << ",pid=" << pid
+              << ",phase=" << phase
+              << ",operation=" << phase
+              << ",command_line=" << commandLine
+              << ",log_path=" << logPath
+              << std::endl;
     return pid;
 }
 
@@ -4413,6 +4554,7 @@ CheckpointEvalRow RowToCheckpointEval(const pqxx::row& row)
     eval.experiment.lastModelId = eval.checkpointModelId;
     eval.experiment.resumeModelId = OptionalLongLongCell(row, 20);
     eval.experiment.trainLogPath = OptionalStringCell(row, 21);
+    eval.inferStartedEpoch = row[22].is_null() ? 0.0 : row[22].as<double>();
     eval.experiment.inferLogPath = eval.inferLogPath;
     eval.experiment.analysisLogPath = eval.analysisLogPath;
     return eval;
@@ -4430,7 +4572,8 @@ std::vector<CheckpointEvalRow> LoadCheckpointEvalRows(pqxx::work& w,
         "e.experiment_id, e.symbol, e.prediction_horizon, e.c_next_threshold, "
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
-        "e.resume_model_id, e.train_log_path "
+        "e.resume_model_id, e.train_log_path, "
+        "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision "
         "FROM experiment_checkpoint_eval ce "
         "JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         "WHERE ce.status = $1 AND ce.phase = $2 "
@@ -4456,7 +4599,8 @@ std::optional<CheckpointEvalRow> LoadCheckpointEvalById(pqxx::work& w,
         "e.experiment_id, e.symbol, e.prediction_horizon, e.c_next_threshold, "
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
-        "e.resume_model_id, e.train_log_path "
+        "e.resume_model_id, e.train_log_path, "
+        "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision "
         "FROM experiment_checkpoint_eval ce "
         "JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         "WHERE ce.checkpoint_eval_id = $1;",
@@ -4829,6 +4973,67 @@ std::optional<std::string> DiscoverValidInferenceLog(const ExperimentRow& experi
     return std::nullopt;
 }
 
+bool FileWasModifiedForAttempt(const std::string& path,
+                               double attemptStartedEpoch)
+{
+    std::error_code ec;
+    const auto fileTime = std::filesystem::last_write_time(path, ec);
+    if (ec)
+        return false;
+    const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        fileTime - std::filesystem::file_time_type::clock::now() +
+        std::chrono::system_clock::now());
+    const double modifiedEpoch = std::chrono::duration<double>(
+        systemTime.time_since_epoch()).count();
+    return IsCurrentWorkerAttemptEvidence(modifiedEpoch, attemptStartedEpoch);
+}
+
+bool HasValidInferenceLogPathForAttempt(
+    const ExperimentRow& experiment,
+    double attemptStartedEpoch)
+{
+    return experiment.inferLogPath.has_value() &&
+           FileWasModifiedForAttempt(*experiment.inferLogPath, attemptStartedEpoch) &&
+           IsValidInferenceLogText(ReadFileIfExists(experiment.inferLogPath));
+}
+
+std::optional<std::string> DiscoverValidInferenceLogForAttempt(
+    const ExperimentRow& experiment,
+    double attemptStartedEpoch)
+{
+    if (!experiment.lastModelId.has_value())
+        return std::nullopt;
+
+    const std::string experimentNeedle =
+        "experiment_" + std::to_string(experiment.experimentId) + "_";
+    const std::vector<std::filesystem::path> roots = {
+        std::filesystem::current_path(),
+        std::filesystem::current_path() / "experiment_logs"};
+
+    for (const auto& root : roots)
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec))
+            continue;
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec))
+        {
+            if (ec)
+                break;
+            if (!entry.is_regular_file(ec))
+                continue;
+            const std::string filename = entry.path().filename().string();
+            if (filename.find(experimentNeedle) == std::string::npos ||
+                filename.find("infer") == std::string::npos)
+                continue;
+            const std::string path = entry.path().string();
+            if (FileWasModifiedForAttempt(path, attemptStartedEpoch) &&
+                IsValidInferenceLogText(ReadFileIfExists(path)))
+                return path;
+        }
+    }
+    return std::nullopt;
+}
+
 void ApplyPersistedSymbolToAnalysisExperiment(pqxx::work& w,
                                                      ExperimentRow& experiment,
                                                      const ParsedMetrics& metrics)
@@ -4946,6 +5151,36 @@ bool HasCompletedInferenceResult(pqxx::work& w,
     return !rows.empty();
 }
 
+bool HasCompletedInferenceResultForAttempt(
+    pqxx::work& w,
+    const ExperimentRow& experiment,
+    double attemptStartedEpoch)
+{
+    if (!TableExists(w, "inference_eval_result") ||
+        !experiment.lastModelId.has_value() ||
+        !experiment.inferStart.has_value() ||
+        !experiment.inferEnd.has_value())
+    {
+        return false;
+    }
+
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 FROM inference_eval_result "
+        "WHERE model_id = $1 AND symbol = $2 AND prediction_horizon = $3 "
+        "AND threshold_logret = $4 AND from_date = $5 AND to_date = $6 "
+        "AND status = 'completed' AND inference_scope = 'final' "
+        "AND checkpoint_eval_id IS NULL "
+        "AND completed_at >= to_timestamp($7) LIMIT 1;",
+        *experiment.lastModelId,
+        experiment.symbol,
+        experiment.predictionHorizon,
+        experiment.cNextThreshold,
+        experiment.inferStart->substr(0, 10),
+        experiment.inferEnd->substr(0, 10),
+        attemptStartedEpoch);
+    return !rows.empty();
+}
+
 std::optional<long long> FindCompletedCheckpointInferenceResultId(
     pqxx::work& w,
     const CheckpointEvalRow& eval)
@@ -4966,6 +5201,28 @@ std::optional<long long> FindCompletedCheckpointInferenceResultId(
         "LIMIT 1;",
         eval.checkpointEvalId,
         eval.checkpointModelId);
+    if (rows.empty())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+std::optional<long long> FindCompletedCheckpointInferenceResultIdForAttempt(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    double attemptStartedEpoch)
+{
+    if (!TableExists(w, "inference_eval_result") ||
+        !ColumnExists(w, "inference_eval_result", "checkpoint_eval_id"))
+        return std::nullopt;
+
+    pqxx::result rows = w.exec_params(
+        "SELECT id FROM inference_eval_result "
+        "WHERE checkpoint_eval_id = $1 AND model_id = $2 "
+        "AND inference_scope = 'checkpoint' AND status = 'completed' "
+        "AND completed_at >= to_timestamp($3) LIMIT 1;",
+        eval.checkpointEvalId,
+        eval.checkpointModelId,
+        attemptStartedEpoch);
     if (rows.empty())
         return std::nullopt;
     return rows[0][0].as<long long>();
@@ -5019,6 +5276,26 @@ bool HasCompletedAnalysisResult(pqxx::work& w,
         "LIMIT 1;",
         experiment.experimentId,
         *experiment.lastModelId);
+    return !rows.empty();
+}
+
+bool HasCompletedAnalysisResultForAttempt(
+    pqxx::work& w,
+    const ExperimentRow& experiment,
+    double attemptStartedEpoch)
+{
+    if (!experiment.lastModelId.has_value())
+        return false;
+
+    pqxx::result rows = w.exec_params(
+        "SELECT 1 FROM experiment_analysis_result "
+        "WHERE experiment_id = $1 AND model_id = $2 "
+        "AND COALESCE(analysis_scope, 'final') = 'final' "
+        "AND analysis_status = 'completed' "
+        "AND updated_at >= to_timestamp($3) LIMIT 1;",
+        experiment.experimentId,
+        *experiment.lastModelId,
+        attemptStartedEpoch);
     return !rows.empty();
 }
 
@@ -6876,6 +7153,8 @@ bool ContinuationPolicySchemaExists(pqxx::work& w)
            ColumnExists(w, "experiment", "continuation_policy_inherit_to_child") &&
            ColumnExists(w, "experiment", "continuation_policy_target_increment") &&
            ColumnExists(w, "experiment", "continuation_policy_max_target_epochs") &&
+           ColumnExists(w, "experiment", "continuation_policy_progression_mode") &&
+           ColumnExists(w, "experiment", "continuation_policy_target_sequence") &&
            ColumnExists(w, "experiment", "continuation_policy_inherited") &&
            ColumnExists(w, "experiment", "continuation_policy_inherited_from_experiment_id") &&
            ColumnExists(w, "experiment", "continuation_policy_inherited_from_revision") &&
@@ -6916,7 +7195,9 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
         "continuation_policy_inherit_to_child, continuation_policy_target_increment, "
         "continuation_policy_inherited, continuation_policy_inherited_from_experiment_id, "
         "continuation_policy_inheritance_status, continuation_policy_max_target_epochs, "
-        "continuation_policy_inherited_from_revision, continuation_policy_inherited_from_hash "
+        "continuation_policy_inherited_from_revision, continuation_policy_inherited_from_hash, "
+        "continuation_policy_progression_mode, "
+        "array_to_string(continuation_policy_target_sequence, ':') "
         "FROM experiment WHERE experiment_id = $1";
     if (lockRow)
         sql += " FOR UPDATE";
@@ -6979,6 +7260,10 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
         config.maxTargetEpochs = row[48].as<int>();
     config.inheritedFromRevision = OptionalLongLongCell(row, 49);
     config.inheritedFromHash = OptionalStringCell(row, 50);
+    config.progressionMode = OptionalStringCell(row, 51);
+    if (!row[52].is_null())
+        config.targetSequence =
+            ParseContinuationTargetSequence(row[52].as<std::string>());
     return config;
 }
 
@@ -7708,6 +7993,10 @@ ContinuationEvaluation EvaluateContinuationPolicy(
     ContinuationPolicyConfig* loadedConfig,
     bool persistDecision = true)
 {
+    LogWorkerStarted(
+        "CONTINUATION_EVALUATION_STARTED",
+        persistDecision ? "continuation_evaluate" : "continuation_dry_run",
+        sourceExperimentId);
     ContinuationEvaluation evaluation;
     std::optional<ContinuationPolicyConfig> configOption =
         LoadContinuationPolicyConfig(w, sourceExperimentId, persistDecision);
@@ -8077,7 +8366,11 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
         update.keys.count("inherit_to_child") &&
         resulting.inheritToChild &&
         !config.inheritToChild;
-    if (newlyEnablingInheritance && !resulting.maxTargetEpochs.has_value())
+    const std::optional<std::string> resultingProgressionMode =
+        EffectiveContinuationProgressionMode(resulting);
+    if (newlyEnablingInheritance &&
+        resultingProgressionMode != "target_sequence" &&
+        !resulting.maxTargetEpochs.has_value())
     {
         std::cerr << "CONTINUATION_POLICY_ERROR"
                   << ",source_experiment_id=" << sourceExperimentId
@@ -8088,7 +8381,8 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
     }
     if (update.keys.count("max_target_epochs") &&
         !resulting.maxTargetEpochs.has_value() &&
-        resulting.inheritToChild)
+        resulting.inheritToChild &&
+        resultingProgressionMode != "target_sequence")
     {
         std::cerr << "CONTINUATION_POLICY_ERROR"
                   << ",source_experiment_id=" << sourceExperimentId
@@ -8158,12 +8452,18 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
     if (update.keys.count("inherit_to_child"))
         sql << ", continuation_policy_inherit_to_child = "
             << (update.inheritToChild ? "true" : "false");
+    if (update.keys.count("progression_mode"))
+        sql << ", continuation_policy_progression_mode = "
+            << SqlNullable(w, update.progressionMode);
     if (update.keys.count("target_increment"))
         sql << ", continuation_policy_target_increment = "
             << SqlNullable(w, update.targetIncrement);
     if (update.keys.count("max_target_epochs"))
         sql << ", continuation_policy_max_target_epochs = "
             << SqlNullable(w, update.maxTargetEpochs);
+    if (update.keys.count("target_sequence"))
+        sql << ", continuation_policy_target_sequence = "
+            << SqlContinuationTargetSequence(update.targetSequence);
     if (changed)
         sql << ", continuation_policy_revision = continuation_policy_revision + 1";
     sql << " WHERE experiment_id = " << sourceExperimentId
@@ -8303,8 +8603,13 @@ void PersistContinuationChildPolicy(
         << "continuation_policy_include_excluded = " << (sourceConfig.includeExcluded ? "true" : "false") << ", "
         << "continuation_candidate_excluded = " << (sourceConfig.candidateExcluded ? "true" : "false") << ", "
         << "continuation_policy_inherit_to_child = " << (plan.terminal ? "false" : "true") << ", "
-        << "continuation_policy_target_increment = " << *sourceConfig.targetIncrement << ", "
+        << "continuation_policy_progression_mode = "
+        << SqlNullable(w, plan.inheritedPolicy.progressionMode) << ", "
+        << "continuation_policy_target_increment = "
+        << SqlNullable(w, plan.inheritedPolicy.targetIncrement) << ", "
         << "continuation_policy_max_target_epochs = " << SqlNullable(w, sourceConfig.maxTargetEpochs) << ", "
+        << "continuation_policy_target_sequence = "
+        << SqlContinuationTargetSequence(plan.inheritedPolicy.targetSequence) << ", "
         << "continuation_policy_revision = 1, "
         << "continuation_policy_last_decision = NULL, "
         << "continuation_policy_last_decision_at = NULL, "
@@ -8507,6 +8812,16 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
                   << (childPolicy.inherit
                           ? (childPolicy.terminal ? "max_target_reached" : "valid")
                           : "not_requested")
+                  << ",progression_mode="
+                  << (childPolicy.inherit
+                          ? childPolicy.progressionMode
+                          : EffectiveContinuationProgressionMode(config).value_or("NULL"))
+                  << ",target_sequence="
+                  << ContinuationTargetSequenceText(config.targetSequence)
+                  << ",progression_diagnostic="
+                  << (childPolicy.progressionDiagnostic.empty()
+                          ? "not_requested"
+                          : childPolicy.progressionDiagnostic)
                   << std::endl;
         return 0;
     }
@@ -8556,6 +8871,15 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::optional<int> derivedNextTarget;
     std::string derivedPolicyHash;
     const std::string currentPolicyHash = ContinuationPolicySemanticHash(*config);
+    const std::optional<std::string> effectiveProgressionMode =
+        EffectiveContinuationProgressionMode(*config);
+    std::optional<int> sequenceFinalTarget;
+    if (config->targetSequence.has_value() && !config->targetSequence->empty())
+        sequenceFinalTarget = config->targetSequence->back();
+    const std::optional<int> effectiveFinalTarget =
+        sequenceFinalTarget.has_value()
+            ? sequenceFinalTarget
+            : config->maxTargetEpochs;
     if (config->inheritToChild)
     {
         try
@@ -8590,6 +8914,12 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::cout << "  Continuation Policy: " << (config->enabled ? "enabled" : "disabled") << "\n";
     std::cout << "  Continuation Candidate: "
               << (config->candidateExcluded ? "excluded" : "production-eligible") << "\n";
+    std::cout << "  Current Experiment Target: " << config->source.targetEpochs << "\n";
+    std::cout << "  Continuation Progression Mode: "
+              << effectiveProgressionMode.value_or("not configured") << "\n";
+    std::cout << "  Continuation Target Sequence: "
+              << ContinuationTargetSequenceText(config->targetSequence, "not configured")
+              << "\n";
     std::cout << "  Continuation Target: "
               << (config->targetEpochs.has_value() ? std::to_string(*config->targetEpochs) : "not configured")
               << "\n";
@@ -8601,13 +8931,24 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
                       : "not configured")
               << "\n";
     std::cout << "  Continuation Maximum Target: "
-              << (config->maxTargetEpochs.has_value()
-                      ? std::to_string(*config->maxTargetEpochs)
+              << (effectiveFinalTarget.has_value()
+                      ? std::to_string(*effectiveFinalTarget)
                       : "not configured")
               << "\n";
     std::cout << "  Derived Next Policy Target: "
               << (derivedNextTarget.has_value()
                       ? std::to_string(*derivedNextTarget)
+                      : "none")
+              << "\n";
+    std::cout << "  Sequence Next Target: "
+              << (effectiveProgressionMode == "target_sequence" &&
+                          derivedNextTarget.has_value()
+                      ? std::to_string(*derivedNextTarget)
+                      : "none")
+              << "\n";
+    std::cout << "  Sequence Final Target: "
+              << (sequenceFinalTarget.has_value()
+                      ? std::to_string(*sequenceFinalTarget)
                       : "none")
               << "\n";
     std::cout << "  Policy Inherited: " << (config->policyInherited ? "yes" : "no") << "\n";
@@ -8631,6 +8972,11 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::cout << "CONTINUATION_POLICY_STATUS"
               << ",source_experiment_id=" << sourceExperimentId
               << ",enabled=" << (config->enabled ? "1" : "0")
+              << ",progression_mode="
+              << effectiveProgressionMode.value_or("NULL")
+              << ",target_sequence="
+              << ContinuationTargetSequenceText(config->targetSequence)
+              << ",current_experiment_target=" << config->source.targetEpochs
               << ",inherit_to_child=" << (config->inheritToChild ? "1" : "0")
               << ",target_increment="
               << (config->targetIncrement.has_value()
@@ -8648,6 +8994,15 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
               << (derivedNextTarget.has_value()
                       ? std::to_string(*derivedNextTarget)
                       : "NULL")
+              << ",sequence_next_target="
+              << (effectiveProgressionMode == "target_sequence" &&
+                          derivedNextTarget.has_value()
+                      ? std::to_string(*derivedNextTarget)
+                      : "NULL")
+              << ",sequence_final_target="
+              << (sequenceFinalTarget.has_value()
+                      ? std::to_string(*sequenceFinalTarget)
+                      : "NULL")
               << ",policy_inherited=" << (config->policyInherited ? "1" : "0")
               << ",inherited_from_experiment_id="
               << (config->inheritedFromExperimentId.has_value()
@@ -8663,6 +9018,7 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
               << ",terminal="
               << (config->inheritanceStatus == "max_target_reached" ? "1" : "0")
               << ",inheritance_validation=" << outgoingInheritanceValidation
+              << ",progression_validation=" << outgoingInheritanceValidation
               << ",current_policy_hash=" << currentPolicyHash
               << ",derived_policy_hash="
               << (derivedPolicyHash.empty() ? "NULL" : derivedPolicyHash)
@@ -9103,13 +9459,10 @@ void MarkAnalyzeFailed(pqxx::work& w,
 
 int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& options)
 {
-    std::cout << "ANALYSIS_WORKER_STARTED"
-              << ",experiment_id=" << experimentId
-              << ",pid=" << static_cast<long long>(::getpid())
-              << ",model_id=unknown"
-              << std::endl;
-    std::cout.flush();
-    std::cerr.flush();
+    LogWorkerStarted(
+        "ANALYSIS_WORKER_STARTED",
+        "analyze",
+        experimentId);
 
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -9271,6 +9624,7 @@ void MarkExperimentRunning(pqxx::work& w,
         "UPDATE experiment SET status = 'running', started_at = COALESCE(started_at, now()), " +
         std::string{logColumn} + " = " + w.quote(logPath) +
         ", current_operation = " + w.quote(phase) +
+        ", worker_started_at = now()" +
         (phase == "train" ? ", current_epoch = NULL" : "") +
         ", worker_pid = NULL, updated_at = now() "
         "WHERE experiment_id = " + std::to_string(experiment.experimentId) + ";");
@@ -9617,17 +9971,65 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
             continue;
         }
 
+        bool successfulCompletionRecorded = false;
+        if (phase == "infer")
+        {
+            successfulCompletionRecorded =
+                HasCompletedInferenceResultForAttempt(
+                    w, experiment, state.attemptStartedEpoch) ||
+                HasValidInferenceLogPathForAttempt(
+                    experiment, state.attemptStartedEpoch) ||
+                DiscoverValidInferenceLogForAttempt(
+                    experiment, state.attemptStartedEpoch).has_value();
+        }
+        else if (phase == "analyze")
+        {
+            successfulCompletionRecorded =
+                HasCompletedAnalysisResultForAttempt(
+                    w, experiment, state.attemptStartedEpoch);
+        }
+        else if (phase == "train")
+        {
+            successfulCompletionRecorded =
+                FindLatestModelForExperimentSince(
+                    w,
+                    experiment.experimentId,
+                    state.attemptStartedEpoch).has_value();
+            if (!successfulCompletionRecorded)
+            {
+                const std::string existingTrainLog = ReadFileIfExists(experiment.trainLogPath);
+                std::optional<long long> loggedModelId =
+                    ExtractCompletedTrainModelId(existingTrainLog);
+                if (!loggedModelId.has_value())
+                    loggedModelId = ExtractCheckpointModelId(existingTrainLog);
+                successfulCompletionRecorded =
+                    loggedModelId.has_value() &&
+                    ModelWasCreatedForAttempt(
+                        w,
+                        *loggedModelId,
+                        experiment.experimentId,
+                        state.attemptStartedEpoch);
+            }
+        }
+
         ++recoveredOrFailed;
-        std::cout << "SCHEDULER_ORPHAN_DETECTED"
-                  << ",experiment_id=" << experiment.experimentId
-                  << ",phase=" << phase
-                  << ",pid=" << (state.workerPid.has_value() ? std::to_string(*state.workerPid) : "none")
-                  << ",ownership=previous_scheduler_or_unknown"
-                  << std::endl;
+        if (ShouldReconcileSchedulerOrphan(
+                false,
+                false,
+                successfulCompletionRecorded))
+        {
+            std::cout << "SCHEDULER_ORPHAN_DETECTED"
+                      << ",experiment_id=" << experiment.experimentId
+                      << ",phase=" << phase
+                      << ",pid=" << (state.workerPid.has_value() ? std::to_string(*state.workerPid) : "none")
+                      << ",ownership=previous_scheduler_or_unknown"
+                      << std::endl;
+        }
 
         if (phase == "infer")
         {
-            if (HasCompletedInferenceResult(w, experiment))
+            if (HasCompletedInferenceResultForAttempt(
+                    w, experiment, state.attemptStartedEpoch))
             {
                 TransitionRecoveredInferenceToAnalyze(
                     w,
@@ -9635,7 +10037,8 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
                     "SCHEDULER_ORPHAN_RECOVERED_INFERENCE_RESULT",
                     "completed_inference_eval_result");
             }
-            else if (HasValidInferenceLogPath(experiment))
+            else if (HasValidInferenceLogPathForAttempt(
+                         experiment, state.attemptStartedEpoch))
             {
                 TransitionRecoveredInferenceToAnalyze(
                     w,
@@ -9643,7 +10046,9 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
                     "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
                     "valid_infer_log_path");
             }
-            else if (const std::optional<std::string> discoveredLog = DiscoverValidInferenceLog(experiment);
+            else if (const std::optional<std::string> discoveredLog =
+                         DiscoverValidInferenceLogForAttempt(
+                             experiment, state.attemptStartedEpoch);
                      discoveredLog.has_value())
             {
                 TransitionRecoveredInferenceToAnalyze(
@@ -9669,7 +10074,8 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
 
         if (phase == "analyze")
         {
-            if (HasCompletedAnalysisResult(w, experiment))
+            if (HasCompletedAnalysisResultForAttempt(
+                    w, experiment, state.attemptStartedEpoch))
             {
                 std::cout << "SCHEDULER_ORPHAN_RECOVERED_ANALYSIS"
                           << ",experiment_id=" << experiment.experimentId
@@ -9700,7 +10106,11 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
             continue;
         }
 
-        const std::optional<long long> linkedModelId = FindLatestModelForExperiment(w, experiment.experimentId);
+        const std::optional<long long> linkedModelId =
+            FindLatestModelForExperimentSince(
+                w,
+                experiment.experimentId,
+                state.attemptStartedEpoch);
         if (linkedModelId.has_value())
         {
             std::cout << "SCHEDULER_ORPHAN_RECOVERED_MODEL"
@@ -9721,7 +10131,14 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
         }
 
         const std::string logText = ReadFileIfExists(experiment.trainLogPath);
-        const std::optional<long long> finalModelId = ExtractCompletedTrainModelId(logText);
+        std::optional<long long> finalModelId = ExtractCompletedTrainModelId(logText);
+        if (finalModelId.has_value() &&
+            !ModelWasCreatedForAttempt(
+                w,
+                *finalModelId,
+                experiment.experimentId,
+                state.attemptStartedEpoch))
+            finalModelId.reset();
         if (finalModelId.has_value())
         {
             std::cout << "SCHEDULER_ORPHAN_RECOVERED_MODEL"
@@ -9740,7 +10157,14 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
             continue;
         }
 
-        const std::optional<long long> checkpointModelId = ExtractCheckpointModelId(logText);
+        std::optional<long long> checkpointModelId = ExtractCheckpointModelId(logText);
+        if (checkpointModelId.has_value() &&
+            !ModelWasCreatedForAttempt(
+                w,
+                *checkpointModelId,
+                experiment.experimentId,
+                state.attemptStartedEpoch))
+            checkpointModelId.reset();
         if (checkpointModelId.has_value())
         {
             std::cout << "SCHEDULER_ORPHAN_RECOVERED_CHECKPOINT"
@@ -9838,7 +10262,7 @@ std::string ObservedChildError(const SchedulerOwnedChild& child,
     std::ostringstream error;
     if (signalNumber.has_value())
     {
-        error << "scheduler_observed_child_signal"
+        error << "child_signal_" << *signalNumber
               << ";phase=" << child.phase
               << ";signal=" << *signalNumber
               << ";signal_name=" << SchedulerSignalName(*signalNumber)
@@ -9846,7 +10270,7 @@ std::string ObservedChildError(const SchedulerOwnedChild& child,
     }
     else
     {
-        error << "scheduler_observed_child_exit"
+        error << "child_exit_code_" << exitCode
               << ";phase=" << child.phase
               << ";exit_code=" << exitCode;
     }
@@ -9909,7 +10333,9 @@ void PersistObservedExperimentChild(pqxx::work& w,
         return;
     }
 
-    if (child.phase == "analyze" && HasCompletedAnalysisResult(w, experiment))
+    if (child.phase == "analyze" &&
+        HasCompletedAnalysisResultForAttempt(
+            w, experiment, child.launchedEpoch))
     {
         MarkExperimentDone(w, experiment, "analyze");
         PersistObservedExitFields(w, child, exitCode, error, true);
@@ -9918,21 +10344,25 @@ void PersistObservedExperimentChild(pqxx::work& w,
 
     if (child.phase == "infer")
     {
-        if (HasCompletedInferenceResult(w, experiment))
+        if (HasCompletedInferenceResultForAttempt(
+                w, experiment, child.launchedEpoch))
         {
             TransitionRecoveredInferenceToAnalyze(
                 w, experiment, "SCHEDULER_CHILD_RESULT_PERSISTED", "completed_inference_eval_result");
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
-        if (HasValidInferenceLogPath(experiment))
+        if (HasValidInferenceLogPathForAttempt(
+                experiment, child.launchedEpoch))
         {
             TransitionRecoveredInferenceToAnalyze(
                 w, experiment, "SCHEDULER_CHILD_RESULT_PERSISTED", "valid_infer_log_path");
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
-        if (const std::optional<std::string> discoveredLog = DiscoverValidInferenceLog(experiment);
+        if (const std::optional<std::string> discoveredLog =
+                DiscoverValidInferenceLogForAttempt(
+                    experiment, child.launchedEpoch);
             discoveredLog.has_value())
         {
             TransitionRecoveredInferenceToAnalyze(
@@ -9944,7 +10374,11 @@ void PersistObservedExperimentChild(pqxx::work& w,
 
     if (child.phase == "train")
     {
-        if (const std::optional<long long> modelId = FindLatestModelForExperiment(w, experiment.experimentId);
+        if (const std::optional<long long> modelId =
+                FindLatestModelForExperimentSince(
+                    w,
+                    experiment.experimentId,
+                    child.launchedEpoch);
             modelId.has_value() &&
             (!child.expectedModelId.has_value() || *modelId != *child.expectedModelId))
         {
@@ -9975,7 +10409,9 @@ void PersistObservedCheckpointChild(pqxx::work& w,
     eval.checkpointEvalId = *child.checkpointEvalId;
     eval.experiment.experimentId = child.experimentId;
     eval.checkpointModelId = child.expectedModelId.value_or(-1);
-    const std::optional<long long> resultId = FindCompletedCheckpointInferenceResultId(w, eval);
+    const std::optional<long long> resultId =
+        FindCompletedCheckpointInferenceResultIdForAttempt(
+            w, eval, child.launchedEpoch);
 
     if (resultId.has_value())
     {
@@ -10000,6 +10436,33 @@ void PersistObservedCheckpointChild(pqxx::work& w,
         *child.checkpointEvalId);
 }
 
+void PersistUnexpectedChildStatus(pqxx::work& w,
+                                  const SchedulerOwnedChild& child,
+                                  int rawStatus)
+{
+    const std::string error =
+        "child_abnormal_wait_status;phase=" + child.phase +
+        ";raw_status=" + std::to_string(rawStatus);
+    if (child.checkpointEvalId.has_value())
+    {
+        w.exec_params(
+            "UPDATE experiment_checkpoint_eval SET status = 'failed', worker_pid = NULL, "
+            "completed_at = now(), updated_at = now(), error_message = $1 "
+            "WHERE checkpoint_eval_id = $2 AND status = 'running';",
+            error,
+            *child.checkpointEvalId);
+        return;
+    }
+    w.exec_params(
+        "UPDATE experiment SET status = 'failed', exit_code = -1, error_message = $1, "
+        "worker_pid = NULL, completed_at = now(), updated_at = now() "
+        "WHERE experiment_id = $2 AND status = 'running' "
+        "AND (worker_pid = $3 OR worker_pid IS NULL);",
+        error,
+        child.experimentId,
+        static_cast<int>(child.pid));
+}
+
 void ReapSchedulerOwnedChildren(pqxx::work& w)
 {
     for (auto it = gSchedulerOwnedChildren.begin(); it != gSchedulerOwnedChildren.end();)
@@ -10018,6 +10481,8 @@ void ReapSchedulerOwnedChildren(pqxx::work& w)
                 std::cout << "SCHEDULER_CHILD_WAIT_ERROR"
                           << ",experiment_id=" << child.experimentId
                           << ",phase=" << child.phase
+                          << ",operation=" << child.operation
+                          << ",worker_pid=" << child.pid
                           << ",pid=" << child.pid
                           << ",errno=" << observed.errorNumber
                           << ",error=waitpid_failed"
@@ -10027,6 +10492,7 @@ void ReapSchedulerOwnedChildren(pqxx::work& w)
                 continue;
             }
             child.observedStatus = observed;
+            MarkChildTerminationObserved(child.diagnosticState);
         }
 
         const ObservedChildStatus& observed = *child.observedStatus;
@@ -10035,33 +10501,48 @@ void ReapSchedulerOwnedChildren(pqxx::work& w)
         const bool coreDumped = observed.coreDumped;
         if (observed.kind == ChildStatusKind::Exited)
         {
-            std::cout << "SCHEDULER_CHILD_EXITED"
-                      << ",experiment_id=" << child.experimentId
-                      << ",phase=" << child.phase
-                      << ",pid=" << child.pid
-                      << ",exit_code=" << exitCode
-                      << std::endl;
+            if (MarkChildExitDiagnosticEmitted(child.diagnosticState))
+            {
+                std::cout << "SCHEDULER_CHILD_EXITED"
+                          << ",experiment_id=" << child.experimentId
+                          << ",worker_pid=" << child.pid
+                          << ",pid=" << child.pid
+                          << ",phase=" << child.phase
+                          << ",operation=" << child.operation
+                          << ",exit_code=" << exitCode
+                          << std::endl;
+            }
         }
         else if (observed.kind == ChildStatusKind::Signaled)
         {
             signalNumber = observed.signalNumber;
-            std::cout << "SCHEDULER_CHILD_SIGNALED"
-                      << ",experiment_id=" << child.experimentId
-                      << ",phase=" << child.phase
-                      << ",pid=" << child.pid
-                      << ",signal=" << *signalNumber
-                      << ",signal_name=" << SchedulerSignalName(*signalNumber)
-                      << ",core_dumped=" << (coreDumped ? 1 : 0)
-                      << std::endl;
+            if (MarkChildExitDiagnosticEmitted(child.diagnosticState))
+            {
+                std::cout << "SCHEDULER_CHILD_SIGNALED"
+                          << ",experiment_id=" << child.experimentId
+                          << ",worker_pid=" << child.pid
+                          << ",pid=" << child.pid
+                          << ",phase=" << child.phase
+                          << ",operation=" << child.operation
+                          << ",signal_number=" << *signalNumber
+                          << ",signal=" << *signalNumber
+                          << ",signal_name=" << SchedulerSignalName(*signalNumber)
+                          << ",core_dumped=" << (coreDumped ? 1 : 0)
+                          << std::endl;
+            }
         }
         else
         {
             std::cout << "SCHEDULER_CHILD_WAIT_ERROR"
                       << ",experiment_id=" << child.experimentId
                       << ",phase=" << child.phase
+                      << ",operation=" << child.operation
+                      << ",worker_pid=" << child.pid
                       << ",pid=" << child.pid
                       << ",errno=0,error=unexpected_wait_status"
+                      << ",raw_status=" << observed.rawStatus
                       << std::endl;
+            PersistUnexpectedChildStatus(w, child, observed.rawStatus);
             it = gSchedulerOwnedChildren.erase(it);
             continue;
         }
@@ -10179,19 +10660,32 @@ int RunTrainJobs(const SchedulerOptions& options,
         {
             const pid_t pid = LaunchChildProcess(
                 command, logPath, job.experimentId, "train", job.lastModelId);
-            PersistExperimentWorkerPid(job, "train", pid);
-            std::cout << "SCHEDULER_CHILD_LAUNCHED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=train"
-                      << ",pid=" << pid
-                      << ",log_path=" << logPath
-                      << std::endl;
+            try
+            {
+                PersistExperimentWorkerPid(job, "train", pid);
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",worker_pid=" << pid
+                          << ",phase=train"
+                          << ",operation=train"
+                          << ",error=" << e.what()
+                          << std::endl;
+                --freeSlots;
+                ++stats.launched;
+                rc = 1;
+                continue;
+            }
             --freeSlots;
             ++stats.launched;
         }
         catch (const std::exception& e)
         {
-            MarkExperimentFailed(w, job, std::string{"train_launch_failed:"} + e.what());
+            const int launchError = SchedulerChildLaunchErrorNumber(e);
+            MarkExperimentFailed(
+                w, job, SchedulerLaunchFailureError(launchError));
             std::cout << "EXPERIMENT_FAILED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=train"
@@ -10352,19 +10846,32 @@ int RunInferJobs(const SchedulerOptions& options,
         {
             const pid_t pid = LaunchChildProcess(
                 command, logPath, job.experimentId, "infer", job.lastModelId);
-            PersistExperimentWorkerPid(job, "infer", pid);
-            std::cout << "SCHEDULER_CHILD_LAUNCHED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=infer"
-                      << ",pid=" << pid
-                      << ",log_path=" << logPath
-                      << std::endl;
+            try
+            {
+                PersistExperimentWorkerPid(job, "infer", pid);
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",worker_pid=" << pid
+                          << ",phase=infer"
+                          << ",operation=infer"
+                          << ",error=" << e.what()
+                          << std::endl;
+                --freeSlots;
+                ++stats.launched;
+                rc = 1;
+                continue;
+            }
             --freeSlots;
             ++stats.launched;
         }
         catch (const std::exception& e)
         {
-            MarkExperimentFailed(w, job, std::string{"infer_launch_failed:"} + e.what());
+            const int launchError = SchedulerChildLaunchErrorNumber(e);
+            MarkExperimentFailed(
+                w, job, SchedulerLaunchFailureError(launchError));
             std::cout << "EXPERIMENT_FAILED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=infer"
@@ -10492,19 +10999,32 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
         {
             const pid_t pid = LaunchChildProcess(
                 command, logPath, job.experimentId, "analyze", job.lastModelId);
-            PersistExperimentWorkerPid(job, "analyze", pid);
-            std::cout << "SCHEDULER_CHILD_LAUNCHED"
-                      << ",experiment_id=" << job.experimentId
-                      << ",phase=analyze"
-                      << ",pid=" << pid
-                      << ",log_path=" << logPath
-                      << std::endl;
+            try
+            {
+                PersistExperimentWorkerPid(job, "analyze", pid);
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
+                          << ",experiment_id=" << job.experimentId
+                          << ",worker_pid=" << pid
+                          << ",phase=analyze"
+                          << ",operation=analyze"
+                          << ",error=" << e.what()
+                          << std::endl;
+                --freeSlots;
+                ++stats.launched;
+                rc = 1;
+                continue;
+            }
             --freeSlots;
             ++stats.launched;
         }
         catch (const std::exception& e)
         {
-            MarkAnalyzeFailed(w, job.experimentId, std::string{"analyze_launch_failed:"} + e.what());
+            const int launchError = SchedulerChildLaunchErrorNumber(e);
+            MarkAnalyzeFailed(
+                w, job.experimentId, SchedulerLaunchFailureError(launchError));
             std::cout << "EXPERIMENT_FAILED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=analyze"
@@ -10608,7 +11128,8 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
         if (SchedulerPidStillExists(eval.workerPid))
             continue;
         const std::optional<long long> inferenceResultId =
-            FindCompletedCheckpointInferenceResultId(w, eval);
+            FindCompletedCheckpointInferenceResultIdForAttempt(
+                w, eval, eval.inferStartedEpoch);
         if (inferenceResultId.has_value())
         {
             AdvanceCheckpointEvalToAnalyze(w,
@@ -10705,42 +11226,25 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
             continue;
         }
 
+        pid_t pid = -1;
         try
         {
-            const pid_t pid = LaunchChildProcess(
+            pid = LaunchChildProcess(
                 command,
                 logPath,
                 eval.experiment.experimentId,
                 "checkpoint_infer",
                 eval.checkpointModelId,
                 eval.checkpointEvalId);
-            std::ostringstream sql;
-            sql << "UPDATE experiment_checkpoint_eval "
-                << "SET status = 'running', phase = 'infer', worker_pid = $1, infer_log_path = $2, "
-                << "started_at = COALESCE(started_at, now()), updated_at = now(), error_message = NULL";
-            if (hasInferStartedAt)
-                sql << ", infer_started_at = COALESCE(infer_started_at, now())";
-            sql << " WHERE checkpoint_eval_id = $3;";
-            w.exec_params(sql.str(),
-                          static_cast<int>(pid),
-                          logPath,
-                          eval.checkpointEvalId);
-            std::cout << "CHECKPOINT_EVAL_STARTED"
-                      << " experiment_id=" << eval.experiment.experimentId
-                      << " phase=infer"
-                      << " epoch=" << eval.checkpointEpoch
-                      << " model_id=" << eval.checkpointModelId
-                      << std::endl;
-            PrintSchedulerExec(command);
-            --freeSlots;
         }
         catch (const std::exception& e)
         {
+            const int launchError = SchedulerChildLaunchErrorNumber(e);
             w.exec_params(
                 "UPDATE experiment_checkpoint_eval "
                 "SET status = 'failed', completed_at = now(), updated_at = now(), error_message = $1 "
                 "WHERE checkpoint_eval_id = $2;",
-                std::string{"infer_launch_failed:"} + e.what(),
+                SchedulerLaunchFailureError(launchError),
                 eval.checkpointEvalId);
             std::cout << "CHECKPOINT_EVAL_FAILED"
                       << " experiment_id=" << eval.experiment.experimentId
@@ -10750,7 +11254,46 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
                       << " error=infer_launch_failed"
                       << std::endl;
             rc = 1;
+            continue;
         }
+
+        std::ostringstream sql;
+        sql << "UPDATE experiment_checkpoint_eval "
+            << "SET status = 'running', phase = 'infer', worker_pid = $1, infer_log_path = $2, "
+            << "started_at = COALESCE(started_at, now()), updated_at = now(), error_message = NULL";
+        if (hasInferStartedAt)
+            sql << ", infer_started_at = COALESCE(infer_started_at, now())";
+        sql << " WHERE checkpoint_eval_id = $3;";
+        try
+        {
+            w.exec_params(sql.str(),
+                          static_cast<int>(pid),
+                          logPath,
+                          eval.checkpointEvalId);
+        }
+        catch (const std::exception& e)
+        {
+            const int killResult = ::kill(pid, SIGTERM);
+            std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
+                      << ",experiment_id=" << eval.experiment.experimentId
+                      << ",checkpoint_eval_id=" << eval.checkpointEvalId
+                      << ",worker_pid=" << pid
+                      << ",phase=checkpoint_infer"
+                      << ",operation=checkpoint_infer"
+                      << ",child_termination_requested="
+                      << (killResult == 0 ? "1" : "0")
+                      << ",error=" << e.what()
+                      << std::endl;
+            throw;
+        }
+        std::cout << "CHECKPOINT_EVAL_STARTED"
+                  << " experiment_id=" << eval.experiment.experimentId
+                  << " phase=infer"
+                  << " epoch=" << eval.checkpointEpoch
+                  << " model_id=" << eval.checkpointModelId
+                  << std::endl;
+        PrintSchedulerExec(command);
+        --freeSlots;
     }
     w.commit();
     return rc;
@@ -10782,6 +11325,12 @@ int RunCheckpointEvalAnalyzeJobs(const SchedulerOptions& options)
     {
         if (freeSlots <= 0)
             break;
+        LogWorkerStarted(
+            "CHECKPOINT_ANALYSIS_WORKER_STARTED",
+            "checkpoint_analyze",
+            eval.experiment.experimentId,
+            eval.checkpointModelId,
+            eval.checkpointEvalId);
         std::cout << "CHECKPOINT_EVAL_ANALYSIS_STARTED"
                   << " experiment_id=" << eval.experiment.experimentId
                   << " epoch=" << eval.checkpointEpoch
@@ -14026,12 +14575,13 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--set-continuation-policy=EXPERIMENT_ID:key=value,key=value\n"
         << "Continuation keys: target_epochs, min_evals, patience, min_leader_score, "
         << "min_infer_accuracy, min_improvement, max_degradation, top_n, scope, trend_mode, "
-        << "source_mode, include_excluded, candidate_excluded, inherit_to_child, target_increment, "
-        << "max_target_epochs\n"
+        << "source_mode, include_excluded, candidate_excluded, inherit_to_child, progression_mode, "
+        << "target_increment, max_target_epochs, target_sequence\n"
         << "Continuation policy inheritance is disabled by default. When inherit_to_child=true, "
-        << "newly enabled policies require positive target_increment and max_target_epochs; each "
-        << "new child receives a policy target equal to its own target_epochs plus target_increment. "
-        << "A child at max_target_epochs is created terminal with outgoing inheritance disabled. "
+        << "fixed_increment policies require positive target_increment and max_target_epochs; "
+        << "target_sequence policies use colon-separated strictly increasing targets such as "
+        << "140:160:180:200:220:240. The final configured target creates a terminal child with "
+        << "outgoing inheritance disabled. "
         << "Legacy inherited policies without a maximum retain compatibility until reconfigured.\n"
         << "Continuation gates use AND semantics. trend_delta=latest_metric-first_metric; "
         << "non_degrading requires trend_delta>=-max_degradation and improving requires "

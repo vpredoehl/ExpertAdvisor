@@ -48,6 +48,19 @@ ContinuationPolicyConfig BoundedPolicy()
     return config;
 }
 
+ContinuationPolicyConfig SequencePolicy(int currentTarget, int policyTarget)
+{
+    ContinuationPolicyConfig config = BoundedPolicy();
+    config.sourceExperimentId = 300;
+    config.source.targetEpochs = currentTarget;
+    config.targetEpochs = policyTarget;
+    config.progressionMode = "target_sequence";
+    config.targetIncrement.reset();
+    config.maxTargetEpochs.reset();
+    config.targetSequence = std::vector<int>{140, 160, 180, 200, 220, 240};
+    return config;
+}
+
 } // namespace
 
 int main()
@@ -79,6 +92,21 @@ int main()
     assert(!parsed.minImprovement && !parsed.maxDegradation && !parsed.topN);
     assert(!parsed.targetIncrement && !parsed.maxTargetEpochs);
 
+    ContinuationPolicyUpdate sequenceUpdate = ParseContinuationPolicyUpdate(
+        "progression_mode=target_sequence,target_sequence=140:160:180:200:220:240");
+    assert(sequenceUpdate.progressionMode == "target_sequence");
+    assert(sequenceUpdate.targetSequence ==
+           std::optional<std::vector<int>>({140, 160, 180, 200, 220, 240}));
+    ApplyContinuationPolicyUpdate(parsed, sequenceUpdate);
+    assert(parsed.progressionMode == "target_sequence");
+    assert(ContinuationTargetSequenceText(parsed.targetSequence) ==
+           "140:160:180:200:220:240");
+    ApplyContinuationPolicyUpdate(
+        parsed,
+        ParseContinuationPolicyUpdate(
+            "progression_mode=null,target_sequence=null"));
+    assert(!parsed.progressionMode && !parsed.targetSequence);
+
     assert(ExceptionMessage([] { ParseContinuationPolicyUpdate(""); }) ==
            "--set-continuation-policy requires at least one key=value pair");
     assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("min_evals=0"); }) ==
@@ -89,6 +117,22 @@ int main()
            "unsupported continuation policy key 'unknown'");
     assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_epochs"); }) ==
            "--set-continuation-policy requires key=value pairs");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence="); }) ==
+           "target_sequence_required");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=140:x"); }) ==
+           "invalid target_sequence value '140:x'");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=140:0"); }) ==
+           "target_sequence_contains_nonpositive_value");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=140:-1"); }) ==
+           "target_sequence_contains_nonpositive_value");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=140:140"); }) ==
+           "target_sequence_contains_duplicate");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=160:140"); }) ==
+           "target_sequence_must_be_strictly_increasing");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=140:"); }) ==
+           "invalid target_sequence value '140:'");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_sequence=140::160"); }) ==
+           "invalid target_sequence value '140::160'");
 
     ContinuationPolicyConfig invalid = BoundedPolicy();
     invalid.minEvals = 0;
@@ -111,6 +155,53 @@ int main()
     assert(ContinuationPolicyConfigurationError(invalid, true) ==
            "policy_target_exceeds_max_target");
 
+    ContinuationPolicyConfig sequence = SequencePolicy(120, 140);
+    assert(!ContinuationPolicyConfigurationError(sequence, true));
+    invalid = sequence;
+    invalid.progressionMode = "adaptive";
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "invalid_progression_mode");
+    invalid = sequence;
+    invalid.targetSequence.reset();
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "target_sequence_required");
+    invalid = sequence;
+    invalid.targetIncrement = 20;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "target_increment_disallowed_for_target_sequence");
+    invalid = sequence;
+    invalid.maxTargetEpochs = 220;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "max_target_conflicts_with_sequence");
+    invalid = sequence;
+    invalid.targetEpochs = 150;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "policy_target_not_in_sequence");
+    invalid = sequence;
+    invalid.targetEpochs = 160;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "policy_target_is_not_next_sequence_target");
+    invalid = SequencePolicy(240, 240);
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "sequence_has_no_target_after_current_epoch");
+    invalid = sequence;
+    invalid.targetSequence = std::vector<int>{140, 160, 160};
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "target_sequence_contains_duplicate");
+    invalid = sequence;
+    invalid.targetSequence = std::vector<int>{140, 180, 160};
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "target_sequence_must_be_strictly_increasing");
+    invalid = BoundedPolicy();
+    invalid.progressionMode = "fixed_increment";
+    invalid.targetIncrement.reset();
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "fixed_increment_requires_target_increment");
+    invalid = BoundedPolicy();
+    invalid.targetSequence = std::vector<int>{134, 138, 142};
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "fixed_increment_disallows_target_sequence");
+
     const ContinuationPolicyConfig bounded = BoundedPolicy();
     const std::string boundedCanonical =
         "target_epochs=134|min_evals=1|patience=2|min_leader_score=NULL|"
@@ -123,6 +214,8 @@ int main()
 
     ContinuationPolicyConfig legacy = bounded;
     legacy.maxTargetEpochs.reset();
+    assert(ContinuationPolicySemanticHash(legacy) == "e000ebb1a1203736");
+    legacy.progressionMode = "fixed_increment";
     assert(ContinuationPolicySemanticHash(legacy) == "e000ebb1a1203736");
 
     ContinuationPolicyConfig differentProvenance = bounded;
@@ -175,6 +268,24 @@ int main()
     assert(DeriveBoundedContinuationChildPolicy(140, 4, 142).error ==
            "target_increment_would_skip_past_max_target");
 
+    const std::optional<std::vector<int>> campaign =
+        std::vector<int>{140, 160, 180, 200, 220, 240};
+    const auto sequence140 =
+        DeriveSequenceContinuationChildPolicy(120, 140, campaign);
+    assert(sequence140.childTrainingTargetEpochs == 140);
+    assert(sequence140.inheritedPolicyTargetEpochs == 160);
+    assert(!sequence140.terminal && sequence140.error.empty());
+    const auto sequence160 =
+        DeriveSequenceContinuationChildPolicy(140, 160, campaign);
+    assert(sequence160.childTrainingTargetEpochs == 160);
+    assert(sequence160.inheritedPolicyTargetEpochs == 180);
+    const auto sequence240 =
+        DeriveSequenceContinuationChildPolicy(220, 240, campaign);
+    assert(sequence240.childTrainingTargetEpochs == 240);
+    assert(sequence240.terminal && !sequence240.inheritedPolicyTargetEpochs);
+    assert(DeriveSequenceContinuationChildPolicy(240, 240, campaign).error ==
+           "sequence_has_no_target_after_current_epoch");
+
     const ContinuationChildPolicyPlan plan = PlanContinuationChildPolicy(bounded);
     assert(plan.inherit && !plan.terminal && plan.targetEpochs == 138);
     assert(plan.sourcePolicyHash == "28815e783b815f0b");
@@ -204,6 +315,57 @@ int main()
     const ContinuationChildPolicyPlan noInheritance =
         PlanContinuationChildPolicy(disabled);
     assert(!noInheritance.inherit && !noInheritance.terminal);
+
+    const ContinuationChildPolicyPlan sequencePlan =
+        PlanContinuationChildPolicy(sequence);
+    assert(sequencePlan.inherit && !sequencePlan.terminal);
+    assert(sequencePlan.progressionMode == "target_sequence");
+    assert(sequencePlan.childTrainingTargetEpochs == 140);
+    assert(sequencePlan.inheritedPolicyTargetEpochs == 160);
+    assert(sequencePlan.targetEpochs == 160);
+    assert(sequencePlan.progressionDiagnostic == "target_sequence_advanced");
+    assert(sequencePlan.inheritedPolicy.progressionMode == "target_sequence");
+    assert(sequencePlan.inheritedPolicy.targetSequence == sequence.targetSequence);
+    assert(sequencePlan.inheritedPolicy.targetEpochs == 160);
+    assert(!sequencePlan.inheritedPolicy.lastDecision &&
+           !sequencePlan.inheritedPolicy.queuedExperimentId);
+
+    ContinuationPolicyConfig sequenceTerminalSource = SequencePolicy(220, 240);
+    const ContinuationChildPolicyPlan sequenceTerminal =
+        PlanContinuationChildPolicy(sequenceTerminalSource);
+    assert(sequenceTerminal.terminal);
+    assert(sequenceTerminal.childTrainingTargetEpochs == 240);
+    assert(!sequenceTerminal.inheritedPolicyTargetEpochs);
+    assert(!sequenceTerminal.inheritedPolicy.enabled);
+    assert(!sequenceTerminal.inheritedPolicy.inheritToChild);
+    assert(!sequenceTerminal.inheritedPolicy.targetEpochs);
+    assert(sequenceTerminal.inheritedPolicy.targetSequence ==
+           sequenceTerminalSource.targetSequence);
+    assert(sequenceTerminal.progressionDiagnostic == "target_sequence_terminal");
+    ContinuationPolicyConfig invalidSequencePlan = sequence;
+    invalidSequencePlan.targetEpochs = 160;
+    assert(ExceptionMessage([&] { PlanContinuationChildPolicy(invalidSequencePlan); }) ==
+           "policy_target_is_not_next_sequence_target");
+
+    const std::string sequenceCanonical =
+        ContinuationPolicySemanticCanonicalText(sequence);
+    assert(sequenceCanonical.find(
+               "|progression_mode=target_sequence|target_sequence=[140,160,180,200,220,240]") !=
+           std::string::npos);
+    assert(ContinuationPolicySemanticHash(sequence) !=
+           ContinuationPolicySemanticHash(legacy));
+    ContinuationPolicyConfig sequenceProvenance = sequence;
+    sequenceProvenance.policyInherited = true;
+    sequenceProvenance.inheritedFromExperimentId = 999;
+    sequenceProvenance.inheritedFromRevision = 8;
+    sequenceProvenance.inheritedFromHash = "unrelated";
+    assert(ContinuationPolicySemanticHash(sequenceProvenance) ==
+           ContinuationPolicySemanticHash(sequence));
+    ContinuationPolicyConfig changedSequence = sequence;
+    changedSequence.targetSequence =
+        std::vector<int>{140, 160, 180, 200, 224, 240};
+    assert(ContinuationPolicySemanticHash(changedSequence) !=
+           ContinuationPolicySemanticHash(sequence));
 
     std::cout << "ContinuationPolicyInheritanceTests passed\n";
     return 0;

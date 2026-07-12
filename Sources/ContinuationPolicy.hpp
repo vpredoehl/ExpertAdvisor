@@ -3,6 +3,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace EA::ExperimentScheduler
 {
@@ -42,8 +43,10 @@ struct ContinuationPolicyConfig
     bool includeExcluded = false;
     bool candidateExcluded = false;
     bool inheritToChild = false;
+    std::optional<std::string> progressionMode;
     std::optional<int> targetIncrement;
     std::optional<int> maxTargetEpochs;
+    std::optional<std::vector<int>> targetSequence;
     bool policyInherited = false;
     std::optional<long long> inheritedFromExperimentId;
     std::optional<long long> inheritedFromRevision;
@@ -78,8 +81,10 @@ struct ContinuationPolicyUpdate
     bool includeExcluded = false;
     bool candidateExcluded = false;
     bool inheritToChild = false;
+    std::optional<std::string> progressionMode;
     std::optional<int> targetIncrement;
     std::optional<int> maxTargetEpochs;
+    std::optional<std::vector<int>> targetSequence;
 };
 
 struct ContinuationEvidence
@@ -125,6 +130,14 @@ struct ContinuationPolicyIdentityMaterial
 bool ValidContinuationScope(const std::string& value);
 bool ValidContinuationTrendMode(const std::string& value);
 bool ValidContinuationSourceMode(const std::string& value);
+bool ValidContinuationProgressionMode(const std::string& value);
+
+std::optional<std::string> EffectiveContinuationProgressionMode(
+    const ContinuationPolicyConfig& config);
+std::vector<int> ParseContinuationTargetSequence(const std::string& value);
+std::string ContinuationTargetSequenceText(
+    const std::optional<std::vector<int>>& sequence,
+    const std::string& nullText = "NULL");
 
 ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text);
 void ApplyContinuationPolicyUpdate(

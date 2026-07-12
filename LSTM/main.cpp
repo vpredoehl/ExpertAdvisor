@@ -39,6 +39,7 @@
 #include "ExperimentMetaAnalyzer.hpp"
 #include "CanonicalSymbol.hpp"
 #include "FxPriceSanity.hpp"
+#include "WorkerLifecycleDiagnostics.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -6732,6 +6733,28 @@ int main(int argc, const char * argv[])
         launchArgs = ParseLaunchArgs(argc, argv);
         if (launchArgs.logLevel.has_value())
             gRuntimeLogLevel = *launchArgs.logLevel;
+        if (launchArgs.schedulerCheckpointEvalId.has_value())
+        {
+            EA::ExperimentScheduler::LogWorkerStarted(
+                "CHECKPOINT_INFER_WORKER_STARTED",
+                "checkpoint_infer",
+                std::nullopt,
+                launchArgs.modelId,
+                launchArgs.schedulerCheckpointEvalId);
+        }
+        else if (launchArgs.schedulerExperimentId.has_value())
+        {
+            const bool inferenceWorker =
+                launchArgs.inferenceMode.has_value() &&
+                *launchArgs.inferenceMode;
+            EA::ExperimentScheduler::LogWorkerStarted(
+                inferenceWorker
+                    ? "INFERENCE_WORKER_STARTED"
+                    : "TRAINING_WORKER_STARTED",
+                inferenceWorker ? "infer" : "train",
+                launchArgs.schedulerExperimentId,
+                inferenceWorker ? launchArgs.modelId : launchArgs.resumeModelId);
+        }
         if (!ValidateResumeLaunchArgs(launchArgs))
             return 1;
         if (!launchArgs.resumeModelId.has_value())
