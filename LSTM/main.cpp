@@ -7327,18 +7327,33 @@ int main(int argc, const char * argv[])
     catch (const pqxx::broken_connection& e)
     {
         std::cerr << "Broken connection: " << e.what() << "\n";
+        std::cout.flush();
+        std::cerr.flush();
         return 1;
     }
     catch (const pqxx::failure& e)
     {
         std::cerr << "pqxx::failure: " << e.what() << "\n";
+        std::cout.flush();
+        std::cerr.flush();
         return 1;
     }
     catch (const std::exception& e)
     {
         std::cerr << "std::exception: " << e.what() << "\n";
+        std::cout.flush();
+        std::cerr.flush();
+        return 1;
+    }
+    catch (...)
+    {
+        std::cerr << "unknown exception\n";
+        std::cout.flush();
+        std::cerr.flush();
         return 1;
     }
 
+    std::cout.flush();
+    std::cerr.flush();
     return 0;
 }
