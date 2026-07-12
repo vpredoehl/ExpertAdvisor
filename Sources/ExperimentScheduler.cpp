@@ -29,6 +29,7 @@
 
 #include "ExperimentScheduler.hpp"
 #include "CanonicalSymbol.hpp"
+#include "ContinuationPolicyInheritance.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -606,6 +607,11 @@ struct ContinuationPolicyConfig
     std::string sourceMode = "best_checkpoint";
     bool includeExcluded = false;
     bool candidateExcluded = false;
+    bool inheritToChild = false;
+    std::optional<int> targetIncrement;
+    bool policyInherited = false;
+    std::optional<long long> inheritedFromExperimentId;
+    std::string inheritanceStatus = "not_requested";
     long long policyRevision = 1;
     std::optional<std::string> lastDecision;
     std::optional<std::string> lastReason;
@@ -634,6 +640,8 @@ struct ContinuationPolicyUpdate
     std::string sourceMode = "best_checkpoint";
     bool includeExcluded = false;
     bool candidateExcluded = false;
+    bool inheritToChild = false;
+    std::optional<int> targetIncrement;
 };
 
 struct ContinuationEvidence
@@ -6953,6 +6961,11 @@ bool ContinuationPolicySchemaExists(pqxx::work& w)
            ColumnExists(w, "experiment", "continuation_policy_enabled") &&
            ColumnExists(w, "experiment", "continuation_policy_target_epochs") &&
            ColumnExists(w, "experiment", "continuation_policy_revision") &&
+           ColumnExists(w, "experiment", "continuation_policy_inherit_to_child") &&
+           ColumnExists(w, "experiment", "continuation_policy_target_increment") &&
+           ColumnExists(w, "experiment", "continuation_policy_inherited") &&
+           ColumnExists(w, "experiment", "continuation_policy_inherited_from_experiment_id") &&
+           ColumnExists(w, "experiment", "continuation_policy_inheritance_status") &&
            ColumnExists(w, "experiment", "continuation_candidate_excluded") &&
            ColumnExists(w, "experiment", "continuation_source_experiment_id") &&
            ColumnExists(w, "experiment", "continuation_decision_id") &&
@@ -6984,7 +6997,10 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
         "continuation_policy_last_decision, continuation_policy_last_reason, "
         "continuation_policy_selected_model_id, continuation_policy_queued_experiment_id, "
         "continuation_source_experiment_id, continuation_source_model_id, "
-        "continuation_source_epoch, continuation_decision_id, continuation_generation "
+        "continuation_source_epoch, continuation_decision_id, continuation_generation, "
+        "continuation_policy_inherit_to_child, continuation_policy_target_increment, "
+        "continuation_policy_inherited, continuation_policy_inherited_from_experiment_id, "
+        "continuation_policy_inheritance_status "
         "FROM experiment WHERE experiment_id = $1";
     if (lockRow)
         sql += " FOR UPDATE";
@@ -7027,6 +7043,12 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
         config.continuationSourceEpoch = row[40].as<int>();
     config.continuationDecisionId = OptionalLongLongCell(row, 41);
     config.continuationGeneration = row[42].as<int>();
+    config.inheritToChild = row[43].as<bool>();
+    if (!row[44].is_null())
+        config.targetIncrement = row[44].as<int>();
+    config.policyInherited = row[45].as<bool>();
+    config.inheritedFromExperimentId = OptionalLongLongCell(row, 46);
+    config.inheritanceStatus = row[47].as<std::string>();
     return config;
 }
 
@@ -7075,6 +7097,17 @@ std::optional<std::string> ContinuationPolicyConfigurationError(
         return "invalid_trend_mode";
     if (!ValidContinuationSourceMode(config.sourceMode))
         return "invalid_source_mode";
+    if (config.targetIncrement.has_value() && *config.targetIncrement <= 0)
+        return "target_increment_must_be_positive";
+    if (config.inheritToChild)
+    {
+        const ContinuationTargetDerivation target =
+            DeriveContinuationChildPolicyTarget(
+                config.targetEpochs,
+                config.targetIncrement);
+        if (!target.error.empty())
+            return target.error;
+    }
     if (config.trendMode == "none" &&
         (config.minImprovement.has_value() || config.maxDegradation.has_value()))
         return "trend_none_requires_null_trend_thresholds";
@@ -7124,21 +7157,15 @@ std::string ContinuationPolicyCanonicalText(const ContinuationPolicyConfig& conf
         << "|trend_mode=" << config.trendMode
         << "|source_mode=" << config.sourceMode
         << "|include_excluded=" << (config.includeExcluded ? "true" : "false")
-        << "|candidate_excluded=" << (config.candidateExcluded ? "true" : "false");
+        << "|candidate_excluded=" << (config.candidateExcluded ? "true" : "false")
+        << "|inherit_to_child=" << (config.inheritToChild ? "true" : "false")
+        << "|target_increment=" << ContinuationOptionalIntText(config.targetIncrement);
     return out.str();
 }
 
 std::string StableFnv1aHash(const std::string& value)
 {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (const unsigned char ch : value)
-    {
-        hash ^= static_cast<uint64_t>(ch);
-        hash *= UINT64_C(1099511628211);
-    }
-    std::ostringstream out;
-    out << std::hex << std::setw(16) << std::setfill('0') << hash;
-    return out.str();
+    return StableContinuationPolicyHash(value);
 }
 
 ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
@@ -7198,6 +7225,13 @@ ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
             update.includeExcluded = ParseBoolean(key, value);
         else if (key == "candidate_excluded")
             update.candidateExcluded = ParseBoolean(key, value);
+        else if (key == "inherit_to_child")
+            update.inheritToChild = ParseBoolean(key, value);
+        else if (key == "target_increment")
+        {
+            if (!clearValue)
+                update.targetIncrement = ParsePositiveInt(key, value);
+        }
         else
             throw std::invalid_argument("unsupported continuation policy key '" + key + "'");
     }
@@ -7235,6 +7269,10 @@ void ApplyContinuationPolicyUpdate(ContinuationPolicyConfig& config,
         config.includeExcluded = update.includeExcluded;
     if (update.keys.count("candidate_excluded"))
         config.candidateExcluded = update.candidateExcluded;
+    if (update.keys.count("inherit_to_child"))
+        config.inheritToChild = update.inheritToChild;
+    if (update.keys.count("target_increment"))
+        config.targetIncrement = update.targetIncrement;
 }
 
 std::vector<ContinuationEvidence> LoadContinuationEvidence(
@@ -8232,7 +8270,13 @@ bool ValidateEnabledContinuationPolicySource(
 std::string ContinuationPolicyDisplayText(const ContinuationPolicyConfig& config)
 {
     return ContinuationPolicyCanonicalText(config) +
-           "|policy_revision=" + std::to_string(config.policyRevision);
+           "|policy_revision=" + std::to_string(config.policyRevision) +
+           "|policy_inherited=" + (config.policyInherited ? "true" : "false") +
+           "|inherited_from_experiment_id=" +
+               (config.inheritedFromExperimentId.has_value()
+                    ? std::to_string(*config.inheritedFromExperimentId)
+                    : "NULL") +
+           "|inheritance_status=" + config.inheritanceStatus;
 }
 
 long long ContinuationControlExperimentId(const SchedulerOptions& options)
@@ -8386,6 +8430,12 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
     if (update.keys.count("candidate_excluded"))
         sql << ", continuation_candidate_excluded = "
             << (update.candidateExcluded ? "true" : "false");
+    if (update.keys.count("inherit_to_child"))
+        sql << ", continuation_policy_inherit_to_child = "
+            << (update.inheritToChild ? "true" : "false");
+    if (update.keys.count("target_increment"))
+        sql << ", continuation_policy_target_increment = "
+            << SqlNullable(w, update.targetIncrement);
     if (changed)
         sql << ", continuation_policy_revision = continuation_policy_revision + 1";
     sql << " WHERE experiment_id = " << sourceExperimentId
@@ -8431,6 +8481,141 @@ int RunEvaluateContinuationCommand(const SchedulerOptions& options)
                   << std::endl;
         return 1;
     }
+}
+
+struct ContinuationChildPolicyPlan
+{
+    bool inherit = false;
+    int targetEpochs = 0;
+    std::string policyHash;
+};
+
+ContinuationChildPolicyPlan PrepareContinuationChildPolicy(
+    pqxx::work& w,
+    const ContinuationPolicyConfig& sourceConfig,
+    SchedulerOptions& child,
+    int continuationSourceEpoch)
+{
+    ContinuationChildPolicyPlan plan;
+    if (!sourceConfig.inheritToChild)
+        return plan;
+
+    plan.inherit = true;
+    const ContinuationTargetDerivation target =
+        DeriveContinuationChildPolicyTarget(
+            sourceConfig.targetEpochs,
+            sourceConfig.targetIncrement);
+    if (!target.error.empty())
+        throw std::runtime_error(target.error);
+    plan.targetEpochs = *target.targetEpochs;
+
+    ContinuationPolicyConfig inherited = sourceConfig;
+    inherited.enabled = true;
+    inherited.targetEpochs = plan.targetEpochs;
+    inherited.policyRevision = 1;
+    inherited.lastDecision.reset();
+    inherited.lastReason.reset();
+    inherited.selectedModelId.reset();
+    inherited.queuedExperimentId.reset();
+    const std::optional<std::string> configError =
+        ContinuationPolicyConfigurationError(inherited, true);
+    if (configError.has_value())
+        throw std::runtime_error("invalid_inherited_policy:" + *configError);
+
+    if (sourceConfig.sourceMode == "best_checkpoint" ||
+        sourceConfig.sourceMode == "latest_checkpoint")
+    {
+        pqxx::result checkpointConfig = w.exec_params(
+            "SELECT checkpoint_infer_enabled, checkpoint_infer_min_epoch, "
+            "checkpoint_infer_interval FROM experiment WHERE experiment_id = $1;",
+            sourceConfig.sourceExperimentId);
+        if (checkpointConfig.size() != 1 || !checkpointConfig[0][0].as<bool>())
+        {
+            throw std::runtime_error(
+                "inherited_checkpoint_source_mode_requires_checkpoint_inference");
+        }
+        child.queueCheckpointInfer = true;
+        if (!checkpointConfig[0][1].is_null())
+            child.queueCheckpointInferMinEpoch = checkpointConfig[0][1].as<int>();
+        if (!checkpointConfig[0][2].is_null())
+            child.queueCheckpointInferInterval = checkpointConfig[0][2].as<int>();
+        if (child.queueCheckpointInferMinEpoch.has_value() &&
+            *child.queueCheckpointInferMinEpoch > *sourceConfig.targetEpochs)
+        {
+            throw std::runtime_error(
+                "inherited_checkpoint_min_epoch_exceeds_child_target");
+        }
+        const int checkpointInterval = sourceConfig.source.checkpointInterval;
+        const int inferenceInterval = child.queueCheckpointInferInterval.value_or(checkpointInterval);
+        if (checkpointInterval <= 0 || inferenceInterval <= 0)
+            throw std::runtime_error("inherited_checkpoint_interval_must_be_positive");
+        const auto gcd = [](long long lhs, long long rhs) {
+            while (rhs != 0)
+            {
+                const long long remainder = lhs % rhs;
+                lhs = rhs;
+                rhs = remainder;
+            }
+            return lhs;
+        };
+        const long long commonInterval =
+            static_cast<long long>(checkpointInterval) / gcd(checkpointInterval, inferenceInterval) *
+            inferenceInterval;
+        const long long minimumEpoch = std::max<long long>(
+            static_cast<long long>(continuationSourceEpoch) + 1,
+            child.queueCheckpointInferMinEpoch.value_or(1));
+        const long long firstQualifyingEpoch =
+            ((minimumEpoch + commonInterval - 1) / commonInterval) * commonInterval;
+        if (firstQualifyingEpoch > *sourceConfig.targetEpochs)
+        {
+            throw std::runtime_error(
+                "inherited_checkpoint_source_mode_has_no_qualifying_child_checkpoint");
+        }
+    }
+
+    plan.policyHash = StableFnv1aHash(ContinuationPolicyCanonicalText(inherited));
+    return plan;
+}
+
+void PersistContinuationChildPolicy(
+    pqxx::work& w,
+    long long childExperimentId,
+    const ContinuationPolicyConfig& sourceConfig,
+    const ContinuationChildPolicyPlan& plan)
+{
+    if (!plan.inherit)
+        return;
+
+    std::ostringstream sql;
+    sql << "UPDATE experiment SET "
+        << "continuation_policy_enabled = true, "
+        << "continuation_policy_target_epochs = " << plan.targetEpochs << ", "
+        << "continuation_policy_min_evals = " << sourceConfig.minEvals << ", "
+        << "continuation_policy_patience = " << sourceConfig.patience << ", "
+        << "continuation_policy_min_leader_score = " << SqlNullable(w, sourceConfig.minLeaderScore) << ", "
+        << "continuation_policy_min_infer_accuracy = " << SqlNullable(w, sourceConfig.minInferAccuracy) << ", "
+        << "continuation_policy_min_improvement = " << SqlNullable(w, sourceConfig.minImprovement) << ", "
+        << "continuation_policy_max_degradation = " << SqlNullable(w, sourceConfig.maxDegradation) << ", "
+        << "continuation_policy_top_n = " << SqlNullable(w, sourceConfig.topN) << ", "
+        << "continuation_policy_scope = " << w.quote(sourceConfig.scope) << ", "
+        << "continuation_policy_trend_mode = " << w.quote(sourceConfig.trendMode) << ", "
+        << "continuation_policy_source_mode = " << w.quote(sourceConfig.sourceMode) << ", "
+        << "continuation_policy_include_excluded = " << (sourceConfig.includeExcluded ? "true" : "false") << ", "
+        << "continuation_candidate_excluded = " << (sourceConfig.candidateExcluded ? "true" : "false") << ", "
+        << "continuation_policy_inherit_to_child = true, "
+        << "continuation_policy_target_increment = " << *sourceConfig.targetIncrement << ", "
+        << "continuation_policy_revision = 1, "
+        << "continuation_policy_last_decision = NULL, "
+        << "continuation_policy_last_decision_at = NULL, "
+        << "continuation_policy_last_reason = NULL, "
+        << "continuation_policy_selected_model_id = NULL, "
+        << "continuation_policy_queued_experiment_id = NULL, "
+        << "continuation_policy_inherited = true, "
+        << "continuation_policy_inherited_from_experiment_id = " << sourceConfig.sourceExperimentId << ", "
+        << "continuation_policy_inheritance_status = 'valid', "
+        << "updated_at = now() "
+        << "WHERE experiment_id = " << childExperimentId << ";";
+    w.exec(sql.str());
 }
 
 int RunQueueContinuationCommand(const SchedulerOptions& options)
@@ -8521,6 +8706,12 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
         child.inferEnd = config.source.inferEnd;
         child.queueContinuationCandidateExcluded = config.candidateExcluded;
         MergeResumeMetaIntoQueueOptions(child, resumeMeta);
+        const ContinuationChildPolicyPlan childPolicy =
+            PrepareContinuationChildPolicy(
+                w,
+                config,
+                child,
+                evaluation.selected.completedEpoch);
         EnsureRequiredQueueOptions(child);
 
         const long long childExperimentId = InsertExperimentRecord(
@@ -8553,6 +8744,7 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
             childExperimentId);
         if (childUpdated.size() != 1)
             throw std::runtime_error("failed to persist continuation experiment lineage");
+        PersistContinuationChildPolicy(w, childExperimentId, config, childPolicy);
 
         pqxx::result decisionUpdated = w.exec_params(
             "UPDATE experiment_continuation_decision SET "
@@ -8583,6 +8775,22 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
         evaluation.queuedExperimentId = childExperimentId;
         w.commit();
         PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUED", config, evaluation);
+        std::cout << "CONTINUATION_POLICY_CHILD_INITIALIZED"
+                  << ",source_experiment_id=" << sourceExperimentId
+                  << ",child_experiment_id=" << childExperimentId
+                  << ",inherit_to_child=" << (childPolicy.inherit ? "1" : "0")
+                  << ",child_target_epochs=" << *config.targetEpochs
+                  << ",inherited_policy_target_epochs="
+                  << (childPolicy.inherit ? std::to_string(childPolicy.targetEpochs) : "NULL")
+                  << ",target_increment="
+                  << (config.targetIncrement.has_value()
+                          ? std::to_string(*config.targetIncrement)
+                          : "NULL")
+                  << ",policy_hash="
+                  << (childPolicy.inherit ? childPolicy.policyHash : "NULL")
+                  << ",inheritance_status="
+                  << (childPolicy.inherit ? "valid" : "not_requested")
+                  << std::endl;
         return 0;
     }
     catch (const std::exception& e)
@@ -8627,6 +8835,32 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
         "WHERE source_experiment_id = $1 "
         "ORDER BY updated_at DESC, continuation_decision_id DESC LIMIT 1;",
         sourceExperimentId);
+    std::string outgoingInheritanceValidation = "disabled";
+    std::optional<int> derivedNextTarget;
+    std::string derivedPolicyHash;
+    const std::string currentPolicyHash =
+        StableFnv1aHash(ContinuationPolicyCanonicalText(*config));
+    if (config->inheritToChild)
+    {
+        try
+        {
+            SchedulerOptions prospectiveChild;
+            prospectiveChild.targetEpochs = config->targetEpochs;
+            const ContinuationChildPolicyPlan plan =
+                PrepareContinuationChildPolicy(
+                    w,
+                    *config,
+                    prospectiveChild,
+                    config->source.targetEpochs);
+            outgoingInheritanceValidation = "valid";
+            derivedNextTarget = plan.targetEpochs;
+            derivedPolicyHash = plan.policyHash;
+        }
+        catch (const std::exception& e)
+        {
+            outgoingInheritanceValidation = e.what();
+        }
+    }
     w.commit();
 
     std::cout << "CONTINUATION STATUS\n";
@@ -8637,7 +8871,49 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::cout << "  Continuation Target: "
               << (config->targetEpochs.has_value() ? std::to_string(*config->targetEpochs) : "not configured")
               << "\n";
+    std::cout << "  Inherit Policy To Child: "
+              << (config->inheritToChild ? "enabled" : "disabled") << "\n";
+    std::cout << "  Continuation Target Increment: "
+              << (config->targetIncrement.has_value()
+                      ? std::to_string(*config->targetIncrement)
+                      : "not configured")
+              << "\n";
+    std::cout << "  Derived Next Policy Target: "
+              << (derivedNextTarget.has_value()
+                      ? std::to_string(*derivedNextTarget)
+                      : "none")
+              << "\n";
+    std::cout << "  Policy Inherited: " << (config->policyInherited ? "yes" : "no") << "\n";
+    std::cout << "  Policy Inherited From: "
+              << (config->inheritedFromExperimentId.has_value()
+                      ? std::to_string(*config->inheritedFromExperimentId)
+                      : "none")
+              << "\n";
+    std::cout << "  Inheritance Validation: " << outgoingInheritanceValidation << "\n";
     std::cout << "  Continuation Rules: " << ContinuationPolicyDisplayText(*config) << "\n";
+    std::cout << "CONTINUATION_POLICY_STATUS"
+              << ",source_experiment_id=" << sourceExperimentId
+              << ",enabled=" << (config->enabled ? "1" : "0")
+              << ",inherit_to_child=" << (config->inheritToChild ? "1" : "0")
+              << ",target_increment="
+              << (config->targetIncrement.has_value()
+                      ? std::to_string(*config->targetIncrement)
+                      : "NULL")
+              << ",derived_next_target="
+              << (derivedNextTarget.has_value()
+                      ? std::to_string(*derivedNextTarget)
+                      : "NULL")
+              << ",policy_inherited=" << (config->policyInherited ? "1" : "0")
+              << ",inherited_from_experiment_id="
+              << (config->inheritedFromExperimentId.has_value()
+                      ? std::to_string(*config->inheritedFromExperimentId)
+                      : "NULL")
+              << ",inheritance_status=" << config->inheritanceStatus
+              << ",inheritance_validation=" << outgoingInheritanceValidation
+              << ",current_policy_hash=" << currentPolicyHash
+              << ",derived_policy_hash="
+              << (derivedPolicyHash.empty() ? "NULL" : derivedPolicyHash)
+              << std::endl;
     std::cout << "  Continuation Last: decision="
               << (config->lastDecision.has_value() ? *config->lastDecision : "none")
               << " reason=" << (config->lastReason.has_value() ? *config->lastReason : "none")
@@ -13997,7 +14273,10 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--set-continuation-policy=EXPERIMENT_ID:key=value,key=value\n"
         << "Continuation keys: target_epochs, min_evals, patience, min_leader_score, "
         << "min_infer_accuracy, min_improvement, max_degradation, top_n, scope, trend_mode, "
-        << "source_mode, include_excluded, candidate_excluded\n"
+        << "source_mode, include_excluded, candidate_excluded, inherit_to_child, target_increment\n"
+        << "Continuation policy inheritance is disabled by default. When inherit_to_child=true, "
+        << "target_increment must be positive; each new child receives a policy target equal to "
+        << "its own target_epochs plus target_increment.\n"
         << "Continuation gates use AND semantics. trend_delta=latest_metric-first_metric; "
         << "non_degrading requires trend_delta>=-max_degradation and improving requires "
         << "trend_delta>=min_improvement. trend_mode defaults to none.\n"
