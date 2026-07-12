@@ -8030,7 +8030,7 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         PrintContinuationPolicyLog("CONTINUATION_POLICY_ERROR", config, evaluation);
         return evaluation;
     }
-    if (config.status != "completed" || config.phase != "done")
+    if (!ContinuationPolicySourceCompletionReady(config))
     {
         evaluation.reason = "source_requires_completed_done";
         PrintContinuationPolicyLog("CONTINUATION_POLICY_SKIPPED", config, evaluation);
@@ -8228,7 +8228,7 @@ ContinuationEvaluation EvaluateContinuationPolicy(
     return evaluation;
 }
 
-bool ValidateEnabledContinuationPolicySource(
+bool ValidateContinuationEvaluationSource(
     pqxx::work& w,
     const ContinuationPolicyConfig& config,
     std::string& reason)
@@ -8240,7 +8240,7 @@ bool ValidateEnabledContinuationPolicySource(
         reason = *configError;
         return false;
     }
-    if (config.status != "completed" || config.phase != "done")
+    if (!ContinuationPolicySourceCompletionReady(config))
     {
         reason = "source_requires_completed_done";
         return false;
@@ -8320,12 +8320,13 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
         if (enabled)
         {
             config.enabled = true;
-            std::string reason;
-            if (!ValidateEnabledContinuationPolicySource(w, config, reason))
+            const std::optional<std::string> reason =
+                ContinuationPolicyEnablementError(config);
+            if (reason.has_value())
             {
                 std::cerr << "CONTINUATION_POLICY_ERROR"
                           << ",source_experiment_id=" << sourceExperimentId
-                          << ",reason=" << reason
+                          << ",reason=" << *reason
                           << std::endl;
                 w.commit();
                 return 1;
@@ -8405,12 +8406,13 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
     }
     if (resulting.enabled)
     {
-        std::string reason;
-        if (!ValidateEnabledContinuationPolicySource(w, resulting, reason))
+        const std::optional<std::string> reason =
+            ContinuationPolicyEnablementError(resulting);
+        if (reason.has_value())
         {
             std::cerr << "CONTINUATION_POLICY_ERROR"
                       << ",source_experiment_id=" << sourceExperimentId
-                      << ",reason=" << reason
+                      << ",reason=" << *reason
                       << std::endl;
             w.commit();
             return 1;
@@ -8870,6 +8872,25 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::string outgoingInheritanceValidation = "disabled";
     std::optional<int> derivedNextTarget;
     std::string derivedPolicyHash;
+    const bool sourceCompletionReady =
+        ContinuationPolicySourceCompletionReady(*config);
+    bool evaluationReady = false;
+    std::string evaluationDeferredReason;
+    if (!config->enabled)
+    {
+        evaluationDeferredReason = "policy_disabled";
+    }
+    else if (!sourceCompletionReady)
+    {
+        evaluationDeferredReason = "source_not_completed";
+    }
+    else
+    {
+        std::string reason;
+        evaluationReady = ValidateContinuationEvaluationSource(w, *config, reason);
+        if (!evaluationReady)
+            evaluationDeferredReason = reason;
+    }
     const std::string currentPolicyHash = ContinuationPolicySemanticHash(*config);
     const std::optional<std::string> effectiveProgressionMode =
         EffectiveContinuationProgressionMode(*config);
@@ -8887,11 +8908,13 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
             SchedulerOptions prospectiveChild;
             prospectiveChild.targetEpochs = config->targetEpochs;
             const ContinuationChildPolicyPlan plan =
-                PrepareContinuationChildPolicy(
-                    w,
-                    *config,
-                    prospectiveChild,
-                    config->source.targetEpochs);
+                sourceCompletionReady
+                    ? PrepareContinuationChildPolicy(
+                          w,
+                          *config,
+                          prospectiveChild,
+                          config->source.targetEpochs)
+                    : PlanContinuationChildPolicy(*config);
             outgoingInheritanceValidation =
                 plan.terminal ? "valid_terminal_child" : "valid";
             if (!plan.terminal)
@@ -8912,6 +8935,14 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::cout << "CONTINUATION STATUS\n";
     std::cout << "  Experiment: " << sourceExperimentId << "\n";
     std::cout << "  Continuation Policy: " << (config->enabled ? "enabled" : "disabled") << "\n";
+    std::cout << "  Continuation Evaluation: ";
+    if (evaluationReady)
+        std::cout << "ready";
+    else if (config->enabled && !sourceCompletionReady)
+        std::cout << "enabled and awaiting source completion";
+    else
+        std::cout << "deferred (" << evaluationDeferredReason << ")";
+    std::cout << "\n";
     std::cout << "  Continuation Candidate: "
               << (config->candidateExcluded ? "excluded" : "production-eligible") << "\n";
     std::cout << "  Current Experiment Target: " << config->source.targetEpochs << "\n";
@@ -8972,6 +9003,11 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::cout << "CONTINUATION_POLICY_STATUS"
               << ",source_experiment_id=" << sourceExperimentId
               << ",enabled=" << (config->enabled ? "1" : "0")
+              << ",policy_enabled=" << (config->enabled ? "1" : "0")
+              << ",source_completion_ready=" << (sourceCompletionReady ? "1" : "0")
+              << ",evaluation_ready=" << (evaluationReady ? "1" : "0")
+              << ",evaluation_deferred_reason="
+              << (evaluationDeferredReason.empty() ? "NULL" : evaluationDeferredReason)
               << ",progression_mode="
               << effectiveProgressionMode.value_or("NULL")
               << ",target_sequence="

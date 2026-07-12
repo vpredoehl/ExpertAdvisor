@@ -147,6 +147,10 @@ void ApplyContinuationPolicyUpdate(
 std::optional<std::string> ContinuationPolicyConfigurationError(
     const ContinuationPolicyConfig& config,
     bool requireSelectionConfig);
+std::optional<std::string> ContinuationPolicyEnablementError(
+    const ContinuationPolicyConfig& config);
+bool ContinuationPolicySourceCompletionReady(
+    const ContinuationPolicyConfig& config);
 
 std::string ContinuationPolicySemanticCanonicalText(
     const ContinuationPolicyConfig& config);

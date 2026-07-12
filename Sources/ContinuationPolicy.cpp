@@ -428,6 +428,32 @@ std::optional<std::string> ContinuationPolicyConfigurationError(
     return std::nullopt;
 }
 
+std::optional<std::string> ContinuationPolicyEnablementError(
+    const ContinuationPolicyConfig& config)
+{
+    const std::optional<std::string> configurationError =
+        ContinuationPolicyConfigurationError(config, true);
+    if (configurationError.has_value())
+        return configurationError;
+
+    if (config.status == "pending" || config.status == "paused" ||
+        config.status == "running" || config.status == "completed")
+    {
+        return std::nullopt;
+    }
+    if (config.status == "cancelled")
+        return "policy_enablement_disallowed_for_cancelled_source";
+    if (config.status == "failed")
+        return "policy_enablement_disallowed_for_failed_source";
+    return "policy_enablement_disallowed_for_source_status";
+}
+
+bool ContinuationPolicySourceCompletionReady(
+    const ContinuationPolicyConfig& config)
+{
+    return config.status == "completed" && config.phase == "done";
+}
+
 std::string ContinuationPolicySemanticCanonicalText(const ContinuationPolicyConfig& config)
 {
     std::ostringstream out;

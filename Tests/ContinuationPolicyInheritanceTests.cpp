@@ -65,6 +65,42 @@ ContinuationPolicyConfig SequencePolicy(int currentTarget, int policyTarget)
 
 int main()
 {
+    ContinuationPolicyConfig enablement = BoundedPolicy();
+    for (const std::string& status : {"pending", "paused", "running", "completed"})
+    {
+        enablement.status = status;
+        enablement.phase = status == "completed" ? "done" : "train";
+        assert(!ContinuationPolicyEnablementError(enablement));
+    }
+    enablement.status = "running";
+    for (const std::string& phase : {"train", "infer", "analyze"})
+    {
+        enablement.phase = phase;
+        assert(!ContinuationPolicyEnablementError(enablement));
+        assert(!ContinuationPolicySourceCompletionReady(enablement));
+    }
+    enablement.status = "cancelled";
+    assert(ContinuationPolicyEnablementError(enablement) ==
+           "policy_enablement_disallowed_for_cancelled_source");
+    enablement.status = "failed";
+    assert(ContinuationPolicyEnablementError(enablement) ==
+           "policy_enablement_disallowed_for_failed_source");
+    enablement.status = "unknown";
+    assert(ContinuationPolicyEnablementError(enablement) ==
+           "policy_enablement_disallowed_for_source_status");
+    enablement = BoundedPolicy();
+    enablement.status = "running";
+    enablement.phase = "train";
+    enablement.minInferAccuracy.reset();
+    assert(ContinuationPolicyEnablementError(enablement) ==
+           "at_least_one_threshold_ranking_or_trend_criterion_required");
+    assert(!ContinuationPolicySourceCompletionReady(enablement));
+    enablement.status = "completed";
+    enablement.phase = "analyze";
+    assert(!ContinuationPolicySourceCompletionReady(enablement));
+    enablement.phase = "done";
+    assert(ContinuationPolicySourceCompletionReady(enablement));
+
     const ContinuationPolicyUpdate update = ParseContinuationPolicyUpdate(
         "target_epochs=134,min_evals=1,patience=2,min_leader_score=0.25,"
         "min_infer_accuracy=0.5,min_improvement=0.01,max_degradation=0.02,"
