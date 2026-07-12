@@ -1,74 +1,168 @@
 #include <cassert>
 #include <climits>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
 
 #include "../Sources/ContinuationPolicyInheritance.hpp"
 
-using EA::ExperimentScheduler::DeriveContinuationChildPolicyTarget;
-using EA::ExperimentScheduler::DeriveBoundedContinuationChildPolicy;
-using EA::ExperimentScheduler::StableContinuationPolicyHash;
-using EA::ExperimentScheduler::ContinuationPolicyIdentityMaterial;
-using EA::ExperimentScheduler::SemanticContinuationPolicyHash;
+using namespace EA::ExperimentScheduler;
+
+namespace
+{
+
+template <typename Function>
+std::string ExceptionMessage(Function&& function)
+{
+    try
+    {
+        function();
+    }
+    catch (const std::exception& error)
+    {
+        return error.what();
+    }
+    assert(false && "expected an exception");
+    return {};
+}
+
+ContinuationPolicyConfig BoundedPolicy()
+{
+    ContinuationPolicyConfig config;
+    config.sourceExperimentId = 184;
+    config.source.targetEpochs = 130;
+    config.enabled = true;
+    config.targetEpochs = 134;
+    config.minEvals = 1;
+    config.patience = 2;
+    config.minInferAccuracy = 0.0;
+    config.scope = "symbol_horizon";
+    config.trendMode = "none";
+    config.sourceMode = "final_model";
+    config.includeExcluded = true;
+    config.candidateExcluded = true;
+    config.inheritToChild = true;
+    config.targetIncrement = 4;
+    config.maxTargetEpochs = 142;
+    return config;
+}
+
+} // namespace
 
 int main()
 {
+    const ContinuationPolicyUpdate update = ParseContinuationPolicyUpdate(
+        "target_epochs=134,min_evals=1,patience=2,min_leader_score=0.25,"
+        "min_infer_accuracy=0.5,min_improvement=0.01,max_degradation=0.02,"
+        "top_n=3,scope=global,trend_mode=improving,source_mode=final_model,"
+        "include_excluded=true,candidate_excluded=1,inherit_to_child=true,"
+        "target_increment=4,max_target_epochs=142");
+    ContinuationPolicyConfig parsed;
+    ApplyContinuationPolicyUpdate(parsed, update);
+    assert(parsed.targetEpochs == 134);
+    assert(parsed.minEvals == 1 && parsed.patience == 2);
+    assert(parsed.minLeaderScore == 0.25 && parsed.minInferAccuracy == 0.5);
+    assert(parsed.minImprovement == 0.01 && parsed.maxDegradation == 0.02);
+    assert(parsed.topN == 3 && parsed.scope == "global");
+    assert(parsed.trendMode == "improving" && parsed.sourceMode == "final_model");
+    assert(parsed.includeExcluded && parsed.candidateExcluded && parsed.inheritToChild);
+    assert(parsed.targetIncrement == 4 && parsed.maxTargetEpochs == 142);
+
+    ApplyContinuationPolicyUpdate(
+        parsed,
+        ParseContinuationPolicyUpdate(
+            "target_epochs=null,min_leader_score=null,min_infer_accuracy=null,"
+            "min_improvement=null,max_degradation=null,top_n=null,"
+            "target_increment=null,max_target_epochs=null"));
+    assert(!parsed.targetEpochs && !parsed.minLeaderScore && !parsed.minInferAccuracy);
+    assert(!parsed.minImprovement && !parsed.maxDegradation && !parsed.topN);
+    assert(!parsed.targetIncrement && !parsed.maxTargetEpochs);
+
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate(""); }) ==
+           "--set-continuation-policy requires at least one key=value pair");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("min_evals=0"); }) ==
+           "invalid min_evals value '0'");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("include_excluded=yes"); }) ==
+           "invalid include_excluded value 'yes'; expected true or false");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("unknown=1"); }) ==
+           "unsupported continuation policy key 'unknown'");
+    assert(ExceptionMessage([] { ParseContinuationPolicyUpdate("target_epochs"); }) ==
+           "--set-continuation-policy requires key=value pairs");
+
+    ContinuationPolicyConfig invalid = BoundedPolicy();
+    invalid.minEvals = 0;
+    invalid.patience = 0;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "min_evals_must_be_positive");
+    invalid = BoundedPolicy();
+    invalid.scope = "invalid";
+    assert(ContinuationPolicyConfigurationError(invalid, true) == "invalid_scope");
+    invalid = BoundedPolicy();
+    invalid.minInferAccuracy.reset();
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "at_least_one_threshold_ranking_or_trend_criterion_required");
+    invalid = BoundedPolicy();
+    invalid.includeExcluded = false;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "excluded_candidate_requires_include_excluded");
+    invalid = BoundedPolicy();
+    invalid.maxTargetEpochs = 133;
+    assert(ContinuationPolicyConfigurationError(invalid, true) ==
+           "policy_target_exceeds_max_target");
+
+    const ContinuationPolicyConfig bounded = BoundedPolicy();
+    const std::string boundedCanonical =
+        "target_epochs=134|min_evals=1|patience=2|min_leader_score=NULL|"
+        "min_infer_accuracy=0|min_improvement=NULL|max_degradation=NULL|top_n=NULL|"
+        "scope=symbol_horizon|trend_mode=none|source_mode=final_model|"
+        "include_excluded=true|candidate_excluded=true|inherit_to_child=true|"
+        "target_increment=4|max_target_epochs=142";
+    assert(ContinuationPolicySemanticCanonicalText(bounded) == boundedCanonical);
+    assert(ContinuationPolicySemanticHash(bounded) == "28815e783b815f0b");
+
+    ContinuationPolicyConfig legacy = bounded;
+    legacy.maxTargetEpochs.reset();
+    assert(ContinuationPolicySemanticHash(legacy) == "e000ebb1a1203736");
+
+    ContinuationPolicyConfig differentProvenance = bounded;
+    differentProvenance.policyInherited = true;
+    differentProvenance.inheritedFromExperimentId = 999;
+    differentProvenance.inheritedFromRevision = 77;
+    differentProvenance.inheritedFromHash = "source-hash";
+    differentProvenance.inheritanceStatus = "max_target_reached";
+    differentProvenance.lastDecision = "queued";
+    differentProvenance.lastReason = "runtime";
+    differentProvenance.selectedModelId = 645;
+    differentProvenance.queuedExperimentId = 185;
+    assert(ContinuationPolicySemanticHash(differentProvenance) ==
+           ContinuationPolicySemanticHash(bounded));
+
+    ContinuationPolicyConfig behavioralChange = bounded;
+    behavioralChange.targetEpochs = 138;
+    assert(ContinuationPolicySemanticHash(behavioralChange) !=
+           ContinuationPolicySemanticHash(bounded));
+    behavioralChange = bounded;
+    behavioralChange.targetIncrement = 8;
+    assert(ContinuationPolicySemanticHash(behavioralChange) !=
+           ContinuationPolicySemanticHash(bounded));
+    behavioralChange = bounded;
+    behavioralChange.maxTargetEpochs = 146;
+    assert(ContinuationPolicySemanticHash(behavioralChange) !=
+           ContinuationPolicySemanticHash(bounded));
+    behavioralChange = bounded;
+    behavioralChange.sourceMode = "best_checkpoint";
+    assert(ContinuationPolicySemanticHash(behavioralChange) !=
+           ContinuationPolicySemanticHash(bounded));
+
     const auto derived = DeriveContinuationChildPolicyTarget(130, 4);
-    assert(derived.error.empty());
-    assert(derived.targetEpochs == 134);
-
-    const auto repeated = DeriveContinuationChildPolicyTarget(130, 4);
-    assert(repeated.targetEpochs == derived.targetEpochs);
-    assert(repeated.error == derived.error);
-
-    const auto missingIncrement =
-        DeriveContinuationChildPolicyTarget(130, std::nullopt);
-    assert(!missingIncrement.targetEpochs.has_value());
-    assert(missingIncrement.error == "inherit_to_child_requires_target_increment");
-
-    const auto missingTarget =
-        DeriveContinuationChildPolicyTarget(std::nullopt, 4);
-    assert(!missingTarget.targetEpochs.has_value());
-    assert(missingTarget.error == "inherit_to_child_requires_target_epochs");
-
-    const auto overflow = DeriveContinuationChildPolicyTarget(INT_MAX - 1, 4);
-    assert(!overflow.targetEpochs.has_value());
-    assert(overflow.error == "inherited_target_epochs_overflow");
-
-    const std::string parentCanonical =
-        "target_epochs=130|min_evals=1|inherit_to_child=true|target_increment=4";
-    const std::string childCanonical =
-        "target_epochs=134|min_evals=1|inherit_to_child=true|target_increment=4";
-    const std::string childHash = StableContinuationPolicyHash(childCanonical);
-    assert(childHash == StableContinuationPolicyHash(childCanonical));
-    assert(childHash != StableContinuationPolicyHash(parentCanonical));
-
-    const std::string semanticPolicy =
-        "target_epochs=138|min_evals=1|patience=2|min_infer_accuracy=0"
-        "|source_mode=final_model|candidate_excluded=true|inherit_to_child=true"
-        "|target_increment=4|max_target_epochs=142";
-    const ContinuationPolicyIdentityMaterial provenanceA{
-        semanticPolicy, true, 184, "valid"};
-    const ContinuationPolicyIdentityMaterial provenanceB{
-        semanticPolicy, true, 999, "max_target_reached"};
-    const ContinuationPolicyIdentityMaterial noProvenance{
-        semanticPolicy, false, std::nullopt, "not_requested"};
-    assert(SemanticContinuationPolicyHash(provenanceA) ==
-           SemanticContinuationPolicyHash(provenanceB));
-    assert(SemanticContinuationPolicyHash(provenanceA) ==
-           SemanticContinuationPolicyHash(noProvenance));
-
-    assert(StableContinuationPolicyHash(semanticPolicy) !=
-           StableContinuationPolicyHash(semanticPolicy + "|target_epochs=142"));
-    assert(StableContinuationPolicyHash(semanticPolicy) !=
-           StableContinuationPolicyHash(semanticPolicy + "|target_increment=8"));
-    assert(StableContinuationPolicyHash(semanticPolicy) !=
-           StableContinuationPolicyHash(semanticPolicy + "|max_target_epochs=146"));
-    assert(StableContinuationPolicyHash(semanticPolicy) !=
-           StableContinuationPolicyHash(semanticPolicy + "|min_infer_accuracy=0.5"));
-    assert(StableContinuationPolicyHash(semanticPolicy) !=
-           StableContinuationPolicyHash(semanticPolicy + "|source_mode=best_checkpoint"));
-    assert(StableContinuationPolicyHash(semanticPolicy) !=
-           StableContinuationPolicyHash(semanticPolicy + "|candidate_excluded=false"));
+    assert(derived.error.empty() && derived.targetEpochs == 134);
+    assert(DeriveContinuationChildPolicyTarget(130, std::nullopt).error ==
+           "inherit_to_child_requires_target_increment");
+    assert(DeriveContinuationChildPolicyTarget(std::nullopt, 4).error ==
+           "inherit_to_child_requires_target_epochs");
+    assert(DeriveContinuationChildPolicyTarget(INT_MAX - 1, 4).error ==
+           "inherited_target_epochs_overflow");
 
     const auto child134 = DeriveBoundedContinuationChildPolicy(134, 4, 142);
     assert(!child134.terminal && child134.inheritedPolicyTargetEpochs == 138);
@@ -76,10 +170,40 @@ int main()
     assert(!child138.terminal && child138.inheritedPolicyTargetEpochs == 142);
     const auto child142 = DeriveBoundedContinuationChildPolicy(142, 4, 142);
     assert(child142.terminal && !child142.inheritedPolicyTargetEpochs.has_value());
-    const auto child146 = DeriveBoundedContinuationChildPolicy(146, 4, 142);
-    assert(child146.error == "policy_target_exceeds_max_target");
-    const auto skippedMaximum = DeriveBoundedContinuationChildPolicy(140, 4, 142);
-    assert(skippedMaximum.error == "target_increment_would_skip_past_max_target");
+    assert(DeriveBoundedContinuationChildPolicy(146, 4, 142).error ==
+           "policy_target_exceeds_max_target");
+    assert(DeriveBoundedContinuationChildPolicy(140, 4, 142).error ==
+           "target_increment_would_skip_past_max_target");
+
+    const ContinuationChildPolicyPlan plan = PlanContinuationChildPolicy(bounded);
+    assert(plan.inherit && !plan.terminal && plan.targetEpochs == 138);
+    assert(plan.sourcePolicyHash == "28815e783b815f0b");
+    assert(plan.policyHash == "d8ba2ada6edd5727");
+    assert(plan.inheritedPolicy.source.targetEpochs == 134);
+    assert(plan.inheritedPolicy.targetEpochs == 138);
+    assert(plan.inheritedPolicy.policyRevision == 1);
+    assert(plan.inheritedPolicy.enabled && plan.inheritedPolicy.inheritToChild);
+    assert(!plan.inheritedPolicy.lastDecision && !plan.inheritedPolicy.lastReason);
+    assert(!plan.inheritedPolicy.selectedModelId && !plan.inheritedPolicy.queuedExperimentId);
+
+    ContinuationPolicyConfig terminalSource = bounded;
+    terminalSource.source.targetEpochs = 138;
+    terminalSource.targetEpochs = 142;
+    terminalSource.lastDecision = "queued";
+    terminalSource.queuedExperimentId = 999;
+    const ContinuationChildPolicyPlan terminal =
+        PlanContinuationChildPolicy(terminalSource);
+    assert(terminal.inherit && terminal.terminal && terminal.targetEpochs == 0);
+    assert(!terminal.inheritedPolicy.enabled && !terminal.inheritedPolicy.inheritToChild);
+    assert(!terminal.inheritedPolicy.targetEpochs);
+    assert(terminal.inheritedPolicy.inheritanceStatus == "max_target_reached");
+    assert(!terminal.inheritedPolicy.lastDecision && !terminal.inheritedPolicy.queuedExperimentId);
+
+    ContinuationPolicyConfig disabled = bounded;
+    disabled.inheritToChild = false;
+    const ContinuationChildPolicyPlan noInheritance =
+        PlanContinuationChildPolicy(disabled);
+    assert(!noInheritance.inherit && !noInheritance.terminal);
 
     std::cout << "ContinuationPolicyInheritanceTests passed\n";
     return 0;

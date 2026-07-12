@@ -29,6 +29,7 @@
 
 #include "ExperimentScheduler.hpp"
 #include "CanonicalSymbol.hpp"
+#include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
@@ -585,99 +586,6 @@ struct CheckpointPolicyEvaluationResult
     bool evaluated = false;
     std::string decision = "skipped";
     std::string reason;
-};
-
-struct ContinuationPolicyConfig
-{
-    long long sourceExperimentId = -1;
-    ExperimentRow source;
-    std::string status;
-    std::string phase;
-    bool enabled = false;
-    std::optional<int> targetEpochs;
-    int minEvals = 2;
-    int patience = 2;
-    std::optional<double> minLeaderScore;
-    std::optional<double> minInferAccuracy;
-    std::optional<double> minImprovement;
-    std::optional<double> maxDegradation;
-    std::optional<int> topN;
-    std::string scope = "symbol_horizon";
-    std::string trendMode = "none";
-    std::string sourceMode = "best_checkpoint";
-    bool includeExcluded = false;
-    bool candidateExcluded = false;
-    bool inheritToChild = false;
-    std::optional<int> targetIncrement;
-    std::optional<int> maxTargetEpochs;
-    bool policyInherited = false;
-    std::optional<long long> inheritedFromExperimentId;
-    std::optional<long long> inheritedFromRevision;
-    std::optional<std::string> inheritedFromHash;
-    std::string inheritanceStatus = "not_requested";
-    long long policyRevision = 1;
-    std::optional<std::string> lastDecision;
-    std::optional<std::string> lastReason;
-    std::optional<long long> selectedModelId;
-    std::optional<long long> queuedExperimentId;
-    std::optional<long long> continuationSourceExperimentId;
-    std::optional<long long> continuationSourceModelId;
-    std::optional<int> continuationSourceEpoch;
-    std::optional<long long> continuationDecisionId;
-    int continuationGeneration = 1;
-};
-
-struct ContinuationPolicyUpdate
-{
-    std::set<std::string> keys;
-    std::optional<int> targetEpochs;
-    int minEvals = 2;
-    int patience = 2;
-    std::optional<double> minLeaderScore;
-    std::optional<double> minInferAccuracy;
-    std::optional<double> minImprovement;
-    std::optional<double> maxDegradation;
-    std::optional<int> topN;
-    std::string scope = "symbol_horizon";
-    std::string trendMode = "none";
-    std::string sourceMode = "best_checkpoint";
-    bool includeExcluded = false;
-    bool candidateExcluded = false;
-    bool inheritToChild = false;
-    std::optional<int> targetIncrement;
-    std::optional<int> maxTargetEpochs;
-};
-
-struct ContinuationEvidence
-{
-    long long analysisId = -1;
-    std::optional<long long> checkpointEvalId;
-    long long modelId = -1;
-    int completedEpoch = 0;
-    std::optional<double> leaderScore;
-    std::optional<double> inferAccuracy;
-    std::optional<bool> acceptModel;
-    std::string analysisScope;
-    std::string completedAt;
-    std::string updatedAt;
-};
-
-struct ContinuationEvaluation
-{
-    bool persisted = false;
-    bool reused = false;
-    bool alreadyQueued = false;
-    long long decisionId = -1;
-    std::string decision = "skipped";
-    std::string reason;
-    ContinuationEvidence selected;
-    int evidenceCount = 0;
-    std::optional<int> rankValue;
-    std::optional<std::string> trendMetric;
-    std::optional<double> trendValue;
-    std::string policyHash;
-    std::string evidenceWatermark;
-    std::optional<long long> queuedExperimentId;
 };
 
 bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
@@ -7021,7 +6929,17 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
     const pqxx::row& row = rows[0];
     ContinuationPolicyConfig config;
     config.sourceExperimentId = sourceExperimentId;
-    config.source = RowToExperiment(row);
+    const ExperimentRow source = RowToExperiment(row);
+    config.source.symbol = source.symbol;
+    config.source.predictionHorizon = source.predictionHorizon;
+    config.source.cNextThreshold = source.cNextThreshold;
+    config.source.checkpointInterval = source.checkpointInterval;
+    config.source.targetEpochs = source.targetEpochs;
+    config.source.trainStart = source.trainStart;
+    config.source.trainEnd = source.trainEnd;
+    config.source.inferStart = source.inferStart;
+    config.source.inferEnd = source.inferEnd;
+    config.source.lastModelId = source.lastModelId;
     config.status = row[17].as<std::string>();
     config.phase = row[18].as<std::string>();
     config.enabled = row[19].as<bool>();
@@ -7064,259 +6982,9 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
     return config;
 }
 
-bool ValidContinuationScope(const std::string& value)
-{
-    return value == "symbol_horizon" || value == "horizon" || value == "global";
-}
-
-bool ValidContinuationTrendMode(const std::string& value)
-{
-    return value == "none" || value == "non_degrading" || value == "improving";
-}
-
-bool ValidContinuationSourceMode(const std::string& value)
-{
-    return value == "best_checkpoint" ||
-           value == "latest_checkpoint" ||
-           value == "final_model";
-}
-
-std::optional<std::string> ContinuationPolicyConfigurationError(
-    const ContinuationPolicyConfig& config,
-    bool requireSelectionConfig)
-{
-    if (config.targetEpochs.has_value() && *config.targetEpochs <= 0)
-        return "target_epochs_must_be_positive";
-    if (config.minEvals <= 0)
-        return "min_evals_must_be_positive";
-    if (config.patience <= 0)
-        return "patience_must_be_positive";
-    if (config.minLeaderScore.has_value() && !std::isfinite(*config.minLeaderScore))
-        return "min_leader_score_must_be_finite";
-    if (config.minInferAccuracy.has_value() && !std::isfinite(*config.minInferAccuracy))
-        return "min_infer_accuracy_must_be_finite";
-    if (config.minImprovement.has_value() &&
-        (!std::isfinite(*config.minImprovement) || *config.minImprovement < 0.0))
-        return "min_improvement_must_be_non_negative_and_finite";
-    if (config.maxDegradation.has_value() &&
-        (!std::isfinite(*config.maxDegradation) || *config.maxDegradation < 0.0))
-        return "max_degradation_must_be_non_negative_and_finite";
-    if (config.topN.has_value() && *config.topN <= 0)
-        return "top_n_must_be_positive";
-    if (!ValidContinuationScope(config.scope))
-        return "invalid_scope";
-    if (!ValidContinuationTrendMode(config.trendMode))
-        return "invalid_trend_mode";
-    if (!ValidContinuationSourceMode(config.sourceMode))
-        return "invalid_source_mode";
-    if (config.targetIncrement.has_value() && *config.targetIncrement <= 0)
-        return "target_increment_must_be_positive";
-    if (config.maxTargetEpochs.has_value())
-    {
-        if (*config.maxTargetEpochs <= 0)
-            return "max_target_epochs_must_be_positive";
-        const bool terminal = config.inheritanceStatus == "max_target_reached";
-        if ((!terminal && *config.maxTargetEpochs <= config.source.targetEpochs) ||
-            (terminal && *config.maxTargetEpochs != config.source.targetEpochs))
-        {
-            return "max_target_must_exceed_current_target";
-        }
-        if (config.targetEpochs.has_value() &&
-            *config.targetEpochs > *config.maxTargetEpochs)
-        {
-            return "policy_target_exceeds_max_target";
-        }
-    }
-    if (config.inheritToChild)
-    {
-        const ContinuationTargetDerivation target =
-            DeriveContinuationChildPolicyTarget(
-                config.targetEpochs,
-                config.targetIncrement);
-        if (!target.error.empty())
-            return target.error;
-        if (config.maxTargetEpochs.has_value() &&
-            *config.targetEpochs < *config.maxTargetEpochs &&
-            *target.targetEpochs > *config.maxTargetEpochs)
-        {
-            return "target_increment_would_skip_past_max_target";
-        }
-    }
-    if (config.trendMode == "none" &&
-        (config.minImprovement.has_value() || config.maxDegradation.has_value()))
-        return "trend_none_requires_null_trend_thresholds";
-    if (config.trendMode == "non_degrading" &&
-        (!config.maxDegradation.has_value() || config.minImprovement.has_value()))
-        return "non_degrading_requires_only_max_degradation";
-    if (config.trendMode == "improving" &&
-        (!config.minImprovement.has_value() || config.maxDegradation.has_value()))
-        return "improving_requires_only_min_improvement";
-    if (requireSelectionConfig && !config.targetEpochs.has_value())
-        return "target_epochs_required";
-    if (requireSelectionConfig && config.candidateExcluded && !config.includeExcluded)
-        return "excluded_candidate_requires_include_excluded";
-    if (requireSelectionConfig &&
-        !config.minLeaderScore.has_value() &&
-        !config.minInferAccuracy.has_value() &&
-        !config.topN.has_value() &&
-        config.trendMode == "none")
-    {
-        return "at_least_one_threshold_ranking_or_trend_criterion_required";
-    }
-    return std::nullopt;
-}
-
-std::string ContinuationOptionalDoubleText(const std::optional<double>& value)
-{
-    return value.has_value() ? FormatDouble(*value) : "NULL";
-}
-
-std::string ContinuationOptionalIntText(const std::optional<int>& value)
-{
-    return value.has_value() ? std::to_string(*value) : "NULL";
-}
-
-std::string ContinuationPolicySemanticCanonicalText(const ContinuationPolicyConfig& config)
-{
-    std::ostringstream out;
-    out << "target_epochs=" << ContinuationOptionalIntText(config.targetEpochs)
-        << "|min_evals=" << config.minEvals
-        << "|patience=" << config.patience
-        << "|min_leader_score=" << ContinuationOptionalDoubleText(config.minLeaderScore)
-        << "|min_infer_accuracy=" << ContinuationOptionalDoubleText(config.minInferAccuracy)
-        << "|min_improvement=" << ContinuationOptionalDoubleText(config.minImprovement)
-        << "|max_degradation=" << ContinuationOptionalDoubleText(config.maxDegradation)
-        << "|top_n=" << ContinuationOptionalIntText(config.topN)
-        << "|scope=" << config.scope
-        << "|trend_mode=" << config.trendMode
-        << "|source_mode=" << config.sourceMode
-        << "|include_excluded=" << (config.includeExcluded ? "true" : "false")
-        << "|candidate_excluded=" << (config.candidateExcluded ? "true" : "false")
-        << "|inherit_to_child=" << (config.inheritToChild ? "true" : "false")
-        << "|target_increment=" << ContinuationOptionalIntText(config.targetIncrement);
-    // Preserve legacy hashes for policies created before bounded inheritance existed.
-    if (config.maxTargetEpochs.has_value())
-        out << "|max_target_epochs=" << *config.maxTargetEpochs;
-    return out.str();
-}
-
 std::string StableFnv1aHash(const std::string& value)
 {
     return StableContinuationPolicyHash(value);
-}
-
-ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
-{
-    ContinuationPolicyUpdate update;
-    for (const std::string& item : SplitCommaSeparated(text))
-    {
-        const size_t equals = item.find('=');
-        if (equals == std::string::npos || equals == 0 || equals + 1 >= item.size())
-            throw std::invalid_argument("--set-continuation-policy requires key=value pairs");
-        const std::string key = item.substr(0, equals);
-        const std::string value = item.substr(equals + 1);
-        update.keys.insert(key);
-        const bool clearValue = value == "null";
-
-        if (key == "target_epochs")
-        {
-            if (!clearValue)
-                update.targetEpochs = ParsePositiveInt(key, value);
-        }
-        else if (key == "min_evals")
-            update.minEvals = ParsePositiveInt(key, value);
-        else if (key == "patience")
-            update.patience = ParsePositiveInt(key, value);
-        else if (key == "min_leader_score")
-        {
-            if (!clearValue)
-                update.minLeaderScore = ParseFiniteDouble(key, value);
-        }
-        else if (key == "min_infer_accuracy")
-        {
-            if (!clearValue)
-                update.minInferAccuracy = ParseFiniteDouble(key, value);
-        }
-        else if (key == "min_improvement")
-        {
-            if (!clearValue)
-                update.minImprovement = ParseNonNegativeFiniteDouble(key, value);
-        }
-        else if (key == "max_degradation")
-        {
-            if (!clearValue)
-                update.maxDegradation = ParseNonNegativeFiniteDouble(key, value);
-        }
-        else if (key == "top_n")
-        {
-            if (!clearValue)
-                update.topN = ParsePositiveInt(key, value);
-        }
-        else if (key == "scope")
-            update.scope = value;
-        else if (key == "trend_mode")
-            update.trendMode = value;
-        else if (key == "source_mode")
-            update.sourceMode = value;
-        else if (key == "include_excluded")
-            update.includeExcluded = ParseBoolean(key, value);
-        else if (key == "candidate_excluded")
-            update.candidateExcluded = ParseBoolean(key, value);
-        else if (key == "inherit_to_child")
-            update.inheritToChild = ParseBoolean(key, value);
-        else if (key == "target_increment")
-        {
-            if (!clearValue)
-                update.targetIncrement = ParsePositiveInt(key, value);
-        }
-        else if (key == "max_target_epochs")
-        {
-            if (!clearValue)
-                update.maxTargetEpochs = ParsePositiveInt(key, value);
-        }
-        else
-            throw std::invalid_argument("unsupported continuation policy key '" + key + "'");
-    }
-    if (update.keys.empty())
-        throw std::invalid_argument("--set-continuation-policy requires at least one key=value pair");
-    return update;
-}
-
-void ApplyContinuationPolicyUpdate(ContinuationPolicyConfig& config,
-                                   const ContinuationPolicyUpdate& update)
-{
-    if (update.keys.count("target_epochs"))
-        config.targetEpochs = update.targetEpochs;
-    if (update.keys.count("min_evals"))
-        config.minEvals = update.minEvals;
-    if (update.keys.count("patience"))
-        config.patience = update.patience;
-    if (update.keys.count("min_leader_score"))
-        config.minLeaderScore = update.minLeaderScore;
-    if (update.keys.count("min_infer_accuracy"))
-        config.minInferAccuracy = update.minInferAccuracy;
-    if (update.keys.count("min_improvement"))
-        config.minImprovement = update.minImprovement;
-    if (update.keys.count("max_degradation"))
-        config.maxDegradation = update.maxDegradation;
-    if (update.keys.count("top_n"))
-        config.topN = update.topN;
-    if (update.keys.count("scope"))
-        config.scope = update.scope;
-    if (update.keys.count("trend_mode"))
-        config.trendMode = update.trendMode;
-    if (update.keys.count("source_mode"))
-        config.sourceMode = update.sourceMode;
-    if (update.keys.count("include_excluded"))
-        config.includeExcluded = update.includeExcluded;
-    if (update.keys.count("candidate_excluded"))
-        config.candidateExcluded = update.candidateExcluded;
-    if (update.keys.count("inherit_to_child"))
-        config.inheritToChild = update.inheritToChild;
-    if (update.keys.count("target_increment"))
-        config.targetIncrement = update.targetIncrement;
-    if (update.keys.count("max_target_epochs"))
-        config.maxTargetEpochs = update.maxTargetEpochs;
 }
 
 std::vector<ContinuationEvidence> LoadContinuationEvidence(
@@ -8092,11 +7760,7 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         DeduplicateContinuationEvidence(rawEvidence);
     evaluation.evidenceCount = static_cast<int>(evidence.size());
     evaluation.evidenceWatermark = ContinuationEvidenceWatermark(evidence);
-    evaluation.policyHash = SemanticContinuationPolicyHash(
-        {ContinuationPolicySemanticCanonicalText(config),
-         config.policyInherited,
-         config.inheritedFromExperimentId,
-         config.inheritanceStatus});
+    evaluation.policyHash = ContinuationPolicySemanticHash(config);
 
     const std::optional<ContinuationEvidence> selected =
         SelectContinuationSourceEvidence(config, rawEvidence);
@@ -8313,24 +7977,6 @@ bool ValidateEnabledContinuationPolicySource(
         return false;
     }
     return ValidateContinuationResumeSource(w, config, *selected, nullptr, reason);
-}
-
-std::string ContinuationPolicyDisplayText(const ContinuationPolicyConfig& config)
-{
-    return ContinuationPolicySemanticCanonicalText(config) +
-           "|policy_revision=" + std::to_string(config.policyRevision) +
-           "|policy_inherited=" + (config.policyInherited ? "true" : "false") +
-           "|inherited_from_experiment_id=" +
-               (config.inheritedFromExperimentId.has_value()
-                    ? std::to_string(*config.inheritedFromExperimentId)
-                    : "NULL") +
-           "|inherited_from_revision=" +
-               (config.inheritedFromRevision.has_value()
-                    ? std::to_string(*config.inheritedFromRevision)
-                    : "NULL") +
-           "|inherited_from_hash=" +
-               config.inheritedFromHash.value_or("NULL") +
-           "|inheritance_status=" + config.inheritanceStatus;
 }
 
 long long ContinuationControlExperimentId(const SchedulerOptions& options)
@@ -8565,65 +8211,15 @@ int RunEvaluateContinuationCommand(const SchedulerOptions& options)
     }
 }
 
-struct ContinuationChildPolicyPlan
-{
-    bool inherit = false;
-    bool terminal = false;
-    int targetEpochs = 0;
-    std::string policyHash;
-    std::string sourcePolicyHash;
-};
-
 ContinuationChildPolicyPlan PrepareContinuationChildPolicy(
     pqxx::work& w,
     const ContinuationPolicyConfig& sourceConfig,
     SchedulerOptions& child,
     int continuationSourceEpoch)
 {
-    ContinuationChildPolicyPlan plan;
+    ContinuationChildPolicyPlan plan = PlanContinuationChildPolicy(sourceConfig);
     if (!sourceConfig.inheritToChild)
         return plan;
-
-    plan.inherit = true;
-    if (!sourceConfig.targetEpochs.has_value())
-        throw std::runtime_error("inherit_to_child_requires_target_epochs");
-    const BoundedContinuationTargetDerivation boundedTarget =
-        DeriveBoundedContinuationChildPolicy(
-            *sourceConfig.targetEpochs,
-            sourceConfig.targetIncrement,
-            sourceConfig.maxTargetEpochs);
-    if (!boundedTarget.error.empty())
-        throw std::runtime_error(boundedTarget.error);
-    plan.terminal = boundedTarget.terminal;
-    plan.sourcePolicyHash = SemanticContinuationPolicyHash(
-        {ContinuationPolicySemanticCanonicalText(sourceConfig),
-         sourceConfig.policyInherited,
-         sourceConfig.inheritedFromExperimentId,
-         sourceConfig.inheritanceStatus});
-
-    ContinuationPolicyConfig inherited = sourceConfig;
-    inherited.source.targetEpochs = *sourceConfig.targetEpochs;
-    inherited.enabled = !plan.terminal;
-    inherited.inheritToChild = !plan.terminal;
-    inherited.inheritanceStatus = plan.terminal ? "max_target_reached" : "valid";
-    if (plan.terminal)
-    {
-        inherited.targetEpochs.reset();
-    }
-    else
-    {
-        plan.targetEpochs = *boundedTarget.inheritedPolicyTargetEpochs;
-        inherited.targetEpochs = plan.targetEpochs;
-    }
-    inherited.policyRevision = 1;
-    inherited.lastDecision.reset();
-    inherited.lastReason.reset();
-    inherited.selectedModelId.reset();
-    inherited.queuedExperimentId.reset();
-    const std::optional<std::string> configError =
-        ContinuationPolicyConfigurationError(inherited, !plan.terminal);
-    if (configError.has_value())
-        throw std::runtime_error("invalid_inherited_policy:" + *configError);
 
     if (!plan.terminal &&
         (sourceConfig.sourceMode == "best_checkpoint" ||
@@ -8677,11 +8273,6 @@ ContinuationChildPolicyPlan PrepareContinuationChildPolicy(
         }
     }
 
-    plan.policyHash = SemanticContinuationPolicyHash(
-        {ContinuationPolicySemanticCanonicalText(inherited),
-         true,
-         sourceConfig.sourceExperimentId,
-         inherited.inheritanceStatus});
     return plan;
 }
 
@@ -8964,11 +8555,7 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     std::string outgoingInheritanceValidation = "disabled";
     std::optional<int> derivedNextTarget;
     std::string derivedPolicyHash;
-    const std::string currentPolicyHash = SemanticContinuationPolicyHash(
-        {ContinuationPolicySemanticCanonicalText(*config),
-         config->policyInherited,
-         config->inheritedFromExperimentId,
-         config->inheritanceStatus});
+    const std::string currentPolicyHash = ContinuationPolicySemanticHash(*config);
     if (config->inheritToChild)
     {
         try

@@ -28,6 +28,10 @@
 		0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
 		0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A4000002FB0000100AAA001 /* RunMetadata.cpp */; };
 		0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A4000002FB0000100AAA001 /* RunMetadata.cpp */; };
+		0A5000042FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */; };
+		0A5000052FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */; };
+		0A5000062FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */; };
+		0A5000072FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */; };
 		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
 		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
 		0A1000082F70000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
@@ -146,6 +150,10 @@
 		0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ExperimentMetaAnalyzer.cpp; sourceTree = "<group>"; };
 		0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentScheduler.cpp; path = Sources/ExperimentScheduler.cpp; sourceTree = SOURCE_ROOT; };
 		0A4000002FB0000100AAA001 /* RunMetadata.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RunMetadata.cpp; path = Sources/RunMetadata.cpp; sourceTree = SOURCE_ROOT; };
+		0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ContinuationPolicy.cpp; path = Sources/ContinuationPolicy.cpp; sourceTree = SOURCE_ROOT; };
+		0A5000012FC0000100AAA001 /* ContinuationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ContinuationPolicy.hpp; path = Sources/ContinuationPolicy.hpp; sourceTree = SOURCE_ROOT; };
+		0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ContinuationPolicyInheritance.cpp; path = Sources/ContinuationPolicyInheritance.cpp; sourceTree = SOURCE_ROOT; };
+		0A5000032FC0000100AAA001 /* ContinuationPolicyInheritance.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ContinuationPolicyInheritance.hpp; path = Sources/ContinuationPolicyInheritance.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -228,6 +236,10 @@
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */,
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
+				0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */,
+				0A5000012FC0000100AAA001 /* ContinuationPolicy.hpp */,
+				0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */,
+				0A5000032FC0000100AAA001 /* ContinuationPolicyInheritance.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
 			);
@@ -413,6 +425,8 @@
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0A5000042FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
+				0A5000062FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -428,6 +442,8 @@
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0A5000052FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
+				0A5000072FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
