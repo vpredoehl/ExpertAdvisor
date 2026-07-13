@@ -153,45 +153,10 @@ PersistedContinuationIdentity MapPersistedContinuationIdentity(
     return persisted;
 }
 
-} // namespace
-
-bool ContinuationPolicySchemaExists(pqxx::work& transaction)
-{
-    if (!TableExists(transaction, "experiment_continuation_decision"))
-        return false;
-    const std::vector<std::pair<std::string, std::string>> requiredColumns = {
-        {"experiment", "continuation_policy_enabled"},
-        {"experiment", "continuation_policy_target_epochs"},
-        {"experiment", "continuation_policy_revision"},
-        {"experiment", "continuation_policy_inherit_to_child"},
-        {"experiment", "continuation_policy_target_increment"},
-        {"experiment", "continuation_policy_max_target_epochs"},
-        {"experiment", "continuation_policy_progression_mode"},
-        {"experiment", "continuation_policy_target_sequence"},
-        {"experiment", "continuation_policy_inherited"},
-        {"experiment", "continuation_policy_inherited_from_experiment_id"},
-        {"experiment", "continuation_policy_inherited_from_revision"},
-        {"experiment", "continuation_policy_inherited_from_hash"},
-        {"experiment", "continuation_policy_inheritance_status"},
-        {"experiment", "continuation_candidate_excluded"},
-        {"experiment", "continuation_source_experiment_id"},
-        {"experiment", "continuation_decision_id"},
-        {"model", "experiment_id"},
-        {"experiment_analysis_result", "analysis_scope"},
-        {"experiment_checkpoint_eval", "analysis_id"},
-    };
-    for (const auto& [table, column] : requiredColumns)
-    {
-        if (!ColumnExists(transaction, table, column))
-            return false;
-    }
-    return true;
-}
-
-std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
+std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfigImpl(
     pqxx::work& transaction,
     long long sourceExperimentId,
-    bool lockRow)
+    bool lockForUpdate)
 {
     if (!ContinuationPolicySchemaExists(transaction))
         return std::nullopt;
@@ -239,7 +204,7 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
         "e.continuation_policy_progression_mode AS policy_progression_mode, "
         "array_to_string(e.continuation_policy_target_sequence, ':') AS policy_target_sequence "
         "FROM experiment e WHERE e.experiment_id = $1";
-    if (lockRow)
+    if (lockForUpdate)
         sql += " FOR UPDATE";
     sql += ";";
     const pqxx::result rows = transaction.exec_params(sql, sourceExperimentId);
@@ -248,13 +213,75 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
     return MapContinuationPolicyConfig(rows[0]);
 }
 
-ContinuationAutoPreflightLookup LoadAutomaticContinuationPreflight(
+} // namespace
+
+bool ContinuationPolicySchemaExists(pqxx::work& transaction)
+{
+    if (!TableExists(transaction, "experiment_continuation_decision"))
+        return false;
+    const std::vector<std::pair<std::string, std::string>> requiredColumns = {
+        {"experiment", "continuation_policy_enabled"},
+        {"experiment", "continuation_policy_target_epochs"},
+        {"experiment", "continuation_policy_revision"},
+        {"experiment", "continuation_policy_inherit_to_child"},
+        {"experiment", "continuation_policy_target_increment"},
+        {"experiment", "continuation_policy_max_target_epochs"},
+        {"experiment", "continuation_policy_progression_mode"},
+        {"experiment", "continuation_policy_target_sequence"},
+        {"experiment", "continuation_policy_inherited"},
+        {"experiment", "continuation_policy_inherited_from_experiment_id"},
+        {"experiment", "continuation_policy_inherited_from_revision"},
+        {"experiment", "continuation_policy_inherited_from_hash"},
+        {"experiment", "continuation_policy_inheritance_status"},
+        {"experiment", "continuation_candidate_excluded"},
+        {"experiment", "continuation_source_experiment_id"},
+        {"experiment", "continuation_decision_id"},
+        {"model", "experiment_id"},
+        {"experiment_analysis_result", "analysis_scope"},
+        {"experiment_checkpoint_eval", "analysis_id"},
+    };
+    for (const auto& [table, column] : requiredColumns)
+    {
+        if (!ColumnExists(transaction, table, column))
+            return false;
+    }
+    return true;
+}
+
+std::optional<ContinuationPolicyConfig> FindContinuationPolicyConfig(
     pqxx::work& transaction,
     long long sourceExperimentId)
 {
+    return LoadContinuationPolicyConfigImpl(
+        transaction,
+        sourceExperimentId,
+        false);
+}
+
+std::optional<ContinuationPolicyConfig> LockContinuationPolicyConfigForUpdate(
+    pqxx::work& transaction,
+    long long sourceExperimentId)
+{
+    return LoadContinuationPolicyConfigImpl(
+        transaction,
+        sourceExperimentId,
+        true);
+}
+
+ContinuationAutoPreflightLookup LoadAutomaticContinuationPreflightReadOnly(
+    pqxx::work& transaction,
+    long long sourceExperimentId)
+{
+    const std::string transactionReadOnly =
+        transaction.exec("SHOW transaction_read_only;").one_row()[0].as<std::string>();
+    if (transactionReadOnly != "on")
+    {
+        throw std::logic_error(
+            "automatic_continuation_preflight_requires_read_only_transaction");
+    }
     ContinuationAutoPreflightLookup preflight;
     const std::optional<ContinuationPolicyConfig> loaded =
-        LoadContinuationPolicyConfig(transaction, sourceExperimentId, false);
+        FindContinuationPolicyConfig(transaction, sourceExperimentId);
     if (!loaded.has_value())
         throw std::runtime_error("source_experiment_not_found");
     preflight.currentPolicy = *loaded;

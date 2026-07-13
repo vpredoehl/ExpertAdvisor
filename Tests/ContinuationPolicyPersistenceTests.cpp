@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string>
 
@@ -43,8 +45,25 @@ int main()
     assert(!queuedSources.empty());
     const long long queuedSourceId =
         queuedSources[0]["source_experiment_id"].as<long long>();
+    const std::optional<ContinuationPolicyConfig> directlyLoaded =
+        FindContinuationPolicyConfig(transaction, queuedSourceId);
+    assert(directlyLoaded.has_value());
+    const pqxx::row transactionIdBefore =
+        transaction.exec("SELECT txid_current_if_assigned();").one_row();
     const ContinuationAutoPreflightLookup queued =
-        LoadAutomaticContinuationPreflight(transaction, queuedSourceId);
+        LoadAutomaticContinuationPreflightReadOnly(transaction, queuedSourceId);
+    const pqxx::row transactionIdAfter =
+        transaction.exec("SELECT txid_current_if_assigned();").one_row();
+    assert(transaction.exec("SHOW transaction_read_only;").one_row()[0].as<std::string>() ==
+           "on");
+    assert(transactionIdBefore[0].is_null() == transactionIdAfter[0].is_null());
+    if (!transactionIdBefore[0].is_null())
+    {
+        assert(transactionIdBefore[0].as<unsigned long long>() ==
+               transactionIdAfter[0].as<unsigned long long>());
+    }
+    assert(ContinuationPolicySemanticCanonicalText(*directlyLoaded) ==
+           ContinuationPolicySemanticCanonicalText(queued.currentPolicy));
     assert(queued.currentPolicy.sourceExperimentId == queuedSourceId);
     assert(queued.persistedIdentity.has_value());
     const PersistedContinuationIdentity& persisted = *queued.persistedIdentity;
@@ -76,7 +95,7 @@ int main()
         "ORDER BY e.experiment_id LIMIT 1;");
     assert(!noDecisionSources.empty());
     const ContinuationAutoPreflightLookup noDecision =
-        LoadAutomaticContinuationPreflight(
+        LoadAutomaticContinuationPreflightReadOnly(
             transaction,
             noDecisionSources[0]["experiment_id"].as<long long>());
     assert(!noDecision.persistedIdentity.has_value());
@@ -97,6 +116,51 @@ int main()
     }
 
     transaction.commit();
+
+    // The manual/queue path uses the same mapper through an explicitly locking
+    // entry point. Roll back after proving that lookup remains available.
+    pqxx::connection lockingConnection{connectionString};
+    pqxx::work lockingTransaction{lockingConnection};
+    lockingTransaction.exec("SET TRANSACTION READ WRITE;");
+    const std::optional<ContinuationPolicyConfig> locked =
+        LockContinuationPolicyConfigForUpdate(
+            lockingTransaction,
+            queuedSourceId);
+    assert(locked.has_value());
+    assert(ContinuationPolicySemanticCanonicalText(*locked) ==
+           ContinuationPolicySemanticCanonicalText(*directlyLoaded));
+    lockingTransaction.abort();
+
+    pqxx::connection writeConnection{connectionString};
+    pqxx::work writeTransaction{writeConnection};
+    writeTransaction.exec("SET TRANSACTION READ WRITE;");
+    bool rejectedWriteCapablePreflight = false;
+    try
+    {
+        (void)LoadAutomaticContinuationPreflightReadOnly(
+            writeTransaction,
+            queuedSourceId);
+    }
+    catch (const std::logic_error& error)
+    {
+        rejectedWriteCapablePreflight =
+            std::string{error.what()} ==
+            "automatic_continuation_preflight_requires_read_only_transaction";
+    }
+    assert(rejectedWriteCapablePreflight);
+    writeTransaction.abort();
+
+    std::ifstream schedulerSource("Sources/ExperimentScheduler.cpp");
+    assert(schedulerSource.is_open());
+    const std::string schedulerText{
+        std::istreambuf_iterator<char>(schedulerSource),
+        std::istreambuf_iterator<char>()};
+    assert(schedulerText.find("decision_source_experiment_id") == std::string::npos);
+    assert(schedulerText.find("evidence_changed_after_decision") == std::string::npos);
+    assert(schedulerText.find("MapPersistedContinuationIdentity") == std::string::npos);
+    assert(schedulerText.find("PersistedContinuationIdentity persisted") ==
+           std::string::npos);
+
     std::cout << "ContinuationPolicyPersistenceTests passed\n";
     return 0;
 }

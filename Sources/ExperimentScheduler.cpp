@@ -7520,7 +7520,7 @@ ContinuationRankResult RankContinuationSource(
     {
         const long long candidateId = idRow[0].as<long long>();
         std::optional<ContinuationPolicyConfig> loaded =
-            LoadContinuationPolicyConfig(w, candidateId, false);
+            FindContinuationPolicyConfig(w, candidateId);
         if (!loaded.has_value())
             continue;
 
@@ -7886,7 +7886,9 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         sourceExperimentId);
     ContinuationEvaluation evaluation;
     std::optional<ContinuationPolicyConfig> configOption =
-        LoadContinuationPolicyConfig(w, sourceExperimentId, persistDecision);
+        persistDecision
+            ? LockContinuationPolicyConfigForUpdate(w, sourceExperimentId)
+            : FindContinuationPolicyConfig(w, sourceExperimentId);
     if (!configOption.has_value())
     {
         ContinuationPolicyConfig missing;
@@ -8189,7 +8191,7 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
     }
 
     std::optional<ContinuationPolicyConfig> loaded =
-        LoadContinuationPolicyConfig(w, sourceExperimentId, true);
+        LockContinuationPolicyConfigForUpdate(w, sourceExperimentId);
     if (!loaded.has_value())
     {
         std::cerr << "CONTINUATION_POLICY_ERROR"
@@ -8739,7 +8741,7 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
         return 2;
     }
     const std::optional<ContinuationPolicyConfig> config =
-        LoadContinuationPolicyConfig(w, sourceExperimentId, false);
+        FindContinuationPolicyConfig(w, sourceExperimentId);
     if (!config.has_value())
     {
         std::cerr << "CONTINUATION_POLICY_ERROR"
@@ -9149,7 +9151,7 @@ void RefreshContinuationAutoQueuedIdentity(ContinuationAutoCandidate& candidate)
     pqxx::work w{connection};
     SetTransactionReadOnly(w);
     const std::optional<ContinuationPolicyConfig> loaded =
-        LoadContinuationPolicyConfig(w, candidate.sourceExperimentId, false);
+        FindContinuationPolicyConfig(w, candidate.sourceExperimentId);
     if (loaded.has_value())
     {
         candidate.config = *loaded;
@@ -9213,7 +9215,7 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
             pqxx::work preflightTransaction{preflightConnection};
             SetTransactionReadOnly(preflightTransaction);
             const ContinuationAutoPreflightLookup preflight =
-                LoadAutomaticContinuationPreflight(
+                LoadAutomaticContinuationPreflightReadOnly(
                     preflightTransaction,
                     sourceExperimentId);
             preflightTransaction.commit();
