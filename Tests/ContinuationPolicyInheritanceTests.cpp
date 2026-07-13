@@ -327,6 +327,16 @@ int main()
     assert(CheckAutomaticContinuationSatisfaction(
                automatic, changedEvidence).reason ==
            "evidence_changed_after_decision");
+    PersistedContinuationIdentity invalidOwnership = satisfied;
+    invalidOwnership.sourceModelOwnedBySource = false;
+    assert(CheckAutomaticContinuationSatisfaction(
+               automatic, invalidOwnership).reason ==
+           "persisted_source_identity_invalid");
+    PersistedContinuationIdentity invalidAnalysis = satisfied;
+    invalidAnalysis.sourceAnalysisValid = false;
+    assert(CheckAutomaticContinuationSatisfaction(
+               automatic, invalidAnalysis).reason ==
+           "persisted_source_identity_invalid");
     PersistedContinuationIdentity missingChild = satisfied;
     missingChild.queuedChildExists = false;
     assert(CheckAutomaticContinuationSatisfaction(
@@ -346,6 +356,14 @@ int main()
     assert(CheckAutomaticContinuationSatisfaction(
                requiresEvaluation, satisfied).reason ==
            "source_selection_changed");
+    PersistedContinuationIdentity checkpointSource = satisfied;
+    checkpointSource.sourceCheckpointEvalId = 77;
+    checkpointSource.sourceAnalysisScope = "checkpoint";
+    checkpointSource.childPolicySourceMode = "best_checkpoint";
+    checkpointSource.policyHash =
+        ContinuationPolicySemanticHash(requiresEvaluation);
+    assert(CheckAutomaticContinuationSatisfaction(
+               requiresEvaluation, checkpointSource).alreadySatisfied);
 
     ContinuationPolicyConfig legacy = bounded;
     legacy.maxTargetEpochs.reset();

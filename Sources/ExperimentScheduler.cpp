@@ -33,6 +33,7 @@
 #include "CanonicalSymbol.hpp"
 #include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
+#include "ContinuationPolicyPersistence.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -7144,129 +7145,6 @@ int RunEvaluateCheckpointPolicyCommand(const SchedulerOptions& options)
     return 0;
 }
 
-bool ContinuationPolicySchemaExists(pqxx::work& w)
-{
-    return TableExists(w, "experiment_continuation_decision") &&
-           ColumnExists(w, "experiment", "continuation_policy_enabled") &&
-           ColumnExists(w, "experiment", "continuation_policy_target_epochs") &&
-           ColumnExists(w, "experiment", "continuation_policy_revision") &&
-           ColumnExists(w, "experiment", "continuation_policy_inherit_to_child") &&
-           ColumnExists(w, "experiment", "continuation_policy_target_increment") &&
-           ColumnExists(w, "experiment", "continuation_policy_max_target_epochs") &&
-           ColumnExists(w, "experiment", "continuation_policy_progression_mode") &&
-           ColumnExists(w, "experiment", "continuation_policy_target_sequence") &&
-           ColumnExists(w, "experiment", "continuation_policy_inherited") &&
-           ColumnExists(w, "experiment", "continuation_policy_inherited_from_experiment_id") &&
-           ColumnExists(w, "experiment", "continuation_policy_inherited_from_revision") &&
-           ColumnExists(w, "experiment", "continuation_policy_inherited_from_hash") &&
-           ColumnExists(w, "experiment", "continuation_policy_inheritance_status") &&
-           ColumnExists(w, "experiment", "continuation_candidate_excluded") &&
-           ColumnExists(w, "experiment", "continuation_source_experiment_id") &&
-           ColumnExists(w, "experiment", "continuation_decision_id") &&
-           ColumnExists(w, "model", "experiment_id") &&
-           ColumnExists(w, "experiment_analysis_result", "analysis_scope") &&
-           ColumnExists(w, "experiment_checkpoint_eval", "analysis_id");
-}
-
-std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfig(
-    pqxx::work& w,
-    long long sourceExperimentId,
-    bool lockRow)
-{
-    if (!ContinuationPolicySchemaExists(w))
-        return std::nullopt;
-
-    std::string sql =
-        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
-        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
-        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "status, phase, continuation_policy_enabled, continuation_policy_target_epochs, "
-        "continuation_policy_min_evals, continuation_policy_patience, "
-        "continuation_policy_min_leader_score, continuation_policy_min_infer_accuracy, "
-        "continuation_policy_min_improvement, continuation_policy_max_degradation, "
-        "continuation_policy_top_n, continuation_policy_scope, continuation_policy_trend_mode, "
-        "continuation_policy_source_mode, continuation_policy_include_excluded, "
-        "continuation_candidate_excluded, continuation_policy_revision, "
-        "continuation_policy_last_decision, continuation_policy_last_reason, "
-        "continuation_policy_selected_model_id, continuation_policy_queued_experiment_id, "
-        "continuation_source_experiment_id, continuation_source_model_id, "
-        "continuation_source_epoch, continuation_decision_id, continuation_generation, "
-        "continuation_policy_inherit_to_child, continuation_policy_target_increment, "
-        "continuation_policy_inherited, continuation_policy_inherited_from_experiment_id, "
-        "continuation_policy_inheritance_status, continuation_policy_max_target_epochs, "
-        "continuation_policy_inherited_from_revision, continuation_policy_inherited_from_hash, "
-        "continuation_policy_progression_mode, "
-        "array_to_string(continuation_policy_target_sequence, ':') "
-        "FROM experiment WHERE experiment_id = $1";
-    if (lockRow)
-        sql += " FOR UPDATE";
-    sql += ";";
-
-    pqxx::result rows = w.exec_params(sql, sourceExperimentId);
-    if (rows.empty())
-        return std::nullopt;
-
-    const pqxx::row& row = rows[0];
-    ContinuationPolicyConfig config;
-    config.sourceExperimentId = sourceExperimentId;
-    const ExperimentRow source = RowToExperiment(row);
-    config.source.symbol = source.symbol;
-    config.source.predictionHorizon = source.predictionHorizon;
-    config.source.cNextThreshold = source.cNextThreshold;
-    config.source.checkpointInterval = source.checkpointInterval;
-    config.source.targetEpochs = source.targetEpochs;
-    config.source.trainStart = source.trainStart;
-    config.source.trainEnd = source.trainEnd;
-    config.source.inferStart = source.inferStart;
-    config.source.inferEnd = source.inferEnd;
-    config.source.lastModelId = source.lastModelId;
-    config.status = row[17].as<std::string>();
-    config.phase = row[18].as<std::string>();
-    config.enabled = row[19].as<bool>();
-    if (!row[20].is_null())
-        config.targetEpochs = row[20].as<int>();
-    config.minEvals = row[21].as<int>();
-    config.patience = row[22].as<int>();
-    config.minLeaderScore = OptionalDoubleCell(row, 23);
-    config.minInferAccuracy = OptionalDoubleCell(row, 24);
-    config.minImprovement = OptionalDoubleCell(row, 25);
-    config.maxDegradation = OptionalDoubleCell(row, 26);
-    if (!row[27].is_null())
-        config.topN = row[27].as<int>();
-    config.scope = row[28].as<std::string>();
-    config.trendMode = row[29].as<std::string>();
-    config.sourceMode = row[30].as<std::string>();
-    config.includeExcluded = row[31].as<bool>();
-    config.candidateExcluded = row[32].as<bool>();
-    config.policyRevision = row[33].as<long long>();
-    config.lastDecision = OptionalStringCell(row, 34);
-    config.lastReason = OptionalStringCell(row, 35);
-    config.selectedModelId = OptionalLongLongCell(row, 36);
-    config.queuedExperimentId = OptionalLongLongCell(row, 37);
-    config.continuationSourceExperimentId = OptionalLongLongCell(row, 38);
-    config.continuationSourceModelId = OptionalLongLongCell(row, 39);
-    if (!row[40].is_null())
-        config.continuationSourceEpoch = row[40].as<int>();
-    config.continuationDecisionId = OptionalLongLongCell(row, 41);
-    config.continuationGeneration = row[42].as<int>();
-    config.inheritToChild = row[43].as<bool>();
-    if (!row[44].is_null())
-        config.targetIncrement = row[44].as<int>();
-    config.policyInherited = row[45].as<bool>();
-    config.inheritedFromExperimentId = OptionalLongLongCell(row, 46);
-    config.inheritanceStatus = row[47].as<std::string>();
-    if (!row[48].is_null())
-        config.maxTargetEpochs = row[48].as<int>();
-    config.inheritedFromRevision = OptionalLongLongCell(row, 49);
-    config.inheritedFromHash = OptionalStringCell(row, 50);
-    config.progressionMode = OptionalStringCell(row, 51);
-    if (!row[52].is_null())
-        config.targetSequence =
-            ParseContinuationTargetSequence(row[52].as<std::string>());
-    return config;
-}
-
 std::string StableFnv1aHash(const std::string& value)
 {
     return StableContinuationPolicyHash(value);
@@ -9258,150 +9136,6 @@ std::vector<long long> LoadContinuationAutoCandidateIds()
     return ids;
 }
 
-struct ContinuationAutoPreflight
-{
-    ContinuationPolicyConfig config;
-    PersistedContinuationIdentity persisted;
-    ContinuationAutoSatisfactionResult satisfaction;
-};
-
-ContinuationAutoPreflight LoadContinuationAutoPreflight(long long sourceExperimentId)
-{
-    pqxx::connection connection{LstmDbConnectionString()};
-    pqxx::work w{connection};
-    SetTransactionReadOnly(w);
-    const std::optional<ContinuationPolicyConfig> loaded =
-        LoadContinuationPolicyConfig(w, sourceExperimentId, false);
-    if (!loaded.has_value())
-        throw std::runtime_error("source_experiment_not_found");
-
-    ContinuationAutoPreflight preflight;
-    preflight.config = *loaded;
-    preflight.satisfaction.currentPolicyHash =
-        ContinuationPolicySemanticHash(preflight.config);
-    preflight.satisfaction.reason = "no_persisted_decision_for_current_target";
-    if (!preflight.config.targetEpochs.has_value())
-    {
-        w.commit();
-        return preflight;
-    }
-
-    pqxx::result rows = w.exec_params(
-        "SELECT d.continuation_decision_id, d.source_experiment_id, d.source_model_id, "
-        "d.source_analysis_id, d.source_checkpoint_eval_id, d.source_epoch, d.target_epochs, "
-        "d.decision, d.leader_score, d.infer_accuracy, d.rank_value, "
-        "d.observed_eval_count, d.patience_window, d.trend_metric, d.trend_value, "
-        "d.policy_revision, d.policy_hash, d.evidence_watermark, d.queued_experiment_id, "
-        "child.experiment_id, child.status, child.parent_experiment_id, "
-        "child.continuation_source_experiment_id, child.resume_model_id, "
-        "child.continuation_source_model_id, child.continuation_source_epoch, "
-        "child.target_epochs, child.continuation_generation, "
-        "COALESCE(child.continuation_policy_inherited, false), "
-        "COALESCE(child.continuation_policy_source_mode, ''), "
-        "COALESCE(source_analysis.analysis_scope, ''), "
-        "(source_analysis.analysis_id IS NOT NULL "
-        " AND source_analysis.experiment_id = d.source_experiment_id "
-        " AND source_analysis.model_id = d.source_model_id "
-        " AND source_analysis.completed_epochs = d.source_epoch "
-        " AND source_analysis.analysis_status = 'completed' "
-        " AND source_analysis.checkpoint_eval_id IS NOT DISTINCT FROM d.source_checkpoint_eval_id), "
-        "EXISTS (SELECT 1 FROM model source_model "
-        "        WHERE source_model.model_id = d.source_model_id "
-        "        AND source_model.experiment_id = d.source_experiment_id), "
-        "(EXISTS (SELECT 1 FROM experiment_analysis_result changed_analysis "
-        "         WHERE changed_analysis.experiment_id = d.source_experiment_id "
-        "         AND changed_analysis.analysis_status = 'completed' "
-        "         AND changed_analysis.updated_at > d.updated_at) "
-        " OR EXISTS (SELECT 1 FROM experiment_checkpoint_eval changed_checkpoint "
-        "            WHERE changed_checkpoint.parent_experiment_id = d.source_experiment_id "
-        "            AND changed_checkpoint.updated_at > d.updated_at)) "
-        "FROM experiment_continuation_decision d "
-        "LEFT JOIN experiment child ON child.experiment_id = d.queued_experiment_id "
-        "LEFT JOIN experiment_analysis_result source_analysis "
-        "  ON source_analysis.analysis_id = d.source_analysis_id "
-        "WHERE d.source_experiment_id = $1 AND d.target_epochs = $2;",
-        sourceExperimentId,
-        *preflight.config.targetEpochs);
-    if (rows.empty())
-    {
-        w.commit();
-        return preflight;
-    }
-
-    const pqxx::row& row = rows[0];
-    PersistedContinuationIdentity& persisted = preflight.persisted;
-    persisted.decisionId = row[0].as<long long>();
-    persisted.sourceExperimentId = row[1].as<long long>();
-    persisted.sourceModelId = row[2].as<long long>();
-    persisted.sourceAnalysisId = row[3].as<long long>();
-    persisted.sourceCheckpointEvalId = OptionalLongLongCell(row, 4);
-    persisted.sourceEpoch = row[5].as<int>();
-    persisted.targetEpochs = row[6].as<int>();
-    persisted.decision = row[7].as<std::string>();
-    persisted.leaderScore = OptionalDoubleCell(row, 8);
-    persisted.inferAccuracy = OptionalDoubleCell(row, 9);
-    if (!row[10].is_null())
-        persisted.rankValue = row[10].as<int>();
-    persisted.observedEvalCount = row[11].as<int>();
-    persisted.patienceWindow = row[12].as<int>();
-    persisted.trendMetric = OptionalStringCell(row, 13);
-    persisted.trendValue = OptionalDoubleCell(row, 14);
-    persisted.policyRevision = row[15].as<long long>();
-    persisted.policyHash = row[16].as<std::string>();
-    persisted.evidenceWatermark = row[17].as<std::string>();
-    persisted.queuedExperimentId = OptionalLongLongCell(row, 18);
-    persisted.queuedChildExists = !row[19].is_null();
-    if (persisted.queuedChildExists)
-    {
-        persisted.queuedChildStatus = row[20].as<std::string>();
-        persisted.childParentExperimentId = OptionalLongLongCell(row, 21);
-        persisted.childSourceExperimentId = OptionalLongLongCell(row, 22);
-        persisted.childResumeModelId = OptionalLongLongCell(row, 23);
-        persisted.childSourceModelId = OptionalLongLongCell(row, 24);
-        if (!row[25].is_null())
-            persisted.childSourceEpoch = row[25].as<int>();
-        persisted.childTargetEpochs = row[26].as<int>();
-        persisted.childGeneration = row[27].as<int>();
-        persisted.childPolicyInherited = row[28].as<bool>();
-        persisted.childPolicySourceMode = row[29].as<std::string>();
-    }
-    persisted.sourceAnalysisScope = row[30].as<std::string>();
-    persisted.sourceAnalysisValid = row[31].as<bool>();
-    persisted.sourceModelOwnedBySource = row[32].as<bool>();
-    persisted.evidenceChangedAfterDecision = row[33].as<bool>();
-    preflight.satisfaction =
-        CheckAutomaticContinuationSatisfaction(preflight.config, persisted);
-    w.commit();
-    return preflight;
-}
-
-void PrintContinuationAutoSatisfiedLog(
-    const ContinuationAutoPreflight& preflight,
-    bool dryRun)
-{
-    const PersistedContinuationIdentity& persisted = preflight.persisted;
-    const ContinuationAutoSatisfactionResult& result = preflight.satisfaction;
-    std::cout << "CONTINUATION_AUTO_ALREADY_SATISFIED"
-              << ",source_experiment_id=" << preflight.config.sourceExperimentId
-              << ",source_model_id=" << persisted.sourceModelId
-              << ",source_epoch=" << persisted.sourceEpoch
-              << ",target_epochs=" << persisted.targetEpochs
-              << ",decision_id=" << persisted.decisionId
-              << ",queued_experiment_id="
-              << persisted.queuedExperimentId.value_or(-1)
-              << ",reason=" << result.reason
-              << ",current_policy_revision=" << preflight.config.policyRevision
-              << ",persisted_decision_policy_revision=" << persisted.policyRevision
-              << ",current_policy_hash=" << result.currentPolicyHash
-              << ",persisted_decision_policy_hash="
-              << result.persistedDecisionPolicyHash
-              << ",policy_hash_changed="
-              << (result.currentPolicyHash == result.persistedDecisionPolicyHash ? "0" : "1")
-              << ",persisted_evidence_watermark=" << persisted.evidenceWatermark
-              << ",dry_run=" << (dryRun ? "1" : "0")
-              << std::endl;
-}
-
 bool ContinuationAutoEvaluationIsError(const ContinuationEvaluation& evaluation)
 {
     return evaluation.reason == "migration_required" ||
@@ -9475,12 +9209,22 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
                   << std::endl;
         try
         {
-            const ContinuationAutoPreflight preflight =
-                LoadContinuationAutoPreflight(sourceExperimentId);
+            pqxx::connection preflightConnection{LstmDbConnectionString()};
+            pqxx::work preflightTransaction{preflightConnection};
+            SetTransactionReadOnly(preflightTransaction);
+            const ContinuationAutoPreflightLookup preflight =
+                LoadAutomaticContinuationPreflight(
+                    preflightTransaction,
+                    sourceExperimentId);
+            preflightTransaction.commit();
             if (preflight.satisfaction.alreadySatisfied)
             {
                 ++counts.alreadySatisfied;
-                PrintContinuationAutoSatisfiedLog(preflight, dryRun);
+                std::cout << "CONTINUATION_AUTO_ALREADY_SATISFIED"
+                          << FormatAutomaticContinuationSatisfiedFields(
+                                 preflight,
+                                 dryRun)
+                          << std::endl;
                 continue;
             }
 
