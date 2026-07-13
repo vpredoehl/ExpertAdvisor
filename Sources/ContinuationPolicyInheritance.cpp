@@ -194,4 +194,143 @@ ContinuationChildPolicyPlan PlanContinuationChildPolicy(
     return plan;
 }
 
+ContinuationAutoSatisfactionResult CheckAutomaticContinuationSatisfaction(
+    const ContinuationPolicyConfig& currentPolicy,
+    const PersistedContinuationIdentity& persisted)
+{
+    ContinuationAutoSatisfactionResult result;
+    result.currentPolicyHash = ContinuationPolicySemanticHash(currentPolicy);
+    result.persistedDecisionPolicyHash = persisted.policyHash;
+    const auto requireFullEvaluation = [&](const std::string& reason) {
+        result.reason = reason;
+        return result;
+    };
+
+    const std::optional<std::string> configurationError =
+        ContinuationPolicyConfigurationError(currentPolicy, true);
+    if (configurationError.has_value())
+        return requireFullEvaluation("current_policy_invalid");
+    if (!currentPolicy.enabled ||
+        currentPolicy.status != "completed" || currentPolicy.phase != "done")
+    {
+        return requireFullEvaluation("source_not_automatic_evaluation_ready");
+    }
+    if (!currentPolicy.targetEpochs.has_value() ||
+        persisted.targetEpochs != *currentPolicy.targetEpochs)
+    {
+        return requireFullEvaluation("derived_target_changed");
+    }
+    if (persisted.sourceExperimentId != currentPolicy.sourceExperimentId)
+        return requireFullEvaluation("source_experiment_mismatch");
+    if (persisted.decision != "continuation_queued" ||
+        !persisted.queuedExperimentId.has_value())
+    {
+        return requireFullEvaluation("decision_not_continuation_queued");
+    }
+    if (!persisted.queuedChildExists)
+        return requireFullEvaluation("queued_child_missing");
+    if (persisted.queuedChildStatus == "cancelled" ||
+        persisted.queuedChildStatus == "failed")
+    {
+        return requireFullEvaluation("queued_child_retryable_or_failed");
+    }
+    if (!persisted.sourceAnalysisValid || !persisted.sourceModelOwnedBySource)
+        return requireFullEvaluation("persisted_source_identity_invalid");
+
+    const int expectedGeneration =
+        currentPolicy.continuationSourceExperimentId.has_value()
+            ? currentPolicy.continuationGeneration + 1
+            : 1;
+    if (persisted.childParentExperimentId != currentPolicy.sourceExperimentId ||
+        persisted.childSourceExperimentId != currentPolicy.sourceExperimentId ||
+        persisted.childResumeModelId != persisted.sourceModelId ||
+        persisted.childSourceModelId != persisted.sourceModelId ||
+        persisted.childSourceEpoch != persisted.sourceEpoch ||
+        persisted.childTargetEpochs != persisted.targetEpochs ||
+        persisted.childGeneration != expectedGeneration)
+    {
+        return requireFullEvaluation("queued_child_lineage_mismatch");
+    }
+    if (persisted.evidenceChangedAfterDecision)
+        return requireFullEvaluation("evidence_changed_after_decision");
+
+    // Ranking depends on the live comparison population, not only this source's
+    // evidence. Without loading that population, a queued top-N decision cannot
+    // be proven current, so retain the full evaluator for that policy shape.
+    if (currentPolicy.topN.has_value())
+        return requireFullEvaluation("ranking_requires_full_evaluation");
+    if (persisted.observedEvalCount < currentPolicy.minEvals)
+        return requireFullEvaluation("minimum_evidence_changed");
+    if (currentPolicy.minLeaderScore.has_value() &&
+        (!persisted.leaderScore.has_value() ||
+         *persisted.leaderScore < *currentPolicy.minLeaderScore))
+    {
+        return requireFullEvaluation("leader_threshold_changed");
+    }
+    if (currentPolicy.minInferAccuracy.has_value() &&
+        (!persisted.inferAccuracy.has_value() ||
+         *persisted.inferAccuracy < *currentPolicy.minInferAccuracy))
+    {
+        return requireFullEvaluation("inference_threshold_changed");
+    }
+    if (currentPolicy.trendMode != "none")
+    {
+        if (persisted.patienceWindow != currentPolicy.patience ||
+            !persisted.trendMetric.has_value() ||
+            !persisted.trendValue.has_value())
+        {
+            return requireFullEvaluation("trend_configuration_changed");
+        }
+        if (currentPolicy.trendMode == "non_degrading" &&
+            *persisted.trendValue < -*currentPolicy.maxDegradation)
+        {
+            return requireFullEvaluation("trend_gate_changed");
+        }
+        if (currentPolicy.trendMode == "improving" &&
+            *persisted.trendValue < *currentPolicy.minImprovement)
+        {
+            return requireFullEvaluation("trend_gate_changed");
+        }
+    }
+
+    const bool persistedFinal =
+        persisted.sourceAnalysisScope == "final" &&
+        !persisted.sourceCheckpointEvalId.has_value();
+    const bool persistedCheckpoint =
+        persisted.sourceAnalysisScope == "checkpoint" &&
+        persisted.sourceCheckpointEvalId.has_value();
+    if (currentPolicy.sourceMode == "final_model")
+    {
+        if (!persistedFinal ||
+            currentPolicy.source.lastModelId != persisted.sourceModelId)
+        {
+            return requireFullEvaluation("source_selection_changed");
+        }
+    }
+    else
+    {
+        if (!persistedCheckpoint)
+            return requireFullEvaluation("source_selection_changed");
+        // Equal semantic hashes prove the checkpoint source mode is unchanged.
+        // An inherited child also captures the source mode used when it was
+        // created. Otherwise best_checkpoint/latest_checkpoint ambiguity is
+        // deliberately resolved by the authoritative full evaluator.
+        const bool checkpointModeProven =
+            result.currentPolicyHash == persisted.policyHash ||
+            (persisted.childPolicyInherited &&
+             persisted.childPolicySourceMode == currentPolicy.sourceMode);
+        if (!checkpointModeProven)
+            return requireFullEvaluation("checkpoint_source_mode_requires_full_evaluation");
+    }
+
+    // A queued decision is immutable. Its semantic hash describes the policy
+    // revision evaluated at queue time, while the current hash may differ after
+    // progression-only or still-passing gate edits. Child identity is instead
+    // authoritative: source/model/epoch, target, generation, and lineage must
+    // all match. Fresh evidence or any gate/source ambiguity above falls back.
+    result.alreadySatisfied = true;
+    result.reason = "existing_continuation_matches";
+    return result;
+}
+
 } // namespace EA::ExperimentScheduler

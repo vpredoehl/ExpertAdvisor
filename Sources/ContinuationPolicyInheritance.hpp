@@ -60,4 +60,54 @@ struct ContinuationChildPolicyPlan
 ContinuationChildPolicyPlan PlanContinuationChildPolicy(
     const ContinuationPolicyConfig& sourceConfig);
 
+struct PersistedContinuationIdentity
+{
+    long long decisionId = -1;
+    long long sourceExperimentId = -1;
+    long long sourceModelId = -1;
+    long long sourceAnalysisId = -1;
+    std::optional<long long> sourceCheckpointEvalId;
+    int sourceEpoch = 0;
+    int targetEpochs = 0;
+    std::string decision;
+    int observedEvalCount = 0;
+    int patienceWindow = 0;
+    std::optional<double> leaderScore;
+    std::optional<double> inferAccuracy;
+    std::optional<int> rankValue;
+    std::optional<std::string> trendMetric;
+    std::optional<double> trendValue;
+    long long policyRevision = 0;
+    std::string policyHash;
+    std::string evidenceWatermark;
+    std::optional<long long> queuedExperimentId;
+    bool queuedChildExists = false;
+    std::string queuedChildStatus;
+    std::optional<long long> childParentExperimentId;
+    std::optional<long long> childSourceExperimentId;
+    std::optional<long long> childResumeModelId;
+    std::optional<long long> childSourceModelId;
+    std::optional<int> childSourceEpoch;
+    int childTargetEpochs = 0;
+    int childGeneration = 0;
+    bool childPolicyInherited = false;
+    std::string childPolicySourceMode;
+    std::string sourceAnalysisScope;
+    bool sourceAnalysisValid = false;
+    bool sourceModelOwnedBySource = false;
+    bool evidenceChangedAfterDecision = false;
+};
+
+struct ContinuationAutoSatisfactionResult
+{
+    bool alreadySatisfied = false;
+    std::string reason;
+    std::string currentPolicyHash;
+    std::string persistedDecisionPolicyHash;
+};
+
+ContinuationAutoSatisfactionResult CheckAutomaticContinuationSatisfaction(
+    const ContinuationPolicyConfig& currentPolicy,
+    const PersistedContinuationIdentity& persisted);
+
 } // namespace EA::ExperimentScheduler

@@ -115,6 +115,8 @@ struct ContinuationEvaluation
     std::optional<std::string> trendMetric;
     std::optional<double> trendValue;
     std::string policyHash;
+    std::string currentPolicyHash;
+    std::string persistedDecisionPolicyHash;
     std::string evidenceWatermark;
     std::optional<long long> queuedExperimentId;
 };

@@ -7822,6 +7822,14 @@ void PrintContinuationPolicyLog(const std::string& marker,
               << ",policy_revision=" << config.policyRevision
               << ",policy_hash="
               << (evaluation.policyHash.empty() ? "NULL" : evaluation.policyHash)
+              << ",current_policy_hash="
+              << (evaluation.currentPolicyHash.empty()
+                      ? "NULL"
+                      : evaluation.currentPolicyHash)
+              << ",persisted_decision_policy_hash="
+              << (evaluation.persistedDecisionPolicyHash.empty()
+                      ? "NULL"
+                      : evaluation.persistedDecisionPolicyHash)
               << ",evidence_watermark="
               << (evaluation.evidenceWatermark.empty() ? "NULL" : evaluation.evidenceWatermark)
               << ",queued_experiment_id="
@@ -7897,7 +7905,8 @@ void FillContinuationEvaluationFromDecisionRow(
     evaluation.evidenceCount = row[11].as<int>();
     evaluation.trendMetric = OptionalStringCell(row, 13);
     evaluation.trendValue = OptionalDoubleCell(row, 14);
-    evaluation.policyHash = row[16].as<std::string>();
+    evaluation.persistedDecisionPolicyHash = row[16].as<std::string>();
+    evaluation.policyHash = evaluation.persistedDecisionPolicyHash;
     evaluation.evidenceWatermark = row[17].as<std::string>();
     evaluation.queuedExperimentId = OptionalLongLongCell(row, 18);
     evaluation.alreadyQueued = evaluation.queuedExperimentId.has_value();
@@ -8050,6 +8059,7 @@ ContinuationEvaluation EvaluateContinuationPolicy(
     evaluation.evidenceCount = static_cast<int>(evidence.size());
     evaluation.evidenceWatermark = ContinuationEvidenceWatermark(evidence);
     evaluation.policyHash = ContinuationPolicySemanticHash(config);
+    evaluation.currentPolicyHash = evaluation.policyHash;
 
     const std::optional<ContinuationEvidence> selected =
         SelectContinuationSourceEvidence(config, rawEvidence);
@@ -9127,6 +9137,7 @@ struct ContinuationAutoScanCounts
 {
     int candidates = 0;
     int evaluated = 0;
+    int alreadySatisfied = 0;
     int eligible = 0;
     int queued = 0;
     int errors = 0;
@@ -9169,6 +9180,14 @@ void PrintContinuationAutoEvaluationLog(
               << ",evidence_count=" << evaluation.evidenceCount
               << ",policy_revision=" << config.policyRevision
               << ",policy_hash=" << (evaluation.policyHash.empty() ? "NULL" : evaluation.policyHash)
+              << ",current_policy_hash="
+              << (evaluation.currentPolicyHash.empty()
+                      ? "NULL"
+                      : evaluation.currentPolicyHash)
+              << ",persisted_decision_policy_hash="
+              << (evaluation.persistedDecisionPolicyHash.empty()
+                      ? "NULL"
+                      : evaluation.persistedDecisionPolicyHash)
               << ",evidence_watermark="
               << (evaluation.evidenceWatermark.empty() ? "NULL" : evaluation.evidenceWatermark)
               << ",queued_experiment_id="
@@ -9237,6 +9256,150 @@ std::vector<long long> LoadContinuationAutoCandidateIds()
         ids.push_back(row[0].as<long long>());
     w.commit();
     return ids;
+}
+
+struct ContinuationAutoPreflight
+{
+    ContinuationPolicyConfig config;
+    PersistedContinuationIdentity persisted;
+    ContinuationAutoSatisfactionResult satisfaction;
+};
+
+ContinuationAutoPreflight LoadContinuationAutoPreflight(long long sourceExperimentId)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work w{connection};
+    SetTransactionReadOnly(w);
+    const std::optional<ContinuationPolicyConfig> loaded =
+        LoadContinuationPolicyConfig(w, sourceExperimentId, false);
+    if (!loaded.has_value())
+        throw std::runtime_error("source_experiment_not_found");
+
+    ContinuationAutoPreflight preflight;
+    preflight.config = *loaded;
+    preflight.satisfaction.currentPolicyHash =
+        ContinuationPolicySemanticHash(preflight.config);
+    preflight.satisfaction.reason = "no_persisted_decision_for_current_target";
+    if (!preflight.config.targetEpochs.has_value())
+    {
+        w.commit();
+        return preflight;
+    }
+
+    pqxx::result rows = w.exec_params(
+        "SELECT d.continuation_decision_id, d.source_experiment_id, d.source_model_id, "
+        "d.source_analysis_id, d.source_checkpoint_eval_id, d.source_epoch, d.target_epochs, "
+        "d.decision, d.leader_score, d.infer_accuracy, d.rank_value, "
+        "d.observed_eval_count, d.patience_window, d.trend_metric, d.trend_value, "
+        "d.policy_revision, d.policy_hash, d.evidence_watermark, d.queued_experiment_id, "
+        "child.experiment_id, child.status, child.parent_experiment_id, "
+        "child.continuation_source_experiment_id, child.resume_model_id, "
+        "child.continuation_source_model_id, child.continuation_source_epoch, "
+        "child.target_epochs, child.continuation_generation, "
+        "COALESCE(child.continuation_policy_inherited, false), "
+        "COALESCE(child.continuation_policy_source_mode, ''), "
+        "COALESCE(source_analysis.analysis_scope, ''), "
+        "(source_analysis.analysis_id IS NOT NULL "
+        " AND source_analysis.experiment_id = d.source_experiment_id "
+        " AND source_analysis.model_id = d.source_model_id "
+        " AND source_analysis.completed_epochs = d.source_epoch "
+        " AND source_analysis.analysis_status = 'completed' "
+        " AND source_analysis.checkpoint_eval_id IS NOT DISTINCT FROM d.source_checkpoint_eval_id), "
+        "EXISTS (SELECT 1 FROM model source_model "
+        "        WHERE source_model.model_id = d.source_model_id "
+        "        AND source_model.experiment_id = d.source_experiment_id), "
+        "(EXISTS (SELECT 1 FROM experiment_analysis_result changed_analysis "
+        "         WHERE changed_analysis.experiment_id = d.source_experiment_id "
+        "         AND changed_analysis.analysis_status = 'completed' "
+        "         AND changed_analysis.updated_at > d.updated_at) "
+        " OR EXISTS (SELECT 1 FROM experiment_checkpoint_eval changed_checkpoint "
+        "            WHERE changed_checkpoint.parent_experiment_id = d.source_experiment_id "
+        "            AND changed_checkpoint.updated_at > d.updated_at)) "
+        "FROM experiment_continuation_decision d "
+        "LEFT JOIN experiment child ON child.experiment_id = d.queued_experiment_id "
+        "LEFT JOIN experiment_analysis_result source_analysis "
+        "  ON source_analysis.analysis_id = d.source_analysis_id "
+        "WHERE d.source_experiment_id = $1 AND d.target_epochs = $2;",
+        sourceExperimentId,
+        *preflight.config.targetEpochs);
+    if (rows.empty())
+    {
+        w.commit();
+        return preflight;
+    }
+
+    const pqxx::row& row = rows[0];
+    PersistedContinuationIdentity& persisted = preflight.persisted;
+    persisted.decisionId = row[0].as<long long>();
+    persisted.sourceExperimentId = row[1].as<long long>();
+    persisted.sourceModelId = row[2].as<long long>();
+    persisted.sourceAnalysisId = row[3].as<long long>();
+    persisted.sourceCheckpointEvalId = OptionalLongLongCell(row, 4);
+    persisted.sourceEpoch = row[5].as<int>();
+    persisted.targetEpochs = row[6].as<int>();
+    persisted.decision = row[7].as<std::string>();
+    persisted.leaderScore = OptionalDoubleCell(row, 8);
+    persisted.inferAccuracy = OptionalDoubleCell(row, 9);
+    if (!row[10].is_null())
+        persisted.rankValue = row[10].as<int>();
+    persisted.observedEvalCount = row[11].as<int>();
+    persisted.patienceWindow = row[12].as<int>();
+    persisted.trendMetric = OptionalStringCell(row, 13);
+    persisted.trendValue = OptionalDoubleCell(row, 14);
+    persisted.policyRevision = row[15].as<long long>();
+    persisted.policyHash = row[16].as<std::string>();
+    persisted.evidenceWatermark = row[17].as<std::string>();
+    persisted.queuedExperimentId = OptionalLongLongCell(row, 18);
+    persisted.queuedChildExists = !row[19].is_null();
+    if (persisted.queuedChildExists)
+    {
+        persisted.queuedChildStatus = row[20].as<std::string>();
+        persisted.childParentExperimentId = OptionalLongLongCell(row, 21);
+        persisted.childSourceExperimentId = OptionalLongLongCell(row, 22);
+        persisted.childResumeModelId = OptionalLongLongCell(row, 23);
+        persisted.childSourceModelId = OptionalLongLongCell(row, 24);
+        if (!row[25].is_null())
+            persisted.childSourceEpoch = row[25].as<int>();
+        persisted.childTargetEpochs = row[26].as<int>();
+        persisted.childGeneration = row[27].as<int>();
+        persisted.childPolicyInherited = row[28].as<bool>();
+        persisted.childPolicySourceMode = row[29].as<std::string>();
+    }
+    persisted.sourceAnalysisScope = row[30].as<std::string>();
+    persisted.sourceAnalysisValid = row[31].as<bool>();
+    persisted.sourceModelOwnedBySource = row[32].as<bool>();
+    persisted.evidenceChangedAfterDecision = row[33].as<bool>();
+    preflight.satisfaction =
+        CheckAutomaticContinuationSatisfaction(preflight.config, persisted);
+    w.commit();
+    return preflight;
+}
+
+void PrintContinuationAutoSatisfiedLog(
+    const ContinuationAutoPreflight& preflight,
+    bool dryRun)
+{
+    const PersistedContinuationIdentity& persisted = preflight.persisted;
+    const ContinuationAutoSatisfactionResult& result = preflight.satisfaction;
+    std::cout << "CONTINUATION_AUTO_ALREADY_SATISFIED"
+              << ",source_experiment_id=" << preflight.config.sourceExperimentId
+              << ",source_model_id=" << persisted.sourceModelId
+              << ",source_epoch=" << persisted.sourceEpoch
+              << ",target_epochs=" << persisted.targetEpochs
+              << ",decision_id=" << persisted.decisionId
+              << ",queued_experiment_id="
+              << persisted.queuedExperimentId.value_or(-1)
+              << ",reason=" << result.reason
+              << ",current_policy_revision=" << preflight.config.policyRevision
+              << ",persisted_decision_policy_revision=" << persisted.policyRevision
+              << ",current_policy_hash=" << result.currentPolicyHash
+              << ",persisted_decision_policy_hash="
+              << result.persistedDecisionPolicyHash
+              << ",policy_hash_changed="
+              << (result.currentPolicyHash == result.persistedDecisionPolicyHash ? "0" : "1")
+              << ",persisted_evidence_watermark=" << persisted.evidenceWatermark
+              << ",dry_run=" << (dryRun ? "1" : "0")
+              << std::endl;
 }
 
 bool ContinuationAutoEvaluationIsError(const ContinuationEvaluation& evaluation)
@@ -9312,6 +9475,15 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
                   << std::endl;
         try
         {
+            const ContinuationAutoPreflight preflight =
+                LoadContinuationAutoPreflight(sourceExperimentId);
+            if (preflight.satisfaction.alreadySatisfied)
+            {
+                ++counts.alreadySatisfied;
+                PrintContinuationAutoSatisfiedLog(preflight, dryRun);
+                continue;
+            }
+
             pqxx::connection connection{LstmDbConnectionString()};
             pqxx::work w{connection};
             if (dryRun)
@@ -9452,6 +9624,7 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
     std::cout << "CONTINUATION_AUTO_SCAN_COMPLETED"
               << ",scan_candidates=" << counts.candidates
               << ",scan_evaluated=" << counts.evaluated
+              << ",scan_already_satisfied=" << counts.alreadySatisfied
               << ",scan_eligible=" << counts.eligible
               << ",scan_queued=" << counts.queued
               << ",scan_errors=" << counts.errors
@@ -14494,6 +14667,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",next_scan=unavailable"
                   << ",scan_candidates=unavailable"
                   << ",scan_evaluated=unavailable"
+                  << ",scan_already_satisfied=unavailable"
                   << ",scan_eligible=unavailable"
                   << ",scan_queued=unavailable"
                   << ",scan_errors=unavailable"

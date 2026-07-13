@@ -61,6 +61,44 @@ ContinuationPolicyConfig SequencePolicy(int currentTarget, int policyTarget)
     return config;
 }
 
+PersistedContinuationIdentity SatisfiedContinuation(
+    const ContinuationPolicyConfig& config)
+{
+    PersistedContinuationIdentity persisted;
+    persisted.decisionId = 12;
+    persisted.sourceExperimentId = config.sourceExperimentId;
+    persisted.sourceModelId = 663;
+    persisted.sourceAnalysisId = 1001;
+    persisted.sourceEpoch = config.source.targetEpochs;
+    persisted.targetEpochs = *config.targetEpochs;
+    persisted.decision = "continuation_queued";
+    persisted.observedEvalCount = 2;
+    persisted.patienceWindow = config.patience;
+    persisted.inferAccuracy = 0.90;
+    persisted.policyRevision = config.policyRevision;
+    persisted.policyHash = ContinuationPolicySemanticHash(config);
+    persisted.evidenceWatermark = "evidence-v1";
+    persisted.queuedExperimentId = 185;
+    persisted.queuedChildExists = true;
+    persisted.queuedChildStatus = "completed";
+    persisted.childParentExperimentId = config.sourceExperimentId;
+    persisted.childSourceExperimentId = config.sourceExperimentId;
+    persisted.childResumeModelId = persisted.sourceModelId;
+    persisted.childSourceModelId = persisted.sourceModelId;
+    persisted.childSourceEpoch = persisted.sourceEpoch;
+    persisted.childTargetEpochs = persisted.targetEpochs;
+    persisted.childGeneration =
+        config.continuationSourceExperimentId.has_value()
+            ? config.continuationGeneration + 1
+            : 1;
+    persisted.childPolicyInherited = true;
+    persisted.childPolicySourceMode = config.sourceMode;
+    persisted.sourceAnalysisScope = "final";
+    persisted.sourceAnalysisValid = true;
+    persisted.sourceModelOwnedBySource = true;
+    return persisted;
+}
+
 } // namespace
 
 int main()
@@ -247,6 +285,67 @@ int main()
         "target_increment=4|max_target_epochs=142";
     assert(ContinuationPolicySemanticCanonicalText(bounded) == boundedCanonical);
     assert(ContinuationPolicySemanticHash(bounded) == "28815e783b815f0b");
+
+    ContinuationPolicyConfig automatic = bounded;
+    automatic.status = "completed";
+    automatic.phase = "done";
+    automatic.source.lastModelId = 663;
+    PersistedContinuationIdentity satisfied = SatisfiedContinuation(automatic);
+    auto satisfaction =
+        CheckAutomaticContinuationSatisfaction(automatic, satisfied);
+    assert(satisfaction.alreadySatisfied);
+    assert(satisfaction.reason == "existing_continuation_matches");
+
+    // A revision-only change and a progression-only semantic change do not
+    // change the already-persisted child identity.
+    automatic.policyRevision += 1;
+    satisfaction = CheckAutomaticContinuationSatisfaction(automatic, satisfied);
+    assert(satisfaction.alreadySatisfied);
+    automatic.maxTargetEpochs = 146;
+    satisfaction = CheckAutomaticContinuationSatisfaction(automatic, satisfied);
+    assert(satisfaction.alreadySatisfied);
+    assert(satisfaction.currentPolicyHash !=
+           satisfaction.persistedDecisionPolicyHash);
+
+    ContinuationPolicyConfig requiresEvaluation = automatic;
+    requiresEvaluation.minInferAccuracy = 0.95;
+    assert(!CheckAutomaticContinuationSatisfaction(
+                requiresEvaluation, satisfied).alreadySatisfied);
+    requiresEvaluation = automatic;
+    requiresEvaluation.topN = 1;
+    assert(CheckAutomaticContinuationSatisfaction(
+               requiresEvaluation, satisfied).reason ==
+           "ranking_requires_full_evaluation");
+    requiresEvaluation = automatic;
+    requiresEvaluation.targetEpochs = 138;
+    assert(CheckAutomaticContinuationSatisfaction(
+               requiresEvaluation, satisfied).reason ==
+           "derived_target_changed");
+
+    PersistedContinuationIdentity changedEvidence = satisfied;
+    changedEvidence.evidenceChangedAfterDecision = true;
+    assert(CheckAutomaticContinuationSatisfaction(
+               automatic, changedEvidence).reason ==
+           "evidence_changed_after_decision");
+    PersistedContinuationIdentity missingChild = satisfied;
+    missingChild.queuedChildExists = false;
+    assert(CheckAutomaticContinuationSatisfaction(
+               automatic, missingChild).reason == "queued_child_missing");
+    PersistedContinuationIdentity cancelledChild = satisfied;
+    cancelledChild.queuedChildStatus = "cancelled";
+    assert(CheckAutomaticContinuationSatisfaction(
+               automatic, cancelledChild).reason ==
+           "queued_child_retryable_or_failed");
+    PersistedContinuationIdentity wrongLineage = satisfied;
+    wrongLineage.childSourceEpoch = satisfied.sourceEpoch - 1;
+    assert(CheckAutomaticContinuationSatisfaction(
+               automatic, wrongLineage).reason ==
+           "queued_child_lineage_mismatch");
+    requiresEvaluation = automatic;
+    requiresEvaluation.sourceMode = "best_checkpoint";
+    assert(CheckAutomaticContinuationSatisfaction(
+               requiresEvaluation, satisfied).reason ==
+           "source_selection_changed");
 
     ContinuationPolicyConfig legacy = bounded;
     legacy.maxTargetEpochs.reset();
