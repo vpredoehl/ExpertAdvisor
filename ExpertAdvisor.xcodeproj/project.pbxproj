@@ -34,6 +34,8 @@
 		0A5000072FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A5000022FC0000100AAA001 /* ContinuationPolicyInheritance.cpp */; };
 		0A5000092FC0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A50000B2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp */; };
 		0A50000A2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A50000B2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp */; };
+		0A6000042FD0000100AAA001 /* ExperimentRecommendation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A6000002FD0000100AAA001 /* ExperimentRecommendation.cpp */; };
+		0A6000052FD0000100AAA001 /* ExperimentRecommendation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A6000002FD0000100AAA001 /* ExperimentRecommendation.cpp */; };
 		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
 		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
 		0A1000082F70000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
@@ -159,6 +161,8 @@
 		0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = WorkerLifecycleDiagnostics.hpp; path = Sources/WorkerLifecycleDiagnostics.hpp; sourceTree = SOURCE_ROOT; };
 		0A50000B2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ContinuationPolicyPersistence.cpp; path = Sources/ContinuationPolicyPersistence.cpp; sourceTree = SOURCE_ROOT; };
 		0A50000C2FC0000100AAA001 /* ContinuationPolicyPersistence.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ContinuationPolicyPersistence.hpp; path = Sources/ContinuationPolicyPersistence.hpp; sourceTree = SOURCE_ROOT; };
+		0A6000002FD0000100AAA001 /* ExperimentRecommendation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendation.cpp; path = Sources/ExperimentRecommendation.cpp; sourceTree = SOURCE_ROOT; };
+		0A6000012FD0000100AAA001 /* ExperimentRecommendation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendation.hpp; path = Sources/ExperimentRecommendation.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -247,6 +251,8 @@
 				0A5000032FC0000100AAA001 /* ContinuationPolicyInheritance.hpp */,
 				0A50000B2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp */,
 				0A50000C2FC0000100AAA001 /* ContinuationPolicyPersistence.hpp */,
+				0A6000002FD0000100AAA001 /* ExperimentRecommendation.cpp */,
+				0A6000012FD0000100AAA001 /* ExperimentRecommendation.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -436,6 +442,7 @@
 				0A5000042FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
 				0A5000062FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
 				0A5000092FC0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */,
+				0A6000042FD0000100AAA001 /* ExperimentRecommendation.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -454,6 +461,7 @@
 				0A5000052FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
 				0A5000072FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
 				0A50000A2FC0000100AAA001 /* ContinuationPolicyPersistence.cpp in Sources */,
+				0A6000052FD0000100AAA001 /* ExperimentRecommendation.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
