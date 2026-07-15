@@ -1,10 +1,11 @@
-Phase 4A Step 1: recommendation identity foundation
-====================================================
+Phase 4A Steps 1-2: recommendation foundation
+===============================================
 
-Phase 4A remains advisory only. This component defines database-independent
-recommendation policy and identity types. It does not generate or score
-candidates, access PostgreSQL, add schema, expose commands, interact with the
-scheduler, approve recommendations, or queue experiments.
+Phase 4A remains advisory only. The foundation defines database-independent
+recommendation policy and identity types plus pure, deterministic candidate
+generation. It does not score or persist candidates, access PostgreSQL, add
+schema, expose commands, interact with the scheduler, approve recommendations,
+or queue experiments.
 
 Identity model
 --------------
@@ -440,12 +441,60 @@ through the same epochs, or the final model reached normally at the same target
 epoch. Changing checkpoint interval therefore leaves semantic identity stable
 while changing invocation identity.
 
+Pure candidate generation
+-------------------------
+
+``EvaluateRecommendationSource`` returns a structured eligibility result. A
+source is eligible only when the policy is enabled and valid, its experiment
+ID and semantic/invocation configurations are valid, its leader score and
+inference accuracy are present and finite, its evidence count and both metrics
+meet policy minima, and any required predicted-neutral proportion is present,
+finite, within ``[0,1]``, and at or below the configured maximum. Rejections
+use stable machine-readable reasons and do not throw away the underlying policy
+or identity validation detail.
+
+``GenerateRecommendationCandidates`` supports only these mutations:
+
+* additive offsets to ``core_lr_mult``;
+* additive offsets to ``head_lr_mult``;
+* additive offsets to ``label_threshold``; and
+* explicit permitted ``prediction_horizon`` values, only when horizon changes
+  are enabled and the parameter is allowlisted.
+
+Learning-rate multipliers and thresholds follow the queue/worker launch
+contract: results must be finite, positive, and different from the source.
+Horizons must be positive and different from the source. No campaign-specific
+upper or lower caps are invented. A nullable source multiplier is never
+guessed; each requested mutation is rejected as ``missing_source_value``.
+Symbol, target epochs, all train/inference dates, checkpoint interval, and
+resume model are copied unchanged.
+
+Every emitted candidate differs from the normalized source semantic
+configuration in exactly one field. Both semantic and invocation identities
+are built through the Step 1 canonical identity APIs. Structural distance
+contains absolute delta, relative delta when the source is nonzero, and signed
+horizon delta for horizon changes; it is metadata only and is not a score.
+
+Offsets and horizons are sorted and deduplicated before construction. Valid
+candidates are ordered by parameter (core LR, head LR, threshold, horizon),
+numeric proposed value, semantic canonical text, then invocation canonical
+text. All valid candidates are constructed and sorted before the per-source
+limit retains the first N; overflow candidates are returned as
+``per_source_limit`` rejections. There is intentionally no cross-source limit
+in this pure step.
+
+In-memory duplicate handling follows the Step 1 collision contract. Semantic
+canonical text is authoritative. Hash buckets accelerate lookup, but every
+hash match is checked by canonical text. Equal canonical text is rejected as a
+duplicate; equal hashes with different canonical text retain both candidates
+and produce an explicit collision record.
+
 Deferred work
 -------------
 
-Candidate generation, scoring, evidence loading, unsupported-source rejection,
-database duplicate lookup, collision-aware persistence, migrations, CLI
-inspection, scheduler scans, approval, and experiment conversion remain
-deferred. Before approval/queueing, future work must persist or validate a
-complete implementation/feature contract for behavior-affecting settings that
-the experiment row cannot currently reconstruct.
+Scoring, PostgreSQL evidence loading, database duplicate lookup,
+collision-aware persistence, migrations, CLI inspection, scheduler scans,
+approval, and experiment conversion remain deferred. Before approval/queueing,
+future work must persist or validate a complete implementation/feature contract
+for behavior-affecting settings that the experiment row cannot currently
+reconstruct.
