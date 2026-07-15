@@ -202,6 +202,52 @@ PersistedRecommendationScoreRunSummary MapScoreRunSummary(
     return summary;
 }
 
+std::string ReviewEventColumns()
+{
+    return
+        "recommendation_review_event_id,recommendation_id,"
+        "recommendation_score_id,action,previous_status,resulting_status,"
+        "reason_code,reason_text,reviewer,note,"
+        "recommendation_semantic_canonical,recommendation_semantic_hash,"
+        "recommendation_policy_canonical,recommendation_policy_hash,"
+        "recommendation_scan_id,source_experiment_id,"
+        "created_at::text AS created_at";
+}
+
+PersistedRecommendationReviewEvent MapReviewEvent(const pqxx::row& row)
+{
+    PersistedRecommendationReviewEvent event;
+    event.recommendationReviewEventId =
+        row["recommendation_review_event_id"].as<long long>();
+    event.recommendationId = row["recommendation_id"].as<long long>();
+    event.recommendationScoreId =
+        OptionalValue<long long>(row, "recommendation_score_id");
+    const auto action = ParseRecommendationReviewAction(
+        row["action"].as<std::string>());
+    if (!action)
+        throw std::runtime_error("invalid_persisted_recommendation_review_action");
+    event.action = *action;
+    event.previousStatus = row["previous_status"].as<std::string>();
+    event.resultingStatus = row["resulting_status"].as<std::string>();
+    event.reasonCode = row["reason_code"].as<std::string>();
+    event.reasonText = OptionalValue<std::string>(row, "reason_text");
+    event.reviewer = OptionalValue<std::string>(row, "reviewer");
+    event.note = OptionalValue<std::string>(row, "note");
+    event.recommendationSemanticCanonical =
+        row["recommendation_semantic_canonical"].as<std::string>();
+    event.recommendationSemanticHash =
+        row["recommendation_semantic_hash"].as<std::string>();
+    event.recommendationPolicyCanonical =
+        row["recommendation_policy_canonical"].as<std::string>();
+    event.recommendationPolicyHash =
+        row["recommendation_policy_hash"].as<std::string>();
+    event.recommendationScanId =
+        row["recommendation_scan_id"].as<long long>();
+    event.sourceExperimentId = row["source_experiment_id"].as<long long>();
+    event.createdAt = row["created_at"].as<std::string>();
+    return event;
+}
+
 std::string ScanCounterAssignments()
 {
     return
@@ -789,7 +835,7 @@ std::optional<PersistedRecommendationDetail> FindRecommendation(
         "source_leader_score,source_infer_accuracy,source_predicted_neutral_proportion,source_evidence_count,"
         "absolute_delta,relative_delta,horizon_delta,semantic_configuration_canonical,"
         "invocation_configuration_canonical,policy_canonical,duplicate_type,matched_experiment_id,"
-        "matched_recommendation_id,approved_experiment_id,rejected_at::text AS rejected_at,"
+        "matched_recommendation_id,approved_experiment_id,approved_at::text AS approved_at,rejected_at::text AS rejected_at,"
         "rejected_reason,expired_at::text AS expired_at "
         "FROM experiment_recommendation WHERE recommendation_id=$1 "
         "AND recommendation_scan_id IS NOT NULL;",
@@ -818,6 +864,7 @@ std::optional<PersistedRecommendationDetail> FindRecommendation(
         OptionalValue<long long>(row, "matched_recommendation_id");
     detail.approvedExperimentId =
         OptionalValue<long long>(row, "approved_experiment_id");
+    detail.approvedAt = OptionalValue<std::string>(row, "approved_at");
     detail.rejectedAt = OptionalValue<std::string>(row, "rejected_at");
     detail.rejectedReason = OptionalValue<std::string>(row, "rejected_reason");
     detail.expiredAt = OptionalValue<std::string>(row, "expired_at");
@@ -1241,6 +1288,172 @@ std::optional<PersistedRecommendationScoreRunDetail> FindRecommendationScoreRun(
     detail.scoringPolicyCanonical =
         rows.one_row()["scoring_policy_canonical"].as<std::string>();
     return detail;
+}
+
+bool RecommendationReviewSchemaExists(pqxx::connection& connection)
+{
+    pqxx::read_transaction transaction{connection};
+    return TableExists(transaction, "experiment_recommendation_review_event");
+}
+
+RecommendationReviewPersistResult ReviewRecommendation(
+    pqxx::connection& connection,
+    const RecommendationReviewPersistenceRequest& request)
+{
+    if (request.recommendationId <= 0)
+        throw std::invalid_argument("recommendation_review_id_invalid");
+    const RecommendationReviewRequest review =
+        NormalizeRecommendationReviewRequest(request.review);
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION READ WRITE;");
+    const pqxx::result locked = transaction.exec(
+        "SELECT status,recommendation_scan_id,source_experiment_id,"
+        "semantic_configuration_canonical,semantic_hash,policy_canonical,"
+        "policy_hash FROM experiment_recommendation "
+        "WHERE recommendation_id=$1 FOR UPDATE;",
+        pqxx::params{request.recommendationId});
+    if (locked.empty())
+        throw std::runtime_error("recommendation_review_not_found");
+    const pqxx::row recommendation = locked.one_row();
+    const auto current = ParseRecommendationStatus(
+        recommendation["status"].as<std::string>());
+    if (!current)
+        throw std::runtime_error("recommendation_review_status_invalid");
+    if (const auto transition = ValidateRecommendationStatusTransition(
+            *current, review.action))
+        throw std::runtime_error(*transition);
+    if (recommendation["recommendation_scan_id"].is_null() ||
+        recommendation["source_experiment_id"].is_null() ||
+        recommendation["semantic_configuration_canonical"].is_null() ||
+        recommendation["semantic_hash"].is_null() ||
+        recommendation["policy_canonical"].is_null() ||
+        recommendation["policy_hash"].is_null() ||
+        recommendation["semantic_configuration_canonical"].as<std::string>().empty() ||
+        recommendation["semantic_hash"].as<std::string>().empty() ||
+        recommendation["policy_canonical"].as<std::string>().empty() ||
+        recommendation["policy_hash"].as<std::string>().empty())
+        throw std::runtime_error("recommendation_review_provenance_incomplete");
+
+    if (review.recommendationScoreId)
+    {
+        const pqxx::result scores = transaction.exec(
+            "SELECT s.recommendation_id,r.status AS run_status "
+            "FROM experiment_recommendation_score s "
+            "JOIN experiment_recommendation_score_run r "
+            "ON r.recommendation_score_run_id=s.recommendation_score_run_id "
+            "WHERE s.recommendation_score_id=$1;",
+            pqxx::params{*review.recommendationScoreId});
+        if (scores.empty())
+            throw std::runtime_error("recommendation_review_score_not_found");
+        const pqxx::row score = scores.one_row();
+        if (score["recommendation_id"].as<long long>() !=
+            request.recommendationId)
+            throw std::runtime_error(
+                "recommendation_review_score_ownership_mismatch");
+        if (score["run_status"].as<std::string>() != "completed")
+            throw std::runtime_error(
+                "recommendation_review_score_run_not_completed");
+    }
+
+    const std::string resultingStatus = RecommendationStatusText(
+        ResultingRecommendationStatus(review.action));
+    const pqxx::result updated = transaction.exec(
+        "UPDATE experiment_recommendation SET status=$2,"
+        "approved_at=CASE WHEN $2='approved' THEN now() ELSE NULL END,"
+        "approved_experiment_id=NULL,"
+        "rejected_at=CASE WHEN $2='rejected' THEN now() ELSE NULL END,"
+        "rejected_reason=CASE WHEN $2='rejected' THEN $3::text ELSE NULL END,"
+        "expired_at=CASE WHEN $2='expired' THEN now() ELSE NULL END,"
+        "updated_at=now() WHERE recommendation_id=$1;",
+        pqxx::params{request.recommendationId, resultingStatus,
+                     review.reasonText});
+    if (updated.affected_rows() != 1)
+        throw std::runtime_error("recommendation_review_update_failed");
+
+    const pqxx::result inserted = transaction.exec(
+        "INSERT INTO experiment_recommendation_review_event ("
+        "recommendation_id,recommendation_score_id,action,previous_status,"
+        "resulting_status,reason_code,reason_text,reviewer,note,"
+        "recommendation_semantic_canonical,recommendation_semantic_hash,"
+        "recommendation_policy_canonical,recommendation_policy_hash,"
+        "recommendation_scan_id,source_experiment_id) VALUES ("
+        "$1,$2,$3,'proposed',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) "
+        "RETURNING " + ReviewEventColumns() + ";",
+        pqxx::params{
+            request.recommendationId, review.recommendationScoreId,
+            RecommendationReviewActionText(review.action), resultingStatus,
+            review.reasonCode, review.reasonText, review.reviewer, review.note,
+            recommendation["semantic_configuration_canonical"].as<std::string>(),
+            recommendation["semantic_hash"].as<std::string>(),
+            recommendation["policy_canonical"].as<std::string>(),
+            recommendation["policy_hash"].as<std::string>(),
+            recommendation["recommendation_scan_id"].as<long long>(),
+            recommendation["source_experiment_id"].as<long long>()});
+    RecommendationReviewPersistResult result;
+    result.event = MapReviewEvent(inserted.one_row());
+    transaction.commit();
+    return result;
+}
+
+std::vector<PersistedRecommendationReviewEvent> ListRecommendationReviewEvents(
+    pqxx::connection& connection,
+    const RecommendationReviewFilters& filters)
+{
+    if (filters.recommendationId && *filters.recommendationId <= 0)
+        throw std::invalid_argument("recommendation_review_id_invalid");
+    if (filters.limit <= 0)
+        throw std::invalid_argument("recommendation_review_limit_invalid");
+    pqxx::read_transaction transaction{connection};
+    const std::optional<std::string> action = filters.action
+        ? std::optional<std::string>{RecommendationReviewActionText(*filters.action)}
+        : std::nullopt;
+    const pqxx::result rows = transaction.exec(
+        "SELECT " + ReviewEventColumns() +
+        " FROM experiment_recommendation_review_event "
+        "WHERE ($1::bigint IS NULL OR recommendation_id=$1) "
+        "AND ($2::text IS NULL OR action=$2) "
+        "ORDER BY recommendation_review_event_id DESC LIMIT $3;",
+        pqxx::params{filters.recommendationId, action, filters.limit});
+    std::vector<PersistedRecommendationReviewEvent> events;
+    events.reserve(rows.size());
+    for (const pqxx::row& row : rows) events.push_back(MapReviewEvent(row));
+    return events;
+}
+
+std::optional<PersistedRecommendationReviewEvent> FindRecommendationReviewEvent(
+    pqxx::connection& connection,
+    long long reviewEventId)
+{
+    if (reviewEventId <= 0)
+        throw std::invalid_argument("recommendation_review_event_id_invalid");
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT " + ReviewEventColumns() +
+        " FROM experiment_recommendation_review_event "
+        "WHERE recommendation_review_event_id=$1;",
+        pqxx::params{reviewEventId});
+    if (rows.empty()) return std::nullopt;
+    return MapReviewEvent(rows.one_row());
+}
+
+std::vector<PersistedRecommendationReviewEvent>
+ListReviewHistoryForRecommendation(
+    pqxx::connection& connection,
+    long long recommendationId)
+{
+    if (recommendationId <= 0)
+        throw std::invalid_argument("recommendation_review_id_invalid");
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT " + ReviewEventColumns() +
+        " FROM experiment_recommendation_review_event "
+        "WHERE recommendation_id=$1 "
+        "ORDER BY recommendation_review_event_id ASC;",
+        pqxx::params{recommendationId});
+    std::vector<PersistedRecommendationReviewEvent> events;
+    events.reserve(rows.size());
+    for (const pqxx::row& row : rows) events.push_back(MapReviewEvent(row));
+    return events;
 }
 
 std::string PersistedRecommendationMatchKindText(

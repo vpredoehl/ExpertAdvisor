@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExperimentRecommendationCandidateGenerator.hpp"
+#include "ExperimentRecommendationReview.hpp"
 #include "ExperimentRecommendationScoring.hpp"
 
 #include <optional>
@@ -162,6 +163,7 @@ struct PersistedRecommendationDetail : PersistedRecommendationSummary
     std::optional<long long> matchedExperimentId;
     std::optional<long long> matchedRecommendationId;
     std::optional<long long> approvedExperimentId;
+    std::optional<std::string> approvedAt;
     std::optional<std::string> rejectedAt;
     std::optional<std::string> rejectedReason;
     std::optional<std::string> expiredAt;
@@ -264,6 +266,45 @@ struct PersistedRecommendationScoreRunSummary
 struct PersistedRecommendationScoreRunDetail : PersistedRecommendationScoreRunSummary
 {
     std::string scoringPolicyCanonical;
+};
+
+struct RecommendationReviewPersistenceRequest
+{
+    long long recommendationId = -1;
+    RecommendationReviewRequest review;
+};
+
+struct RecommendationReviewFilters
+{
+    std::optional<long long> recommendationId;
+    std::optional<RecommendationReviewAction> action;
+    int limit = 100;
+};
+
+struct PersistedRecommendationReviewEvent
+{
+    long long recommendationReviewEventId = -1;
+    long long recommendationId = -1;
+    std::optional<long long> recommendationScoreId;
+    RecommendationReviewAction action = RecommendationReviewAction::approve;
+    std::string previousStatus;
+    std::string resultingStatus;
+    std::string reasonCode;
+    std::optional<std::string> reasonText;
+    std::optional<std::string> reviewer;
+    std::optional<std::string> note;
+    std::string recommendationSemanticCanonical;
+    std::string recommendationSemanticHash;
+    std::string recommendationPolicyCanonical;
+    std::string recommendationPolicyHash;
+    long long recommendationScanId = -1;
+    long long sourceExperimentId = -1;
+    std::string createdAt;
+};
+
+struct RecommendationReviewPersistResult
+{
+    PersistedRecommendationReviewEvent event;
 };
 
 struct PersistedRecommendationScanSummary
@@ -369,6 +410,21 @@ std::vector<PersistedRecommendationScoreRunSummary> ListRecommendationScoreRuns(
 std::optional<PersistedRecommendationScoreRunDetail> FindRecommendationScoreRun(
     pqxx::connection& connection,
     long long scoreRunId);
+
+bool RecommendationReviewSchemaExists(pqxx::connection& connection);
+RecommendationReviewPersistResult ReviewRecommendation(
+    pqxx::connection& connection,
+    const RecommendationReviewPersistenceRequest& request);
+std::vector<PersistedRecommendationReviewEvent> ListRecommendationReviewEvents(
+    pqxx::connection& connection,
+    const RecommendationReviewFilters& filters);
+std::optional<PersistedRecommendationReviewEvent> FindRecommendationReviewEvent(
+    pqxx::connection& connection,
+    long long reviewEventId);
+std::vector<PersistedRecommendationReviewEvent>
+ListReviewHistoryForRecommendation(
+    pqxx::connection& connection,
+    long long recommendationId);
 
 std::string PersistedRecommendationMatchKindText(
     PersistedRecommendationMatchKind kind);

@@ -45,6 +45,13 @@ int main()
            "a%2Cb%3Dc%25%0A%0D");
     assert(RecommendationMachineText(std::string{"\xC3\xA9", 2}) ==
            "%C3%A9");
+    assert(RecommendationHumanText("Operator Name, desk #2.") ==
+           "Operator Name, desk #2.");
+    assert(RecommendationHumanText("line one\n\x1b[31m") ==
+           "line one\\x0A\\x1B[31m");
+    assert(RecommendationHumanText(std::string{"\x9b[31m", 5}) ==
+           "\\x9B[31m");
+    assert(RecommendationHumanText("NULL") == "NULL");
 
     RecommendationPolicy policy;
     policy.topSourcesPerScope = 2;

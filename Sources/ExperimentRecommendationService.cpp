@@ -37,6 +37,26 @@ std::string RecommendationMachineText(const std::string& value)
     return escaped.str() == "NULL" ? "%4E%55%4C%4C" : escaped.str();
 }
 
+std::string RecommendationHumanText(const std::string& value)
+{
+    std::ostringstream rendered;
+    rendered.imbue(std::locale::classic());
+    for (const unsigned char ch : value)
+    {
+        if (ch < 0x20 || ch > 0x7e)
+        {
+            rendered << "\\x" << std::uppercase << std::hex
+                     << std::setw(2) << std::setfill('0')
+                     << static_cast<unsigned int>(ch) << std::dec;
+        }
+        else
+        {
+            rendered << static_cast<char>(ch);
+        }
+    }
+    return rendered.str();
+}
+
 namespace
 {
 
@@ -174,6 +194,54 @@ void PrintScanSummary(
            << ",completed_at=" << OptionalText(summary.completedAt)
            << ",error=" << OptionalText(summary.errorMessage)
            << '\n';
+}
+
+void PrintReviewEvent(
+    std::ostream& output,
+    const PersistedRecommendationReviewEvent& event)
+{
+    output << "EXPERIMENT_RECOMMENDATION_REVIEW"
+           << ",review_event_id=" << event.recommendationReviewEventId
+           << ",recommendation_id=" << event.recommendationId
+           << ",score_id=" << OptionalNumber(event.recommendationScoreId)
+           << ",action=" << RecommendationReviewActionText(event.action)
+           << ",previous_status=" << event.previousStatus
+           << ",resulting_status=" << event.resultingStatus
+           << ",reason_code=" << RecommendationMachineText(event.reasonCode)
+           << ",reason_text=" << OptionalText(event.reasonText)
+           << ",reviewer=" << OptionalText(event.reviewer)
+           << ",note=" << OptionalText(event.note)
+           << ",scan_id=" << event.recommendationScanId
+           << ",source_experiment_id=" << event.sourceExperimentId
+           << ",semantic_hash=" << event.recommendationSemanticHash
+           << ",policy_hash=" << event.recommendationPolicyHash
+           << ",created_at=" << RecommendationMachineText(event.createdAt)
+           << '\n';
+}
+
+const char* ReviewCompletionEvent(RecommendationReviewAction action)
+{
+    switch (action)
+    {
+        case RecommendationReviewAction::approve:
+            return "EXPERIMENT_RECOMMENDATION_REVIEW_APPROVED";
+        case RecommendationReviewAction::reject:
+            return "EXPERIMENT_RECOMMENDATION_REVIEW_REJECTED";
+        case RecommendationReviewAction::expire:
+            return "EXPERIMENT_RECOMMENDATION_REVIEW_EXPIRED";
+    }
+    return "EXPERIMENT_RECOMMENDATION_REVIEW_FAILED";
+}
+
+const char* ReviewHumanVerb(RecommendationReviewAction action)
+{
+    switch (action)
+    {
+        case RecommendationReviewAction::approve: return "marked approved";
+        case RecommendationReviewAction::reject: return "rejected";
+        case RecommendationReviewAction::expire: return "expired";
+    }
+    return "reviewed";
 }
 
 } // namespace
@@ -658,6 +726,132 @@ int RunExperimentRecommendationScanStatusCommand(
            << ",scan_id=" << detail->recommendationScanId
            << ",policy_canonical=" << RecommendationMachineText(detail->policyCanonical)
            << '\n';
+    return 0;
+}
+
+int RunExperimentRecommendationReviewCommand(
+    const std::string& connectionString,
+    const RecommendationReviewCommandRequest& request,
+    std::ostream& output,
+    std::ostream& errors)
+{
+    RecommendationReviewPersistenceRequest persistence;
+    persistence.recommendationId = request.recommendationId;
+    try
+    {
+        persistence.review = NormalizeRecommendationReviewRequest(request.review);
+        output << "EXPERIMENT_RECOMMENDATION_REVIEW_START"
+               << ",recommendation_id=" << persistence.recommendationId
+               << ",action="
+               << RecommendationReviewActionText(persistence.review.action)
+               << ",score_id="
+               << OptionalNumber(persistence.review.recommendationScoreId)
+               << '\n';
+        pqxx::connection connection{connectionString};
+        if (!RecommendationReviewSchemaExists(connection))
+            throw std::runtime_error(
+                "recommendation review schema required; run ./migrate_lstm_db.sh");
+        const RecommendationReviewPersistResult result =
+            ReviewRecommendation(connection, persistence);
+        const auto& event = result.event;
+        output << ReviewCompletionEvent(event.action)
+               << ",review_event_id=" << event.recommendationReviewEventId
+               << ",recommendation_id=" << event.recommendationId
+               << ",score_id=" << OptionalNumber(event.recommendationScoreId)
+               << ",previous_status=" << event.previousStatus
+               << ",resulting_status=" << event.resultingStatus
+               << ",reason_code="
+               << RecommendationMachineText(event.reasonCode)
+               << ",reason_text=" << OptionalText(event.reasonText)
+               << ",reviewer=" << OptionalText(event.reviewer)
+               << ",note=" << OptionalText(event.note)
+               << '\n';
+        output << "Recommendation " << event.recommendationId << " was "
+               << ReviewHumanVerb(event.action) << ".\n"
+               << "Previous status: " << event.previousStatus << "\n"
+               << "Current status: " << event.resultingStatus << "\n"
+               << "Referenced score: "
+               << OptionalNumber(event.recommendationScoreId) << "\n";
+        if (event.reviewer)
+            output << "Reviewer: " << RecommendationHumanText(*event.reviewer)
+                   << "\n";
+        if (event.action != RecommendationReviewAction::approve)
+            output << "Reason: " << RecommendationHumanText(event.reasonCode)
+                   << "\nDetails: "
+                   << RecommendationHumanText(*event.reasonText) << "\n";
+        output << "Review is advisory only. No experiment was created or queued.\n";
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        const bool conflict =
+            std::string{error.what()} == "recommendation_review_status_conflict";
+        errors << (conflict
+            ? "EXPERIMENT_RECOMMENDATION_REVIEW_CONFLICT"
+            : "EXPERIMENT_RECOMMENDATION_REVIEW_FAILED")
+               << ",recommendation_id=" << persistence.recommendationId
+               << ",action="
+               << RecommendationReviewActionText(request.review.action)
+               << ",error=" << RecommendationMachineText(error.what()) << '\n';
+        return conflict ? 2 : 1;
+    }
+}
+
+int RunListExperimentRecommendationReviewsCommand(
+    const std::string& connectionString,
+    const RecommendationReviewListCommandRequest& request,
+    std::ostream& output)
+{
+    pqxx::connection connection{connectionString};
+    if (!RecommendationReviewSchemaExists(connection))
+        throw std::runtime_error(
+            "recommendation review schema required; run ./migrate_lstm_db.sh");
+    RecommendationReviewFilters filters;
+    filters.recommendationId = request.recommendationId;
+    filters.action = request.action;
+    filters.limit = request.limit;
+    const auto events = ListRecommendationReviewEvents(connection, filters);
+    for (const auto& event : events) PrintReviewEvent(output, event);
+    output << "EXPERIMENT_RECOMMENDATION_REVIEW_LIST_COMPLETE,count="
+           << events.size() << '\n';
+    return 0;
+}
+
+int RunExperimentRecommendationReviewStatusCommand(
+    const std::string& connectionString,
+    long long reviewEventId,
+    std::ostream& output)
+{
+    pqxx::connection connection{connectionString};
+    if (!RecommendationReviewSchemaExists(connection))
+        throw std::runtime_error(
+            "recommendation review schema required; run ./migrate_lstm_db.sh");
+    const auto event = FindRecommendationReviewEvent(connection, reviewEventId);
+    if (!event)
+    {
+        output << "EXPERIMENT_RECOMMENDATION_REVIEW_NOT_FOUND,review_event_id="
+               << reviewEventId << '\n';
+        return 1;
+    }
+    PrintReviewEvent(output, *event);
+    return 0;
+}
+
+int RunExperimentRecommendationReviewHistoryCommand(
+    const std::string& connectionString,
+    long long recommendationId,
+    std::ostream& output)
+{
+    pqxx::connection connection{connectionString};
+    if (!RecommendationReviewSchemaExists(connection))
+        throw std::runtime_error(
+            "recommendation review schema required; run ./migrate_lstm_db.sh");
+    const auto events = ListReviewHistoryForRecommendation(
+        connection, recommendationId);
+    for (const auto& event : events) PrintReviewEvent(output, event);
+    output << "EXPERIMENT_RECOMMENDATION_REVIEW_HISTORY_COMPLETE"
+           << ",recommendation_id=" << recommendationId
+           << ",count=" << events.size() << '\n';
     return 0;
 }
 

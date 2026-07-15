@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExperimentRecommendationCandidateGenerator.hpp"
+#include "ExperimentRecommendationReview.hpp"
 #include "ExperimentRecommendationScoring.hpp"
 
 #include <iosfwd>
@@ -49,6 +50,19 @@ struct RecommendationScoreListCommandRequest
     int limit = 100;
 };
 
+struct RecommendationReviewCommandRequest
+{
+    long long recommendationId = -1;
+    RecommendationReviewRequest review;
+};
+
+struct RecommendationReviewListCommandRequest
+{
+    std::optional<long long> recommendationId;
+    std::optional<RecommendationReviewAction> action;
+    int limit = 100;
+};
+
 struct RecommendationSourceSelectionRecord
 {
     RecommendationSource source;
@@ -70,6 +84,11 @@ RecommendationSourceSelectionResult SelectRecommendationSources(
 // Percent-encode one machine-record text value. NULL is reserved for absent
 // optionals by the record format; a concrete "NULL" value is encoded fully.
 std::string RecommendationMachineText(const std::string& value);
+
+// Preserve ordinary human-readable text while rendering terminal control
+// bytes visibly so review provenance cannot inject additional output lines or
+// terminal escape sequences.
+std::string RecommendationHumanText(const std::string& value);
 
 int RunGenerateExperimentRecommendationsCommand(
     const std::string& connectionString,
@@ -116,6 +135,23 @@ int RunExperimentRecommendationScoreRunStatusCommand(
 int RunExplainExperimentRecommendationScoreCommand(
     const std::string& connectionString,
     long long scoreId,
+    std::ostream& output);
+int RunExperimentRecommendationReviewCommand(
+    const std::string& connectionString,
+    const RecommendationReviewCommandRequest& request,
+    std::ostream& output,
+    std::ostream& errors);
+int RunListExperimentRecommendationReviewsCommand(
+    const std::string& connectionString,
+    const RecommendationReviewListCommandRequest& request,
+    std::ostream& output);
+int RunExperimentRecommendationReviewStatusCommand(
+    const std::string& connectionString,
+    long long reviewEventId,
+    std::ostream& output);
+int RunExperimentRecommendationReviewHistoryCommand(
+    const std::string& connectionString,
+    long long recommendationId,
     std::ostream& output);
 
 } // namespace EA::ExperimentRecommendation
