@@ -34,6 +34,7 @@
 #include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
 #include "ContinuationPolicyPersistence.hpp"
+#include "ExperimentRecommendationService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -84,6 +85,20 @@ struct SchedulerOptions
     std::optional<long long> evaluateContinuationExperimentId;
     std::optional<long long> queueContinuationExperimentId;
     std::optional<long long> continuationStatusExperimentId;
+    bool generateExperimentRecommendations = false;
+    bool listExperimentRecommendations = false;
+    std::optional<long long> recommendationStatusId;
+    bool listExperimentRecommendationScans = false;
+    std::optional<long long> recommendationScanStatusId;
+    std::optional<std::string> recommendationPolicy;
+    std::optional<std::string> recommendationSymbol;
+    std::optional<int> recommendationHorizon;
+    std::optional<long long> recommendationSourceExperimentId;
+    std::optional<int> recommendationMaximum;
+    std::optional<std::string> recommendationStatusFilter;
+    std::optional<long long> recommendationScanId;
+    int recommendationLimit = 100;
+    bool recommendationLimitSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -634,6 +649,19 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--evaluate-continuation" ||
             arg == "--queue-continuation" ||
             arg == "--continuation-status" ||
+            arg == "--generate-experiment-recommendations" ||
+            arg == "--list-experiment-recommendations" ||
+            arg == "--recommendation-status" ||
+            arg == "--list-experiment-recommendation-scans" ||
+            arg == "--recommendation-scan-status" ||
+            arg == "--recommendation-policy" ||
+            arg == "--recommendation-symbol" ||
+            arg == "--recommendation-horizon" ||
+            arg == "--recommendation-source-experiment" ||
+            arg == "--recommendation-max" ||
+            arg == "--recommendation-status-filter" ||
+            arg == "--recommendation-scan-id" ||
+            arg == "--recommendation-limit" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -670,6 +698,16 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--evaluate-continuation=", 0) == 0 ||
             arg.rfind("--queue-continuation=", 0) == 0 ||
             arg.rfind("--continuation-status=", 0) == 0 ||
+            arg.rfind("--recommendation-status=", 0) == 0 ||
+            arg.rfind("--recommendation-scan-status=", 0) == 0 ||
+            arg.rfind("--recommendation-policy=", 0) == 0 ||
+            arg.rfind("--recommendation-symbol=", 0) == 0 ||
+            arg.rfind("--recommendation-horizon=", 0) == 0 ||
+            arg.rfind("--recommendation-source-experiment=", 0) == 0 ||
+            arg.rfind("--recommendation-max=", 0) == 0 ||
+            arg.rfind("--recommendation-status-filter=", 0) == 0 ||
+            arg.rfind("--recommendation-scan-id=", 0) == 0 ||
+            arg.rfind("--recommendation-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1193,6 +1231,35 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.queueContinuationExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--continuation-status")
             options.continuationStatusExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--generate-experiment-recommendations")
+            options.generateExperimentRecommendations = true;
+        else if (arg == "--list-experiment-recommendations")
+            options.listExperimentRecommendations = true;
+        else if (arg == "--recommendation-status")
+            options.recommendationStatusId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-recommendation-scans")
+            options.listExperimentRecommendationScans = true;
+        else if (arg == "--recommendation-scan-status")
+            options.recommendationScanStatusId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-policy")
+            options.recommendationPolicy = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-symbol")
+            options.recommendationSymbol = EA::CanonicalSymbol::Normalize(RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-horizon")
+            options.recommendationHorizon = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-source-experiment")
+            options.recommendationSourceExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-max")
+            options.recommendationMaximum = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-status-filter")
+            options.recommendationStatusFilter = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-scan-id")
+            options.recommendationScanId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-limit")
+        {
+            options.recommendationLimit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.recommendationLimitSpecified = true;
+        }
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1386,6 +1453,29 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.queueContinuationExperimentId = ParsePositiveLongLong("--queue-continuation", value);
         else if (SplitOptionWithValue(arg, "--continuation-status", value))
             options.continuationStatusExperimentId = ParsePositiveLongLong("--continuation-status", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-status", value))
+            options.recommendationStatusId = ParsePositiveLongLong("--recommendation-status", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-scan-status", value))
+            options.recommendationScanStatusId = ParsePositiveLongLong("--recommendation-scan-status", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-policy", value))
+            options.recommendationPolicy = value;
+        else if (SplitOptionWithValue(arg, "--recommendation-symbol", value))
+            options.recommendationSymbol = EA::CanonicalSymbol::Normalize(value);
+        else if (SplitOptionWithValue(arg, "--recommendation-horizon", value))
+            options.recommendationHorizon = ParsePositiveInt("--recommendation-horizon", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-source-experiment", value))
+            options.recommendationSourceExperimentId = ParsePositiveLongLong("--recommendation-source-experiment", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-max", value))
+            options.recommendationMaximum = ParsePositiveInt("--recommendation-max", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-status-filter", value))
+            options.recommendationStatusFilter = value;
+        else if (SplitOptionWithValue(arg, "--recommendation-scan-id", value))
+            options.recommendationScanId = ParsePositiveLongLong("--recommendation-scan-id", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-limit", value))
+        {
+            options.recommendationLimit = ParsePositiveInt("--recommendation-limit", value);
+            options.recommendationLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -1516,6 +1606,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.evaluateContinuationExperimentId.has_value() ? 1 : 0) +
         (options.queueContinuationExperimentId.has_value() ? 1 : 0) +
         (options.continuationStatusExperimentId.has_value() ? 1 : 0) +
+        (options.generateExperimentRecommendations ? 1 : 0) +
+        (options.listExperimentRecommendations ? 1 : 0) +
+        (options.recommendationStatusId.has_value() ? 1 : 0) +
+        (options.listExperimentRecommendationScans ? 1 : 0) +
+        (options.recommendationScanStatusId.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -1536,6 +1631,33 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument("--backup-output is only valid with --backup-database");
     if (options.queueContinuationCandidateExcluded && !options.queueExperiment)
         throw std::invalid_argument("--continuation-candidate-excluded is only valid with --queue-experiment");
+    const bool recommendationGenerationOption =
+        options.recommendationPolicy.has_value() ||
+        options.recommendationSourceExperimentId.has_value() ||
+        options.recommendationMaximum.has_value();
+    if (recommendationGenerationOption &&
+        !options.generateExperimentRecommendations)
+        throw std::invalid_argument("recommendation policy, source, and maximum options require --generate-experiment-recommendations");
+    const bool recommendationListOption =
+        options.recommendationStatusFilter.has_value() ||
+        options.recommendationScanId.has_value();
+    if (recommendationListOption && !options.listExperimentRecommendations)
+        throw std::invalid_argument("recommendation status and scan filters require --list-experiment-recommendations");
+    const bool recommendationSourceFilter =
+        options.recommendationSymbol.has_value() ||
+        options.recommendationHorizon.has_value();
+    if (recommendationSourceFilter &&
+        !options.generateExperimentRecommendations &&
+        !options.listExperimentRecommendations)
+        throw std::invalid_argument("recommendation symbol and horizon filters require generation or recommendation list");
+    if (options.recommendationLimitSpecified &&
+        !options.listExperimentRecommendations &&
+        !options.listExperimentRecommendationScans)
+        throw std::invalid_argument("--recommendation-limit requires a recommendation or scan list command");
+    if (options.recommendationStatusFilter &&
+        !EA::ExperimentRecommendation::ParseRecommendationStatus(
+            *options.recommendationStatusFilter))
+        throw std::invalid_argument("invalid recommendation status filter");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -14546,6 +14668,18 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --evaluate-continuation=EXPERIMENT_ID | --queue-continuation=EXPERIMENT_ID | "
         << "--continuation-status=EXPERIMENT_ID\n"
         << "Usage: " << exe
+        << " --generate-experiment-recommendations [--recommendation-policy=key=value,...] "
+        << "[--recommendation-symbol=SYMBOL] [--recommendation-horizon=N] "
+        << "[--recommendation-source-experiment=ID] [--recommendation-max=N]\n"
+        << "Usage: " << exe
+        << " --list-experiment-recommendations [--recommendation-status-filter=proposed|rejected|expired|approved] "
+        << "[--recommendation-symbol=SYMBOL] [--recommendation-horizon=N] "
+        << "[--recommendation-scan-id=ID] [--recommendation-limit=N]\n"
+        << "Usage: " << exe
+        << " --recommendation-status=ID | --list-experiment-recommendation-scans "
+        << "[--recommendation-limit=N] | --recommendation-scan-status=ID\n"
+        << "Phase 4A recommendations are advisory only: generation stores proposals but never creates or queues experiments.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -14561,6 +14695,44 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Backup note: --backup-database writes a PostgreSQL custom-format dump with schema and data; "
         << "migrations remain schema history, and --backup-output=Database/backups/LSTM_latest.dump overwrites a stable file.\n"
         << "Queue exit codes: 0=created, 1=invalid_arguments, 2=database_error, 3=duplicates_only\n";
+}
+
+int RunExperimentRecommendationCommand(const SchedulerOptions& options)
+{
+    const std::string connectionString = LstmDbConnectionString();
+    if (options.generateExperimentRecommendations)
+    {
+        EA::ExperimentRecommendation::RecommendationGenerationCommandRequest request;
+        request.policy = options.recommendationPolicy
+            ? EA::ExperimentRecommendation::ParseRecommendationPolicy(
+                  *options.recommendationPolicy)
+            : EA::ExperimentRecommendation::RecommendationPolicy{};
+        request.symbol = options.recommendationSymbol;
+        request.predictionHorizon = options.recommendationHorizon;
+        request.sourceExperimentId = options.recommendationSourceExperimentId;
+        request.requestedMaximum = options.recommendationMaximum;
+        return EA::ExperimentRecommendation::RunGenerateExperimentRecommendationsCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.listExperimentRecommendations)
+    {
+        EA::ExperimentRecommendation::RecommendationListCommandRequest request;
+        request.status = options.recommendationStatusFilter;
+        request.symbol = options.recommendationSymbol;
+        request.predictionHorizon = options.recommendationHorizon;
+        request.recommendationScanId = options.recommendationScanId;
+        request.limit = options.recommendationLimit;
+        return EA::ExperimentRecommendation::RunListExperimentRecommendationsCommand(
+            connectionString, request, std::cout);
+    }
+    if (options.recommendationStatusId)
+        return EA::ExperimentRecommendation::RunExperimentRecommendationStatusCommand(
+            connectionString, *options.recommendationStatusId, std::cout);
+    if (options.listExperimentRecommendationScans)
+        return EA::ExperimentRecommendation::RunListExperimentRecommendationScansCommand(
+            connectionString, options.recommendationLimit, std::cout);
+    return EA::ExperimentRecommendation::RunExperimentRecommendationScanStatusCommand(
+        connectionString, *options.recommendationScanStatusId, std::cout);
 }
 
 } // namespace
@@ -14618,6 +14790,12 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunQueueContinuationCommand(options);
         if (options.continuationStatusExperimentId.has_value())
             return RunContinuationStatusCommand(options);
+        if (options.generateExperimentRecommendations ||
+            options.listExperimentRecommendations ||
+            options.recommendationStatusId.has_value() ||
+            options.listExperimentRecommendationScans ||
+            options.recommendationScanStatusId.has_value())
+            return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);
         if (options.schedulerStatus)
