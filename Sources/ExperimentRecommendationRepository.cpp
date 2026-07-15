@@ -113,6 +113,7 @@ PersistedRecommendationSummary MapRecommendationSummary(const pqxx::row& row)
     summary.policyHash = row["policy_hash"].as<std::string>();
     summary.generationOrdinal = row["generation_ordinal"].as<int>();
     summary.structuralRank = row["structural_rank"].as<int>();
+    summary.sourceRank = OptionalValue<int>(row, "source_rank");
     summary.reason = row["reason"].as<std::string>();
     summary.createdAt = row["created_at"].as<std::string>();
     return summary;
@@ -132,6 +133,69 @@ PersistedRecommendationScanSummary MapScanSummary(const pqxx::row& row)
         OptionalValue<long long>(row, "source_experiment_filter");
     summary.requestedMaximum = OptionalValue<int>(row, "requested_maximum");
     summary.counters = MapScanCounters(row);
+    summary.startedAt = row["started_at"].as<std::string>();
+    summary.completedAt = OptionalValue<std::string>(row, "completed_at");
+    summary.errorMessage = OptionalValue<std::string>(row, "error_message");
+    return summary;
+}
+
+RecommendationScoreRunCounters MapScoreRunCounters(const pqxx::row& row)
+{
+    RecommendationScoreRunCounters counters;
+    counters.recommendationsConsidered =
+        row["recommendations_considered"].as<int>();
+    counters.recommendationsScored =
+        row["recommendations_scored"].as<int>();
+    counters.recommendationsSkipped =
+        row["recommendations_skipped"].as<int>();
+    counters.scoringErrors = row["scoring_errors"].as<int>();
+    counters.hashCollisions = row["hash_collisions"].as<int>();
+    return counters;
+}
+
+PersistedRecommendationScoreSummary MapScoreSummary(const pqxx::row& row)
+{
+    PersistedRecommendationScoreSummary summary;
+    summary.recommendationScoreId =
+        row["recommendation_score_id"].as<long long>();
+    summary.scoreRunId = row["recommendation_score_run_id"].as<long long>();
+    summary.recommendationId = row["recommendation_id"].as<long long>();
+    summary.sourceExperimentId = row["source_experiment_id"].as<long long>();
+    summary.scoringPolicyHash = row["scoring_policy_hash"].as<std::string>();
+    summary.scoringVersion = row["scoring_version"].as<int>();
+    summary.finalScore = row["final_score"].as<double>();
+    summary.rawPositiveScore = row["raw_positive_score"].as<double>();
+    summary.rawPenaltyScore = row["raw_penalty_score"].as<double>();
+    summary.rawTotalScore = row["raw_total_score"].as<double>();
+    summary.structuralDistance = row["structural_distance"].as<double>();
+    summary.scoreRank = row["score_rank"].as<int>();
+    summary.tieGroup = row["tie_group"].as<int>();
+    summary.rankingOrdinal = row["ranking_ordinal"].as<int>();
+    summary.reasonCode = row["reason_code"].as<std::string>();
+    summary.explanation = row["explanation"].as<std::string>();
+    summary.createdAt = row["created_at"].as<std::string>();
+    return summary;
+}
+
+PersistedRecommendationScoreRunSummary MapScoreRunSummary(
+    const pqxx::row& row)
+{
+    PersistedRecommendationScoreRunSummary summary;
+    summary.scoreRunId = row["recommendation_score_run_id"].as<long long>();
+    summary.status = row["status"].as<std::string>();
+    summary.scoringPolicyHash =
+        row["scoring_policy_hash"].as<std::string>();
+    summary.scoringVersion = row["scoring_version"].as<int>();
+    summary.recommendationStatusFilter =
+        OptionalValue<std::string>(row, "recommendation_status_filter");
+    summary.symbolFilter = OptionalValue<std::string>(row, "symbol_filter");
+    summary.horizonFilter = OptionalValue<int>(row, "horizon_filter");
+    summary.recommendationScanFilter =
+        OptionalValue<long long>(row, "recommendation_scan_filter");
+    summary.recommendationIdFilter =
+        OptionalValue<long long>(row, "recommendation_id_filter");
+    summary.requestedLimit = OptionalValue<int>(row, "requested_limit");
+    summary.counters = MapScoreRunCounters(row);
     summary.startedAt = row["started_at"].as<std::string>();
     summary.completedAt = OptionalValue<std::string>(row, "completed_at");
     summary.errorMessage = OptionalValue<std::string>(row, "error_message");
@@ -164,6 +228,97 @@ pqxx::params ScanCompletionParams(
         counters.duplicatesHistoricalRecommendation,
         counters.hashCollisions, counters.recommendationsCreated,
         counters.recommendationsAlreadyExisting, counters.persistenceErrors};
+}
+
+std::string ScoreRunCounterAssignments()
+{
+    return
+        "recommendations_considered=$3, recommendations_scored=$4, "
+        "recommendations_skipped=$5, scoring_errors=$6, hash_collisions=$7";
+}
+
+pqxx::params ScoreRunCompletionParams(
+    long long scoreRunId,
+    const std::string& errorMessage,
+    const RecommendationScoreRunCounters& counters)
+{
+    return pqxx::params{
+        scoreRunId, errorMessage, counters.recommendationsConsidered,
+        counters.recommendationsScored, counters.recommendationsSkipped,
+        counters.scoringErrors, counters.hashCollisions};
+}
+
+bool PersistedDoubleEquals(const pqxx::field& field, double expected)
+{
+    if (field.is_null() || !std::isfinite(expected)) return false;
+    const double persisted = field.as<double>();
+    return std::isfinite(persisted) &&
+           CanonicalRecommendationDouble(persisted) ==
+               CanonicalRecommendationDouble(expected);
+}
+
+bool PersistedScoreResultEquals(
+    const pqxx::row& row,
+    const RecommendationScorePersistenceRequest& request)
+{
+    const RecommendationScoreResult& score = request.ranked.score;
+    const RecommendationScoringInput& input = request.ranked.input;
+    return
+        row["scoring_policy_canonical"].as<std::string>() ==
+            score.scoringPolicyCanonical &&
+        row["scoring_policy_hash"].as<std::string>() ==
+            score.scoringPolicyHash &&
+        row["scoring_version"].as<int>() == score.scoringVersion &&
+        row["recommendation_semantic_canonical"].as<std::string>() ==
+            input.semanticCanonicalText &&
+        row["recommendation_policy_canonical"].as<std::string>() ==
+            input.recommendationPolicyCanonicalText &&
+        row["source_experiment_id"].as<long long>() ==
+            input.sourceExperimentId &&
+        PersistedDoubleEquals(row["final_score"], score.finalScore) &&
+        PersistedDoubleEquals(row["raw_positive_score"],
+                              score.rawPositiveScore) &&
+        PersistedDoubleEquals(row["raw_penalty_score"],
+                              score.rawPenaltyScore) &&
+        PersistedDoubleEquals(row["raw_total_score"], score.rawTotalScore) &&
+        PersistedDoubleEquals(row["structural_distance"],
+                              score.structuralDistance) &&
+        row["score_rank"].as<int>() == request.ranked.scoreRank &&
+        row["tie_group"].as<int>() == request.ranked.tieGroup &&
+        row["ranking_ordinal"].as<int>() ==
+            request.ranked.rankingOrdinal &&
+        row["score_status"].as<std::string>() == "scored" &&
+        row["reason_code"].as<std::string>() == score.reasonCode &&
+        row["explanation"].as<std::string>() == score.explanationSummary;
+}
+
+bool PersistedScoreComponentsEqual(
+    const pqxx::result& rows,
+    const std::vector<RecommendationScoreComponent>& expected)
+{
+    if (static_cast<std::size_t>(rows.size()) != expected.size()) return false;
+    std::size_t index = 0;
+    for (const pqxx::row& row : rows)
+    {
+        const RecommendationScoreComponent& component = expected[index];
+        if (row["component_ordinal"].as<int>() !=
+                static_cast<int>(index + 1) ||
+            row["component_name"].as<std::string>() !=
+                component.componentName ||
+            row["reason_code"].as<std::string>() != component.reasonCode ||
+            row["input_canonical"].as<std::string>() !=
+                component.inputCanonical ||
+            !PersistedDoubleEquals(row["normalized_value"],
+                                   component.normalizedValue) ||
+            !PersistedDoubleEquals(row["weight"], component.weight) ||
+            !PersistedDoubleEquals(row["weighted_contribution"],
+                                   component.weightedContribution) ||
+            row["is_penalty"].as<bool>() != component.penalty ||
+            row["explanation"].as<std::string>() != component.explanation)
+            return false;
+        ++index;
+    }
+    return true;
 }
 
 } // namespace
@@ -493,7 +648,7 @@ RecommendationPersistResult PersistRecommendationIdempotently(
     }
 
     if (!request.source.leaderScore || !request.source.inferenceAccuracy ||
-        request.source.evidenceCount <= 0)
+        request.source.evidenceCount <= 0 || request.sourceRank <= 0)
         throw std::invalid_argument("recommendation_persistence_source_evidence_invalid");
 
     const std::string sourceValue =
@@ -507,8 +662,8 @@ RecommendationPersistResult PersistRecommendationIdempotently(
         "source_predicted_neutral_proportion,source_evidence_count,changed_parameter,"
         "source_value_canonical,proposed_value_canonical,absolute_delta,relative_delta,horizon_delta,"
         "semantic_configuration_canonical,semantic_hash,invocation_configuration_canonical,invocation_hash,"
-        "policy_canonical,policy_hash,generation_ordinal,structural_rank,duplicate_type,reason) "
-        "VALUES ($1,'proposed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'no_duplicate','single_parameter_neighborhood') "
+        "policy_canonical,policy_hash,source_rank,generation_ordinal,structural_rank,duplicate_type,reason) "
+        "VALUES ($1,'proposed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,'no_duplicate','single_parameter_neighborhood') "
         "ON CONFLICT (semantic_configuration_canonical,policy_canonical) "
         "WHERE status IN ('proposed','approved') "
         "AND semantic_configuration_canonical IS NOT NULL "
@@ -529,7 +684,8 @@ RecommendationPersistResult PersistRecommendationIdempotently(
             request.candidate.invocationIdentity.canonicalText,
             request.candidate.invocationIdentity.hash,
             policyCanonical, RecommendationPolicyHash(request.policy),
-            request.generationOrdinal, request.structuralRank});
+            request.sourceRank, request.generationOrdinal,
+            request.structuralRank});
     if (!inserted.empty())
     {
         result.recommendationId = inserted.one_row()[0].as<long long>();
@@ -603,7 +759,7 @@ std::vector<PersistedRecommendationSummary> ListRecommendations(
         "SELECT recommendation_id,recommendation_scan_id,status,source_experiment_id,"
         "source_model_id,source_analysis_id,source_symbol,source_prediction_horizon,"
         "changed_parameter,source_value_canonical,proposed_value_canonical,semantic_hash,"
-        "invocation_hash,policy_hash,generation_ordinal,structural_rank,reason,created_at::text AS created_at "
+        "invocation_hash,policy_hash,generation_ordinal,structural_rank,source_rank,reason,created_at::text AS created_at "
         "FROM experiment_recommendation "
         "WHERE recommendation_scan_id IS NOT NULL "
         "AND ($1::text IS NULL OR status=$1) "
@@ -629,7 +785,7 @@ std::optional<PersistedRecommendationDetail> FindRecommendation(
         "SELECT recommendation_id,recommendation_scan_id,status,source_experiment_id,"
         "source_model_id,source_analysis_id,source_symbol,source_prediction_horizon,"
         "changed_parameter,source_value_canonical,proposed_value_canonical,semantic_hash,"
-        "invocation_hash,policy_hash,generation_ordinal,structural_rank,reason,created_at::text AS created_at,"
+        "invocation_hash,policy_hash,generation_ordinal,structural_rank,source_rank,reason,created_at::text AS created_at,"
         "source_leader_score,source_infer_accuracy,source_predicted_neutral_proportion,source_evidence_count,"
         "absolute_delta,relative_delta,horizon_delta,semantic_configuration_canonical,"
         "invocation_configuration_canonical,policy_canonical,duplicate_type,matched_experiment_id,"
@@ -710,6 +866,380 @@ std::optional<PersistedRecommendationScanDetail> FindRecommendationScan(
     static_cast<PersistedRecommendationScanSummary&>(detail) =
         MapScanSummary(rows.one_row());
     detail.policyCanonical = rows.one_row()["policy_canonical"].as<std::string>();
+    return detail;
+}
+
+bool RecommendationScoringSchemaExists(pqxx::connection& connection)
+{
+    pqxx::read_transaction transaction{connection};
+    return TableExists(transaction, "experiment_recommendation_score_run") &&
+           TableExists(transaction, "experiment_recommendation_score") &&
+           TableExists(transaction, "experiment_recommendation_score_component");
+}
+
+long long BeginRecommendationScoreRun(
+    pqxx::connection& connection,
+    const RecommendationScoreRunRequest& request)
+{
+    const std::string canonical =
+        RecommendationScoringPolicyCanonicalText(request.policy);
+    const std::string hash = RecommendationScoringPolicyHash(request.policy);
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION READ WRITE;");
+    const pqxx::result rows = transaction.exec(
+        "INSERT INTO experiment_recommendation_score_run ("
+        "status,scoring_policy_canonical,scoring_policy_hash,scoring_version,"
+        "recommendation_status_filter,symbol_filter,horizon_filter,"
+        "recommendation_scan_filter,recommendation_id_filter,requested_limit) "
+        "VALUES ('running',$1,$2,$3,$4,$5,$6,$7,$8,$9) "
+        "RETURNING recommendation_score_run_id;",
+        pqxx::params{
+            canonical, hash, request.policy.scoringVersion,
+            request.filters.status, request.filters.symbol,
+            request.filters.predictionHorizon,
+            request.filters.recommendationScanId,
+            request.filters.recommendationId, request.requestedLimit});
+    const long long runId = rows.one_row()[0].as<long long>();
+    transaction.commit();
+    return runId;
+}
+
+std::optional<std::string> FindRecommendationScoringPolicyHashCollision(
+    pqxx::connection& connection,
+    const RecommendationScoringPolicy& policy)
+{
+    const std::string canonical =
+        RecommendationScoringPolicyCanonicalText(policy);
+    const std::string hash = RecommendationScoringPolicyHash(policy);
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT scoring_policy_canonical FROM "
+        "experiment_recommendation_score_run WHERE scoring_policy_hash=$1 "
+        "AND scoring_policy_canonical<>$2 "
+        "ORDER BY recommendation_score_run_id ASC LIMIT 1;",
+        pqxx::params{hash, canonical});
+    if (rows.empty()) return std::nullopt;
+    return rows.one_row()[0].as<std::string>();
+}
+
+std::vector<RecommendationScoringLoadResult> LoadRecommendationsForScoring(
+    pqxx::connection& connection,
+    const RecommendationScoringFilters& filters)
+{
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT recommendation_id,status,source_experiment_id,"
+        "source_prediction_horizon,source_rank,source_leader_score,"
+        "source_infer_accuracy,source_predicted_neutral_proportion,"
+        "source_evidence_count,changed_parameter,source_value_canonical,"
+        "proposed_value_canonical,absolute_delta,relative_delta,horizon_delta,"
+        "generation_ordinal,structural_rank,semantic_configuration_canonical,"
+        "invocation_configuration_canonical,policy_canonical,duplicate_type "
+        "FROM experiment_recommendation "
+        "WHERE recommendation_scan_id IS NOT NULL AND status=$1 "
+        "AND ($2::text IS NULL OR source_symbol=$2) "
+        "AND ($3::integer IS NULL OR source_prediction_horizon=$3) "
+        "AND ($4::bigint IS NULL OR recommendation_scan_id=$4) "
+        "AND ($5::bigint IS NULL OR recommendation_id=$5) "
+        "ORDER BY recommendation_id ASC;",
+        pqxx::params{filters.status, filters.symbol,
+                     filters.predictionHorizon,
+                     filters.recommendationScanId,
+                     filters.recommendationId});
+    std::vector<RecommendationScoringLoadResult> results;
+    results.reserve(rows.size());
+    for (const pqxx::row& row : rows)
+    {
+        RecommendationScoringLoadResult loaded;
+        loaded.recommendationId = row["recommendation_id"].as<long long>();
+        if (row["source_rank"].is_null())
+        {
+            loaded.skipReason = "legacy_recommendation_missing_source_rank";
+            results.push_back(std::move(loaded));
+            continue;
+        }
+        RecommendationScoringInput input;
+        input.recommendationId = loaded.recommendationId;
+        input.recommendationStatus = row["status"].as<std::string>();
+        input.sourceExperimentId = row["source_experiment_id"].as<long long>();
+        input.sourcePredictionHorizon =
+            row["source_prediction_horizon"].as<int>();
+        input.sourceRankWithinGroup = row["source_rank"].as<int>();
+        input.sourceLeaderScore = row["source_leader_score"].as<double>();
+        input.sourceInferenceAccuracy =
+            row["source_infer_accuracy"].as<double>();
+        input.sourcePredictedNeutralProportion =
+            OptionalValue<double>(row, "source_predicted_neutral_proportion");
+        input.sourceEvidenceCount = row["source_evidence_count"].as<long long>();
+        input.changedParameter = row["changed_parameter"].as<std::string>();
+        input.sourceValueCanonical =
+            row["source_value_canonical"].as<std::string>();
+        input.proposedValueCanonical =
+            row["proposed_value_canonical"].as<std::string>();
+        input.absoluteDelta = row["absolute_delta"].as<double>();
+        input.relativeDelta = OptionalValue<double>(row, "relative_delta");
+        input.horizonDelta = OptionalValue<int>(row, "horizon_delta");
+        input.generationOrdinal = row["generation_ordinal"].as<int>();
+        input.structuralRank = row["structural_rank"].as<int>();
+        input.semanticCanonicalText =
+            row["semantic_configuration_canonical"].as<std::string>();
+        input.invocationCanonicalText =
+            row["invocation_configuration_canonical"].as<std::string>();
+        input.recommendationPolicyCanonicalText =
+            row["policy_canonical"].as<std::string>();
+        input.duplicateType = row["duplicate_type"].as<std::string>();
+        loaded.input = std::move(input);
+        results.push_back(std::move(loaded));
+    }
+    return results;
+}
+
+RecommendationScorePersistResult PersistRecommendationScore(
+    pqxx::connection& connection,
+    const RecommendationScorePersistenceRequest& request)
+{
+    if (request.scoreRunId <= 0 || !request.ranked.score.valid ||
+        request.ranked.scoreRank <= 0 || request.ranked.tieGroup <= 0 ||
+        request.ranked.rankingOrdinal <= 0)
+        throw std::invalid_argument("invalid_recommendation_score_persistence_request");
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION READ WRITE;");
+    const RecommendationScoreResult& score = request.ranked.score;
+    const RecommendationScoringInput& input = request.ranked.input;
+    const pqxx::result inserted = transaction.exec(
+        "INSERT INTO experiment_recommendation_score ("
+        "recommendation_score_run_id,recommendation_id,scoring_policy_canonical,"
+        "scoring_policy_hash,scoring_version,recommendation_semantic_canonical,"
+        "recommendation_policy_canonical,source_experiment_id,final_score,"
+        "raw_positive_score,raw_penalty_score,raw_total_score,structural_distance,"
+        "score_rank,tie_group,ranking_ordinal,score_status,reason_code,explanation) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,"
+        "'scored',$17,$18) "
+        "ON CONFLICT DO NOTHING "
+        "RETURNING recommendation_score_id;",
+        pqxx::params{
+            request.scoreRunId, input.recommendationId,
+            score.scoringPolicyCanonical, score.scoringPolicyHash,
+            score.scoringVersion, input.semanticCanonicalText,
+            input.recommendationPolicyCanonicalText, input.sourceExperimentId,
+            score.finalScore, score.rawPositiveScore, score.rawPenaltyScore,
+            score.rawTotalScore, score.structuralDistance,
+            request.ranked.scoreRank, request.ranked.tieGroup,
+            request.ranked.rankingOrdinal, score.reasonCode,
+            score.explanationSummary});
+
+    RecommendationScorePersistResult result;
+    if (!inserted.empty())
+    {
+        result.recommendationScoreId = inserted.one_row()[0].as<long long>();
+        result.created = true;
+        int ordinal = 0;
+        for (const RecommendationScoreComponent& component : score.components)
+        {
+            transaction.exec(
+                "INSERT INTO experiment_recommendation_score_component ("
+                "recommendation_score_id,component_ordinal,component_name,"
+                "reason_code,input_canonical,normalized_value,weight,"
+                "weighted_contribution,is_penalty,explanation) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10);",
+                pqxx::params{
+                    result.recommendationScoreId, ++ordinal,
+                    component.componentName, component.reasonCode,
+                    component.inputCanonical, component.normalizedValue,
+                    component.weight, component.weightedContribution,
+                    component.penalty, component.explanation});
+        }
+    }
+    else
+    {
+        const pqxx::result existing = transaction.exec(
+            "SELECT recommendation_score_id,scoring_policy_canonical,"
+            "scoring_policy_hash,scoring_version,"
+            "recommendation_semantic_canonical,recommendation_policy_canonical,"
+            "source_experiment_id,final_score,raw_positive_score,"
+            "raw_penalty_score,raw_total_score,structural_distance,score_rank,"
+            "tie_group,ranking_ordinal,score_status,reason_code,explanation "
+            "FROM experiment_recommendation_score "
+            "WHERE recommendation_score_run_id=$1 AND recommendation_id=$2;",
+            pqxx::params{request.scoreRunId, input.recommendationId});
+        if (existing.empty())
+            throw std::runtime_error("recommendation_score_conflict_without_row");
+        const pqxx::row row = existing.one_row();
+        const long long scoreId =
+            row["recommendation_score_id"].as<long long>();
+        const pqxx::result components = transaction.exec(
+            "SELECT component_ordinal,component_name,reason_code,"
+            "input_canonical,normalized_value,weight,weighted_contribution,"
+            "is_penalty,explanation "
+            "FROM experiment_recommendation_score_component "
+            "WHERE recommendation_score_id=$1 ORDER BY component_ordinal ASC;",
+            pqxx::params{scoreId});
+        if (!PersistedScoreResultEquals(row, request) ||
+            !PersistedScoreComponentsEqual(components, score.components))
+            throw std::runtime_error("recommendation_score_retry_mismatch");
+        result.recommendationScoreId = scoreId;
+    }
+    transaction.commit();
+    return result;
+}
+
+void CompleteRecommendationScoreRun(
+    pqxx::connection& connection,
+    long long scoreRunId,
+    const RecommendationScoreRunCounters& counters)
+{
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION READ WRITE;");
+    const pqxx::result updated = transaction.exec(
+        "UPDATE experiment_recommendation_score_run SET status='completed',"
+        "completed_at=now(),error_message=NULLIF($2::text,''),updated_at=now()," +
+        ScoreRunCounterAssignments() +
+        " WHERE recommendation_score_run_id=$1 AND status='running';",
+        ScoreRunCompletionParams(scoreRunId, "", counters));
+    if (updated.affected_rows() != 1)
+        throw std::runtime_error("recommendation_score_run_not_running");
+    transaction.commit();
+}
+
+void FailRecommendationScoreRun(
+    pqxx::connection& connection,
+    long long scoreRunId,
+    const RecommendationScoreRunCounters& counters,
+    const std::string& errorMessage)
+{
+    pqxx::work transaction{connection};
+    transaction.exec("SET TRANSACTION READ WRITE;");
+    const std::string persistedError = errorMessage.empty()
+        ? "unknown_recommendation_score_run_failure" : errorMessage;
+    const pqxx::result updated = transaction.exec(
+        "UPDATE experiment_recommendation_score_run SET status='failed',"
+        "completed_at=now(),error_message=$2,updated_at=now()," +
+        ScoreRunCounterAssignments() +
+        " WHERE recommendation_score_run_id=$1 AND status='running';",
+        ScoreRunCompletionParams(scoreRunId, persistedError, counters));
+    if (updated.affected_rows() != 1)
+        throw std::runtime_error("recommendation_score_run_not_running");
+    transaction.commit();
+}
+
+std::vector<PersistedRecommendationScoreSummary> ListRecommendationScores(
+    pqxx::connection& connection,
+    const RecommendationScoringFilters& filters)
+{
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT s.recommendation_score_id,s.recommendation_score_run_id,"
+        "s.recommendation_id,s.source_experiment_id,s.scoring_policy_hash,"
+        "s.scoring_version,s.final_score,s.raw_positive_score,"
+        "s.raw_penalty_score,s.raw_total_score,s.structural_distance,"
+        "s.score_rank,s.tie_group,s.ranking_ordinal,s.reason_code,s.explanation,"
+        "s.created_at::text AS created_at FROM experiment_recommendation_score s "
+        "JOIN experiment_recommendation r ON r.recommendation_id=s.recommendation_id "
+        "WHERE ($1::bigint IS NULL OR s.recommendation_score_run_id=$1) "
+        "AND ($2::bigint IS NULL OR s.recommendation_id=$2) "
+        "AND ($3::text IS NULL OR r.source_symbol=$3) "
+        "AND ($4::integer IS NULL OR r.source_prediction_horizon=$4) "
+        "AND ($5::double precision IS NULL OR s.final_score >= $5) "
+        "ORDER BY s.recommendation_score_run_id DESC,s.ranking_ordinal ASC "
+        "LIMIT $6;",
+        pqxx::params{filters.scoreRunId, filters.recommendationId,
+                     filters.symbol, filters.predictionHorizon,
+                     filters.minimumScore, filters.limit});
+    std::vector<PersistedRecommendationScoreSummary> results;
+    results.reserve(rows.size());
+    for (const pqxx::row& row : rows) results.push_back(MapScoreSummary(row));
+    return results;
+}
+
+std::optional<PersistedRecommendationScoreDetail> FindRecommendationScore(
+    pqxx::connection& connection,
+    long long scoreId)
+{
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT recommendation_score_id,recommendation_score_run_id,"
+        "recommendation_id,source_experiment_id,scoring_policy_hash,"
+        "scoring_version,final_score,raw_positive_score,raw_penalty_score,"
+        "raw_total_score,structural_distance,score_rank,tie_group,"
+        "ranking_ordinal,reason_code,explanation,created_at::text AS created_at,"
+        "scoring_policy_canonical,recommendation_semantic_canonical,"
+        "recommendation_policy_canonical FROM experiment_recommendation_score "
+        "WHERE recommendation_score_id=$1;",
+        pqxx::params{scoreId});
+    if (rows.empty()) return std::nullopt;
+    PersistedRecommendationScoreDetail detail;
+    static_cast<PersistedRecommendationScoreSummary&>(detail) =
+        MapScoreSummary(rows.one_row());
+    detail.scoringPolicyCanonical =
+        rows.one_row()["scoring_policy_canonical"].as<std::string>();
+    detail.recommendationSemanticCanonical =
+        rows.one_row()["recommendation_semantic_canonical"].as<std::string>();
+    detail.recommendationPolicyCanonical =
+        rows.one_row()["recommendation_policy_canonical"].as<std::string>();
+    const pqxx::result components = transaction.exec(
+        "SELECT component_name,reason_code,input_canonical,normalized_value,"
+        "weight,weighted_contribution,is_penalty,explanation "
+        "FROM experiment_recommendation_score_component "
+        "WHERE recommendation_score_id=$1 ORDER BY component_ordinal;",
+        pqxx::params{scoreId});
+    for (const pqxx::row& row : components)
+    {
+        detail.components.push_back(RecommendationScoreComponent{
+            row["component_name"].as<std::string>(),
+            row["reason_code"].as<std::string>(),
+            row["input_canonical"].as<std::string>(),
+            row["normalized_value"].as<double>(),
+            row["weight"].as<double>(),
+            row["weighted_contribution"].as<double>(),
+            row["is_penalty"].as<bool>(),
+            row["explanation"].as<std::string>()});
+    }
+    return detail;
+}
+
+std::vector<PersistedRecommendationScoreRunSummary> ListRecommendationScoreRuns(
+    pqxx::connection& connection,
+    int limit)
+{
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT recommendation_score_run_id,status,scoring_policy_hash,"
+        "scoring_version,recommendation_status_filter,symbol_filter,"
+        "horizon_filter,recommendation_scan_filter,recommendation_id_filter,"
+        "requested_limit,recommendations_considered,recommendations_scored,"
+        "recommendations_skipped,scoring_errors,hash_collisions,"
+        "started_at::text AS started_at,completed_at::text AS completed_at,"
+        "error_message FROM experiment_recommendation_score_run "
+        "ORDER BY recommendation_score_run_id DESC LIMIT $1;",
+        pqxx::params{limit});
+    std::vector<PersistedRecommendationScoreRunSummary> results;
+    results.reserve(rows.size());
+    for (const pqxx::row& row : rows) results.push_back(MapScoreRunSummary(row));
+    return results;
+}
+
+std::optional<PersistedRecommendationScoreRunDetail> FindRecommendationScoreRun(
+    pqxx::connection& connection,
+    long long scoreRunId)
+{
+    pqxx::read_transaction transaction{connection};
+    const pqxx::result rows = transaction.exec(
+        "SELECT recommendation_score_run_id,status,scoring_policy_hash,"
+        "scoring_version,scoring_policy_canonical,recommendation_status_filter,"
+        "symbol_filter,horizon_filter,recommendation_scan_filter,"
+        "recommendation_id_filter,requested_limit,recommendations_considered,"
+        "recommendations_scored,recommendations_skipped,scoring_errors,"
+        "hash_collisions,started_at::text AS started_at,"
+        "completed_at::text AS completed_at,error_message "
+        "FROM experiment_recommendation_score_run "
+        "WHERE recommendation_score_run_id=$1;",
+        pqxx::params{scoreRunId});
+    if (rows.empty()) return std::nullopt;
+    PersistedRecommendationScoreRunDetail detail;
+    static_cast<PersistedRecommendationScoreRunSummary&>(detail) =
+        MapScoreRunSummary(rows.one_row());
+    detail.scoringPolicyCanonical =
+        rows.one_row()["scoring_policy_canonical"].as<std::string>();
     return detail;
 }
 

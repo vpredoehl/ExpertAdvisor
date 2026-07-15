@@ -27,14 +27,16 @@ void Require(bool condition, const char* message)
     if (!condition) throw std::runtime_error(message);
 }
 
-std::string ExperimentStateDigest(pqxx::connection& connection)
+std::string ExperimentStateDigest(pqxx::connection& connection,
+                                  long long experimentId)
 {
     pqxx::read_transaction transaction{connection};
     return transaction.exec(
         "SELECT count(*)::text || ':' || md5(COALESCE(string_agg("
         "concat_ws('|',experiment_id::text,status,phase,"
         "COALESCE(worker_pid::text,'NULL'),COALESCE(current_operation,'NULL'),"
-        "updated_at::text),'#' ORDER BY experiment_id),'')) FROM experiment;")
+        "updated_at::text),'#' ORDER BY experiment_id),'')) FROM experiment "
+        "WHERE experiment_id=$1;", pqxx::params{experimentId})
         .one_row()[0].as<std::string>();
 }
 
@@ -65,7 +67,6 @@ int main()
         "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
         " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
     pqxx::connection connection{connectionString};
-    const std::string before = ExperimentStateDigest(connection);
 
     RecommendationPolicy policy;
     policy.policyVersion = 1000000000 + static_cast<int>(
@@ -103,6 +104,11 @@ int main()
         }
         Require(chosenSource.has_value() && chosenCandidate.has_value(),
                 "no persistence-test candidate available");
+        // Scope the safety snapshot to the exact completed source used by the
+        // test. A previous global-table digest was racy with other integration
+        // tests that create and remove their own isolated experiment fixtures.
+        const std::string sourceStateBefore = ExperimentStateDigest(
+            connection, chosenSource->experimentId);
 
         // Avoid colliding with any pre-existing canonical policy identity.
         // A race after this read is harmless: the test will fail without
@@ -139,6 +145,7 @@ int main()
             request.policy = policy;
             request.source = *chosenSource;
             request.candidate = *chosenCandidate;
+            request.sourceRank = 1;
             request.generationOrdinal = 1;
             request.structuralRank = 1;
             startTogether.arrive_and_wait();
@@ -226,7 +233,8 @@ int main()
         }
         Require(duplicateFinalizationRejected,
                 "duplicate scan finalization was not rejected");
-        Require(ExperimentStateDigest(connection) == before,
+        Require(ExperimentStateDigest(connection, chosenSource->experimentId) ==
+                    sourceStateBefore,
                 "recommendation persistence modified experiment state");
     }
     catch (...)
@@ -236,7 +244,5 @@ int main()
     }
 
     Cleanup(connection, scanIds);
-    Require(ExperimentStateDigest(connection) == before,
-            "test cleanup modified experiment state");
     return 0;
 }

@@ -434,6 +434,7 @@ int RunGenerateExperimentRecommendationsCommand(
                 persistence.policy = request.policy;
                 persistence.source = item.source;
                 persistence.candidate = item.candidate;
+                persistence.sourceRank = item.sourceRank;
                 persistence.generationOrdinal = item.generationOrdinal;
                 persistence.structuralRank = structuralRank;
                 const RecommendationPersistResult persisted =

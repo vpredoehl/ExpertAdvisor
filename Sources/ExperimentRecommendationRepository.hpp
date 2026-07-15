@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExperimentRecommendationCandidateGenerator.hpp"
+#include "ExperimentRecommendationScoring.hpp"
 
 #include <optional>
 #include <string>
@@ -90,6 +91,7 @@ struct RecommendationPersistenceRequest
     RecommendationPolicy policy;
     RecommendationSource source;
     GeneratedRecommendationCandidate candidate;
+    int sourceRank = 0;
     int generationOrdinal = 0;
     int structuralRank = 0;
 };
@@ -139,6 +141,7 @@ struct PersistedRecommendationSummary
     std::string policyHash;
     int generationOrdinal = 0;
     int structuralRank = 0;
+    std::optional<int> sourceRank;
     std::string reason;
     std::string createdAt;
 };
@@ -162,6 +165,105 @@ struct PersistedRecommendationDetail : PersistedRecommendationSummary
     std::optional<std::string> rejectedAt;
     std::optional<std::string> rejectedReason;
     std::optional<std::string> expiredAt;
+};
+
+struct RecommendationScoringFilters
+{
+    std::string status = "proposed";
+    std::optional<std::string> symbol;
+    std::optional<int> predictionHorizon;
+    std::optional<long long> recommendationScanId;
+    std::optional<long long> recommendationId;
+    std::optional<double> minimumScore;
+    std::optional<long long> scoreRunId;
+    int limit = 100;
+};
+
+struct RecommendationScoreRunRequest
+{
+    RecommendationScoringPolicy policy;
+    RecommendationScoringFilters filters;
+    std::optional<int> requestedLimit;
+};
+
+struct RecommendationScoreRunCounters
+{
+    int recommendationsConsidered = 0;
+    int recommendationsScored = 0;
+    int recommendationsSkipped = 0;
+    int scoringErrors = 0;
+    int hashCollisions = 0;
+};
+
+struct RecommendationScoringLoadResult
+{
+    long long recommendationId = -1;
+    std::optional<RecommendationScoringInput> input;
+    std::string skipReason;
+};
+
+struct RecommendationScorePersistenceRequest
+{
+    long long scoreRunId = -1;
+    RankedRecommendationScore ranked;
+};
+
+struct RecommendationScorePersistResult
+{
+    long long recommendationScoreId = -1;
+    bool created = false;
+};
+
+struct PersistedRecommendationScoreSummary
+{
+    long long recommendationScoreId = -1;
+    long long scoreRunId = -1;
+    long long recommendationId = -1;
+    long long sourceExperimentId = -1;
+    std::string scoringPolicyHash;
+    int scoringVersion = 0;
+    double finalScore = 0.0;
+    double rawPositiveScore = 0.0;
+    double rawPenaltyScore = 0.0;
+    double rawTotalScore = 0.0;
+    double structuralDistance = 0.0;
+    int scoreRank = 0;
+    int tieGroup = 0;
+    int rankingOrdinal = 0;
+    std::string reasonCode;
+    std::string explanation;
+    std::string createdAt;
+};
+
+struct PersistedRecommendationScoreDetail : PersistedRecommendationScoreSummary
+{
+    std::string scoringPolicyCanonical;
+    std::string recommendationSemanticCanonical;
+    std::string recommendationPolicyCanonical;
+    std::vector<RecommendationScoreComponent> components;
+};
+
+struct PersistedRecommendationScoreRunSummary
+{
+    long long scoreRunId = -1;
+    std::string status;
+    std::string scoringPolicyHash;
+    int scoringVersion = 0;
+    std::optional<std::string> recommendationStatusFilter;
+    std::optional<std::string> symbolFilter;
+    std::optional<int> horizonFilter;
+    std::optional<long long> recommendationScanFilter;
+    std::optional<long long> recommendationIdFilter;
+    std::optional<int> requestedLimit;
+    RecommendationScoreRunCounters counters;
+    std::string startedAt;
+    std::optional<std::string> completedAt;
+    std::optional<std::string> errorMessage;
+};
+
+struct PersistedRecommendationScoreRunDetail : PersistedRecommendationScoreRunSummary
+{
+    std::string scoringPolicyCanonical;
 };
 
 struct PersistedRecommendationScanSummary
@@ -232,6 +334,41 @@ std::vector<PersistedRecommendationScanSummary> ListRecommendationScans(
 std::optional<PersistedRecommendationScanDetail> FindRecommendationScan(
     pqxx::connection& connection,
     long long scanId);
+
+bool RecommendationScoringSchemaExists(pqxx::connection& connection);
+long long BeginRecommendationScoreRun(
+    pqxx::connection& connection,
+    const RecommendationScoreRunRequest& request);
+std::optional<std::string> FindRecommendationScoringPolicyHashCollision(
+    pqxx::connection& connection,
+    const RecommendationScoringPolicy& policy);
+std::vector<RecommendationScoringLoadResult> LoadRecommendationsForScoring(
+    pqxx::connection& connection,
+    const RecommendationScoringFilters& filters);
+RecommendationScorePersistResult PersistRecommendationScore(
+    pqxx::connection& connection,
+    const RecommendationScorePersistenceRequest& request);
+void CompleteRecommendationScoreRun(
+    pqxx::connection& connection,
+    long long scoreRunId,
+    const RecommendationScoreRunCounters& counters);
+void FailRecommendationScoreRun(
+    pqxx::connection& connection,
+    long long scoreRunId,
+    const RecommendationScoreRunCounters& counters,
+    const std::string& errorMessage);
+std::vector<PersistedRecommendationScoreSummary> ListRecommendationScores(
+    pqxx::connection& connection,
+    const RecommendationScoringFilters& filters);
+std::optional<PersistedRecommendationScoreDetail> FindRecommendationScore(
+    pqxx::connection& connection,
+    long long scoreId);
+std::vector<PersistedRecommendationScoreRunSummary> ListRecommendationScoreRuns(
+    pqxx::connection& connection,
+    int limit);
+std::optional<PersistedRecommendationScoreRunDetail> FindRecommendationScoreRun(
+    pqxx::connection& connection,
+    long long scoreRunId);
 
 std::string PersistedRecommendationMatchKindText(
     PersistedRecommendationMatchKind kind);

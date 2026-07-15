@@ -4,7 +4,14 @@ Phase 4A Step 3: advisory recommendation persistence
 Phase 4A remains recommendation-only.  Generation is an explicit command: it
 does not create experiments, enter the scheduler loop, consume worker slots,
 change an experiment, evaluate a continuation, or approve or queue anything.
-Scoring and recommendation-to-experiment conversion are deliberately deferred.
+Recommendation-to-experiment conversion remains deliberately deferred.  Step
+4 adds immutable advisory score history through migration 028, and migrations
+029 through 031 enforce positive source ranks and immutable originating-scan
+provenance for persisted Step 3 rows, without changing Step 3 active
+uniqueness or duplicate rules; see
+``Phase4AExperimentRecommendationScoring.rst``.  New Step 3 rows persist the
+already-computed source rank, while legacy rows are never assigned a guessed
+rank.
 
 Storage and provenance
 ----------------------
@@ -13,12 +20,18 @@ Migration 026 adds ``experiment_recommendation_scan`` and upgrades or creates
 ``experiment_recommendation``.  Additive migration 027 strengthens positive
 scan-filter, nonempty failure-error, and symmetric recommendation-status
 metadata constraints without rewriting legacy prototype rows.  Every explicit
-generation invocation first
+Migrations 029 through 031 enforce ``source_rank > 0`` at the database write
+boundary for scan-associated Step 3 rows.  Once associated, a recommendation
+cannot be detached from its originating scan; reassociation is supported only
+when the resulting source rank remains positive.  Existing legacy rows without
+a scan or rank are not rewritten and remain updateable; scoring skips them
+with explicit legacy provenance.
+Every explicit generation invocation first
 creates a scan row, even when no source is eligible or no proposal is stored.
 The scan records the exact Step 1 policy canonical text and hash, filters,
 counters, completion state, and any fatal error.  A recommendation records the
-scan, final source experiment/model/analysis, evidence metrics, Step 2 mutation
-and distance metadata, both canonical configuration identities and hashes, and
+scan, final source experiment/model/analysis, evidence metrics, Step 2 absolute,
+relative, and horizon mutation deltas, both canonical configuration identities and hashes, and
 the exact policy identity.
 
 Only ``proposed`` rows are created.  ``approved`` is reserved for a later

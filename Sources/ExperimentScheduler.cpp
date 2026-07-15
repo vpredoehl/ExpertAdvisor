@@ -99,6 +99,18 @@ struct SchedulerOptions
     std::optional<long long> recommendationScanId;
     int recommendationLimit = 100;
     bool recommendationLimitSpecified = false;
+    bool scoreExperimentRecommendations = false;
+    bool listExperimentRecommendationScores = false;
+    std::optional<long long> recommendationScoreStatusId;
+    bool listExperimentRecommendationScoreRuns = false;
+    std::optional<long long> recommendationScoreRunStatusId;
+    std::optional<long long> explainRecommendationScoreId;
+    std::optional<std::string> recommendationScoringPolicy;
+    std::optional<long long> recommendationIdFilter;
+    std::optional<long long> recommendationScoreRunId;
+    std::optional<double> recommendationScoreMinimum;
+    int recommendationScoreLimit = 100;
+    bool recommendationScoreLimitSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -662,6 +674,17 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--recommendation-status-filter" ||
             arg == "--recommendation-scan-id" ||
             arg == "--recommendation-limit" ||
+            arg == "--score-experiment-recommendations" ||
+            arg == "--list-experiment-recommendation-scores" ||
+            arg == "--recommendation-score-status" ||
+            arg == "--list-experiment-recommendation-score-runs" ||
+            arg == "--recommendation-score-run-status" ||
+            arg == "--explain-recommendation-score" ||
+            arg == "--recommendation-scoring-policy" ||
+            arg == "--recommendation-id" ||
+            arg == "--recommendation-score-run-id" ||
+            arg == "--recommendation-score-min" ||
+            arg == "--recommendation-score-limit" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -708,6 +731,14 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--recommendation-status-filter=", 0) == 0 ||
             arg.rfind("--recommendation-scan-id=", 0) == 0 ||
             arg.rfind("--recommendation-limit=", 0) == 0 ||
+            arg.rfind("--recommendation-score-status=", 0) == 0 ||
+            arg.rfind("--recommendation-score-run-status=", 0) == 0 ||
+            arg.rfind("--explain-recommendation-score=", 0) == 0 ||
+            arg.rfind("--recommendation-scoring-policy=", 0) == 0 ||
+            arg.rfind("--recommendation-id=", 0) == 0 ||
+            arg.rfind("--recommendation-score-run-id=", 0) == 0 ||
+            arg.rfind("--recommendation-score-min=", 0) == 0 ||
+            arg.rfind("--recommendation-score-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1260,6 +1291,31 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.recommendationLimit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
             options.recommendationLimitSpecified = true;
         }
+        else if (arg == "--score-experiment-recommendations")
+            options.scoreExperimentRecommendations = true;
+        else if (arg == "--list-experiment-recommendation-scores")
+            options.listExperimentRecommendationScores = true;
+        else if (arg == "--recommendation-score-status")
+            options.recommendationScoreStatusId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-recommendation-score-runs")
+            options.listExperimentRecommendationScoreRuns = true;
+        else if (arg == "--recommendation-score-run-status")
+            options.recommendationScoreRunStatusId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--explain-recommendation-score")
+            options.explainRecommendationScoreId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-scoring-policy")
+            options.recommendationScoringPolicy = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-id")
+            options.recommendationIdFilter = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-score-run-id")
+            options.recommendationScoreRunId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-score-min")
+            options.recommendationScoreMinimum = ParseFiniteDouble(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-score-limit")
+        {
+            options.recommendationScoreLimit = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.recommendationScoreLimitSpecified = true;
+        }
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1476,6 +1532,25 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.recommendationLimit = ParsePositiveInt("--recommendation-limit", value);
             options.recommendationLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(arg, "--recommendation-score-status", value))
+            options.recommendationScoreStatusId = ParsePositiveLongLong("--recommendation-score-status", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-score-run-status", value))
+            options.recommendationScoreRunStatusId = ParsePositiveLongLong("--recommendation-score-run-status", value);
+        else if (SplitOptionWithValue(arg, "--explain-recommendation-score", value))
+            options.explainRecommendationScoreId = ParsePositiveLongLong("--explain-recommendation-score", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-scoring-policy", value))
+            options.recommendationScoringPolicy = value;
+        else if (SplitOptionWithValue(arg, "--recommendation-id", value))
+            options.recommendationIdFilter = ParsePositiveLongLong("--recommendation-id", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-score-run-id", value))
+            options.recommendationScoreRunId = ParsePositiveLongLong("--recommendation-score-run-id", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-score-min", value))
+            options.recommendationScoreMinimum = ParseFiniteDouble("--recommendation-score-min", value);
+        else if (SplitOptionWithValue(arg, "--recommendation-score-limit", value))
+        {
+            options.recommendationScoreLimit = ParsePositiveInt("--recommendation-score-limit", value);
+            options.recommendationScoreLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -1611,6 +1686,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.recommendationStatusId.has_value() ? 1 : 0) +
         (options.listExperimentRecommendationScans ? 1 : 0) +
         (options.recommendationScanStatusId.has_value() ? 1 : 0) +
+        (options.scoreExperimentRecommendations ? 1 : 0) +
+        (options.listExperimentRecommendationScores ? 1 : 0) +
+        (options.recommendationScoreStatusId.has_value() ? 1 : 0) +
+        (options.listExperimentRecommendationScoreRuns ? 1 : 0) +
+        (options.recommendationScoreRunStatusId.has_value() ? 1 : 0) +
+        (options.explainRecommendationScoreId.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -1641,15 +1722,22 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     const bool recommendationListOption =
         options.recommendationStatusFilter.has_value() ||
         options.recommendationScanId.has_value();
-    if (recommendationListOption && !options.listExperimentRecommendations)
-        throw std::invalid_argument("recommendation status and scan filters require --list-experiment-recommendations");
+    if (recommendationListOption && !options.listExperimentRecommendations &&
+        !options.scoreExperimentRecommendations)
+        throw std::invalid_argument("recommendation status and scan filters require recommendation listing or scoring");
+    if (options.recommendationStatusFilter &&
+        options.scoreExperimentRecommendations &&
+        *options.recommendationStatusFilter != "proposed")
+        throw std::invalid_argument("recommendation scoring supports only proposed status");
     const bool recommendationSourceFilter =
         options.recommendationSymbol.has_value() ||
         options.recommendationHorizon.has_value();
     if (recommendationSourceFilter &&
         !options.generateExperimentRecommendations &&
-        !options.listExperimentRecommendations)
-        throw std::invalid_argument("recommendation symbol and horizon filters require generation or recommendation list");
+        !options.listExperimentRecommendations &&
+        !options.scoreExperimentRecommendations &&
+        !options.listExperimentRecommendationScores)
+        throw std::invalid_argument("recommendation symbol and horizon filters require a recommendation generation, scoring, or list command");
     if (options.recommendationLimitSpecified &&
         !options.listExperimentRecommendations &&
         !options.listExperimentRecommendationScans)
@@ -1658,6 +1746,24 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         !EA::ExperimentRecommendation::ParseRecommendationStatus(
             *options.recommendationStatusFilter))
         throw std::invalid_argument("invalid recommendation status filter");
+    if (options.recommendationScoringPolicy &&
+        !options.scoreExperimentRecommendations)
+        throw std::invalid_argument("--recommendation-scoring-policy requires --score-experiment-recommendations");
+    if (options.recommendationIdFilter &&
+        !options.scoreExperimentRecommendations &&
+        !options.listExperimentRecommendationScores)
+        throw std::invalid_argument("--recommendation-id requires recommendation scoring or score listing");
+    if (options.recommendationScoreRunId &&
+        !options.listExperimentRecommendationScores)
+        throw std::invalid_argument("--recommendation-score-run-id requires --list-experiment-recommendation-scores");
+    if (options.recommendationScoreMinimum &&
+        !options.listExperimentRecommendationScores)
+        throw std::invalid_argument("--recommendation-score-min requires --list-experiment-recommendation-scores");
+    if (options.recommendationScoreLimitSpecified &&
+        !options.scoreExperimentRecommendations &&
+        !options.listExperimentRecommendationScores &&
+        !options.listExperimentRecommendationScoreRuns)
+        throw std::invalid_argument("--recommendation-score-limit requires a recommendation scoring or score list command");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -14678,7 +14784,21 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --recommendation-status=ID | --list-experiment-recommendation-scans "
         << "[--recommendation-limit=N] | --recommendation-scan-status=ID\n"
-        << "Phase 4A recommendations are advisory only: generation stores proposals but never creates or queues experiments.\n"
+        << "Usage: " << exe
+        << " --score-experiment-recommendations [--recommendation-scoring-policy=key=value,...] "
+        << "[--recommendation-status-filter=proposed] "
+        << "[--recommendation-symbol=SYMBOL] [--recommendation-horizon=N] "
+        << "[--recommendation-scan-id=ID] [--recommendation-id=ID] [--recommendation-score-limit=N]\n"
+        << "Usage: " << exe
+        << " --list-experiment-recommendation-scores [--recommendation-score-run-id=ID] "
+        << "[--recommendation-id=ID] [--recommendation-score-min=VALUE] "
+        << "[--recommendation-symbol=SYMBOL] [--recommendation-horizon=N] "
+        << "[--recommendation-score-limit=N]\n"
+        << "Usage: " << exe
+        << " --recommendation-score-status=ID | --explain-recommendation-score=ID | "
+        << "--list-experiment-recommendation-score-runs [--recommendation-score-limit=N] | "
+        << "--recommendation-score-run-status=ID\n"
+        << "Phase 4A recommendations and scores are advisory only: they never approve, create, or queue experiments.\n"
         << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
@@ -14731,8 +14851,48 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
     if (options.listExperimentRecommendationScans)
         return EA::ExperimentRecommendation::RunListExperimentRecommendationScansCommand(
             connectionString, options.recommendationLimit, std::cout);
-    return EA::ExperimentRecommendation::RunExperimentRecommendationScanStatusCommand(
-        connectionString, *options.recommendationScanStatusId, std::cout);
+    if (options.recommendationScanStatusId)
+        return EA::ExperimentRecommendation::RunExperimentRecommendationScanStatusCommand(
+            connectionString, *options.recommendationScanStatusId, std::cout);
+    if (options.scoreExperimentRecommendations)
+    {
+        EA::ExperimentRecommendation::RecommendationScoringCommandRequest request;
+        request.policy = options.recommendationScoringPolicy
+            ? EA::ExperimentRecommendation::ParseRecommendationScoringPolicy(
+                  *options.recommendationScoringPolicy)
+            : EA::ExperimentRecommendation::RecommendationScoringPolicy{};
+        request.symbol = options.recommendationSymbol;
+        request.predictionHorizon = options.recommendationHorizon;
+        request.recommendationScanId = options.recommendationScanId;
+        request.recommendationId = options.recommendationIdFilter;
+        if (options.recommendationScoreLimitSpecified)
+            request.requestedLimit = options.recommendationScoreLimit;
+        return EA::ExperimentRecommendation::RunScoreExperimentRecommendationsCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.listExperimentRecommendationScores)
+    {
+        EA::ExperimentRecommendation::RecommendationScoreListCommandRequest request;
+        request.scoreRunId = options.recommendationScoreRunId;
+        request.recommendationId = options.recommendationIdFilter;
+        request.symbol = options.recommendationSymbol;
+        request.predictionHorizon = options.recommendationHorizon;
+        request.minimumScore = options.recommendationScoreMinimum;
+        request.limit = options.recommendationScoreLimit;
+        return EA::ExperimentRecommendation::RunListExperimentRecommendationScoresCommand(
+            connectionString, request, std::cout);
+    }
+    if (options.recommendationScoreStatusId)
+        return EA::ExperimentRecommendation::RunExperimentRecommendationScoreStatusCommand(
+            connectionString, *options.recommendationScoreStatusId, std::cout);
+    if (options.listExperimentRecommendationScoreRuns)
+        return EA::ExperimentRecommendation::RunListExperimentRecommendationScoreRunsCommand(
+            connectionString, options.recommendationScoreLimit, std::cout);
+    if (options.recommendationScoreRunStatusId)
+        return EA::ExperimentRecommendation::RunExperimentRecommendationScoreRunStatusCommand(
+            connectionString, *options.recommendationScoreRunStatusId, std::cout);
+    return EA::ExperimentRecommendation::RunExplainExperimentRecommendationScoreCommand(
+        connectionString, *options.explainRecommendationScoreId, std::cout);
 }
 
 } // namespace
@@ -14794,7 +14954,13 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.listExperimentRecommendations ||
             options.recommendationStatusId.has_value() ||
             options.listExperimentRecommendationScans ||
-            options.recommendationScanStatusId.has_value())
+            options.recommendationScanStatusId.has_value() ||
+            options.scoreExperimentRecommendations ||
+            options.listExperimentRecommendationScores ||
+            options.recommendationScoreStatusId.has_value() ||
+            options.listExperimentRecommendationScoreRuns ||
+            options.recommendationScoreRunStatusId.has_value() ||
+            options.explainRecommendationScoreId.has_value())
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

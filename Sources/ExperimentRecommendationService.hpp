@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExperimentRecommendationCandidateGenerator.hpp"
+#include "ExperimentRecommendationScoring.hpp"
 
 #include <iosfwd>
 #include <optional>
@@ -25,6 +26,26 @@ struct RecommendationListCommandRequest
     std::optional<std::string> symbol;
     std::optional<int> predictionHorizon;
     std::optional<long long> recommendationScanId;
+    int limit = 100;
+};
+
+struct RecommendationScoringCommandRequest
+{
+    RecommendationScoringPolicy policy;
+    std::optional<std::string> symbol;
+    std::optional<int> predictionHorizon;
+    std::optional<long long> recommendationScanId;
+    std::optional<long long> recommendationId;
+    std::optional<int> requestedLimit;
+};
+
+struct RecommendationScoreListCommandRequest
+{
+    std::optional<long long> scoreRunId;
+    std::optional<long long> recommendationId;
+    std::optional<std::string> symbol;
+    std::optional<int> predictionHorizon;
+    std::optional<double> minimumScore;
     int limit = 100;
 };
 
@@ -70,6 +91,31 @@ int RunListExperimentRecommendationScansCommand(
 int RunExperimentRecommendationScanStatusCommand(
     const std::string& connectionString,
     long long scanId,
+    std::ostream& output);
+int RunScoreExperimentRecommendationsCommand(
+    const std::string& connectionString,
+    const RecommendationScoringCommandRequest& request,
+    std::ostream& output,
+    std::ostream& errors);
+int RunListExperimentRecommendationScoresCommand(
+    const std::string& connectionString,
+    const RecommendationScoreListCommandRequest& request,
+    std::ostream& output);
+int RunExperimentRecommendationScoreStatusCommand(
+    const std::string& connectionString,
+    long long scoreId,
+    std::ostream& output);
+int RunListExperimentRecommendationScoreRunsCommand(
+    const std::string& connectionString,
+    int limit,
+    std::ostream& output);
+int RunExperimentRecommendationScoreRunStatusCommand(
+    const std::string& connectionString,
+    long long scoreRunId,
+    std::ostream& output);
+int RunExplainExperimentRecommendationScoreCommand(
+    const std::string& connectionString,
+    long long scoreId,
     std::ostream& output);
 
 } // namespace EA::ExperimentRecommendation
