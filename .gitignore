@@ -20,3 +20,4 @@ Database/backups/*.dump
 experiment_reports/
 meta_analysis_dashboard.md
 meta_analysis_report.md
+review_backups/*

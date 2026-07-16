@@ -1,14 +1,15 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned with Phase 4A Steps 1–5 and Phase 4B Step 1
-Version: 0.2.0
+Status: Foundation aligned with Phase 4A Steps 1–5 and Phase 4B Steps 1–2
+Version: 0.3.0
 Last revised: 2026-07-15
 
 ## 1. Purpose
 
 Define the advisory research-recommendation subsystem: deterministic identity,
 candidate generation, persistence, duplicate handling, scoring/ranking,
-explicit human review, and versioned advisory evaluation evidence.
+explicit human review, versioned advisory evaluation evidence, and immutable
+advisory ranking snapshots.
 
 ## 2. Scope
 
@@ -17,7 +18,7 @@ explicit human review, and versioned advisory evaluation evidence.
 Recommendation policy and identities, pure candidates, scans, source evidence,
 duplicates, immutable scores/components, deterministic ranks/explanations,
 terminal review transitions, immutable review events, and deterministic
-evaluation classification/history.
+evaluation classification/history, ranking snapshots, and comparisons.
 
 ### 2.2 Out of scope
 
@@ -26,10 +27,11 @@ scheduler polling, worker execution, and automatic approval/rejection/expiration
 
 ### 2.3 Current implementation status
 
-Phase 4A Steps 1–5 and Phase 4B Step 1 implement the in-scope capabilities.
+Phase 4A Steps 1–5 and Phase 4B Steps 1–2 implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
-score formula unchanged. Detailed contracts remain in the Phase 4 documents
-referenced in §12. This volume organizes, but does not redesign, them.
+score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
+exact snapshot membership, and compares compatible persisted components.
+Detailed contracts remain in the Phase 4 documents referenced in §12.
 
 ## 3. Responsibilities
 
@@ -56,8 +58,8 @@ claim expected profitability/correctness.
 
 - Pure identity/policy and candidate-generation domain components.
 - Repository-owned PostgreSQL mapping, scans, duplicates, scores, and reviews.
-- Services for explicit generation, scoring, evaluation, inspection, and
-  review use cases.
+- Services for explicit generation, scoring, evaluation, ranking/comparison,
+  inspection, and review use cases.
 - CLI parsing/validation/presentation outside scheduler polling.
 
 ### 4.2 Control flow
@@ -80,7 +82,7 @@ transitions; the operator supplies the review action. No stage owns conversion.
 
 Recommendation policy, semantic/invocation configuration, recommendation scan,
 recommendation, score run/result/component, evaluation run/result/component,
-and review event.
+ranking snapshot/member, and review event.
 
 ### 5.2 Provenance and versions
 
@@ -103,8 +105,9 @@ events are append-only to the runtime role. Approval is advisory and leaves
 
 ### 6.1 Read paths
 
-Evidence, list, detail, score history, evaluation history, and review history
-use typed read-only repository paths.
+Evidence, list, detail, score history, evaluation history, ranking input, and
+review history use typed read-only repository paths. Ranking does not reopen
+source experiment metrics.
 
 ### 6.2 Write paths
 
@@ -112,7 +115,8 @@ Candidate persistence uses short collision-aware transactions. Score result and
 ordered components persist atomically. Evaluation results and their unchanged
 Step 4 components persist atomically without locking experiment evidence.
 Review locks one recommendation and updates status plus one immutable event in
-the same transaction.
+the same transaction. Ranking persists its complete member set atomically and
+then completes a ranking-owned snapshot after an exact count check.
 
 ### 6.3 Failure semantics
 
@@ -121,7 +125,7 @@ Score retries compare complete immutable results. Evaluation retains completed
 per-recommendation results if a later item fails, marks the run failed, and
 forbids adding new results to that terminal run; exact existing results remain
 verifiable. Review event failure rolls back status; terminal retries create no
-event.
+event. A ranking-member failure leaves no partial membership.
 
 ## 7. Concurrency
 
@@ -129,7 +133,8 @@ event.
 
 Generation conflicts on semantic configuration plus policy; scoring retries on
 score run plus recommendation; evaluation conflicts on canonical evaluation-run
-identity and evaluation run plus recommendation; review conflicts on one
+identity and evaluation run plus recommendation; ranking conflicts on canonical
+snapshot identity and snapshot plus evaluation result; review conflicts on one
 recommendation row.
 
 ### 7.2 Locking and serialization
@@ -138,21 +143,25 @@ Generation uses a transaction advisory key plus canonical rechecks and active
 uniqueness. Scoring uses uniqueness and complete retry comparison. Evaluation
 uses a short shared lock on its own run row while inserting an atomic result;
 it does not lock experiment evidence. Review uses `SELECT ... FOR UPDATE` and
-one-event uniqueness. Unrelated work is concurrent.
+one-event uniqueness. Ranking serializes identical member verification with a
+short `FOR UPDATE` lock on its ranking-owned snapshot. Unrelated snapshots and
+unrelated work remain concurrent.
 
 ### 7.3 Winner, loser, and retry outcomes
 
 Concurrent identical generation returns one created/one existing result.
 Equivalent score retry reuses only an exact persisted result. Concurrent review
 produces one terminal winner and one `recommendation_review_status_conflict`;
-exactly one event exists.
+exactly one event exists. Concurrent identical ranking requests converge on one
+snapshot with an exactly verified member set.
 
 ## 8. CLI
 
 ### 8.1 Commands and validation
 
-Generation, scoring, evaluation, their inspection commands, review actions,
-and review inspection are explicit families. Evaluation and review mutation
+Generation, scoring, evaluation, ranking/comparison, their inspection commands,
+review actions, and review inspection are explicit families. Evaluation,
+ranking, and review mutation
 are mutually exclusive with generation, scoring, scheduler, continuation, and
 experiment-lifecycle commands.
 
@@ -164,7 +173,8 @@ explicit `NULL`, deterministic ordering, and separate conflict/failure events.
 ### 8.3 Human output
 
 Human score/evaluation/review summaries are concise, control-byte safe, and
-state that the result is advisory and created/queued no experiment.
+state that the result is advisory and created/queued no experiment. Ranking
+separates advisory-ready, blocked, and non-actionable presentation.
 
 ## 9. Testing
 
@@ -180,7 +190,9 @@ Cover scans, duplicates, source rank/scan provenance, score ownership and
 immutability, review constraints, runtime privileges, SQLSTATEs, and migration
 repeatability. Evaluation tests additionally cover canonical idempotency,
 append-only result/component privileges, nullable blocked scores, and evidence
-foreign keys.
+foreign keys. Ranking tests cover exact membership, bucket/rank uniqueness,
+narrow privileges, scope/captured-membership trigger enforcement, bounded
+evidence loading, atomic member persistence, and Step 1 immutability.
 
 ### 9.3 Concurrency and integration tests
 
@@ -204,8 +216,9 @@ rows and exact cleanup without disturbing genuine experiments.
 
 Runtime access to review history and evaluation results/components is
 SELECT/INSERT only; evaluation-run updates are limited to lifecycle columns.
-Owner/test connections perform exact fixture cleanup. Other immutable histories
-follow Volume I §7.3.
+Ranking members are append-only and ranking-snapshot updates are limited to
+lifecycle/count columns. Owner/test connections perform exact fixture cleanup.
+Other immutable histories follow Volume I §7.3.
 
 ### 10.3 Observability and recovery
 
@@ -239,6 +252,7 @@ and scheduler capacity. Approval alone can never imply conversion.
 - [Recommendation scoring](../Phase4AExperimentRecommendationScoring.rst)
 - [Recommendation review](../Phase4AExperimentRecommendationReview.rst)
 - [Recommendation evaluation](../Phase4BExperimentRecommendationEvaluation.rst)
+- [Recommendation ranking](../Phase4BExperimentRecommendationRanking.rst)
 
 ## 13. Revision history
 
@@ -246,3 +260,4 @@ and scheduler capacity. Approval alone can never imply conversion.
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Established the Step 1–5-aligned recommendation architecture outline. | ADR-0003 |
 | 0.2.0 | 2026-07-15 | Recorded Phase 4B Step 1 deterministic advisory evaluation evidence without changing execution ownership. | ADR-0003, ADR-0004 |
+| 0.3.0 | 2026-07-15 | Recorded Phase 4B Step 2 immutable advisory ranking snapshots and policy-aware comparison. | ADR-0001, ADR-0003, ADR-0004 |

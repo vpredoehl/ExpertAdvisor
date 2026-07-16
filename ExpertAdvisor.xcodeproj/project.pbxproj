@@ -22,6 +22,11 @@
 		0A1000032F70000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
+		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
+		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
+		0A1000082F70000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
+		0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
+		0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
 		0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
 		0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
 		0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
@@ -54,11 +59,12 @@
 		0AB000093020000100AAA001 /* ExperimentRecommendationEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AB000023020000100AAA001 /* ExperimentRecommendationEvaluationRepository.cpp */; };
 		0AB0000A3020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AB000043020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp */; };
 		0AB0000B3020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AB000043020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp */; };
-		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
-		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
-		0A1000082F70000100AAA001 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DE2F5FCBD700BE2DCE /* Metal.framework */; };
-		0A1000092F70000100AAA001 /* MetalPerformanceShaders.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DF2F5FCBD700BE2DCE /* MetalPerformanceShaders.framework */; };
-		0A10000A2F70000100AAA001 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334E22F5FCBE600BE2DCE /* Foundation.framework */; };
+		0AC000063030000100AAA001 /* ExperimentRecommendationRanking.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AC000003030000100AAA001 /* ExperimentRecommendationRanking.cpp */; };
+		0AC000073030000100AAA001 /* ExperimentRecommendationRanking.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AC000003030000100AAA001 /* ExperimentRecommendationRanking.cpp */; };
+		0AC000083030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AC000023030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp */; };
+		0AC000093030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AC000023030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp */; };
+		0AC0000A3030000100AAA001 /* ExperimentRecommendationRankingService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AC000043030000100AAA001 /* ExperimentRecommendationRankingService.cpp */; };
+		0AC0000B3030000100AAA001 /* ExperimentRecommendationRankingService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AC000043030000100AAA001 /* ExperimentRecommendationRankingService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -198,6 +204,12 @@
 		0AB000033020000100AAA001 /* ExperimentRecommendationEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationEvaluationRepository.hpp; path = Sources/ExperimentRecommendationEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0AB000043020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationEvaluationService.cpp; path = Sources/ExperimentRecommendationEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
 		0AB000053020000100AAA001 /* ExperimentRecommendationEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationEvaluationService.hpp; path = Sources/ExperimentRecommendationEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0AC000003030000100AAA001 /* ExperimentRecommendationRanking.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationRanking.cpp; path = Sources/ExperimentRecommendationRanking.cpp; sourceTree = SOURCE_ROOT; };
+		0AC000013030000100AAA001 /* ExperimentRecommendationRanking.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationRanking.hpp; path = Sources/ExperimentRecommendationRanking.hpp; sourceTree = SOURCE_ROOT; };
+		0AC000023030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationRankingRepository.cpp; path = Sources/ExperimentRecommendationRankingRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0AC000033030000100AAA001 /* ExperimentRecommendationRankingRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationRankingRepository.hpp; path = Sources/ExperimentRecommendationRankingRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0AC000043030000100AAA001 /* ExperimentRecommendationRankingService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationRankingService.cpp; path = Sources/ExperimentRecommendationRankingService.cpp; sourceTree = SOURCE_ROOT; };
+		0AC000053030000100AAA001 /* ExperimentRecommendationRankingService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationRankingService.hpp; path = Sources/ExperimentRecommendationRankingService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -305,6 +317,12 @@
 				0AB000033020000100AAA001 /* ExperimentRecommendationEvaluationRepository.hpp */,
 				0AB000043020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp */,
 				0AB000053020000100AAA001 /* ExperimentRecommendationEvaluationService.hpp */,
+				0AC000003030000100AAA001 /* ExperimentRecommendationRanking.cpp */,
+				0AC000013030000100AAA001 /* ExperimentRecommendationRanking.hpp */,
+				0AC000023030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp */,
+				0AC000033030000100AAA001 /* ExperimentRecommendationRankingRepository.hpp */,
+				0AC000043030000100AAA001 /* ExperimentRecommendationRankingService.cpp */,
+				0AC000053030000100AAA001 /* ExperimentRecommendationRankingService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -504,6 +522,9 @@
 				0AB000063020000100AAA001 /* ExperimentRecommendationEvaluation.cpp in Sources */,
 				0AB000083020000100AAA001 /* ExperimentRecommendationEvaluationRepository.cpp in Sources */,
 				0AB0000A3020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp in Sources */,
+				0AC000063030000100AAA001 /* ExperimentRecommendationRanking.cpp in Sources */,
+				0AC000083030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp in Sources */,
+				0AC0000A3030000100AAA001 /* ExperimentRecommendationRankingService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -532,6 +553,9 @@
 				0AB000073020000100AAA001 /* ExperimentRecommendationEvaluation.cpp in Sources */,
 				0AB000093020000100AAA001 /* ExperimentRecommendationEvaluationRepository.cpp in Sources */,
 				0AB0000B3020000100AAA001 /* ExperimentRecommendationEvaluationService.cpp in Sources */,
+				0AC000073030000100AAA001 /* ExperimentRecommendationRanking.cpp in Sources */,
+				0AC000093030000100AAA001 /* ExperimentRecommendationRankingRepository.cpp in Sources */,
+				0AC0000B3030000100AAA001 /* ExperimentRecommendationRankingService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
@@ -604,7 +628,7 @@
 				STRIP_INSTALLED_PRODUCT = NO;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
-					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 					/opt/homebrew/opt/libomp/include,
 				);
@@ -664,7 +688,7 @@
 				SDKROOT = macosx;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
-					/Volumes/Darwin/homebrew/Cellar/libpqxx/7.10.5/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 					/opt/homebrew/opt/libomp/include,
 				);
@@ -862,9 +886,11 @@
 				SDKROOT = macosx;
 				SYSTEM_FRAMEWORK_SEARCH_PATHS = /Volumes/Darwin/homebrew/lib/;
 				SYSTEM_HEADER_SEARCH_PATHS = (
+					"$(inherited)",
 					/opt/homebrew/include,
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 					/opt/homebrew/opt/libomp/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 				);
 				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
@@ -925,6 +951,7 @@
 					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
 					/opt/homebrew/opt/libomp/include,
 					/opt/homebrew/include,
+					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 				);
 				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";

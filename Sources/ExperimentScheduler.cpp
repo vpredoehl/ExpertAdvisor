@@ -36,6 +36,7 @@
 #include "ContinuationPolicyPersistence.hpp"
 #include "ExperimentRecommendationService.hpp"
 #include "ExperimentRecommendationEvaluationService.hpp"
+#include "ExperimentRecommendationRankingService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -138,6 +139,23 @@ struct SchedulerOptions
     int recommendationEvaluationLimit = 100;
     bool recommendationEvaluationLimitSpecified = false;
     bool recommendationEvaluationDryRun = false;
+    bool rankExperimentRecommendationEvaluations = false;
+    std::optional<long long> recommendationRankingEvaluationRunId;
+    std::optional<long long> recommendationRankingScanId;
+    std::optional<std::string> recommendationRankingSymbol;
+    std::optional<int> recommendationRankingHorizon;
+    std::optional<std::string> recommendationRankingFamily;
+    bool recommendationRankingGlobal = false;
+    int recommendationRankingLimit = 100;
+    bool recommendationRankingLimitSpecified = false;
+    bool recommendationRankingDryRun = false;
+    bool listExperimentRecommendationRankingSnapshots = false;
+    std::optional<long long> recommendationRankingStatusId;
+    std::optional<long long> listRecommendationRankingMembersId;
+    std::optional<long long> recommendationRankingMemberStatusId;
+    std::optional<std::string> recommendationRankingBucket;
+    std::optional<std::pair<long long, long long>> compareRecommendationEvaluations;
+    std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -736,6 +754,22 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--recommendation-evaluation-disposition" ||
             arg == "--recommendation-evaluation-limit" ||
             arg == "--recommendation-evaluation-dry-run" ||
+            arg == "--rank-experiment-recommendation-evaluations" ||
+            arg == "--recommendation-ranking-evaluation-run-id" ||
+            arg == "--recommendation-ranking-scan-id" ||
+            arg == "--recommendation-ranking-symbol" ||
+            arg == "--recommendation-ranking-horizon" ||
+            arg == "--recommendation-ranking-family" ||
+            arg == "--recommendation-ranking-global" ||
+            arg == "--recommendation-ranking-limit" ||
+            arg == "--recommendation-ranking-dry-run" ||
+            arg == "--list-experiment-recommendation-ranking-snapshots" ||
+            arg == "--recommendation-ranking-status" ||
+            arg == "--list-experiment-recommendation-ranking-members" ||
+            arg == "--recommendation-ranking-member-status" ||
+            arg == "--recommendation-ranking-bucket" ||
+            arg == "--compare-experiment-recommendation-evaluations" ||
+            arg == "--compare-experiment-recommendation-ranking-members" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -809,6 +843,18 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--recommendation-evaluation-policy=", 0) == 0 ||
             arg.rfind("--recommendation-evaluation-disposition=", 0) == 0 ||
             arg.rfind("--recommendation-evaluation-limit=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-evaluation-run-id=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-scan-id=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-symbol=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-horizon=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-family=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-limit=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-status=", 0) == 0 ||
+            arg.rfind("--list-experiment-recommendation-ranking-members=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-member-status=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-bucket=", 0) == 0 ||
+            arg.rfind("--compare-experiment-recommendation-evaluations=", 0) == 0 ||
+            arg.rfind("--compare-experiment-recommendation-ranking-members=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -841,7 +887,7 @@ std::string GetEnvOrDefault(const char* name, const char* fallback)
 std::string LstmDbConnectionString()
 {
     return "hostaddr=" + GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1") +
-           " user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+           " gssencmode=disable user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
 }
 
 std::string CurrentLocalFilenameTimestamp()
@@ -1065,6 +1111,18 @@ std::pair<long long, int> ParseExperimentEpochPair(const std::string& optionName
     };
 }
 
+std::pair<long long, long long> ParsePositiveIdPair(
+    const std::string& optionName,
+    const std::string& value)
+{
+    const size_t colon = value.find(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= value.size() ||
+        value.find(':', colon + 1) != std::string::npos)
+        throw std::invalid_argument(optionName + " requires LEFT_ID:RIGHT_ID");
+    return {ParsePositiveLongLong(optionName, value.substr(0, colon)),
+            ParsePositiveLongLong(optionName, value.substr(colon + 1))};
+}
+
 double ParsePositiveDouble(const std::string& optionName, const std::string& value)
 {
     size_t consumed = 0;
@@ -1107,7 +1165,9 @@ double ParseFiniteDouble(const std::string& optionName, const std::string& value
     return parsed;
 }
 
-double ParseNonNegativeFiniteDouble(const std::string& optionName, const std::string& value)
+[[maybe_unused]] double ParseNonNegativeFiniteDouble(
+    const std::string& optionName,
+    const std::string& value)
 {
     const double parsed = ParseFiniteDouble(optionName, value);
     if (parsed < 0.0)
@@ -1457,6 +1517,53 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (arg == "--recommendation-evaluation-dry-run")
             options.recommendationEvaluationDryRun = true;
+        else if (arg == "--rank-experiment-recommendation-evaluations")
+            options.rankExperimentRecommendationEvaluations = true;
+        else if (arg == "--recommendation-ranking-evaluation-run-id")
+            options.recommendationRankingEvaluationRunId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-scan-id")
+            options.recommendationRankingScanId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-symbol")
+            options.recommendationRankingSymbol =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-ranking-horizon")
+            options.recommendationRankingHorizon = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-family")
+            options.recommendationRankingFamily =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-ranking-global")
+            options.recommendationRankingGlobal = true;
+        else if (arg == "--recommendation-ranking-limit")
+        {
+            options.recommendationRankingLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.recommendationRankingLimitSpecified = true;
+        }
+        else if (arg == "--recommendation-ranking-dry-run")
+            options.recommendationRankingDryRun = true;
+        else if (arg == "--list-experiment-recommendation-ranking-snapshots")
+            options.listExperimentRecommendationRankingSnapshots = true;
+        else if (arg == "--recommendation-ranking-status")
+            options.recommendationRankingStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-recommendation-ranking-members")
+            options.listRecommendationRankingMembersId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-member-status")
+            options.recommendationRankingMemberStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-bucket")
+            options.recommendationRankingBucket =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--compare-experiment-recommendation-evaluations")
+            options.compareRecommendationEvaluations = ParsePositiveIdPair(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-experiment-recommendation-ranking-members")
+            options.compareRecommendationRankingMembers = ParsePositiveIdPair(
+                arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1766,6 +1873,54 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--recommendation-evaluation-limit", value);
             options.recommendationEvaluationLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-evaluation-run-id", value))
+            options.recommendationRankingEvaluationRunId = ParsePositiveLongLong(
+                "--recommendation-ranking-evaluation-run-id", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-scan-id", value))
+            options.recommendationRankingScanId = ParsePositiveLongLong(
+                "--recommendation-ranking-scan-id", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-symbol", value))
+            options.recommendationRankingSymbol = value;
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-horizon", value))
+            options.recommendationRankingHorizon = ParsePositiveInt(
+                "--recommendation-ranking-horizon", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-family", value))
+            options.recommendationRankingFamily = value;
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-limit", value))
+        {
+            options.recommendationRankingLimit = ParsePositiveInt(
+                "--recommendation-ranking-limit", value);
+            options.recommendationRankingLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-status", value))
+            options.recommendationRankingStatusId = ParsePositiveLongLong(
+                "--recommendation-ranking-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--list-experiment-recommendation-ranking-members", value))
+            options.listRecommendationRankingMembersId = ParsePositiveLongLong(
+                "--list-experiment-recommendation-ranking-members", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-member-status", value))
+            options.recommendationRankingMemberStatusId = ParsePositiveLongLong(
+                "--recommendation-ranking-member-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-bucket", value))
+            options.recommendationRankingBucket = value;
+        else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-recommendation-evaluations", value))
+            options.compareRecommendationEvaluations = ParsePositiveIdPair(
+                "--compare-experiment-recommendation-evaluations", value);
+        else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-recommendation-ranking-members", value))
+            options.compareRecommendationRankingMembers = ParsePositiveIdPair(
+                "--compare-experiment-recommendation-ranking-members", value);
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -1920,6 +2075,13 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.explainRecommendationEvaluationId.has_value() ? 1 : 0) +
         (options.listExperimentRecommendationEvaluationRuns ? 1 : 0) +
         (options.recommendationEvaluationRunStatusId.has_value() ? 1 : 0) +
+        (options.rankExperimentRecommendationEvaluations ? 1 : 0) +
+        (options.listExperimentRecommendationRankingSnapshots ? 1 : 0) +
+        (options.recommendationRankingStatusId.has_value() ? 1 : 0) +
+        (options.listRecommendationRankingMembersId.has_value() ? 1 : 0) +
+        (options.recommendationRankingMemberStatusId.has_value() ? 1 : 0) +
+        (options.compareRecommendationEvaluations.has_value() ? 1 : 0) +
+        (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2065,6 +2227,64 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     if (options.recommendationEvaluationLimit > 1000)
         throw std::invalid_argument(
             "--recommendation-evaluation-limit must not exceed 1000");
+    const bool recommendationRankingScopeOption =
+        options.recommendationRankingEvaluationRunId.has_value() ||
+        options.recommendationRankingScanId.has_value() ||
+        options.recommendationRankingSymbol.has_value() ||
+        options.recommendationRankingHorizon.has_value() ||
+        options.recommendationRankingFamily.has_value() ||
+        options.recommendationRankingGlobal;
+    if (recommendationRankingScopeOption &&
+        !options.rankExperimentRecommendationEvaluations)
+        throw std::invalid_argument(
+            "recommendation ranking scope options require --rank-experiment-recommendation-evaluations");
+    const int recommendationRankingScopeCount =
+        (options.recommendationRankingEvaluationRunId ? 1 : 0) +
+        (options.recommendationRankingScanId ? 1 : 0) +
+        (options.recommendationRankingFamily ? 1 : 0) +
+        (options.recommendationRankingGlobal ? 1 : 0) +
+        ((options.recommendationRankingSymbol ||
+          options.recommendationRankingHorizon) ? 1 : 0);
+    if (options.rankExperimentRecommendationEvaluations &&
+        recommendationRankingScopeCount != 1)
+        throw std::invalid_argument(
+            "ranking requires exactly one explicit evaluation-run, scan, symbol/horizon, family, or global scope");
+    if ((options.recommendationRankingSymbol &&
+         options.recommendationRankingSymbol->empty()) ||
+        (options.recommendationRankingFamily &&
+         options.recommendationRankingFamily->empty()))
+        throw std::invalid_argument("recommendation ranking text scope is empty");
+    if (options.recommendationRankingDryRun &&
+        !options.rankExperimentRecommendationEvaluations)
+        throw std::invalid_argument(
+            "--recommendation-ranking-dry-run requires ranking creation");
+    if (options.recommendationRankingLimitSpecified &&
+        !options.rankExperimentRecommendationEvaluations &&
+        !options.listExperimentRecommendationRankingSnapshots &&
+        !options.listRecommendationRankingMembersId)
+        throw std::invalid_argument(
+            "--recommendation-ranking-limit requires ranking creation or listing");
+    if (options.recommendationRankingLimit > 1000)
+        throw std::invalid_argument(
+            "--recommendation-ranking-limit must not exceed 1000");
+    if (options.recommendationRankingBucket &&
+        !options.listRecommendationRankingMembersId)
+        throw std::invalid_argument(
+            "--recommendation-ranking-bucket requires ranking member listing");
+    if (options.recommendationRankingBucket &&
+        !EA::ExperimentRecommendation::ParseRecommendationRankingBucket(
+            *options.recommendationRankingBucket))
+        throw std::invalid_argument("invalid recommendation ranking bucket");
+    if (options.compareRecommendationEvaluations &&
+        options.compareRecommendationEvaluations->first ==
+            options.compareRecommendationEvaluations->second)
+        throw std::invalid_argument(
+            "recommendation evaluation comparison requires two different IDs");
+    if (options.compareRecommendationRankingMembers &&
+        options.compareRecommendationRankingMembers->first ==
+            options.compareRecommendationRankingMembers->second)
+        throw std::invalid_argument(
+            "recommendation ranking member comparison requires two different IDs");
     if (recommendationReviewActionCommand)
     {
         EA::ExperimentRecommendation::RecommendationReviewRequest review;
@@ -5898,17 +6118,17 @@ std::optional<double> ComputeLeaderScore(const ParsedMetrics& metrics)
     return (*metrics.inferAccuracy) * (0.75 + 0.25 * acceptAccuracy) * penalty;
 }
 
-std::string MetricSql(pqxx::work& w, const std::optional<double>& value)
+std::string MetricSql(pqxx::work&, const std::optional<double>& value)
 {
     return value.has_value() ? FormatDouble(*value) : "NULL";
 }
 
-std::string MetricSql(pqxx::work& w, const std::optional<int>& value)
+std::string MetricSql(pqxx::work&, const std::optional<int>& value)
 {
     return value.has_value() ? std::to_string(*value) : "NULL";
 }
 
-std::string MetricSql(pqxx::work& w, const std::optional<long long>& value)
+std::string MetricSql(pqxx::work&, const std::optional<long long>& value)
 {
     return value.has_value() ? std::to_string(*value) : "NULL";
 }
@@ -15146,6 +15366,24 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--recommendation-evaluation-run-status=ID\n"
         << "Phase 4B evaluation is advisory only: it never creates or queues experiments or changes scheduler state.\n"
         << "Usage: " << exe
+        << " --rank-experiment-recommendation-evaluations "
+        << "(--recommendation-ranking-evaluation-run-id=ID | "
+        << "--recommendation-ranking-scan-id=ID | "
+        << "--recommendation-ranking-symbol=SYMBOL [--recommendation-ranking-horizon=N] | "
+        << "--recommendation-ranking-horizon=N | --recommendation-ranking-family=NAME | "
+        << "--recommendation-ranking-global) [--recommendation-ranking-limit=N] "
+        << "[--recommendation-ranking-dry-run]\n"
+        << "Usage: " << exe
+        << " --list-experiment-recommendation-ranking-snapshots "
+        << "[--recommendation-ranking-limit=N] | --recommendation-ranking-status=ID | "
+        << "--list-experiment-recommendation-ranking-members=ID "
+        << "[--recommendation-ranking-bucket=advisory_ready|blocked|non_actionable] "
+        << "[--recommendation-ranking-limit=N] | --recommendation-ranking-member-status=ID\n"
+        << "Usage: " << exe
+        << " --compare-experiment-recommendation-evaluations=LEFT:RIGHT | "
+        << "--compare-experiment-recommendation-ranking-members=LEFT:RIGHT\n"
+        << "Phase 4B ranking and comparison are advisory only: they never create or queue experiments or change scheduler state.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -15331,6 +15569,95 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
         return EA::ExperimentRecommendation::RunExperimentRecommendationEvaluationRunStatusCommand(
             connectionString, *options.recommendationEvaluationRunStatusId,
             std::cout);
+    if (options.rankExperimentRecommendationEvaluations)
+    {
+        EA::ExperimentRecommendation::RecommendationRankingCommandRequest request;
+        request.limit = options.recommendationRankingLimit;
+        request.dryRun = options.recommendationRankingDryRun;
+        if (options.recommendationRankingEvaluationRunId)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::evaluationRun;
+            request.scope.evaluationRunId =
+                options.recommendationRankingEvaluationRunId;
+        }
+        else if (options.recommendationRankingScanId)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::recommendationScan;
+            request.scope.recommendationScanId =
+                options.recommendationRankingScanId;
+        }
+        else if (options.recommendationRankingSymbol &&
+                 options.recommendationRankingHorizon)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::symbolHorizon;
+            request.scope.symbol = options.recommendationRankingSymbol;
+            request.scope.horizon = options.recommendationRankingHorizon;
+        }
+        else if (options.recommendationRankingSymbol)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::symbol;
+            request.scope.symbol = options.recommendationRankingSymbol;
+        }
+        else if (options.recommendationRankingHorizon)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::horizon;
+            request.scope.horizon = options.recommendationRankingHorizon;
+        }
+        else if (options.recommendationRankingFamily)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::family;
+            request.scope.family = options.recommendationRankingFamily;
+        }
+        else
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::global;
+        return EA::ExperimentRecommendation::
+            RunRankExperimentRecommendationEvaluationsCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.listExperimentRecommendationRankingSnapshots)
+        return EA::ExperimentRecommendation::
+            RunListExperimentRecommendationRankingSnapshotsCommand(
+                connectionString, options.recommendationRankingLimit, std::cout);
+    if (options.recommendationRankingStatusId)
+        return EA::ExperimentRecommendation::
+            RunExperimentRecommendationRankingStatusCommand(
+                connectionString, *options.recommendationRankingStatusId,
+                std::cout);
+    if (options.listRecommendationRankingMembersId)
+    {
+        std::optional<EA::ExperimentRecommendation::RecommendationRankingBucket>
+            bucket;
+        if (options.recommendationRankingBucket)
+            bucket = *EA::ExperimentRecommendation::
+                ParseRecommendationRankingBucket(
+                    *options.recommendationRankingBucket);
+        return EA::ExperimentRecommendation::
+            RunListExperimentRecommendationRankingMembersCommand(
+                connectionString, *options.listRecommendationRankingMembersId,
+                bucket, options.recommendationRankingLimit, std::cout);
+    }
+    if (options.recommendationRankingMemberStatusId)
+        return EA::ExperimentRecommendation::
+            RunExperimentRecommendationRankingMemberStatusCommand(
+                connectionString,
+                *options.recommendationRankingMemberStatusId, std::cout);
+    if (options.compareRecommendationEvaluations)
+        return EA::ExperimentRecommendation::
+            RunCompareExperimentRecommendationEvaluationsCommand(
+                connectionString, *options.compareRecommendationEvaluations,
+                std::cout);
+    if (options.compareRecommendationRankingMembers)
+        return EA::ExperimentRecommendation::
+            RunCompareExperimentRecommendationRankingMembersCommand(
+                connectionString,
+                *options.compareRecommendationRankingMembers, std::cout);
     return EA::ExperimentRecommendation::RunExplainExperimentRecommendationScoreCommand(
         connectionString, *options.explainRecommendationScoreId, std::cout);
 }
@@ -15413,7 +15740,14 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.recommendationEvaluationStatusId.has_value() ||
             options.explainRecommendationEvaluationId.has_value() ||
             options.listExperimentRecommendationEvaluationRuns ||
-            options.recommendationEvaluationRunStatusId.has_value())
+            options.recommendationEvaluationRunStatusId.has_value() ||
+            options.rankExperimentRecommendationEvaluations ||
+            options.listExperimentRecommendationRankingSnapshots ||
+            options.recommendationRankingStatusId.has_value() ||
+            options.listRecommendationRankingMembersId.has_value() ||
+            options.recommendationRankingMemberStatusId.has_value() ||
+            options.compareRecommendationEvaluations.has_value() ||
+            options.compareRecommendationRankingMembers.has_value())
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);
