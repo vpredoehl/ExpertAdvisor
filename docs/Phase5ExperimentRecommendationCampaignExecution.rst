@@ -90,7 +90,9 @@ proposal disposition.
 Created experiments are ordinary Phase 4C ``paused/train`` conversion output.
 The command does not activate them, change them to ``pending``, queue them,
 start the scheduler, launch workers, or automatically invoke another command.
-Activation remains the separately invoked Phase 4C action for each execution.
+Activation remains separately invoked. Phase 5 Step 2 provides an optional,
+separately confirmed atomic convenience over the same Phase 4C activation
+authority for every exact materialized member; Step 1 never invokes it.
 
 Schema
 ------
@@ -108,3 +110,4 @@ References
 * ``docs/Phase4CExperimentRecommendationConversionExecution.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignProposalReview.rst``
+* ``docs/Phase5ExperimentRecommendationCampaignActivation.rst``

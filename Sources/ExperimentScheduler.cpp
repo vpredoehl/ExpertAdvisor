@@ -48,6 +48,7 @@
 #include "ExperimentRecommendationCampaignHandoffService.hpp"
 #include "ExperimentRecommendationCampaignProposalReviewService.hpp"
 #include "ExperimentRecommendationCampaignExecutionService.hpp"
+#include "ExperimentRecommendationCampaignActivationService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -226,6 +227,8 @@ struct SchedulerOptions
     bool campaignProposalReviewReasonSpecified = false;
     std::optional<long long> executeRecommendationCampaignMaterializationId;
     bool campaignExecutionCommandSpecified = false;
+    std::optional<long long> activateRecommendationCampaignMaterializationId;
+    bool campaignActivationCommandSpecified = false;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -888,6 +891,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--campaign-proposal-review-operator" ||
             arg == "--campaign-proposal-review-reason" ||
             arg == "--execute-recommendation-campaign-materialization" ||
+            arg == "--activate-recommendation-campaign-materialization" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -1038,6 +1042,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--campaign-proposal-review-reason=", 0) == 0 ||
             arg.rfind(
                 "--execute-recommendation-campaign-materialization=", 0) == 0 ||
+            arg.rfind(
+                "--activate-recommendation-campaign-materialization=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1949,6 +1955,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
         }
+        else if (arg == "--activate-recommendation-campaign-materialization")
+        {
+            if (options.campaignActivationCommandSpecified)
+                throw std::invalid_argument(
+                    "duplicate --activate-recommendation-campaign-materialization");
+            options.campaignActivationCommandSpecified = true;
+            options.activateRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
         else if (arg == "--campaign-ranking-snapshot")
         {
             options.campaignPlanningScope.rankingSnapshotId =
@@ -2680,6 +2696,19 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     "--execute-recommendation-campaign-materialization", value);
         }
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--activate-recommendation-campaign-materialization",
+                     value))
+        {
+            if (options.campaignActivationCommandSpecified)
+                throw std::invalid_argument(
+                    "duplicate --activate-recommendation-campaign-materialization");
+            options.campaignActivationCommandSpecified = true;
+            options.activateRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(
+                    "--activate-recommendation-campaign-materialization", value);
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2867,6 +2896,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
              ? 1
              : 0) +
         (options.executeRecommendationCampaignMaterializationId.has_value()
+             ? 1
+             : 0) +
+        (options.activateRecommendationCampaignMaterializationId.has_value()
              ? 1
              : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
@@ -3324,6 +3356,17 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     options.dryRun};
         (void)EA::ExperimentRecommendation::
             NormalizeRecommendationCampaignExecutionRequest(request);
+    }
+    if (options.activateRecommendationCampaignMaterializationId)
+    {
+        if (!options.dryRun && !options.yes)
+            throw std::invalid_argument(
+                "campaign activation write requires --yes");
+        EA::ExperimentRecommendation::RecommendationCampaignActivationRequest
+            request{*options.activateRecommendationCampaignMaterializationId,
+                    options.dryRun};
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignActivationRequest(request);
     }
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
@@ -16515,6 +16558,14 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "the scheduler or workers. --yes is required unless --dry-run is "
         << "supplied.\n"
         << "Usage: " << exe
+        << " --activate-recommendation-campaign-materialization=ID "
+        << "[--dry-run] [--yes]\n"
+        << "Phase 5 campaign activation atomically invokes the existing Phase "
+        << "4C paused/train to pending/train activation for every exact "
+        << "persisted materialization member. It starts neither scheduler nor "
+        << "workers and performs no automatic follow-up. --yes is required "
+        << "unless --dry-run is supplied.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -16846,6 +16897,15 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
             RunRecommendationCampaignExecutionCommand(
                 connectionString, request, std::cout, std::cerr);
     }
+    if (options.activateRecommendationCampaignMaterializationId)
+    {
+        EA::ExperimentRecommendation::RecommendationCampaignActivationRequest
+            request{*options.activateRecommendationCampaignMaterializationId,
+                    options.dryRun};
+        return EA::ExperimentRecommendation::
+            RunRecommendationCampaignActivationCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -17095,6 +17155,9 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (options.executeRecommendationCampaignMaterializationId.has_value())
+            // Handled by the standalone recommendation/campaign dispatcher.
+            return RunExperimentRecommendationCommand(options);
+        if (options.activateRecommendationCampaignMaterializationId.has_value())
             // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))

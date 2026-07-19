@@ -122,9 +122,10 @@ struct ExperimentActivationState
     bool hasLastModel = false;
 };
 
-ExperimentActivationState LockExperiment(
+ExperimentActivationState LoadExperimentState(
     pqxx::transaction_base& transaction,
-    long long experimentId)
+    long long experimentId,
+    bool lock)
 {
     const pqxx::result rows = transaction.exec(
         "SELECT status,phase,worker_pid,current_operation,current_epoch,"
@@ -133,7 +134,7 @@ ExperimentActivationState LockExperiment(
         "completed_at IS NOT NULL AS completed,exit_code IS NOT NULL AS "
         "has_exit_code,error_message IS NOT NULL AS has_error,"
         "last_model_id IS NOT NULL AS has_last_model FROM experiment WHERE "
-        "experiment_id=$1 FOR UPDATE;",
+        "experiment_id=$1" + std::string{lock ? " FOR UPDATE;" : ";"},
         pqxx::params{experimentId});
     if (rows.empty())
         throw std::runtime_error(
@@ -186,18 +187,6 @@ std::optional<std::string> InvalidStateReason(
     return std::nullopt;
 }
 
-void LockActivationSequence(
-    pqxx::transaction_base& transaction,
-    long long executionId)
-{
-    transaction.exec(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1, "
-        "4354685564936845355));",
-        pqxx::params{
-            "recommendation_conversion_activation_sequence_v1:" +
-            std::to_string(executionId)});
-}
-
 } // namespace
 
 std::string RecommendationConversionActivationOutcomeText(
@@ -230,6 +219,149 @@ bool RecommendationConversionActivationSchemaExists(
         .one_row()[0].as<bool>();
 }
 
+void LockRecommendationConversionActivationSequence(
+    pqxx::transaction_base& transaction,
+    long long executionId)
+{
+    if (executionId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_activation_execution_id_invalid");
+    transaction.exec(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, "
+        "4354685564936845355));",
+        pqxx::params{
+            "recommendation_conversion_activation_sequence_v1:" +
+            std::to_string(executionId)});
+}
+
+void LockRecommendationConversionActivationExperiment(
+    pqxx::transaction_base& transaction,
+    long long experimentId)
+{
+    if (experimentId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_activation_experiment_id_invalid");
+    (void)LoadExperimentState(transaction, experimentId, true);
+}
+
+RecommendationConversionActivationAssessment
+AssessRecommendationConversionActivation(
+    pqxx::transaction_base& transaction,
+    long long executionId,
+    bool lockExperiment)
+{
+    if (executionId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_activation_execution_id_invalid");
+    RecommendationConversionActivationAssessment assessment;
+    assessment.execution = FindRecommendationConversionExecution(
+        transaction, executionId);
+    if (!assessment.execution)
+    {
+        assessment.state =
+            RecommendationConversionActivationAssessmentState::notFound;
+        assessment.reason = "conversion_execution_not_found";
+        return assessment;
+    }
+
+    const ExperimentActivationState experiment = LoadExperimentState(
+        transaction, assessment.execution->experimentId, lockExperiment);
+    assessment.experimentStatus = experiment.status;
+    assessment.experimentPhase = experiment.phase;
+    ValidatePersistedRecommendationConversionExecution(
+        transaction, *assessment.execution);
+    const auto identity = ExpectedIdentity(*assessment.execution);
+    assessment.activation = FindByColumn(
+        transaction, "recommendation_conversion_execution_id", executionId);
+    if (assessment.activation)
+    {
+        if (!MatchesExecution(
+                *assessment.activation, *assessment.execution, identity))
+        {
+            assessment.state =
+                RecommendationConversionActivationAssessmentState::conflict;
+            assessment.reason = "activation_identity_conflict";
+            return assessment;
+        }
+        assessment.state = RecommendationConversionActivationAssessmentState::
+            existingIdentical;
+        return assessment;
+    }
+    if (const auto reason = InvalidStateReason(experiment))
+    {
+        assessment.state =
+            RecommendationConversionActivationAssessmentState::invalidState;
+        assessment.reason = *reason;
+        return assessment;
+    }
+    assessment.state =
+        RecommendationConversionActivationAssessmentState::eligible;
+    return assessment;
+}
+
+RecommendationConversionActivationResult
+ActivateRecommendationConversionExecutionInTransaction(
+    pqxx::transaction_base& transaction,
+    long long executionId)
+{
+    const auto assessment = AssessRecommendationConversionActivation(
+        transaction, executionId, true);
+    switch (assessment.state)
+    {
+        case RecommendationConversionActivationAssessmentState::notFound:
+            return {RecommendationConversionActivationOutcome::notFound,
+                    std::nullopt, assessment.reason};
+        case RecommendationConversionActivationAssessmentState::invalidState:
+            return {RecommendationConversionActivationOutcome::invalidState,
+                    std::nullopt, assessment.reason};
+        case RecommendationConversionActivationAssessmentState::conflict:
+            return {RecommendationConversionActivationOutcome::conflict,
+                    assessment.activation, assessment.reason};
+        case RecommendationConversionActivationAssessmentState::existingIdentical:
+            return {
+                RecommendationConversionActivationOutcome::existingIdentical,
+                assessment.activation,
+                {}};
+        case RecommendationConversionActivationAssessmentState::eligible:
+            break;
+    }
+
+    const auto& execution = *assessment.execution;
+    const auto identity = ExpectedIdentity(execution);
+    auto activation = MapActivation(transaction.exec(
+        "INSERT INTO experiment_recommendation_conversion_activation ("
+        "recommendation_conversion_execution_id,"
+        "recommendation_conversion_proposal_id,"
+        "recommendation_conversion_review_decision_id,experiment_id,"
+        "activation_contract_version,previous_status,previous_phase,"
+        "resulting_status,resulting_phase,activation_identity_canonical,"
+        "activation_identity_hash) VALUES ($1,$2,$3,$4,$5,'paused',"
+        "'train','pending','train',$6,$7) RETURNING " +
+            ActivationColumns() + ";",
+        pqxx::params{
+            execution.executionId, execution.proposalId,
+            execution.reviewDecisionId, execution.experimentId,
+            kRecommendationConversionActivationContractVersion,
+            identity.canonicalText, identity.hash})
+        .one_row());
+
+    const pqxx::result updated = transaction.exec(
+        "UPDATE experiment SET status='pending',phase='train',"
+        "updated_at=now() WHERE experiment_id=$1 AND status='paused' AND "
+        "phase='train' AND worker_pid IS NULL AND current_operation IS "
+        "NULL AND current_epoch IS NULL AND invocation_mode="
+        "'recommendation_conversion' AND started_at IS NULL AND "
+        "duplicate_nonce=0 AND worker_started_at IS NULL AND completed_at "
+        "IS NULL AND exit_code IS NULL AND error_message IS NULL AND "
+        "last_model_id IS NULL RETURNING experiment_id;",
+        pqxx::params{execution.experimentId});
+    if (updated.empty())
+        throw std::runtime_error(
+            "recommendation_conversion_activation_state_changed");
+    return {RecommendationConversionActivationOutcome::activated,
+            std::move(activation), {}};
+}
+
 RecommendationConversionActivationResult
 ActivateRecommendationConversionExecution(
     pqxx::connection& connection,
@@ -241,84 +373,11 @@ ActivateRecommendationConversionExecution(
     try
     {
         pqxx::work transaction{connection};
-        LockActivationSequence(transaction, executionId);
-        const auto execution = FindRecommendationConversionExecution(
+        LockRecommendationConversionActivationSequence(transaction, executionId);
+        auto result = ActivateRecommendationConversionExecutionInTransaction(
             transaction, executionId);
-        if (!execution)
-        {
-            transaction.commit();
-            return {RecommendationConversionActivationOutcome::notFound,
-                    std::nullopt,
-                    "conversion_execution_not_found"};
-        }
-
-        const ExperimentActivationState state = LockExperiment(
-            transaction, execution->experimentId);
-        ValidatePersistedRecommendationConversionExecution(
-            transaction, *execution);
-        const auto identity = ExpectedIdentity(*execution);
-        if (auto existing = FindByColumn(
-                transaction,
-                "recommendation_conversion_execution_id",
-                executionId))
-        {
-            if (!MatchesExecution(*existing, *execution, identity))
-            {
-                transaction.commit();
-                return {RecommendationConversionActivationOutcome::conflict,
-                        std::move(existing),
-                        "activation_identity_conflict"};
-            }
-            transaction.commit();
-            return {
-                RecommendationConversionActivationOutcome::existingIdentical,
-                std::move(existing),
-                {}};
-        }
-
-        if (const auto reason = InvalidStateReason(state))
-        {
-            transaction.commit();
-            return {RecommendationConversionActivationOutcome::invalidState,
-                    std::nullopt,
-                    *reason};
-        }
-
-        auto activation = MapActivation(transaction.exec(
-            "INSERT INTO experiment_recommendation_conversion_activation ("
-            "recommendation_conversion_execution_id,"
-            "recommendation_conversion_proposal_id,"
-            "recommendation_conversion_review_decision_id,experiment_id,"
-            "activation_contract_version,previous_status,previous_phase,"
-            "resulting_status,resulting_phase,activation_identity_canonical,"
-            "activation_identity_hash) VALUES ($1,$2,$3,$4,$5,'paused',"
-            "'train','pending','train',$6,$7) RETURNING " +
-                ActivationColumns() + ";",
-            pqxx::params{
-                execution->executionId, execution->proposalId,
-                execution->reviewDecisionId, execution->experimentId,
-                kRecommendationConversionActivationContractVersion,
-                identity.canonicalText, identity.hash})
-            .one_row());
-
-        const pqxx::result updated = transaction.exec(
-            "UPDATE experiment SET status='pending',phase='train',"
-            "updated_at=now() WHERE experiment_id=$1 AND status='paused' AND "
-            "phase='train' AND worker_pid IS NULL AND current_operation IS "
-            "NULL AND current_epoch IS NULL AND invocation_mode="
-            "'recommendation_conversion' AND started_at IS NULL AND "
-            "duplicate_nonce=0 AND "
-            "worker_started_at IS NULL AND completed_at IS NULL AND "
-            "exit_code IS NULL AND error_message IS NULL AND last_model_id "
-            "IS NULL RETURNING experiment_id;",
-            pqxx::params{execution->experimentId});
-        if (updated.empty())
-            throw std::runtime_error(
-                "recommendation_conversion_activation_state_changed");
         transaction.commit();
-        return {RecommendationConversionActivationOutcome::activated,
-                std::move(activation),
-                {}};
+        return result;
     }
     catch (const pqxx::unique_violation&)
     {
@@ -364,6 +423,18 @@ FindRecommendationConversionActivationByExperiment(
             "recommendation_conversion_activation_experiment_id_invalid");
     pqxx::read_transaction transaction{connection};
     return FindByColumn(transaction, "experiment_id", experimentId);
+}
+
+std::optional<PersistedRecommendationConversionActivation>
+FindRecommendationConversionActivationByExecution(
+    pqxx::transaction_base& transaction,
+    long long executionId)
+{
+    if (executionId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_activation_execution_id_invalid");
+    return FindByColumn(
+        transaction, "recommendation_conversion_execution_id", executionId);
 }
 
 } // namespace EA::ExperimentRecommendation

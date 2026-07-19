@@ -56,6 +56,11 @@ workflow. Concurrent identical requests converge on the same record. A replay
 returns ``existing_identical`` without repeating the lifecycle update; a
 different canonical identity conflicts without mutation.
 
+Phase 5 Step 2 reuses this exact assessment, identity, execution-scoped lock,
+experiment-row lock, insert, and conditional lifecycle update inside one outer
+all-member transaction. The original single-execution command retains its own
+transaction and commit ownership.
+
 Database privileges
 -------------------
 
@@ -88,6 +93,8 @@ experiment exactly as it would any other eligible experiment.
 
 Phase 4C Step 6 provides a separate read-only aggregate for observing proposal,
 review, execution, activation, and current experiment lifecycle provenance.
+Phase 5 Step 2 provides a separately confirmed exact-materialization aggregate
+convenience; it introduces no alternate activation or scheduler authority.
 
 References
 ----------

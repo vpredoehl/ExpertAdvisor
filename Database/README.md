@@ -111,6 +111,11 @@ existing Phase 4C execution transaction primitive to create all corresponding
 ``paused/train`` experiments and immutable conversion-execution rows atomically.
 Exact all-member retries insert nothing; partial prior execution conflicts. It
 does not activate or queue experiments, modify scheduler state, or start workers.
+Phase 5 Step 2 likewise adds no schema object or privilege. It validates the
+same immutable membership and atomically reuses the existing Phase 4C
+activation insert plus ``paused/train`` to ``pending/train`` experiment update.
+Exact all-member retries insert nothing; mixed prior activation conflicts. It
+does not start the scheduler, launch workers, or perform a follow-up command.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
