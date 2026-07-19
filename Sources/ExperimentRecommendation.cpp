@@ -446,6 +446,11 @@ std::string CanonicalRecommendationDouble(double value)
     return std::string(buffer.data(), result.ptr);
 }
 
+std::string RecommendationCanonicalHash(const std::string& canonicalText)
+{
+    return StableRecommendationHash(canonicalText);
+}
+
 std::string RecommendationPolicyCanonicalText(
     const RecommendationPolicy& policy)
 {
@@ -491,7 +496,8 @@ std::string RecommendationPolicyCanonicalText(
 
 std::string RecommendationPolicyHash(const RecommendationPolicy& policy)
 {
-    return StableRecommendationHash(RecommendationPolicyCanonicalText(policy));
+    return RecommendationCanonicalHash(
+        RecommendationPolicyCanonicalText(policy));
 }
 
 std::string CanonicalExperimentDateText(const std::string& value)
@@ -556,7 +562,7 @@ std::string EffectiveExperimentConfigurationCanonicalText(
 std::string RecommendationCandidateHash(
     const EffectiveExperimentConfiguration& configuration)
 {
-    return StableRecommendationHash(
+    return RecommendationCanonicalHash(
         EffectiveExperimentConfigurationCanonicalText(configuration));
 }
 
@@ -579,7 +585,7 @@ RecommendationCandidateIdentity BuildRecommendationCandidateIdentity(
             CanonicalExperimentDateText(*configuration.inferEndDate);
     identity.canonicalText =
         EffectiveExperimentConfigurationCanonicalText(identity.configuration);
-    identity.hash = StableRecommendationHash(identity.canonicalText);
+    identity.hash = RecommendationCanonicalHash(identity.canonicalText);
     return identity;
 }
 
@@ -609,7 +615,7 @@ std::string ExperimentInvocationCanonicalText(
 std::string ExperimentInvocationHash(
     const ExperimentInvocationConfiguration& invocation)
 {
-    return StableRecommendationHash(
+    return RecommendationCanonicalHash(
         ExperimentInvocationCanonicalText(invocation));
 }
 
@@ -623,7 +629,7 @@ RecommendationInvocationIdentity BuildRecommendationInvocationIdentity(
     identity.invocation.configuration = semantic.configuration;
     identity.canonicalText = ExperimentInvocationCanonicalText(
         identity.invocation);
-    identity.hash = StableRecommendationHash(identity.canonicalText);
+    identity.hash = RecommendationCanonicalHash(identity.canonicalText);
     return identity;
 }
 

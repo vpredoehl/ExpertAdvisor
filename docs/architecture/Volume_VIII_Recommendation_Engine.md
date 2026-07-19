@@ -1,8 +1,8 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned with Phase 4A Steps 1–5 and Phase 4B Steps 1–2
-Version: 0.3.0
-Last revised: 2026-07-15
+Status: Foundation aligned through Phase 4C Step 1
+Version: 0.4.0
+Last revised: 2026-07-18
 
 ## 1. Purpose
 
@@ -18,20 +18,25 @@ advisory ranking snapshots.
 Recommendation policy and identities, pure candidates, scans, source evidence,
 duplicates, immutable scores/components, deterministic ranks/explanations,
 terminal review transitions, immutable review events, and deterministic
-evaluation classification/history, ranking snapshots, and comparisons.
+evaluation classification/history, ranking snapshots and comparisons, plus the
+pure manually invoked proposed-experiment specification contract.
 
 ### 2.2 Out of scope
 
-Recommendation-to-experiment conversion, profitability claims, queueing,
-scheduler polling, worker execution, and automatic approval/rejection/expiration.
+Durable recommendation-to-experiment conversion, experiment creation,
+profitability claims, queueing, scheduler polling, worker execution, and
+automatic approval/rejection/expiration.
 
 ### 2.3 Current implementation status
 
-Phase 4A Steps 1–5 and Phase 4B Steps 1–2 implement the in-scope capabilities.
+Phase 4A Steps 1–5, Phase 4B Steps 1–2, and the pure Phase 4C Step 1 conversion
+contract implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
-Detailed contracts remain in the Phase 4 documents referenced in §12.
+Phase 4C Step 1 validates explicitly supplied manual authorization and derives
+only an in-memory proposed experiment specification. Detailed contracts remain
+in the Phase 4 documents referenced in §12.
 
 ## 3. Responsibilities
 
@@ -57,6 +62,8 @@ claim expected profitability/correctness.
 ### 4.1 Components
 
 - Pure identity/policy and candidate-generation domain components.
+- Pure manual conversion eligibility, source-consistency, and proposed-
+  specification domain component.
 - Repository-owned PostgreSQL mapping, scans, duplicates, scores, and reviews.
 - Services for explicit generation, scoring, evaluation, ranking/comparison,
   inspection, and review use cases.
@@ -74,7 +81,8 @@ execution. Every arrow is separately invoked and auditable.
 
 Canonical text decides identity; repository transactions decide persistence;
 pure scoring policy decides numeric evidence; pure review rules decide legal
-transitions; the operator supplies the review action. No stage owns conversion.
+transitions; the operator supplies the review action and any later explicit
+conversion request. No stage owns durable conversion or experiment creation.
 
 ## 5. Data model
 
@@ -234,8 +242,10 @@ APIs, and separate inspection commands.
 
 ### 11.2 Deferred capabilities
 
-Recommendation conversion, multi-source attribution, automatic research
-campaigns, profitability evidence, and scheduler-managed recommendation work.
+Durable recommendation conversion, multi-source attribution, automatic
+research campaigns, profitability evidence, and scheduler-managed
+recommendation work. Phase 4C Step 1 provides only the pure proposed-
+specification contract.
 
 ### 11.3 Required decisions
 
@@ -253,6 +263,7 @@ and scheduler capacity. Approval alone can never imply conversion.
 - [Recommendation review](../Phase4AExperimentRecommendationReview.rst)
 - [Recommendation evaluation](../Phase4BExperimentRecommendationEvaluation.rst)
 - [Recommendation ranking](../Phase4BExperimentRecommendationRanking.rst)
+- [Manual conversion contract](../Phase4CExperimentRecommendationConversion.rst)
 
 ## 13. Revision history
 
@@ -261,3 +272,4 @@ and scheduler capacity. Approval alone can never imply conversion.
 | 0.1.0 | 2026-07-15 | Established the Step 1–5-aligned recommendation architecture outline. | ADR-0003 |
 | 0.2.0 | 2026-07-15 | Recorded Phase 4B Step 1 deterministic advisory evaluation evidence without changing execution ownership. | ADR-0003, ADR-0004 |
 | 0.3.0 | 2026-07-15 | Recorded Phase 4B Step 2 immutable advisory ranking snapshots and policy-aware comparison. | ADR-0001, ADR-0003, ADR-0004 |
+| 0.4.0 | 2026-07-18 | Recorded the pure Phase 4C Step 1 manually authorized proposed-experiment contract; durable conversion and execution remain deferred. | ADR-0003, ADR-0004 |
