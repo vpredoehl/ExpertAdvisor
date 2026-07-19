@@ -37,6 +37,14 @@ Experiment scheduling tables are created by:
 - `005_experiment_scheduler.sql`: `experiment`
 - `006_experiment_analysis.sql`: `experiment_analysis_result`
 
+Recommendation conversion proposal history is created by:
+
+- `036_experiment_recommendation_conversion_proposal.sql`:
+  `experiment_recommendation_conversion_proposal`
+
+This append-only table records manually prepared proposals only. It is not an
+experiment queue and is not read by the scheduler.
+
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
 

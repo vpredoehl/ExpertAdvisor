@@ -208,6 +208,12 @@ int main()
         assert(result.eligibility.reason == RecommendationConversionReason::eligible);
         assert(result.proposal);
         assert(result.proposal->changedParameter == test.parameter);
+        assert(result.proposal->sourceInvocationCanonical ==
+               BuildRecommendationInvocationIdentity(request.sourceInvocation)
+                   .canonicalText);
+        assert(result.proposal->proposedInvocationCanonical ==
+               BuildRecommendationInvocationIdentity(
+                   result.proposal->proposedInvocation).canonicalText);
         AssertPreservedExcept(
             request.sourceInvocation, result.proposal->proposedInvocation,
             test.parameter);

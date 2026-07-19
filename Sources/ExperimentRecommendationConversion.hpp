@@ -140,6 +140,10 @@ struct ProposedExperimentSpecification
     long long sourceExperimentId = -1;
     long long recommendationId = -1;
     ExperimentInvocationConfiguration proposedInvocation;
+    // These canonical snapshots make a durable proposal independently
+    // auditable without reloading a mutable source experiment row.
+    std::string sourceInvocationCanonical;
+    std::string proposedInvocationCanonical;
     RecommendationMutationParameter changedParameter =
         RecommendationMutationParameter::coreLrMult;
     std::string sourceValueCanonical;

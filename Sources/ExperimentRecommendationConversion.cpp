@@ -507,6 +507,8 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     proposal.sourceExperimentId = request.sourceExperimentId;
     proposal.recommendationId = request.recommendationId;
     proposal.proposedInvocation = proposedIdentity.invocation;
+    proposal.sourceInvocationCanonical = sourceIdentity.canonicalText;
+    proposal.proposedInvocationCanonical = proposedIdentity.canonicalText;
     proposal.changedParameter = *parameter;
     proposal.sourceValueCanonical = *actualSourceValue;
     proposal.proposedValueCanonical = mutation.proposedValueCanonical;
