@@ -69,13 +69,16 @@ SQL and no database privileges. Repository verification uses only an explicit
 non-``LSTM`` disposable database and proves proposal/audit/experiment row
 counts, experiment ``updated_at``, and a sentinel sequence do not change.
 
-Campaign persistence, campaign approval, proposal creation, bulk execution,
-automatic activation, background scans, and scheduler integration remain
-deferred.
+Phase 4D Step 3 can persist one explicit operator approval or rejection only
+after reconstructing this review and matching an operator-supplied expected
+review identity hash. The approval is a separate immutable audit record and
+does not execute the campaign. Proposal creation, bulk execution, automatic
+activation, background scans, and scheduler integration remain deferred.
 
 References
 ----------
 
 * ``docs/Phase4DExperimentRecommendationCampaignPlanning.rst``
 * ``docs/Phase4CExperimentRecommendationConversionWorkflow.rst``
+* ``docs/Phase4DExperimentRecommendationCampaignApproval.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``

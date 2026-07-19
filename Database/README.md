@@ -37,7 +37,7 @@ Experiment scheduling tables are created by:
 - `005_experiment_scheduler.sql`: `experiment`
 - `006_experiment_analysis.sql`: `experiment_analysis_result`
 
-Recommendation conversion proposal history is created by:
+Recommendation conversion and campaign-approval history is created by:
 
 - `036_experiment_recommendation_conversion_proposal.sql`:
   `experiment_recommendation_conversion_proposal`
@@ -47,6 +47,8 @@ Recommendation conversion proposal history is created by:
   `experiment_recommendation_conversion_execution`
 - `039_experiment_recommendation_conversion_activation.sql`:
   `experiment_recommendation_conversion_activation`
+- `040_experiment_recommendation_campaign_approval.sql`:
+  `experiment_recommendation_campaign_approval`
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -63,11 +65,19 @@ Phase 4C tables.
 Phase 4C Step 6 adds no schema object or privilege. Its read-only workflow view
 joins these existing audit records with current experiment lifecycle state and
 reports deterministic integrity diagnostics.
-Phase 4D Steps 1 and 2 likewise add no schema object or privilege. Their
+Phase 4D Steps 1 and 2 add no schema object or privilege. Their
 read-only campaign planner and review consume one explicit completed ranking
 snapshot plus existing
 recommendation and Phase 4C workflow evidence in a PostgreSQL read transaction.
 They do not persist a plan or advance a sequence.
+Phase 4D Step 3 reconstructs that exact plan and review in the same transaction
+that inserts one immutable operator approval or rejection. Runtime ``pqxx``
+has ``SELECT``, column-limited payload ``INSERT``, and sequence ``USAGE`` only;
+it cannot provide generated IDs/timestamps or update, delete, or truncate
+approval history. Canonical review text is authoritative, identical retries
+return the existing row, and changed payload for the same review conflicts.
+Campaign approval does not create or modify an experiment and does not execute
+the campaign.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

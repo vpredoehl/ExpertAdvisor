@@ -43,6 +43,7 @@
 #include "ExperimentRecommendationConversionWorkflowService.hpp"
 #include "ExperimentRecommendationCampaignPlanningService.hpp"
 #include "ExperimentRecommendationCampaignReviewService.hpp"
+#include "ExperimentRecommendationCampaignApprovalService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -185,6 +186,17 @@ struct SchedulerOptions
     bool conversionWorkflowLimitSpecified = false;
     bool planRecommendationCampaign = false;
     bool reviewRecommendationCampaign = false;
+    bool approveRecommendationCampaign = false;
+    bool rejectRecommendationCampaign = false;
+    std::optional<std::string> campaignReviewIdentityHash;
+    std::optional<std::string> campaignReviewer;
+    std::optional<std::string> campaignReviewReason;
+    std::optional<long long> showRecommendationCampaignApprovalId;
+    bool listRecommendationCampaignApprovals = false;
+    std::optional<EA::ExperimentRecommendation::
+        RecommendationCampaignApprovalDecision> campaignApprovalDecision;
+    int campaignApprovalLimit = 100;
+    bool campaignApprovalLimitSpecified = false;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -823,6 +835,15 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--conversion-workflow-limit" ||
             arg == "--plan-recommendation-campaign" ||
             arg == "--review-recommendation-campaign" ||
+            arg == "--approve-recommendation-campaign" ||
+            arg == "--reject-recommendation-campaign" ||
+            arg == "--campaign-review-identity-hash" ||
+            arg == "--campaign-reviewer" ||
+            arg == "--campaign-review-reason" ||
+            arg == "--show-recommendation-campaign-approval" ||
+            arg == "--list-recommendation-campaign-approvals" ||
+            arg == "--campaign-approval-decision" ||
+            arg == "--campaign-approval-limit" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -953,6 +974,12 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--campaign-max-per-symbol=", 0) == 0 ||
             arg.rfind("--campaign-max-per-horizon=", 0) == 0 ||
             arg.rfind("--campaign-max-per-source-experiment=", 0) == 0 ||
+            arg.rfind("--campaign-review-identity-hash=", 0) == 0 ||
+            arg.rfind("--campaign-reviewer=", 0) == 0 ||
+            arg.rfind("--campaign-review-reason=", 0) == 0 ||
+            arg.rfind("--show-recommendation-campaign-approval=", 0) == 0 ||
+            arg.rfind("--campaign-approval-decision=", 0) == 0 ||
+            arg.rfind("--campaign-approval-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1738,6 +1765,45 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.reviewRecommendationCampaign = true;
             options.campaignPlanningPolicy.enabled = true;
         }
+        else if (arg == "--approve-recommendation-campaign")
+        {
+            options.approveRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--reject-recommendation-campaign")
+        {
+            options.rejectRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--campaign-review-identity-hash")
+            options.campaignReviewIdentityHash =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--campaign-reviewer")
+            options.campaignReviewer = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--campaign-review-reason")
+            options.campaignReviewReason = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--show-recommendation-campaign-approval")
+            options.showRecommendationCampaignApprovalId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-campaign-approvals")
+            options.listRecommendationCampaignApprovals = true;
+        else if (arg == "--campaign-approval-decision")
+        {
+            const std::string value = RequireNextArg(argc, argv, i, arg);
+            options.campaignApprovalDecision = EA::ExperimentRecommendation::
+                ParseRecommendationCampaignApprovalDecision(value);
+            if (!options.campaignApprovalDecision)
+                throw std::invalid_argument(
+                    "invalid --campaign-approval-decision value '" + value +
+                    "'");
+        }
+        else if (arg == "--campaign-approval-limit")
+        {
+            options.campaignApprovalLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignApprovalLimitSpecified = true;
+        }
         else if (arg == "--campaign-ranking-snapshot")
         {
             options.campaignPlanningScope.rankingSnapshotId =
@@ -2349,6 +2415,35 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "--campaign-max-per-source-experiment", value);
             options.campaignPolicyOptionSpecified = true;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-review-identity-hash", value))
+            options.campaignReviewIdentityHash = value;
+        else if (SplitOptionWithValue(arg, "--campaign-reviewer", value))
+            options.campaignReviewer = value;
+        else if (SplitOptionWithValue(arg, "--campaign-review-reason", value))
+            options.campaignReviewReason = value;
+        else if (SplitOptionWithValue(
+                     arg, "--show-recommendation-campaign-approval", value))
+            options.showRecommendationCampaignApprovalId =
+                ParsePositiveLongLong(
+                    "--show-recommendation-campaign-approval", value);
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-approval-decision", value))
+        {
+            options.campaignApprovalDecision = EA::ExperimentRecommendation::
+                ParseRecommendationCampaignApprovalDecision(value);
+            if (!options.campaignApprovalDecision)
+                throw std::invalid_argument(
+                    "invalid --campaign-approval-decision value '" + value +
+                    "'");
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-approval-limit", value))
+        {
+            options.campaignApprovalLimit = ParsePositiveInt(
+                "--campaign-approval-limit", value);
+            options.campaignApprovalLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2523,6 +2618,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.listRecommendationConversionWorkflows ? 1 : 0) +
         (options.planRecommendationCampaign ? 1 : 0) +
         (options.reviewRecommendationCampaign ? 1 : 0) +
+        (options.approveRecommendationCampaign ? 1 : 0) +
+        (options.rejectRecommendationCampaign ? 1 : 0) +
+        (options.showRecommendationCampaignApprovalId.has_value() ? 1 : 0) +
+        (options.listRecommendationCampaignApprovals ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2812,14 +2911,22 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             kMaximumRecommendationConversionWorkflowListLimit)
         throw std::invalid_argument(
             "--conversion-workflow-limit must not exceed 1000");
+    const int campaignApprovalActionCount =
+        (options.approveRecommendationCampaign ? 1 : 0) +
+        (options.rejectRecommendationCampaign ? 1 : 0);
+    if (campaignApprovalActionCount > 1)
+        throw std::invalid_argument(
+            "campaign approval and rejection are mutually exclusive");
+    const bool campaignApprovalAction = campaignApprovalActionCount == 1;
     if (options.campaignPolicyOptionSpecified &&
         !options.planRecommendationCampaign &&
-        !options.reviewRecommendationCampaign)
+        !options.reviewRecommendationCampaign &&
+        !campaignApprovalAction)
         throw std::invalid_argument(
-            "campaign options require --plan-recommendation-campaign or "
-            "--review-recommendation-campaign");
+            "campaign options require campaign planning, review, approval, or "
+            "rejection");
     if (options.planRecommendationCampaign ||
-        options.reviewRecommendationCampaign)
+        options.reviewRecommendationCampaign || campaignApprovalAction)
     {
         if (const auto error = EA::ExperimentRecommendation::
                 ValidateRecommendationCampaignPlanningPolicy(
@@ -2830,6 +2937,50 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     options.campaignPlanningScope))
             throw std::invalid_argument(*error);
     }
+    const bool campaignApprovalMetadata =
+        options.campaignReviewIdentityHash.has_value() ||
+        options.campaignReviewer.has_value() ||
+        options.campaignReviewReason.has_value();
+    if (campaignApprovalMetadata && !campaignApprovalAction)
+        throw std::invalid_argument(
+            "campaign review identity, reviewer, and reason require campaign "
+            "approval or rejection");
+    if (campaignApprovalAction)
+    {
+        if (!options.campaignReviewIdentityHash || !options.campaignReviewer ||
+            !options.campaignReviewReason)
+            throw std::invalid_argument(
+                "campaign approval or rejection requires "
+                "--campaign-review-identity-hash, --campaign-reviewer, and "
+                "--campaign-review-reason");
+        EA::ExperimentRecommendation::RecommendationCampaignApprovalRequest
+            request;
+        request.decision = options.approveRecommendationCampaign
+            ? EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::approved
+            : EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::rejected;
+        request.expectedCampaignReviewIdentityHash =
+            *options.campaignReviewIdentityHash;
+        request.reviewerIdentity = *options.campaignReviewer;
+        request.reasonText = *options.campaignReviewReason;
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignApprovalRequest(request);
+    }
+    if (options.campaignApprovalDecision &&
+        !options.listRecommendationCampaignApprovals)
+        throw std::invalid_argument(
+            "--campaign-approval-decision requires "
+            "--list-recommendation-campaign-approvals");
+    if (options.campaignApprovalLimitSpecified &&
+        !options.listRecommendationCampaignApprovals)
+        throw std::invalid_argument(
+            "--campaign-approval-limit requires "
+            "--list-recommendation-campaign-approvals");
+    if (options.campaignApprovalLimit > EA::ExperimentRecommendation::
+            kMaximumRecommendationCampaignApprovalListLimit)
+        throw std::invalid_argument(
+            "--campaign-approval-limit must not exceed 1000");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -15968,6 +16119,21 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "excluded, duplicate, family, symbol, and horizon structure of the "
         << "read-only campaign plan. It writes no database row.\n"
         << "Usage: " << exe
+        << " --approve-recommendation-campaign | "
+        << "--reject-recommendation-campaign "
+        << "--campaign-ranking-snapshot=ID "
+        << "--campaign-review-identity-hash=HASH "
+        << "--campaign-reviewer=TEXT --campaign-review-reason=TEXT "
+        << "[campaign policy options]\n"
+        << "Usage: " << exe
+        << " --show-recommendation-campaign-approval=ID | "
+        << "--list-recommendation-campaign-approvals "
+        << "[--campaign-approval-decision=approved|rejected] "
+        << "[--campaign-approval-limit=N]\n"
+        << "Phase 4D campaign approval records immutable human authorization "
+        << "for one exact reconstructed review. It never executes a campaign "
+        << "or creates, queues, or modifies an experiment.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -16205,6 +16371,44 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
                 options.campaignPlanningScope,
                 std::cout,
                 std::cerr);
+    if (options.approveRecommendationCampaign ||
+        options.rejectRecommendationCampaign)
+    {
+        EA::ExperimentRecommendation::RecommendationCampaignApprovalRequest
+            request;
+        request.decision = options.approveRecommendationCampaign
+            ? EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::approved
+            : EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::rejected;
+        request.expectedCampaignReviewIdentityHash =
+            *options.campaignReviewIdentityHash;
+        request.reviewerIdentity = *options.campaignReviewer;
+        request.reasonText = *options.campaignReviewReason;
+        return EA::ExperimentRecommendation::
+            RunRecordRecommendationCampaignApprovalCommand(
+                connectionString,
+                options.campaignPlanningPolicy,
+                options.campaignPlanningScope,
+                request,
+                std::cout,
+                std::cerr);
+    }
+    if (options.showRecommendationCampaignApprovalId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationCampaignApprovalCommand(
+                connectionString,
+                *options.showRecommendationCampaignApprovalId,
+                std::cout,
+                std::cerr);
+    if (options.listRecommendationCampaignApprovals)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationCampaignApprovalsCommand(
+                connectionString,
+                options.campaignApprovalDecision,
+                options.campaignApprovalLimit,
+                std::cout,
+                std::cerr);
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -16440,7 +16644,11 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.recommendationConversionWorkflowProposalId.has_value() ||
             options.listRecommendationConversionWorkflows ||
             options.planRecommendationCampaign ||
-            options.reviewRecommendationCampaign)
+            options.reviewRecommendationCampaign ||
+            options.approveRecommendationCampaign ||
+            options.rejectRecommendationCampaign ||
+            options.showRecommendationCampaignApprovalId.has_value() ||
+            options.listRecommendationCampaignApprovals)
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

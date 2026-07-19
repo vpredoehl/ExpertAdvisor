@@ -26,6 +26,7 @@ struct RecommendationCampaignReviewCandidate
     std::vector<RecommendationCampaignReason> reasons;
     bool duplicate = false;
     std::optional<std::string> duplicateIdentityHash;
+    bool operator==(const RecommendationCampaignReviewCandidate&) const = default;
 };
 
 struct RecommendationCampaignReviewTextCoverage
@@ -34,6 +35,7 @@ struct RecommendationCampaignReviewTextCoverage
     int consideredCount = 0;
     int selectedCount = 0;
     int excludedCount = 0;
+    bool operator==(const RecommendationCampaignReviewTextCoverage&) const = default;
 };
 
 struct RecommendationCampaignReviewHorizonCoverage
@@ -42,12 +44,14 @@ struct RecommendationCampaignReviewHorizonCoverage
     int consideredCount = 0;
     int selectedCount = 0;
     int excludedCount = 0;
+    bool operator==(const RecommendationCampaignReviewHorizonCoverage&) const = default;
 };
 
 struct RecommendationCampaignReviewDuplicateGroup
 {
     std::string recommendationInvocationIdentityHash;
     std::vector<long long> recommendationIds;
+    bool operator==(const RecommendationCampaignReviewDuplicateGroup&) const = default;
 };
 
 struct RecommendationCampaignReviewSummary
@@ -64,6 +68,7 @@ struct RecommendationCampaignReviewSummary
     int consideredHorizonCount = 0;
     int selectedHorizonCount = 0;
     bool deterministicOrderingVerified = false;
+    bool operator==(const RecommendationCampaignReviewSummary&) const = default;
 };
 
 struct RecommendationCampaignReview
@@ -83,6 +88,7 @@ struct RecommendationCampaignReview
     std::vector<RecommendationCampaignReviewHorizonCoverage> horizonCoverage;
     std::string identityCanonical;
     std::string identityHash;
+    bool operator==(const RecommendationCampaignReview&) const = default;
 };
 
 RecommendationCampaignReview ReviewRecommendationCampaignPlan(

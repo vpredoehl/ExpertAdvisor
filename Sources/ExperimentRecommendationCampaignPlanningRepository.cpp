@@ -67,6 +67,12 @@ RecommendationCampaignWorkflowEvidence MapWorkflowEvidence(
 bool RecommendationCampaignPlanningSchemasExist(pqxx::connection& connection)
 {
     pqxx::read_transaction transaction{connection};
+    return RecommendationCampaignPlanningSchemasExist(transaction);
+}
+
+bool RecommendationCampaignPlanningSchemasExist(
+    pqxx::transaction_base& transaction)
+{
     return transaction.exec(R"SQL(
 SELECT to_regclass('experiment_recommendation_ranking_snapshot') IS NOT NULL
    AND to_regclass('experiment_recommendation_ranking_member') IS NOT NULL
@@ -84,12 +90,20 @@ RecommendationCampaignPlanInput LoadRecommendationCampaignPlanInput(
     const RecommendationCampaignPlanningPolicy& policy,
     const RecommendationCampaignPlanningScope& scope)
 {
+    pqxx::read_transaction transaction{connection};
+    return LoadRecommendationCampaignPlanInput(transaction, policy, scope);
+}
+
+RecommendationCampaignPlanInput LoadRecommendationCampaignPlanInput(
+    pqxx::transaction_base& transaction,
+    const RecommendationCampaignPlanningPolicy& policy,
+    const RecommendationCampaignPlanningScope& scope)
+{
     if (const auto error = ValidateRecommendationCampaignPlanningPolicy(policy))
         throw std::invalid_argument(*error);
     if (const auto error = ValidateRecommendationCampaignPlanningScope(scope))
         throw std::invalid_argument(*error);
 
-    pqxx::read_transaction transaction{connection};
     const pqxx::result snapshots = transaction.exec(R"SQL(
 SELECT status,ranking_snapshot_identity_canonical,
        ranking_snapshot_identity_hash,ranking_policy_canonical,

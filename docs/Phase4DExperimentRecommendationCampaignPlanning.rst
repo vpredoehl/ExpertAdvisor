@@ -147,7 +147,9 @@ Deferred work
 -------------
 
 Phase 4D Step 2 consumes this plan through a separate deterministic, read-only
-review contract. Plan persistence, plan approval, proposal creation, bulk review, campaign
+review contract. Step 3 may persist one explicit operator decision only after
+reconstructing the plan and review from an explicit snapshot and matching the
+expected review identity. Plan persistence, proposal creation, bulk review, campaign
 execution, automatic activation, background scans, budgets, durable
 profitability policy, and scheduler integration remain outside Step 1.
 
@@ -157,5 +159,6 @@ References
 * ``docs/Phase4BExperimentRecommendationRanking.rst``
 * ``docs/Phase4CExperimentRecommendationConversionWorkflow.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignReview.rst``
+* ``docs/Phase4DExperimentRecommendationCampaignApproval.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/Volume_IX_Trading_Profitability.md``
