@@ -74,6 +74,8 @@ after reconstructing this review and matching an operator-supplied expected
 review identity hash. The approval is a separate immutable audit record and
 does not execute the campaign. Proposal creation, bulk execution, automatic
 activation, background scans, and scheduler integration remain deferred.
+Phase 4D Step 4 may consume an approved review only after reconstructing this
+exact canonical evidence and stops at Phase 4C proposal materialization.
 
 References
 ----------
@@ -81,4 +83,5 @@ References
 * ``docs/Phase4DExperimentRecommendationCampaignPlanning.rst``
 * ``docs/Phase4CExperimentRecommendationConversionWorkflow.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignApproval.rst``
+* ``docs/Phase4DExperimentRecommendationCampaignMaterialization.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``

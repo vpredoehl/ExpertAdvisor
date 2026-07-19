@@ -120,6 +120,10 @@ outside Step 3. Campaign approval records explicit human authorization for one
 exact deterministic campaign review. It does not create or modify experiments
 and does not execute the campaign.
 
+Phase 4D Step 4 may consume an ``approved`` row only to materialize the exact
+selected members as Phase 4C conversion proposals. Proposal review, execution,
+activation, experiment creation, and scheduling remain separate boundaries.
+
 References
 ----------
 

@@ -271,10 +271,18 @@ FindRecommendationCampaignApproval(
     pqxx::connection& connection,
     long long campaignApprovalId)
 {
+    pqxx::read_transaction transaction{connection};
+    return FindRecommendationCampaignApproval(transaction, campaignApprovalId);
+}
+
+std::optional<PersistedRecommendationCampaignApproval>
+FindRecommendationCampaignApproval(
+    pqxx::transaction_base& transaction,
+    long long campaignApprovalId)
+{
     if (campaignApprovalId <= 0)
         throw std::invalid_argument(
             "recommendation_campaign_approval_id_invalid");
-    pqxx::read_transaction transaction{connection};
     const pqxx::result rows = transaction.exec(
         "SELECT " + ApprovalColumns() + " FROM "
         "experiment_recommendation_campaign_approval WHERE "

@@ -45,6 +45,9 @@ std::string RecommendationCampaignPlanningPolicyCanonicalText(
     const RecommendationCampaignPlanningPolicy& policy);
 std::string RecommendationCampaignPlanningPolicyHash(
     const RecommendationCampaignPlanningPolicy& policy);
+RecommendationCampaignPlanningPolicy
+ParseRecommendationCampaignPlanningPolicyCanonicalText(
+    const std::string& canonical);
 
 struct RecommendationCampaignPlanningScope
 {
@@ -58,6 +61,9 @@ std::optional<std::string> ValidateRecommendationCampaignPlanningScope(
     const RecommendationCampaignPlanningScope& scope);
 std::string RecommendationCampaignPlanningScopeCanonicalText(
     const RecommendationCampaignPlanningScope& scope);
+RecommendationCampaignPlanningScope
+ParseRecommendationCampaignPlanningScopeCanonicalText(
+    const std::string& canonical);
 
 struct RecommendationCampaignWorkflowEvidence
 {

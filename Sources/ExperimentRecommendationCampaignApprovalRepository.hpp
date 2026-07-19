@@ -49,6 +49,10 @@ std::optional<PersistedRecommendationCampaignApproval>
 FindRecommendationCampaignApproval(
     pqxx::connection& connection,
     long long campaignApprovalId);
+std::optional<PersistedRecommendationCampaignApproval>
+FindRecommendationCampaignApproval(
+    pqxx::transaction_base& transaction,
+    long long campaignApprovalId);
 
 std::optional<PersistedRecommendationCampaignApproval>
 FindRecommendationCampaignApprovalByReviewIdentity(

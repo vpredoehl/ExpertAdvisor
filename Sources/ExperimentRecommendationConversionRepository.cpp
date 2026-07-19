@@ -321,6 +321,29 @@ PersistRecommendationConversionProposal(
     try
     {
         pqxx::work transaction{connection};
+        auto result = PersistRecommendationConversionProposal(
+            transaction, proposal);
+        transaction.commit();
+        return result;
+    }
+    catch (const pqxx::unique_violation&)
+    {
+        pqxx::read_transaction transaction{connection};
+        auto existing = FindByCanonical(
+            transaction, proposal.conversionIdentityCanonical);
+        if (!existing)
+            throw std::runtime_error(
+                "recommendation_conversion_proposal_unique_conflict");
+        return ExistingResult(std::move(*existing), proposal);
+    }
+}
+
+RecommendationConversionProposalPersistResult
+PersistRecommendationConversionProposal(
+    pqxx::transaction_base& transaction,
+    const ProposedExperimentSpecification& proposal)
+{
+        ValidateProposal(proposal);
         // Serialize only proposals sharing the accelerator hash. This makes
         // collision reporting and same-identity retries deterministic without
         // locking recommendation, experiment, or scheduler-owned rows.
@@ -331,7 +354,6 @@ PersistRecommendationConversionProposal(
         if (auto existing = FindByCanonical(
                 transaction, proposal.conversionIdentityCanonical))
         {
-            transaction.commit();
             return ExistingResult(std::move(*existing), proposal);
         }
         const bool hashCollision = HasHashCollision(transaction, proposal);
@@ -387,24 +409,12 @@ PersistRecommendationConversionProposal(
                 proposal.conversionIdentityHash,
                 collisionOrdinal}).one_row();
         PersistedRecommendationConversionProposal persisted = MapProposal(row);
-        transaction.commit();
         return {
             hashCollision
                 ? RecommendationConversionProposalPersistOutcome::
                       createdWithHashCollision
                 : RecommendationConversionProposalPersistOutcome::created,
             std::move(persisted)};
-    }
-    catch (const pqxx::unique_violation&)
-    {
-        pqxx::read_transaction transaction{connection};
-        auto existing = FindByCanonical(
-            transaction, proposal.conversionIdentityCanonical);
-        if (!existing)
-            throw std::runtime_error(
-                "recommendation_conversion_proposal_unique_conflict");
-        return ExistingResult(std::move(*existing), proposal);
-    }
 }
 
 std::optional<PersistedRecommendationConversionProposal>

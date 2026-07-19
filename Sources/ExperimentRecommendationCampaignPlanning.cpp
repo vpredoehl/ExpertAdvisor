@@ -4,12 +4,15 @@
 #include "ExperimentRecommendation.hpp"
 
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <cmath>
 #include <locale>
 #include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 namespace EA::ExperimentRecommendation
 {
@@ -49,6 +52,141 @@ std::string OptionalLongText(const std::optional<long long>& value)
 std::string OptionalFramedText(const std::optional<std::string>& value)
 {
     return value ? LengthText(*value) : "NULL";
+}
+
+class CanonicalReader
+{
+public:
+    explicit CanonicalReader(const std::string& value) : value_(value) {}
+
+    void Expect(std::string_view literal)
+    {
+        if (value_.compare(position_, literal.size(), literal) != 0)
+            throw std::invalid_argument(
+                "recommendation_campaign_canonical_text_invalid");
+        position_ += literal.size();
+    }
+
+    std::string Token()
+    {
+        const std::size_t end = value_.find(';', position_);
+        const std::size_t length = end == std::string::npos
+            ? value_.size() - position_ : end - position_;
+        std::string result = value_.substr(position_, length);
+        position_ += length;
+        return result;
+    }
+
+    std::optional<std::string> OptionalFramed()
+    {
+        if (value_.compare(position_, 4, "NULL") == 0)
+        {
+            position_ += 4;
+            return std::nullopt;
+        }
+        const std::size_t colon = value_.find(':', position_);
+        if (colon == std::string::npos)
+            throw std::invalid_argument(
+                "recommendation_campaign_canonical_text_invalid");
+        const std::size_t length = ParseSize(
+            value_.substr(position_, colon - position_));
+        position_ = colon + 1;
+        if (length > value_.size() - position_)
+            throw std::invalid_argument(
+                "recommendation_campaign_canonical_text_invalid");
+        std::string result = value_.substr(position_, length);
+        position_ += length;
+        return result;
+    }
+
+    std::string Framed()
+    {
+        auto value = OptionalFramed();
+        if (!value)
+            throw std::invalid_argument(
+                "recommendation_campaign_canonical_text_invalid");
+        return *value;
+    }
+
+    bool AtEnd() const { return position_ == value_.size(); }
+
+private:
+    static std::size_t ParseSize(const std::string& text)
+    {
+        if (text.empty() || text.find_first_not_of("0123456789") !=
+                                std::string::npos)
+            throw std::invalid_argument(
+                "recommendation_campaign_canonical_text_invalid");
+        std::size_t consumed = 0;
+        const unsigned long long value = std::stoull(text, &consumed);
+        if (consumed != text.size() ||
+            value > static_cast<unsigned long long>(SIZE_MAX))
+            throw std::invalid_argument(
+                "recommendation_campaign_canonical_text_invalid");
+        return static_cast<std::size_t>(value);
+    }
+
+    const std::string& value_;
+    std::size_t position_ = 0;
+};
+
+int ParseInt(const std::string& value)
+{
+    std::size_t consumed = 0;
+    const long long parsed = std::stoll(value, &consumed);
+    if (consumed != value.size() || parsed < INT_MIN || parsed > INT_MAX)
+        throw std::invalid_argument(
+            "recommendation_campaign_canonical_text_invalid");
+    return static_cast<int>(parsed);
+}
+
+long long ParseLong(const std::string& value)
+{
+    std::size_t consumed = 0;
+    const long long parsed = std::stoll(value, &consumed);
+    if (consumed != value.size())
+        throw std::invalid_argument(
+            "recommendation_campaign_canonical_text_invalid");
+    return parsed;
+}
+
+double ParseDouble(const std::string& value)
+{
+    std::istringstream input{value};
+    input.imbue(std::locale::classic());
+    double parsed = 0.0;
+    input >> parsed;
+    if (!input || input.peek() != std::char_traits<char>::eof() ||
+        !std::isfinite(parsed))
+        throw std::invalid_argument(
+            "recommendation_campaign_canonical_text_invalid");
+    return parsed;
+}
+
+bool ParseBool(const std::string& value)
+{
+    if (value == "0") return false;
+    if (value == "1") return true;
+    throw std::invalid_argument(
+        "recommendation_campaign_canonical_text_invalid");
+}
+
+std::optional<int> ParseOptionalInt(const std::string& value)
+{
+    return value == "NULL" ? std::nullopt
+                           : std::optional<int>{ParseInt(value)};
+}
+
+std::optional<long long> ParseOptionalLong(const std::string& value)
+{
+    return value == "NULL" ? std::nullopt
+                           : std::optional<long long>{ParseLong(value)};
+}
+
+std::optional<double> ParseOptionalDouble(const std::string& value)
+{
+    return value == "NULL" ? std::nullopt
+                           : std::optional<double>{ParseDouble(value)};
 }
 
 bool FiniteUnit(double value)
@@ -435,6 +573,54 @@ std::string RecommendationCampaignPlanningPolicyHash(
         RecommendationCampaignPlanningPolicyCanonicalText(policy));
 }
 
+RecommendationCampaignPlanningPolicy
+ParseRecommendationCampaignPlanningPolicyCanonicalText(
+    const std::string& canonical)
+{
+    CanonicalReader reader{canonical};
+    RecommendationCampaignPlanningPolicy policy;
+    reader.Expect("experiment_recommendation_campaign_planning_policy_v1;");
+    reader.Expect("contract_version=");
+    policy.contractVersion = ParseInt(reader.Token());
+    reader.Expect(";enabled=");
+    policy.enabled = ParseBool(reader.Token());
+    reader.Expect(";maximum_selected=");
+    policy.maximumSelectedRecommendations = ParseInt(reader.Token());
+    reader.Expect(";maximum_candidates=");
+    policy.maximumCandidatesConsidered = ParseInt(reader.Token());
+    reader.Expect(";minimum_leader_score=");
+    policy.minimumLeaderScore = ParseDouble(reader.Token());
+    reader.Expect(";minimum_inference_accuracy=");
+    policy.minimumInferenceAccuracy = ParseDouble(reader.Token());
+    reader.Expect(";maximum_neutral=");
+    policy.maximumPredictedNeutralProportion = ParseDouble(reader.Token());
+    reader.Expect(";minimum_profitability=");
+    policy.minimumProfitability = ParseOptionalDouble(reader.Token());
+    reader.Expect(";maximum_per_symbol=");
+    policy.maximumPerSymbol = ParseOptionalInt(reader.Token());
+    reader.Expect(";maximum_per_horizon=");
+    policy.maximumPerHorizon = ParseOptionalInt(reader.Token());
+    reader.Expect(";maximum_per_source=");
+    policy.maximumPerSourceExperiment = ParseOptionalInt(reader.Token());
+    reader.Expect(";reconsider_rejected=");
+    policy.reconsiderRejectedWorkflows = ParseBool(reader.Token());
+    reader.Expect(";reconsider_failed=");
+    policy.reconsiderFailedWorkflows = ParseBool(reader.Token());
+    reader.Expect(";reconsider_cancelled=");
+    policy.reconsiderCancelledWorkflows = ParseBool(reader.Token());
+    reader.Expect(";completed_excludes=");
+    policy.completedWorkflowsExcludeSelection = ParseBool(reader.Token());
+    reader.Expect(";inconsistent_excludes=");
+    policy.inconsistentWorkflowsAlwaysExclude = ParseBool(reader.Token());
+    reader.Expect(";tie_breaking=");
+    policy.tieBreaking = reader.Framed();
+    if (!reader.AtEnd() ||
+        RecommendationCampaignPlanningPolicyCanonicalText(policy) != canonical)
+        throw std::invalid_argument(
+            "recommendation_campaign_policy_canonical_invalid");
+    return policy;
+}
+
 std::optional<std::string> ValidateRecommendationCampaignPlanningScope(
     const RecommendationCampaignPlanningScope& scope)
 {
@@ -468,6 +654,28 @@ std::string RecommendationCampaignPlanningScopeCanonicalText(
         << ";recommendation_id="
         << OptionalLongText(scope.recommendationId);
     return out.str();
+}
+
+RecommendationCampaignPlanningScope
+ParseRecommendationCampaignPlanningScopeCanonicalText(
+    const std::string& canonical)
+{
+    CanonicalReader reader{canonical};
+    RecommendationCampaignPlanningScope scope;
+    reader.Expect("experiment_recommendation_campaign_scope_v1;");
+    reader.Expect("ranking_snapshot_id=");
+    scope.rankingSnapshotId = ParseLong(reader.Token());
+    reader.Expect(";symbol=");
+    scope.symbol = reader.OptionalFramed();
+    reader.Expect(";horizon=");
+    scope.horizon = ParseOptionalInt(reader.Token());
+    reader.Expect(";recommendation_id=");
+    scope.recommendationId = ParseOptionalLong(reader.Token());
+    if (!reader.AtEnd() ||
+        RecommendationCampaignPlanningScopeCanonicalText(scope) != canonical)
+        throw std::invalid_argument(
+            "recommendation_campaign_scope_canonical_invalid");
+    return scope;
 }
 
 std::string RecommendationCampaignDecisionText(

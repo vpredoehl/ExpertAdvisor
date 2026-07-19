@@ -49,6 +49,10 @@ Recommendation conversion and campaign-approval history is created by:
   `experiment_recommendation_conversion_activation`
 - `040_experiment_recommendation_campaign_approval.sql`:
   `experiment_recommendation_campaign_approval`
+- `041_experiment_recommendation_campaign_materialization.sql`:
+  `experiment_recommendation_campaign_materialization` and
+  `experiment_recommendation_campaign_materialization_member`, with
+  invoker-rights provenance and deferred completeness enforcement
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -78,6 +82,15 @@ approval history. Canonical review text is authoritative, identical retries
 return the existing row, and changed payload for the same review conflicts.
 Campaign approval does not create or modify an experiment and does not execute
 the campaign.
+Phase 4D Step 4 atomically reconstructs one approved campaign and creates or
+reuses only its exact ordered Phase 4C conversion-proposal set. One immutable
+manifest and ordered member links preserve approval, ranking, review, and
+proposal provenance. Runtime access is append-only and column-limited.
+First-time materialization reconstructs current authoritative evidence; exact
+retry validates and returns the immutable manifest because its Phase 4C
+proposals intentionally change later planning evidence.
+Materialization creates no conversion review, execution, activation, or
+experiment and does not involve the scheduler or workers.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

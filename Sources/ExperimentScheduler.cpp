@@ -44,6 +44,7 @@
 #include "ExperimentRecommendationCampaignPlanningService.hpp"
 #include "ExperimentRecommendationCampaignReviewService.hpp"
 #include "ExperimentRecommendationCampaignApprovalService.hpp"
+#include "ExperimentRecommendationCampaignMaterializationService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -197,6 +198,14 @@ struct SchedulerOptions
         RecommendationCampaignApprovalDecision> campaignApprovalDecision;
     int campaignApprovalLimit = 100;
     bool campaignApprovalLimitSpecified = false;
+    bool materializeRecommendationCampaign = false;
+    std::optional<long long> campaignMaterializationApprovalId;
+    std::optional<std::string> campaignMaterializedBy;
+    std::optional<std::string> campaignMaterializationReason;
+    std::optional<long long> showRecommendationCampaignMaterializationId;
+    bool listRecommendationCampaignMaterializations = false;
+    int campaignMaterializationLimit = 100;
+    bool campaignMaterializationLimitSpecified = false;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -844,6 +853,13 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--list-recommendation-campaign-approvals" ||
             arg == "--campaign-approval-decision" ||
             arg == "--campaign-approval-limit" ||
+            arg == "--materialize-recommendation-campaign" ||
+            arg == "--campaign-approval-id" ||
+            arg == "--campaign-materialized-by" ||
+            arg == "--campaign-materialization-reason" ||
+            arg == "--show-recommendation-campaign-materialization" ||
+            arg == "--list-recommendation-campaign-materializations" ||
+            arg == "--campaign-materialization-limit" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -980,6 +996,11 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--show-recommendation-campaign-approval=", 0) == 0 ||
             arg.rfind("--campaign-approval-decision=", 0) == 0 ||
             arg.rfind("--campaign-approval-limit=", 0) == 0 ||
+            arg.rfind("--campaign-approval-id=", 0) == 0 ||
+            arg.rfind("--campaign-materialized-by=", 0) == 0 ||
+            arg.rfind("--campaign-materialization-reason=", 0) == 0 ||
+            arg.rfind("--show-recommendation-campaign-materialization=", 0) == 0 ||
+            arg.rfind("--campaign-materialization-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1804,6 +1825,27 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
             options.campaignApprovalLimitSpecified = true;
         }
+        else if (arg == "--materialize-recommendation-campaign")
+            options.materializeRecommendationCampaign = true;
+        else if (arg == "--campaign-approval-id")
+            options.campaignMaterializationApprovalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--campaign-materialized-by")
+            options.campaignMaterializedBy = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--campaign-materialization-reason")
+            options.campaignMaterializationReason =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--show-recommendation-campaign-materialization")
+            options.showRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-campaign-materializations")
+            options.listRecommendationCampaignMaterializations = true;
+        else if (arg == "--campaign-materialization-limit")
+        {
+            options.campaignMaterializationLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignMaterializationLimitSpecified = true;
+        }
         else if (arg == "--campaign-ranking-snapshot")
         {
             options.campaignPlanningScope.rankingSnapshotId =
@@ -2444,6 +2486,26 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--campaign-approval-limit", value);
             options.campaignApprovalLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(arg, "--campaign-approval-id", value))
+            options.campaignMaterializationApprovalId = ParsePositiveLongLong(
+                "--campaign-approval-id", value);
+        else if (SplitOptionWithValue(arg, "--campaign-materialized-by", value))
+            options.campaignMaterializedBy = value;
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-materialization-reason", value))
+            options.campaignMaterializationReason = value;
+        else if (SplitOptionWithValue(
+                     arg, "--show-recommendation-campaign-materialization", value))
+            options.showRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(
+                    "--show-recommendation-campaign-materialization", value);
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-materialization-limit", value))
+        {
+            options.campaignMaterializationLimit = ParsePositiveInt(
+                "--campaign-materialization-limit", value);
+            options.campaignMaterializationLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2622,6 +2684,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.rejectRecommendationCampaign ? 1 : 0) +
         (options.showRecommendationCampaignApprovalId.has_value() ? 1 : 0) +
         (options.listRecommendationCampaignApprovals ? 1 : 0) +
+        (options.materializeRecommendationCampaign ? 1 : 0) +
+        (options.showRecommendationCampaignMaterializationId.has_value() ? 1 : 0) +
+        (options.listRecommendationCampaignMaterializations ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2981,6 +3046,50 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             kMaximumRecommendationCampaignApprovalListLimit)
         throw std::invalid_argument(
             "--campaign-approval-limit must not exceed 1000");
+    const bool campaignMaterializationMetadata =
+        options.campaignMaterializationApprovalId.has_value() ||
+        options.campaignMaterializedBy.has_value() ||
+        options.campaignMaterializationReason.has_value();
+    if (campaignMaterializationMetadata &&
+        !options.materializeRecommendationCampaign &&
+        !options.listRecommendationCampaignMaterializations)
+        throw std::invalid_argument(
+            "campaign materialization metadata requires materialize or list");
+    if (options.materializeRecommendationCampaign)
+    {
+        if (!options.campaignMaterializationApprovalId ||
+            !options.campaignMaterializedBy ||
+            !options.campaignMaterializationReason)
+            throw std::invalid_argument(
+                "campaign materialization requires --campaign-approval-id, "
+                "--campaign-materialized-by, and "
+                "--campaign-materialization-reason");
+        EA::ExperimentRecommendation::RecommendationCampaignMaterializationRequest
+            request{*options.campaignMaterializationApprovalId,
+                    *options.campaignMaterializedBy,
+                    *options.campaignMaterializationReason};
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignMaterializationRequest(request);
+    }
+    if ((options.campaignMaterializedBy ||
+         options.campaignMaterializationReason) &&
+        !options.materializeRecommendationCampaign)
+        throw std::invalid_argument(
+            "materialized-by and materialization-reason require materialize");
+    if (options.campaignMaterializationApprovalId &&
+        !options.materializeRecommendationCampaign &&
+        !options.listRecommendationCampaignMaterializations)
+        throw std::invalid_argument(
+            "--campaign-approval-id requires materialize or list");
+    if (options.campaignMaterializationLimitSpecified &&
+        !options.listRecommendationCampaignMaterializations)
+        throw std::invalid_argument(
+            "--campaign-materialization-limit requires list materializations");
+    if (options.campaignMaterializationLimit >
+        EA::ExperimentRecommendation::
+            kMaximumRecommendationCampaignMaterializationListLimit)
+        throw std::invalid_argument(
+            "--campaign-materialization-limit must not exceed 1000");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -16134,6 +16243,18 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "for one exact reconstructed review. It never executes a campaign "
         << "or creates, queues, or modifies an experiment.\n"
         << "Usage: " << exe
+        << " --materialize-recommendation-campaign "
+        << "--campaign-approval-id=ID --campaign-materialized-by=IDENTITY "
+        << "--campaign-materialization-reason=TEXT\n"
+        << "Usage: " << exe
+        << " --show-recommendation-campaign-materialization=ID | "
+        << "--list-recommendation-campaign-materializations "
+        << "[--campaign-approval-id=ID] "
+        << "[--campaign-materialization-limit=N]\n"
+        << "Campaign materialization creates only the exact Phase 4C proposal "
+        << "set. Conversion review, execution, activation, and experiments "
+        << "remain separate explicit actions.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -16409,6 +16530,28 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
                 options.campaignApprovalLimit,
                 std::cout,
                 std::cerr);
+    if (options.materializeRecommendationCampaign)
+    {
+        EA::ExperimentRecommendation::RecommendationCampaignMaterializationRequest
+            request{*options.campaignMaterializationApprovalId,
+                    *options.campaignMaterializedBy,
+                    *options.campaignMaterializationReason};
+        return EA::ExperimentRecommendation::
+            RunMaterializeRecommendationCampaignCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.showRecommendationCampaignMaterializationId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationCampaignMaterializationCommand(
+                connectionString,
+                *options.showRecommendationCampaignMaterializationId,
+                std::cout, std::cerr);
+    if (options.listRecommendationCampaignMaterializations)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationCampaignMaterializationsCommand(
+                connectionString, options.campaignMaterializationApprovalId,
+                options.campaignMaterializationLimit,
+                std::cout, std::cerr);
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -16648,7 +16791,11 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.approveRecommendationCampaign ||
             options.rejectRecommendationCampaign ||
             options.showRecommendationCampaignApprovalId.has_value() ||
-            options.listRecommendationCampaignApprovals)
+            options.listRecommendationCampaignApprovals ||
+            options.materializeRecommendationCampaign ||
+            options.showRecommendationCampaignMaterializationId.has_value() ||
+            options.listRecommendationCampaignMaterializations)
+            // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

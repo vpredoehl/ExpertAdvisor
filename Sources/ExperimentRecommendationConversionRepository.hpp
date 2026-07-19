@@ -45,6 +45,10 @@ RecommendationConversionProposalPersistResult
 PersistRecommendationConversionProposal(
     pqxx::connection& connection,
     const ProposedExperimentSpecification& proposal);
+RecommendationConversionProposalPersistResult
+PersistRecommendationConversionProposal(
+    pqxx::transaction_base& transaction,
+    const ProposedExperimentSpecification& proposal);
 
 std::optional<PersistedRecommendationConversionProposal>
 FindRecommendationConversionProposal(

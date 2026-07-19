@@ -152,6 +152,8 @@ reconstructing the plan and review from an explicit snapshot and matching the
 expected review identity. Plan persistence, proposal creation, bulk review, campaign
 execution, automatic activation, background scans, budgets, durable
 profitability policy, and scheduler integration remain outside Step 1.
+Phase 4D Step 4 does not mutate the plan: it reconstructs the exact approved
+plan and materializes only its selected members as Phase 4C proposals.
 
 References
 ----------
@@ -160,5 +162,6 @@ References
 * ``docs/Phase4CExperimentRecommendationConversionWorkflow.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignReview.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignApproval.rst``
+* ``docs/Phase4DExperimentRecommendationCampaignMaterialization.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/Volume_IX_Trading_Profitability.md``

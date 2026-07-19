@@ -1,7 +1,7 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 4D Step 3
-Version: 1.2.0
+Status: Foundation aligned through Phase 4D Step 4
+Version: 1.3.0
 Last revised: 2026-07-19
 
 ## 1. Purpose
@@ -22,7 +22,8 @@ terminal review transitions, immutable review events, and deterministic
 evaluation classification/history, ranking snapshots and comparisons, plus the
 pure manually invoked proposed-experiment specification contract.
 The explicit Phase 4C manual conversion chain and Phase 4D campaign planning,
-review, and explicit non-executing approval are also in scope.
+review, explicit non-executing approval, and approved-campaign materialization
+into the existing Phase 4C proposal boundary are also in scope.
 
 ### 2.2 Out of scope
 
@@ -32,7 +33,7 @@ approval/rejection/expiration.
 
 ### 2.3 Current implementation status
 
-Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, and Phase 4D Steps 1–3
+Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, and Phase 4D Steps 1–4
 implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
@@ -43,7 +44,9 @@ ranking snapshot and Phase 4C workflow evidence to produce a deterministic,
 bounded campaign plan without persisting or executing it. Step 2 validates and
 reviews that plan with deterministic duplicates and coverage. Step 3 records
 one explicit immutable operator approval or rejection for an exactly
-reconstructed review without executing it. Detailed contracts
+reconstructed review without executing it. Step 4 atomically creates or reuses
+only that review's selected Phase 4C proposals; it does not review or execute
+them. Detailed contracts
 remain in the Phase 4 documents referenced in §12.
 
 ## 3. Responsibilities
@@ -99,11 +102,13 @@ recommendation ranking
 -> read-only campaign plan
 -> read-only campaign review
 -> explicit persisted campaign approval
--> future campaign execution
+-> explicit approved-campaign materialization to Phase 4C proposals
 -> existing Phase 4C per-recommendation manual workflow
 ```
 
-The first four stages are implemented through Phase 4D Step 3.
+All displayed stages through proposal materialization are implemented through
+Phase 4D Step 4; Phase 4C review, execution, and activation remain separately
+invoked actions.
 
 ### 4.3 Ownership boundaries
 
@@ -378,6 +383,18 @@ only be rejected. Runtime privileges are append-only and column-limited. The
 approval row never creates or modifies an experiment and is not consumed by
 the scheduler.
 
+Phase 4D Step 4 adds one explicit, atomic materialization transaction for one
+approved campaign. It reconstructs the exact plan, review, and approval, then
+passes every selected member through the existing Phase 4C conversion contract.
+One immutable manifest and ordered member links record created or reused Phase
+4C proposals. Canonical text is authoritative and exact replay converges;
+changed operator, reason, membership, proposal, or approval evidence conflicts.
+First creation reconstructs the approved evidence; retry validates the
+immutable manifest directly because its newly created proposals intentionally
+alter subsequent planning evidence.
+Materialization does not review or execute those proposals, create or modify an
+experiment, or contact the scheduler or workers.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -398,6 +415,7 @@ the scheduler.
 - [Read-only campaign planning](../Phase4DExperimentRecommendationCampaignPlanning.rst)
 - [Read-only campaign review](../Phase4DExperimentRecommendationCampaignReview.rst)
 - [Explicit campaign approval](../Phase4DExperimentRecommendationCampaignApproval.rst)
+- [Approved campaign materialization](../Phase4DExperimentRecommendationCampaignMaterialization.rst)
 
 ## 13. Revision history
 
@@ -415,3 +433,4 @@ the scheduler.
 | 1.0.0 | 2026-07-19 | Recorded deterministic read-only Phase 4D Step 1 campaign planning from explicit persisted ranking and workflow evidence. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.1.0 | 2026-07-19 | Recorded deterministic read-only Phase 4D Step 2 campaign review, duplicate findings, and coverage. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.2.0 | 2026-07-19 | Recorded explicit immutable Phase 4D Step 3 campaign approval/rejection for one exact reconstructed review without execution. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
+| 1.3.0 | 2026-07-19 | Recorded atomic Phase 4D Step 4 materialization of one approved campaign into exact Phase 4C proposals without experiment or scheduler execution. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
