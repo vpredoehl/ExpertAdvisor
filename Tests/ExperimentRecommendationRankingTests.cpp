@@ -168,6 +168,11 @@ int main()
     assert(ParseRecommendationRankingBucket("blocked") ==
            RecommendationRankingBucket::blocked);
     assert(!ParseRecommendationRankingBucket("unknown"));
+    const auto emptyRanking = RankRecommendationEvaluationEvidence(
+        policy, {}, kMaximumRecommendationRankingMembers);
+    assert(emptyRanking.empty());
+    assert(RecommendationRankingMembershipCanonicalText({}) ==
+           "experiment_recommendation_ranking_membership_v1;count=0");
 
     std::vector<RecommendationRankingEvaluation> inputs = {
         Evaluation(8, RecommendationEvaluationDisposition::invalidPersistedEvidence,

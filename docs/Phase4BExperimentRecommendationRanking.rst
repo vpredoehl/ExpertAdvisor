@@ -136,7 +136,10 @@ Migration 035 is additive, owns only ranking tables, has no source-table
 trigger, and has restrictive foreign keys. Ranking takes ``FOR UPDATE`` only on
 its own snapshot while verifying member persistence; it does not take such locks
 on recommendations, evaluations, experiments, evidence, reviews, or scheduler
-state. Write tests use exact disposable schemas.
+state. Repository write tests require an explicit ``LSTM_TEST_DB_NAME`` and use
+an exact disposable schema; ``LSTM_TEST_DB_HOST``, ``LSTM_TEST_DB_PORT``, and
+``LSTM_TEST_DB_ADMIN_USER`` select an isolated PostgreSQL instance. They never
+fall back to the production ``LSTM`` database.
 
 Profitability, approval, conversion, experiment creation, queueing, autonomous
 selection, and scheduler integration remain deferred. Rank is advisory evidence,

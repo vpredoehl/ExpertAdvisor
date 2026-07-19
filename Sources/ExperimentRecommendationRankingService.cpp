@@ -380,6 +380,7 @@ int RunListExperimentRecommendationRankingMembersCommand(
     std::ostream& output)
 {
     pqxx::connection connection{connectionString};
+    if (!FindRecommendationRankingSnapshot(connection, snapshotId)) return 3;
     const auto members = ListRecommendationRankingMembers(
         connection, snapshotId, bucket, limit);
     for (const auto& member : members)

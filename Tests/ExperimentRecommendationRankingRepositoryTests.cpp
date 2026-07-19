@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -124,15 +125,23 @@ std::string SourceDigest(pqxx::connection& connection,
 
 int main()
 {
-    const std::string database = EnvironmentOr("LSTM_DB_NAME", "LSTM");
-    const std::string host = EnvironmentOr("LSTM_DB_HOST", "127.0.0.1");
+    const char* testDatabase = std::getenv("LSTM_TEST_DB_NAME");
+    if (testDatabase == nullptr || *testDatabase == '\0')
+    {
+        std::cerr << "LSTM_TEST_DB_NAME_required\n";
+        return 2;
+    }
+    const std::string database = testDatabase;
+    const std::string host = EnvironmentOr("LSTM_TEST_DB_HOST", "127.0.0.1");
+    const std::string port = EnvironmentOr("LSTM_TEST_DB_PORT", "5432");
     const std::string owner = EnvironmentOr(
-        "LSTM_DB_ADMIN_USER", EnvironmentOr("USER", "vjp").c_str());
+        "LSTM_TEST_DB_ADMIN_USER", EnvironmentOr("USER", "vjp").c_str());
     const std::string schema = "phase4b_rank_" + std::to_string(getpid());
     const std::string ownerConnectionString =
-        "hostaddr=" + host + " user=" + owner + " dbname=" + database;
+        "host=" + host + " port=" + port + " user=" + owner +
+        " dbname=" + database;
     const std::string runtimeConnectionString =
-        "hostaddr=" + host + " user=pqxx dbname=" + database +
+        "host=" + host + " port=" + port + " user=pqxx dbname=" + database +
         " options='-c search_path=" + schema + "'";
     pqxx::connection ownerConnection{ownerConnectionString};
 
@@ -342,6 +351,11 @@ int main()
         assert(members[4].member.bucket == RecommendationRankingBucket::nonActionable);
         assert(FindRecommendationRankingSnapshot(runtime, snapshotId));
         assert(FindRecommendationRankingMember(runtime, members.front().memberId));
+        std::ostringstream missingSnapshotOutput;
+        assert(RunListExperimentRecommendationRankingMembersCommand(
+            runtimeConnectionString, 9223372036854775807LL, std::nullopt, 100,
+            missingSnapshotOutput) == 3);
+        assert(missingSnapshotOutput.str().empty());
 
         std::ostringstream retryOutput;
         std::ostringstream retryErrors;
