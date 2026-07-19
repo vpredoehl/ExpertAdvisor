@@ -249,6 +249,9 @@ Their source-provenance foreign keys are restrictive. Review history is
 append-only, and the greatest generated decision ID yields the current
 pending/approved/rejected administrative disposition. This sequence-ID order is
 authoritative even when concurrent transactions commit in another order.
+Conversion activations likewise grant only ``SELECT`` and column-limited
+``INSERT`` plus sequence usage. Activation evidence is append-only; runtime
+``UPDATE``, ``DELETE``, and ``TRUNCATE`` are denied.
 Other immutable histories follow Volume I §7.3.
 
 ### 10.3 Observability and recovery
@@ -270,7 +273,9 @@ automatic research campaigns, profitability evidence, and scheduler-managed
 recommendation work. Phase 4C Step 1 provides the pure proposed-
 specification contract, Step 2 provides durable proposal audit evidence, and
 Step 3 provides explicit append-only manual proposal review. Step 4 permits one
-explicit approved proposal to create one paused experiment.
+explicit approved proposal to create one paused experiment. Step 5 permits a
+separate explicit operator action to make that exact experiment pending under
+the existing scheduler lifecycle.
 
 ### 11.3 Required decisions
 
@@ -301,6 +306,20 @@ proposal, approving decision, and experiment. Unique proposal and experiment
 references make retries and concurrent requests converge. The scheduler does
 not poll conversion rows and a converted experiment is not queued or started.
 
+Phase 4C Step 5 adds one explicit activation transaction. It revalidates the
+Step 4 execution and exact created invocation, requires the experiment to
+remain in the pristine ``paused/train`` state, records immutable activation
+evidence, and changes only that experiment to ``pending/train``. The audit and
+lifecycle update are atomic. Exact retries return the same activation without
+reapplying the transition. The scheduler is unchanged and never reads the
+activation table; no worker is started by activation.
+
+Phase 4C Step 6 adds a read-only workflow aggregate over proposal, greatest-ID
+review disposition, exact execution authorization, activation evidence, and
+current experiment lifecycle. Stable states and deterministic diagnostics make
+healthy and inconsistent chains inspectable without adding schema, privileges,
+workflow mutation, scheduler polling, or worker behavior.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -316,6 +335,8 @@ not poll conversion rows and a converted experiment is not queued or started.
 - [Manual conversion proposal persistence](../Phase4CExperimentRecommendationConversionPersistence.rst)
 - [Manual conversion proposal review](../Phase4CExperimentRecommendationConversionProposalReview.rst)
 - [Manual conversion execution](../Phase4CExperimentRecommendationConversionExecution.rst)
+- [Manual conversion activation](../Phase4CExperimentRecommendationConversionActivation.rst)
+- [Manual conversion workflow observability](../Phase4CExperimentRecommendationConversionWorkflow.rst)
 
 ## 13. Revision history
 
@@ -328,3 +349,5 @@ not poll conversion rows and a converted experiment is not queued or started.
 | 0.5.0 | 2026-07-18 | Recorded immutable Phase 4C Step 2 conversion-proposal persistence; experiment creation and execution remain deferred. | ADR-0001, ADR-0003, ADR-0004 |
 | 0.6.0 | 2026-07-18 | Recorded append-only, idempotent Phase 4C Step 3 manual proposal review; approval remains non-executing. | ADR-0001, ADR-0003, ADR-0004 |
 | 0.7.0 | 2026-07-19 | Recorded explicit, idempotent Phase 4C Step 4 conversion to one paused experiment. | ADR-0001, ADR-0004, ADR-0005 |
+| 0.8.0 | 2026-07-19 | Recorded explicit, atomic Phase 4C Step 5 activation of a converted experiment into the existing pending lifecycle. | ADR-0001, ADR-0004, ADR-0005 |
+| 0.9.0 | 2026-07-19 | Recorded read-only Phase 4C Step 6 end-to-end workflow state and integrity observability. | ADR-0001, ADR-0004, ADR-0005 |

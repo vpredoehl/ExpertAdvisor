@@ -45,6 +45,8 @@ Recommendation conversion proposal history is created by:
   `experiment_recommendation_conversion_review_decision`
 - `038_experiment_recommendation_conversion_execution.sql`:
   `experiment_recommendation_conversion_execution`
+- `039_experiment_recommendation_conversion_activation.sql`:
+  `experiment_recommendation_conversion_activation`
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -54,6 +56,13 @@ defines its current review disposition. That generated sequence-ID order, not
 transaction commit time or the descriptive timestamp, is authoritative.
 An explicit Step 4 conversion records the exact approving decision and creates
 one paused experiment. It does not queue, start, or schedule that experiment.
+An explicit Step 5 activation records a separate immutable audit event and
+changes only that existing experiment from `paused/train` to `pending/train`.
+It creates no experiment, starts no worker, and adds no scheduler dependency on
+Phase 4C tables.
+Phase 4C Step 6 adds no schema object or privilege. Its read-only workflow view
+joins these existing audit records with current experiment lifecycle state and
+reports deterministic integrity diagnostics.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

@@ -60,6 +60,15 @@ FindRecommendationConversionExecution(
     long long executionId);
 
 std::optional<PersistedRecommendationConversionExecution>
+FindRecommendationConversionExecution(
+    pqxx::transaction_base& transaction,
+    long long executionId);
+
+void ValidatePersistedRecommendationConversionExecution(
+    pqxx::transaction_base& transaction,
+    const PersistedRecommendationConversionExecution& execution);
+
+std::optional<PersistedRecommendationConversionExecution>
 FindRecommendationConversionExecutionByProposal(
     pqxx::connection& connection,
     long long proposalId);

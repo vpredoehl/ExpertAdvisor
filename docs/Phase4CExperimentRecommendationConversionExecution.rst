@@ -60,8 +60,9 @@ queued and scheduler state was not modified.
 Deferred work
 -------------
 
-Starting or resuming the paused experiment, queueing, scheduler capacity,
-worker launch, automatic conversion, budgets, and autonomous selection remain
+Step 5 provides a separate explicit activation action that may move this exact
+experiment from ``paused/train`` to ``pending/train``. Scheduler capacity,
+worker launch, automatic activation, budgets, and autonomous selection remain
 outside Step 4. Existing Phase 3 continuation behavior is unchanged.
 
 References

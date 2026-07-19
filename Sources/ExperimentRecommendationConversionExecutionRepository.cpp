@@ -326,10 +326,18 @@ FindRecommendationConversionExecution(
     pqxx::connection& connection,
     long long executionId)
 {
+    pqxx::read_transaction transaction{connection};
+    return FindRecommendationConversionExecution(transaction, executionId);
+}
+
+std::optional<PersistedRecommendationConversionExecution>
+FindRecommendationConversionExecution(
+    pqxx::transaction_base& transaction,
+    long long executionId)
+{
     if (executionId <= 0)
         throw std::invalid_argument(
             "recommendation_conversion_execution_id_invalid");
-    pqxx::read_transaction transaction{connection};
     const pqxx::result rows = transaction.exec(
         "SELECT " + ExecutionColumns() + " FROM "
         "experiment_recommendation_conversion_execution WHERE "
@@ -337,6 +345,18 @@ FindRecommendationConversionExecution(
         pqxx::params{executionId});
     if (rows.empty()) return std::nullopt;
     return MapExecution(rows.one_row());
+}
+
+void ValidatePersistedRecommendationConversionExecution(
+    pqxx::transaction_base& transaction,
+    const PersistedRecommendationConversionExecution& execution)
+{
+    const auto proposal = FindRecommendationConversionProposal(
+        transaction, execution.proposalId);
+    if (!proposal)
+        throw std::runtime_error(
+            "recommendation_conversion_execution_proposal_missing");
+    ValidateExisting(transaction, execution, *proposal);
 }
 
 std::optional<PersistedRecommendationConversionExecution>

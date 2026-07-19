@@ -39,6 +39,8 @@
 #include "ExperimentRecommendationRankingService.hpp"
 #include "ExperimentRecommendationConversionProposalReviewService.hpp"
 #include "ExperimentRecommendationConversionExecutionService.hpp"
+#include "ExperimentRecommendationConversionActivationService.hpp"
+#include "ExperimentRecommendationConversionWorkflowService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -170,6 +172,15 @@ struct SchedulerOptions
     bool conversionProposalReviewLimitSpecified = false;
     std::optional<long long> executeApprovedConversionProposalId;
     std::optional<long long> conversionProposalExecutionStatusId;
+    std::optional<long long> activateRecommendationConversionExecutionId;
+    std::optional<long long> recommendationConversionActivationStatusId;
+    std::optional<long long> recommendationConversionWorkflowProposalId;
+    bool listRecommendationConversionWorkflows = false;
+    std::optional<EA::ExperimentRecommendation::
+        RecommendationConversionWorkflowState> conversionWorkflowState;
+    int conversionWorkflowLimit = EA::ExperimentRecommendation::
+        kDefaultRecommendationConversionWorkflowListLimit;
+    bool conversionWorkflowLimitSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -795,6 +806,12 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--conversion-proposal-review-limit" ||
             arg == "--execute-approved-conversion-proposal" ||
             arg == "--conversion-proposal-execution-status" ||
+            arg == "--activate-recommendation-conversion-execution" ||
+            arg == "--recommendation-conversion-activation-status" ||
+            arg == "--recommendation-conversion-workflow" ||
+            arg == "--list-recommendation-conversion-workflows" ||
+            arg == "--conversion-workflow-state" ||
+            arg == "--conversion-workflow-limit" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -891,6 +908,13 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--conversion-proposal-review-limit=", 0) == 0 ||
             arg.rfind("--execute-approved-conversion-proposal=", 0) == 0 ||
             arg.rfind("--conversion-proposal-execution-status=", 0) == 0 ||
+            arg.rfind(
+                "--activate-recommendation-conversion-execution=", 0) == 0 ||
+            arg.rfind(
+                "--recommendation-conversion-activation-status=", 0) == 0 ||
+            arg.rfind("--recommendation-conversion-workflow=", 0) == 0 ||
+            arg.rfind("--conversion-workflow-state=", 0) == 0 ||
+            arg.rfind("--conversion-workflow-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1636,6 +1660,36 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--conversion-proposal-execution-status")
             options.conversionProposalExecutionStatusId = ParsePositiveLongLong(
                 arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--activate-recommendation-conversion-execution")
+            options.activateRecommendationConversionExecutionId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-conversion-activation-status")
+            options.recommendationConversionActivationStatusId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-conversion-workflow")
+            options.recommendationConversionWorkflowProposalId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-conversion-workflows")
+            options.listRecommendationConversionWorkflows = true;
+        else if (arg == "--conversion-workflow-state")
+        {
+            const std::string value = RequireNextArg(argc, argv, i, arg);
+            options.conversionWorkflowState = EA::ExperimentRecommendation::
+                ParseRecommendationConversionWorkflowState(value);
+            if (!options.conversionWorkflowState)
+                throw std::invalid_argument(
+                    "invalid --conversion-workflow-state value '" + value +
+                    "'");
+        }
+        else if (arg == "--conversion-workflow-limit")
+        {
+            options.conversionWorkflowLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.conversionWorkflowLimitSpecified = true;
+        }
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -2036,6 +2090,42 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                      arg, "--conversion-proposal-execution-status", value))
             options.conversionProposalExecutionStatusId = ParsePositiveLongLong(
                 "--conversion-proposal-execution-status", value);
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--activate-recommendation-conversion-execution",
+                     value))
+            options.activateRecommendationConversionExecutionId =
+                ParsePositiveLongLong(
+                    "--activate-recommendation-conversion-execution", value);
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--recommendation-conversion-activation-status",
+                     value))
+            options.recommendationConversionActivationStatusId =
+                ParsePositiveLongLong(
+                    "--recommendation-conversion-activation-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-conversion-workflow", value))
+            options.recommendationConversionWorkflowProposalId =
+                ParsePositiveLongLong(
+                    "--recommendation-conversion-workflow", value);
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-workflow-state", value))
+        {
+            options.conversionWorkflowState = EA::ExperimentRecommendation::
+                ParseRecommendationConversionWorkflowState(value);
+            if (!options.conversionWorkflowState)
+                throw std::invalid_argument(
+                    "invalid --conversion-workflow-state value '" + value +
+                    "'");
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-workflow-limit", value))
+        {
+            options.conversionWorkflowLimit = ParsePositiveInt(
+                "--conversion-workflow-limit", value);
+            options.conversionWorkflowLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2204,6 +2294,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.listConversionProposalsReviewStatus.has_value() ? 1 : 0) +
         (options.executeApprovedConversionProposalId.has_value() ? 1 : 0) +
         (options.conversionProposalExecutionStatusId.has_value() ? 1 : 0) +
+        (options.activateRecommendationConversionExecutionId.has_value() ? 1 : 0) +
+        (options.recommendationConversionActivationStatusId.has_value() ? 1 : 0) +
+        (options.recommendationConversionWorkflowProposalId.has_value() ? 1 : 0) +
+        (options.listRecommendationConversionWorkflows ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2478,6 +2572,21 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (void)EA::ExperimentRecommendation::
             NormalizeRecommendationConversionProposalReviewRequest(review);
     }
+    if (options.conversionWorkflowState &&
+        !options.listRecommendationConversionWorkflows)
+        throw std::invalid_argument(
+            "--conversion-workflow-state requires "
+            "--list-recommendation-conversion-workflows");
+    if (options.conversionWorkflowLimitSpecified &&
+        !options.listRecommendationConversionWorkflows)
+        throw std::invalid_argument(
+            "--conversion-workflow-limit requires "
+            "--list-recommendation-conversion-workflows");
+    if (options.conversionWorkflowLimit >
+        EA::ExperimentRecommendation::
+            kMaximumRecommendationConversionWorkflowListLimit)
+        throw std::invalid_argument(
+            "--conversion-workflow-limit must not exceed 1000");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -15580,6 +15689,18 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Phase 4C conversion creates one paused experiment only: it does not "
         << "queue, start, resume, or schedule the experiment.\n"
         << "Usage: " << exe
+        << " --activate-recommendation-conversion-execution=EXECUTION_ID | "
+        << "--recommendation-conversion-activation-status=ACTIVATION_ID\n"
+        << "Phase 4C activation moves that existing paused experiment to "
+        << "pending/train. It starts no worker and does not bypass the scheduler.\n"
+        << "Usage: " << exe
+        << " --recommendation-conversion-workflow=PROPOSAL_ID | "
+        << "--list-recommendation-conversion-workflows "
+        << "[--conversion-workflow-state=STATE] "
+        << "[--conversion-workflow-limit=N]\n"
+        << "Phase 4C workflow observation is read-only and never changes an "
+        << "experiment, audit record, worker, or scheduler state.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -15773,6 +15894,34 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
                 connectionString,
                 *options.conversionProposalExecutionStatusId,
                 std::cout);
+    if (options.activateRecommendationConversionExecutionId)
+        return EA::ExperimentRecommendation::
+            RunActivateRecommendationConversionExecutionCommand(
+                connectionString,
+                *options.activateRecommendationConversionExecutionId,
+                std::cout,
+                std::cerr);
+    if (options.recommendationConversionActivationStatusId)
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionActivationStatusCommand(
+                connectionString,
+                *options.recommendationConversionActivationStatusId,
+                std::cout);
+    if (options.recommendationConversionWorkflowProposalId)
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionWorkflowCommand(
+                connectionString,
+                *options.recommendationConversionWorkflowProposalId,
+                std::cout,
+                std::cerr);
+    if (options.listRecommendationConversionWorkflows)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationConversionWorkflowsCommand(
+                connectionString,
+                options.conversionWorkflowState,
+                options.conversionWorkflowLimit,
+                std::cout,
+                std::cerr);
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -16002,7 +16151,11 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.listConversionProposalReviewsId.has_value() ||
             options.listConversionProposalsReviewStatus.has_value() ||
             options.executeApprovedConversionProposalId.has_value() ||
-            options.conversionProposalExecutionStatusId.has_value())
+            options.conversionProposalExecutionStatusId.has_value() ||
+            options.activateRecommendationConversionExecutionId.has_value() ||
+            options.recommendationConversionActivationStatusId.has_value() ||
+            options.recommendationConversionWorkflowProposalId.has_value() ||
+            options.listRecommendationConversionWorkflows)
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);
