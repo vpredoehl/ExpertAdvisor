@@ -91,6 +91,12 @@
 		0B2000093072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B2000023072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.cpp */; };
 		0B20000A3072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B2000043072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp */; };
 		0B20000B3072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B2000043072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp */; };
+		0B3000063073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B3000003073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp */; };
+		0B3000073073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B3000003073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp */; };
+		0B3000083073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B3000023073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp */; };
+		0B3000093073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B3000023073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp */; };
+		0B30000A3073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B3000043073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp */; };
+		0B30000B3073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B3000043073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -262,6 +268,12 @@
 		0B2000033072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationConversionWorkflowRepository.hpp; path = Sources/ExperimentRecommendationConversionWorkflowRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0B2000043072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationConversionWorkflowService.cpp; path = Sources/ExperimentRecommendationConversionWorkflowService.cpp; sourceTree = SOURCE_ROOT; };
 		0B2000053072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationConversionWorkflowService.hpp; path = Sources/ExperimentRecommendationConversionWorkflowService.hpp; sourceTree = SOURCE_ROOT; };
+		0B3000003073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignPlanning.cpp; path = Sources/ExperimentRecommendationCampaignPlanning.cpp; sourceTree = SOURCE_ROOT; };
+		0B3000013073000100AAA001 /* ExperimentRecommendationCampaignPlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignPlanning.hpp; path = Sources/ExperimentRecommendationCampaignPlanning.hpp; sourceTree = SOURCE_ROOT; };
+		0B3000023073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignPlanningRepository.cpp; path = Sources/ExperimentRecommendationCampaignPlanningRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0B3000033073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignPlanningRepository.hpp; path = Sources/ExperimentRecommendationCampaignPlanningRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0B3000043073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignPlanningService.cpp; path = Sources/ExperimentRecommendationCampaignPlanningService.cpp; sourceTree = SOURCE_ROOT; };
+		0B3000053073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignPlanningService.hpp; path = Sources/ExperimentRecommendationCampaignPlanningService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -401,6 +413,12 @@
 				0B2000033072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.hpp */,
 				0B2000043072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp */,
 				0B2000053072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.hpp */,
+				0B3000003073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp */,
+				0B3000013073000100AAA001 /* ExperimentRecommendationCampaignPlanning.hpp */,
+				0B3000023073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp */,
+				0B3000033073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.hpp */,
+				0B3000043073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp */,
+				0B3000053073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -616,6 +634,9 @@
 				0B2000063072000100AAA001 /* ExperimentRecommendationConversionWorkflow.cpp in Sources */,
 				0B2000083072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.cpp in Sources */,
 				0B20000A3072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp in Sources */,
+				0B3000063073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp in Sources */,
+				0B3000083073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp in Sources */,
+				0B30000A3073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -660,6 +681,9 @@
 				0B2000073072000100AAA001 /* ExperimentRecommendationConversionWorkflow.cpp in Sources */,
 				0B2000093072000100AAA001 /* ExperimentRecommendationConversionWorkflowRepository.cpp in Sources */,
 				0B20000B3072000100AAA001 /* ExperimentRecommendationConversionWorkflowService.cpp in Sources */,
+				0B3000073073000100AAA001 /* ExperimentRecommendationCampaignPlanning.cpp in Sources */,
+				0B3000093073000100AAA001 /* ExperimentRecommendationCampaignPlanningRepository.cpp in Sources */,
+				0B30000B3073000100AAA001 /* ExperimentRecommendationCampaignPlanningService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,

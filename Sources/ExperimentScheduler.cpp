@@ -41,6 +41,7 @@
 #include "ExperimentRecommendationConversionExecutionService.hpp"
 #include "ExperimentRecommendationConversionActivationService.hpp"
 #include "ExperimentRecommendationConversionWorkflowService.hpp"
+#include "ExperimentRecommendationCampaignPlanningService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -181,6 +182,12 @@ struct SchedulerOptions
     int conversionWorkflowLimit = EA::ExperimentRecommendation::
         kDefaultRecommendationConversionWorkflowListLimit;
     bool conversionWorkflowLimitSpecified = false;
+    bool planRecommendationCampaign = false;
+    EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
+        campaignPlanningPolicy;
+    EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
+        campaignPlanningScope;
+    bool campaignPolicyOptionSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -812,6 +819,22 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--list-recommendation-conversion-workflows" ||
             arg == "--conversion-workflow-state" ||
             arg == "--conversion-workflow-limit" ||
+            arg == "--plan-recommendation-campaign" ||
+            arg == "--campaign-ranking-snapshot" ||
+            arg == "--campaign-limit" ||
+            arg == "--campaign-candidate-limit" ||
+            arg == "--campaign-symbol" ||
+            arg == "--campaign-horizon" ||
+            arg == "--campaign-min-leader-score" ||
+            arg == "--campaign-min-inference-accuracy" ||
+            arg == "--campaign-max-neutral-proportion" ||
+            arg == "--campaign-min-profitability" ||
+            arg == "--campaign-max-per-symbol" ||
+            arg == "--campaign-max-per-horizon" ||
+            arg == "--campaign-max-per-source-experiment" ||
+            arg == "--campaign-reconsider-rejected" ||
+            arg == "--campaign-reconsider-failed" ||
+            arg == "--campaign-reconsider-cancelled" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -915,6 +938,18 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--recommendation-conversion-workflow=", 0) == 0 ||
             arg.rfind("--conversion-workflow-state=", 0) == 0 ||
             arg.rfind("--conversion-workflow-limit=", 0) == 0 ||
+            arg.rfind("--campaign-ranking-snapshot=", 0) == 0 ||
+            arg.rfind("--campaign-limit=", 0) == 0 ||
+            arg.rfind("--campaign-candidate-limit=", 0) == 0 ||
+            arg.rfind("--campaign-symbol=", 0) == 0 ||
+            arg.rfind("--campaign-horizon=", 0) == 0 ||
+            arg.rfind("--campaign-min-leader-score=", 0) == 0 ||
+            arg.rfind("--campaign-min-inference-accuracy=", 0) == 0 ||
+            arg.rfind("--campaign-max-neutral-proportion=", 0) == 0 ||
+            arg.rfind("--campaign-min-profitability=", 0) == 0 ||
+            arg.rfind("--campaign-max-per-symbol=", 0) == 0 ||
+            arg.rfind("--campaign-max-per-horizon=", 0) == 0 ||
+            arg.rfind("--campaign-max-per-source-experiment=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1690,6 +1725,101 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
             options.conversionWorkflowLimitSpecified = true;
         }
+        else if (arg == "--plan-recommendation-campaign")
+        {
+            options.planRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--campaign-ranking-snapshot")
+        {
+            options.campaignPlanningScope.rankingSnapshotId =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-limit")
+        {
+            options.campaignPlanningPolicy.maximumSelectedRecommendations =
+                ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-candidate-limit")
+        {
+            options.campaignPlanningPolicy.maximumCandidatesConsidered =
+                ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-symbol")
+        {
+            options.campaignPlanningScope.symbol = EA::CanonicalSymbol::Normalize(
+                RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-horizon")
+        {
+            options.campaignPlanningScope.horizon = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-min-leader-score")
+        {
+            options.campaignPlanningPolicy.minimumLeaderScore =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-min-inference-accuracy")
+        {
+            options.campaignPlanningPolicy.minimumInferenceAccuracy =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-neutral-proportion")
+        {
+            options.campaignPlanningPolicy.maximumPredictedNeutralProportion =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-min-profitability")
+        {
+            options.campaignPlanningPolicy.minimumProfitability =
+                ParseFiniteDouble(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-per-symbol")
+        {
+            options.campaignPlanningPolicy.maximumPerSymbol = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-per-horizon")
+        {
+            options.campaignPlanningPolicy.maximumPerHorizon = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-per-source-experiment")
+        {
+            options.campaignPlanningPolicy.maximumPerSourceExperiment =
+                ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-reconsider-rejected")
+        {
+            options.campaignPlanningPolicy.reconsiderRejectedWorkflows = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-reconsider-failed")
+        {
+            options.campaignPlanningPolicy.reconsiderFailedWorkflows = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-reconsider-cancelled")
+        {
+            options.campaignPlanningPolicy.reconsiderCancelledWorkflows = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -2126,6 +2256,91 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--conversion-workflow-limit", value);
             options.conversionWorkflowLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-ranking-snapshot", value))
+        {
+            options.campaignPlanningScope.rankingSnapshotId =
+                ParsePositiveLongLong("--campaign-ranking-snapshot", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-limit", value))
+        {
+            options.campaignPlanningPolicy.maximumSelectedRecommendations =
+                ParsePositiveInt("--campaign-limit", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-candidate-limit", value))
+        {
+            options.campaignPlanningPolicy.maximumCandidatesConsidered =
+                ParsePositiveInt("--campaign-candidate-limit", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-symbol", value))
+        {
+            options.campaignPlanningScope.symbol =
+                EA::CanonicalSymbol::Normalize(value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-horizon", value))
+        {
+            options.campaignPlanningScope.horizon =
+                ParsePositiveInt("--campaign-horizon", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-min-leader-score", value))
+        {
+            options.campaignPlanningPolicy.minimumLeaderScore =
+                ParseNonNegativeFiniteDouble(
+                    "--campaign-min-leader-score", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-min-inference-accuracy", value))
+        {
+            options.campaignPlanningPolicy.minimumInferenceAccuracy =
+                ParseNonNegativeFiniteDouble(
+                    "--campaign-min-inference-accuracy", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-neutral-proportion", value))
+        {
+            options.campaignPlanningPolicy.maximumPredictedNeutralProportion =
+                ParseNonNegativeFiniteDouble(
+                    "--campaign-max-neutral-proportion", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-min-profitability", value))
+        {
+            options.campaignPlanningPolicy.minimumProfitability =
+                ParseFiniteDouble("--campaign-min-profitability", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-per-symbol", value))
+        {
+            options.campaignPlanningPolicy.maximumPerSymbol =
+                ParsePositiveInt("--campaign-max-per-symbol", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-per-horizon", value))
+        {
+            options.campaignPlanningPolicy.maximumPerHorizon =
+                ParsePositiveInt("--campaign-max-per-horizon", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-per-source-experiment", value))
+        {
+            options.campaignPlanningPolicy.maximumPerSourceExperiment =
+                ParsePositiveInt(
+                    "--campaign-max-per-source-experiment", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2298,6 +2513,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.recommendationConversionActivationStatusId.has_value() ? 1 : 0) +
         (options.recommendationConversionWorkflowProposalId.has_value() ? 1 : 0) +
         (options.listRecommendationConversionWorkflows ? 1 : 0) +
+        (options.planRecommendationCampaign ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2587,6 +2803,21 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             kMaximumRecommendationConversionWorkflowListLimit)
         throw std::invalid_argument(
             "--conversion-workflow-limit must not exceed 1000");
+    if (options.campaignPolicyOptionSpecified &&
+        !options.planRecommendationCampaign)
+        throw std::invalid_argument(
+            "campaign planning options require --plan-recommendation-campaign");
+    if (options.planRecommendationCampaign)
+    {
+        if (const auto error = EA::ExperimentRecommendation::
+                ValidateRecommendationCampaignPlanningPolicy(
+                    options.campaignPlanningPolicy))
+            throw std::invalid_argument(*error);
+        if (const auto error = EA::ExperimentRecommendation::
+                ValidateRecommendationCampaignPlanningScope(
+                    options.campaignPlanningScope))
+            throw std::invalid_argument(*error);
+    }
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -15701,6 +15932,24 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Phase 4C workflow observation is read-only and never changes an "
         << "experiment, audit record, worker, or scheduler state.\n"
         << "Usage: " << exe
+        << " --plan-recommendation-campaign "
+        << "--campaign-ranking-snapshot=ID "
+        << "[--campaign-limit=N] [--campaign-candidate-limit=N] "
+        << "[--campaign-symbol=SYMBOL] [--campaign-horizon=N] "
+        << "[--campaign-min-leader-score=VALUE] "
+        << "[--campaign-min-inference-accuracy=VALUE] "
+        << "[--campaign-max-neutral-proportion=VALUE] "
+        << "[--campaign-min-profitability=VALUE] "
+        << "[--campaign-max-per-symbol=N] "
+        << "[--campaign-max-per-horizon=N] "
+        << "[--campaign-max-per-source-experiment=N] "
+        << "[--campaign-reconsider-rejected] "
+        << "[--campaign-reconsider-failed] "
+        << "[--campaign-reconsider-cancelled]\n"
+        << "Phase 4D campaign planning reads one explicit durable ranking "
+        << "snapshot and Phase 4C workflow history. It creates no proposal or "
+        << "experiment and never starts the scheduler or a worker.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -15920,6 +16169,14 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
                 connectionString,
                 options.conversionWorkflowState,
                 options.conversionWorkflowLimit,
+                std::cout,
+                std::cerr);
+    if (options.planRecommendationCampaign)
+        return EA::ExperimentRecommendation::
+            RunRecommendationCampaignPlanningCommand(
+                connectionString,
+                options.campaignPlanningPolicy,
+                options.campaignPlanningScope,
                 std::cout,
                 std::cerr);
     if (options.evaluateExperimentRecommendations ||
@@ -16155,7 +16412,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.activateRecommendationConversionExecutionId.has_value() ||
             options.recommendationConversionActivationStatusId.has_value() ||
             options.recommendationConversionWorkflowProposalId.has_value() ||
-            options.listRecommendationConversionWorkflows)
+            options.listRecommendationConversionWorkflows ||
+            options.planRecommendationCampaign)
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

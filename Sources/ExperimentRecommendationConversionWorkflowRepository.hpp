@@ -56,4 +56,11 @@ ListRecommendationConversionWorkflows(
     pqxx::connection& connection,
     int candidateLimit = kDefaultRecommendationConversionWorkflowListLimit);
 
+// Transaction-bound set lookup for read models that must observe workflow and
+// adjacent immutable evidence in one PostgreSQL snapshot.
+std::vector<RecommendationConversionWorkflowView>
+ListRecommendationConversionWorkflowsForRecommendations(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& recommendationIds);
+
 } // namespace EA::ExperimentRecommendation

@@ -1,5 +1,7 @@
 #include "ExperimentRecommendationConversionWorkflowRepository.hpp"
 
+#include <algorithm>
+#include <sstream>
 #include <stdexcept>
 
 namespace EA::ExperimentRecommendation
@@ -39,9 +41,9 @@ SELECT
     execution.execution_identity_canonical,
     execution.execution_identity_hash,
     execution.created_at::text AS execution_created_at,
-    authorization.recommendation_conversion_review_decision_id AS authorization_review_id,
-    authorization.recommendation_conversion_proposal_id AS authorization_proposal_id,
-    authorization.decision AS authorization_decision_value,
+    execution_authorization.recommendation_conversion_review_decision_id AS authorization_review_id,
+    execution_authorization.recommendation_conversion_proposal_id AS authorization_proposal_id,
+    execution_authorization.decision AS authorization_decision_value,
     activation.recommendation_conversion_activation_id AS activation_id,
     activation.recommendation_conversion_execution_id AS activation_execution_id,
     activation.recommendation_conversion_proposal_id AS activation_proposal_id,
@@ -85,8 +87,8 @@ LEFT JOIN LATERAL (
     ORDER BY e.recommendation_conversion_execution_id
     LIMIT 1
 ) execution ON true
-LEFT JOIN experiment_recommendation_conversion_review_decision authorization
-  ON authorization.recommendation_conversion_review_decision_id =
+LEFT JOIN experiment_recommendation_conversion_review_decision execution_authorization
+  ON execution_authorization.recommendation_conversion_review_decision_id =
      execution.recommendation_conversion_review_decision_id
 LEFT JOIN LATERAL (
     SELECT a.*
@@ -291,6 +293,46 @@ ListRecommendationConversionWorkflows(
         WorkflowQuery() +
             " ORDER BY p.recommendation_conversion_proposal_id DESC LIMIT $1;",
         pqxx::params{candidateLimit});
+    std::vector<RecommendationConversionWorkflowView> views;
+    views.reserve(rows.size());
+    for (const pqxx::row& row : rows) views.push_back(MapWorkflow(row));
+    return views;
+}
+
+std::vector<RecommendationConversionWorkflowView>
+ListRecommendationConversionWorkflowsForRecommendations(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& recommendationIds)
+{
+    if (recommendationIds.size() >
+        static_cast<std::size_t>(
+            kMaximumRecommendationConversionWorkflowListLimit))
+        throw std::invalid_argument(
+            "recommendation_conversion_workflow_recommendation_limit_exceeded");
+    if (recommendationIds.empty()) return {};
+
+    std::vector<long long> ids = recommendationIds;
+    std::sort(ids.begin(), ids.end());
+    if (std::adjacent_find(ids.begin(), ids.end()) != ids.end())
+        throw std::invalid_argument(
+            "recommendation_conversion_workflow_recommendation_duplicate");
+
+    pqxx::params parameters;
+    std::ostringstream predicates;
+    predicates << " WHERE p.recommendation_id IN (";
+    for (std::size_t i = 0; i < ids.size(); ++i)
+    {
+        ValidatePositiveId(
+            ids[i], "recommendation_conversion_workflow_recommendation_id_invalid");
+        if (i != 0) predicates << ',';
+        predicates << '$' << (i + 1);
+        parameters.append(ids[i]);
+    }
+    predicates << ") ORDER BY p.recommendation_id,"
+                  "p.recommendation_conversion_proposal_id;";
+
+    const pqxx::result rows = transaction.exec(
+        WorkflowQuery() + predicates.str(), parameters);
     std::vector<RecommendationConversionWorkflowView> views;
     views.reserve(rows.size());
     for (const pqxx::row& row : rows) views.push_back(MapWorkflow(row));

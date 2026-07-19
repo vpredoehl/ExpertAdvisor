@@ -1,15 +1,15 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 4C Step 2
-Version: 0.5.0
-Last revised: 2026-07-18
+Status: Foundation aligned through Phase 4D Step 1
+Version: 1.0.0
+Last revised: 2026-07-19
 
 ## 1. Purpose
 
-Define the advisory research-recommendation subsystem: deterministic identity,
-candidate generation, persistence, duplicate handling, scoring/ranking,
-explicit human review, versioned advisory evaluation evidence, and immutable
-advisory ranking snapshots.
+Define the research-recommendation subsystem: deterministic identity, candidate
+generation, persistence, duplicate handling, scoring/ranking, explicit human
+review, immutable advisory evidence, the explicitly separated manual conversion
+chain, and read-only campaign planning.
 
 ## 2. Scope
 
@@ -20,26 +20,27 @@ duplicates, immutable scores/components, deterministic ranks/explanations,
 terminal review transitions, immutable review events, and deterministic
 evaluation classification/history, ranking snapshots and comparisons, plus the
 pure manually invoked proposed-experiment specification contract.
-Immutable manual conversion-proposal persistence is also in scope; proposal
-execution is not.
+The explicit Phase 4C manual conversion chain and read-only Phase 4D campaign
+planning are also in scope.
 
 ### 2.2 Out of scope
 
-Experiment creation from a durable proposal,
-profitability claims, queueing, scheduler polling, worker execution, and
-automatic approval/rejection/expiration.
+Automatic proposal creation, campaign execution, profitability claims,
+recommendation-driven scheduler polling, worker execution, and automatic
+approval/rejection/expiration.
 
 ### 2.3 Current implementation status
 
-Phase 4A Steps 1–5, Phase 4B Steps 1–2, and Phase 4C Steps 1–2 conversion
-contracts implement the in-scope capabilities.
+Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, and Phase 4D Step 1
+implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
-Phase 4C Step 1 validates explicitly supplied manual authorization and derives
-only an in-memory proposed experiment specification. Detailed contracts remain
-in the Phase 4 documents referenced in §12. Step 2 persists that specification
-without creating an experiment or adding a scheduler consumer.
+Phase 4C provides the explicit proposal, review, paused conversion, activation,
+and workflow-observation chain. Phase 4D Step 1 reads one explicit immutable
+ranking snapshot and Phase 4C workflow evidence to produce a deterministic,
+bounded campaign plan without persisting or executing it. Detailed contracts
+remain in the Phase 4 documents referenced in §12.
 
 ## 3. Responsibilities
 
@@ -52,13 +53,16 @@ their presentation.
 ### 3.2 Dependencies
 
 Consumes completed experiment/final-analysis evidence from Volumes VI/VII.
-There is no implemented downstream execution dependency.
+Only the explicit Phase 4C operator commands cross into experiment lifecycle;
+ranking and campaign planning have no downstream execution dependency.
 
 ### 3.3 Prohibited responsibilities
 
-The subsystem MUST NOT create experiments, queue work, mutate experiment or
-scheduler state, infer reviewer identity, use score thresholds for status, or
-claim expected profitability/correctness.
+Advisory evaluation, ranking, and campaign planning MUST NOT create experiments,
+queue work, mutate experiment or scheduler state, infer reviewer identity, use
+score thresholds for authorization, or claim expected profitability. Phase 4C
+may create and activate exactly one experiment only through its separately
+invoked, audited manual commands.
 
 ## 4. Architecture
 
@@ -76,18 +80,30 @@ claim expected profitability/correctness.
 ### 4.2 Control flow
 
 Completed evidence → deterministic source selection → pure candidates →
-collision-aware persistence → optional explicit score run → optional explicit
-operator review. Phase 4B evaluation is a separate explicit read/classify/
-persist path over recommendations; it is not an implicit arrow to review or
-execution. Every arrow is separately invoked and auditable.
+collision-aware persistence → optional explicit score/evaluation/ranking. The
+Phase 4C proposal → review → paused execution → activation chain consists of
+separately invoked and audited manual actions. Phase 4D reads ranking and Phase
+4C history to plan only; it adds no implicit arrow to mutation or execution.
+
+The governed campaign path is:
+
+```text
+recommendation ranking
+-> read-only campaign plan
+-> future explicit campaign approval
+-> future campaign execution
+-> existing Phase 4C per-recommendation manual workflow
+```
+
+Only the first two stages are implemented by Phase 4D Step 1.
 
 ### 4.3 Ownership boundaries
 
 Canonical text decides identity; repository transactions decide persistence;
-pure scoring policy decides numeric evidence; pure review rules decide legal
-transitions; the operator supplies the review action and any later explicit
-conversion request. Phase 4C Step 2 persists that exact proposed specification
-as immutable audit evidence. No stage creates an experiment from it.
+pure scoring and planning policies decide advisory output; pure review rules
+decide legal transitions; and the operator separately supplies review,
+conversion, and activation actions. Only Phase 4C Steps 4–5 may create or
+activate the one provenance-linked experiment. Campaign planning never does.
 
 ## 5. Data model
 
@@ -96,8 +112,9 @@ as immutable audit evidence. No stage creates an experiment from it.
 Recommendation policy, semantic/invocation configuration, recommendation scan,
 recommendation, score run/result/component, evaluation run/result/component,
 ranking snapshot/member, and review event.
-The conversion proposal is a separate immutable audit entity and is not an
-experiment lifecycle entity.
+Conversion proposal, review decision, execution, and activation records are
+separate immutable audit entities; only their explicitly linked experiment is
+an experiment-lifecycle entity. Campaign plans are not persisted in Step 1.
 
 ### 5.2 Provenance and versions
 
@@ -320,6 +337,18 @@ current experiment lifecycle. Stable states and deterministic diagnostics make
 healthy and inconsistent chains inspectable without adding schema, privileges,
 workflow mutation, scheduler polling, or worker behavior.
 
+Phase 4D Step 1 adds a pure, versioned campaign policy and a read-only aggregate
+over one explicit completed ranking snapshot, persisted recommendation source
+metrics, and the existing Phase 4C workflow derivation. Ranking global ordinal,
+recommendation ID, ranking member ID, then canonical evidence define the full
+presentation/selection order. Every considered
+candidate is retained with one decision and stable reasons; plan identity binds
+the full policy, scope, snapshot, evidence, workflow provenance, decisions, and
+reasons while excluding display time. There is no campaign table or scheduler
+consumer. Because no authoritative profitability evidence exists, a requested
+profitability threshold yields ``profitability_metric_unavailable`` rather than
+an inferred proxy.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -337,6 +366,7 @@ workflow mutation, scheduler polling, or worker behavior.
 - [Manual conversion execution](../Phase4CExperimentRecommendationConversionExecution.rst)
 - [Manual conversion activation](../Phase4CExperimentRecommendationConversionActivation.rst)
 - [Manual conversion workflow observability](../Phase4CExperimentRecommendationConversionWorkflow.rst)
+- [Read-only campaign planning](../Phase4DExperimentRecommendationCampaignPlanning.rst)
 
 ## 13. Revision history
 
@@ -351,3 +381,4 @@ workflow mutation, scheduler polling, or worker behavior.
 | 0.7.0 | 2026-07-19 | Recorded explicit, idempotent Phase 4C Step 4 conversion to one paused experiment. | ADR-0001, ADR-0004, ADR-0005 |
 | 0.8.0 | 2026-07-19 | Recorded explicit, atomic Phase 4C Step 5 activation of a converted experiment into the existing pending lifecycle. | ADR-0001, ADR-0004, ADR-0005 |
 | 0.9.0 | 2026-07-19 | Recorded read-only Phase 4C Step 6 end-to-end workflow state and integrity observability. | ADR-0001, ADR-0004, ADR-0005 |
+| 1.0.0 | 2026-07-19 | Recorded deterministic read-only Phase 4D Step 1 campaign planning from explicit persisted ranking and workflow evidence. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
