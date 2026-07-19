@@ -35,6 +35,18 @@
 #include "ContinuationPolicyInheritance.hpp"
 #include "ContinuationPolicyPersistence.hpp"
 #include "ExperimentRecommendationService.hpp"
+#include "ExperimentRecommendationEvaluationService.hpp"
+#include "ExperimentRecommendationRankingService.hpp"
+#include "ExperimentRecommendationConversionProposalReviewService.hpp"
+#include "ExperimentRecommendationConversionExecutionService.hpp"
+#include "ExperimentRecommendationConversionActivationService.hpp"
+#include "ExperimentRecommendationConversionWorkflowService.hpp"
+#include "ExperimentRecommendationCampaignPlanningService.hpp"
+#include "ExperimentRecommendationCampaignReviewService.hpp"
+#include "ExperimentRecommendationCampaignApprovalService.hpp"
+#include "ExperimentRecommendationCampaignMaterializationService.hpp"
+#include "ExperimentRecommendationCampaignHandoffService.hpp"
+#include "ExperimentRecommendationCampaignProposalReviewService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -125,6 +137,97 @@ struct SchedulerOptions
     std::optional<std::string> recommendationReviewActionFilter;
     int recommendationReviewLimit = 100;
     bool recommendationReviewLimitSpecified = false;
+    bool evaluateExperimentRecommendations = false;
+    std::optional<long long> evaluateExperimentRecommendationId;
+    bool listExperimentRecommendationEvaluations = false;
+    std::optional<long long> recommendationEvaluationStatusId;
+    std::optional<long long> explainRecommendationEvaluationId;
+    bool listExperimentRecommendationEvaluationRuns = false;
+    std::optional<long long> recommendationEvaluationRunStatusId;
+    std::optional<std::string> recommendationEvaluationPolicy;
+    std::optional<std::string> recommendationEvaluationDisposition;
+    int recommendationEvaluationLimit = 100;
+    bool recommendationEvaluationLimitSpecified = false;
+    bool recommendationEvaluationDryRun = false;
+    bool rankExperimentRecommendationEvaluations = false;
+    std::optional<long long> recommendationRankingEvaluationRunId;
+    std::optional<long long> recommendationRankingScanId;
+    std::optional<std::string> recommendationRankingSymbol;
+    std::optional<int> recommendationRankingHorizon;
+    std::optional<std::string> recommendationRankingFamily;
+    bool recommendationRankingGlobal = false;
+    int recommendationRankingLimit = 100;
+    bool recommendationRankingLimitSpecified = false;
+    bool recommendationRankingDryRun = false;
+    bool listExperimentRecommendationRankingSnapshots = false;
+    std::optional<long long> recommendationRankingStatusId;
+    std::optional<long long> listRecommendationRankingMembersId;
+    std::optional<long long> recommendationRankingMemberStatusId;
+    std::optional<std::string> recommendationRankingBucket;
+    std::optional<std::pair<long long, long long>> compareRecommendationEvaluations;
+    std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
+    std::optional<long long> approveConversionProposalId;
+    std::optional<long long> rejectConversionProposalId;
+    std::optional<long long> showConversionProposalId;
+    std::optional<long long> listConversionProposalReviewsId;
+    std::optional<std::string> listConversionProposalsReviewStatus;
+    std::optional<std::string> conversionProposalReviewRequestId;
+    std::optional<std::string> conversionProposalReviewOperator;
+    std::optional<std::string> conversionProposalReviewReason;
+    int conversionProposalReviewLimit = 100;
+    bool conversionProposalReviewLimitSpecified = false;
+    std::optional<long long> executeApprovedConversionProposalId;
+    std::optional<long long> conversionProposalExecutionStatusId;
+    std::optional<long long> activateRecommendationConversionExecutionId;
+    std::optional<long long> recommendationConversionActivationStatusId;
+    std::optional<long long> recommendationConversionWorkflowProposalId;
+    bool listRecommendationConversionWorkflows = false;
+    std::optional<EA::ExperimentRecommendation::
+        RecommendationConversionWorkflowState> conversionWorkflowState;
+    int conversionWorkflowLimit = EA::ExperimentRecommendation::
+        kDefaultRecommendationConversionWorkflowListLimit;
+    bool conversionWorkflowLimitSpecified = false;
+    bool planRecommendationCampaign = false;
+    bool reviewRecommendationCampaign = false;
+    bool approveRecommendationCampaign = false;
+    bool rejectRecommendationCampaign = false;
+    std::optional<std::string> campaignReviewIdentityHash;
+    std::optional<std::string> campaignReviewer;
+    std::optional<std::string> campaignReviewReason;
+    std::optional<long long> showRecommendationCampaignApprovalId;
+    bool listRecommendationCampaignApprovals = false;
+    std::optional<EA::ExperimentRecommendation::
+        RecommendationCampaignApprovalDecision> campaignApprovalDecision;
+    int campaignApprovalLimit = 100;
+    bool campaignApprovalLimitSpecified = false;
+    bool materializeRecommendationCampaign = false;
+    std::optional<long long> campaignMaterializationApprovalId;
+    std::optional<std::string> campaignMaterializedBy;
+    std::optional<std::string> campaignMaterializationReason;
+    std::optional<long long> showRecommendationCampaignMaterializationId;
+    bool listRecommendationCampaignMaterializations = false;
+    int campaignMaterializationLimit = 100;
+    bool campaignMaterializationLimitSpecified = false;
+    std::optional<long long> showRecommendationCampaignHandoffId;
+    bool listRecommendationCampaignHandoffs = false;
+    int campaignHandoffLimit = EA::ExperimentRecommendation::
+        kDefaultRecommendationCampaignHandoffListLimit;
+    bool campaignHandoffLimitSpecified = false;
+    std::optional<long long> reviewRecommendationCampaignMaterializationId;
+    std::optional<EA::ExperimentRecommendation::
+        RecommendationConversionProposalReviewDecision>
+        campaignProposalReviewDecision;
+    std::optional<std::string> campaignProposalReviewOperator;
+    std::optional<std::string> campaignProposalReviewReason;
+    bool campaignProposalReviewCommandSpecified = false;
+    bool campaignProposalReviewDecisionSpecified = false;
+    bool campaignProposalReviewOperatorSpecified = false;
+    bool campaignProposalReviewReasonSpecified = false;
+    EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
+        campaignPlanningPolicy;
+    EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
+        campaignPlanningScope;
+    bool campaignPolicyOptionSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -712,6 +815,90 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--recommendation-review-score-id" ||
             arg == "--recommendation-review-action" ||
             arg == "--recommendation-review-limit" ||
+            arg == "--evaluate-experiment-recommendations" ||
+            arg == "--evaluate-experiment-recommendation" ||
+            arg == "--list-experiment-recommendation-evaluations" ||
+            arg == "--recommendation-evaluation-status" ||
+            arg == "--explain-recommendation-evaluation" ||
+            arg == "--list-experiment-recommendation-evaluation-runs" ||
+            arg == "--recommendation-evaluation-run-status" ||
+            arg == "--recommendation-evaluation-policy" ||
+            arg == "--recommendation-evaluation-disposition" ||
+            arg == "--recommendation-evaluation-limit" ||
+            arg == "--recommendation-evaluation-dry-run" ||
+            arg == "--rank-experiment-recommendation-evaluations" ||
+            arg == "--recommendation-ranking-evaluation-run-id" ||
+            arg == "--recommendation-ranking-scan-id" ||
+            arg == "--recommendation-ranking-symbol" ||
+            arg == "--recommendation-ranking-horizon" ||
+            arg == "--recommendation-ranking-family" ||
+            arg == "--recommendation-ranking-global" ||
+            arg == "--recommendation-ranking-limit" ||
+            arg == "--recommendation-ranking-dry-run" ||
+            arg == "--list-experiment-recommendation-ranking-snapshots" ||
+            arg == "--recommendation-ranking-status" ||
+            arg == "--list-experiment-recommendation-ranking-members" ||
+            arg == "--recommendation-ranking-member-status" ||
+            arg == "--recommendation-ranking-bucket" ||
+            arg == "--compare-experiment-recommendation-evaluations" ||
+            arg == "--compare-experiment-recommendation-ranking-members" ||
+            arg == "--approve-conversion-proposal" ||
+            arg == "--reject-conversion-proposal" ||
+            arg == "--conversion-proposal-review-request-id" ||
+            arg == "--conversion-proposal-review-operator" ||
+            arg == "--conversion-proposal-review-reason" ||
+            arg == "--show-conversion-proposal" ||
+            arg == "--list-conversion-proposal-reviews" ||
+            arg == "--list-conversion-proposals-by-review-status" ||
+            arg == "--conversion-proposal-review-limit" ||
+            arg == "--execute-approved-conversion-proposal" ||
+            arg == "--conversion-proposal-execution-status" ||
+            arg == "--activate-recommendation-conversion-execution" ||
+            arg == "--recommendation-conversion-activation-status" ||
+            arg == "--recommendation-conversion-workflow" ||
+            arg == "--list-recommendation-conversion-workflows" ||
+            arg == "--conversion-workflow-state" ||
+            arg == "--conversion-workflow-limit" ||
+            arg == "--plan-recommendation-campaign" ||
+            arg == "--review-recommendation-campaign" ||
+            arg == "--approve-recommendation-campaign" ||
+            arg == "--reject-recommendation-campaign" ||
+            arg == "--campaign-review-identity-hash" ||
+            arg == "--campaign-reviewer" ||
+            arg == "--campaign-review-reason" ||
+            arg == "--show-recommendation-campaign-approval" ||
+            arg == "--list-recommendation-campaign-approvals" ||
+            arg == "--campaign-approval-decision" ||
+            arg == "--campaign-approval-limit" ||
+            arg == "--materialize-recommendation-campaign" ||
+            arg == "--campaign-approval-id" ||
+            arg == "--campaign-materialized-by" ||
+            arg == "--campaign-materialization-reason" ||
+            arg == "--show-recommendation-campaign-materialization" ||
+            arg == "--list-recommendation-campaign-materializations" ||
+            arg == "--campaign-materialization-limit" ||
+            arg == "--show-recommendation-campaign-handoff" ||
+            arg == "--list-recommendation-campaign-handoffs" ||
+            arg == "--campaign-handoff-limit" ||
+            arg == "--review-recommendation-campaign-materialization" ||
+            arg == "--campaign-proposal-review-decision" ||
+            arg == "--campaign-proposal-review-operator" ||
+            arg == "--campaign-proposal-review-reason" ||
+            arg == "--campaign-ranking-snapshot" ||
+            arg == "--campaign-limit" ||
+            arg == "--campaign-candidate-limit" ||
+            arg == "--campaign-symbol" ||
+            arg == "--campaign-horizon" ||
+            arg == "--campaign-min-leader-score" ||
+            arg == "--campaign-min-inference-accuracy" ||
+            arg == "--campaign-max-neutral-proportion" ||
+            arg == "--campaign-min-profitability" ||
+            arg == "--campaign-max-per-symbol" ||
+            arg == "--campaign-max-per-horizon" ||
+            arg == "--campaign-max-per-source-experiment" ||
+            arg == "--campaign-reconsider-rejected" ||
+            arg == "--campaign-reconsider-failed" ||
+            arg == "--campaign-reconsider-cancelled" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -778,6 +965,73 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--recommendation-review-score-id=", 0) == 0 ||
             arg.rfind("--recommendation-review-action=", 0) == 0 ||
             arg.rfind("--recommendation-review-limit=", 0) == 0 ||
+            arg.rfind("--evaluate-experiment-recommendation=", 0) == 0 ||
+            arg.rfind("--recommendation-evaluation-status=", 0) == 0 ||
+            arg.rfind("--explain-recommendation-evaluation=", 0) == 0 ||
+            arg.rfind("--recommendation-evaluation-run-status=", 0) == 0 ||
+            arg.rfind("--recommendation-evaluation-policy=", 0) == 0 ||
+            arg.rfind("--recommendation-evaluation-disposition=", 0) == 0 ||
+            arg.rfind("--recommendation-evaluation-limit=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-evaluation-run-id=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-scan-id=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-symbol=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-horizon=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-family=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-limit=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-status=", 0) == 0 ||
+            arg.rfind("--list-experiment-recommendation-ranking-members=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-member-status=", 0) == 0 ||
+            arg.rfind("--recommendation-ranking-bucket=", 0) == 0 ||
+            arg.rfind("--compare-experiment-recommendation-evaluations=", 0) == 0 ||
+            arg.rfind("--compare-experiment-recommendation-ranking-members=", 0) == 0 ||
+            arg.rfind("--approve-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--reject-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-request-id=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-operator=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-reason=", 0) == 0 ||
+            arg.rfind("--show-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--list-conversion-proposal-reviews=", 0) == 0 ||
+            arg.rfind("--list-conversion-proposals-by-review-status=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-limit=", 0) == 0 ||
+            arg.rfind("--execute-approved-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-execution-status=", 0) == 0 ||
+            arg.rfind(
+                "--activate-recommendation-conversion-execution=", 0) == 0 ||
+            arg.rfind(
+                "--recommendation-conversion-activation-status=", 0) == 0 ||
+            arg.rfind("--recommendation-conversion-workflow=", 0) == 0 ||
+            arg.rfind("--conversion-workflow-state=", 0) == 0 ||
+            arg.rfind("--conversion-workflow-limit=", 0) == 0 ||
+            arg.rfind("--campaign-ranking-snapshot=", 0) == 0 ||
+            arg.rfind("--campaign-limit=", 0) == 0 ||
+            arg.rfind("--campaign-candidate-limit=", 0) == 0 ||
+            arg.rfind("--campaign-symbol=", 0) == 0 ||
+            arg.rfind("--campaign-horizon=", 0) == 0 ||
+            arg.rfind("--campaign-min-leader-score=", 0) == 0 ||
+            arg.rfind("--campaign-min-inference-accuracy=", 0) == 0 ||
+            arg.rfind("--campaign-max-neutral-proportion=", 0) == 0 ||
+            arg.rfind("--campaign-min-profitability=", 0) == 0 ||
+            arg.rfind("--campaign-max-per-symbol=", 0) == 0 ||
+            arg.rfind("--campaign-max-per-horizon=", 0) == 0 ||
+            arg.rfind("--campaign-max-per-source-experiment=", 0) == 0 ||
+            arg.rfind("--campaign-review-identity-hash=", 0) == 0 ||
+            arg.rfind("--campaign-reviewer=", 0) == 0 ||
+            arg.rfind("--campaign-review-reason=", 0) == 0 ||
+            arg.rfind("--show-recommendation-campaign-approval=", 0) == 0 ||
+            arg.rfind("--campaign-approval-decision=", 0) == 0 ||
+            arg.rfind("--campaign-approval-limit=", 0) == 0 ||
+            arg.rfind("--campaign-approval-id=", 0) == 0 ||
+            arg.rfind("--campaign-materialized-by=", 0) == 0 ||
+            arg.rfind("--campaign-materialization-reason=", 0) == 0 ||
+            arg.rfind("--show-recommendation-campaign-materialization=", 0) == 0 ||
+            arg.rfind("--campaign-materialization-limit=", 0) == 0 ||
+            arg.rfind("--show-recommendation-campaign-handoff=", 0) == 0 ||
+            arg.rfind("--campaign-handoff-limit=", 0) == 0 ||
+            arg.rfind(
+                "--review-recommendation-campaign-materialization=", 0) == 0 ||
+            arg.rfind("--campaign-proposal-review-decision=", 0) == 0 ||
+            arg.rfind("--campaign-proposal-review-operator=", 0) == 0 ||
+            arg.rfind("--campaign-proposal-review-reason=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -810,7 +1064,7 @@ std::string GetEnvOrDefault(const char* name, const char* fallback)
 std::string LstmDbConnectionString()
 {
     return "hostaddr=" + GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1") +
-           " user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+           " gssencmode=disable user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
 }
 
 std::string CurrentLocalFilenameTimestamp()
@@ -1034,6 +1288,18 @@ std::pair<long long, int> ParseExperimentEpochPair(const std::string& optionName
     };
 }
 
+std::pair<long long, long long> ParsePositiveIdPair(
+    const std::string& optionName,
+    const std::string& value)
+{
+    const size_t colon = value.find(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= value.size() ||
+        value.find(':', colon + 1) != std::string::npos)
+        throw std::invalid_argument(optionName + " requires LEFT_ID:RIGHT_ID");
+    return {ParsePositiveLongLong(optionName, value.substr(0, colon)),
+            ParsePositiveLongLong(optionName, value.substr(colon + 1))};
+}
+
 double ParsePositiveDouble(const std::string& optionName, const std::string& value)
 {
     size_t consumed = 0;
@@ -1076,7 +1342,9 @@ double ParseFiniteDouble(const std::string& optionName, const std::string& value
     return parsed;
 }
 
-double ParseNonNegativeFiniteDouble(const std::string& optionName, const std::string& value)
+[[maybe_unused]] double ParseNonNegativeFiniteDouble(
+    const std::string& optionName,
+    const std::string& value)
 {
     const double parsed = ParseFiniteDouble(optionName, value);
     if (parsed < 0.0)
@@ -1394,6 +1662,367 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
             options.recommendationReviewLimitSpecified = true;
         }
+        else if (arg == "--evaluate-experiment-recommendations")
+            options.evaluateExperimentRecommendations = true;
+        else if (arg == "--evaluate-experiment-recommendation")
+            options.evaluateExperimentRecommendationId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-recommendation-evaluations")
+            options.listExperimentRecommendationEvaluations = true;
+        else if (arg == "--recommendation-evaluation-status")
+            options.recommendationEvaluationStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--explain-recommendation-evaluation")
+            options.explainRecommendationEvaluationId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-recommendation-evaluation-runs")
+            options.listExperimentRecommendationEvaluationRuns = true;
+        else if (arg == "--recommendation-evaluation-run-status")
+            options.recommendationEvaluationRunStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-evaluation-policy")
+            options.recommendationEvaluationPolicy =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-evaluation-disposition")
+            options.recommendationEvaluationDisposition =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-evaluation-limit")
+        {
+            options.recommendationEvaluationLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.recommendationEvaluationLimitSpecified = true;
+        }
+        else if (arg == "--recommendation-evaluation-dry-run")
+            options.recommendationEvaluationDryRun = true;
+        else if (arg == "--rank-experiment-recommendation-evaluations")
+            options.rankExperimentRecommendationEvaluations = true;
+        else if (arg == "--recommendation-ranking-evaluation-run-id")
+            options.recommendationRankingEvaluationRunId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-scan-id")
+            options.recommendationRankingScanId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-symbol")
+            options.recommendationRankingSymbol =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-ranking-horizon")
+            options.recommendationRankingHorizon = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-family")
+            options.recommendationRankingFamily =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--recommendation-ranking-global")
+            options.recommendationRankingGlobal = true;
+        else if (arg == "--recommendation-ranking-limit")
+        {
+            options.recommendationRankingLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.recommendationRankingLimitSpecified = true;
+        }
+        else if (arg == "--recommendation-ranking-dry-run")
+            options.recommendationRankingDryRun = true;
+        else if (arg == "--list-experiment-recommendation-ranking-snapshots")
+            options.listExperimentRecommendationRankingSnapshots = true;
+        else if (arg == "--recommendation-ranking-status")
+            options.recommendationRankingStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-experiment-recommendation-ranking-members")
+            options.listRecommendationRankingMembersId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-member-status")
+            options.recommendationRankingMemberStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-ranking-bucket")
+            options.recommendationRankingBucket =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--compare-experiment-recommendation-evaluations")
+            options.compareRecommendationEvaluations = ParsePositiveIdPair(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-experiment-recommendation-ranking-members")
+            options.compareRecommendationRankingMembers = ParsePositiveIdPair(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--approve-conversion-proposal")
+            options.approveConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--reject-conversion-proposal")
+            options.rejectConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--conversion-proposal-review-request-id")
+            options.conversionProposalReviewRequestId =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--conversion-proposal-review-operator")
+            options.conversionProposalReviewOperator =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--conversion-proposal-review-reason")
+            options.conversionProposalReviewReason =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--show-conversion-proposal")
+            options.showConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-conversion-proposal-reviews")
+            options.listConversionProposalReviewsId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-conversion-proposals-by-review-status")
+            options.listConversionProposalsReviewStatus =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--conversion-proposal-review-limit")
+        {
+            options.conversionProposalReviewLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.conversionProposalReviewLimitSpecified = true;
+        }
+        else if (arg == "--execute-approved-conversion-proposal")
+            options.executeApprovedConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--conversion-proposal-execution-status")
+            options.conversionProposalExecutionStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--activate-recommendation-conversion-execution")
+            options.activateRecommendationConversionExecutionId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-conversion-activation-status")
+            options.recommendationConversionActivationStatusId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--recommendation-conversion-workflow")
+            options.recommendationConversionWorkflowProposalId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-conversion-workflows")
+            options.listRecommendationConversionWorkflows = true;
+        else if (arg == "--conversion-workflow-state")
+        {
+            const std::string value = RequireNextArg(argc, argv, i, arg);
+            options.conversionWorkflowState = EA::ExperimentRecommendation::
+                ParseRecommendationConversionWorkflowState(value);
+            if (!options.conversionWorkflowState)
+                throw std::invalid_argument(
+                    "invalid --conversion-workflow-state value '" + value +
+                    "'");
+        }
+        else if (arg == "--conversion-workflow-limit")
+        {
+            options.conversionWorkflowLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.conversionWorkflowLimitSpecified = true;
+        }
+        else if (arg == "--plan-recommendation-campaign")
+        {
+            options.planRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--review-recommendation-campaign")
+        {
+            options.reviewRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--approve-recommendation-campaign")
+        {
+            options.approveRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--reject-recommendation-campaign")
+        {
+            options.rejectRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
+        else if (arg == "--campaign-review-identity-hash")
+            options.campaignReviewIdentityHash =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--campaign-reviewer")
+            options.campaignReviewer = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--campaign-review-reason")
+            options.campaignReviewReason = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--show-recommendation-campaign-approval")
+            options.showRecommendationCampaignApprovalId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-campaign-approvals")
+            options.listRecommendationCampaignApprovals = true;
+        else if (arg == "--campaign-approval-decision")
+        {
+            const std::string value = RequireNextArg(argc, argv, i, arg);
+            options.campaignApprovalDecision = EA::ExperimentRecommendation::
+                ParseRecommendationCampaignApprovalDecision(value);
+            if (!options.campaignApprovalDecision)
+                throw std::invalid_argument(
+                    "invalid --campaign-approval-decision value '" + value +
+                    "'");
+        }
+        else if (arg == "--campaign-approval-limit")
+        {
+            options.campaignApprovalLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignApprovalLimitSpecified = true;
+        }
+        else if (arg == "--materialize-recommendation-campaign")
+            options.materializeRecommendationCampaign = true;
+        else if (arg == "--campaign-approval-id")
+            options.campaignMaterializationApprovalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--campaign-materialized-by")
+            options.campaignMaterializedBy = RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--campaign-materialization-reason")
+            options.campaignMaterializationReason =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--show-recommendation-campaign-materialization")
+            options.showRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-campaign-materializations")
+            options.listRecommendationCampaignMaterializations = true;
+        else if (arg == "--campaign-materialization-limit")
+        {
+            options.campaignMaterializationLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignMaterializationLimitSpecified = true;
+        }
+        else if (arg == "--show-recommendation-campaign-handoff")
+            options.showRecommendationCampaignHandoffId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-campaign-handoffs")
+            options.listRecommendationCampaignHandoffs = true;
+        else if (arg == "--campaign-handoff-limit")
+        {
+            options.campaignHandoffLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignHandoffLimitSpecified = true;
+        }
+        else if (arg == "--review-recommendation-campaign-materialization")
+        {
+            if (options.campaignProposalReviewCommandSpecified)
+                throw std::invalid_argument(
+                    "duplicate --review-recommendation-campaign-materialization");
+            options.campaignProposalReviewCommandSpecified = true;
+            options.reviewRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-proposal-review-decision")
+        {
+            if (options.campaignProposalReviewDecisionSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-proposal-review-decision");
+            options.campaignProposalReviewDecisionSpecified = true;
+            const std::string decision = RequireNextArg(argc, argv, i, arg);
+            options.campaignProposalReviewDecision =
+                EA::ExperimentRecommendation::
+                    ParseRecommendationConversionProposalReviewDecision(
+                        decision);
+            if (!options.campaignProposalReviewDecision)
+                throw std::invalid_argument(
+                    "invalid --campaign-proposal-review-decision value '" +
+                    decision + "'");
+        }
+        else if (arg == "--campaign-proposal-review-operator")
+        {
+            if (options.campaignProposalReviewOperatorSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-proposal-review-operator");
+            options.campaignProposalReviewOperatorSpecified = true;
+            options.campaignProposalReviewOperator =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (arg == "--campaign-proposal-review-reason")
+        {
+            if (options.campaignProposalReviewReasonSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-proposal-review-reason");
+            options.campaignProposalReviewReasonSpecified = true;
+            options.campaignProposalReviewReason =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (arg == "--campaign-ranking-snapshot")
+        {
+            options.campaignPlanningScope.rankingSnapshotId =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-limit")
+        {
+            options.campaignPlanningPolicy.maximumSelectedRecommendations =
+                ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-candidate-limit")
+        {
+            options.campaignPlanningPolicy.maximumCandidatesConsidered =
+                ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-symbol")
+        {
+            options.campaignPlanningScope.symbol = EA::CanonicalSymbol::Normalize(
+                RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-horizon")
+        {
+            options.campaignPlanningScope.horizon = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-min-leader-score")
+        {
+            options.campaignPlanningPolicy.minimumLeaderScore =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-min-inference-accuracy")
+        {
+            options.campaignPlanningPolicy.minimumInferenceAccuracy =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-neutral-proportion")
+        {
+            options.campaignPlanningPolicy.maximumPredictedNeutralProportion =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-min-profitability")
+        {
+            options.campaignPlanningPolicy.minimumProfitability =
+                ParseFiniteDouble(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-per-symbol")
+        {
+            options.campaignPlanningPolicy.maximumPerSymbol = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-per-horizon")
+        {
+            options.campaignPlanningPolicy.maximumPerHorizon = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-max-per-source-experiment")
+        {
+            options.campaignPlanningPolicy.maximumPerSourceExperiment =
+                ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-reconsider-rejected")
+        {
+            options.campaignPlanningPolicy.reconsiderRejectedWorkflows = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-reconsider-failed")
+        {
+            options.campaignPlanningPolicy.reconsiderFailedWorkflows = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (arg == "--campaign-reconsider-cancelled")
+        {
+            options.campaignPlanningPolicy.reconsiderCancelledWorkflows = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1674,6 +2303,354 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--recommendation-review-limit", value);
             options.recommendationReviewLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--evaluate-experiment-recommendation", value))
+            options.evaluateExperimentRecommendationId = ParsePositiveLongLong(
+                "--evaluate-experiment-recommendation", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-evaluation-status", value))
+            options.recommendationEvaluationStatusId = ParsePositiveLongLong(
+                "--recommendation-evaluation-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--explain-recommendation-evaluation", value))
+            options.explainRecommendationEvaluationId = ParsePositiveLongLong(
+                "--explain-recommendation-evaluation", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-evaluation-run-status", value))
+            options.recommendationEvaluationRunStatusId = ParsePositiveLongLong(
+                "--recommendation-evaluation-run-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-evaluation-policy", value))
+            options.recommendationEvaluationPolicy = value;
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-evaluation-disposition", value))
+            options.recommendationEvaluationDisposition = value;
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-evaluation-limit", value))
+        {
+            options.recommendationEvaluationLimit = ParsePositiveInt(
+                "--recommendation-evaluation-limit", value);
+            options.recommendationEvaluationLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-evaluation-run-id", value))
+            options.recommendationRankingEvaluationRunId = ParsePositiveLongLong(
+                "--recommendation-ranking-evaluation-run-id", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-scan-id", value))
+            options.recommendationRankingScanId = ParsePositiveLongLong(
+                "--recommendation-ranking-scan-id", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-symbol", value))
+            options.recommendationRankingSymbol = value;
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-horizon", value))
+            options.recommendationRankingHorizon = ParsePositiveInt(
+                "--recommendation-ranking-horizon", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-family", value))
+            options.recommendationRankingFamily = value;
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-limit", value))
+        {
+            options.recommendationRankingLimit = ParsePositiveInt(
+                "--recommendation-ranking-limit", value);
+            options.recommendationRankingLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-status", value))
+            options.recommendationRankingStatusId = ParsePositiveLongLong(
+                "--recommendation-ranking-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--list-experiment-recommendation-ranking-members", value))
+            options.listRecommendationRankingMembersId = ParsePositiveLongLong(
+                "--list-experiment-recommendation-ranking-members", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-member-status", value))
+            options.recommendationRankingMemberStatusId = ParsePositiveLongLong(
+                "--recommendation-ranking-member-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-ranking-bucket", value))
+            options.recommendationRankingBucket = value;
+        else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-recommendation-evaluations", value))
+            options.compareRecommendationEvaluations = ParsePositiveIdPair(
+                "--compare-experiment-recommendation-evaluations", value);
+        else if (SplitOptionWithValue(
+                     arg, "--compare-experiment-recommendation-ranking-members", value))
+            options.compareRecommendationRankingMembers = ParsePositiveIdPair(
+                "--compare-experiment-recommendation-ranking-members", value);
+        else if (SplitOptionWithValue(
+                     arg, "--approve-conversion-proposal", value))
+            options.approveConversionProposalId = ParsePositiveLongLong(
+                "--approve-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--reject-conversion-proposal", value))
+            options.rejectConversionProposalId = ParsePositiveLongLong(
+                "--reject-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-request-id", value))
+            options.conversionProposalReviewRequestId = value;
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-operator", value))
+            options.conversionProposalReviewOperator = value;
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-reason", value))
+            options.conversionProposalReviewReason = value;
+        else if (SplitOptionWithValue(
+                     arg, "--show-conversion-proposal", value))
+            options.showConversionProposalId = ParsePositiveLongLong(
+                "--show-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--list-conversion-proposal-reviews", value))
+            options.listConversionProposalReviewsId = ParsePositiveLongLong(
+                "--list-conversion-proposal-reviews", value);
+        else if (SplitOptionWithValue(
+                     arg, "--list-conversion-proposals-by-review-status", value))
+            options.listConversionProposalsReviewStatus = value;
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-limit", value))
+        {
+            options.conversionProposalReviewLimit = ParsePositiveInt(
+                "--conversion-proposal-review-limit", value);
+            options.conversionProposalReviewLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--execute-approved-conversion-proposal", value))
+            options.executeApprovedConversionProposalId = ParsePositiveLongLong(
+                "--execute-approved-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-execution-status", value))
+            options.conversionProposalExecutionStatusId = ParsePositiveLongLong(
+                "--conversion-proposal-execution-status", value);
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--activate-recommendation-conversion-execution",
+                     value))
+            options.activateRecommendationConversionExecutionId =
+                ParsePositiveLongLong(
+                    "--activate-recommendation-conversion-execution", value);
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--recommendation-conversion-activation-status",
+                     value))
+            options.recommendationConversionActivationStatusId =
+                ParsePositiveLongLong(
+                    "--recommendation-conversion-activation-status", value);
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-conversion-workflow", value))
+            options.recommendationConversionWorkflowProposalId =
+                ParsePositiveLongLong(
+                    "--recommendation-conversion-workflow", value);
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-workflow-state", value))
+        {
+            options.conversionWorkflowState = EA::ExperimentRecommendation::
+                ParseRecommendationConversionWorkflowState(value);
+            if (!options.conversionWorkflowState)
+                throw std::invalid_argument(
+                    "invalid --conversion-workflow-state value '" + value +
+                    "'");
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-workflow-limit", value))
+        {
+            options.conversionWorkflowLimit = ParsePositiveInt(
+                "--conversion-workflow-limit", value);
+            options.conversionWorkflowLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-ranking-snapshot", value))
+        {
+            options.campaignPlanningScope.rankingSnapshotId =
+                ParsePositiveLongLong("--campaign-ranking-snapshot", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-limit", value))
+        {
+            options.campaignPlanningPolicy.maximumSelectedRecommendations =
+                ParsePositiveInt("--campaign-limit", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-candidate-limit", value))
+        {
+            options.campaignPlanningPolicy.maximumCandidatesConsidered =
+                ParsePositiveInt("--campaign-candidate-limit", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-symbol", value))
+        {
+            options.campaignPlanningScope.symbol =
+                EA::CanonicalSymbol::Normalize(value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-horizon", value))
+        {
+            options.campaignPlanningScope.horizon =
+                ParsePositiveInt("--campaign-horizon", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-min-leader-score", value))
+        {
+            options.campaignPlanningPolicy.minimumLeaderScore =
+                ParseNonNegativeFiniteDouble(
+                    "--campaign-min-leader-score", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-min-inference-accuracy", value))
+        {
+            options.campaignPlanningPolicy.minimumInferenceAccuracy =
+                ParseNonNegativeFiniteDouble(
+                    "--campaign-min-inference-accuracy", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-neutral-proportion", value))
+        {
+            options.campaignPlanningPolicy.maximumPredictedNeutralProportion =
+                ParseNonNegativeFiniteDouble(
+                    "--campaign-max-neutral-proportion", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-min-profitability", value))
+        {
+            options.campaignPlanningPolicy.minimumProfitability =
+                ParseFiniteDouble("--campaign-min-profitability", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-per-symbol", value))
+        {
+            options.campaignPlanningPolicy.maximumPerSymbol =
+                ParsePositiveInt("--campaign-max-per-symbol", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-per-horizon", value))
+        {
+            options.campaignPlanningPolicy.maximumPerHorizon =
+                ParsePositiveInt("--campaign-max-per-horizon", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-max-per-source-experiment", value))
+        {
+            options.campaignPlanningPolicy.maximumPerSourceExperiment =
+                ParsePositiveInt(
+                    "--campaign-max-per-source-experiment", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-review-identity-hash", value))
+            options.campaignReviewIdentityHash = value;
+        else if (SplitOptionWithValue(arg, "--campaign-reviewer", value))
+            options.campaignReviewer = value;
+        else if (SplitOptionWithValue(arg, "--campaign-review-reason", value))
+            options.campaignReviewReason = value;
+        else if (SplitOptionWithValue(
+                     arg, "--show-recommendation-campaign-approval", value))
+            options.showRecommendationCampaignApprovalId =
+                ParsePositiveLongLong(
+                    "--show-recommendation-campaign-approval", value);
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-approval-decision", value))
+        {
+            options.campaignApprovalDecision = EA::ExperimentRecommendation::
+                ParseRecommendationCampaignApprovalDecision(value);
+            if (!options.campaignApprovalDecision)
+                throw std::invalid_argument(
+                    "invalid --campaign-approval-decision value '" + value +
+                    "'");
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-approval-limit", value))
+        {
+            options.campaignApprovalLimit = ParsePositiveInt(
+                "--campaign-approval-limit", value);
+            options.campaignApprovalLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--campaign-approval-id", value))
+            options.campaignMaterializationApprovalId = ParsePositiveLongLong(
+                "--campaign-approval-id", value);
+        else if (SplitOptionWithValue(arg, "--campaign-materialized-by", value))
+            options.campaignMaterializedBy = value;
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-materialization-reason", value))
+            options.campaignMaterializationReason = value;
+        else if (SplitOptionWithValue(
+                     arg, "--show-recommendation-campaign-materialization", value))
+            options.showRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(
+                    "--show-recommendation-campaign-materialization", value);
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-materialization-limit", value))
+        {
+            options.campaignMaterializationLimit = ParsePositiveInt(
+                "--campaign-materialization-limit", value);
+            options.campaignMaterializationLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--show-recommendation-campaign-handoff", value))
+            options.showRecommendationCampaignHandoffId =
+                ParsePositiveLongLong(
+                    "--show-recommendation-campaign-handoff", value);
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-handoff-limit", value))
+        {
+            options.campaignHandoffLimit = ParsePositiveInt(
+                "--campaign-handoff-limit", value);
+            options.campaignHandoffLimitSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--review-recommendation-campaign-materialization",
+                     value))
+        {
+            if (options.campaignProposalReviewCommandSpecified)
+                throw std::invalid_argument(
+                    "duplicate --review-recommendation-campaign-materialization");
+            options.campaignProposalReviewCommandSpecified = true;
+            options.reviewRecommendationCampaignMaterializationId =
+                ParsePositiveLongLong(
+                    "--review-recommendation-campaign-materialization", value);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-proposal-review-decision", value))
+        {
+            if (options.campaignProposalReviewDecisionSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-proposal-review-decision");
+            options.campaignProposalReviewDecisionSpecified = true;
+            options.campaignProposalReviewDecision =
+                EA::ExperimentRecommendation::
+                    ParseRecommendationConversionProposalReviewDecision(value);
+            if (!options.campaignProposalReviewDecision)
+                throw std::invalid_argument(
+                    "invalid --campaign-proposal-review-decision value '" +
+                    value + "'");
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-proposal-review-operator", value))
+        {
+            if (options.campaignProposalReviewOperatorSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-proposal-review-operator");
+            options.campaignProposalReviewOperatorSpecified = true;
+            options.campaignProposalReviewOperator = value;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-proposal-review-reason", value))
+        {
+            if (options.campaignProposalReviewReasonSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-proposal-review-reason");
+            options.campaignProposalReviewReasonSpecified = true;
+            options.campaignProposalReviewReason = value;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -1821,6 +2798,45 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.listExperimentRecommendationReviews ? 1 : 0) +
         (options.recommendationReviewStatusId.has_value() ? 1 : 0) +
         (options.recommendationReviewHistoryId.has_value() ? 1 : 0) +
+        (options.evaluateExperimentRecommendations ? 1 : 0) +
+        (options.evaluateExperimentRecommendationId.has_value() ? 1 : 0) +
+        (options.listExperimentRecommendationEvaluations ? 1 : 0) +
+        (options.recommendationEvaluationStatusId.has_value() ? 1 : 0) +
+        (options.explainRecommendationEvaluationId.has_value() ? 1 : 0) +
+        (options.listExperimentRecommendationEvaluationRuns ? 1 : 0) +
+        (options.recommendationEvaluationRunStatusId.has_value() ? 1 : 0) +
+        (options.rankExperimentRecommendationEvaluations ? 1 : 0) +
+        (options.listExperimentRecommendationRankingSnapshots ? 1 : 0) +
+        (options.recommendationRankingStatusId.has_value() ? 1 : 0) +
+        (options.listRecommendationRankingMembersId.has_value() ? 1 : 0) +
+        (options.recommendationRankingMemberStatusId.has_value() ? 1 : 0) +
+        (options.compareRecommendationEvaluations.has_value() ? 1 : 0) +
+        (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
+        (options.approveConversionProposalId.has_value() ? 1 : 0) +
+        (options.rejectConversionProposalId.has_value() ? 1 : 0) +
+        (options.showConversionProposalId.has_value() ? 1 : 0) +
+        (options.listConversionProposalReviewsId.has_value() ? 1 : 0) +
+        (options.listConversionProposalsReviewStatus.has_value() ? 1 : 0) +
+        (options.executeApprovedConversionProposalId.has_value() ? 1 : 0) +
+        (options.conversionProposalExecutionStatusId.has_value() ? 1 : 0) +
+        (options.activateRecommendationConversionExecutionId.has_value() ? 1 : 0) +
+        (options.recommendationConversionActivationStatusId.has_value() ? 1 : 0) +
+        (options.recommendationConversionWorkflowProposalId.has_value() ? 1 : 0) +
+        (options.listRecommendationConversionWorkflows ? 1 : 0) +
+        (options.planRecommendationCampaign ? 1 : 0) +
+        (options.reviewRecommendationCampaign ? 1 : 0) +
+        (options.approveRecommendationCampaign ? 1 : 0) +
+        (options.rejectRecommendationCampaign ? 1 : 0) +
+        (options.showRecommendationCampaignApprovalId.has_value() ? 1 : 0) +
+        (options.listRecommendationCampaignApprovals ? 1 : 0) +
+        (options.materializeRecommendationCampaign ? 1 : 0) +
+        (options.showRecommendationCampaignMaterializationId.has_value() ? 1 : 0) +
+        (options.listRecommendationCampaignMaterializations ? 1 : 0) +
+        (options.showRecommendationCampaignHandoffId.has_value() ? 1 : 0) +
+        (options.listRecommendationCampaignHandoffs ? 1 : 0) +
+        (options.reviewRecommendationCampaignMaterializationId.has_value()
+             ? 1
+             : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -1852,12 +2868,20 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.recommendationStatusFilter.has_value() ||
         options.recommendationScanId.has_value();
     if (recommendationListOption && !options.listExperimentRecommendations &&
-        !options.scoreExperimentRecommendations)
-        throw std::invalid_argument("recommendation status and scan filters require recommendation listing or scoring");
+        !options.scoreExperimentRecommendations &&
+        !options.evaluateExperimentRecommendations &&
+        !options.evaluateExperimentRecommendationId &&
+        !options.listExperimentRecommendationEvaluations)
+        throw std::invalid_argument("recommendation status and scan filters require recommendation listing, scoring, or evaluation");
     if (options.recommendationStatusFilter &&
         options.scoreExperimentRecommendations &&
         *options.recommendationStatusFilter != "proposed")
         throw std::invalid_argument("recommendation scoring supports only proposed status");
+    if (options.recommendationStatusFilter &&
+        (options.evaluateExperimentRecommendations ||
+         options.evaluateExperimentRecommendationId))
+        throw std::invalid_argument(
+            "recommendation evaluation supports proposed status implicitly");
     const bool recommendationSourceFilter =
         options.recommendationSymbol.has_value() ||
         options.recommendationHorizon.has_value();
@@ -1881,9 +2905,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     if (options.recommendationIdFilter &&
         !options.scoreExperimentRecommendations &&
         !options.listExperimentRecommendationScores &&
-        !options.listExperimentRecommendationReviews)
+        !options.listExperimentRecommendationReviews &&
+        !options.listExperimentRecommendationEvaluations)
         throw std::invalid_argument(
-            "--recommendation-id requires recommendation scoring, score listing, or review listing");
+            "--recommendation-id requires recommendation scoring, score listing, review listing, or evaluation listing");
     if (options.recommendationScoreRunId &&
         !options.listExperimentRecommendationScores)
         throw std::invalid_argument("--recommendation-score-run-id requires --list-experiment-recommendation-scores");
@@ -1927,6 +2952,94 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         !options.listExperimentRecommendationReviews)
         throw std::invalid_argument(
             "--recommendation-review-limit requires --list-experiment-recommendation-reviews");
+    const bool recommendationEvaluationCommand =
+        options.evaluateExperimentRecommendations ||
+        options.evaluateExperimentRecommendationId.has_value();
+    if (options.evaluateExperimentRecommendations &&
+        !options.recommendationScanId)
+        throw std::invalid_argument(
+            "--evaluate-experiment-recommendations requires --recommendation-scan-id");
+    if (options.recommendationEvaluationPolicy && !recommendationEvaluationCommand)
+        throw std::invalid_argument(
+            "--recommendation-evaluation-policy requires an evaluation command");
+    if (options.recommendationEvaluationDryRun && !recommendationEvaluationCommand)
+        throw std::invalid_argument(
+            "--recommendation-evaluation-dry-run requires an evaluation command");
+    if (options.recommendationEvaluationDisposition &&
+        !options.listExperimentRecommendationEvaluations)
+        throw std::invalid_argument(
+            "--recommendation-evaluation-disposition requires --list-experiment-recommendation-evaluations");
+    if (options.recommendationEvaluationDisposition &&
+        !EA::ExperimentRecommendation::ParseRecommendationEvaluationDisposition(
+            *options.recommendationEvaluationDisposition))
+        throw std::invalid_argument("invalid recommendation evaluation disposition");
+    if (options.recommendationEvaluationLimitSpecified &&
+        !recommendationEvaluationCommand &&
+        !options.listExperimentRecommendationEvaluations &&
+        !options.listExperimentRecommendationEvaluationRuns)
+        throw std::invalid_argument(
+            "--recommendation-evaluation-limit requires evaluation or evaluation listing");
+    if (options.recommendationEvaluationLimit > 1000)
+        throw std::invalid_argument(
+            "--recommendation-evaluation-limit must not exceed 1000");
+    const bool recommendationRankingScopeOption =
+        options.recommendationRankingEvaluationRunId.has_value() ||
+        options.recommendationRankingScanId.has_value() ||
+        options.recommendationRankingSymbol.has_value() ||
+        options.recommendationRankingHorizon.has_value() ||
+        options.recommendationRankingFamily.has_value() ||
+        options.recommendationRankingGlobal;
+    if (recommendationRankingScopeOption &&
+        !options.rankExperimentRecommendationEvaluations)
+        throw std::invalid_argument(
+            "recommendation ranking scope options require --rank-experiment-recommendation-evaluations");
+    const int recommendationRankingScopeCount =
+        (options.recommendationRankingEvaluationRunId ? 1 : 0) +
+        (options.recommendationRankingScanId ? 1 : 0) +
+        (options.recommendationRankingFamily ? 1 : 0) +
+        (options.recommendationRankingGlobal ? 1 : 0) +
+        ((options.recommendationRankingSymbol ||
+          options.recommendationRankingHorizon) ? 1 : 0);
+    if (options.rankExperimentRecommendationEvaluations &&
+        recommendationRankingScopeCount != 1)
+        throw std::invalid_argument(
+            "ranking requires exactly one explicit evaluation-run, scan, symbol/horizon, family, or global scope");
+    if ((options.recommendationRankingSymbol &&
+         options.recommendationRankingSymbol->empty()) ||
+        (options.recommendationRankingFamily &&
+         options.recommendationRankingFamily->empty()))
+        throw std::invalid_argument("recommendation ranking text scope is empty");
+    if (options.recommendationRankingDryRun &&
+        !options.rankExperimentRecommendationEvaluations)
+        throw std::invalid_argument(
+            "--recommendation-ranking-dry-run requires ranking creation");
+    if (options.recommendationRankingLimitSpecified &&
+        !options.rankExperimentRecommendationEvaluations &&
+        !options.listExperimentRecommendationRankingSnapshots &&
+        !options.listRecommendationRankingMembersId)
+        throw std::invalid_argument(
+            "--recommendation-ranking-limit requires ranking creation or listing");
+    if (options.recommendationRankingLimit > 1000)
+        throw std::invalid_argument(
+            "--recommendation-ranking-limit must not exceed 1000");
+    if (options.recommendationRankingBucket &&
+        !options.listRecommendationRankingMembersId)
+        throw std::invalid_argument(
+            "--recommendation-ranking-bucket requires ranking member listing");
+    if (options.recommendationRankingBucket &&
+        !EA::ExperimentRecommendation::ParseRecommendationRankingBucket(
+            *options.recommendationRankingBucket))
+        throw std::invalid_argument("invalid recommendation ranking bucket");
+    if (options.compareRecommendationEvaluations &&
+        options.compareRecommendationEvaluations->first ==
+            options.compareRecommendationEvaluations->second)
+        throw std::invalid_argument(
+            "recommendation evaluation comparison requires two different IDs");
+    if (options.compareRecommendationRankingMembers &&
+        options.compareRecommendationRankingMembers->first ==
+            options.compareRecommendationRankingMembers->second)
+        throw std::invalid_argument(
+            "recommendation ranking member comparison requires two different IDs");
     if (recommendationReviewActionCommand)
     {
         EA::ExperimentRecommendation::RecommendationReviewRequest review;
@@ -1942,6 +3055,232 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         review.recommendationScoreId = options.recommendationReviewScoreId;
         (void)EA::ExperimentRecommendation::NormalizeRecommendationReviewRequest(
             review);
+    }
+    const bool conversionProposalReviewAction =
+        options.approveConversionProposalId.has_value() ||
+        options.rejectConversionProposalId.has_value();
+    if (options.approveConversionProposalId &&
+        options.rejectConversionProposalId)
+        throw std::invalid_argument(
+            "only one conversion proposal review action may be supplied");
+    const bool conversionProposalReviewOnlyOption =
+        options.conversionProposalReviewRequestId.has_value() ||
+        options.conversionProposalReviewOperator.has_value() ||
+        options.conversionProposalReviewReason.has_value();
+    if (conversionProposalReviewOnlyOption && !conversionProposalReviewAction)
+        throw std::invalid_argument(
+            "conversion proposal review request, operator, and reason options "
+            "require an approve or reject action");
+    if (conversionProposalReviewAction &&
+        !options.conversionProposalReviewRequestId)
+        throw std::invalid_argument(
+            "conversion proposal review action requires "
+            "--conversion-proposal-review-request-id");
+    if (options.listConversionProposalsReviewStatus &&
+        !EA::ExperimentRecommendation::
+            ParseRecommendationConversionProposalReviewDisposition(
+                *options.listConversionProposalsReviewStatus))
+        throw std::invalid_argument(
+            "invalid conversion proposal review status");
+    if (options.conversionProposalReviewLimitSpecified &&
+        !options.listConversionProposalReviewsId &&
+        !options.listConversionProposalsReviewStatus)
+        throw std::invalid_argument(
+            "--conversion-proposal-review-limit requires a conversion proposal "
+            "review list command");
+    if (options.conversionProposalReviewLimit >
+        EA::ExperimentRecommendation::
+            kMaximumRecommendationConversionProposalReviewListLimit)
+        throw std::invalid_argument(
+            "--conversion-proposal-review-limit must not exceed 1000");
+    if (conversionProposalReviewAction)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationConversionProposalReviewRequest review;
+        review.proposalId = options.approveConversionProposalId
+            ? *options.approveConversionProposalId
+            : *options.rejectConversionProposalId;
+        review.decision = options.approveConversionProposalId
+            ? EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::approve
+            : EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::reject;
+        review.requestId = *options.conversionProposalReviewRequestId;
+        review.operatorIdentity = options.conversionProposalReviewOperator;
+        review.reasonText = options.conversionProposalReviewReason;
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationConversionProposalReviewRequest(review);
+    }
+    if (options.conversionWorkflowState &&
+        !options.listRecommendationConversionWorkflows)
+        throw std::invalid_argument(
+            "--conversion-workflow-state requires "
+            "--list-recommendation-conversion-workflows");
+    if (options.conversionWorkflowLimitSpecified &&
+        !options.listRecommendationConversionWorkflows)
+        throw std::invalid_argument(
+            "--conversion-workflow-limit requires "
+            "--list-recommendation-conversion-workflows");
+    if (options.conversionWorkflowLimit >
+        EA::ExperimentRecommendation::
+            kMaximumRecommendationConversionWorkflowListLimit)
+        throw std::invalid_argument(
+            "--conversion-workflow-limit must not exceed 1000");
+    const int campaignApprovalActionCount =
+        (options.approveRecommendationCampaign ? 1 : 0) +
+        (options.rejectRecommendationCampaign ? 1 : 0);
+    if (campaignApprovalActionCount > 1)
+        throw std::invalid_argument(
+            "campaign approval and rejection are mutually exclusive");
+    const bool campaignApprovalAction = campaignApprovalActionCount == 1;
+    if (options.campaignPolicyOptionSpecified &&
+        !options.planRecommendationCampaign &&
+        !options.reviewRecommendationCampaign &&
+        !campaignApprovalAction)
+        throw std::invalid_argument(
+            "campaign options require campaign planning, review, approval, or "
+            "rejection");
+    if (options.planRecommendationCampaign ||
+        options.reviewRecommendationCampaign || campaignApprovalAction)
+    {
+        if (const auto error = EA::ExperimentRecommendation::
+                ValidateRecommendationCampaignPlanningPolicy(
+                    options.campaignPlanningPolicy))
+            throw std::invalid_argument(*error);
+        if (const auto error = EA::ExperimentRecommendation::
+                ValidateRecommendationCampaignPlanningScope(
+                    options.campaignPlanningScope))
+            throw std::invalid_argument(*error);
+    }
+    const bool campaignApprovalMetadata =
+        options.campaignReviewIdentityHash.has_value() ||
+        options.campaignReviewer.has_value() ||
+        options.campaignReviewReason.has_value();
+    if (campaignApprovalMetadata && !campaignApprovalAction)
+        throw std::invalid_argument(
+            "campaign review identity, reviewer, and reason require campaign "
+            "approval or rejection");
+    if (campaignApprovalAction)
+    {
+        if (!options.campaignReviewIdentityHash || !options.campaignReviewer ||
+            !options.campaignReviewReason)
+            throw std::invalid_argument(
+                "campaign approval or rejection requires "
+                "--campaign-review-identity-hash, --campaign-reviewer, and "
+                "--campaign-review-reason");
+        EA::ExperimentRecommendation::RecommendationCampaignApprovalRequest
+            request;
+        request.decision = options.approveRecommendationCampaign
+            ? EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::approved
+            : EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::rejected;
+        request.expectedCampaignReviewIdentityHash =
+            *options.campaignReviewIdentityHash;
+        request.reviewerIdentity = *options.campaignReviewer;
+        request.reasonText = *options.campaignReviewReason;
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignApprovalRequest(request);
+    }
+    if (options.campaignApprovalDecision &&
+        !options.listRecommendationCampaignApprovals)
+        throw std::invalid_argument(
+            "--campaign-approval-decision requires "
+            "--list-recommendation-campaign-approvals");
+    if (options.campaignApprovalLimitSpecified &&
+        !options.listRecommendationCampaignApprovals)
+        throw std::invalid_argument(
+            "--campaign-approval-limit requires "
+            "--list-recommendation-campaign-approvals");
+    if (options.campaignApprovalLimit > EA::ExperimentRecommendation::
+            kMaximumRecommendationCampaignApprovalListLimit)
+        throw std::invalid_argument(
+            "--campaign-approval-limit must not exceed 1000");
+    const bool campaignMaterializationMetadata =
+        options.campaignMaterializationApprovalId.has_value() ||
+        options.campaignMaterializedBy.has_value() ||
+        options.campaignMaterializationReason.has_value();
+    if (campaignMaterializationMetadata &&
+        !options.materializeRecommendationCampaign &&
+        !options.listRecommendationCampaignMaterializations)
+        throw std::invalid_argument(
+            "campaign materialization metadata requires materialize or list");
+    if (options.materializeRecommendationCampaign)
+    {
+        if (!options.campaignMaterializationApprovalId ||
+            !options.campaignMaterializedBy ||
+            !options.campaignMaterializationReason)
+            throw std::invalid_argument(
+                "campaign materialization requires --campaign-approval-id, "
+                "--campaign-materialized-by, and "
+                "--campaign-materialization-reason");
+        EA::ExperimentRecommendation::RecommendationCampaignMaterializationRequest
+            request{*options.campaignMaterializationApprovalId,
+                    *options.campaignMaterializedBy,
+                    *options.campaignMaterializationReason};
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignMaterializationRequest(request);
+    }
+    if ((options.campaignMaterializedBy ||
+         options.campaignMaterializationReason) &&
+        !options.materializeRecommendationCampaign)
+        throw std::invalid_argument(
+            "materialized-by and materialization-reason require materialize");
+    if (options.campaignMaterializationApprovalId &&
+        !options.materializeRecommendationCampaign &&
+        !options.listRecommendationCampaignMaterializations)
+        throw std::invalid_argument(
+            "--campaign-approval-id requires materialize or list");
+    if (options.campaignMaterializationLimitSpecified &&
+        !options.listRecommendationCampaignMaterializations)
+        throw std::invalid_argument(
+            "--campaign-materialization-limit requires list materializations");
+    if (options.campaignMaterializationLimit >
+        EA::ExperimentRecommendation::
+            kMaximumRecommendationCampaignMaterializationListLimit)
+        throw std::invalid_argument(
+            "--campaign-materialization-limit must not exceed 1000");
+    if (options.campaignHandoffLimitSpecified &&
+        !options.listRecommendationCampaignHandoffs)
+        throw std::invalid_argument(
+            "--campaign-handoff-limit requires "
+            "--list-recommendation-campaign-handoffs");
+    if (options.campaignHandoffLimit > EA::ExperimentRecommendation::
+            kMaximumRecommendationCampaignHandoffListLimit)
+        throw std::invalid_argument(
+            "--campaign-handoff-limit must not exceed 1000");
+    const bool campaignProposalReviewMetadata =
+        options.campaignProposalReviewDecisionSpecified ||
+        options.campaignProposalReviewOperatorSpecified ||
+        options.campaignProposalReviewReasonSpecified;
+    if (campaignProposalReviewMetadata &&
+        !options.reviewRecommendationCampaignMaterializationId)
+        throw std::invalid_argument(
+            "campaign proposal review metadata requires "
+            "--review-recommendation-campaign-materialization");
+    if (options.reviewRecommendationCampaignMaterializationId)
+    {
+        if (!options.campaignProposalReviewDecision ||
+            !options.campaignProposalReviewOperator ||
+            !options.campaignProposalReviewReason)
+            throw std::invalid_argument(
+                "campaign proposal review requires "
+                "--campaign-proposal-review-decision, "
+                "--campaign-proposal-review-operator, and "
+                "--campaign-proposal-review-reason");
+        if (!options.dryRun && !options.yes)
+            throw std::invalid_argument(
+                "campaign proposal review write requires --yes");
+        EA::ExperimentRecommendation::RecommendationCampaignProposalReviewRequest
+            request;
+        request.materializationId =
+            *options.reviewRecommendationCampaignMaterializationId;
+        request.decision = *options.campaignProposalReviewDecision;
+        request.operatorIdentity = *options.campaignProposalReviewOperator;
+        request.reasonText = *options.campaignProposalReviewReason;
+        request.dryRun = options.dryRun;
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignProposalReviewRequest(request);
     }
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
@@ -5760,17 +7099,17 @@ std::optional<double> ComputeLeaderScore(const ParsedMetrics& metrics)
     return (*metrics.inferAccuracy) * (0.75 + 0.25 * acceptAccuracy) * penalty;
 }
 
-std::string MetricSql(pqxx::work& w, const std::optional<double>& value)
+std::string MetricSql(pqxx::work&, const std::optional<double>& value)
 {
     return value.has_value() ? FormatDouble(*value) : "NULL";
 }
 
-std::string MetricSql(pqxx::work& w, const std::optional<int>& value)
+std::string MetricSql(pqxx::work&, const std::optional<int>& value)
 {
     return value.has_value() ? std::to_string(*value) : "NULL";
 }
 
-std::string MetricSql(pqxx::work& w, const std::optional<long long>& value)
+std::string MetricSql(pqxx::work&, const std::optional<long long>& value)
 {
     return value.has_value() ? std::to_string(*value) : "NULL";
 }
@@ -14990,6 +16329,141 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--recommendation-review-history=RECOMMENDATION_ID\n"
         << "Phase 4A recommendations, scores, and reviews are advisory only: review never creates or queues experiments.\n"
         << "Usage: " << exe
+        << " --evaluate-experiment-recommendations --recommendation-scan-id=ID | "
+        << "--evaluate-experiment-recommendation=ID "
+        << "[--recommendation-evaluation-policy=key=value,...] "
+        << "[--recommendation-evaluation-limit=N] "
+        << "[--recommendation-evaluation-dry-run]\n"
+        << "Usage: " << exe
+        << " --list-experiment-recommendation-evaluations "
+        << "[--recommendation-scan-id=ID] [--recommendation-id=ID] "
+        << "[--recommendation-evaluation-disposition=STATE] "
+        << "[--recommendation-evaluation-limit=N] | "
+        << "--recommendation-evaluation-status=ID | "
+        << "--explain-recommendation-evaluation=ID\n"
+        << "Usage: " << exe
+        << " --list-experiment-recommendation-evaluation-runs "
+        << "[--recommendation-evaluation-limit=N] | "
+        << "--recommendation-evaluation-run-status=ID\n"
+        << "Phase 4B evaluation is advisory only: it never creates or queues experiments or changes scheduler state.\n"
+        << "Usage: " << exe
+        << " --rank-experiment-recommendation-evaluations "
+        << "(--recommendation-ranking-evaluation-run-id=ID | "
+        << "--recommendation-ranking-scan-id=ID | "
+        << "--recommendation-ranking-symbol=SYMBOL [--recommendation-ranking-horizon=N] | "
+        << "--recommendation-ranking-horizon=N | --recommendation-ranking-family=NAME | "
+        << "--recommendation-ranking-global) [--recommendation-ranking-limit=N] "
+        << "[--recommendation-ranking-dry-run]\n"
+        << "Usage: " << exe
+        << " --list-experiment-recommendation-ranking-snapshots "
+        << "[--recommendation-ranking-limit=N] | --recommendation-ranking-status=ID | "
+        << "--list-experiment-recommendation-ranking-members=ID "
+        << "[--recommendation-ranking-bucket=advisory_ready|blocked|non_actionable] "
+        << "[--recommendation-ranking-limit=N] | --recommendation-ranking-member-status=ID\n"
+        << "Usage: " << exe
+        << " --compare-experiment-recommendation-evaluations=LEFT:RIGHT | "
+        << "--compare-experiment-recommendation-ranking-members=LEFT:RIGHT\n"
+        << "Phase 4B ranking and comparison are advisory only: they never create or queue experiments or change scheduler state.\n"
+        << "Usage: " << exe
+        << " --approve-conversion-proposal=ID | --reject-conversion-proposal=ID "
+        << "--conversion-proposal-review-request-id=TOKEN "
+        << "[--conversion-proposal-review-operator=TEXT] "
+        << "[--conversion-proposal-review-reason=TEXT]\n"
+        << "Usage: " << exe
+        << " --show-conversion-proposal=ID | "
+        << "--list-conversion-proposal-reviews=ID "
+        << "[--conversion-proposal-review-limit=N] | "
+        << "--list-conversion-proposals-by-review-status="
+        << "pending_review|approved|rejected "
+        << "[--conversion-proposal-review-limit=N]\n"
+        << "Phase 4C proposal review is administrative only: it never creates "
+        << "or queues an experiment or changes scheduler state.\n"
+        << "Usage: " << exe
+        << " --execute-approved-conversion-proposal=PROPOSAL_ID | "
+        << "--conversion-proposal-execution-status=PROPOSAL_ID\n"
+        << "Phase 4C conversion creates one paused experiment only: it does not "
+        << "queue, start, resume, or schedule the experiment.\n"
+        << "Usage: " << exe
+        << " --activate-recommendation-conversion-execution=EXECUTION_ID | "
+        << "--recommendation-conversion-activation-status=ACTIVATION_ID\n"
+        << "Phase 4C activation moves that existing paused experiment to "
+        << "pending/train. It starts no worker and does not bypass the scheduler.\n"
+        << "Usage: " << exe
+        << " --recommendation-conversion-workflow=PROPOSAL_ID | "
+        << "--list-recommendation-conversion-workflows "
+        << "[--conversion-workflow-state=STATE] "
+        << "[--conversion-workflow-limit=N]\n"
+        << "Phase 4C workflow observation is read-only and never changes an "
+        << "experiment, audit record, worker, or scheduler state.\n"
+        << "Usage: " << exe
+        << " --plan-recommendation-campaign "
+        << "--campaign-ranking-snapshot=ID "
+        << "[--campaign-limit=N] [--campaign-candidate-limit=N] "
+        << "[--campaign-symbol=SYMBOL] [--campaign-horizon=N] "
+        << "[--campaign-min-leader-score=VALUE] "
+        << "[--campaign-min-inference-accuracy=VALUE] "
+        << "[--campaign-max-neutral-proportion=VALUE] "
+        << "[--campaign-min-profitability=VALUE] "
+        << "[--campaign-max-per-symbol=N] "
+        << "[--campaign-max-per-horizon=N] "
+        << "[--campaign-max-per-source-experiment=N] "
+        << "[--campaign-reconsider-rejected] "
+        << "[--campaign-reconsider-failed] "
+        << "[--campaign-reconsider-cancelled]\n"
+        << "Phase 4D campaign planning reads one explicit durable ranking "
+        << "snapshot and Phase 4C workflow history. It creates no proposal or "
+        << "experiment and never starts the scheduler or a worker.\n"
+        << "Usage: " << exe
+        << " --review-recommendation-campaign "
+        << "--campaign-ranking-snapshot=ID [campaign policy options]\n"
+        << "Phase 4D campaign review deterministically explains the selected, "
+        << "excluded, duplicate, family, symbol, and horizon structure of the "
+        << "read-only campaign plan. It writes no database row.\n"
+        << "Usage: " << exe
+        << " --approve-recommendation-campaign | "
+        << "--reject-recommendation-campaign "
+        << "--campaign-ranking-snapshot=ID "
+        << "--campaign-review-identity-hash=HASH "
+        << "--campaign-reviewer=TEXT --campaign-review-reason=TEXT "
+        << "[campaign policy options]\n"
+        << "Usage: " << exe
+        << " --show-recommendation-campaign-approval=ID | "
+        << "--list-recommendation-campaign-approvals "
+        << "[--campaign-approval-decision=approved|rejected] "
+        << "[--campaign-approval-limit=N]\n"
+        << "Phase 4D campaign approval records immutable human authorization "
+        << "for one exact reconstructed review. It never executes a campaign "
+        << "or creates, queues, or modifies an experiment.\n"
+        << "Usage: " << exe
+        << " --materialize-recommendation-campaign "
+        << "--campaign-approval-id=ID --campaign-materialized-by=IDENTITY "
+        << "--campaign-materialization-reason=TEXT\n"
+        << "Usage: " << exe
+        << " --show-recommendation-campaign-materialization=ID | "
+        << "--list-recommendation-campaign-materializations "
+        << "[--campaign-approval-id=ID] "
+        << "[--campaign-materialization-limit=N]\n"
+        << "Campaign materialization creates only the exact Phase 4C proposal "
+        << "set. Conversion review, execution, activation, and experiments "
+        << "remain separate explicit actions.\n"
+        << "Usage: " << exe
+        << " --show-recommendation-campaign-handoff=ID | "
+        << "--list-recommendation-campaign-handoffs "
+        << "[--campaign-handoff-limit=N]\n"
+        << "Campaign handoff is a read-only projection of each materialized "
+        << "proposal's current Phase 4C review, execution, and activation "
+        << "evidence. It never advances or repairs workflow state.\n"
+        << "Usage: " << exe
+        << " --review-recommendation-campaign-materialization=ID "
+        << "--campaign-proposal-review-decision=approve|reject "
+        << "--campaign-proposal-review-operator=TEXT "
+        << "--campaign-proposal-review-reason=TEXT [--dry-run] [--yes]\n"
+        << "Campaign proposal review atomically records ordinary Phase 4C "
+        << "review rows for every exact persisted materialization member. "
+        << "It never executes or activates proposals, creates experiments, "
+        << "or starts the scheduler or workers. --yes is required unless "
+        << "--dry-run is supplied.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -15131,6 +16605,320 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
     if (options.recommendationReviewHistoryId)
         return EA::ExperimentRecommendation::RunExperimentRecommendationReviewHistoryCommand(
             connectionString, *options.recommendationReviewHistoryId, std::cout);
+    if (options.approveConversionProposalId ||
+        options.rejectConversionProposalId)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationConversionProposalReviewRequest request;
+        request.proposalId = options.approveConversionProposalId
+            ? *options.approveConversionProposalId
+            : *options.rejectConversionProposalId;
+        request.decision = options.approveConversionProposalId
+            ? EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::approve
+            : EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::reject;
+        request.requestId = *options.conversionProposalReviewRequestId;
+        request.operatorIdentity = options.conversionProposalReviewOperator;
+        request.reasonText = options.conversionProposalReviewReason;
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionProposalReviewCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.showConversionProposalId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationConversionProposalCommand(
+                connectionString, *options.showConversionProposalId, std::cout);
+    if (options.listConversionProposalReviewsId)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationConversionProposalReviewsCommand(
+                connectionString, *options.listConversionProposalReviewsId,
+                options.conversionProposalReviewLimit, std::cout);
+    if (options.listConversionProposalsReviewStatus)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationConversionProposalReviewListRequest request;
+        request.disposition = *EA::ExperimentRecommendation::
+            ParseRecommendationConversionProposalReviewDisposition(
+                *options.listConversionProposalsReviewStatus);
+        request.limit = options.conversionProposalReviewLimit;
+        return EA::ExperimentRecommendation::
+            RunListRecommendationConversionProposalsByReviewDispositionCommand(
+                connectionString, request, std::cout);
+    }
+    if (options.executeApprovedConversionProposalId)
+        return EA::ExperimentRecommendation::
+            RunExecuteApprovedRecommendationConversionProposalCommand(
+                connectionString, *options.executeApprovedConversionProposalId,
+                std::cout, std::cerr);
+    if (options.conversionProposalExecutionStatusId)
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionExecutionStatusCommand(
+                connectionString,
+                *options.conversionProposalExecutionStatusId,
+                std::cout);
+    if (options.activateRecommendationConversionExecutionId)
+        return EA::ExperimentRecommendation::
+            RunActivateRecommendationConversionExecutionCommand(
+                connectionString,
+                *options.activateRecommendationConversionExecutionId,
+                std::cout,
+                std::cerr);
+    if (options.recommendationConversionActivationStatusId)
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionActivationStatusCommand(
+                connectionString,
+                *options.recommendationConversionActivationStatusId,
+                std::cout);
+    if (options.recommendationConversionWorkflowProposalId)
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionWorkflowCommand(
+                connectionString,
+                *options.recommendationConversionWorkflowProposalId,
+                std::cout,
+                std::cerr);
+    if (options.listRecommendationConversionWorkflows)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationConversionWorkflowsCommand(
+                connectionString,
+                options.conversionWorkflowState,
+                options.conversionWorkflowLimit,
+                std::cout,
+                std::cerr);
+    if (options.planRecommendationCampaign)
+        return EA::ExperimentRecommendation::
+            RunRecommendationCampaignPlanningCommand(
+                connectionString,
+                options.campaignPlanningPolicy,
+                options.campaignPlanningScope,
+                std::cout,
+                std::cerr);
+    if (options.reviewRecommendationCampaign)
+        return EA::ExperimentRecommendation::
+            RunRecommendationCampaignReviewCommand(
+                connectionString,
+                options.campaignPlanningPolicy,
+                options.campaignPlanningScope,
+                std::cout,
+                std::cerr);
+    if (options.approveRecommendationCampaign ||
+        options.rejectRecommendationCampaign)
+    {
+        EA::ExperimentRecommendation::RecommendationCampaignApprovalRequest
+            request;
+        request.decision = options.approveRecommendationCampaign
+            ? EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::approved
+            : EA::ExperimentRecommendation::
+                  RecommendationCampaignApprovalDecision::rejected;
+        request.expectedCampaignReviewIdentityHash =
+            *options.campaignReviewIdentityHash;
+        request.reviewerIdentity = *options.campaignReviewer;
+        request.reasonText = *options.campaignReviewReason;
+        return EA::ExperimentRecommendation::
+            RunRecordRecommendationCampaignApprovalCommand(
+                connectionString,
+                options.campaignPlanningPolicy,
+                options.campaignPlanningScope,
+                request,
+                std::cout,
+                std::cerr);
+    }
+    if (options.showRecommendationCampaignApprovalId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationCampaignApprovalCommand(
+                connectionString,
+                *options.showRecommendationCampaignApprovalId,
+                std::cout,
+                std::cerr);
+    if (options.listRecommendationCampaignApprovals)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationCampaignApprovalsCommand(
+                connectionString,
+                options.campaignApprovalDecision,
+                options.campaignApprovalLimit,
+                std::cout,
+                std::cerr);
+    if (options.materializeRecommendationCampaign)
+    {
+        EA::ExperimentRecommendation::RecommendationCampaignMaterializationRequest
+            request{*options.campaignMaterializationApprovalId,
+                    *options.campaignMaterializedBy,
+                    *options.campaignMaterializationReason};
+        return EA::ExperimentRecommendation::
+            RunMaterializeRecommendationCampaignCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.showRecommendationCampaignMaterializationId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationCampaignMaterializationCommand(
+                connectionString,
+                *options.showRecommendationCampaignMaterializationId,
+                std::cout, std::cerr);
+    if (options.listRecommendationCampaignMaterializations)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationCampaignMaterializationsCommand(
+                connectionString, options.campaignMaterializationApprovalId,
+                options.campaignMaterializationLimit,
+                std::cout, std::cerr);
+    if (options.showRecommendationCampaignHandoffId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationCampaignHandoffCommand(
+                connectionString,
+                *options.showRecommendationCampaignHandoffId,
+                std::cout, std::cerr);
+    if (options.listRecommendationCampaignHandoffs)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationCampaignHandoffsCommand(
+                connectionString, options.campaignHandoffLimit,
+                std::cout, std::cerr);
+    if (options.reviewRecommendationCampaignMaterializationId)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationCampaignProposalReviewRequest request;
+        request.materializationId =
+            *options.reviewRecommendationCampaignMaterializationId;
+        request.decision = *options.campaignProposalReviewDecision;
+        request.operatorIdentity = *options.campaignProposalReviewOperator;
+        request.reasonText = *options.campaignProposalReviewReason;
+        request.dryRun = options.dryRun;
+        return EA::ExperimentRecommendation::
+            RunRecommendationCampaignProposalReviewCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.evaluateExperimentRecommendations ||
+        options.evaluateExperimentRecommendationId)
+    {
+        EA::ExperimentRecommendation::RecommendationEvaluationCommandRequest request;
+        if (options.recommendationEvaluationPolicy)
+            request.policy.scoringPolicy =
+                EA::ExperimentRecommendation::ParseRecommendationScoringPolicy(
+                    *options.recommendationEvaluationPolicy);
+        request.recommendationScanId = options.recommendationScanId;
+        request.recommendationId = options.evaluateExperimentRecommendationId;
+        request.limit = options.recommendationEvaluationLimit;
+        request.dryRun = options.recommendationEvaluationDryRun;
+        return EA::ExperimentRecommendation::RunEvaluateExperimentRecommendationsCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.listExperimentRecommendationEvaluations)
+    {
+        EA::ExperimentRecommendation::RecommendationEvaluationFilters filters;
+        filters.recommendationScanId = options.recommendationScanId;
+        filters.recommendationId = options.recommendationIdFilter;
+        if (options.recommendationEvaluationDisposition)
+            filters.disposition =
+                *EA::ExperimentRecommendation::ParseRecommendationEvaluationDisposition(
+                    *options.recommendationEvaluationDisposition);
+        filters.limit = options.recommendationEvaluationLimit;
+        return EA::ExperimentRecommendation::RunListExperimentRecommendationEvaluationsCommand(
+            connectionString, filters, std::cout);
+    }
+    if (options.recommendationEvaluationStatusId)
+        return EA::ExperimentRecommendation::RunExperimentRecommendationEvaluationStatusCommand(
+            connectionString, *options.recommendationEvaluationStatusId,
+            std::cout);
+    if (options.explainRecommendationEvaluationId)
+        return EA::ExperimentRecommendation::RunExplainExperimentRecommendationEvaluationCommand(
+            connectionString, *options.explainRecommendationEvaluationId,
+            std::cout);
+    if (options.listExperimentRecommendationEvaluationRuns)
+        return EA::ExperimentRecommendation::RunListExperimentRecommendationEvaluationRunsCommand(
+            connectionString, options.recommendationEvaluationLimit,
+            std::cout);
+    if (options.recommendationEvaluationRunStatusId)
+        return EA::ExperimentRecommendation::RunExperimentRecommendationEvaluationRunStatusCommand(
+            connectionString, *options.recommendationEvaluationRunStatusId,
+            std::cout);
+    if (options.rankExperimentRecommendationEvaluations)
+    {
+        EA::ExperimentRecommendation::RecommendationRankingCommandRequest request;
+        request.limit = options.recommendationRankingLimit;
+        request.dryRun = options.recommendationRankingDryRun;
+        if (options.recommendationRankingEvaluationRunId)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::evaluationRun;
+            request.scope.evaluationRunId =
+                options.recommendationRankingEvaluationRunId;
+        }
+        else if (options.recommendationRankingScanId)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::recommendationScan;
+            request.scope.recommendationScanId =
+                options.recommendationRankingScanId;
+        }
+        else if (options.recommendationRankingSymbol &&
+                 options.recommendationRankingHorizon)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::symbolHorizon;
+            request.scope.symbol = options.recommendationRankingSymbol;
+            request.scope.horizon = options.recommendationRankingHorizon;
+        }
+        else if (options.recommendationRankingSymbol)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::symbol;
+            request.scope.symbol = options.recommendationRankingSymbol;
+        }
+        else if (options.recommendationRankingHorizon)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::horizon;
+            request.scope.horizon = options.recommendationRankingHorizon;
+        }
+        else if (options.recommendationRankingFamily)
+        {
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::family;
+            request.scope.family = options.recommendationRankingFamily;
+        }
+        else
+            request.scope.type = EA::ExperimentRecommendation::
+                RecommendationRankingScopeType::global;
+        return EA::ExperimentRecommendation::
+            RunRankExperimentRecommendationEvaluationsCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.listExperimentRecommendationRankingSnapshots)
+        return EA::ExperimentRecommendation::
+            RunListExperimentRecommendationRankingSnapshotsCommand(
+                connectionString, options.recommendationRankingLimit, std::cout);
+    if (options.recommendationRankingStatusId)
+        return EA::ExperimentRecommendation::
+            RunExperimentRecommendationRankingStatusCommand(
+                connectionString, *options.recommendationRankingStatusId,
+                std::cout);
+    if (options.listRecommendationRankingMembersId)
+    {
+        std::optional<EA::ExperimentRecommendation::RecommendationRankingBucket>
+            bucket;
+        if (options.recommendationRankingBucket)
+            bucket = *EA::ExperimentRecommendation::
+                ParseRecommendationRankingBucket(
+                    *options.recommendationRankingBucket);
+        return EA::ExperimentRecommendation::
+            RunListExperimentRecommendationRankingMembersCommand(
+                connectionString, *options.listRecommendationRankingMembersId,
+                bucket, options.recommendationRankingLimit, std::cout);
+    }
+    if (options.recommendationRankingMemberStatusId)
+        return EA::ExperimentRecommendation::
+            RunExperimentRecommendationRankingMemberStatusCommand(
+                connectionString,
+                *options.recommendationRankingMemberStatusId, std::cout);
+    if (options.compareRecommendationEvaluations)
+        return EA::ExperimentRecommendation::
+            RunCompareExperimentRecommendationEvaluationsCommand(
+                connectionString, *options.compareRecommendationEvaluations,
+                std::cout);
+    if (options.compareRecommendationRankingMembers)
+        return EA::ExperimentRecommendation::
+            RunCompareExperimentRecommendationRankingMembersCommand(
+                connectionString,
+                *options.compareRecommendationRankingMembers, std::cout);
     return EA::ExperimentRecommendation::RunExplainExperimentRecommendationScoreCommand(
         connectionString, *options.explainRecommendationScoreId, std::cout);
 }
@@ -15206,7 +16994,45 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.expireRecommendationId.has_value() ||
             options.listExperimentRecommendationReviews ||
             options.recommendationReviewStatusId.has_value() ||
-            options.recommendationReviewHistoryId.has_value())
+            options.recommendationReviewHistoryId.has_value() ||
+            options.evaluateExperimentRecommendations ||
+            options.evaluateExperimentRecommendationId.has_value() ||
+            options.listExperimentRecommendationEvaluations ||
+            options.recommendationEvaluationStatusId.has_value() ||
+            options.explainRecommendationEvaluationId.has_value() ||
+            options.listExperimentRecommendationEvaluationRuns ||
+            options.recommendationEvaluationRunStatusId.has_value() ||
+            options.rankExperimentRecommendationEvaluations ||
+            options.listExperimentRecommendationRankingSnapshots ||
+            options.recommendationRankingStatusId.has_value() ||
+            options.listRecommendationRankingMembersId.has_value() ||
+            options.recommendationRankingMemberStatusId.has_value() ||
+            options.compareRecommendationEvaluations.has_value() ||
+            options.compareRecommendationRankingMembers.has_value() ||
+            options.approveConversionProposalId.has_value() ||
+            options.rejectConversionProposalId.has_value() ||
+            options.showConversionProposalId.has_value() ||
+            options.listConversionProposalReviewsId.has_value() ||
+            options.listConversionProposalsReviewStatus.has_value() ||
+            options.executeApprovedConversionProposalId.has_value() ||
+            options.conversionProposalExecutionStatusId.has_value() ||
+            options.activateRecommendationConversionExecutionId.has_value() ||
+            options.recommendationConversionActivationStatusId.has_value() ||
+            options.recommendationConversionWorkflowProposalId.has_value() ||
+            options.listRecommendationConversionWorkflows ||
+            options.planRecommendationCampaign ||
+            options.reviewRecommendationCampaign ||
+            options.approveRecommendationCampaign ||
+            options.rejectRecommendationCampaign ||
+            options.showRecommendationCampaignApprovalId.has_value() ||
+            options.listRecommendationCampaignApprovals ||
+            options.materializeRecommendationCampaign ||
+            options.showRecommendationCampaignMaterializationId.has_value() ||
+            options.listRecommendationCampaignMaterializations ||
+            options.showRecommendationCampaignHandoffId.has_value() ||
+            options.listRecommendationCampaignHandoffs ||
+            options.reviewRecommendationCampaignMaterializationId.has_value())
+            // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

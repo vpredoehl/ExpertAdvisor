@@ -125,6 +125,9 @@ std::string RecommendationPolicyCanonicalText(
 std::string RecommendationPolicyHash(const RecommendationPolicy& policy);
 
 std::string CanonicalRecommendationDouble(double value);
+// Tagged deterministic accelerator for recommendation-owned canonical text.
+// Canonical text remains authoritative and must be compared after a hash match.
+std::string RecommendationCanonicalHash(const std::string& canonicalText);
 std::string CanonicalExperimentDateText(const std::string& value);
 std::string EffectiveExperimentConfigurationCanonicalText(
     const EffectiveExperimentConfiguration& configuration);
