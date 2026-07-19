@@ -105,6 +105,12 @@ the materialization, decision, operator, reason, and operation version for exact
 retry recognition. The greatest Phase 4C review-decision ID remains authoritative;
 no campaign-level status authority, execution, activation, experiment, scheduler,
 or worker behavior is added.
+Phase 5 Step 1 adds no schema object or privilege. Its explicit confirmed
+campaign command validates one exact Phase 4D materialization and uses the
+existing Phase 4C execution transaction primitive to create all corresponding
+``paused/train`` experiments and immutable conversion-execution rows atomically.
+Exact all-member retries insert nothing; partial prior execution conflicts. It
+does not activate or queue experiments, modify scheduler state, or start workers.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

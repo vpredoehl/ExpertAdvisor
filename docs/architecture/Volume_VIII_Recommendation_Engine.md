@@ -1,7 +1,7 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 4D Step 6
-Version: 1.5.0
+Status: Foundation aligned through Phase 5 Step 1
+Version: 1.6.0
 Last revised: 2026-07-19
 
 ## 1. Purpose
@@ -12,6 +12,9 @@ review, immutable advisory evidence, the explicitly separated manual conversion
 chain, read-only campaign planning/review, and explicit non-executing campaign
 approval, materialization, handoff observation, and exact materialized-proposal
 review.
+Phase 5 Step 1 adds an explicit atomic convenience that applies the existing
+Phase 4C paused conversion execution to every exact materialized campaign
+member, without activation, queueing, scheduler control, or workers.
 
 ## 2. Scope
 
@@ -29,14 +32,15 @@ campaign-wide Phase 4C proposal review are also in scope.
 
 ### 2.2 Out of scope
 
-Automatic proposal creation, campaign execution, profitability claims,
+Automatic proposal creation, autonomous campaign execution or campaign
+management, profitability claims,
 recommendation-driven scheduler polling, worker execution, and automatic
 approval/rejection/expiration.
 
 ### 2.3 Current implementation status
 
-Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, and Phase 4D Steps 1–6
-implement the in-scope capabilities.
+Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, Phase 4D Steps 1–6,
+and Phase 5 Step 1 implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
@@ -50,8 +54,10 @@ reconstructed review without executing it. Step 4 atomically creates or reuses
 only that review's selected Phase 4C proposals; it does not review or execute
 them. Step 5 observes every exact materialized proposal, and Step 6 explicitly
 applies one ordinary Phase 4C review decision to all exact members atomically.
-Detailed contracts
-remain in the Phase 4 documents referenced in §12.
+Phase 5 Step 1 then permits a separately confirmed atomic execution of those
+exact members through the existing Phase 4C paused-conversion transaction
+primitive. It neither activates nor queues the created experiments.
+Detailed contracts remain in the Phase documents referenced in §12.
 
 ## 3. Responsibilities
 
@@ -64,9 +70,10 @@ their presentation.
 ### 3.2 Dependencies
 
 Consumes completed experiment/final-analysis evidence from Volumes VI/VII.
-Only the explicit Phase 4C operator commands cross into experiment lifecycle;
-ranking, campaign planning, campaign review, and campaign approval have no
-downstream execution dependency.
+Only the explicit Phase 4C execution and activation primitives cross into
+experiment lifecycle; Phase 5 Step 1 is a confirmed orchestration caller of the
+former. Ranking, campaign planning, campaign review, and campaign approval have
+no downstream execution dependency.
 
 ### 3.3 Prohibited responsibilities
 
@@ -109,12 +116,14 @@ recommendation ranking
 -> explicit approved-campaign materialization to Phase 4C proposals
 -> read-only exact campaign handoff
 -> explicit atomic Phase 4C proposal review for all exact campaign members
--> existing Phase 4C per-recommendation manual workflow
+-> optional explicit Phase 5 atomic convenience over Phase 4C paused execution
+-> existing Phase 4C per-recommendation activation workflow
 ```
 
 All displayed stages through exact proposal review are implemented through
 Phase 4D Step 6; Phase 4C execution and activation remain separately invoked
-actions.
+actions. Phase 5 Step 1 invokes only the existing Phase 4C execution operation
+for the exact campaign membership; activation remains per execution.
 
 ### 4.3 Ownership boundaries
 
@@ -419,6 +428,16 @@ fails closed. No Phase 4D review authority or schema is added, and execution,
 activation, experiment creation, scheduling, workers, repair, and automatic
 progression remain separate.
 
+Phase 5 Step 1 adds one separately confirmed, all-member execution transaction
+over the same immutable Step 4 membership. Sorted existing Phase 4C proposal
+locks serialize the operation with direct review and direct execution. Every
+member is validated before the first insert, then the existing transaction-
+bound Phase 4C primitive creates ordinary paused experiments and immutable
+execution rows. Exact all-executed retry is already satisfied; mixed prior
+execution fails closed. There is no new schema or execution authority, and no
+activation, pending transition, scheduler action, worker launch, or automatic
+progression.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -442,6 +461,7 @@ progression remain separate.
 - [Approved campaign materialization](../Phase4DExperimentRecommendationCampaignMaterialization.rst)
 - [Read-only campaign handoff status](../Phase4DExperimentRecommendationCampaignHandoff.rst)
 - [Materialized campaign proposal review](../Phase4DExperimentRecommendationCampaignProposalReview.rst)
+- [Atomic campaign conversion execution](../Phase5ExperimentRecommendationCampaignExecution.rst)
 
 ## 13. Revision history
 
@@ -462,3 +482,4 @@ progression remain separate.
 | 1.3.0 | 2026-07-19 | Recorded atomic Phase 4D Step 4 materialization of one approved campaign into exact Phase 4C proposals without experiment or scheduler execution. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.4.0 | 2026-07-19 | Recorded read-only Phase 4D Step 5 projection of materialized campaign membership onto current Phase 4C lifecycle evidence. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.5.0 | 2026-07-19 | Recorded explicit atomic Phase 4D Step 6 review of exact materialized proposals through ordinary Phase 4C review rows. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
+| 1.6.0 | 2026-07-19 | Recorded explicit atomic Phase 5 Step 1 execution of exact materialized proposals through the existing Phase 4C paused-conversion authority. | ADR-0001, ADR-0004, ADR-0005 |

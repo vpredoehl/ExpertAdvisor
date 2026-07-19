@@ -238,6 +238,69 @@ bool RecommendationConversionExecutionSchemaExists(pqxx::connection& connection)
 }
 
 RecommendationConversionExecutionResult
+ExecuteApprovedRecommendationConversionProposalInTransaction(
+    pqxx::transaction_base& transaction,
+    long long proposalId)
+{
+    if (proposalId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_execution_proposal_id_invalid");
+    const pqxx::result proposalRow = transaction.exec(
+        "SELECT recommendation_conversion_proposal_id FROM "
+        "experiment_recommendation_conversion_proposal WHERE "
+        "recommendation_conversion_proposal_id=$1;",
+        pqxx::params{proposalId});
+    if (proposalRow.empty())
+    {
+        return {RecommendationConversionExecutionOutcome::proposalNotFound,
+                std::nullopt};
+    }
+    const auto proposal = FindRecommendationConversionProposal(
+        transaction, proposalId);
+    if (!proposal)
+        throw std::runtime_error(
+            "recommendation_conversion_execution_locked_proposal_missing");
+    if (auto existing = FindByProposal(transaction, proposalId))
+    {
+        ValidateExisting(transaction, *existing, *proposal);
+        return {RecommendationConversionExecutionOutcome::existingIdentical,
+                std::move(existing)};
+    }
+    const auto review = GetRecommendationConversionProposalCurrentReview(
+        transaction, proposalId);
+    if (!review)
+        throw std::runtime_error(
+            "recommendation_conversion_execution_review_state_missing");
+    if (!review->latestDecision)
+        return {RecommendationConversionExecutionOutcome::pendingReview,
+                std::nullopt};
+    if (review->disposition !=
+        RecommendationConversionProposalReviewDisposition::approved)
+        return {RecommendationConversionExecutionOutcome::rejected,
+                std::nullopt};
+    const long long reviewDecisionId = review->latestDecision->reviewDecisionId;
+    const long long experimentId = InsertPausedExperiment(
+        transaction, proposal->proposal.proposedInvocation);
+    const std::string canonical = BuildExecutionIdentity(
+        *proposal, reviewDecisionId);
+    auto execution = MapExecution(transaction.exec(
+        "INSERT INTO experiment_recommendation_conversion_execution ("
+        "recommendation_conversion_proposal_id,"
+        "recommendation_conversion_review_decision_id,experiment_id,"
+        "execution_contract_version,authorization_decision,"
+        "execution_identity_canonical,execution_identity_hash) VALUES "
+        "($1,$2,$3,$4,'approve',$5,$6) RETURNING " +
+            ExecutionColumns() + ";",
+        pqxx::params{
+            proposalId, reviewDecisionId, experimentId,
+            kRecommendationConversionExecutionContractVersion, canonical,
+            RecommendationCanonicalHash(canonical)})
+        .one_row());
+    return {RecommendationConversionExecutionOutcome::created,
+            std::move(execution)};
+}
+
+RecommendationConversionExecutionResult
 ExecuteApprovedRecommendationConversionProposal(
     pqxx::connection& connection,
     long long proposalId)
@@ -250,69 +313,10 @@ ExecuteApprovedRecommendationConversionProposal(
         pqxx::work transaction{connection};
         LockRecommendationConversionProposalReviewSequence(
             transaction, proposalId);
-        const pqxx::result proposalRow = transaction.exec(
-            "SELECT recommendation_conversion_proposal_id FROM "
-            "experiment_recommendation_conversion_proposal WHERE "
-            "recommendation_conversion_proposal_id=$1;",
-            pqxx::params{proposalId});
-        if (proposalRow.empty())
-        {
-            transaction.commit();
-            return {RecommendationConversionExecutionOutcome::proposalNotFound,
-                    std::nullopt};
-        }
-        const auto proposal = FindRecommendationConversionProposal(
+        auto result = ExecuteApprovedRecommendationConversionProposalInTransaction(
             transaction, proposalId);
-        if (!proposal)
-            throw std::runtime_error(
-                "recommendation_conversion_execution_locked_proposal_missing");
-        if (auto existing = FindByProposal(transaction, proposalId))
-        {
-            ValidateExisting(transaction, *existing, *proposal);
-            transaction.commit();
-            return {RecommendationConversionExecutionOutcome::existingIdentical,
-                    std::move(existing)};
-        }
-        const auto review = GetRecommendationConversionProposalCurrentReview(
-            transaction, proposalId);
-        if (!review)
-            throw std::runtime_error(
-                "recommendation_conversion_execution_review_state_missing");
-        if (!review->latestDecision)
-        {
-            transaction.commit();
-            return {RecommendationConversionExecutionOutcome::pendingReview,
-                    std::nullopt};
-        }
-        if (review->disposition !=
-            RecommendationConversionProposalReviewDisposition::approved)
-        {
-            transaction.commit();
-            return {RecommendationConversionExecutionOutcome::rejected,
-                    std::nullopt};
-        }
-        const long long reviewDecisionId =
-            review->latestDecision->reviewDecisionId;
-        const long long experimentId = InsertPausedExperiment(
-            transaction, proposal->proposal.proposedInvocation);
-        const std::string canonical =
-            BuildExecutionIdentity(*proposal, reviewDecisionId);
-        auto execution = MapExecution(transaction.exec(
-            "INSERT INTO experiment_recommendation_conversion_execution ("
-            "recommendation_conversion_proposal_id,"
-            "recommendation_conversion_review_decision_id,experiment_id,"
-            "execution_contract_version,authorization_decision,"
-            "execution_identity_canonical,execution_identity_hash) VALUES "
-            "($1,$2,$3,$4,'approve',$5,$6) RETURNING " +
-                ExecutionColumns() + ";",
-            pqxx::params{
-                proposalId, reviewDecisionId, experimentId,
-                kRecommendationConversionExecutionContractVersion, canonical,
-                RecommendationCanonicalHash(canonical)})
-            .one_row());
         transaction.commit();
-        return {RecommendationConversionExecutionOutcome::created,
-                std::move(execution)};
+        return result;
     }
     catch (const pqxx::unique_violation&)
     {
@@ -368,6 +372,17 @@ FindRecommendationConversionExecutionByProposal(
         throw std::invalid_argument(
             "recommendation_conversion_execution_proposal_id_invalid");
     pqxx::read_transaction transaction{connection};
+    return FindByProposal(transaction, proposalId);
+}
+
+std::optional<PersistedRecommendationConversionExecution>
+FindRecommendationConversionExecutionByProposal(
+    pqxx::transaction_base& transaction,
+    long long proposalId)
+{
+    if (proposalId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_execution_proposal_id_invalid");
     return FindByProposal(transaction, proposalId);
 }
 

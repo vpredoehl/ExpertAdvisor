@@ -108,5 +108,7 @@ immutable Step 4 rows provide campaign scope and ordering.
 
 Execution, activation, experiment creation or queueing, experiment status
 changes, scheduling, worker launch, polling, repair, subset review, and automatic
-progression remain separate and explicitly deferred. The scheduler and workers
-do not query or invoke this operation.
+progression remain outside Step 6. Phase 5 Step 1 provides a separately invoked
+atomic convenience over the existing Phase 4C paused-execution authority;
+activation and scheduler lifecycle remain separate. The scheduler and workers
+do not query or invoke Step 6.

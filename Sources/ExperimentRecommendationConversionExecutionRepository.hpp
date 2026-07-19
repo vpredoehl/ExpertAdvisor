@@ -54,6 +54,13 @@ ExecuteApprovedRecommendationConversionProposal(
     pqxx::connection& connection,
     long long proposalId);
 
+// The caller owns the transaction and must hold the proposal review-sequence
+// advisory lock. This primitive never starts, commits, or aborts a transaction.
+RecommendationConversionExecutionResult
+ExecuteApprovedRecommendationConversionProposalInTransaction(
+    pqxx::transaction_base& transaction,
+    long long proposalId);
+
 std::optional<PersistedRecommendationConversionExecution>
 FindRecommendationConversionExecution(
     pqxx::connection& connection,
@@ -71,6 +78,11 @@ void ValidatePersistedRecommendationConversionExecution(
 std::optional<PersistedRecommendationConversionExecution>
 FindRecommendationConversionExecutionByProposal(
     pqxx::connection& connection,
+    long long proposalId);
+
+std::optional<PersistedRecommendationConversionExecution>
+FindRecommendationConversionExecutionByProposal(
+    pqxx::transaction_base& transaction,
     long long proposalId);
 
 } // namespace EA::ExperimentRecommendation

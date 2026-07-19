@@ -99,6 +99,9 @@ Use an explicit disposable non-``LSTM`` database::
 Step 6 adds a separate explicit manual operation that can append the same
 approve/reject decision to every exact materialized proposal through ordinary
 Phase 4C review rows. This projection observes those rows immediately; it does
-not invoke Step 6. Execution, activation, automatic review or progression,
-repair, background scans, and scheduler integration remain deferred. The
-scheduler does not query the handoff projection or any Phase 4D audit table.
+not invoke Step 6. Phase 5 Step 1 adds a separately confirmed atomic convenience
+over the existing Phase 4C paused execution for the exact membership; the
+handoff observes those rows and experiments but does not invoke Phase 5.
+Activation, automatic progression, repair, background scans, and scheduler
+integration remain separate. The scheduler does not query the handoff
+projection or any Phase 4D audit table.
