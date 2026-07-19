@@ -65,6 +65,10 @@ std::string RecommendationConversionProposalReviewPersistOutcomeText(
 bool RecommendationConversionProposalReviewSchemaExists(
     pqxx::connection& connection);
 
+void LockRecommendationConversionProposalReviewSequence(
+    pqxx::transaction_base& transaction,
+    long long proposalId);
+
 RecommendationConversionProposalReviewPersistResult
 RecordRecommendationConversionProposalReviewDecision(
     pqxx::connection& connection,
@@ -84,6 +88,11 @@ ListRecommendationConversionProposalReviewDecisions(
 std::optional<RecommendationConversionProposalCurrentReview>
 GetRecommendationConversionProposalCurrentReview(
     pqxx::connection& connection,
+    long long proposalId);
+
+std::optional<RecommendationConversionProposalCurrentReview>
+GetRecommendationConversionProposalCurrentReview(
+    pqxx::transaction_base& transaction,
     long long proposalId);
 
 std::vector<RecommendationConversionProposalReviewSummary>

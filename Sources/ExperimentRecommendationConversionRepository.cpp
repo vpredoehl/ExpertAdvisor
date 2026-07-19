@@ -412,10 +412,18 @@ FindRecommendationConversionProposal(
     pqxx::connection& connection,
     long long proposalId)
 {
+    pqxx::read_transaction transaction{connection};
+    return FindRecommendationConversionProposal(transaction, proposalId);
+}
+
+std::optional<PersistedRecommendationConversionProposal>
+FindRecommendationConversionProposal(
+    pqxx::transaction_base& transaction,
+    long long proposalId)
+{
     if (proposalId <= 0)
         throw std::invalid_argument(
             "recommendation_conversion_proposal_id_must_be_positive");
-    pqxx::read_transaction transaction{connection};
     const pqxx::result rows = transaction.exec(
         "SELECT " + ProposalColumns() + " FROM "
         "experiment_recommendation_conversion_proposal WHERE "

@@ -54,7 +54,11 @@ including a reversal.
 constraint authoritative. Concurrent identical requests converge on one row.
 Concurrent different request IDs both remain auditable; the greater generated
 decision ID determines the resulting disposition. Reviews of unrelated
-proposals are not globally serialized.
+proposals are not globally serialized. Review writes and the Step 4 conversion
+operation share a transaction-scoped, proposal-specific advisory lock. This
+gives a review-versus-conversion race an explicit order without granting UPDATE
+access to the immutable proposal row; a lock-hash collision can only add
+serialization and never establishes proposal identity.
 
 Validation and repository boundary
 ----------------------------------
@@ -91,9 +95,11 @@ administrative only.
 Deferred work
 -------------
 
-Proposal-to-experiment conversion, experiment creation, queueing, budgets,
-scheduler capacity, execution authorization, and automation remain deferred.
-Ranking remains advisory and cannot authorize either review or execution.
+Step 4 provides the separate explicit operation that can materialize an
+approved proposal as one paused experiment. Queueing, starting or resuming that
+experiment, budgets, scheduler capacity, operational execution authorization,
+and automation remain deferred. Ranking remains advisory and cannot authorize
+review, conversion, or execution.
 
 References
 ----------

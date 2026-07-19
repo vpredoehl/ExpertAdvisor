@@ -38,6 +38,7 @@
 #include "ExperimentRecommendationEvaluationService.hpp"
 #include "ExperimentRecommendationRankingService.hpp"
 #include "ExperimentRecommendationConversionProposalReviewService.hpp"
+#include "ExperimentRecommendationConversionExecutionService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -167,6 +168,8 @@ struct SchedulerOptions
     std::optional<std::string> conversionProposalReviewReason;
     int conversionProposalReviewLimit = 100;
     bool conversionProposalReviewLimitSpecified = false;
+    std::optional<long long> executeApprovedConversionProposalId;
+    std::optional<long long> conversionProposalExecutionStatusId;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -790,6 +793,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--list-conversion-proposal-reviews" ||
             arg == "--list-conversion-proposals-by-review-status" ||
             arg == "--conversion-proposal-review-limit" ||
+            arg == "--execute-approved-conversion-proposal" ||
+            arg == "--conversion-proposal-execution-status" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -884,6 +889,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--list-conversion-proposal-reviews=", 0) == 0 ||
             arg.rfind("--list-conversion-proposals-by-review-status=", 0) == 0 ||
             arg.rfind("--conversion-proposal-review-limit=", 0) == 0 ||
+            arg.rfind("--execute-approved-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-execution-status=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1623,6 +1630,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
             options.conversionProposalReviewLimitSpecified = true;
         }
+        else if (arg == "--execute-approved-conversion-proposal")
+            options.executeApprovedConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--conversion-proposal-execution-status")
+            options.conversionProposalExecutionStatusId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -2015,6 +2028,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--conversion-proposal-review-limit", value);
             options.conversionProposalReviewLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--execute-approved-conversion-proposal", value))
+            options.executeApprovedConversionProposalId = ParsePositiveLongLong(
+                "--execute-approved-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-execution-status", value))
+            options.conversionProposalExecutionStatusId = ParsePositiveLongLong(
+                "--conversion-proposal-execution-status", value);
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2181,6 +2202,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.showConversionProposalId.has_value() ? 1 : 0) +
         (options.listConversionProposalReviewsId.has_value() ? 1 : 0) +
         (options.listConversionProposalsReviewStatus.has_value() ? 1 : 0) +
+        (options.executeApprovedConversionProposalId.has_value() ? 1 : 0) +
+        (options.conversionProposalExecutionStatusId.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -15552,6 +15575,11 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Phase 4C proposal review is administrative only: it never creates "
         << "or queues an experiment or changes scheduler state.\n"
         << "Usage: " << exe
+        << " --execute-approved-conversion-proposal=PROPOSAL_ID | "
+        << "--conversion-proposal-execution-status=PROPOSAL_ID\n"
+        << "Phase 4C conversion creates one paused experiment only: it does not "
+        << "queue, start, resume, or schedule the experiment.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -15734,6 +15762,17 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
             RunListRecommendationConversionProposalsByReviewDispositionCommand(
                 connectionString, request, std::cout);
     }
+    if (options.executeApprovedConversionProposalId)
+        return EA::ExperimentRecommendation::
+            RunExecuteApprovedRecommendationConversionProposalCommand(
+                connectionString, *options.executeApprovedConversionProposalId,
+                std::cout, std::cerr);
+    if (options.conversionProposalExecutionStatusId)
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionExecutionStatusCommand(
+                connectionString,
+                *options.conversionProposalExecutionStatusId,
+                std::cout);
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -15961,7 +16000,9 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.rejectConversionProposalId.has_value() ||
             options.showConversionProposalId.has_value() ||
             options.listConversionProposalReviewsId.has_value() ||
-            options.listConversionProposalsReviewStatus.has_value())
+            options.listConversionProposalsReviewStatus.has_value() ||
+            options.executeApprovedConversionProposalId.has_value() ||
+            options.conversionProposalExecutionStatusId.has_value())
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

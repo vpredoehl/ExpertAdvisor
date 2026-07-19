@@ -94,11 +94,12 @@ Phase 4C Step 2 durably persists completed proposals as immutable audit records;
 see ``Phase4CExperimentRecommendationConversionPersistence.rst``. Step 3 adds
 an append-only manual review history and inspection CLI; see
 ``Phase4CExperimentRecommendationConversionProposalReview.rst``. Proposal
-preparation through CLI, experiment creation, budgets, queueing, scheduler
-capacity, and any autonomous workflow remain deferred. A later operational
-conversion capability still requires the architecture decision and service
-boundary required by Volume VIII §11.3. Profitability and rank never imply
-authorization.
+preparation through CLI, budgets, queueing, scheduler capacity, and any
+autonomous workflow remain deferred. Phase 4C Step 4 separately permits an
+explicit approved durable proposal to create one paused experiment. A later
+operational lifecycle or queueing capability still requires the architecture
+and service boundaries in Volume VIII §11.3 and ADR-0004. Profitability and
+rank never imply authorization.
 
 References
 ----------
@@ -107,6 +108,7 @@ References
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md``
 * ``docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md``
+* ``docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md``
 * ``docs/Phase4AExperimentRecommendationFoundation.rst``
 * ``docs/Phase4AExperimentRecommendationReview.rst``
 * ``docs/Phase4BExperimentRecommendationEvaluation.rst``

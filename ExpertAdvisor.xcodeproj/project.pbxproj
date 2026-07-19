@@ -75,6 +75,10 @@
 		0AF000093060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AF000023060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.cpp */; };
 		0AF0000A3060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AF000043060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp */; };
 		0AF0000B3060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0AF000043060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp */; };
+		0B0000063070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000003070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp */; };
+		0B0000073070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000003070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp */; };
+		0B0000083070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000023070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp */; };
+		0B0000093070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B0000023070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -230,6 +234,10 @@
 		0AF000033060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationConversionProposalReviewRepository.hpp; path = Sources/ExperimentRecommendationConversionProposalReviewRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0AF000043060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationConversionProposalReviewService.cpp; path = Sources/ExperimentRecommendationConversionProposalReviewService.cpp; sourceTree = SOURCE_ROOT; };
 		0AF000053060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationConversionProposalReviewService.hpp; path = Sources/ExperimentRecommendationConversionProposalReviewService.hpp; sourceTree = SOURCE_ROOT; };
+		0B0000003070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationConversionExecutionRepository.cpp; path = Sources/ExperimentRecommendationConversionExecutionRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0B0000013070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationConversionExecutionRepository.hpp; path = Sources/ExperimentRecommendationConversionExecutionRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0B0000023070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationConversionExecutionService.cpp; path = Sources/ExperimentRecommendationConversionExecutionService.cpp; sourceTree = SOURCE_ROOT; };
+		0B0000033070000100AAA001 /* ExperimentRecommendationConversionExecutionService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationConversionExecutionService.hpp; path = Sources/ExperimentRecommendationConversionExecutionService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -353,6 +361,10 @@
 				0AF000033060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.hpp */,
 				0AF000043060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp */,
 				0AF000053060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.hpp */,
+				0B0000003070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp */,
+				0B0000013070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.hpp */,
+				0B0000023070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp */,
+				0B0000033070000100AAA001 /* ExperimentRecommendationConversionExecutionService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -560,6 +572,8 @@
 				0AF000063060000100AAA001 /* ExperimentRecommendationConversionProposalReview.cpp in Sources */,
 				0AF000083060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.cpp in Sources */,
 				0AF0000A3060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp in Sources */,
+				0B0000063070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp in Sources */,
+				0B0000083070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -596,6 +610,8 @@
 				0AF000073060000100AAA001 /* ExperimentRecommendationConversionProposalReview.cpp in Sources */,
 				0AF000093060000100AAA001 /* ExperimentRecommendationConversionProposalReviewRepository.cpp in Sources */,
 				0AF0000B3060000100AAA001 /* ExperimentRecommendationConversionProposalReviewService.cpp in Sources */,
+				0B0000073070000100AAA001 /* ExperimentRecommendationConversionExecutionRepository.cpp in Sources */,
+				0B0000093070000100AAA001 /* ExperimentRecommendationConversionExecutionService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,

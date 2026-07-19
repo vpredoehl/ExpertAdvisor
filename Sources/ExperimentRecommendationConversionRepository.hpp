@@ -51,6 +51,13 @@ FindRecommendationConversionProposal(
     pqxx::connection& connection,
     long long proposalId);
 
+// Transaction-bound overload for callers that must keep proposal validation
+// and a dependent write in one database transaction.
+std::optional<PersistedRecommendationConversionProposal>
+FindRecommendationConversionProposal(
+    pqxx::transaction_base& transaction,
+    long long proposalId);
+
 std::optional<PersistedRecommendationConversionProposal>
 FindRecommendationConversionProposalByIdentity(
     pqxx::connection& connection,

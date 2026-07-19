@@ -73,9 +73,11 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0002](ADR-0002-deterministic-experiment-identity.md) | Accepted | Experiment semantic identity uses deterministic canonical content. |
 | [ADR-0003](ADR-0003-advisory-recommendation-evaluation.md) | Accepted | Recommendation generation, scoring, and review remain advisory and non-executing. |
 | [ADR-0004](ADR-0004-scheduler-ownership-boundaries.md) | Accepted | Scheduler work requires explicit ownership and durable lifecycle claims. |
+| [ADR-0005](ADR-0005-manual-recommendation-conversion.md) | Accepted | Explicit approved-proposal conversion creates one paused experiment. |
 
 ## 8. Revision history
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-07-15 | Established ADR numbering, statuses, required sections, workflow, and initial index. |
+| 1.1.0 | 2026-07-19 | Added ADR-0005 for explicit manual conversion to a paused experiment. |

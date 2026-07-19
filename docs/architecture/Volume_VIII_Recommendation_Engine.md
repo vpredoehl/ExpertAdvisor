@@ -265,17 +265,19 @@ APIs, and separate inspection commands.
 
 ### 11.2 Deferred capabilities
 
-Proposal-to-experiment conversion, multi-source attribution, automatic
-research campaigns, profitability evidence, and scheduler-managed
+Experiment queueing/execution from conversion, multi-source attribution,
+automatic research campaigns, profitability evidence, and scheduler-managed
 recommendation work. Phase 4C Step 1 provides the pure proposed-
 specification contract, Step 2 provides durable proposal audit evidence, and
-Step 3 provides explicit append-only manual proposal review.
+Step 3 provides explicit append-only manual proposal review. Step 4 permits one
+explicit approved proposal to create one paused experiment.
 
 ### 11.3 Required decisions
 
-Conversion requires a new ADR defining authorization, complete implementation
-identity, idempotent experiment creation, budgets, transactions, audit history,
-and scheduler capacity. Approval alone can never imply conversion.
+ADR-0005 defines explicit conversion authorization, implementation identity,
+idempotent experiment creation, transactions, and audit history. Approval alone
+does not invoke conversion. Budgets, queueing, execution, and scheduler capacity
+remain deferred under ADR-0004.
 
 Phase 4C Step 2 adds the append-only
 ``experiment_recommendation_conversion_proposal`` record and a narrow
@@ -291,10 +293,19 @@ idempotent per proposal. New request tokens permit auditable reversals; the
 greatest decision ID defines the current disposition. Approval remains
 administrative evidence only and never creates or queues an experiment.
 
+Phase 4C Step 4 adds one explicit manual conversion transaction. It takes a
+proposal-specific transaction advisory lock, revalidates the immutable
+proposal, requires the latest serialized decision to be ``approve``, creates
+one ``paused`` experiment, and records immutable provenance linking the
+proposal, approving decision, and experiment. Unique proposal and experiment
+references make retries and concurrent requests converge. The scheduler does
+not poll conversion rows and a converted experiment is not queued or started.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
 - [ADR-0003](adr/ADR-0003-advisory-recommendation-evaluation.md)
+- [ADR-0005](adr/ADR-0005-manual-recommendation-conversion.md)
 - [Recommendation foundation](../Phase4AExperimentRecommendationFoundation.rst)
 - [Recommendation persistence](../Phase4AExperimentRecommendationPersistence.rst)
 - [Recommendation scoring](../Phase4AExperimentRecommendationScoring.rst)
@@ -304,6 +315,7 @@ administrative evidence only and never creates or queues an experiment.
 - [Manual conversion contract](../Phase4CExperimentRecommendationConversion.rst)
 - [Manual conversion proposal persistence](../Phase4CExperimentRecommendationConversionPersistence.rst)
 - [Manual conversion proposal review](../Phase4CExperimentRecommendationConversionProposalReview.rst)
+- [Manual conversion execution](../Phase4CExperimentRecommendationConversionExecution.rst)
 
 ## 13. Revision history
 
@@ -315,3 +327,4 @@ administrative evidence only and never creates or queues an experiment.
 | 0.4.0 | 2026-07-18 | Recorded the pure Phase 4C Step 1 manually authorized proposed-experiment contract; durable conversion and execution remain deferred. | ADR-0003, ADR-0004 |
 | 0.5.0 | 2026-07-18 | Recorded immutable Phase 4C Step 2 conversion-proposal persistence; experiment creation and execution remain deferred. | ADR-0001, ADR-0003, ADR-0004 |
 | 0.6.0 | 2026-07-18 | Recorded append-only, idempotent Phase 4C Step 3 manual proposal review; approval remains non-executing. | ADR-0001, ADR-0003, ADR-0004 |
+| 0.7.0 | 2026-07-19 | Recorded explicit, idempotent Phase 4C Step 4 conversion to one paused experiment. | ADR-0001, ADR-0004, ADR-0005 |

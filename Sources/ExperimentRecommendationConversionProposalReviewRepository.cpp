@@ -124,6 +124,25 @@ bool RecommendationConversionProposalReviewSchemaExists(
         .one_row()[0].as<bool>();
 }
 
+void LockRecommendationConversionProposalReviewSequence(
+    pqxx::transaction_base& transaction,
+    long long proposalId)
+{
+    if (proposalId <= 0)
+        throw std::invalid_argument(
+            "recommendation_conversion_proposal_review_id_invalid");
+    // The proposal is immutable and the runtime role intentionally has no
+    // UPDATE privilege, so a row-level FOR UPDATE lock is unavailable. This
+    // transaction-scoped lock serializes review decisions and conversion for
+    // one proposal without making advisory-lock hash equality authoritative.
+    transaction.exec(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, "
+        "-7046029254386353131));",
+        pqxx::params{
+            "recommendation_conversion_proposal_review_sequence_v1:" +
+            std::to_string(proposalId)});
+}
+
 RecommendationConversionProposalReviewPersistResult
 RecordRecommendationConversionProposalReviewDecision(
     pqxx::connection& connection,
@@ -132,6 +151,8 @@ RecordRecommendationConversionProposalReviewDecision(
     const RecommendationConversionProposalReviewRequest normalized =
         NormalizeRecommendationConversionProposalReviewRequest(request);
     pqxx::work transaction{connection};
+    LockRecommendationConversionProposalReviewSequence(
+        transaction, normalized.proposalId);
     const pqxx::result proposal = transaction.exec(
         "SELECT recommendation_conversion_proposal_id FROM "
         "experiment_recommendation_conversion_proposal WHERE "
@@ -229,10 +250,19 @@ GetRecommendationConversionProposalCurrentReview(
     pqxx::connection& connection,
     long long proposalId)
 {
+    pqxx::read_transaction transaction{connection};
+    return GetRecommendationConversionProposalCurrentReview(
+        transaction, proposalId);
+}
+
+std::optional<RecommendationConversionProposalCurrentReview>
+GetRecommendationConversionProposalCurrentReview(
+    pqxx::transaction_base& transaction,
+    long long proposalId)
+{
     if (proposalId <= 0)
         throw std::invalid_argument(
             "recommendation_conversion_proposal_review_id_invalid");
-    pqxx::read_transaction transaction{connection};
     const pqxx::result proposal = transaction.exec(
         "SELECT 1 FROM experiment_recommendation_conversion_proposal WHERE "
         "recommendation_conversion_proposal_id=$1;",

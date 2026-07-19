@@ -118,11 +118,12 @@ remains unchanged.
 Deferred work
 -------------
 
-Manual CLI proposal preparation, proposal-to-experiment creation, operator
-execution commands, budgets, queueing, scheduler capacity, and any automatic
-workflow remain deferred. Step 3 provides inspection and append-only manual
-review only. Ranking, proposal persistence, and review remain advisory and
-cannot authorize execution. Profitability is not inferred.
+Manual CLI proposal preparation, budgets, queueing, scheduler capacity, and any
+automatic workflow remain deferred. Step 3 provides inspection and append-only
+manual review. Step 4 adds a separate explicit conversion command that can
+materialize an approved proposal only as a paused experiment; persistence or
+approval alone still creates nothing. Ranking remains advisory and cannot
+authorize review, conversion, or execution. Profitability is not inferred.
 
 References
 ----------
