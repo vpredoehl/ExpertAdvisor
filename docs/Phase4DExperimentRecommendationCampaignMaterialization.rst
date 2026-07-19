@@ -101,8 +101,10 @@ Use only an explicit disposable non-``LSTM`` database::
      /tmp/ExperimentRecommendationCampaignMaterializationRepositoryTests
 
 Phase 4C proposal review, execution to a paused experiment, and explicit
-activation remain separate actions. Bulk review, campaign execution, automatic
-activation, background scans, scheduler integration, and worker launch are
+activation remain separate actions. Phase 4D Step 6 provides an explicit atomic
+operator convenience for reviewing every exact persisted member through
+ordinary Phase 4C review rows. Campaign execution, automatic review or
+activation, background scans, scheduler integration, and worker launch remain
 outside Step 4.
 
 Phase 4D Step 5 adds a separate read-only handoff projection over the immutable

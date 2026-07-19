@@ -1,5 +1,7 @@
 #include "ExperimentRecommendationConversionProposalReviewRepository.hpp"
 
+#include <algorithm>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -153,18 +155,28 @@ RecordRecommendationConversionProposalReviewDecision(
     pqxx::work transaction{connection};
     LockRecommendationConversionProposalReviewSequence(
         transaction, normalized.proposalId);
+    auto result = PersistRecommendationConversionProposalReviewDecision(
+        transaction, normalized);
+    transaction.commit();
+    return result;
+}
+
+RecommendationConversionProposalReviewPersistResult
+PersistRecommendationConversionProposalReviewDecision(
+    pqxx::transaction_base& transaction,
+    const RecommendationConversionProposalReviewRequest& request)
+{
+    const RecommendationConversionProposalReviewRequest normalized =
+        NormalizeRecommendationConversionProposalReviewRequest(request);
     const pqxx::result proposal = transaction.exec(
         "SELECT recommendation_conversion_proposal_id FROM "
         "experiment_recommendation_conversion_proposal WHERE "
         "recommendation_conversion_proposal_id=$1;",
         pqxx::params{normalized.proposalId});
     if (proposal.empty())
-    {
-        transaction.commit();
         return {
             RecommendationConversionProposalReviewPersistOutcome::proposalNotFound,
             std::nullopt};
-    }
 
     const pqxx::result inserted = transaction.exec(
         "INSERT INTO experiment_recommendation_conversion_review_decision ("
@@ -181,7 +193,6 @@ RecordRecommendationConversionProposalReviewDecision(
     if (!inserted.empty())
     {
         auto persisted = MapDecision(inserted.one_row());
-        transaction.commit();
         return {RecommendationConversionProposalReviewPersistOutcome::recorded,
                 std::move(persisted)};
     }
@@ -198,7 +209,6 @@ RecordRecommendationConversionProposalReviewDecision(
     if (!Matches(persisted, normalized))
         throw std::runtime_error(
             "recommendation_conversion_proposal_review_request_conflict");
-    transaction.commit();
     return {
         RecommendationConversionProposalReviewPersistOutcome::existingIdentical,
         std::move(persisted)};
@@ -281,6 +291,69 @@ GetRecommendationConversionProposalCurrentReview(
         current.disposition = DispositionFor(current.latestDecision->decision);
     }
     return current;
+}
+
+std::vector<RecommendationConversionProposalReviewSummary>
+ListRecommendationConversionProposalCurrentReviews(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& proposalIds)
+{
+    if (proposalIds.size() > static_cast<std::size_t>(
+            kMaximumRecommendationConversionProposalReviewListLimit))
+        throw std::invalid_argument(
+            "recommendation_conversion_proposal_review_limit_out_of_range");
+    if (proposalIds.empty()) return {};
+    std::vector<long long> ids = proposalIds;
+    std::sort(ids.begin(), ids.end());
+    if (std::adjacent_find(ids.begin(), ids.end()) != ids.end())
+        throw std::invalid_argument(
+            "recommendation_conversion_proposal_review_proposal_duplicate");
+    pqxx::params parameters;
+    std::ostringstream predicate;
+    predicate << " WHERE p.recommendation_conversion_proposal_id IN (";
+    for (std::size_t i = 0; i < ids.size(); ++i)
+    {
+        if (ids[i] <= 0)
+            throw std::invalid_argument(
+                "recommendation_conversion_proposal_review_id_invalid");
+        if (i != 0) predicate << ',';
+        predicate << '$' << i + 1;
+        parameters.append(ids[i]);
+    }
+    predicate << ") ORDER BY p.recommendation_conversion_proposal_id;";
+    const pqxx::result rows = transaction.exec(
+        "SELECT p.recommendation_conversion_proposal_id,p.recommendation_id,"
+        "p.source_experiment_id,p.conversion_identity_hash,"
+        "d.recommendation_conversion_review_decision_id,d.decision,"
+        "d.decision_request_id,d.operator_identity,d.reason_text,"
+        "d.decided_at::text AS decided_at,d.created_at::text AS created_at "
+        "FROM experiment_recommendation_conversion_proposal p LEFT JOIN "
+        "LATERAL (SELECT * FROM "
+        "experiment_recommendation_conversion_review_decision WHERE "
+        "recommendation_conversion_proposal_id="
+        "p.recommendation_conversion_proposal_id ORDER BY "
+        "recommendation_conversion_review_decision_id DESC LIMIT 1) d ON true" +
+        predicate.str(), parameters);
+    std::vector<RecommendationConversionProposalReviewSummary> values;
+    values.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        RecommendationConversionProposalReviewSummary value;
+        value.proposalId =
+            row["recommendation_conversion_proposal_id"].as<long long>();
+        value.recommendationId = row["recommendation_id"].as<long long>();
+        value.sourceExperimentId = row["source_experiment_id"].as<long long>();
+        value.conversionIdentityHash =
+            row["conversion_identity_hash"].as<std::string>();
+        if (!row["recommendation_conversion_review_decision_id"].is_null())
+        {
+            value.currentReview.latestDecision = MapDecision(row);
+            value.currentReview.disposition = DispositionFor(
+                value.currentReview.latestDecision->decision);
+        }
+        values.push_back(std::move(value));
+    }
+    return values;
 }
 
 std::vector<RecommendationConversionProposalReviewSummary>

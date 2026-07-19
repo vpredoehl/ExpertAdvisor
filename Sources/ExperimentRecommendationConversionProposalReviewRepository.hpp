@@ -74,6 +74,14 @@ RecordRecommendationConversionProposalReviewDecision(
     pqxx::connection& connection,
     const RecommendationConversionProposalReviewRequest& request);
 
+// Transaction-bound primitive for aggregate operations that have already
+// acquired the proposal review lock.  It never commits or starts a nested
+// transaction.
+RecommendationConversionProposalReviewPersistResult
+PersistRecommendationConversionProposalReviewDecision(
+    pqxx::transaction_base& transaction,
+    const RecommendationConversionProposalReviewRequest& request);
+
 std::optional<PersistedRecommendationConversionProposalReviewDecision>
 FindRecommendationConversionProposalReviewDecision(
     pqxx::connection& connection,
@@ -94,6 +102,11 @@ std::optional<RecommendationConversionProposalCurrentReview>
 GetRecommendationConversionProposalCurrentReview(
     pqxx::transaction_base& transaction,
     long long proposalId);
+
+std::vector<RecommendationConversionProposalReviewSummary>
+ListRecommendationConversionProposalCurrentReviews(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& proposalIds);
 
 std::vector<RecommendationConversionProposalReviewSummary>
 ListRecommendationConversionProposalsByReviewDisposition(

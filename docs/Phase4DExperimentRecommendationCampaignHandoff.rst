@@ -96,6 +96,9 @@ Use an explicit disposable non-``LSTM`` database::
    LSTM_TEST_DB_NAME=phase4d_campaign_test \
      /tmp/ExperimentRecommendationCampaignHandoffRepositoryTests
 
-Automatic campaign review, execution, activation, repair, background scans,
-and scheduler integration remain deferred. The scheduler does not query the
-handoff projection or any Phase 4D audit table.
+Step 6 adds a separate explicit manual operation that can append the same
+approve/reject decision to every exact materialized proposal through ordinary
+Phase 4C review rows. This projection observes those rows immediately; it does
+not invoke Step 6. Execution, activation, automatic review or progression,
+repair, background scans, and scheduler integration remain deferred. The
+scheduler does not query the handoff projection or any Phase 4D audit table.

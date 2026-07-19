@@ -98,6 +98,13 @@ disposition, and validates linked proposal, execution, activation, and
 experiment evidence in one read transaction. It advances no sequence and
 uses `REPEATABLE READ` for one consistent snapshot; it never repairs or
 progresses a workflow.
+Phase 4D Step 6 also adds no schema object or privilege. One explicit operator
+command validates the exact immutable Step 4 member set and atomically appends
+one ordinary Phase 4C review row per member. A deterministic request ID binds
+the materialization, decision, operator, reason, and operation version for exact
+retry recognition. The greatest Phase 4C review-decision ID remains authoritative;
+no campaign-level status authority, execution, activation, experiment, scheduler,
+or worker behavior is added.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
