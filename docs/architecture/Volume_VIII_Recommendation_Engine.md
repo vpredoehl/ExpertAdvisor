@@ -395,6 +395,14 @@ alter subsequent planning evidence.
 Materialization does not review or execute those proposals, create or modify an
 experiment, or contact the scheduler or workers.
 
+Phase 4D Step 5 adds a read-only campaign handoff projection. The immutable
+Step 4 manifest and ordered members remain membership authority; greatest-ID
+Phase 4C review, execution, activation, and experiment lifecycle evidence are
+observed in one repeatable-read transaction and one consistent snapshot.
+Explicit aggregate states and deterministic diagnostics expose incomplete or
+contradictory chains without persistence, repair, automatic progression,
+scheduler polling, or worker behavior.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -416,6 +424,7 @@ experiment, or contact the scheduler or workers.
 - [Read-only campaign review](../Phase4DExperimentRecommendationCampaignReview.rst)
 - [Explicit campaign approval](../Phase4DExperimentRecommendationCampaignApproval.rst)
 - [Approved campaign materialization](../Phase4DExperimentRecommendationCampaignMaterialization.rst)
+- [Read-only campaign handoff status](../Phase4DExperimentRecommendationCampaignHandoff.rst)
 
 ## 13. Revision history
 
@@ -434,3 +443,4 @@ experiment, or contact the scheduler or workers.
 | 1.1.0 | 2026-07-19 | Recorded deterministic read-only Phase 4D Step 2 campaign review, duplicate findings, and coverage. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.2.0 | 2026-07-19 | Recorded explicit immutable Phase 4D Step 3 campaign approval/rejection for one exact reconstructed review without execution. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.3.0 | 2026-07-19 | Recorded atomic Phase 4D Step 4 materialization of one approved campaign into exact Phase 4C proposals without experiment or scheduler execution. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
+| 1.4.0 | 2026-07-19 | Recorded read-only Phase 4D Step 5 projection of materialized campaign membership onto current Phase 4C lifecycle evidence. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |

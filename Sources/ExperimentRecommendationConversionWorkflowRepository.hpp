@@ -63,4 +63,11 @@ ListRecommendationConversionWorkflowsForRecommendations(
     pqxx::transaction_base& transaction,
     const std::vector<long long>& recommendationIds);
 
+// Transaction-bound exact proposal lookup for aggregate read models. Results
+// are ordered by proposal ID and never infer membership from recommendation ID.
+std::vector<RecommendationConversionWorkflowView>
+ListRecommendationConversionWorkflowsForProposals(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& proposalIds);
+
 } // namespace EA::ExperimentRecommendation

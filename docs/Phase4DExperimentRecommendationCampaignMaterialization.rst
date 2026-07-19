@@ -104,3 +104,7 @@ Phase 4C proposal review, execution to a paused experiment, and explicit
 activation remain separate actions. Bulk review, campaign execution, automatic
 activation, background scans, scheduler integration, and worker launch are
 outside Step 4.
+
+Phase 4D Step 5 adds a separate read-only handoff projection over the immutable
+manifest membership and current Phase 4C lifecycle evidence. It does not alter
+the materialization or advance any linked proposal.

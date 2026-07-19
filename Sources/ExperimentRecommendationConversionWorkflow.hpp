@@ -110,6 +110,10 @@ ParseRecommendationConversionWorkflowState(const std::string& text);
 std::string RecommendationConversionWorkflowIntegrityText(
     RecommendationConversionWorkflowIntegrity integrity);
 
+bool IsValidRecommendationConversionWorkflowReviewFact(
+    const RecommendationConversionWorkflowReviewFact& review,
+    long long proposalId);
+
 RecommendationConversionWorkflowDerivation
 DeriveRecommendationConversionWorkflow(
     const RecommendationConversionWorkflowFacts& facts);

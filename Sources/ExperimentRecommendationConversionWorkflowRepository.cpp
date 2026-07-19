@@ -339,4 +339,43 @@ ListRecommendationConversionWorkflowsForRecommendations(
     return views;
 }
 
+std::vector<RecommendationConversionWorkflowView>
+ListRecommendationConversionWorkflowsForProposals(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& proposalIds)
+{
+    if (proposalIds.size() >
+        static_cast<std::size_t>(
+            kMaximumRecommendationConversionWorkflowListLimit))
+        throw std::invalid_argument(
+            "recommendation_conversion_workflow_proposal_limit_exceeded");
+    if (proposalIds.empty()) return {};
+
+    std::vector<long long> ids = proposalIds;
+    std::sort(ids.begin(), ids.end());
+    if (std::adjacent_find(ids.begin(), ids.end()) != ids.end())
+        throw std::invalid_argument(
+            "recommendation_conversion_workflow_proposal_duplicate");
+
+    pqxx::params parameters;
+    std::ostringstream predicates;
+    predicates << " WHERE p.recommendation_conversion_proposal_id IN (";
+    for (std::size_t i = 0; i < ids.size(); ++i)
+    {
+        ValidatePositiveId(
+            ids[i], "recommendation_conversion_workflow_proposal_id_invalid");
+        if (i != 0) predicates << ',';
+        predicates << '$' << (i + 1);
+        parameters.append(ids[i]);
+    }
+    predicates << ") ORDER BY p.recommendation_conversion_proposal_id;";
+
+    const pqxx::result rows = transaction.exec(
+        WorkflowQuery() + predicates.str(), parameters);
+    std::vector<RecommendationConversionWorkflowView> views;
+    views.reserve(rows.size());
+    for (const pqxx::row& row : rows) views.push_back(MapWorkflow(row));
+    return views;
+}
+
 } // namespace EA::ExperimentRecommendation

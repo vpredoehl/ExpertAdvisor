@@ -543,10 +543,19 @@ FindRecommendationCampaignMaterialization(
     pqxx::connection& connection,
     long long materializationId)
 {
+    pqxx::read_transaction transaction{connection};
+    return FindRecommendationCampaignMaterialization(
+        transaction, materializationId);
+}
+
+std::optional<PersistedRecommendationCampaignMaterialization>
+FindRecommendationCampaignMaterialization(
+    pqxx::transaction_base& transaction,
+    long long materializationId)
+{
     if (materializationId <= 0)
         throw std::invalid_argument(
             "recommendation_campaign_materialization_id_invalid");
-    pqxx::read_transaction transaction{connection};
     return FindById(transaction, materializationId);
 }
 
@@ -556,11 +565,21 @@ ListRecommendationCampaignMaterializations(
     std::optional<long long> campaignApprovalId,
     int limit)
 {
+    pqxx::read_transaction transaction{connection};
+    return ListRecommendationCampaignMaterializations(
+        transaction, campaignApprovalId, limit);
+}
+
+std::vector<PersistedRecommendationCampaignMaterialization>
+ListRecommendationCampaignMaterializations(
+    pqxx::transaction_base& transaction,
+    std::optional<long long> campaignApprovalId,
+    int limit)
+{
     if ((campaignApprovalId && *campaignApprovalId <= 0) || limit <= 0 ||
         limit > kMaximumRecommendationCampaignMaterializationListLimit)
         throw std::invalid_argument(
             "recommendation_campaign_materialization_list_argument_invalid");
-    pqxx::read_transaction transaction{connection};
     const auto rows = transaction.exec(
         "SELECT " + MaterializationColumns() + " FROM "
         "experiment_recommendation_campaign_materialization WHERE "

@@ -90,6 +90,10 @@ FindRecommendationCampaignMaterialization(
     pqxx::connection& connection,
     long long materializationId);
 std::optional<PersistedRecommendationCampaignMaterialization>
+FindRecommendationCampaignMaterialization(
+    pqxx::transaction_base& transaction,
+    long long materializationId);
+std::optional<PersistedRecommendationCampaignMaterialization>
 FindRecommendationCampaignMaterializationByApproval(
     pqxx::transaction_base& transaction,
     long long campaignApprovalId);
@@ -97,6 +101,11 @@ FindRecommendationCampaignMaterializationByApproval(
 std::vector<PersistedRecommendationCampaignMaterialization>
 ListRecommendationCampaignMaterializations(
     pqxx::connection& connection,
+    std::optional<long long> campaignApprovalId,
+    int limit);
+std::vector<PersistedRecommendationCampaignMaterialization>
+ListRecommendationCampaignMaterializations(
+    pqxx::transaction_base& transaction,
     std::optional<long long> campaignApprovalId,
     int limit);
 

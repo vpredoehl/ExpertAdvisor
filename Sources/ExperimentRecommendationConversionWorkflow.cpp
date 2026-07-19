@@ -16,14 +16,6 @@ void Diagnose(
     result.diagnosticCodes.emplace_back(code);
 }
 
-bool ValidReview(
-    const RecommendationConversionWorkflowReviewFact& review,
-    long long proposalId)
-{
-    return review.reviewDecisionId > 0 && review.proposalId == proposalId &&
-        (review.decision == "approve" || review.decision == "reject");
-}
-
 bool HasSchedulerActivity(
     const RecommendationConversionWorkflowExperimentFact& experiment)
 {
@@ -102,6 +94,14 @@ std::string RecommendationConversionWorkflowIntegrityText(
         "invalid_recommendation_conversion_workflow_integrity");
 }
 
+bool IsValidRecommendationConversionWorkflowReviewFact(
+    const RecommendationConversionWorkflowReviewFact& review,
+    long long proposalId)
+{
+    return review.reviewDecisionId > 0 && review.proposalId == proposalId &&
+        (review.decision == "approve" || review.decision == "reject");
+}
+
 RecommendationConversionWorkflowDerivation
 DeriveRecommendationConversionWorkflow(
     const RecommendationConversionWorkflowFacts& facts)
@@ -125,7 +125,8 @@ DeriveRecommendationConversionWorkflow(
         Diagnose(result, "activation_cardinality_invalid");
 
     if (facts.latestReview &&
-        !ValidReview(*facts.latestReview, facts.proposalId))
+        !IsValidRecommendationConversionWorkflowReviewFact(
+            *facts.latestReview, facts.proposalId))
         Diagnose(result, "latest_review_invalid");
 
     if (facts.execution)
@@ -144,7 +145,8 @@ DeriveRecommendationConversionWorkflow(
                 RecommendationCanonicalHash(execution.identityCanonical))
             Diagnose(result, "execution_identity_invalid");
         if (!facts.executionReview ||
-            !ValidReview(*facts.executionReview, facts.proposalId) ||
+            !IsValidRecommendationConversionWorkflowReviewFact(
+                *facts.executionReview, facts.proposalId) ||
             facts.executionReview->reviewDecisionId !=
                 execution.reviewDecisionId ||
             facts.executionReview->decision != "approve")

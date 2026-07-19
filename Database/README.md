@@ -91,6 +91,13 @@ retry validates and returns the immutable manifest because its Phase 4C
 proposals intentionally change later planning evidence.
 Materialization creates no conversion review, execution, activation, or
 experiment and does not involve the scheduler or workers.
+Phase 4D Step 5 adds no schema object or privilege. Its read-only campaign
+handoff projection treats the Step 4 manifest/member rows as authoritative
+membership, selects the greatest Phase 4C review-decision ID for current
+disposition, and validates linked proposal, execution, activation, and
+experiment evidence in one read transaction. It advances no sequence and
+uses `REPEATABLE READ` for one consistent snapshot; it never repairs or
+progresses a workflow.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

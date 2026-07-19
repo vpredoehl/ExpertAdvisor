@@ -45,6 +45,7 @@
 #include "ExperimentRecommendationCampaignReviewService.hpp"
 #include "ExperimentRecommendationCampaignApprovalService.hpp"
 #include "ExperimentRecommendationCampaignMaterializationService.hpp"
+#include "ExperimentRecommendationCampaignHandoffService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -206,6 +207,11 @@ struct SchedulerOptions
     bool listRecommendationCampaignMaterializations = false;
     int campaignMaterializationLimit = 100;
     bool campaignMaterializationLimitSpecified = false;
+    std::optional<long long> showRecommendationCampaignHandoffId;
+    bool listRecommendationCampaignHandoffs = false;
+    int campaignHandoffLimit = EA::ExperimentRecommendation::
+        kDefaultRecommendationCampaignHandoffListLimit;
+    bool campaignHandoffLimitSpecified = false;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -860,6 +866,9 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--show-recommendation-campaign-materialization" ||
             arg == "--list-recommendation-campaign-materializations" ||
             arg == "--campaign-materialization-limit" ||
+            arg == "--show-recommendation-campaign-handoff" ||
+            arg == "--list-recommendation-campaign-handoffs" ||
+            arg == "--campaign-handoff-limit" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -1001,6 +1010,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--campaign-materialization-reason=", 0) == 0 ||
             arg.rfind("--show-recommendation-campaign-materialization=", 0) == 0 ||
             arg.rfind("--campaign-materialization-limit=", 0) == 0 ||
+            arg.rfind("--show-recommendation-campaign-handoff=", 0) == 0 ||
+            arg.rfind("--campaign-handoff-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1846,6 +1857,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
             options.campaignMaterializationLimitSpecified = true;
         }
+        else if (arg == "--show-recommendation-campaign-handoff")
+            options.showRecommendationCampaignHandoffId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-recommendation-campaign-handoffs")
+            options.listRecommendationCampaignHandoffs = true;
+        else if (arg == "--campaign-handoff-limit")
+        {
+            options.campaignHandoffLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.campaignHandoffLimitSpecified = true;
+        }
         else if (arg == "--campaign-ranking-snapshot")
         {
             options.campaignPlanningScope.rankingSnapshotId =
@@ -2506,6 +2529,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--campaign-materialization-limit", value);
             options.campaignMaterializationLimitSpecified = true;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--show-recommendation-campaign-handoff", value))
+            options.showRecommendationCampaignHandoffId =
+                ParsePositiveLongLong(
+                    "--show-recommendation-campaign-handoff", value);
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-handoff-limit", value))
+        {
+            options.campaignHandoffLimit = ParsePositiveInt(
+                "--campaign-handoff-limit", value);
+            options.campaignHandoffLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2687,6 +2722,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.materializeRecommendationCampaign ? 1 : 0) +
         (options.showRecommendationCampaignMaterializationId.has_value() ? 1 : 0) +
         (options.listRecommendationCampaignMaterializations ? 1 : 0) +
+        (options.showRecommendationCampaignHandoffId.has_value() ? 1 : 0) +
+        (options.listRecommendationCampaignHandoffs ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -3090,6 +3127,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             kMaximumRecommendationCampaignMaterializationListLimit)
         throw std::invalid_argument(
             "--campaign-materialization-limit must not exceed 1000");
+    if (options.campaignHandoffLimitSpecified &&
+        !options.listRecommendationCampaignHandoffs)
+        throw std::invalid_argument(
+            "--campaign-handoff-limit requires "
+            "--list-recommendation-campaign-handoffs");
+    if (options.campaignHandoffLimit > EA::ExperimentRecommendation::
+            kMaximumRecommendationCampaignHandoffListLimit)
+        throw std::invalid_argument(
+            "--campaign-handoff-limit must not exceed 1000");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -16255,6 +16301,13 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "set. Conversion review, execution, activation, and experiments "
         << "remain separate explicit actions.\n"
         << "Usage: " << exe
+        << " --show-recommendation-campaign-handoff=ID | "
+        << "--list-recommendation-campaign-handoffs "
+        << "[--campaign-handoff-limit=N]\n"
+        << "Campaign handoff is a read-only projection of each materialized "
+        << "proposal's current Phase 4C review, execution, and activation "
+        << "evidence. It never advances or repairs workflow state.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -16552,6 +16605,17 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
                 connectionString, options.campaignMaterializationApprovalId,
                 options.campaignMaterializationLimit,
                 std::cout, std::cerr);
+    if (options.showRecommendationCampaignHandoffId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationCampaignHandoffCommand(
+                connectionString,
+                *options.showRecommendationCampaignHandoffId,
+                std::cout, std::cerr);
+    if (options.listRecommendationCampaignHandoffs)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationCampaignHandoffsCommand(
+                connectionString, options.campaignHandoffLimit,
+                std::cout, std::cerr);
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -16794,7 +16858,9 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.listRecommendationCampaignApprovals ||
             options.materializeRecommendationCampaign ||
             options.showRecommendationCampaignMaterializationId.has_value() ||
-            options.listRecommendationCampaignMaterializations)
+            options.listRecommendationCampaignMaterializations ||
+            options.showRecommendationCampaignHandoffId.has_value() ||
+            options.listRecommendationCampaignHandoffs)
             // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))

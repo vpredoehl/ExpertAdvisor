@@ -113,6 +113,12 @@
 		0B5100093076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5100023076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.cpp */; };
 		0B51000A3076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5100043076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp */; };
 		0B51000B3076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5100043076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp */; };
+		0B5200063077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5200003077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp */; };
+		0B5200073077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5200003077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp */; };
+		0B5200083077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5200023077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp */; };
+		0B5200093077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5200023077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp */; };
+		0B52000A3077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5200043077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp */; };
+		0B52000B3077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5200043077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -306,6 +312,12 @@
 		0B5100033076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignMaterializationRepository.hpp; path = Sources/ExperimentRecommendationCampaignMaterializationRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0B5100043076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignMaterializationService.cpp; path = Sources/ExperimentRecommendationCampaignMaterializationService.cpp; sourceTree = SOURCE_ROOT; };
 		0B5100053076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignMaterializationService.hpp; path = Sources/ExperimentRecommendationCampaignMaterializationService.hpp; sourceTree = SOURCE_ROOT; };
+		0B5200003077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignHandoff.cpp; path = Sources/ExperimentRecommendationCampaignHandoff.cpp; sourceTree = SOURCE_ROOT; };
+		0B5200013077000100AAA001 /* ExperimentRecommendationCampaignHandoff.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignHandoff.hpp; path = Sources/ExperimentRecommendationCampaignHandoff.hpp; sourceTree = SOURCE_ROOT; };
+		0B5200023077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignHandoffRepository.cpp; path = Sources/ExperimentRecommendationCampaignHandoffRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0B5200033077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignHandoffRepository.hpp; path = Sources/ExperimentRecommendationCampaignHandoffRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0B5200043077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignHandoffService.cpp; path = Sources/ExperimentRecommendationCampaignHandoffService.cpp; sourceTree = SOURCE_ROOT; };
+		0B5200053077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignHandoffService.hpp; path = Sources/ExperimentRecommendationCampaignHandoffService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -467,6 +479,12 @@
 				0B5100033076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.hpp */,
 				0B5100043076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp */,
 				0B5100053076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.hpp */,
+				0B5200003077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp */,
+				0B5200013077000100AAA001 /* ExperimentRecommendationCampaignHandoff.hpp */,
+				0B5200023077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp */,
+				0B5200033077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.hpp */,
+				0B5200043077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp */,
+				0B5200053077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -693,6 +711,9 @@
 				0B5100063076000100AAA001 /* ExperimentRecommendationCampaignMaterialization.cpp in Sources */,
 				0B5100083076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.cpp in Sources */,
 				0B51000A3076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp in Sources */,
+				0B5200063077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp in Sources */,
+				0B5200083077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp in Sources */,
+				0B52000A3077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -748,6 +769,9 @@
 				0B5100073076000100AAA001 /* ExperimentRecommendationCampaignMaterialization.cpp in Sources */,
 				0B5100093076000100AAA001 /* ExperimentRecommendationCampaignMaterializationRepository.cpp in Sources */,
 				0B51000B3076000100AAA001 /* ExperimentRecommendationCampaignMaterializationService.cpp in Sources */,
+				0B5200073077000100AAA001 /* ExperimentRecommendationCampaignHandoff.cpp in Sources */,
+				0B5200093077000100AAA001 /* ExperimentRecommendationCampaignHandoffRepository.cpp in Sources */,
+				0B52000B3077000100AAA001 /* ExperimentRecommendationCampaignHandoffService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
