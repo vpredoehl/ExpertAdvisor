@@ -5,6 +5,7 @@
 #include "../Sources/ExperimentRecommendationCampaignHandoffRepository.hpp"
 
 #include <cassert>
+#include <barrier>
 #include <cstdlib>
 #include <future>
 #include <iostream>
@@ -343,6 +344,10 @@ CREATE TABLE experiment_recommendation_campaign_materialization_member(
             InsertMaterialization(setup, 8, 13, 1);
             InsertMaterialization(setup, 9, 14, 2);
             InsertMaterialization(setup, 10, 16, 1);
+            InsertMaterialization(setup, 13, 90, 2);
+            InsertProposal(setup, 92, 10092, 20092);
+            InsertMaterialization(setup, 14, 91, 2, false);
+            InsertMaterialization(setup, 15, 93, 2);
             setup.exec(
                 "INSERT INTO experiment(experiment_id,status,phase,worker_pid,"
                 "current_operation,current_epoch,updated_at) VALUES "
@@ -620,6 +625,133 @@ FOR EACH ROW EXECUTE FUNCTION fail_second_campaign_review();
         assert(Count(owner, schema,
             "experiment_recommendation_conversion_review_decision") == 9);
 
+        // Overlapping materializations serialize on their shared exact
+        // proposal. One whole campaign wins; the other inserts no private
+        // member row and fails closed on the unrelated current review.
+        const long long beforeOverlap = Count(
+            owner, schema,
+            "experiment_recommendation_conversion_review_decision");
+        std::barrier overlapStart{2};
+        auto overlapLeft = std::async(std::launch::async, [&] {
+            overlapStart.arrive_and_wait();
+            try
+            {
+                return Run(runtimeConnectionString,
+                    Request(13,
+                        RecommendationConversionProposalReviewDecision::approve))
+                    .rows.size() == 2;
+            }
+            catch (const std::invalid_argument& error)
+            {
+                assert(std::string{error.what()} ==
+                       "campaign_proposal_review_existing_decision_conflict");
+                return false;
+            }
+        });
+        auto overlapRight = std::async(std::launch::async, [&] {
+            overlapStart.arrive_and_wait();
+            try
+            {
+                return Run(runtimeConnectionString,
+                    Request(14,
+                        RecommendationConversionProposalReviewDecision::approve))
+                    .rows.size() == 2;
+            }
+            catch (const std::invalid_argument& error)
+            {
+                assert(std::string{error.what()} ==
+                       "campaign_proposal_review_existing_decision_conflict");
+                return false;
+            }
+        });
+        const bool overlapLeftWon = overlapLeft.get();
+        const bool overlapRightWon = overlapRight.get();
+        assert(overlapLeftWon != overlapRightWon);
+        assert(Count(owner, schema,
+            "experiment_recommendation_conversion_review_decision") ==
+               beforeOverlap + 2);
+        {
+            pqxx::read_transaction read{owner};
+            SetSearchPath(read, schema);
+            const auto counts = read.exec(R"SQL(
+SELECT recommendation_conversion_proposal_id,count(*)
+FROM experiment_recommendation_conversion_review_decision
+WHERE recommendation_conversion_proposal_id IN (90,91,92)
+GROUP BY recommendation_conversion_proposal_id
+ORDER BY recommendation_conversion_proposal_id;
+)SQL");
+            assert(counts.size() == 2);
+            assert(counts[0][1].as<int>() == 1);
+            assert(counts[1][1].as<int>() == 1);
+            assert(counts[0][0].as<long long>() ==
+                   (overlapLeftWon ? 90 : 91));
+            assert(counts[1][0].as<long long>() ==
+                   (overlapLeftWon ? 91 : 92));
+        }
+
+        // A direct Phase 4C review and a campaign review use the same lock.
+        // If the direct review wins, the campaign writes nothing. If the
+        // campaign wins, both campaign members are durable before the later
+        // direct append becomes authoritative for its one proposal.
+        const long long beforeDirectRace = Count(
+            owner, schema,
+            "experiment_recommendation_conversion_review_decision");
+        std::barrier directRaceStart{2};
+        auto campaignRace = std::async(std::launch::async, [&] {
+            directRaceStart.arrive_and_wait();
+            try
+            {
+                return Run(runtimeConnectionString,
+                    Request(15,
+                        RecommendationConversionProposalReviewDecision::approve))
+                    .rows.size() == 2;
+            }
+            catch (const std::invalid_argument& error)
+            {
+                assert(std::string{error.what()} ==
+                       "campaign_proposal_review_existing_decision_conflict");
+                return false;
+            }
+        });
+        auto directRace = std::async(std::launch::async, [&] {
+            directRaceStart.arrive_and_wait();
+            pqxx::connection connection{runtimeConnectionString};
+            RecommendationConversionProposalReviewRequest direct;
+            direct.proposalId = 93;
+            direct.decision =
+                RecommendationConversionProposalReviewDecision::approve;
+            direct.requestId = "direct-review-racing-campaign";
+            direct.operatorIdentity = "direct-operator@example";
+            direct.reasonText = "direct Phase 4C review";
+            return RecordRecommendationConversionProposalReviewDecision(
+                connection, direct).outcome ==
+                RecommendationConversionProposalReviewPersistOutcome::recorded;
+        });
+        const bool campaignRaceWon = campaignRace.get();
+        assert(directRace.get());
+        assert(Count(owner, schema,
+            "experiment_recommendation_conversion_review_decision") ==
+               beforeDirectRace + (campaignRaceWon ? 3 : 1));
+        {
+            pqxx::read_transaction read{owner};
+            SetSearchPath(read, schema);
+            const int proposal93 = read.exec(
+                "SELECT count(*) FROM "
+                "experiment_recommendation_conversion_review_decision WHERE "
+                "recommendation_conversion_proposal_id=93;")
+                .one_row()[0].as<int>();
+            const int proposal94 = read.exec(
+                "SELECT count(*) FROM "
+                "experiment_recommendation_conversion_review_decision WHERE "
+                "recommendation_conversion_proposal_id=94;")
+                .one_row()[0].as<int>();
+            assert(proposal93 == (campaignRaceWon ? 2 : 1));
+            assert(proposal94 == (campaignRaceWon ? 1 : 0));
+        }
+        const long long afterConcurrencyRaces = Count(
+            owner, schema,
+            "experiment_recommendation_conversion_review_decision");
+
         std::ostringstream serviceOutput;
         std::ostringstream serviceErrors;
         assert(RunRecommendationCampaignProposalReviewCommand(
@@ -641,7 +773,8 @@ FOR EACH ROW EXECUTE FUNCTION fail_second_campaign_review();
         assert(serviceOutput.str().find("workers_started=false") !=
                std::string::npos);
         assert(Count(owner, schema,
-            "experiment_recommendation_conversion_review_decision") == 11);
+            "experiment_recommendation_conversion_review_decision") ==
+               afterConcurrencyRaces + 2);
         std::ostringstream conflictOutput;
         std::ostringstream conflictErrors;
         assert(RunRecommendationCampaignProposalReviewCommand(
@@ -659,7 +792,8 @@ FOR EACH ROW EXECUTE FUNCTION fail_second_campaign_review();
         assert(conflictErrors.str().find("proposals_validated=2") !=
                std::string::npos);
         assert(Count(owner, schema,
-            "experiment_recommendation_conversion_review_decision") == 11);
+            "experiment_recommendation_conversion_review_decision") ==
+               afterConcurrencyRaces + 2);
 
         long long executedReviewId = -1;
         long long activatedReviewId = -1;
@@ -760,9 +894,9 @@ FOR EACH ROW EXECUTE FUNCTION fail_second_campaign_review();
         assert(ExperimentFingerprint(owner, schema, 900002) ==
                activatedExperimentBefore);
         assert(Count(owner, schema,
-            "experiment_recommendation_campaign_materialization") == 12);
+            "experiment_recommendation_campaign_materialization") == 15);
         assert(Count(owner, schema,
-            "experiment_recommendation_campaign_materialization_member") == 18);
+            "experiment_recommendation_campaign_materialization_member") == 24);
         assert(Count(owner, schema, "experiment") == 3);
         assert(ExperimentFingerprint(owner, schema, 900000) ==
                sentinelExperimentBefore);

@@ -197,6 +197,19 @@ int main()
                    Request(), partial); },
         "campaign_proposal_review_partial_operation_conflict");
 
+    auto changedOperator = Request();
+    changedOperator.operatorIdentity = "different-operator@example";
+    ExpectInvalid(
+        [&] { (void)BuildRecommendationCampaignProposalReviewPlan(
+                   changedOperator, satisfiedInput); },
+        "campaign_proposal_review_existing_decision_conflict");
+    auto changedReason = Request();
+    changedReason.reasonText = "reviewed for a different reason";
+    ExpectInvalid(
+        [&] { (void)BuildRecommendationCampaignProposalReviewPlan(
+                   changedReason, satisfiedInput); },
+        "campaign_proposal_review_existing_decision_conflict");
+
     auto malformed = Input();
     malformed.members[0].authoritativeReview = Review(
         approve, 0, RecommendationConversionProposalReviewDecision::approve);
