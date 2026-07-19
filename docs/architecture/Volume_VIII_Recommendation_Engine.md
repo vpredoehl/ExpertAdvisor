@@ -1,7 +1,7 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 4D Step 1
-Version: 1.0.0
+Status: Foundation aligned through Phase 4D Step 2
+Version: 1.1.0
 Last revised: 2026-07-19
 
 ## 1. Purpose
@@ -9,7 +9,7 @@ Last revised: 2026-07-19
 Define the research-recommendation subsystem: deterministic identity, candidate
 generation, persistence, duplicate handling, scoring/ranking, explicit human
 review, immutable advisory evidence, the explicitly separated manual conversion
-chain, and read-only campaign planning.
+chain, and read-only campaign planning and review.
 
 ## 2. Scope
 
@@ -31,7 +31,7 @@ approval/rejection/expiration.
 
 ### 2.3 Current implementation status
 
-Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, and Phase 4D Step 1
+Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, and Phase 4D Steps 1–2
 implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
@@ -39,7 +39,8 @@ exact snapshot membership, and compares compatible persisted components.
 Phase 4C provides the explicit proposal, review, paused conversion, activation,
 and workflow-observation chain. Phase 4D Step 1 reads one explicit immutable
 ranking snapshot and Phase 4C workflow evidence to produce a deterministic,
-bounded campaign plan without persisting or executing it. Detailed contracts
+bounded campaign plan without persisting or executing it. Step 2 validates and
+reviews that plan with deterministic duplicates and coverage. Detailed contracts
 remain in the Phase 4 documents referenced in §12.
 
 ## 3. Responsibilities
@@ -54,11 +55,12 @@ their presentation.
 
 Consumes completed experiment/final-analysis evidence from Volumes VI/VII.
 Only the explicit Phase 4C operator commands cross into experiment lifecycle;
-ranking and campaign planning have no downstream execution dependency.
+ranking, campaign planning, and campaign review have no downstream execution
+dependency.
 
 ### 3.3 Prohibited responsibilities
 
-Advisory evaluation, ranking, and campaign planning MUST NOT create experiments,
+Advisory evaluation, ranking, campaign planning, and campaign review MUST NOT create experiments,
 queue work, mutate experiment or scheduler state, infer reviewer identity, use
 score thresholds for authorization, or claim expected profitability. Phase 4C
 may create and activate exactly one experiment only through its separately
@@ -90,20 +92,22 @@ The governed campaign path is:
 ```text
 recommendation ranking
 -> read-only campaign plan
+-> read-only campaign review
 -> future explicit campaign approval
 -> future campaign execution
 -> existing Phase 4C per-recommendation manual workflow
 ```
 
-Only the first two stages are implemented by Phase 4D Step 1.
+The first three stages are implemented through Phase 4D Step 2.
 
 ### 4.3 Ownership boundaries
 
 Canonical text decides identity; repository transactions decide persistence;
-pure scoring and planning policies decide advisory output; pure review rules
+pure scoring, planning, and campaign-review policies decide advisory output; pure review rules
 decide legal transitions; and the operator separately supplies review,
 conversion, and activation actions. Only Phase 4C Steps 4–5 may create or
-activate the one provenance-linked experiment. Campaign planning never does.
+activate the one provenance-linked experiment. Campaign planning and review
+never do.
 
 ## 5. Data model
 
@@ -349,6 +353,15 @@ consumer. Because no authoritative profitability evidence exists, a requested
 profitability threshold yields ``profitability_metric_unavailable`` rather than
 an inferred proxy.
 
+Phase 4D Step 2 adds a pure review contract over the Step 1 plan and reuses the
+same read-only loader and planner. It verifies plan identity, policy/scope,
+counts, result shape, and deterministic ordering; preserves selected and
+excluded rows with their ordered reasons; and derives exact canonical duplicate
+groups plus deterministic family, symbol, and horizon coverage. Review identity
+binds these results while excluding display time. Step 2 adds no migration,
+privilege, persisted campaign, workflow mutation, scheduler consumer, or worker
+behavior.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -367,6 +380,7 @@ an inferred proxy.
 - [Manual conversion activation](../Phase4CExperimentRecommendationConversionActivation.rst)
 - [Manual conversion workflow observability](../Phase4CExperimentRecommendationConversionWorkflow.rst)
 - [Read-only campaign planning](../Phase4DExperimentRecommendationCampaignPlanning.rst)
+- [Read-only campaign review](../Phase4DExperimentRecommendationCampaignReview.rst)
 
 ## 13. Revision history
 
@@ -382,3 +396,4 @@ an inferred proxy.
 | 0.8.0 | 2026-07-19 | Recorded explicit, atomic Phase 4C Step 5 activation of a converted experiment into the existing pending lifecycle. | ADR-0001, ADR-0004, ADR-0005 |
 | 0.9.0 | 2026-07-19 | Recorded read-only Phase 4C Step 6 end-to-end workflow state and integrity observability. | ADR-0001, ADR-0004, ADR-0005 |
 | 1.0.0 | 2026-07-19 | Recorded deterministic read-only Phase 4D Step 1 campaign planning from explicit persisted ranking and workflow evidence. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
+| 1.1.0 | 2026-07-19 | Recorded deterministic read-only Phase 4D Step 2 campaign review, duplicate findings, and coverage. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |

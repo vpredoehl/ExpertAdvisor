@@ -1,5 +1,6 @@
 #include "../Sources/ExperimentRecommendationCampaignPlanningRepository.hpp"
 #include "../Sources/ExperimentRecommendationCampaignPlanningService.hpp"
+#include "../Sources/ExperimentRecommendationCampaignReviewService.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
 
@@ -289,6 +290,19 @@ INSERT INTO experiment_recommendation_conversion_proposal VALUES(
         assert(output.str().find("read_only=true") != std::string::npos);
         assert(output.str().find("proposal_created=false") !=
                std::string::npos);
+        assert(errors.str().empty());
+
+        output.str({});
+        output.clear();
+        assert(RunRecommendationCampaignReviewCommand(
+            runtimeConnectionString, policy, scope, output, errors) == 0);
+        assert(output.str().find("RECOMMENDATION_CAMPAIGN_REVIEW") !=
+               std::string::npos);
+        assert(output.str().find(
+            "deterministic_ordering_verified=true") != std::string::npos);
+        assert(output.str().find(
+            "RECOMMENDATION_CAMPAIGN_REVIEW_FAMILY") != std::string::npos);
+        assert(output.str().find("read_only=true") != std::string::npos);
         assert(errors.str().empty());
 
         scope.rankingSnapshotId = 999;

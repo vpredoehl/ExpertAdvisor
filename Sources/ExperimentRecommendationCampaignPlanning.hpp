@@ -201,4 +201,7 @@ struct RecommendationCampaignPlan
 RecommendationCampaignPlan PlanRecommendationCampaign(
     const RecommendationCampaignPlanInput& input);
 
+bool RecommendationCampaignPlanOrderingIsDeterministic(
+    const RecommendationCampaignPlan& plan);
+
 } // namespace EA::ExperimentRecommendation

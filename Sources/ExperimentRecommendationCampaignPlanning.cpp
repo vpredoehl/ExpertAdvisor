@@ -220,6 +220,20 @@ std::string CandidateEvidenceCanonicalText(
     return out.str();
 }
 
+bool CampaignCandidateLess(
+    const RecommendationCampaignCandidateInput& left,
+    const RecommendationCampaignCandidateInput& right)
+{
+    if (left.rankingPosition != right.rankingPosition)
+        return left.rankingPosition < right.rankingPosition;
+    if (left.recommendationId != right.recommendationId)
+        return left.recommendationId < right.recommendationId;
+    if (left.rankingMemberId != right.rankingMemberId)
+        return left.rankingMemberId < right.rankingMemberId;
+    return CandidateEvidenceCanonicalText(left) <
+           CandidateEvidenceCanonicalText(right);
+}
+
 void AddWorkflowReasons(
     RecommendationCampaignPlanCandidate& candidate,
     const RecommendationCampaignPlanningPolicy& policy)
@@ -561,17 +575,7 @@ RecommendationCampaignPlan PlanRecommendationCampaign(
             { return left.proposalId < right.proposalId; });
     std::sort(
         ordered.begin(), ordered.end(),
-        [](const auto& left, const auto& right)
-        {
-            if (left.rankingPosition != right.rankingPosition)
-                return left.rankingPosition < right.rankingPosition;
-            if (left.recommendationId != right.recommendationId)
-                return left.recommendationId < right.recommendationId;
-            if (left.rankingMemberId != right.rankingMemberId)
-                return left.rankingMemberId < right.rankingMemberId;
-            return CandidateEvidenceCanonicalText(left) <
-                   CandidateEvidenceCanonicalText(right);
-        });
+        CampaignCandidateLess);
 
     bool rankingPolicyConsistent = true;
     if (!ordered.empty())
@@ -711,6 +715,21 @@ RecommendationCampaignPlan PlanRecommendationCampaign(
         input.rankingSnapshotIdentityHash);
     plan.identityHash = RecommendationCanonicalHash(plan.identityCanonical);
     return plan;
+}
+
+bool RecommendationCampaignPlanOrderingIsDeterministic(
+    const RecommendationCampaignPlan& plan)
+{
+    for (std::size_t index = 0; index < plan.candidates.size(); ++index)
+    {
+        if (plan.candidates[index].ordinal != static_cast<int>(index + 1))
+            return false;
+        if (index != 0 && CampaignCandidateLess(
+                plan.candidates[index].input,
+                plan.candidates[index - 1].input))
+            return false;
+    }
+    return true;
 }
 
 } // namespace EA::ExperimentRecommendation

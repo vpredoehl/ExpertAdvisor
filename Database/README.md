@@ -63,10 +63,11 @@ Phase 4C tables.
 Phase 4C Step 6 adds no schema object or privilege. Its read-only workflow view
 joins these existing audit records with current experiment lifecycle state and
 reports deterministic integrity diagnostics.
-Phase 4D Step 1 likewise adds no schema object or privilege. Its read-only
-campaign planner consumes one explicit completed ranking snapshot plus existing
+Phase 4D Steps 1 and 2 likewise add no schema object or privilege. Their
+read-only campaign planner and review consume one explicit completed ranking
+snapshot plus existing
 recommendation and Phase 4C workflow evidence in a PostgreSQL read transaction.
-It does not persist a plan or advance a sequence.
+They do not persist a plan or advance a sequence.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

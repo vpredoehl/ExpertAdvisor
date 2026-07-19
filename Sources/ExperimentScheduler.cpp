@@ -42,6 +42,7 @@
 #include "ExperimentRecommendationConversionActivationService.hpp"
 #include "ExperimentRecommendationConversionWorkflowService.hpp"
 #include "ExperimentRecommendationCampaignPlanningService.hpp"
+#include "ExperimentRecommendationCampaignReviewService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -183,6 +184,7 @@ struct SchedulerOptions
         kDefaultRecommendationConversionWorkflowListLimit;
     bool conversionWorkflowLimitSpecified = false;
     bool planRecommendationCampaign = false;
+    bool reviewRecommendationCampaign = false;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -820,6 +822,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--conversion-workflow-state" ||
             arg == "--conversion-workflow-limit" ||
             arg == "--plan-recommendation-campaign" ||
+            arg == "--review-recommendation-campaign" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -1730,6 +1733,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.planRecommendationCampaign = true;
             options.campaignPlanningPolicy.enabled = true;
         }
+        else if (arg == "--review-recommendation-campaign")
+        {
+            options.reviewRecommendationCampaign = true;
+            options.campaignPlanningPolicy.enabled = true;
+        }
         else if (arg == "--campaign-ranking-snapshot")
         {
             options.campaignPlanningScope.rankingSnapshotId =
@@ -2514,6 +2522,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.recommendationConversionWorkflowProposalId.has_value() ? 1 : 0) +
         (options.listRecommendationConversionWorkflows ? 1 : 0) +
         (options.planRecommendationCampaign ? 1 : 0) +
+        (options.reviewRecommendationCampaign ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2804,10 +2813,13 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "--conversion-workflow-limit must not exceed 1000");
     if (options.campaignPolicyOptionSpecified &&
-        !options.planRecommendationCampaign)
+        !options.planRecommendationCampaign &&
+        !options.reviewRecommendationCampaign)
         throw std::invalid_argument(
-            "campaign planning options require --plan-recommendation-campaign");
-    if (options.planRecommendationCampaign)
+            "campaign options require --plan-recommendation-campaign or "
+            "--review-recommendation-campaign");
+    if (options.planRecommendationCampaign ||
+        options.reviewRecommendationCampaign)
     {
         if (const auto error = EA::ExperimentRecommendation::
                 ValidateRecommendationCampaignPlanningPolicy(
@@ -15950,6 +15962,12 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "snapshot and Phase 4C workflow history. It creates no proposal or "
         << "experiment and never starts the scheduler or a worker.\n"
         << "Usage: " << exe
+        << " --review-recommendation-campaign "
+        << "--campaign-ranking-snapshot=ID [campaign policy options]\n"
+        << "Phase 4D campaign review deterministically explains the selected, "
+        << "excluded, duplicate, family, symbol, and horizon structure of the "
+        << "read-only campaign plan. It writes no database row.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -16174,6 +16192,14 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
     if (options.planRecommendationCampaign)
         return EA::ExperimentRecommendation::
             RunRecommendationCampaignPlanningCommand(
+                connectionString,
+                options.campaignPlanningPolicy,
+                options.campaignPlanningScope,
+                std::cout,
+                std::cerr);
+    if (options.reviewRecommendationCampaign)
+        return EA::ExperimentRecommendation::
+            RunRecommendationCampaignReviewCommand(
                 connectionString,
                 options.campaignPlanningPolicy,
                 options.campaignPlanningScope,
@@ -16413,7 +16439,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.recommendationConversionActivationStatusId.has_value() ||
             options.recommendationConversionWorkflowProposalId.has_value() ||
             options.listRecommendationConversionWorkflows ||
-            options.planRecommendationCampaign)
+            options.planRecommendationCampaign ||
+            options.reviewRecommendationCampaign)
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);
