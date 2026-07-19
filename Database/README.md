@@ -41,9 +41,15 @@ Recommendation conversion proposal history is created by:
 
 - `036_experiment_recommendation_conversion_proposal.sql`:
   `experiment_recommendation_conversion_proposal`
+- `037_experiment_recommendation_conversion_review.sql`:
+  `experiment_recommendation_conversion_review_decision`
 
-This append-only table records manually prepared proposals only. It is not an
-experiment queue and is not read by the scheduler.
+These append-only tables record manually prepared proposals and their explicit
+operator review decisions. An approval is administrative evidence for possible
+later conversion; it is not an experiment queue, does not create an experiment,
+and is not read by the scheduler. The greatest review-decision ID for a proposal
+defines its current review disposition. That generated sequence-ID order, not
+transaction commit time or the descriptive timestamp, is authoritative.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

@@ -101,7 +101,9 @@ maps all values, and supports:
 It does not load evidence and rerun eligibility, infer authorization from rank,
 select a recommendation, or duplicate the Step 1 mutation rules. There is no
 Step 2 service or CLI because persistence orchestration beyond an already-built
-proposal is not needed for this increment.
+proposal is not needed for that increment. Phase 4C Step 3 adds only proposal
+inspection and manual review commands; it does not prepare, regenerate, mutate,
+or execute a proposal.
 
 Migration and operational safety
 --------------------------------
@@ -116,15 +118,17 @@ remains unchanged.
 Deferred work
 -------------
 
-Manual CLI preparation and inspection, proposal-to-experiment creation,
-operator execution commands, budgets, queueing, scheduler capacity, and any
-automatic workflow remain deferred. Ranking and proposal persistence remain
-advisory and cannot authorize execution. Profitability is not inferred.
+Manual CLI proposal preparation, proposal-to-experiment creation, operator
+execution commands, budgets, queueing, scheduler capacity, and any automatic
+workflow remain deferred. Step 3 provides inspection and append-only manual
+review only. Ranking, proposal persistence, and review remain advisory and
+cannot authorize execution. Profitability is not inferred.
 
 References
 ----------
 
 * ``docs/Phase4CExperimentRecommendationConversion.rst``
+* ``docs/Phase4CExperimentRecommendationConversionProposalReview.rst``
 * ``docs/architecture/Volume_I_Foundation.md``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
 * ``docs/architecture/adr/ADR-0001-postgresql-source-of-truth.md``

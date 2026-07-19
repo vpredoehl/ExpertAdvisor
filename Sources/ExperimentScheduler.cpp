@@ -37,6 +37,7 @@
 #include "ExperimentRecommendationService.hpp"
 #include "ExperimentRecommendationEvaluationService.hpp"
 #include "ExperimentRecommendationRankingService.hpp"
+#include "ExperimentRecommendationConversionProposalReviewService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -156,6 +157,16 @@ struct SchedulerOptions
     std::optional<std::string> recommendationRankingBucket;
     std::optional<std::pair<long long, long long>> compareRecommendationEvaluations;
     std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
+    std::optional<long long> approveConversionProposalId;
+    std::optional<long long> rejectConversionProposalId;
+    std::optional<long long> showConversionProposalId;
+    std::optional<long long> listConversionProposalReviewsId;
+    std::optional<std::string> listConversionProposalsReviewStatus;
+    std::optional<std::string> conversionProposalReviewRequestId;
+    std::optional<std::string> conversionProposalReviewOperator;
+    std::optional<std::string> conversionProposalReviewReason;
+    int conversionProposalReviewLimit = 100;
+    bool conversionProposalReviewLimitSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -770,6 +781,15 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--recommendation-ranking-bucket" ||
             arg == "--compare-experiment-recommendation-evaluations" ||
             arg == "--compare-experiment-recommendation-ranking-members" ||
+            arg == "--approve-conversion-proposal" ||
+            arg == "--reject-conversion-proposal" ||
+            arg == "--conversion-proposal-review-request-id" ||
+            arg == "--conversion-proposal-review-operator" ||
+            arg == "--conversion-proposal-review-reason" ||
+            arg == "--show-conversion-proposal" ||
+            arg == "--list-conversion-proposal-reviews" ||
+            arg == "--list-conversion-proposals-by-review-status" ||
+            arg == "--conversion-proposal-review-limit" ||
             arg == "--auto-evaluate-continuations" ||
             arg == "--auto-queue-continuations" ||
             arg == "--continuation-scan-seconds" ||
@@ -855,6 +875,15 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--recommendation-ranking-bucket=", 0) == 0 ||
             arg.rfind("--compare-experiment-recommendation-evaluations=", 0) == 0 ||
             arg.rfind("--compare-experiment-recommendation-ranking-members=", 0) == 0 ||
+            arg.rfind("--approve-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--reject-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-request-id=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-operator=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-reason=", 0) == 0 ||
+            arg.rfind("--show-conversion-proposal=", 0) == 0 ||
+            arg.rfind("--list-conversion-proposal-reviews=", 0) == 0 ||
+            arg.rfind("--list-conversion-proposals-by-review-status=", 0) == 0 ||
+            arg.rfind("--conversion-proposal-review-limit=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1564,6 +1593,36 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--compare-experiment-recommendation-ranking-members")
             options.compareRecommendationRankingMembers = ParsePositiveIdPair(
                 arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--approve-conversion-proposal")
+            options.approveConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--reject-conversion-proposal")
+            options.rejectConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--conversion-proposal-review-request-id")
+            options.conversionProposalReviewRequestId =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--conversion-proposal-review-operator")
+            options.conversionProposalReviewOperator =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--conversion-proposal-review-reason")
+            options.conversionProposalReviewReason =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--show-conversion-proposal")
+            options.showConversionProposalId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-conversion-proposal-reviews")
+            options.listConversionProposalReviewsId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--list-conversion-proposals-by-review-status")
+            options.listConversionProposalsReviewStatus =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--conversion-proposal-review-limit")
+        {
+            options.conversionProposalReviewLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+            options.conversionProposalReviewLimitSpecified = true;
+        }
         else if (arg == "--requeue-analysis")
             options.requeueAnalysisExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--requeue-inference")
@@ -1921,6 +1980,41 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                      arg, "--compare-experiment-recommendation-ranking-members", value))
             options.compareRecommendationRankingMembers = ParsePositiveIdPair(
                 "--compare-experiment-recommendation-ranking-members", value);
+        else if (SplitOptionWithValue(
+                     arg, "--approve-conversion-proposal", value))
+            options.approveConversionProposalId = ParsePositiveLongLong(
+                "--approve-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--reject-conversion-proposal", value))
+            options.rejectConversionProposalId = ParsePositiveLongLong(
+                "--reject-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-request-id", value))
+            options.conversionProposalReviewRequestId = value;
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-operator", value))
+            options.conversionProposalReviewOperator = value;
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-reason", value))
+            options.conversionProposalReviewReason = value;
+        else if (SplitOptionWithValue(
+                     arg, "--show-conversion-proposal", value))
+            options.showConversionProposalId = ParsePositiveLongLong(
+                "--show-conversion-proposal", value);
+        else if (SplitOptionWithValue(
+                     arg, "--list-conversion-proposal-reviews", value))
+            options.listConversionProposalReviewsId = ParsePositiveLongLong(
+                "--list-conversion-proposal-reviews", value);
+        else if (SplitOptionWithValue(
+                     arg, "--list-conversion-proposals-by-review-status", value))
+            options.listConversionProposalsReviewStatus = value;
+        else if (SplitOptionWithValue(
+                     arg, "--conversion-proposal-review-limit", value))
+        {
+            options.conversionProposalReviewLimit = ParsePositiveInt(
+                "--conversion-proposal-review-limit", value);
+            options.conversionProposalReviewLimitSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2082,6 +2176,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.recommendationRankingMemberStatusId.has_value() ? 1 : 0) +
         (options.compareRecommendationEvaluations.has_value() ? 1 : 0) +
         (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
+        (options.approveConversionProposalId.has_value() ? 1 : 0) +
+        (options.rejectConversionProposalId.has_value() ? 1 : 0) +
+        (options.showConversionProposalId.has_value() ? 1 : 0) +
+        (options.listConversionProposalReviewsId.has_value() ? 1 : 0) +
+        (options.listConversionProposalsReviewStatus.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -2300,6 +2399,61 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         review.recommendationScoreId = options.recommendationReviewScoreId;
         (void)EA::ExperimentRecommendation::NormalizeRecommendationReviewRequest(
             review);
+    }
+    const bool conversionProposalReviewAction =
+        options.approveConversionProposalId.has_value() ||
+        options.rejectConversionProposalId.has_value();
+    if (options.approveConversionProposalId &&
+        options.rejectConversionProposalId)
+        throw std::invalid_argument(
+            "only one conversion proposal review action may be supplied");
+    const bool conversionProposalReviewOnlyOption =
+        options.conversionProposalReviewRequestId.has_value() ||
+        options.conversionProposalReviewOperator.has_value() ||
+        options.conversionProposalReviewReason.has_value();
+    if (conversionProposalReviewOnlyOption && !conversionProposalReviewAction)
+        throw std::invalid_argument(
+            "conversion proposal review request, operator, and reason options "
+            "require an approve or reject action");
+    if (conversionProposalReviewAction &&
+        !options.conversionProposalReviewRequestId)
+        throw std::invalid_argument(
+            "conversion proposal review action requires "
+            "--conversion-proposal-review-request-id");
+    if (options.listConversionProposalsReviewStatus &&
+        !EA::ExperimentRecommendation::
+            ParseRecommendationConversionProposalReviewDisposition(
+                *options.listConversionProposalsReviewStatus))
+        throw std::invalid_argument(
+            "invalid conversion proposal review status");
+    if (options.conversionProposalReviewLimitSpecified &&
+        !options.listConversionProposalReviewsId &&
+        !options.listConversionProposalsReviewStatus)
+        throw std::invalid_argument(
+            "--conversion-proposal-review-limit requires a conversion proposal "
+            "review list command");
+    if (options.conversionProposalReviewLimit >
+        EA::ExperimentRecommendation::
+            kMaximumRecommendationConversionProposalReviewListLimit)
+        throw std::invalid_argument(
+            "--conversion-proposal-review-limit must not exceed 1000");
+    if (conversionProposalReviewAction)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationConversionProposalReviewRequest review;
+        review.proposalId = options.approveConversionProposalId
+            ? *options.approveConversionProposalId
+            : *options.rejectConversionProposalId;
+        review.decision = options.approveConversionProposalId
+            ? EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::approve
+            : EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::reject;
+        review.requestId = *options.conversionProposalReviewRequestId;
+        review.operatorIdentity = options.conversionProposalReviewOperator;
+        review.reasonText = options.conversionProposalReviewReason;
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationConversionProposalReviewRequest(review);
     }
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
@@ -15384,6 +15538,20 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--compare-experiment-recommendation-ranking-members=LEFT:RIGHT\n"
         << "Phase 4B ranking and comparison are advisory only: they never create or queue experiments or change scheduler state.\n"
         << "Usage: " << exe
+        << " --approve-conversion-proposal=ID | --reject-conversion-proposal=ID "
+        << "--conversion-proposal-review-request-id=TOKEN "
+        << "[--conversion-proposal-review-operator=TEXT] "
+        << "[--conversion-proposal-review-reason=TEXT]\n"
+        << "Usage: " << exe
+        << " --show-conversion-proposal=ID | "
+        << "--list-conversion-proposal-reviews=ID "
+        << "[--conversion-proposal-review-limit=N] | "
+        << "--list-conversion-proposals-by-review-status="
+        << "pending_review|approved|rejected "
+        << "[--conversion-proposal-review-limit=N]\n"
+        << "Phase 4C proposal review is administrative only: it never creates "
+        << "or queues an experiment or changes scheduler state.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -15525,6 +15693,47 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
     if (options.recommendationReviewHistoryId)
         return EA::ExperimentRecommendation::RunExperimentRecommendationReviewHistoryCommand(
             connectionString, *options.recommendationReviewHistoryId, std::cout);
+    if (options.approveConversionProposalId ||
+        options.rejectConversionProposalId)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationConversionProposalReviewRequest request;
+        request.proposalId = options.approveConversionProposalId
+            ? *options.approveConversionProposalId
+            : *options.rejectConversionProposalId;
+        request.decision = options.approveConversionProposalId
+            ? EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::approve
+            : EA::ExperimentRecommendation::
+                  RecommendationConversionProposalReviewDecision::reject;
+        request.requestId = *options.conversionProposalReviewRequestId;
+        request.operatorIdentity = options.conversionProposalReviewOperator;
+        request.reasonText = options.conversionProposalReviewReason;
+        return EA::ExperimentRecommendation::
+            RunRecommendationConversionProposalReviewCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    if (options.showConversionProposalId)
+        return EA::ExperimentRecommendation::
+            RunShowRecommendationConversionProposalCommand(
+                connectionString, *options.showConversionProposalId, std::cout);
+    if (options.listConversionProposalReviewsId)
+        return EA::ExperimentRecommendation::
+            RunListRecommendationConversionProposalReviewsCommand(
+                connectionString, *options.listConversionProposalReviewsId,
+                options.conversionProposalReviewLimit, std::cout);
+    if (options.listConversionProposalsReviewStatus)
+    {
+        EA::ExperimentRecommendation::
+            RecommendationConversionProposalReviewListRequest request;
+        request.disposition = *EA::ExperimentRecommendation::
+            ParseRecommendationConversionProposalReviewDisposition(
+                *options.listConversionProposalsReviewStatus);
+        request.limit = options.conversionProposalReviewLimit;
+        return EA::ExperimentRecommendation::
+            RunListRecommendationConversionProposalsByReviewDispositionCommand(
+                connectionString, request, std::cout);
+    }
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -15747,7 +15956,12 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.listRecommendationRankingMembersId.has_value() ||
             options.recommendationRankingMemberStatusId.has_value() ||
             options.compareRecommendationEvaluations.has_value() ||
-            options.compareRecommendationRankingMembers.has_value())
+            options.compareRecommendationRankingMembers.has_value() ||
+            options.approveConversionProposalId.has_value() ||
+            options.rejectConversionProposalId.has_value() ||
+            options.showConversionProposalId.has_value() ||
+            options.listConversionProposalReviewsId.has_value() ||
+            options.listConversionProposalsReviewStatus.has_value())
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))
             return RunCheckpointControlCommand(options);

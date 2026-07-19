@@ -242,8 +242,13 @@ Runtime access to review history and evaluation results/components is
 SELECT/INSERT only; evaluation-run updates are limited to lifecycle columns.
 Ranking members are append-only and ranking-snapshot updates are limited to
 lifecycle/count columns. Owner/test connections perform exact fixture cleanup.
-Conversion proposals grant the runtime role only ``SELECT`` and ``INSERT``;
-their source-provenance foreign keys are restrictive.
+Conversion proposals grant runtime ``SELECT``/``INSERT`` access. Manual review
+decisions grant runtime ``SELECT`` plus column-limited ``INSERT`` for decision
+payload only; generated decision IDs and timestamps are not caller-writable.
+Their source-provenance foreign keys are restrictive. Review history is
+append-only, and the greatest generated decision ID yields the current
+pending/approved/rejected administrative disposition. This sequence-ID order is
+authoritative even when concurrent transactions commit in another order.
 Other immutable histories follow Volume I §7.3.
 
 ### 10.3 Observability and recovery
@@ -263,7 +268,8 @@ APIs, and separate inspection commands.
 Proposal-to-experiment conversion, multi-source attribution, automatic
 research campaigns, profitability evidence, and scheduler-managed
 recommendation work. Phase 4C Step 1 provides the pure proposed-
-specification contract and Step 2 provides durable proposal audit evidence.
+specification contract, Step 2 provides durable proposal audit evidence, and
+Step 3 provides explicit append-only manual proposal review.
 
 ### 11.3 Required decisions
 
@@ -279,6 +285,12 @@ identical inserts converge on one proposal. Optional ranking provenance is
 advisory, excluded from identity, and cannot authorize conversion. Runtime
 access is limited to ``SELECT``/``INSERT``; no scheduler path reads these rows.
 
+Phase 4C Step 3 adds explicit ``approve``/``reject`` decisions against an exact
+proposal primary key. A caller-visible request token makes CLI retries
+idempotent per proposal. New request tokens permit auditable reversals; the
+greatest decision ID defines the current disposition. Approval remains
+administrative evidence only and never creates or queues an experiment.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -291,6 +303,7 @@ access is limited to ``SELECT``/``INSERT``; no scheduler path reads these rows.
 - [Recommendation ranking](../Phase4BExperimentRecommendationRanking.rst)
 - [Manual conversion contract](../Phase4CExperimentRecommendationConversion.rst)
 - [Manual conversion proposal persistence](../Phase4CExperimentRecommendationConversionPersistence.rst)
+- [Manual conversion proposal review](../Phase4CExperimentRecommendationConversionProposalReview.rst)
 
 ## 13. Revision history
 
@@ -301,3 +314,4 @@ access is limited to ``SELECT``/``INSERT``; no scheduler path reads these rows.
 | 0.3.0 | 2026-07-15 | Recorded Phase 4B Step 2 immutable advisory ranking snapshots and policy-aware comparison. | ADR-0001, ADR-0003, ADR-0004 |
 | 0.4.0 | 2026-07-18 | Recorded the pure Phase 4C Step 1 manually authorized proposed-experiment contract; durable conversion and execution remain deferred. | ADR-0003, ADR-0004 |
 | 0.5.0 | 2026-07-18 | Recorded immutable Phase 4C Step 2 conversion-proposal persistence; experiment creation and execution remain deferred. | ADR-0001, ADR-0003, ADR-0004 |
+| 0.6.0 | 2026-07-18 | Recorded append-only, idempotent Phase 4C Step 3 manual proposal review; approval remains non-executing. | ADR-0001, ADR-0003, ADR-0004 |

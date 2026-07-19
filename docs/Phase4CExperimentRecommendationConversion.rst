@@ -91,9 +91,11 @@ The implementation consists only of value types and pure functions under
 requires no environment, file, network, executable, database, or scheduler.
 
 Phase 4C Step 2 durably persists completed proposals as immutable audit records;
-see ``Phase4CExperimentRecommendationConversionPersistence.rst``. Manual CLI
-preparation, experiment creation, budgets, queueing, scheduler capacity, and
-any autonomous workflow remain deferred. A later operational
+see ``Phase4CExperimentRecommendationConversionPersistence.rst``. Step 3 adds
+an append-only manual review history and inspection CLI; see
+``Phase4CExperimentRecommendationConversionProposalReview.rst``. Proposal
+preparation through CLI, experiment creation, budgets, queueing, scheduler
+capacity, and any autonomous workflow remain deferred. A later operational
 conversion capability still requires the architecture decision and service
 boundary required by Volume VIII §11.3. Profitability and rank never imply
 authorization.
