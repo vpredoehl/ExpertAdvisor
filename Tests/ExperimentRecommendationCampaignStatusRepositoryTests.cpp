@@ -1,5 +1,7 @@
 #include "../Sources/ExperimentRecommendationCampaignStatusRepository.hpp"
 #include "../Sources/ExperimentRecommendationCampaignStatusService.hpp"
+#include "../Sources/ExperimentRecommendationCampaignOutcomeAssessmentRepository.hpp"
+#include "../Sources/ExperimentRecommendationCampaignOutcomeAssessmentService.hpp"
 #include "../Sources/ExperimentRecommendationCampaignPlanning.hpp"
 #include "../Sources/ExperimentRecommendationCampaignReview.hpp"
 #include "../Sources/ExperimentRecommendationCampaignApproval.hpp"
@@ -401,20 +403,25 @@ std::string SequenceState(
         .one_row()[0].as<std::string>();
 }
 
-int RunReleaseStatusCli(
+int RunReleaseCampaignCli(
     const std::string& database,
     const std::string& host,
     const std::string& port,
     const std::string& schema,
     long long materializationId,
-    bool separatedForm)
+    const std::string& command,
+    bool separatedForm,
+    bool withYes = false,
+    bool duplicate = false,
+    bool withDryRun = false,
+    bool withStatusConflict = false)
 {
     const char* binary = std::getenv("LSTM_STEP4_RELEASE_BINARY");
     if (!binary || *binary == '\0')
         throw std::runtime_error("LSTM_STEP4_RELEASE_BINARY_required");
     if (port != "5432")
         throw std::runtime_error("phase5_step4_release_cli_requires_default_port");
-    const std::string option = "--recommendation-campaign-status=" +
+    const std::string option = command + "=" +
         std::to_string(materializationId);
     const std::string pgOptions = "-c search_path=" + schema +
         " -c lock_timeout=5s -c statement_timeout=15s";
@@ -428,12 +435,33 @@ int RunReleaseStatusCli(
             setenv("PGCONNECT_TIMEOUT", "5", 1) != 0 ||
             setenv("PGOPTIONS", pgOptions.c_str(), 1) != 0)
             _exit(126);
-        if (separatedForm)
+        if (duplicate)
+            execl(binary, binary, option.c_str(), option.c_str(),
+                  static_cast<char*>(nullptr));
+        else if (withDryRun)
+            execl(binary, binary, option.c_str(), "--dry-run",
+                  static_cast<char*>(nullptr));
+        else if (withStatusConflict)
         {
-            const std::string id = std::to_string(materializationId);
-            execl(binary, binary, "--recommendation-campaign-status", id.c_str(),
+            const std::string status =
+                "--recommendation-campaign-status=" +
+                std::to_string(materializationId);
+            execl(binary, binary, option.c_str(), status.c_str(),
                   static_cast<char*>(nullptr));
         }
+        else if (separatedForm)
+        {
+            const std::string id = std::to_string(materializationId);
+            if (withYes)
+                execl(binary, binary, command.c_str(), id.c_str(), "--yes",
+                      static_cast<char*>(nullptr));
+            else
+                execl(binary, binary, command.c_str(), id.c_str(),
+                      static_cast<char*>(nullptr));
+        }
+        else if (withYes)
+            execl(binary, binary, option.c_str(), "--yes",
+                  static_cast<char*>(nullptr));
         else
             execl(binary, binary, option.c_str(), static_cast<char*>(nullptr));
         _exit(127);
@@ -547,6 +575,12 @@ int main()
 CREATE TABLE experiment_recommendation(
  recommendation_id bigint PRIMARY KEY,
  source_experiment_id bigint NOT NULL REFERENCES experiment(experiment_id),
+ source_model_id bigint,
+ source_analysis_id bigint,
+ source_symbol text NOT NULL,
+ source_prediction_horizon integer NOT NULL,
+ source_leader_score double precision,
+ source_infer_accuracy double precision,
  status text NOT NULL);
 CREATE TABLE experiment_recommendation_ranking_snapshot(
  recommendation_ranking_snapshot_id bigint PRIMARY KEY);
@@ -565,7 +599,18 @@ VALUES(17,'eurusd',12,0.001,1,5,120,15,
  '2025-01-01 America/Chicago','2026-01-01 America/Chicago',77,
  'paused','train','source','2026-07-19 12:34:56+00');
 INSERT INTO model(model_id,name,experiment_id) VALUES(77,'source',17);
-INSERT INTO experiment_recommendation VALUES(42,17,'approved');
+INSERT INTO inference_eval_result(id,model_id,symbol,prediction_horizon,
+ threshold_logret,window_size,label_rule_id,target_type,from_date,to_date,
+ accuracy,status,inference_scope)
+VALUES(1701,77,'eurusd',12,0.001,128,1,1,'2025-01-01','2026-01-01',
+ 0.70,'completed','final');
+INSERT INTO experiment_analysis_result(analysis_id,experiment_id,model_id,
+ infer_accuracy,leader_score,analysis_status,analysis_scope)
+VALUES(1701,17,77,0.70,0.80,'completed','final');
+INSERT INTO experiment_recommendation(recommendation_id,source_experiment_id,
+ source_model_id,source_analysis_id,source_symbol,source_prediction_horizon,
+ source_leader_score,source_infer_accuracy,status)
+VALUES(42,17,77,1701,'eurusd',12,0.80,0.70,'approved');
 SELECT setval(pg_get_serial_sequence('experiment','experiment_id'),17,true);
 )SQL");
             for (const char* migration : {
@@ -635,8 +680,10 @@ SELECT setval(pg_get_serial_sequence('experiment','experiment_id'),17,true);
         assert(output.str().find("RECOMMENDATION_CAMPAIGN_STATUS") == 0);
         assert(output.str().find("transaction_read_only=true") != std::string::npos);
         assert(output.str().find("scheduler_polled=false") != std::string::npos);
-        assert(RunReleaseStatusCli(database, host, port, schema, 1, false) == 0);
-        assert(RunReleaseStatusCli(database, host, port, schema, 1, true) == 0);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-status", false) == 0);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-status", true) == 0);
         assert(SequenceState(owner, schema, "experiment", "experiment_id") ==
                experimentSequenceBefore);
         assert(SequenceState(owner, schema,
@@ -705,7 +752,8 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
 )SQL");
             mutate.exec(
                 "INSERT INTO experiment_analysis_result(experiment_id,model_id,"
-                "analysis_status,analysis_scope) VALUES($1,1001,'completed','final');",
+                "infer_accuracy,leader_score,analysis_status,analysis_scope) "
+                "VALUES($1,1001,0.75,0.78,'completed','final');",
                 pqxx::params{experimentId});
             mutate.exec(
                 "UPDATE experiment SET status='completed',phase='done',last_model_id=1001,"
@@ -719,6 +767,426 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
         assert(snapshot.members[0].trainComplete && snapshot.members[0].inferComplete &&
                snapshot.members[0].analyzeComplete);
         assert(snapshot.members[0].failedFinalAnalysisResultCount == 0);
+
+        stage = "outcome_assessment";
+        try
+        {
+            (void)ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                runtime, {0});
+            assert(false);
+        }
+        catch (const std::invalid_argument&) {}
+        const std::string inferenceSequenceBefore = SequenceState(
+            owner, schema, "inference_eval_result", "id");
+        const std::string analysisSequenceBefore = SequenceState(
+            owner, schema, "experiment_analysis_result", "analysis_id");
+        const auto outcomeEvidence =
+            ReadRecommendationCampaignOutcomeAssessmentEvidence(runtime, {1});
+        assert(outcomeEvidence.campaignIdentity.campaignApprovalId ==
+               outcomeEvidence.materializationIdentity.campaignApprovalId);
+        assert(outcomeEvidence.materializationIdentity.campaignIdentityHash ==
+               outcomeEvidence.campaignIdentity.identityHash);
+        const auto assessment =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                outcomeEvidence);
+        assert(assessment.members.size() == 1);
+        assert(assessment.members[0].identity.memberOrdinal == 1);
+        assert(assessment.members[0].identity.materializationMemberId > 0);
+        assert(assessment.members[0].identity.rankingMemberId ==
+               outcomeEvidence.statusSnapshot.members[0].rankingMemberId);
+        assert(assessment.members[0].identity.recommendationId == 42);
+        assert(assessment.members[0].identity.sourceExperimentId == 17);
+        assert(assessment.members[0].identity.proposalId ==
+               first.proposal.proposalId);
+        assert(assessment.members[0].identity.expectedExperimentId ==
+               std::optional<long long>{executionResult.execution->experimentId});
+        assert(assessment.summary.comparableMetricCount == 2);
+        assert(assessment.members[0].sourceEvidence->sourceModelId ==
+               std::optional<long long>{77});
+        assert(assessment.members[0].sourceEvidence->sourceAnalysisId ==
+               std::optional<long long>{1701});
+        assert(assessment.members[0].sourceEvidence->context.symbol == "eurusd");
+        assert(assessment.members[0].sourceEvidence->context.predictionHorizon ==
+               12);
+        assert(assessment.members[0].sourceEvidence->context.threshold == 0.001);
+        assert(assessment.members[0].sourceEvidence->context.windowSize == 128);
+        assert(assessment.members[0].sourceEvidence->context.labelDefinition ==
+               "inference_eval_result_label_v1;label_rule_id=1;target_type=1");
+        assert(assessment.members[0].sourceEvidence->context.inferenceRangeStart ==
+               "2025-01-01");
+        assert(assessment.members[0].sourceEvidence->context.inferenceRangeEnd ==
+               "2026-01-01");
+        assert(assessment.members[0].resultEvidence->modelId ==
+               std::optional<long long>{1001});
+        assert(assessment.members[0].resultEvidence->context);
+        assert(assessment.members[0].resultEvidence->context->windowSize == 128);
+        assert(assessment.members[0].resultEvidence->context->labelDefinition ==
+               "inference_eval_result_label_v1;label_rule_id=1;target_type=1");
+        assert(assessment.members[0].resultEvidence->resultIdentities.size() == 2);
+        const auto resultInferenceIdentity = std::find_if(
+            assessment.members[0].resultEvidence->resultIdentities.begin(),
+            assessment.members[0].resultEvidence->resultIdentities.end(),
+            [](const auto& identity)
+            {
+                return identity.kind == "inference_eval_result";
+            });
+        const auto resultAnalysisIdentity = std::find_if(
+            assessment.members[0].resultEvidence->resultIdentities.begin(),
+            assessment.members[0].resultEvidence->resultIdentities.end(),
+            [](const auto& identity)
+            {
+                return identity.kind == "experiment_analysis_result";
+            });
+        assert(resultInferenceIdentity !=
+               assessment.members[0].resultEvidence->resultIdentities.end());
+        assert(resultAnalysisIdentity !=
+               assessment.members[0].resultEvidence->resultIdentities.end());
+        std::ostringstream assessmentOutput;
+        std::ostringstream assessmentErrors;
+        assert(RunRecommendationCampaignOutcomeAssessmentCommand(
+            runtimeString, {1}, assessmentOutput, assessmentErrors) == 0);
+        assert(assessmentErrors.str().empty());
+        assert(assessmentOutput.str().find(
+            "RECOMMENDATION_CAMPAIGN_OUTCOME_ASSESSMENT") == 0);
+        assert(assessmentOutput.str().find(
+            "materialization_campaign_approval_identity_hash=" +
+            assessment.materializationIdentity.campaignIdentityHash) !=
+            std::string::npos);
+        assert(assessmentOutput.str().find("source_inference_accuracy=0.7") !=
+               std::string::npos);
+        assert(assessmentOutput.str().find("result_leader_score=0.78") !=
+               std::string::npos);
+        assert(assessmentOutput.str().find("rows_inserted=0") !=
+               std::string::npos);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-outcome-assessment", false) == 0);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-outcome-assessment", true) == 0);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-outcome-assessment", false, true) == 1);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-outcome-assessment", false, false,
+            true) == 1);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-outcome-assessment", false, false,
+            false, true) == 1);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 1,
+            "--recommendation-campaign-outcome-assessment", false, false,
+            false, false, true) == 1);
+        assert(RunReleaseCampaignCli(database, host, port, schema, 0,
+            "--recommendation-campaign-outcome-assessment", false) == 1);
+        assert(SequenceState(owner, schema, "inference_eval_result", "id") ==
+               inferenceSequenceBefore);
+        assert(SequenceState(owner, schema, "experiment_analysis_result",
+            "analysis_id") == analysisSequenceBefore);
+
+        const std::string baselineOutcomeIdentity = assessment.identity.hash;
+
+        stage = "outcome_source_context_immutable";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(
+                "UPDATE experiment SET c_next_threshold=0.002 "
+                "WHERE experiment_id=17;");
+            mutate.commit();
+        }
+        const auto immutableSourceContext =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(immutableSourceContext.identity.hash == baselineOutcomeIdentity);
+        assert(immutableSourceContext.members[0].sourceEvidence);
+        assert(immutableSourceContext.members[0].sourceEvidence->context.threshold ==
+               0.001);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "UPDATE experiment SET c_next_threshold=0.001 "
+                "WHERE experiment_id=17;");
+            restore.commit();
+        }
+
+        stage = "outcome_source_context_link_inconsistent";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(
+                "UPDATE experiment_recommendation SET source_symbol='gbpusd' "
+                "WHERE recommendation_id=42;");
+            mutate.commit();
+        }
+        const auto inconsistentSourceLink =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(inconsistentSourceLink.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(inconsistentSourceLink.members[0].sourceEvidence);
+        assert(inconsistentSourceLink.members[0].sourceEvidence->context.symbol ==
+               "eurusd");
+        assert(std::find(inconsistentSourceLink.members[0].diagnostics.begin(),
+                   inconsistentSourceLink.members[0].diagnostics.end(),
+                   RecommendationCampaignOutcomeAssessmentDiagnosticCode::
+                       InputEvidenceInconsistent) !=
+               inconsistentSourceLink.members[0].diagnostics.end());
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "UPDATE experiment_recommendation SET source_symbol='eurusd' "
+                "WHERE recommendation_id=42;");
+            restore.commit();
+        }
+
+        stage = "outcome_partial_source_identity_inconsistent";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(
+                "UPDATE experiment_recommendation SET source_model_id=NULL "
+                "WHERE recommendation_id=42;");
+            mutate.commit();
+        }
+        const auto partialSourceIdentity =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(partialSourceIdentity.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(!partialSourceIdentity.members[0].sourceEvidence);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "UPDATE experiment_recommendation SET source_model_id=77 "
+                "WHERE recommendation_id=42;");
+            restore.commit();
+        }
+
+        stage = "outcome_optional_source_analysis_missing";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(
+                "UPDATE experiment_recommendation SET source_analysis_id=NULL "
+                "WHERE recommendation_id=42;");
+            mutate.commit();
+        }
+        const auto sourceAnalysisMissing =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(sourceAnalysisMissing.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Consistent);
+        assert(sourceAnalysisMissing.members[0].sourceEvidence);
+        assert(!sourceAnalysisMissing.members[0].sourceEvidence->sourceAnalysisId);
+        assert(sourceAnalysisMissing.summary.missingSourceMetricCount == 2);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "UPDATE experiment_recommendation SET source_analysis_id=1701 "
+                "WHERE recommendation_id=42;");
+            restore.commit();
+        }
+
+        stage = "outcome_optional_result_metric_missing";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(
+                "UPDATE experiment_analysis_result SET leader_score=NULL "
+                "WHERE experiment_id=$1 AND model_id=1001;",
+                pqxx::params{executionResult.execution->experimentId});
+            mutate.commit();
+        }
+        const auto resultMetricMissing =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(resultMetricMissing.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Consistent);
+        assert(resultMetricMissing.summary.metricValueUnavailableCount == 1);
+        assert(resultMetricMissing.summary.comparableMetricCount == 1);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "UPDATE experiment_analysis_result SET leader_score=0.78 "
+                "WHERE experiment_id=$1 AND model_id=1001;",
+                pqxx::params{executionResult.execution->experimentId});
+            restore.commit();
+        }
+
+        stage = "outcome_duplicate_completed_inference";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(R"SQL(
+INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
+ threshold_logret,window_size,label_rule_id,target_type,from_date,to_date,
+ accuracy,status,inference_scope) VALUES(1001,'eurusd',12,0.001,256,1,1,
+ '2025-01-01','2026-01-01',0.75,'completed','final');
+)SQL");
+            mutate.commit();
+        }
+        const auto duplicateCompletedInference =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(duplicateCompletedInference.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(duplicateCompletedInference.members[0].resultEvidence);
+        assert(duplicateCompletedInference.members[0]
+                   .resultEvidence->resultIdentities.size() == 3);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "DELETE FROM inference_eval_result WHERE model_id=1001 "
+                "AND window_size=256;");
+            restore.commit();
+        }
+
+        stage = "outcome_failed_inference_retained";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(R"SQL(
+INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
+ threshold_logret,window_size,label_rule_id,target_type,from_date,to_date,
+ status,inference_scope) VALUES(1001,'eurusd',12,0.001,128,1,1,
+ '2025-01-01','2026-01-01','failed','final');
+)SQL");
+            mutate.commit();
+        }
+        const auto failedInference =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(failedInference.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(failedInference.members[0].resultEvidence);
+        assert(failedInference.members[0].resultEvidence->resultIdentities.size() ==
+               3);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "DELETE FROM inference_eval_result WHERE model_id=1001 "
+                "AND status='failed';");
+            restore.commit();
+        }
+        assert(BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                   ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                       runtime, {1}))
+                   .identity.hash == baselineOutcomeIdentity);
+
+        stage = "outcome_invalid_result_identity";
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec("UPDATE inference_eval_result SET id=$1 WHERE id=$2;",
+                pqxx::params{-resultInferenceIdentity->id,
+                    resultInferenceIdentity->id});
+            mutate.commit();
+        }
+        const auto invalidInferenceIdentity =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(invalidInferenceIdentity.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(invalidInferenceIdentity.members[0].resultEvidence);
+        assert(invalidInferenceIdentity.members[0]
+                   .resultEvidence->resultIdentities.size() == 1);
+        assert(invalidInferenceIdentity.members[0]
+                   .resultEvidence->resultIdentities[0].kind ==
+               "experiment_analysis_result");
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec("UPDATE inference_eval_result SET id=$1 WHERE id=$2;",
+                pqxx::params{resultInferenceIdentity->id,
+                    -resultInferenceIdentity->id});
+            restore.commit();
+        }
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec(
+                "UPDATE experiment_analysis_result SET analysis_id=$1 "
+                "WHERE analysis_id=$2;",
+                pqxx::params{-resultAnalysisIdentity->id,
+                    resultAnalysisIdentity->id});
+            mutate.commit();
+        }
+        const auto invalidAnalysisIdentity =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(invalidAnalysisIdentity.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(invalidAnalysisIdentity.members[0].resultEvidence);
+        assert(invalidAnalysisIdentity.members[0]
+                   .resultEvidence->resultIdentities.size() == 1);
+        assert(invalidAnalysisIdentity.members[0]
+                   .resultEvidence->resultIdentities[0].kind ==
+               "inference_eval_result");
+        assert(invalidAnalysisIdentity.members[0]
+                   .resultEvidence->metrics.metrics.size() == 2);
+        {
+            pqxx::work restore{owner};
+            SetSearchPath(restore, schema);
+            restore.exec(
+                "UPDATE experiment_analysis_result SET analysis_id=$1 "
+                "WHERE analysis_id=$2;",
+                pqxx::params{resultAnalysisIdentity->id,
+                    -resultAnalysisIdentity->id});
+            restore.commit();
+        }
+        assert(BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                   ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                       runtime, {1}))
+                   .identity.hash == baselineOutcomeIdentity);
+
+        stage = "outcome_assessment_snapshot_consistency";
+        pqxx::read_transaction stableOutcome{runtime};
+        stableOutcome.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+        const auto stableBefore =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                LoadRecommendationCampaignOutcomeAssessmentEvidence(
+                    stableOutcome, {1}));
+        {
+            pqxx::work mutate{owner};
+            SetSearchPath(mutate, schema);
+            mutate.exec("UPDATE experiment_analysis_result SET leader_score=0.79 "
+                        "WHERE experiment_id=$1 AND model_id=1001;",
+                pqxx::params{executionResult.execution->experimentId});
+            mutate.commit();
+        }
+        const auto stableWithin =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                LoadRecommendationCampaignOutcomeAssessmentEvidence(
+                    stableOutcome, {1}));
+        assert(stableBefore.identity.hash == stableWithin.identity.hash);
+        stableOutcome.abort();
+        const auto stableAfter =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(stableBefore.identity.hash != stableAfter.identity.hash);
+        std::string currentOutcomeIdentity = stableAfter.identity.hash;
 
         const std::string completedIdentity = snapshot.snapshotIdentityHash;
         stage = "unrelated_result_evidence";
@@ -735,6 +1203,10 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
         }
         assert(ReadRecommendationCampaignStatusSnapshot(runtime, {1}).snapshotIdentityHash ==
                completedIdentity);
+        assert(BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                   ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                       runtime, {1}))
+                   .identity.hash == currentOutcomeIdentity);
         {
             pqxx::work mutate{owner};
             SetSearchPath(mutate, schema);
@@ -760,6 +1232,19 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
         snapshot = ReadRecommendationCampaignStatusSnapshot(runtime, {1});
         assert(snapshot.inconsistentCount == 1);
         assert(snapshot.members[0].completedFinalInferenceResultCount == 0);
+        const auto wrongInference =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(wrongInference.members[0].consistency ==
+               RecommendationCampaignOutcomeAssessmentConsistencyState::
+                   Inconsistent);
+        assert(wrongInference.members[0].resultEvidence);
+        assert(wrongInference.members[0].resultEvidence->resultIdentities.size() ==
+               1);
+        assert(wrongInference.members[0]
+                   .resultEvidence->resultIdentities[0].kind ==
+               "experiment_analysis_result");
         {
             pqxx::work restore{owner};
             SetSearchPath(restore, schema);
@@ -772,6 +1257,11 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
 )SQL");
             restore.commit();
         }
+        currentOutcomeIdentity =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}))
+                .identity.hash;
 
         stage = "historical_analysis_ignored";
         {
@@ -788,6 +1278,11 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
         }
         assert(ReadRecommendationCampaignStatusSnapshot(runtime, {1}).snapshotIdentityHash ==
                completedIdentity);
+        const auto historicalOutcome =
+            BuildRecommendationCampaignOutcomeAssessmentFromEvidence(
+                ReadRecommendationCampaignOutcomeAssessmentEvidence(
+                    runtime, {1}));
+        assert(historicalOutcome.identity.hash == currentOutcomeIdentity);
 
         stage = "member_inconsistent";
         {

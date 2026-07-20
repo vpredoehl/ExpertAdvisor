@@ -58,3 +58,76 @@ Non-goals
 Step 5a does not provide a repository, database access, persistence, service,
 CLI, scheduler, worker, filesystem behavior, campaign-success policy, or
 follow-up authorization.
+
+Step 5b authoritative integration
+---------------------------------
+
+Step 5b supplies the read-only integration without changing the Step 5a domain
+boundary.  One PostgreSQL ``REPEATABLE READ``, ``READ ONLY`` transaction loads
+the exact materialization through the Phase 4D production loader, loads its
+exact campaign approval, and obtains lifecycle and workflow consistency from
+the existing Phase 5 campaign-status projection.  It does not reconstruct a
+second lifecycle classifier.
+
+The Step 5a campaign identity is the persisted approval canonical text and
+hash.  Its materialization input receives the materialization row's persisted
+``approval_identity_hash`` unchanged, so Step 5a verifies the approval-to-
+materialization binding.  Exact materialization member ordinal, member ID,
+ranking-member ID, recommendation ID, source-experiment ID, proposal ID, and
+the execution-linked expected experiment ID flow from the validated status
+snapshot.  A status member reported as inconsistent is passed to Step 5a as
+``inputConsistency=inconsistent``; Step 5b neither repairs nor normalizes the
+upstream evidence.
+
+Scientific evidence
+-------------------
+
+Source evidence follows the materialized recommendation's persisted source
+experiment, model, and analysis identities.  Source final-inference selection
+uses the immutable source invocation canonical text captured by the exact
+persisted Phase 4C proposal; it never substitutes the source experiment's
+current configuration.  Result evidence follows the exact conversion-
+execution experiment, its current linked model, and its final inference and
+final analysis rows.  The comparison context is taken from the selected
+persisted final inference identity: canonical symbol, prediction horizon,
+threshold, persisted window size, the versioned
+``inference_eval_result_label_v1`` representation of the
+``label_rule_id``/``target_type`` pair, and canonical ``YYYY-MM-DD`` inference
+range.
+
+The version-1 Step 5b mapping carries ``inference_accuracy`` and
+``leader_score`` with ``NumericDelta`` support.  The source values are the
+immutable values captured on the recommendation; result values are the final
+analysis values.  Missing analysis or metric evidence remains absent or null,
+and changed contexts remain non-comparable.  No metric is recomputed and no
+campaign-success threshold is applied.
+
+Other persisted analysis fields were deliberately not mapped in this version:
+the immutable recommendation does not retain a directly corresponding value
+with the same scientific meaning.  In particular, Step 5b does not reconstruct
+predicted-neutral proportions or evidence totals from result counts.  Such
+values therefore cannot be mistaken for a valid numeric delta.
+
+CLI and output
+--------------
+
+::
+
+   LSTM_Release \
+     --recommendation-campaign-outcome-assessment=MATERIALIZATION_ID
+
+The separated option form is also accepted.  The command is intrinsically
+read-only, so ``--yes`` and ``--dry-run`` are rejected.  Output begins with one
+``RECOMMENDATION_CAMPAIGN_OUTCOME_ASSESSMENT`` record and then one
+``RECOMMENDATION_CAMPAIGN_OUTCOME_ASSESSMENT_MEMBER`` record per exact
+materialized ordinal.  Records expose contract and identity hashes, the exact
+Step 5a aggregate classification and counts, lifecycle, separate input and
+final consistency, diagnostics, provenance, contexts, metrics, comparisons,
+explicit evidence/context-presence booleans and ``null`` values,
+percent-encoded variable text, the materialization's persisted campaign-
+approval hash, and explicit no-write/no-scheduler/no-success/no-follow-up
+safety fields.
+
+No schema migration or privilege change is required.  The assessment remains
+point-in-time and non-persistent; Step 5b inserts, updates, deletes, activates,
+queues, retries, and launches nothing and authorizes no follow-up.
