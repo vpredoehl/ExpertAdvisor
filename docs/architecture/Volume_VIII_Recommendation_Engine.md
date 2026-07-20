@@ -1,7 +1,7 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 5 Step 5c
-Version: 2.0.0
+Status: Foundation aligned through Phase 6A
+Version: 2.1.0
 Last revised: 2026-07-20
 
 ## 1. Purpose
@@ -29,6 +29,10 @@ and its bounded, read-only authoritative-persisted-evidence integration. Step
 5c adds a separate pure, versioned advisory policy over that immutable
 assessment; it interprets but does not alter evidence, declare campaign
 success, or authorize follow-up.
+Phase 6A adds one pure immutable follow-up proposal bound to an exactly aligned
+eligible favorable Step 5C decision and its exact Step 5A assessment. The
+proposal is only an advisory candidate for later operator review and adds no
+persistence, approval, lifecycle, or scheduler authority.
 
 ## 2. Scope
 
@@ -43,6 +47,8 @@ The explicit Phase 4C manual conversion chain and Phase 4D campaign planning,
 review, explicit non-executing approval, and approved-campaign materialization
 into the existing Phase 4C proposal boundary, read-only handoff, and explicit
 campaign-wide Phase 4C proposal review are also in scope.
+The pure Phase 5 outcome contracts and the pure identity-bound Phase 6A
+follow-up proposal are in scope as non-persistent advisory values.
 
 ### 2.2 Out of scope
 
@@ -54,7 +60,7 @@ approval/rejection/expiration.
 ### 2.3 Current implementation status
 
 Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, Phase 4D Steps 1–6,
-and Phase 5 Steps 1–5c implement the in-scope capabilities.
+Phase 5 Steps 1–5c, and Phase 6A implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
@@ -83,6 +89,10 @@ with its final result evidence without recomputation, persistence, or success
 policy. Step 5c then applies only a database-free versioned interpretation
 policy, keeping evidence sufficiency, campaign interpretation, operator-review
 eligibility, and the invariant absence of follow-up authority separate.
+Phase 6A validates exact Step 5A/5C canonical and direct identity alignment and
+builds a deterministic follow-up proposal only from an eligible favorable,
+explicitly non-authorizing decision. It does not recompute policy truth or add
+operator-review, persistence, activation, execution, or scheduler behavior.
 Detailed contracts remain in the Phase documents referenced in §12.
 
 ## 3. Responsibilities
@@ -102,6 +112,8 @@ of those existing primitives. Ranking, campaign planning, campaign review, and
 campaign approval have no downstream execution dependency. Outcome assessment
 and policy consume persisted evidence but have no lifecycle dependency or
 authority.
+The Phase 6A proposal consumes only their immutable typed values and has no
+database, CLI, service, repository, lifecycle, or scheduler dependency.
 
 ### 3.3 Prohibited responsibilities
 
@@ -111,12 +123,16 @@ scheduler state, infer reviewer identity, use
 score thresholds for authorization, or claim expected profitability. Phase 4C
 may create and activate exactly one experiment only through its separately
 invoked, audited manual commands.
+Phase 6A eligibility MUST NOT be treated as operator approval, follow-up
+authorization, campaign success, profitability evidence, persistence, or
+scheduler work.
 
 ## 4. Architecture
 
 ### 4.1 Components
 
 - Pure identity/policy and candidate-generation domain components.
+- Pure identity-bound Phase 6A follow-up-proposal domain component.
 - Pure manual conversion eligibility, source-consistency, and proposed-
   specification domain component.
 - Repository-owned PostgreSQL mapping, scans, duplicates, scores, and reviews.
@@ -150,6 +166,7 @@ recommendation ranking
 -> optional read-only Phase 5 Step 4 operational status snapshot
 -> optional read-only Step 5b outcome assessment
 -> optional pure Step 5c advisory policy interpretation
+-> optional pure Phase 6A follow-up proposal for later operator review
 ```
 
 All displayed stages through exact proposal review are implemented through
@@ -163,16 +180,19 @@ Phase 5 Step 4 reads the immutable materialization and bounded downstream
 evidence only; it neither invokes Steps 1–3 nor contacts the scheduler process.
 Step 5b reuses that status lifecycle inside one read-only snapshot. Step 5c
 contains no repository or CLI and consumes only an already-built immutable
-assessment.
+assessment. Phase 6A consumes only the exact immutable assessment and policy
+decision and terminates at a non-authorizing proposal value.
 
 ### 4.3 Ownership boundaries
 
 Canonical text decides identity; repository transactions decide persistence;
-pure scoring, planning, campaign-review, and outcome policies decide advisory
-output; pure review rules decide legal transitions; and the operator separately
+pure scoring, planning, campaign-review, outcome-policy, and follow-up-proposal
+components decide advisory output; pure review rules decide legal transitions;
+and the operator separately
 supplies review, conversion, and activation actions. Only Phase 4C Steps 4–5
 may create or activate the one provenance-linked experiment. Campaign
-planning, review, approval, outcome assessment, and outcome policy never do.
+planning, review, approval, outcome assessment, outcome policy, and Phase 6A
+follow-up proposal never do.
 
 ## 5. Data model
 
@@ -188,6 +208,10 @@ not persisted; Step 3 persists only their exact approved/rejected provenance.
 Campaign outcome assessments and policy decisions are point-in-time,
 non-persistent advisory values; their canonical identities bind exact upstream
 evidence but create no authoritative campaign decision.
+Phase 6A follow-up proposals are likewise non-persistent advisory values. Their
+canonical identities bind the exact assessment v2, policy v1, decision v1,
+campaign, materialization, ordered members, eligibility, and fixed
+non-authority semantics while excluding observation time.
 
 ### 5.2 Provenance and versions
 
@@ -299,6 +323,11 @@ coverage minimum, mixed member/metric states, locale independence,
 deterministic identity, and explicit non-authorization. The coverage minimum
 is not statistical sufficiency, confidence, causality, profitability,
 repeatability, or campaign success.
+Phase 6A pure tests additionally cover exact upstream alignment, stable refusal
+reasons, golden canonical identity, all non-authority flags, upstream-order,
+locale and observation-time invariance, identity sensitivity, inherited IEEE
+edge behavior, the canonical-size boundary, and inaccessible malformed
+construction paths.
 
 ### 9.2 Persistence and migration tests
 
@@ -524,6 +553,17 @@ campaigns are not. Its result is non-persistent and non-authoritative, always
 records follow-up authorization as false, and adds no repository, CLI,
 scheduler, worker, schema, or lifecycle behavior.
 
+Phase 6A adds the distinct
+``RecommendationCampaignFollowUpProposal`` contract over one exact Step 5a
+assessment v2 and one exact Step 5c policy decision v1 containing policy v1.
+It validates authoritative canonical text as well as hashes and exact campaign,
+materialization, count, and ordered-member alignment. Only an eligible,
+favorable, explicitly non-authorizing decision yields a proposal. Contract v1
+binds every safety semantic and exact upstream canonical identity, excludes
+``observedAt``, and rejects canonical text above 1,048,576 bytes before
+construction. The proposal is not approval, persistence, activation,
+execution, scheduler work, success evidence, or authority for Phase 6B–6F.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -552,6 +592,8 @@ scheduler, worker, schema, or lifecycle behavior.
 - [Atomic campaign conversion launch](../Phase5ExperimentRecommendationCampaignLaunch.rst)
 - [Recommendation campaign operational status](../Phase5ExperimentRecommendationCampaignStatus.rst)
 - [Recommendation campaign outcome assessment and policy](../Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
+- [Phase 6A recommendation campaign follow-up proposal](../Phase6ARecommendationCampaignFollowUpProposal.rst)
+- [ADR-0006](adr/ADR-0006-phase-6a-follow-up-proposal.md)
 
 ## 13. Revision history
 
@@ -577,3 +619,4 @@ scheduler, worker, schema, or lifecycle behavior.
 | 1.8.0 | 2026-07-19 | Recorded explicit one-transaction Phase 5 Step 3 launch through the existing Phase 4C execution and activation authorities. | ADR-0001, ADR-0004, ADR-0005 |
 | 1.9.0 | 2026-07-19 | Recorded read-only Phase 5 Step 4 operational status for exact materialized members and current persisted lifecycle evidence. | ADR-0001, ADR-0004, ADR-0005 |
 | 2.0.0 | 2026-07-20 | Recorded Phase 5 Steps 5a–5b read-only outcome assessment and Step 5c pure advisory outcome policy with no persistence or follow-up authority. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
+| 2.1.0 | 2026-07-20 | Recorded the pure, exact-identity-bound, non-authorizing Phase 6A follow-up proposal; later persistence, review, activation, and execution remain deferred. | ADR-0003, ADR-0004, ADR-0006 |
