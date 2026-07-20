@@ -79,6 +79,8 @@ does not automatically invoke Phase 5 Step 1 or any later operation.
 Phase 5 Step 3 is a distinct, separately confirmed command that may combine
 the existing execution and activation transaction-bound authorities under one
 outer transaction. Step 2 remains activate-only and never invokes Step 3.
+Phase 5 Step 4 can observe activated members and their later persisted
+lifecycle evidence in one read-only snapshot; it never invokes Step 2.
 
 Schema
 ------

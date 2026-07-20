@@ -28,6 +28,8 @@ struct RecommendationConversionWorkflowView
     std::optional<std::string> executionCreatedAt;
     std::optional<RecommendationConversionWorkflowActivationFact> activation;
     std::optional<std::string> activationCreatedAt;
+    long long executionCount = 0;
+    long long activationCount = 0;
     std::optional<RecommendationConversionWorkflowExperimentFact> experiment;
     std::optional<std::string> experimentUpdatedAt;
     RecommendationConversionWorkflowDerivation derivation;

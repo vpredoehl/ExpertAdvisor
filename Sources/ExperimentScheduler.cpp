@@ -50,6 +50,7 @@
 #include "ExperimentRecommendationCampaignExecutionService.hpp"
 #include "ExperimentRecommendationCampaignActivationService.hpp"
 #include "ExperimentRecommendationCampaignLaunchService.hpp"
+#include "ExperimentRecommendationCampaignStatusService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -232,6 +233,8 @@ struct SchedulerOptions
     bool campaignActivationCommandSpecified = false;
     std::optional<long long> launchRecommendationCampaignMaterializationId;
     bool campaignLaunchCommandSpecified = false;
+    std::optional<long long> recommendationCampaignStatusMaterializationId;
+    bool campaignStatusCommandSpecified = false;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -896,6 +899,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--execute-recommendation-campaign-materialization" ||
             arg == "--activate-recommendation-campaign-materialization" ||
             arg == "--launch-recommendation-campaign-materialization" ||
+            arg == "--recommendation-campaign-status" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -1050,6 +1054,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
                 "--activate-recommendation-campaign-materialization=", 0) == 0 ||
             arg.rfind(
                 "--launch-recommendation-campaign-materialization=", 0) == 0 ||
+            arg.rfind("--recommendation-campaign-status=", 0) == 0 ||
             arg.rfind("--continuation-scan-seconds=", 0) == 0 ||
             arg.rfind("--continuation-max-queues-per-scan=", 0) == 0 ||
             arg.rfind("--requeue-analysis=", 0) == 0 ||
@@ -1981,6 +1986,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
         }
+        else if (arg == "--recommendation-campaign-status")
+        {
+            if (options.campaignStatusCommandSpecified)
+                throw std::invalid_argument(
+                    "duplicate --recommendation-campaign-status");
+            options.campaignStatusCommandSpecified = true;
+            options.recommendationCampaignStatusMaterializationId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
         else if (arg == "--campaign-ranking-snapshot")
         {
             options.campaignPlanningScope.rankingSnapshotId =
@@ -2738,6 +2753,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     "--launch-recommendation-campaign-materialization", value);
         }
+        else if (SplitOptionWithValue(
+                     arg, "--recommendation-campaign-status", value))
+        {
+            if (options.campaignStatusCommandSpecified)
+                throw std::invalid_argument(
+                    "duplicate --recommendation-campaign-status");
+            options.campaignStatusCommandSpecified = true;
+            options.recommendationCampaignStatusMaterializationId =
+                ParsePositiveLongLong("--recommendation-campaign-status", value);
+        }
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -2931,6 +2956,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
              ? 1
              : 0) +
         (options.launchRecommendationCampaignMaterializationId.has_value()
+             ? 1
+             : 0) +
+        (options.recommendationCampaignStatusMaterializationId.has_value()
              ? 1
              : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
@@ -3410,6 +3438,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     options.dryRun};
         (void)EA::ExperimentRecommendation::
             NormalizeRecommendationCampaignLaunchRequest(request);
+    }
+    if (options.recommendationCampaignStatusMaterializationId)
+    {
+        if (options.dryRun)
+            throw std::invalid_argument(
+                "--dry-run is not valid with --recommendation-campaign-status");
+        if (options.yes)
+            throw std::invalid_argument(
+                "--yes is not valid with --recommendation-campaign-status");
+        (void)EA::ExperimentRecommendation::
+            NormalizeRecommendationCampaignStatusRequest(
+                {*options.recommendationCampaignStatusMaterializationId});
     }
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
@@ -16617,6 +16657,12 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "It starts neither scheduler nor workers and performs no automatic "
         << "follow-up. --yes is required unless --dry-run is supplied.\n"
         << "Usage: " << exe
+        << " --recommendation-campaign-status=MATERIALIZATION_ID\n"
+        << "Phase 5 campaign status reads one repeatable-read snapshot of every "
+        << "exact materialized member and its Phase 4C and experiment lifecycle "
+        << "evidence. It writes nothing, takes no locks, and neither polls nor "
+        << "controls the scheduler or workers.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -16966,6 +17012,13 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
             RunRecommendationCampaignLaunchCommand(
                 connectionString, request, std::cout, std::cerr);
     }
+    if (options.recommendationCampaignStatusMaterializationId)
+    {
+        EA::ExperimentRecommendation::RecommendationCampaignStatusRequest request{
+            *options.recommendationCampaignStatusMaterializationId};
+        return EA::ExperimentRecommendation::RunRecommendationCampaignStatusCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
     if (options.evaluateExperimentRecommendations ||
         options.evaluateExperimentRecommendationId)
     {
@@ -17221,6 +17274,9 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (options.launchRecommendationCampaignMaterializationId.has_value())
+            // Handled by the standalone recommendation/campaign dispatcher.
+            return RunExperimentRecommendationCommand(options);
+        if (options.recommendationCampaignStatusMaterializationId.has_value())
             // Handled by the standalone recommendation/campaign dispatcher.
             return RunExperimentRecommendationCommand(options);
         if (HasCheckpointControlCommand(options))

@@ -1,5 +1,7 @@
 #include "ExperimentRecommendationConversionRepository.hpp"
 
+#include <algorithm>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -441,6 +443,43 @@ FindRecommendationConversionProposal(
         pqxx::params{proposalId});
     if (rows.empty()) return std::nullopt;
     return MapProposal(rows.one_row());
+}
+
+std::vector<PersistedRecommendationConversionProposal>
+ListRecommendationConversionProposalsByIds(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& proposalIds)
+{
+    if (proposalIds.empty()) return {};
+    if (proposalIds.size() >
+        static_cast<std::size_t>(kMaximumRecommendationConversionProposalListLimit))
+        throw std::invalid_argument(
+            "recommendation_conversion_proposal_id_list_limit_invalid");
+    std::vector<long long> ids = proposalIds;
+    std::sort(ids.begin(), ids.end());
+    if (ids.front() <= 0 ||
+        std::adjacent_find(ids.begin(), ids.end()) != ids.end())
+        throw std::invalid_argument(
+            "recommendation_conversion_proposal_id_list_invalid");
+
+    pqxx::params parameters;
+    std::ostringstream placeholders;
+    for (std::size_t index = 0; index < ids.size(); ++index)
+    {
+        if (index != 0) placeholders << ',';
+        placeholders << '$' << index + 1;
+        parameters.append(ids[index]);
+    }
+    const pqxx::result rows = transaction.exec(
+        "SELECT " + ProposalColumns() + " FROM "
+        "experiment_recommendation_conversion_proposal WHERE "
+        "recommendation_conversion_proposal_id IN (" + placeholders.str() +
+        ") ORDER BY recommendation_conversion_proposal_id;",
+        parameters);
+    std::vector<PersistedRecommendationConversionProposal> result;
+    result.reserve(rows.size());
+    for (const auto& row : rows) result.push_back(MapProposal(row));
+    return result;
 }
 
 std::optional<PersistedRecommendationConversionProposal>

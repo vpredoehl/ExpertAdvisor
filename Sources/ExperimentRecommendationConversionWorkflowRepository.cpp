@@ -124,6 +124,8 @@ RecommendationConversionWorkflowView MapWorkflow(const pqxx::row& row)
     facts.proposalIdentityHash = view.proposalIdentityHash;
     facts.executionCount = row["execution_count"].as<long long>();
     facts.activationCount = row["activation_count"].as<long long>();
+    view.executionCount = facts.executionCount;
+    view.activationCount = facts.activationCount;
 
     if (!row["latest_review_id"].is_null())
     {

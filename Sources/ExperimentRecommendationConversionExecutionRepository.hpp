@@ -46,6 +46,12 @@ struct RecommendationConversionExecutionResult
 std::string RecommendationConversionExecutionOutcomeText(
     RecommendationConversionExecutionOutcome outcome);
 
+// Canonical identity shared by write authority and read-only provenance
+// projections. The proposal must already have ordinary repository validation.
+std::string BuildRecommendationConversionExecutionIdentityCanonical(
+    const PersistedRecommendationConversionProposal& proposal,
+    long long reviewDecisionId);
+
 bool RecommendationConversionExecutionSchemaExists(
     pqxx::connection& connection);
 

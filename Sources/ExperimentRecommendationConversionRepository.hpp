@@ -62,6 +62,14 @@ FindRecommendationConversionProposal(
     pqxx::transaction_base& transaction,
     long long proposalId);
 
+// Transaction-bound exact-ID lookup for bounded aggregate read models. Results
+// are ordered by proposal ID and each row receives the ordinary proposal
+// repository validation.
+std::vector<PersistedRecommendationConversionProposal>
+ListRecommendationConversionProposalsByIds(
+    pqxx::transaction_base& transaction,
+    const std::vector<long long>& proposalIds);
+
 std::optional<PersistedRecommendationConversionProposal>
 FindRecommendationConversionProposalByIdentity(
     pqxx::connection& connection,

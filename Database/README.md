@@ -124,6 +124,12 @@ and all activations, reuses all executions before activation, or reports an
 exact already-satisfied result; partial prior execution or activation fails
 closed. The resulting ordinary experiments are ``pending/train`` but the
 command neither polls nor signals the scheduler and launches no worker.
+Phase 5 Step 4 also adds no schema object or privilege. Its standalone status
+command uses one repeatable-read, read-only transaction to validate immutable
+materialization membership and project bounded exact Phase 4C, experiment,
+model, final-inference, and final-analysis evidence. It takes no advisory or row
+lock, advances no sequence, writes no cached campaign state, and neither polls
+nor controls the scheduler or workers.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

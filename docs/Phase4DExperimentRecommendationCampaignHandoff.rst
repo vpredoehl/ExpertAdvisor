@@ -107,7 +107,10 @@ Phase 4C activation for the same exact membership; the handoff observes its
 activation rows and lifecycle states but does not invoke it. Phase 5 Step 3
 adds a distinct, separately confirmed atomic convenience that can establish
 both ordinary Phase 4C executions and activations for the exact membership;
-the handoff observes those durable results but never invokes it. Automatic
+the handoff observes those durable results but never invokes it. Phase 5 Step 4
+adds a deeper read-only operational snapshot over the same exact
+membership and current experiment/result evidence; the handoff remains its
+Phase 4D workflow projection and invokes no Phase 5 operation. Automatic
 progression, repair, background scans, and scheduler integration remain
 separate. The scheduler does not query the handoff projection or any Phase 4D
 audit table.

@@ -124,6 +124,9 @@ existing authorities atomically without calling either public command and
 without adding campaign lifecycle state. Pending experiments are merely
 eligible for a later claim by the existing scheduler; launch does not imply
 that training has started.
+Phase 5 Step 4 is the separate read-only operational projection of those exact
+members. It observes persisted lifecycle evidence but never launches, repairs,
+or controls it.
 
 References
 ----------
@@ -134,3 +137,4 @@ References
 * ``docs/Phase5ExperimentRecommendationCampaignExecution.rst``
 * ``docs/Phase5ExperimentRecommendationCampaignActivation.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
+* ``docs/Phase5ExperimentRecommendationCampaignStatus.rst``

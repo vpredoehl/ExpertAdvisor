@@ -68,7 +68,7 @@ std::string LengthText(const std::string& value)
     return std::to_string(value.size()) + ":" + value;
 }
 
-std::string BuildExecutionIdentity(
+std::string BuildExecutionIdentityImpl(
     const PersistedRecommendationConversionProposal& proposal,
     long long reviewDecisionId)
 {
@@ -152,7 +152,7 @@ void ValidateExisting(
     const PersistedRecommendationConversionProposal& proposal)
 {
     const std::string canonical =
-        BuildExecutionIdentity(proposal, execution.reviewDecisionId);
+        BuildExecutionIdentityImpl(proposal, execution.reviewDecisionId);
     if (execution.proposalId != proposal.proposalId ||
         execution.executionIdentityCanonical != canonical ||
         execution.executionIdentityHash != RecommendationCanonicalHash(canonical))
@@ -207,6 +207,13 @@ long long InsertPausedExperiment(
 }
 
 } // namespace
+
+std::string BuildRecommendationConversionExecutionIdentityCanonical(
+    const PersistedRecommendationConversionProposal& proposal,
+    long long reviewDecisionId)
+{
+    return BuildExecutionIdentityImpl(proposal, reviewDecisionId);
+}
 
 std::string RecommendationConversionExecutionOutcomeText(
     RecommendationConversionExecutionOutcome outcome)
@@ -281,7 +288,7 @@ ExecuteApprovedRecommendationConversionProposalInTransaction(
     const long long reviewDecisionId = review->latestDecision->reviewDecisionId;
     const long long experimentId = InsertPausedExperiment(
         transaction, proposal->proposal.proposedInvocation);
-    const std::string canonical = BuildExecutionIdentity(
+    const std::string canonical = BuildExecutionIdentityImpl(
         *proposal, reviewDecisionId);
     auto execution = MapExecution(transaction.exec(
         "INSERT INTO experiment_recommendation_conversion_execution ("

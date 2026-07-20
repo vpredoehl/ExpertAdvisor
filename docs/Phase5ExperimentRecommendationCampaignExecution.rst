@@ -96,6 +96,8 @@ authority for every exact materialized member; Step 1 never invokes it.
 Phase 5 Step 3 is a distinct, separately confirmed command that can establish
 both execution and activation in one outer transaction. Step 1 does not invoke
 Step 3, and Step 3 does not alter Step 1's execute-only contract.
+Phase 5 Step 4 can observe the resulting exact member lifecycle in one read-only
+snapshot; it never invokes or changes Step 1.
 
 Schema
 ------
