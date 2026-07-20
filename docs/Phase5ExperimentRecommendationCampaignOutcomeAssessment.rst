@@ -59,15 +59,16 @@ Step 5a does not provide a repository, database access, persistence, service,
 CLI, scheduler, worker, filesystem behavior, campaign-success policy, or
 follow-up authorization.
 
-Step 5b authoritative integration
----------------------------------
+Step 5b authoritative-evidence integration
+------------------------------------------
 
 Step 5b supplies the read-only integration without changing the Step 5a domain
 boundary.  One PostgreSQL ``REPEATABLE READ``, ``READ ONLY`` transaction loads
-the exact materialization through the Phase 4D production loader, loads its
-exact campaign approval, and obtains lifecycle and workflow consistency from
-the existing Phase 5 campaign-status projection.  It does not reconstruct a
-second lifecycle classifier.
+authoritative persisted evidence: the exact materialization through the Phase
+4D production loader, its exact campaign approval, and the evidence underlying
+lifecycle and workflow consistency from the existing Phase 5 campaign-status
+projection.  Step 5b builds a non-authoritative, point-in-time assessment from
+that evidence.  It does not reconstruct a second lifecycle classifier.
 
 The Step 5a campaign identity is the persisted approval canonical text and
 hash.  Its materialization input receives the materialization row's persisted
@@ -131,3 +132,83 @@ safety fields.
 No schema migration or privilege change is required.  The assessment remains
 point-in-time and non-persistent; Step 5b inserts, updates, deletes, activates,
 queues, retries, and launches nothing and authorizes no follow-up.
+
+Step 5c pure outcome policy
+----------------------------
+
+Step 5c adds only a database-free policy and interpretation contract over one
+immutable Step 5a assessment.  It does not reopen source or result evidence,
+recompute a metric or delta, or change any Step 5a lifecycle, consistency,
+member-outcome, comparison, diagnostic, or aggregate classification.  Evidence
+classification and policy judgment remain separate fields.
+
+Policy contract version 1 has an explicit canonical identity.  Its default
+minimum comparable-member evidence coverage is one ``succeeded_comparable``
+member, and its required metric rules are ``inference_accuracy`` and
+``leader_score``, each with the explicit ``higher_is_favorable`` direction.
+Required rules are sorted by metric identity and duplicates are rejected.  A
+caller may construct another version-1 policy with a different positive
+minimum or deterministic set of metric-direction rules; changing the policy
+changes both policy and decision identity.  The canonical policy binds the
+contract version, coverage minimum, sorted metric identities and directions,
+fixed all-member consistency, terminal, and successful comparability
+requirements, favorable-interpretation requirement for operator-review
+eligibility, and fixed non-authorizing semantics.
+
+``minimumComparableMemberCount`` is only an advisory evidence-coverage
+threshold.  It is not statistical significance, confidence, causal evidence,
+profitability evidence, a guarantee of repeatability, or campaign success.  No
+materiality threshold or statistical, causal, profitability, or weighted
+campaign score is inferred.
+
+For every exact member and required metric, the policy output preserves the
+Step 5a comparison classification and delta as optional evidence, then records
+a separate ``favorable``, ``neutral``, ``unfavorable``, or ``not_evaluable``
+judgment.  It never subtracts result and source values again.  Positive and
+negative meaning is determined only by the versioned metric-direction rule;
+an exact zero remains neutral.
+
+Evidence sufficiency is separate from campaign interpretation.  Inconsistent,
+not-ready, cancelled, context-changed, metric-gap, missing-source,
+missing-result, unavailable, unsupported, missing-required-metric, and
+minimum-comparable-member conditions remain explicit conservative reasons.
+A terminal failure is adverse lifecycle evidence rather than a scientific
+metric gap.  Thus an all-failed campaign is interpreted ``unfavorable`` even
+though it lacks the minimum comparable-member evidence coverage; a failed
+member mixed with complete favorable evidence is ``mixed``.  Cancellation,
+inconsistency, unfinished lifecycle, or non-comparable successful evidence
+makes the campaign interpretation ``inconclusive``.  Complete comparable
+metric judgments yield ``favorable``, ``neutral``, ``unfavorable``, or
+``mixed`` without declaring the campaign successful.
+
+Follow-up eligibility is only ``eligible_for_operator_review`` when every
+exact member is a comparable successful outcome, the minimum evidence coverage
+is met, all required metrics are comparable, and the campaign interpretation
+is ``favorable``.  Neutral, unfavorable, mixed, and inconclusive campaigns are
+``not_eligible``; sufficient evidence alone is not enough.  Failure,
+cancellation, incompleteness, inconsistency, context change, or a metric gap
+also leaves it ``not_eligible``.  This is an advisory screening result, not a
+recommendation, approval, or authorization: the immutable result always has
+``follow_up_authorized=false`` and ``follow_up_authorizing=false``.
+
+Decision contract version 1 binds the complete policy canonical text and hash,
+the exact Step 5a assessment canonical text and hash, complete campaign
+approval and materialization identities, ordered member identities including
+the expected experiment, assessment lifecycle/consistency/outcome/diagnostics,
+evidence classifications, metric judgments, interpretations, reasons, counts,
+and explicit non-authorization result.  The complete upstream assessment
+canonical already binds Step 5a provenance; the direct fields are deliberately
+included as well because the decision carries and exposes those identities and
+assessment classifications.  ``observed_at`` remains display metadata and is
+excluded through the upstream assessment identity.  Unsupported policy or
+assessment contracts, invalid enums, duplicate policy metrics, duplicate or
+ambiguous top-level member identities, malformed identity/hash pairs, and
+invalid counts fail closed.
+
+Step 5c adds no repository, service, formatter, CLI, migration, privilege,
+table, sequence, lock, write, scheduler call, worker behavior, experiment or
+campaign mutation, persistence, operator-review event, follow-up generation,
+approval, queueing, activation, retry, continuation, or automatic action.  The
+existing Step 5b CLI continues to report only the non-authoritative assessment
+built from authoritative persisted evidence and does not silently apply outcome
+policy.

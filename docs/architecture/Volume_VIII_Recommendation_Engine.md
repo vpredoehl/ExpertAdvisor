@@ -1,8 +1,8 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 5 Step 4
-Version: 1.9.0
-Last revised: 2026-07-19
+Status: Foundation aligned through Phase 5 Step 5c
+Version: 2.0.0
+Last revised: 2026-07-20
 
 ## 1. Purpose
 
@@ -24,6 +24,11 @@ membership without adding campaign state or scheduler behavior.
 Phase 5 Step 4 adds one deterministic read-only operational snapshot of every
 exact member's current Phase 4C, experiment, worker-metadata, inference, and
 analysis evidence without adding durable campaign state or scheduler behavior.
+Phase 5 Steps 5a–5b add a pure, non-authoritative scientific outcome assessment
+and its bounded, read-only authoritative-persisted-evidence integration. Step
+5c adds a separate pure, versioned advisory policy over that immutable
+assessment; it interprets but does not alter evidence, declare campaign
+success, or authorize follow-up.
 
 ## 2. Scope
 
@@ -49,7 +54,7 @@ approval/rejection/expiration.
 ### 2.3 Current implementation status
 
 Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, Phase 4D Steps 1–6,
-and Phase 5 Steps 1–4 implement the in-scope capabilities.
+and Phase 5 Steps 1–5c implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
@@ -73,6 +78,11 @@ activation primitives under one outer transaction, leaving all exact
 experiments ``pending/train`` without starting scheduler work.
 Phase 5 Step 4 observes those exact members through one repeatable-read,
 read-only database snapshot and performs no lifecycle action.
+Phase 5 Steps 5a–5b compare each exact member's frozen recommendation evidence
+with its final result evidence without recomputation, persistence, or success
+policy. Step 5c then applies only a database-free versioned interpretation
+policy, keeping evidence sufficiency, campaign interpretation, operator-review
+eligibility, and the invariant absence of follow-up authority separate.
 Detailed contracts remain in the Phase documents referenced in §12.
 
 ## 3. Responsibilities
@@ -89,7 +99,9 @@ Consumes completed experiment/final-analysis evidence from Volumes VI/VII.
 Only the explicit Phase 4C execution and activation primitives cross into
 experiment lifecycle; Phase 5 Steps 1–3 are confirmed orchestration callers
 of those existing primitives. Ranking, campaign planning, campaign review, and
-campaign approval have no downstream execution dependency.
+campaign approval have no downstream execution dependency. Outcome assessment
+and policy consume persisted evidence but have no lifecycle dependency or
+authority.
 
 ### 3.3 Prohibited responsibilities
 
@@ -136,6 +148,8 @@ recommendation ranking
 -> or optional Phase 5 Step 3 atomic execution-and-activation launch
 -> existing scheduler lifecycle for ordinary pending experiments
 -> optional read-only Phase 5 Step 4 operational status snapshot
+-> optional read-only Step 5b outcome assessment
+-> optional pure Step 5c advisory policy interpretation
 ```
 
 All displayed stages through exact proposal review are implemented through
@@ -147,15 +161,18 @@ Phase 5 Step 3 is a separate command that reuses both transaction-bound
 authorities inside one transaction; it does not call either public command.
 Phase 5 Step 4 reads the immutable materialization and bounded downstream
 evidence only; it neither invokes Steps 1–3 nor contacts the scheduler process.
+Step 5b reuses that status lifecycle inside one read-only snapshot. Step 5c
+contains no repository or CLI and consumes only an already-built immutable
+assessment.
 
 ### 4.3 Ownership boundaries
 
 Canonical text decides identity; repository transactions decide persistence;
-pure scoring, planning, and campaign-review policies decide advisory output; pure review rules
-decide legal transitions; and the operator separately supplies review,
-conversion, and activation actions. Only Phase 4C Steps 4–5 may create or
-activate the one provenance-linked experiment. Campaign planning, review, and
-approval never do.
+pure scoring, planning, campaign-review, and outcome policies decide advisory
+output; pure review rules decide legal transitions; and the operator separately
+supplies review, conversion, and activation actions. Only Phase 4C Steps 4–5
+may create or activate the one provenance-linked experiment. Campaign
+planning, review, approval, outcome assessment, and outcome policy never do.
 
 ## 5. Data model
 
@@ -168,6 +185,9 @@ Conversion proposal, review decision, execution, activation, and campaign
 approval records are separate immutable audit entities; only their explicitly linked experiment is
 an experiment-lifecycle entity. Campaign plans and reviews are reconstructed,
 not persisted; Step 3 persists only their exact approved/rejected provenance.
+Campaign outcome assessments and policy decisions are point-in-time,
+non-persistent advisory values; their canonical identities bind exact upstream
+evidence but create no authoritative campaign decision.
 
 ### 5.2 Provenance and versions
 
@@ -273,7 +293,12 @@ separates advisory-ready, blocked, and non-actionable presentation.
 
 Cover canonical identity/collisions, eligibility, candidates, scoring formulas,
 ranking, evaluation classification/identity, review parsing/reasons, and all
-transition outcomes.
+transition outcomes. Phase 5 outcome tests additionally cover evidence
+classification, policy judgment, the advisory comparable-member evidence-
+coverage minimum, mixed member/metric states, locale independence,
+deterministic identity, and explicit non-authorization. The coverage minimum
+is not statistical sufficiency, confidence, causality, profitability,
+repeatability, or campaign success.
 
 ### 9.2 Persistence and migration tests
 
@@ -482,6 +507,23 @@ already satisfied only while every experiment remains ``pending/train``. No
 schema, campaign lifecycle authority, scheduler action, worker launch, direct
 process, or automatic follow-up is added.
 
+Phase 5 Step 5a defines a pure immutable outcome assessment over exact campaign
+membership, lifecycle consistency, source/result provenance, comparison
+context, and metric deltas. Step 5b loads authoritative persisted campaign and
+scientific evidence in one repeatable-read, read-only snapshot and builds a
+deterministic, non-authoritative, point-in-time assessment from it. Neither step
+persists an assessment, declares campaign success, or authorizes follow-up.
+
+Phase 5 Step 5c adds a pure versioned policy over the Step 5a assessment. It
+uses the assessment's existing classifications and deltas, applies explicit
+metric-direction and advisory evidence-coverage rules, and separates evidence
+sufficiency, conservative interpretation, and eligibility for a later explicit
+operator review. Only a favorable, sufficient, all-comparable campaign is
+eligible for such review; neutral, unfavorable, mixed, and inconclusive
+campaigns are not. Its result is non-persistent and non-authoritative, always
+records follow-up authorization as false, and adds no repository, CLI,
+scheduler, worker, schema, or lifecycle behavior.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -509,6 +551,7 @@ process, or automatic follow-up is added.
 - [Atomic campaign conversion activation](../Phase5ExperimentRecommendationCampaignActivation.rst)
 - [Atomic campaign conversion launch](../Phase5ExperimentRecommendationCampaignLaunch.rst)
 - [Recommendation campaign operational status](../Phase5ExperimentRecommendationCampaignStatus.rst)
+- [Recommendation campaign outcome assessment and policy](../Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
 
 ## 13. Revision history
 
@@ -533,3 +576,4 @@ process, or automatic follow-up is added.
 | 1.7.0 | 2026-07-19 | Recorded explicit atomic Phase 5 Step 2 activation of exact materialized executions through the existing Phase 4C pending-transition authority. | ADR-0001, ADR-0004, ADR-0005 |
 | 1.8.0 | 2026-07-19 | Recorded explicit one-transaction Phase 5 Step 3 launch through the existing Phase 4C execution and activation authorities. | ADR-0001, ADR-0004, ADR-0005 |
 | 1.9.0 | 2026-07-19 | Recorded read-only Phase 5 Step 4 operational status for exact materialized members and current persisted lifecycle evidence. | ADR-0001, ADR-0004, ADR-0005 |
+| 2.0.0 | 2026-07-20 | Recorded Phase 5 Steps 5a–5b read-only outcome assessment and Step 5c pure advisory outcome policy with no persistence or follow-up authority. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
