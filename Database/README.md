@@ -116,6 +116,14 @@ same immutable membership and atomically reuses the existing Phase 4C
 activation insert plus ``paused/train`` to ``pending/train`` experiment update.
 Exact all-member retries insert nothing; mixed prior activation conflicts. It
 does not start the scheduler, launch workers, or perform a follow-up command.
+Phase 5 Step 3 adds no schema object or privilege. Its explicit confirmed
+launch command composes the existing transaction-bound Phase 4C execution and
+activation authorities in one outer transaction for the exact immutable
+materialization. It either creates all required paused experiments/executions
+and all activations, reuses all executions before activation, or reports an
+exact already-satisfied result; partial prior execution or activation fails
+closed. The resulting ordinary experiments are ``pending/train`` but the
+command neither polls nor signals the scheduler and launches no worker.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

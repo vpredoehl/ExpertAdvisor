@@ -104,7 +104,10 @@ over the existing Phase 4C paused execution for the exact membership; the
 handoff observes those rows and experiments but does not invoke Phase 5.
 Phase 5 Step 2 adds a separately confirmed atomic convenience over ordinary
 Phase 4C activation for the same exact membership; the handoff observes its
-activation rows and lifecycle states but does not invoke it. Automatic
+activation rows and lifecycle states but does not invoke it. Phase 5 Step 3
+adds a distinct, separately confirmed atomic convenience that can establish
+both ordinary Phase 4C executions and activations for the exact membership;
+the handoff observes those durable results but never invokes it. Automatic
 progression, repair, background scans, and scheduler integration remain
 separate. The scheduler does not query the handoff projection or any Phase 4D
 audit table.

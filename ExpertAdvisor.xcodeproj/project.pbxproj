@@ -137,6 +137,12 @@
 		0B550009307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B550002307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.cpp */; };
 		0B55000A307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B550004307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp */; };
 		0B55000B307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B550004307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp */; };
+		0B560006307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B560000307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp */; };
+		0B560007307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B560000307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp */; };
+		0B560008307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B560002307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp */; };
+		0B560009307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B560002307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp */; };
+		0B56000A307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B560004307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp */; };
+		0B56000B307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B560004307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -354,6 +360,12 @@
 		0B550003307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignActivationRepository.hpp; path = Sources/ExperimentRecommendationCampaignActivationRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0B550004307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignActivationService.cpp; path = Sources/ExperimentRecommendationCampaignActivationService.cpp; sourceTree = SOURCE_ROOT; };
 		0B550005307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignActivationService.hpp; path = Sources/ExperimentRecommendationCampaignActivationService.hpp; sourceTree = SOURCE_ROOT; };
+		0B560000307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignLaunch.cpp; path = Sources/ExperimentRecommendationCampaignLaunch.cpp; sourceTree = SOURCE_ROOT; };
+		0B560001307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignLaunch.hpp; path = Sources/ExperimentRecommendationCampaignLaunch.hpp; sourceTree = SOURCE_ROOT; };
+		0B560002307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignLaunchRepository.cpp; path = Sources/ExperimentRecommendationCampaignLaunchRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0B560003307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignLaunchRepository.hpp; path = Sources/ExperimentRecommendationCampaignLaunchRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0B560004307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignLaunchService.cpp; path = Sources/ExperimentRecommendationCampaignLaunchService.cpp; sourceTree = SOURCE_ROOT; };
+		0B560005307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignLaunchService.hpp; path = Sources/ExperimentRecommendationCampaignLaunchService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -539,6 +551,12 @@
 				0B550003307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.hpp */,
 				0B550004307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp */,
 				0B550005307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.hpp */,
+				0B560000307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp */,
+				0B560001307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.hpp */,
+				0B560002307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp */,
+				0B560003307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.hpp */,
+				0B560004307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp */,
+				0B560005307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -777,6 +795,9 @@
 				0B550006307A000100AAA001 /* ExperimentRecommendationCampaignActivation.cpp in Sources */,
 				0B550008307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.cpp in Sources */,
 				0B55000A307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp in Sources */,
+				0B560006307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp in Sources */,
+				0B560008307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp in Sources */,
+				0B56000A307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -844,6 +865,9 @@
 				0B550007307A000100AAA001 /* ExperimentRecommendationCampaignActivation.cpp in Sources */,
 				0B550009307A000100AAA001 /* ExperimentRecommendationCampaignActivationRepository.cpp in Sources */,
 				0B55000B307A000100AAA001 /* ExperimentRecommendationCampaignActivationService.cpp in Sources */,
+				0B560007307B000100AAA001 /* ExperimentRecommendationCampaignLaunch.cpp in Sources */,
+				0B560009307B000100AAA001 /* ExperimentRecommendationCampaignLaunchRepository.cpp in Sources */,
+				0B56000B307B000100AAA001 /* ExperimentRecommendationCampaignLaunchService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,

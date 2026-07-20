@@ -76,6 +76,9 @@ Activation does not execute a worker or complete an experiment. It only makes
 the ordinary experiments ``pending/train``. Any later scheduler claim and
 worker lifecycle remain the existing scheduler's responsibility. The command
 does not automatically invoke Phase 5 Step 1 or any later operation.
+Phase 5 Step 3 is a distinct, separately confirmed command that may combine
+the existing execution and activation transaction-bound authorities under one
+outer transaction. Step 2 remains activate-only and never invokes Step 3.
 
 Schema
 ------
@@ -91,3 +94,4 @@ References
 * ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
 * ``docs/Phase5ExperimentRecommendationCampaignExecution.rst``
 * ``docs/architecture/Volume_VIII_Recommendation_Engine.md``
+* ``docs/Phase5ExperimentRecommendationCampaignLaunch.rst``

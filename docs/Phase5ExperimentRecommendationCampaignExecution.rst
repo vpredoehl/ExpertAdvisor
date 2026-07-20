@@ -93,6 +93,9 @@ start the scheduler, launch workers, or automatically invoke another command.
 Activation remains separately invoked. Phase 5 Step 2 provides an optional,
 separately confirmed atomic convenience over the same Phase 4C activation
 authority for every exact materialized member; Step 1 never invokes it.
+Phase 5 Step 3 is a distinct, separately confirmed command that can establish
+both execution and activation in one outer transaction. Step 1 does not invoke
+Step 3, and Step 3 does not alter Step 1's execute-only contract.
 
 Schema
 ------
@@ -111,3 +114,4 @@ References
 * ``docs/Phase4DExperimentRecommendationCampaignHandoff.rst``
 * ``docs/Phase4DExperimentRecommendationCampaignProposalReview.rst``
 * ``docs/Phase5ExperimentRecommendationCampaignActivation.rst``
+* ``docs/Phase5ExperimentRecommendationCampaignLaunch.rst``

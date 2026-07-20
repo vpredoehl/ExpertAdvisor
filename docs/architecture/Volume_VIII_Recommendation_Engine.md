@@ -1,7 +1,7 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 5 Step 2
-Version: 1.7.0
+Status: Foundation aligned through Phase 5 Step 3
+Version: 1.8.0
 Last revised: 2026-07-19
 
 ## 1. Purpose
@@ -18,6 +18,9 @@ member, without activation, queueing, scheduler control, or workers.
 Phase 5 Step 2 adds the separately confirmed atomic convenience over existing
 Phase 4C activation, transitioning every exact eligible member from
 ``paused/train`` to ``pending/train`` without starting scheduler or workers.
+Phase 5 Step 3 adds a distinct confirmed one-transaction launch convenience
+that composes those same execution and activation authorities for the exact
+membership without adding campaign state or scheduler behavior.
 
 ## 2. Scope
 
@@ -43,7 +46,7 @@ approval/rejection/expiration.
 ### 2.3 Current implementation status
 
 Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, Phase 4D Steps 1–6,
-and Phase 5 Steps 1–2 implement the in-scope capabilities.
+and Phase 5 Steps 1–3 implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
@@ -62,6 +65,9 @@ exact members through the existing Phase 4C paused-conversion transaction
 primitive. It neither activates nor queues the created experiments.
 Phase 5 Step 2 separately applies the existing Phase 4C activation primitive to
 all exact executed members atomically; it performs no automatic follow-up.
+Phase 5 Step 3 may instead compose the transaction-bound execution and
+activation primitives under one outer transaction, leaving all exact
+experiments ``pending/train`` without starting scheduler work.
 Detailed contracts remain in the Phase documents referenced in §12.
 
 ## 3. Responsibilities
@@ -76,7 +82,7 @@ their presentation.
 
 Consumes completed experiment/final-analysis evidence from Volumes VI/VII.
 Only the explicit Phase 4C execution and activation primitives cross into
-experiment lifecycle; Phase 5 Steps 1 and 2 are confirmed orchestration callers
+experiment lifecycle; Phase 5 Steps 1–3 are confirmed orchestration callers
 of those existing primitives. Ranking, campaign planning, campaign review, and
 campaign approval have no downstream execution dependency.
 
@@ -121,8 +127,8 @@ recommendation ranking
 -> explicit approved-campaign materialization to Phase 4C proposals
 -> read-only exact campaign handoff
 -> explicit atomic Phase 4C proposal review for all exact campaign members
--> optional explicit Phase 5 atomic convenience over Phase 4C paused execution
--> optional explicit Phase 5 atomic convenience over Phase 4C activation
+-> either optional Phase 5 Step 1 execution then optional Step 2 activation
+-> or optional Phase 5 Step 3 atomic execution-and-activation launch
 -> existing scheduler lifecycle for ordinary pending experiments
 ```
 
@@ -131,6 +137,8 @@ Phase 4D Step 6; Phase 4C execution and activation remain separately invoked
 actions. Phase 5 Step 1 invokes only the existing Phase 4C execution operation
 for the exact campaign membership. Phase 5 Step 2 separately invokes only the
 existing Phase 4C activation operation; neither step invokes the other.
+Phase 5 Step 3 is a separate command that reuses both transaction-bound
+authorities inside one transaction; it does not call either public command.
 
 ### 4.3 Ownership boundaries
 
@@ -454,6 +462,18 @@ already satisfied only while every experiment retains that post-state; mixed
 activation fails closed. No schema, campaign activation authority, scheduler
 action, worker launch, direct process, or automatic follow-up is added.
 
+Phase 5 Step 3 adds one separately confirmed atomic launch over the same exact
+membership. It takes all proposal locks in ascending proposal-ID order,
+validates the complete execution phase, creates all required ordinary paused
+experiments and executions, then takes activation locks in ascending
+execution-ID order and experiment rows in ascending experiment-ID order. It
+validates the complete activation phase before applying any activation, and
+commits once. All-executed/no-activation state is completed atomically; partial
+execution or activation fails closed; an exact fully activated retry is
+already satisfied only while every experiment remains ``pending/train``. No
+schema, campaign lifecycle authority, scheduler action, worker launch, direct
+process, or automatic follow-up is added.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -479,6 +499,7 @@ action, worker launch, direct process, or automatic follow-up is added.
 - [Materialized campaign proposal review](../Phase4DExperimentRecommendationCampaignProposalReview.rst)
 - [Atomic campaign conversion execution](../Phase5ExperimentRecommendationCampaignExecution.rst)
 - [Atomic campaign conversion activation](../Phase5ExperimentRecommendationCampaignActivation.rst)
+- [Atomic campaign conversion launch](../Phase5ExperimentRecommendationCampaignLaunch.rst)
 
 ## 13. Revision history
 
@@ -501,3 +522,4 @@ action, worker launch, direct process, or automatic follow-up is added.
 | 1.5.0 | 2026-07-19 | Recorded explicit atomic Phase 4D Step 6 review of exact materialized proposals through ordinary Phase 4C review rows. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 1.6.0 | 2026-07-19 | Recorded explicit atomic Phase 5 Step 1 execution of exact materialized proposals through the existing Phase 4C paused-conversion authority. | ADR-0001, ADR-0004, ADR-0005 |
 | 1.7.0 | 2026-07-19 | Recorded explicit atomic Phase 5 Step 2 activation of exact materialized executions through the existing Phase 4C pending-transition authority. | ADR-0001, ADR-0004, ADR-0005 |
+| 1.8.0 | 2026-07-19 | Recorded explicit one-transaction Phase 5 Step 3 launch through the existing Phase 4C execution and activation authorities. | ADR-0001, ADR-0004, ADR-0005 |
