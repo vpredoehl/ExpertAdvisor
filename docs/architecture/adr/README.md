@@ -77,6 +77,7 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0006](ADR-0006-phase-6a-follow-up-proposal.md) | Accepted | Phase 6A follow-up proposals are pure, identity-bound, and non-authorizing. |
 | [ADR-0007](ADR-0007-phase-6b-follow-up-proposal-persistence.md) | Accepted | Phase 6B persists exact advisory proposals for read-only preview without action authority. |
 | [ADR-0008](ADR-0008-phase-6c-follow-up-proposal-administrative-review.md) | Accepted | Phase 6C records one immutable administrative proposal review without action authority. |
+| [ADR-0009](ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md) | Proposed | Phase 6D separately ratifies governance advancement after an approved review, with mandatory separation of duties and no Phase 6E authority. |
 
 ## 8. Revision history
 
@@ -87,3 +88,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.2.0 | 2026-07-20 | Added ADR-0006 for the pure non-authorizing Phase 6A follow-up proposal. |
 | 1.3.0 | 2026-07-20 | Added ADR-0007 for exact append-only Phase 6B persistence and read-only preview. |
 | 1.4.0 | 2026-07-21 | Added ADR-0008 for exact append-only Phase 6C administrative review without action authority. |
+| 1.5.0 | 2026-07-22 | Proposed ADR-0009 for exact append-only Phase 6D governance ratification with mandatory separation of duties and no Phase 6E authority. |

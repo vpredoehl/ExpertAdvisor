@@ -59,6 +59,10 @@ Recommendation conversion and campaign-approval history is created by:
 - `043_experiment_recommendation_campaign_follow_up_proposal_review.sql`:
   one immutable approved/rejected Phase 6C administrative review event per
   exact persisted Phase 6B proposal, without action authority
+- `044_experiment_recommendation_campaign_follow_up_proposal_ratification.sql`:
+  one immutable Phase 6D governance ratification per exact eligible approved
+  Phase 6C review, with mandatory reviewer/ratifier separation and no Phase 6E
+  or operational authority
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -153,6 +157,21 @@ denied. Approval means only administrative approval for possible consideration
 by a later explicitly authorized phase. It does not activate, execute,
 authorize follow-up, queue, schedule, signal/start the scheduler, launch a
 worker, create/modify an experiment, or declare campaign success.
+Phase 6D adds one separate append-only governance-ratification event table.
+It asks whether a governance actor ratifies the exact merits-approved proposal
+for entry into the next separately controlled phase. Only an exact persisted
+Phase 6C `approved` review is eligible, the fixed role is
+`follow_up_governance_ratifier`, and the ratifier must differ from the Phase 6C
+reviewer. Restrictive review/proposal foreign keys, checks, and an
+invoker-rights provenance trigger verify the complete copied
+version/canonical/hash chain and separation of duties. Exact replay is
+idempotent; any changed ratifier, basis, role, or identity conflicts.
+Runtime access is limited to `SELECT`, column-scoped `INSERT`, and sequence
+`USAGE`, with explicit PUBLIC and trigger-function revocation. Phase 6D
+ratification remains non-operational evidence: it grants no Phase 6E
+capability and does not authorize follow-up or execution, activate, queue,
+schedule, signal/start the scheduler, launch a worker, create/modify an
+experiment or model, or declare campaign success.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

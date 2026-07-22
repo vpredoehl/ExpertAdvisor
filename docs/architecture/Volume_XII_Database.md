@@ -1,8 +1,8 @@
 # Volume XII — Database
 
-Status: Foundation aligned through Phase 6C
-Version: 0.3.0
-Last revised: 2026-07-21
+Status: Foundation aligned through Phase 6C; proposed Phase 6D recorded
+Version: 0.4.0
+Last revised: 2026-07-22
 
 ## 1. Purpose
 
@@ -29,6 +29,10 @@ append-only exact follow-up-proposal manifest and ordered member table for
 read-only operator preview. Phase 6C migration 043 adds one append-only
 administrative review event per exact persisted proposal. Neither migration
 adds lifecycle, experiment, execution, queue, or scheduler state.
+Phase 6D migration 044 adds one append-only governance-ratification event per
+exact eligible approved Phase 6C review. The fixed ratifier role and mandatory
+reviewer/ratifier separation distinguish it from merits review. It adds no
+Phase 6E, lifecycle, experiment, execution, queue, or scheduler state.
 
 ## 3. Responsibilities
 
@@ -79,6 +83,12 @@ Phase 6C review events preserve the exact proposal ID/version/canonical/hash,
 approved or rejected administrative decision, reviewer, reason, and complete
 review canonical/hash. Review-event ID and creation timestamp are metadata
 outside review identity. Approval is not action authorization.
+Phase 6D ratification events preserve the exact review-event ID and complete
+review version/canonical/hash, reviewer, exact reviewed proposal identity,
+approved eligibility, fixed authority role, ``ratified`` decision, distinct
+ratifier, basis, and complete ratification canonical/hash. Ratification-event
+ID and creation timestamp remain metadata outside identity, and ratification
+grants no Phase 6E or operational authority.
 
 ### 5.2 Provenance and versions
 
@@ -109,6 +119,10 @@ hash-scoped advisory lock; a deferred trigger rejects partial membership.
 Phase 6C serializes one proposal-ID conflict domain with a transaction advisory
 lock, verifies the exact Phase 6B row, and inserts at most one review event. It
 never updates or supersedes an event or changes a Phase 6B row.
+Phase 6D serializes one review-event-ID conflict domain with a transaction
+advisory lock, validates the complete Phase 6C/6B chain and approved
+eligibility, fixed role, and separation of duties, and inserts at most one
+ratification event. It never changes any upstream row.
 
 ### 6.3 Failure semantics
 
@@ -118,6 +132,8 @@ initiating error.
 Phase 6C returns ``recorded`` for the first valid event,
 ``existing_identical`` for exact replay, and a deterministic conflict for any
 different decision, reviewer, reason, or review identity on that proposal.
+Phase 6D returns the same recorded/existing-identical outcomes and conflicts on
+any different ratification payload for the same review.
 
 ## 7. Concurrency
 
@@ -133,6 +149,8 @@ transaction-scoped advisory locks. Full canonical values are rechecked after
 hash/advisory-key matches.
 Phase 6C uses no proposal row lock: one proposal-ID-scoped advisory lock plus a
 unique proposal foreign key serializes attempts without mutating Phase 6B.
+Phase 6D similarly uses no upstream row lock: one review-event-ID-scoped
+advisory lock plus unique review/proposal foreign keys serializes attempts.
 
 ### 7.3 Winner, loser, and retry outcomes
 
@@ -140,6 +158,9 @@ Owning volumes define exact outcomes. The database guarantees no partial
 commit; applications do not reinterpret arbitrary SQL failure as idempotency.
 Concurrent identical Phase 6C events converge on one row; concurrent differing
 events produce one recorded winner and one deterministic conflict.
+Concurrent identical Phase 6D ratifications converge on one row; concurrent
+differing ratifications produce one recorded winner and one deterministic
+conflict.
 
 ## 8. CLI
 
@@ -159,6 +180,8 @@ Operational summaries distinguish schema change, data repair, backup, and
 read-only inspection.
 Phase 6C show/list records expose event/proposal IDs, identities, decision,
 reviewer, reason, timestamp, and explicit negative action-authority fields.
+Phase 6D adds no main-program CLI. Its repository lookup/list operations are
+read-only, while its explicit typed service owns the governance write.
 
 ## 9. Testing
 
@@ -178,6 +201,10 @@ Use independent connections and disposable exact IDs to prove locks,
 uniqueness, rollback, privileges, and unrelated-row concurrency.
 Phase 6C additionally verifies concurrent identical/conflicting reviews and
 read-only presentation without advisory/tuple locks or sequence advancement.
+Phase 6D additionally verifies clean and upgrade paths, exact eligibility,
+fixed role, separation of duties, concurrent identical/conflicting
+ratifications, rollback, NULL-ACL fallback, and read-only lookup/list without
+advisory/tuple locks or sequence advancement.
 
 ### 9.4 Regression boundaries
 
@@ -185,6 +212,8 @@ Schema changes verify unaffected experiment state, identities, history,
 permissions, scheduler behavior, and repository compatibility.
 Migration 043 tests preserve Phase 6B manifests/members and experiment and
 scheduler sentinels byte-for-byte.
+Migration 044 tests preserve Phase 6B manifests/members, Phase 6C reviews, and
+experiment/scheduler sentinels byte-for-byte.
 
 ## 10. Operational safety
 
@@ -201,6 +230,10 @@ separate from application APIs.
 Phase 6C grants only review-table ``SELECT``, payload-column ``INSERT``, and
 sequence ``USAGE``. Generated ID/timestamp insertion and update, delete, and
 truncate are denied.
+Phase 6D grants the same narrow privilege shape for its ratification table and
+sequence. PUBLIC/runtime trigger-function execution is revoked, the invoker-
+rights trigger has a pinned safe context, and NULL ACLs are interpreted through
+PostgreSQL default ACLs in privilege tests.
 
 ### 10.3 Observability and recovery
 
@@ -231,8 +264,10 @@ permissions, backup, concurrency, and observability decisions.
 - [ADR-0001](adr/ADR-0001-postgresql-source-of-truth.md)
 - [ADR-0007](adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md)
 - [ADR-0008](adr/ADR-0008-phase-6c-follow-up-proposal-administrative-review.md)
+- [ADR-0009](adr/ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md)
 - [Phase 6B persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
 - [Phase 6C administrative review](../Phase6CRecommendationCampaignFollowUpProposalReview.rst)
+- [Phase 6D governance ratification](../Phase6DRecommendationCampaignFollowUpProposalRatification.rst)
 - [`migrate_lstm_db.sh`](../../migrate_lstm_db.sh)
 - [`Database/migrations`](../../Database/migrations)
 
@@ -243,3 +278,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.1.0 | 2026-07-15 | Established database ownership and migration-governance outline. | ADR-0001 |
 | 0.2.0 | 2026-07-20 | Recorded the append-only exact Phase 6B follow-up-proposal schema, collision-safe transaction, and least-privilege read-only preview boundary. | ADR-0001, ADR-0007 |
 | 0.3.0 | 2026-07-21 | Recorded one exact append-only Phase 6C administrative review event per proposal, deterministic replay/conflict, validated reload, and read-only presentation without action authority. | ADR-0001, ADR-0004, ADR-0008 |
+| 0.4.0 | 2026-07-22 | Recorded proposed append-only Phase 6D governance ratification per eligible approved review, fixed role, mandatory separation of duties, deterministic replay/conflict, and least privilege without Phase 6E authority. | ADR-0001, ADR-0004, ADR-0009 |
