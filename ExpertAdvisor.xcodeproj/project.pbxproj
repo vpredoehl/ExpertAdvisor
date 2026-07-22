@@ -163,6 +163,12 @@
 		0B5C00053081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5C00003081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.cpp */; };
 		0B5C00063081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5C00023081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp */; };
 		0B5C00073081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5C00023081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp */; };
+		0B5D00063082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5D00003082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp */; };
+		0B5D00073082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5D00003082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp */; };
+		0B5D00083082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5D00023082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp */; };
+		0B5D00093082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5D00023082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp */; };
+		0B5D000A3082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5D00043082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp */; };
+		0B5D000B3082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B5D00043082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -406,6 +412,12 @@
 		0B5C00013081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignFollowUpProposalRepository.hpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0B5C00023081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignFollowUpProposalPreview.cpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalPreview.cpp; sourceTree = SOURCE_ROOT; };
 		0B5C00033081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignFollowUpProposalPreview.hpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalPreview.hpp; sourceTree = SOURCE_ROOT; };
+		0B5D00003082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignFollowUpProposalReview.cpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalReview.cpp; sourceTree = SOURCE_ROOT; };
+		0B5D00013082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignFollowUpProposalReview.hpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalReview.hpp; sourceTree = SOURCE_ROOT; };
+		0B5D00023082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0B5D00033082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignFollowUpProposalReviewRepository.hpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalReviewRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0B5D00043082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp; sourceTree = SOURCE_ROOT; };
+		0B5D00053082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.hpp; path = Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -617,6 +629,12 @@
 				0B5C00013081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.hpp */,
 				0B5C00023081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp */,
 				0B5C00033081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.hpp */,
+				0B5D00003082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp */,
+				0B5D00013082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.hpp */,
+				0B5D00023082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp */,
+				0B5D00033082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.hpp */,
+				0B5D00043082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp */,
+				0B5D00053082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -868,6 +886,9 @@
 				0B5B00023080000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposal.cpp in Sources */,
 				0B5C00043081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.cpp in Sources */,
 				0B5C00063081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp in Sources */,
+				0B5D00063082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp in Sources */,
+				0B5D00083082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp in Sources */,
+				0B5D000A3082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -948,6 +969,9 @@
 				0B5B00033080000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposal.cpp in Sources */,
 				0B5C00053081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalRepository.cpp in Sources */,
 				0B5C00073081000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalPreview.cpp in Sources */,
+				0B5D00073082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReview.cpp in Sources */,
+				0B5D00093082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp in Sources */,
+				0B5D000B3082000100AAA001 /* ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,

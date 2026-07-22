@@ -1,8 +1,8 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 6B
-Version: 2.2.0
-Last revised: 2026-07-20
+Status: Foundation aligned through Phase 6C
+Version: 2.3.0
+Last revised: 2026-07-21
 
 ## 1. Purpose
 
@@ -37,6 +37,10 @@ Phase 6B durably records that exact immutable advisory value and exposes a
 repeatable-read, read-only operator preview. Persistence adds no operator
 decision, approval, activation, execution, experiment, queue, scheduler, or
 follow-up authorization authority.
+Phase 6C records exactly one immutable approved or rejected administrative
+review for one exact persisted Phase 6B proposal. Approval permits only possible
+consideration by a later explicitly authorized phase; it grants no action,
+follow-up, lifecycle, experiment, worker, or scheduler authority.
 
 ## 2. Scope
 
@@ -53,7 +57,8 @@ into the existing Phase 4C proposal boundary, read-only handoff, and explicit
 campaign-wide Phase 4C proposal review are also in scope.
 The pure Phase 5 outcome contracts and the pure identity-bound Phase 6A
 follow-up proposal are in scope as advisory values. Phase 6B exact append-only
-proposal persistence and read-only preview are also in scope.
+proposal persistence/read-only preview and Phase 6C explicit immutable
+administrative review/read-only presentation are also in scope.
 
 ### 2.2 Out of scope
 
@@ -65,7 +70,7 @@ approval/rejection/expiration.
 ### 2.3 Current implementation status
 
 Phase 4A Steps 1–5, Phase 4B Steps 1–2, Phase 4C Steps 1–6, Phase 4D Steps 1–6,
-Phase 5 Steps 1–5c and Phases 6A–6B implement the in-scope capabilities.
+Phase 5 Steps 1–5c and Phases 6A–6C implement the in-scope capabilities.
 Phase 4B Step 1 classifies current persisted provenance and reuses the Step 4
 score formula unchanged. Step 2 ranks only persisted Step 1 results, stores
 exact snapshot membership, and compares compatible persisted components.
@@ -101,6 +106,9 @@ operator-review, persistence, activation, execution, or scheduler behavior.
 Phase 6B stores that already-built value without recomputing it, reloads the
 same immutable typed proposal through a private validated seam, and previews
 it read-only. It adds no approval or action state.
+Phase 6C binds an explicit operator, reason, and approved/rejected decision to
+that exact persisted proposal in one append-only event. It adds administrative
+review evidence only and no activation or execution adapter.
 Detailed contracts remain in the Phase documents referenced in §12.
 
 ## 3. Responsibilities
@@ -124,6 +132,9 @@ The Phase 6A proposal consumes only their immutable typed values and has no
 database, CLI, service, repository, lifecycle, or scheduler dependency. The
 separate Phase 6B repository depends on PostgreSQL only to preserve and preview
 that exact value; it has no lifecycle or scheduler dependency.
+The Phase 6C contract depends only on the Phase 6A proposal identity and its
+persisted Phase 6B ID. Its repository depends on PostgreSQL only to verify and
+append the administrative event; presentation is read-only.
 
 ### 3.3 Prohibited responsibilities
 
@@ -138,6 +149,10 @@ authorization, campaign success, profitability evidence, persistence, or
 scheduler work.
 Phase 6B persistence and preview MUST NOT be treated as operator approval,
 activation, execution, queueing, scheduling, or follow-up authorization.
+Phase 6C approval MUST NOT be treated as activation, execution authorization,
+follow-up authorization, queueing, scheduling, scheduler work, worker launch,
+experiment creation/modification, campaign success, profitability, or
+statistical validation.
 
 ## 4. Architecture
 
@@ -146,6 +161,8 @@ activation, execution, queueing, scheduling, or follow-up authorization.
 - Pure identity/policy and candidate-generation domain components.
 - Pure identity-bound Phase 6A follow-up-proposal domain component.
 - Phase 6B append-only proposal repository and read-only preview component.
+- Pure immutable Phase 6C review contract, append-only event repository, and
+  read-only show/list presentation.
 - Pure manual conversion eligibility, source-consistency, and proposed-
   specification domain component.
 - Repository-owned PostgreSQL mapping, scans, duplicates, scores, and reviews.
@@ -181,6 +198,7 @@ recommendation ranking
 -> optional pure Step 5c advisory policy interpretation
 -> optional pure Phase 6A follow-up proposal for later operator review
 -> optional exact Phase 6B persistence and read-only operator preview
+-> optional explicit Phase 6C administrative approval or rejection
 ```
 
 All displayed stages through exact proposal review are implemented through
@@ -197,7 +215,8 @@ contains no repository or CLI and consumes only an already-built immutable
 assessment. Phase 6A consumes only the exact immutable assessment and policy
 decision and terminates at a non-authorizing proposal value. Phase 6B may
 persist and preview only that exact value; it introduces no downstream action
-arrow.
+arrow. Phase 6C may record only one administrative decision and likewise adds
+no downstream action arrow.
 
 ### 4.3 Ownership boundaries
 
@@ -208,7 +227,8 @@ and the operator separately
 supplies review, conversion, and activation actions. Only Phase 4C Steps 4–5
 may create or activate the one provenance-linked experiment. Campaign
 planning, review, approval, outcome assessment, outcome policy, Phase 6A
-follow-up proposal, and Phase 6B persistence/preview never do.
+follow-up proposal, Phase 6B persistence/preview, and Phase 6C administrative
+review/presentation never do.
 
 ## 5. Data model
 
@@ -230,6 +250,10 @@ materialization, ordered members, eligibility, and fixed non-authority
 semantics while excluding observation time. Phase 6B persists that exact value
 in one immutable manifest and ordered member set; repository row ID, collision
 ordinal, and creation timestamp remain storage metadata outside identity.
+The Phase 6C review is a separate immutable administrative entity binding the
+persisted proposal ID, exact proposal version/canonical/hash, decision,
+reviewer, and reason. Its canonical text is authoritative. Review-event ID and
+creation timestamp remain persistence metadata outside identity.
 
 ### 5.2 Provenance and versions
 
@@ -272,6 +296,10 @@ Phase 6B proposal insertion locks only the proposal-hash bucket, compares
 authoritative canonical text exactly, inserts the manifest and ordered members
 in one caller-owned transaction, and enforces completeness at commit. It does
 not write any review, lifecycle, experiment, or scheduler table.
+Phase 6C review insertion locks only the proposal-ID conflict domain, reloads
+and compares the exact Phase 6B proposal identity, and inserts one event. Exact
+replay returns the event; changed decision, reviewer, reason, or identity
+conflicts. It never updates or supersedes review history.
 
 ### 6.3 Failure semantics
 
@@ -281,6 +309,8 @@ per-recommendation results if a later item fails, marks the run failed, and
 forbids adding new results to that terminal run; exact existing results remain
 verifiable. Review event failure rolls back status; terminal retries create no
 event. A ranking-member failure leaves no partial membership.
+Malformed Phase 6C input, stored canonical/hash disagreement, Phase 6B
+provenance mismatch, and conflicts fail closed and leave no partial event.
 
 ## 7. Concurrency
 
@@ -314,6 +344,9 @@ same-hash different canonical rows remain distinct.
 Concurrent identical Phase 6B proposal persistence converges on one exact
 canonical row; same-hash/different-canonical proposals receive distinct
 storage collision ordinals.
+Concurrent identical Phase 6C reviews converge on one event with one
+``recorded`` and one ``existing_identical`` outcome. Concurrent differing
+reviews yield one recorded winner and one deterministic conflict.
 
 ## 8. CLI
 
@@ -338,6 +371,9 @@ separates advisory-ready, blocked, and non-actionable presentation.
 Phase 6B preview includes the full authoritative proposal identity, provenance,
 ordered members, and explicit false approval/activation/execution/scheduler
 fields in a read-only snapshot.
+Phase 6C show/list includes exact proposal/review identities, decision,
+reviewer, reason, timestamp, and fixed negative activation, execution,
+follow-up, queue, schedule, scheduler, worker, experiment, and success fields.
 
 ## 9. Testing
 
@@ -359,6 +395,9 @@ construction paths.
 Phase 6B focused tests cover exact round trip, immutable typed reload,
 canonical/hash preservation, exact retry, duplicate persisted identity,
 malformed hash/member data, and read-only preview safety fields.
+Phase 6C pure tests cover immutable types, approved/rejected construction,
+canonical grammar, locale independence, proposal/reviewer/reason/decision
+sensitivity, malformed input, and fixed negative authority.
 
 ### 9.2 Persistence and migration tests
 
@@ -376,6 +415,12 @@ Phase 6B migration/repository tests cover bytewise canonical storage,
 collision metadata, upstream provenance, deferred membership completeness,
 narrow append-only privileges, migration repeatability, malformed persistence
 rejection, and a preview read sentinel that remains untouched.
+Phase 6C migration/repository tests cover repeatability, bytewise canonical
+storage, restrictive provenance, narrow privileges, generated-column
+protection, exact round trip/replay, all conflict forms, concurrent identical
+and differing attempts, corruption/provenance rejection, rollback, unchanged
+Phase 6B/experiment/scheduler fixtures, and read-only presentation without
+sequence advancement or advisory/tuple locks.
 
 ### 9.3 Concurrency and integration tests
 
@@ -412,6 +457,10 @@ Conversion activations likewise grant only ``SELECT`` and column-limited
 ``INSERT`` plus sequence usage. Activation evidence is append-only; runtime
 ``UPDATE``, ``DELETE``, and ``TRUNCATE`` are denied.
 Other immutable histories follow Volume I §7.3.
+Phase 6C review events likewise grant only ``SELECT``, payload-column
+``INSERT``, and sequence ``USAGE``. Generated IDs/timestamps and runtime
+update/delete/truncate are denied. An approved event is administrative evidence
+only and is not consumed by any Phase 6C action path.
 
 ### 10.3 Observability and recovery
 
@@ -607,6 +656,14 @@ uses one repeatable-read, read-only transaction and explicitly reports false
 approval, activation, execution, authorization, queue, scheduling, worker, and
 experiment mutation state. Phase 6B adds no operator decision or action path.
 
+Phase 6C records only one immutable administrative ``approved`` or ``rejected``
+event for one exact persisted Phase 6B proposal. The review canonical binds the
+proposal ID/version/canonical/hash, decision, reviewer, reason, and fixed
+negative action semantics. Exact retry is idempotent; every changed payload for
+that proposal conflicts. Approval grants only possible later consideration and
+does not activate, execute, authorize follow-up, queue, schedule, contact the
+scheduler, launch workers, create/modify experiments, or declare success.
+
 ## 12. References
 
 - [Volume I §§5–10](Volume_I_Foundation.md)
@@ -637,8 +694,10 @@ experiment mutation state. Phase 6B adds no operator decision or action path.
 - [Recommendation campaign outcome assessment and policy](../Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst)
 - [Phase 6A recommendation campaign follow-up proposal](../Phase6ARecommendationCampaignFollowUpProposal.rst)
 - [Phase 6B follow-up proposal persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
+- [Phase 6C follow-up proposal administrative review](../Phase6CRecommendationCampaignFollowUpProposalReview.rst)
 - [ADR-0006](adr/ADR-0006-phase-6a-follow-up-proposal.md)
 - [ADR-0007](adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md)
+- [ADR-0008](adr/ADR-0008-phase-6c-follow-up-proposal-administrative-review.md)
 
 ## 13. Revision history
 
@@ -666,3 +725,4 @@ experiment mutation state. Phase 6B adds no operator decision or action path.
 | 2.0.0 | 2026-07-20 | Recorded Phase 5 Steps 5a–5b read-only outcome assessment and Step 5c pure advisory outcome policy with no persistence or follow-up authority. | ADR-0001, ADR-0003, ADR-0004, ADR-0005 |
 | 2.1.0 | 2026-07-20 | Recorded the pure, exact-identity-bound, non-authorizing Phase 6A follow-up proposal; later persistence, review, activation, and execution remain deferred. | ADR-0003, ADR-0004, ADR-0006 |
 | 2.2.0 | 2026-07-20 | Recorded exact append-only Phase 6B proposal persistence, immutable validated reload, and read-only preview without operator-decision or action authority. | ADR-0001, ADR-0004, ADR-0006, ADR-0007 |
+| 2.3.0 | 2026-07-21 | Recorded exact append-only Phase 6C approved/rejected administrative review, deterministic replay/conflict, and read-only presentation without action authority. | ADR-0001, ADR-0004, ADR-0006, ADR-0007, ADR-0008 |

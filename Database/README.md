@@ -56,6 +56,9 @@ Recommendation conversion and campaign-approval history is created by:
 - `042_experiment_recommendation_campaign_follow_up_proposal.sql`:
   immutable exact Phase 6A proposal manifests and ordered members for Phase 6B
   read-only operator preview
+- `043_experiment_recommendation_campaign_follow_up_proposal_review.sql`:
+  one immutable approved/rejected Phase 6C administrative review event per
+  exact persisted Phase 6B proposal, without action authority
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -140,6 +143,16 @@ upstream-provenance triggers protect the ordered manifest. Runtime access is
 limited to `SELECT`, column-scoped `INSERT`, and sequence `USAGE`. The
 read-only preview path adds no approval, activation, execution, experiment,
 queue, scheduler, worker, or follow-up authorization behavior.
+Phase 6C adds one append-only administrative review-event table with a
+restrictive foreign key and exact version/canonical/hash binding to a persisted
+Phase 6B proposal. One proposal has at most one immutable approved or rejected
+decision; exact replay is idempotent and any changed decision, reviewer, reason,
+or identity conflicts. Runtime access remains `SELECT`, column-scoped `INSERT`,
+and sequence `USAGE`; generated IDs/timestamps and update/delete/truncate are
+denied. Approval means only administrative approval for possible consideration
+by a later explicitly authorized phase. It does not activate, execute,
+authorize follow-up, queue, schedule, signal/start the scheduler, launch a
+worker, create/modify an experiment, or declare campaign success.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
