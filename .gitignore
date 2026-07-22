@@ -25,3 +25,6 @@ review_backups/*
 !ArchitectureReviews/
 !ArchitectureReviews/**/
 !ArchitectureReviews/**/*.txt
+
+*_Transcript.txt
+
