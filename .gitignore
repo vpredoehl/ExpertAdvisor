@@ -21,3 +21,7 @@ experiment_reports/
 meta_analysis_dashboard.md
 meta_analysis_report.md
 review_backups/*
+# Track architecture review artifacts
+!ArchitectureReviews/
+!ArchitectureReviews/**/
+!ArchitectureReviews/**/*.txt
