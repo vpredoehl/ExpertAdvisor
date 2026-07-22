@@ -69,11 +69,13 @@ void WriteRecommendationCampaignFollowUpProposalReview(
     const auto& review = persisted.review;
     output
         << "RECOMMENDATION_CAMPAIGN_FOLLOW_UP_PROPOSAL_REVIEW"
-        << ",review_event_id=" << persisted.reviewEventId
-        << ",follow_up_proposal_id=" << review.followUpProposalId
+        << ",review_event_id=" << std::to_string(persisted.reviewEventId)
+        << ",follow_up_proposal_id="
+        << std::to_string(review.followUpProposalId)
         << ",proposal_identity_hash="
         << ReviewMachineText(review.proposalIdentityHash)
-        << ",review_contract_version=" << review.identity.contractVersion
+        << ",review_contract_version="
+        << std::to_string(review.identity.contractVersion)
         << ",review_identity_hash="
         << ReviewMachineText(review.identity.hash)
         << ",decision="
@@ -109,7 +111,8 @@ int RunShowRecommendationCampaignFollowUpProposalReview(
         if (!persisted)
         {
             errors << "RECOMMENDATION_CAMPAIGN_FOLLOW_UP_PROPOSAL_REVIEW_NOT_FOUND"
-                   << ",review_event_id=" << reviewEventId << ',';
+                   << ",review_event_id=" << std::to_string(reviewEventId)
+                   << ',';
             PrintSafety(errors);
             errors << '\n';
             return 1;

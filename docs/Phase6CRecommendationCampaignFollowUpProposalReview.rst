@@ -51,8 +51,8 @@ canonical text, proposal canonical/hash mismatch, invalid decision, malformed
 reviewer, invalid reason, or oversize review canonical text.  Reviewer identity
 is 1--128 ASCII bytes, begins alphanumerically, and otherwise permits only
 alphanumerics plus ``._@:/+-``.  Reason text is 1--4096 bytes, valid UTF-8,
-contains a non-whitespace character, contains no NUL or disallowed control
-byte, and is preserved exactly.
+contains a byte other than ASCII space, tab, carriage return, or line feed,
+contains no NUL or disallowed control byte, and is preserved exactly.
 
 Reload rebuilds the complete typed value from stored payload and compares the
 authoritative review canonical and hash.  It then reloads the referenced Phase
@@ -96,6 +96,9 @@ transactions.  Lists are ordered by descending generated review-event ID and
 use a validated 1--1000 limit.  Every event record includes the event and
 proposal IDs, proposal hash, review version/hash, decision, reviewer, reason,
 timestamp, and these exact safety statements:
+
+Machine records render integer fields with locale-independent decimal digits
+and percent-escape delimiter-bearing or non-ASCII payload bytes.
 
 ``read_only=true``, ``persisted=true``, ``administrative_review=true``,
 ``activated=false``, ``execution_authorized=false``,

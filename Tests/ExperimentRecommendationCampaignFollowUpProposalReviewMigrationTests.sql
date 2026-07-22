@@ -7,6 +7,7 @@ DECLARE
         '%I.experiment_recommendation_campaign_follow_up_proposal',
         current_schema());
     review_sequence text;
+    review_function regprocedure;
 BEGIN
     IF to_regclass(review_table) IS NULL THEN
         RAISE EXCEPTION 'follow-up proposal review-event table missing';
@@ -106,6 +107,35 @@ BEGIN
         RAISE EXCEPTION 'follow-up proposal review trigger privilege present';
     END IF;
 
+    SELECT trigger.tgfoid::regprocedure
+    INTO STRICT review_function
+    FROM pg_trigger trigger
+    WHERE trigger.tgrelid = to_regclass(review_table)
+      AND NOT trigger.tgisinternal
+      AND trigger.tgname =
+          'enforce_recommendation_campaign_follow_up_proposal_review_provenance_trigger';
+    IF review_function IS DISTINCT FROM to_regprocedure(format(
+            '%I.enforce_recommendation_campaign_follow_up_proposal_review_provenance()',
+            current_schema())) THEN
+        RAISE EXCEPTION 'follow-up proposal review trigger function incorrect';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_proc function
+        CROSS JOIN LATERAL aclexplode(coalesce(
+            function.proacl, acldefault('f', function.proowner))) privilege
+        WHERE function.oid = review_function
+          AND privilege.grantee = 0) THEN
+        RAISE EXCEPTION 'follow-up proposal review trigger PUBLIC privilege present';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_proc function
+        WHERE function.oid = review_function
+          AND (function.prosecdef OR function.proconfig IS DISTINCT FROM
+              ARRAY[format('search_path=pg_catalog, %I, pg_temp',
+                  current_schema())])) THEN
+        RAISE EXCEPTION 'follow-up proposal review trigger execution context unsafe';
+    END IF;
+
     review_sequence := pg_get_serial_sequence(
         review_table,
         'recommendation_campaign_follow_up_proposal_review_event_id');
@@ -113,6 +143,14 @@ BEGIN
        has_sequence_privilege('pqxx', review_sequence, 'SELECT') OR
        has_sequence_privilege('pqxx', review_sequence, 'UPDATE') THEN
         RAISE EXCEPTION 'follow-up proposal review sequence privilege incorrect';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_class relation
+        CROSS JOIN LATERAL aclexplode(coalesce(
+            relation.relacl, acldefault('s', relation.relowner))) privilege
+        WHERE relation.oid = review_sequence::regclass
+          AND privilege.grantee = 0) THEN
+        RAISE EXCEPTION 'follow-up proposal review sequence PUBLIC privilege present';
     END IF;
     IF EXISTS (
         SELECT 1 FROM pg_class relation

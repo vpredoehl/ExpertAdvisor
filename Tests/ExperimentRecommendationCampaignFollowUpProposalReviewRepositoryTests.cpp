@@ -12,6 +12,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <locale>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -52,6 +53,13 @@ using Review = RecommendationCampaignFollowUpProposalReview;
 using ResultEvidence = RecommendationCampaignOutcomeAssessmentResultEvidence;
 using ResultIdentity = RecommendationCampaignOutcomeAssessmentResultIdentity;
 using SourceEvidence = RecommendationCampaignOutcomeAssessmentSourceEvidence;
+
+class GroupedNumberPunctuation final : public std::numpunct<char>
+{
+protected:
+    char do_thousands_sep() const override { return ','; }
+    std::string do_grouping() const override { return "\1"; }
+};
 
 static_assert(!std::is_copy_assignable_v<
     PersistedRecommendationCampaignFollowUpProposalReview>);
@@ -821,14 +829,52 @@ $drop_check$;
         assert(shown.find("activated=true") == std::string::npos);
         assert(shown.find("execution_authorized=true") == std::string::npos);
 
+        const Review machineEscaping =
+            BuildRecommendationCampaignFollowUpProposalReview(1234,
+                proposal1, Decision::approved, "operator.machine",
+                "Comma, equals= percent% newline\n and UTF-8 \xc3\xbc.");
+        const PersistedRecommendationCampaignFollowUpProposalReview
+            machinePersisted(5678, machineEscaping,
+                "2026-07-21 12:00:00+00");
+        std::ostringstream machineOutput;
+        machineOutput.imbue(std::locale(
+            std::locale::classic(), new GroupedNumberPunctuation));
+        WriteRecommendationCampaignFollowUpProposalReview(
+            machineOutput, machinePersisted);
+        const std::string machineText = machineOutput.str();
+        assert(machineText ==
+            "RECOMMENDATION_CAMPAIGN_FOLLOW_UP_PROPOSAL_REVIEW"
+            ",review_event_id=5678,follow_up_proposal_id=1234,"
+            "proposal_identity_hash=" + proposal1.identity.hash +
+            ",review_contract_version=1,review_identity_hash=" +
+            machineEscaping.identity.hash +
+            ",decision=approved,reviewer=operator.machine,"
+            "reason=Comma%2C%20equals%3D%20percent%25%20"
+            "newline%0A%20and%20UTF-8%20%C3%BC.,"
+            "created_at=2026-07-21%2012:00:00%2B00,"
+            "read_only=true,persisted=true,administrative_review=true,"
+            "activated=false,execution_authorized=false,"
+            "follow_up_authorized=false,queued=false,scheduled=false,"
+            "scheduler_started=false,scheduler_signaled=false,"
+            "workers_started=false,experiments_created=false,"
+            "experiments_modified=false,campaign_success_declared=false\n");
+
         showOutput.str({});
         showOutput.clear();
+        showErrors.imbue(std::locale(
+            std::locale::classic(), new GroupedNumberPunctuation));
         assert(RunShowRecommendationCampaignFollowUpProposalReview(
                    runtimeConnectionString, 999999, showOutput,
                    showErrors) == 1);
-        assert(showErrors.str().find(
-                   "RECOMMENDATION_CAMPAIGN_FOLLOW_UP_PROPOSAL_REVIEW_NOT_FOUND") !=
-            std::string::npos);
+        assert(showErrors.str() ==
+            "RECOMMENDATION_CAMPAIGN_FOLLOW_UP_PROPOSAL_REVIEW_NOT_FOUND,"
+            "review_event_id=999999,read_only=true,persisted=true,"
+            "administrative_review=true,activated=false,"
+            "execution_authorized=false,follow_up_authorized=false,"
+            "queued=false,scheduled=false,scheduler_started=false,"
+            "scheduler_signaled=false,workers_started=false,"
+            "experiments_created=false,experiments_modified=false,"
+            "campaign_success_declared=false\n");
         std::ostringstream listOutput;
         std::ostringstream listErrors;
         assert(RunListRecommendationCampaignFollowUpProposalReviews(
