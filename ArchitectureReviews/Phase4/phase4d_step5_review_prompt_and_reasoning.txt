@@ -1,0 +1,674 @@
+Using High reasoning, perform a focused code review of the completed Phase 4D Step 5 implementation.
+
+GOAL
+
+Review the current uncommitted Phase 4D Step 5 changes for correctness, consistency, regression risk, maintainability, deterministic behavior, read consistency, data-integrity detection, CLI safety, performance, and readiness to commit.
+
+Do not redesign Phase 4D.
+
+Do not implement a later write-side campaign progression step.
+
+Do not add automatic review, execution, activation, repair, polling, or scheduler integration.
+
+Do not make changes unless the review identifies a concrete defect, ineffective verification, unsafe behavior, misleading output or documentation, incorrect state derivation, broken read consistency, repository inefficiency with material operational impact, parser flaw, or mismatch between domain, repository, service, CLI, tests, project membership, and documented behavior.
+
+The review must concentrate on the actual current diff.
+
+STARTING POINT
+
+The committed starting point is:
+
+cc678118f910f977cf7ee70ead2f25b616b8952a
+
+Before reviewing, record:
+
+```bash
+git status --short
+git rev-parse HEAD
+git log -1 --oneline
+git diff --stat
+git diff --check
+```
+
+Expected conditions:
+
+- HEAD remains `cc678118f910f977cf7ee70ead2f25b616b8952a`.
+- Step 5 changes are uncommitted.
+- No unrelated changes are present.
+- No commit or push has been made.
+
+CONTEXT
+
+Phase 4D Step 5 reportedly adds a deterministic read-only campaign handoff projection that:
+
+- treats the immutable Phase 4D Step 4 materialization manifest and ordered member rows as authoritative campaign membership;
+- projects each linked Phase 4C conversion proposal onto its current review, execution, activation, experiment, and derived workflow evidence;
+- preserves exact stored member order;
+- derives deterministic per-member status, diagnostics, aggregate counts, and one aggregate campaign state;
+- uses one PostgreSQL read transaction per show/list request;
+- adds explicit show/list CLI commands;
+- adds no migration or persisted status cache;
+- creates or modifies no campaign, proposal, review, execution, activation, experiment, scheduler, or worker state.
+
+The reported aggregate states are:
+
+- awaiting_phase4c_review
+- partially_reviewed
+- review_rejected
+- ready_for_phase4c_execution
+- partially_executed
+- ready_for_phase4c_activation
+- partially_activated
+- fully_activated
+- inconsistent
+
+The reported precedence is:
+
+1. inconsistent
+2. review_rejected
+3. awaiting_phase4c_review
+4. partially_reviewed
+5. ready_for_phase4c_execution
+6. partially_executed
+7. ready_for_phase4c_activation
+8. partially_activated
+9. fully_activated
+
+PHASE BOUNDARY
+
+Step 5 may:
+
+- load one persisted campaign materialization;
+- load exact ordered materialization members;
+- load exact linked Phase 4C proposals;
+- load authoritative latest Phase 4C review evidence;
+- load Phase 4C execution and activation evidence;
+- observe related experiment lifecycle evidence where Phase 4C workflow validation requires it;
+- derive read-only status and diagnostics;
+- expose show/list CLI commands;
+- document and test the projection.
+
+Step 5 must not:
+
+- create or modify campaign materializations;
+- create or modify proposals;
+- approve or reject proposals;
+- execute proposals;
+- activate conversions;
+- create or modify experiments;
+- queue, pause, cancel, retry, resume, or continue experiments;
+- contact, start, stop, signal, or reconfigure the scheduler;
+- start workers;
+- add background scans or polling;
+- automatically repair inconsistent evidence;
+- persist a derived campaign status cache;
+- infer authorization from observational `ready_for_*` states;
+- silently omit malformed members;
+- silently add non-member proposals;
+- reconstruct membership from current ranking or planning state.
+
+REVIEW SCOPE
+
+Review all Step 5 changes, including at minimum:
+
+- Sources/ExperimentRecommendationCampaignHandoff.hpp
+- Sources/ExperimentRecommendationCampaignHandoff.cpp
+- Sources/ExperimentRecommendationCampaignHandoffRepository.hpp
+- Sources/ExperimentRecommendationCampaignHandoffRepository.cpp
+- Sources/ExperimentRecommendationCampaignHandoffService.hpp
+- Sources/ExperimentRecommendationCampaignHandoffService.cpp
+- Tests/ExperimentRecommendationCampaignHandoffTests.cpp
+- Tests/ExperimentRecommendationCampaignHandoffRepositoryTests.cpp
+- docs/Phase4DExperimentRecommendationCampaignHandoff.rst
+
+Also review all modified integration points:
+
+- Sources/ExperimentRecommendationCampaignMaterializationRepository.hpp
+- Sources/ExperimentRecommendationCampaignMaterializationRepository.cpp
+- Sources/ExperimentRecommendationConversionWorkflowRepository.hpp
+- Sources/ExperimentRecommendationConversionWorkflowRepository.cpp
+- Sources/ExperimentScheduler.cpp
+- ExpertAdvisor.xcodeproj/project.pbxproj
+- Database/README.md
+- docs/Phase4DExperimentRecommendationCampaignMaterialization.rst
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+
+REVIEW PRIORITIES
+
+1. Authoritative membership and immutable evidence
+
+Verify:
+
+- campaign membership comes only from the Step 4 materialization manifest and member rows;
+- the implementation never reruns planning or ranking;
+- no current proposal/review/execution/activation row can add or remove campaign membership;
+- member order is exactly persisted ordinal order;
+- malformed immutable manifest evidence fails closed;
+- selected member count must equal actual member count;
+- ordinals are contiguous and one-based;
+- duplicate ranking-member or proposal links are rejected;
+- unsupported materialization contract versions fail closed;
+- canonical hashes are recomputed and checked where appropriate;
+- immutable evidence is not silently normalized or repaired.
+
+Check whether the validation performed by Step 5 is at least as strict as the committed Step 4 repository mapping.
+
+2. Aggregate-state correctness
+
+Audit the full state machine and precedence rules.
+
+Verify all combinations, especially:
+
+- all unreviewed;
+- some approved and some unreviewed;
+- any latest rejection;
+- all approved and none executed;
+- some executed and some not;
+- all executed and none activated;
+- some activated and some not;
+- all activated;
+- any integrity failure at any lifecycle stage;
+- rejection plus unrelated downstream inconsistency;
+- rejected proposal with execution present;
+- activation present with missing execution;
+- proposal missing but review/execution facts somehow present;
+- zero-member input;
+- total counts that do not sum consistently.
+
+Confirm `inconsistent` has intentional precedence over `review_rejected`.
+
+Confirm `ready_for_phase4c_execution` and `ready_for_phase4c_activation` cannot appear when any member has contradictory or missing required evidence.
+
+Look for states that are unreachable, ambiguous, or misclassified.
+
+3. Per-member status correctness
+
+Verify every member reports:
+
+- materialization ID and approval ID through the summary/member output context;
+- exact member ordinal;
+- ranking member ID;
+- recommendation ID;
+- source experiment ID;
+- ranking position;
+- proposal ID and proposal identity hash;
+- latest proposal-review status and decision ID;
+- execution status and ID;
+- activation status and ID;
+- Phase 4C workflow state;
+- integrity state;
+- deterministic diagnostics.
+
+Check that default enum values cannot accidentally make a missing proposal look merely unreviewed.
+
+Check whether `reviewStatus`, `executionStatus`, and `activationStatus` remain truthful when workflow integrity is inconsistent.
+
+Check deterministic diagnostic ordering and duplicate suppression.
+
+4. Reuse of Phase 4C workflow derivation
+
+Verify Step 5 correctly reuses existing Phase 4C workflow validation rather than implementing a conflicting second interpretation.
+
+Inspect:
+
+- review identity and latest-decision semantics;
+- execution authorization and provenance validation;
+- activation provenance validation;
+- experiment lifecycle compatibility;
+- canonical identity validation;
+- duplicate execution or activation handling.
+
+Confirm the handoff layer does not discard important Phase 4C diagnostics.
+
+Confirm handoff-specific diagnostics and Phase 4C workflow diagnostics cannot conflict or produce misleading output.
+
+5. Latest-review semantics
+
+Verify the authoritative latest review is selected by the established monotonic review-decision ID convention.
+
+Check:
+
+- earlier rejection followed by later approval;
+- earlier approval followed by later rejection;
+- duplicate or malformed review rows;
+- no review;
+- review timestamps are not used as tie-breakers;
+- repository SQL returns at most one authoritative review per proposal.
+
+6. Repository query strategy
+
+Trace the repository path from one materialization to all linked proposal workflows.
+
+Verify:
+
+- exact proposal IDs from the manifest are used;
+- no membership is inferred from recommendation ID;
+- no proposal is accidentally duplicated;
+- missing proposals remain detectable;
+- query ordering is deterministic;
+- input proposal IDs are validated;
+- duplicate proposal IDs fail closed;
+- query parameter construction is safe;
+- no SQL string interpolation of user-controlled values;
+- no `FOR UPDATE`;
+- no advisory locks;
+- no writes;
+- no sequence access.
+
+Pay particular attention to list behavior:
+
+- the list is bounded to at most 1000 materializations;
+- it reportedly performs one workflow query per materialization;
+- determine whether this bounded N+1 pattern is acceptable, misleadingly documented, or operationally unsafe;
+- do not redesign merely for elegance, but fix it if the actual worst-case behavior is likely to be excessive or if a much smaller narrow correction is required.
+
+7. Read consistency
+
+Verify each show/list command uses one PostgreSQL `pqxx::read_transaction`.
+
+Check:
+
+- all manifest/member/workflow reads for one command occur inside the same transaction;
+- helper overloads do not silently create nested or separate transactions;
+- no connection-based overload is accidentally called from the transaction-bound path;
+- list uses one consistent snapshot for all returned materializations;
+- transaction lifetime extends through all repository reads;
+- output is based entirely on the completed in-memory projection.
+
+Confirm no write-capable transaction is needed.
+
+8. Integrity diagnostics
+
+Audit every documented diagnostic against actual code.
+
+Verify detection of:
+
+- missing linked proposal;
+- proposal ID mismatch;
+- proposal recommendation mismatch;
+- proposal source-experiment mismatch;
+- proposal canonical mismatch;
+- proposal hash mismatch;
+- invalid latest review;
+- execution without valid approval;
+- duplicate execution;
+- activation without execution;
+- duplicate activation;
+- execution/activation provenance mismatch;
+- execution/activation identity mismatch;
+- missing experiment;
+- incompatible experiment lifecycle;
+- malformed immutable materialization;
+- non-contiguous or reordered ordinals;
+- duplicate immutable links.
+
+Identify any documented diagnostic that cannot actually occur or any actual inconsistency that lacks a deterministic code.
+
+Check whether a missing proposal should increment `proposalsPresent`, `awaitingReview`, and `noAuthoritativeReview` as currently implemented, and whether aggregate counts remain semantically clear.
+
+9. CLI parsing and dispatch
+
+Review:
+
+- `--show-recommendation-campaign-handoff=ID`;
+- separated show form;
+- `--list-recommendation-campaign-handoffs`;
+- `--campaign-handoff-limit=N`;
+- separated limit form;
+- missing value;
+- invalid ID;
+- zero/negative ID;
+- orphan limit;
+- zero/negative limit;
+- limit above 1000;
+- conflicting show/list commands;
+- conflict with other standalone recommendation commands;
+- conflict with scheduler commands;
+- help text;
+- parser failure before database access;
+- no fallthrough into scheduler operation.
+
+Confirm `ExperimentScheduler.cpp` contains only parsing, validation, help, and dispatch for Step 5.
+
+10. Machine-readable output
+
+Verify:
+
+- one deterministic summary row;
+- show emits one deterministic member row per persisted member;
+- member rows remain in ordinal order;
+- list ordering is deterministic;
+- optional IDs use an unambiguous representation;
+- all variable text is escaped through the production machine-text helper;
+- diagnostic delimiters cannot be confused with escaped diagnostic content;
+- output keys are stable and accurately named;
+- aggregate counts match member rows;
+- no field incorrectly claims a write or read-only state.
+
+Every summary/error path should truthfully report:
+
+```text
+read_only=true
+campaign_materializations_created=false
+conversion_proposals_created=false
+conversion_reviews_created=false
+conversion_executions_created=false
+conversion_activations_created=false
+experiments_created=false
+scheduler_started=false
+workers_started=false
+```
+
+Check whether member rows should include the same complete safety fields or whether summary-only safety fields are clearly documented and sufficient.
+
+11. Schema and privilege assumptions
+
+Confirm no migration is actually needed.
+
+Verify all repository predicates and joins are supported by existing migrations 036 through 041.
+
+Check assumptions about:
+
+- uniqueness of one execution per proposal;
+- uniqueness of one activation per execution/proposal;
+- append-only review decisions;
+- restrictive foreign keys;
+- materialization member uniqueness;
+- proposal identity immutability;
+- experiment linkage.
+
+If malformed direct SQL can create contradictions, Step 5 should report them deterministically rather than assume they are impossible unless the schema structurally guarantees impossibility.
+
+12. Regression risk
+
+Check for changes that could break:
+
+- Phase 4C proposal workflows;
+- Phase 4C proposal review;
+- Phase 4C execution;
+- Phase 4C activation;
+- existing Phase 4C workflow list/show commands;
+- Phase 4D materialization show/list commands;
+- scheduler command counting and exclusivity;
+- help text;
+- Xcode application targets;
+- transaction overload behavior;
+- production Release linking.
+
+Review added overloads to existing repositories carefully for accidental recursion, changed behavior, ambiguity, or transaction-lifetime issues.
+
+13. Test quality
+
+Review tests for what they actually prove, not just whether they pass.
+
+Pure tests should truly cover:
+
+- every aggregate state;
+- precedence;
+- zero-member rejection;
+- unsupported version;
+- invalid hash;
+- reordered members;
+- duplicate ordinals;
+- duplicate immutable links;
+- deterministic diagnostics.
+
+Disposable PostgreSQL tests should truly cover:
+
+- exact member order;
+- latest review by greatest ID;
+- no review;
+- approval;
+- rejection;
+- healthy execution;
+- healthy activation;
+- execution without valid approval;
+- activation without execution;
+- missing experiment;
+- proposal identity mismatch;
+- malformed immutable manifest;
+- deterministic repeated output;
+- list limit and ordering;
+- not-found behavior;
+- no sequence advancement;
+- no row creation;
+- no experiment timestamp change;
+- isolated schema cleanup;
+- active `LSTM` database refusal.
+
+Identify tests that pass through fixture mutation but do not assert the intended production behavior.
+
+Check whether the tests exercise duplicate execution/activation cardinality if documentation claims it.
+
+Check whether list behavior is tested with more than one materialization.
+
+14. Documentation
+
+Verify documentation matches implementation exactly.
+
+It must clearly state:
+
+- status is a projection, not persisted authority;
+- manifest membership is authoritative;
+- latest review uses greatest review-decision ID;
+- `ready_for_*` is observational only;
+- no approval, execution, activation, repair, scheduler, or worker action occurs;
+- no migration or new privilege is added;
+- read consistency uses one transaction;
+- list query behavior and bounds;
+- malformed immutable evidence fails closed;
+- downstream contradictions are reported as inconsistent;
+- deferred work remains deferred.
+
+Look for claims stronger than the tests or schema actually support.
+
+REVIEW METHOD
+
+1. Record baseline Git state.
+
+2. Inspect the complete diff, including all modifications to existing files.
+
+3. Trace one successful show request:
+
+```text
+CLI parse
+→ standalone command dispatch
+→ service read transaction
+→ materialization load
+→ ordered member load
+→ exact proposal workflow batch load
+→ domain projection
+→ summary/member output
+```
+
+4. Trace one list request with multiple materializations.
+
+5. Trace these failure/inconsistency paths:
+
+- materialization not found;
+- unsupported contract version;
+- materialization count mismatch;
+- reordered member;
+- missing proposal;
+- latest rejection;
+- execution without approval;
+- activation without execution;
+- duplicate execution;
+- duplicate activation;
+- missing experiment;
+- proposal canonical mismatch;
+- parser error;
+- schema missing.
+
+6. Compare the new workflow batch loader with existing Phase 4C repository conventions.
+
+7. Inspect migrations 036 through 041 to verify uniqueness and provenance assumptions.
+
+8. Rebuild all tests from current source. Do not rely on stale `/tmp` binaries.
+
+9. Use only an explicitly disposable non-production PostgreSQL database.
+
+10. Do not launch, stop, signal, or modify the scheduler or workers.
+
+CHANGE POLICY
+
+Do not make changes for style preference.
+
+Make changes only for a concrete:
+
+- correctness defect;
+- state-machine error;
+- integrity-detection gap;
+- read-consistency flaw;
+- parser or dispatch error;
+- misleading machine-readable output;
+- query behavior with meaningful operational risk;
+- missing or ineffective test;
+- documentation mismatch;
+- build or project-membership defect;
+- regression risk.
+
+Keep fixes narrow.
+
+Do not broaden Step 5.
+
+Do not implement campaign-level review, execution, activation, or automatic progression.
+
+Do not commit or push.
+
+VERIFICATION AFTER ANY FIX
+
+Run:
+
+```bash
+git diff --check
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+```
+
+Compile new and modified C++ with:
+
+```text
+-std=c++20 -Wall -Wextra -Wpedantic -Werror
+```
+
+Run the new pure tests three consecutive times.
+
+Rebuild and run the Step 5 repository/service tests three consecutive times against an explicitly disposable database.
+
+Rebuild and run directly relevant regressions from current source:
+
+- Phase 4C conversion proposal repository;
+- Phase 4C proposal review repository;
+- Phase 4C execution repository;
+- Phase 4C activation repository;
+- Phase 4C workflow repository;
+- Phase 4D planning repository;
+- Phase 4D review repository if present;
+- Phase 4D approval repository;
+- Phase 4D materialization repository;
+- corresponding pure-domain suites.
+
+Run parser-only checks using the isolated Release binary.
+
+Run an isolated clean Release build:
+
+```bash
+xcodebuild \
+  -project ExpertAdvisor.xcodeproj \
+  -scheme "LSTM Release" \
+  -configuration Release \
+  -derivedDataPath /tmp/ExpertAdvisorPhase4DStep5ReviewDerivedData \
+  clean build \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+If `xcodebuild` reports a locked build database, first identify and wait for or stop only the duplicate review build using that same isolated DerivedData path. Do not touch the production scheduler or worker processes.
+
+Confirm:
+
+- the active `LSTM` database was not accessed;
+- no production experiment row changed;
+- no proposal, review, execution, activation, or materialization row changed;
+- no scheduler or worker was launched, stopped, signaled, or reconfigured;
+- no files are staged;
+- no commit or push occurred.
+
+FINAL REPORT
+
+Provide:
+
+1. Review verdict:
+   - READY
+   - READY AFTER FIXES
+   - NOT READY
+
+2. Findings ordered by severity.
+
+For each finding include:
+
+- severity;
+- file and line;
+- concrete defect or risk;
+- why it matters;
+- exact fix made or recommended;
+- verification performed.
+
+3. Summary of changes made by the review.
+
+4. Exact files changed by the review.
+
+5. Final domain state model and precedence assessment.
+
+6. Repository and read-transaction assessment.
+
+7. Integrity-diagnostic assessment.
+
+8. CLI and machine-readable output assessment.
+
+9. Performance assessment, including bounded list-query behavior.
+
+10. Test-quality assessment.
+
+11. Exact commands run and results.
+
+12. Disposable PostgreSQL result.
+
+13. Release build result.
+
+14. Regression result.
+
+15. Confirmation that experiments, proposals, reviews, executions, activations, materializations, scheduler, and workers were untouched.
+
+16. Remaining risks and deferred work.
+
+17. Final `git status --short`.
+
+18. Final HEAD.
+
+Do not commit or push.
+
+
+REASONING
+
+Step 5 is intentionally read-only, but it is not trivial. It creates a new cross-layer interpretation of durable Phase 4D membership and current Phase 4C lifecycle evidence. That makes correctness depend on several subtle boundaries:
+
+- immutable campaign membership must never be reconstructed from mutable current workflow state;
+- the latest append-only review must be selected deterministically;
+- aggregate state precedence must remain correct for mixed and contradictory member states;
+- malformed immutable evidence must fail closed;
+- downstream contradictions must remain visible rather than being repaired;
+- all data for one command must come from one consistent database snapshot;
+- the central CLI parser must reject conflicts before database access and must not fall through into scheduler operation;
+- existing Phase 4C workflow derivation should be reused without losing diagnostics or creating a conflicting interpretation;
+- list behavior is bounded but may still have meaningful query-cost implications.
+
+The implementation report is strong and verification was extensive, but several areas deserve independent scrutiny before commit:
+
+1. The state model and aggregate counts can appear correct in ordinary cases while misclassifying mixed failure cases.
+2. The handoff domain defaults missing proposals to unreviewed/not-executed/not-activated before marking them inconsistent; the review should verify that output remains truthful and aggregates are not misleading.
+3. The new transaction-bound overloads modify existing repositories and therefore carry regression risk beyond the new feature.
+4. The list implementation performs one bounded workflow query per materialization. This may be acceptable, but the review should make that judgment from actual code and limits rather than accepting the implementation summary.
+5. Documentation claims duplicate execution and activation detection; tests and schema guarantees must be checked to ensure those claims are real.
+6. The central parser and Xcode project integration affect the production binary even though the feature is observational.
+
+A focused high-reasoning review is therefore the correct next step. It should validate the actual current diff, fix only concrete defects, rerun all relevant tests from current source, and preserve the strict read-only Phase 4D boundary.

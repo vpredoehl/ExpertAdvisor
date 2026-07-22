@@ -1,0 +1,178 @@
+Using High reasoning, perform a focused post-commit verification of the completed Phase 4B recommendation ranking and comparison implementation.
+
+GOAL
+
+Verify that the current committed Phase 4B ranking implementation is correct, internally consistent, migration-safe, regression-resistant, and ready for continued development and scheduler use.
+
+This is a verification and defect-finding pass. Do not redesign the recommendation subsystem. Do not begin the next Phase 4 feature. Do not make speculative improvements.
+
+Only change code when you identify a concrete defect, missing verification, unsafe behavior, misleading documentation, migration inconsistency, or mismatch between schema, repository, service, CLI, tests, and documented behavior.
+
+SCOPE
+
+Review the current branch HEAD, including the amended commit:
+
+    phase4b: add advisory recommendation ranking and comparison
+
+Concentrate on the actual implementation and its interaction with the immediately preceding Phase 4A and Phase 4B recommendation work.
+
+Inspect at minimum:
+
+- Database/migrations/035_experiment_recommendation_ranking.sql
+- Sources/ExperimentRecommendationRanking.cpp
+- Sources/ExperimentRecommendationRanking.hpp
+- Sources/ExperimentRecommendationRankingRepository.cpp
+- Sources/ExperimentRecommendationRankingService.cpp
+- Sources/ExperimentScheduler.cpp
+- Tests/ExperimentRecommendationRankingMigrationTests.sql
+- Tests/ExperimentRecommendationRankingRepositoryTests.cpp
+- Tests/ExperimentRecommendationRankingTests.cpp
+- docs/Phase4BExperimentRecommendationRanking.rst
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+- ExpertAdvisor.xcodeproj/project.pbxproj
+
+Also inspect any directly related recommendation evaluation, review, persistence, migration, CLI, and architecture files needed to verify cross-layer consistency.
+
+PHASE BOUNDARY
+
+Phase 4B ranking must remain advisory only.
+
+It must not:
+
+- create experiment rows
+- queue experiments
+- modify experiment status or phase
+- resume, retry, cancel, pause, or continue experiments
+- approve recommendations for execution
+- convert recommendation rankings into executable work
+- alter scheduler worker allocation
+- trigger training, inference, analysis, or continuation processing
+- mutate immutable recommendation evaluation or review history
+- silently replace persisted ranking snapshots
+
+VERIFY
+
+1. Build integrity
+
+- Confirm both Xcode targets and schemes remain valid.
+- Confirm Debug and Release use the pinned Homebrew libpqxx 7.x installation consistently.
+- Confirm no stale absolute path to /Volumes/Darwin/homebrew or libpqxx 7.10.5 remains.
+- Confirm the project file is syntactically valid and does not contain accidental duplicate, malformed, or inappropriate build settings.
+- Rebuild both LSTM Debug and LSTM Release without launching the scheduler or any experiment work.
+
+2. Migration correctness
+
+- Verify migration 035 is additive, repeat-safe under the project's migration framework, and consistent with all prior applied migrations.
+- Verify table definitions, primary keys, foreign keys, uniqueness constraints, indexes, defaults, nullability, timestamps, and ownership/privilege behavior.
+- Verify ranking snapshots cannot be ambiguously duplicated.
+- Verify immutable or append-only expectations are enforced where intended.
+- Verify foreign-key deletion behavior cannot destroy required audit history.
+- Verify SQL tests reflect the real production schema and do not depend on accidental database state.
+
+3. Domain-model correctness
+
+- Verify ranking inputs, outputs, identifiers, ordering fields, comparison fields, provenance, and serialization behavior.
+- Verify deterministic ordering, including complete and stable tie-breaking.
+- Verify floating-point comparison and null/optional handling.
+- Verify invalid scores, non-finite values, missing evaluations, incompatible policies, stale data, and empty candidate sets are handled explicitly.
+- Verify rank numbering and comparison semantics are unambiguous.
+- Verify persisted values can round-trip without losing meaning.
+
+4. Repository correctness
+
+- Verify SQL parameterization and transaction boundaries.
+- Verify inserts, reads, list operations, and comparison queries match the migration exactly.
+- Verify duplicate handling is deterministic and does not silently overwrite history.
+- Verify repository methods return rows in documented deterministic order.
+- Verify nullable columns are read and written safely.
+- Verify error handling provides enough context without exposing secrets.
+- Verify connection and transaction lifetimes are correct for pqxx 7.10.1.
+
+5. Service correctness
+
+- Verify the service enforces all ranking invariants before persistence.
+- Verify policy/version/provenance compatibility checks are complete.
+- Verify ranking generation uses the intended eligible recommendation population.
+- Verify comparison operations compare compatible snapshots and reject invalid comparisons.
+- Verify read-only commands are truly read-only.
+- Verify repeated identical requests have documented deterministic behavior.
+- Verify no ranking action crosses the advisory-only boundary.
+
+6. CLI and scheduler integration
+
+- Verify every ranking/list/compare command has strict argument validation.
+- Verify mutually exclusive or missing arguments fail clearly.
+- Verify machine-readable output is deterministic and complete.
+- Verify human-readable output accurately represents stored values.
+- Verify exit codes distinguish success, invalid input, not found, incompatibility, and operational failure where the CLI architecture supports that distinction.
+- Verify ranking commands cannot accidentally enter normal scheduler startup or worker execution paths.
+- Verify verification commands do not launch, resume, queue, or modify experiments.
+
+7. Tests
+
+- Run all focused migration, domain, repository, service, and CLI tests related to recommendation ranking.
+- Run the broader relevant recommendation test suite.
+- Add or correct tests only for concrete gaps.
+- Specifically test:
+  - empty candidate set
+  - one candidate
+  - deterministic ties
+  - complete tie-break ordering
+  - duplicate snapshot attempts
+  - incompatible snapshot comparison
+  - missing snapshot
+  - invalid/non-finite numeric inputs
+  - nullable fields
+  - transaction rollback
+  - advisory-boundary protection
+  - deterministic machine-readable output
+  - migration constraints and indexes
+- Ensure tests do not launch scheduler workers or alter live experiment rows.
+- Do not run destructive tests against production data.
+
+8. Documentation consistency
+
+- Verify the implementation, CLI help, Phase 4B documentation, and architecture volume describe the same behavior.
+- Correct claims that are stronger than the actual implementation.
+- Confirm documentation clearly states that ranking is advisory and non-executable.
+- Confirm persistence, immutability, deterministic ordering, comparison compatibility, and duplicate behavior are accurately documented.
+
+DATABASE SAFETY
+
+Use the configured development/test database only.
+
+Before running database tests:
+
+- identify the database being used
+- confirm tests are isolated or transactional
+- do not delete or rewrite existing experiment, model, inference, analysis, recommendation, evaluation, review, or ranking history
+- do not run the experiment scheduler
+- do not queue new work
+- do not modify currently running or pending experiments
+
+If safe database verification cannot be guaranteed, stop and report exactly what must be isolated before proceeding.
+
+OUTPUT
+
+Return:
+
+1. Verification result: PASS, PASS WITH FIXES, or FAIL.
+2. Findings ordered by severity.
+3. Exact files changed, if any.
+4. Tests and builds run, with results.
+5. Database verification performed and its safety/isolation method.
+6. Confirmation that no scheduler or experiment work was started or modified.
+7. Remaining risks or unverified assumptions.
+8. A recommended commit message only if changes were required.
+
+Do not create a commit.
+
+REASONING
+
+This verification pass is the safest next step because the Phase 4B ranking implementation has just been amended and the build environment was repaired after a Homebrew/libpqxx upgrade. Both Xcode targets now build, but the final committed state still needs an independent cross-layer audit before scheduler activity resumes or the next Phase 4 feature begins.
+
+The review must validate more than compilation. Ranking spans migration 035, domain logic, deterministic ordering, persistence, comparison semantics, CLI integration, tests, documentation, and Xcode build settings. A defect in any one layer could produce misleading advisory output, non-repeatable ranking snapshots, incompatible comparisons, migration trouble, or accidental scheduler side effects.
+
+The advisory-only boundary is especially important. Phase 4B may evaluate, rank, persist, list, and compare recommendations, but it must not create or queue experiments or otherwise affect execution. Verifying that boundary now prevents later implementation work from building on an unsafe foundation.
+
+The database and scheduler safety constraints are explicit because live experiment history and scheduler state must remain untouched during verification. The correct outcome is either a clean PASS or a small, evidence-based correction set followed by a PASS WITH FIXES—not a redesign or expansion of scope.

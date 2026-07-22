@@ -1,0 +1,539 @@
+Using High reasoning, perform the final consolidated verification and hardening pass for the complete current uncommitted Phase 4B Step 2 recommendation-ranking implementation.
+
+REASONING
+
+The current working tree contains accumulated Phase 4B Step 2 implementation and hardening changes across the ranking domain, persistence, service, scheduler/CLI integration, migration, tests, and documentation.
+
+Several focused reviews have already identified and corrected issues such as incomplete ranking-policy canonicalization, invalid result-shape acceptance, membership canonicalization bounds, comparison rank validation, deterministic identity behavior, floating-point canonicalization, and broader regression coverage.
+
+Those reviews considered individual areas. This pass must verify the complete combined uncommitted tree as one coherent implementation before the changes are manually amended into the existing Phase 4B Step 2 commit.
+
+The production experiment workload has drained. However, the live LSTM PostgreSQL database contains valuable experiment history and must not be reset, destructively modified, or used as a disposable test environment.
+
+The purpose of this task is not to redesign the recommendation subsystem or add new Phase 4 functionality. It is to prove that the current combined implementation is correct, internally consistent, migration-safe, deterministic, regression-safe, documented accurately, and ready for a manual commit amend.
+
+GOAL
+
+Review, test, and—only where a concrete defect is found—correct the complete current uncommitted Phase 4B Step 2 implementation.
+
+At completion:
+
+* the combined implementation must be internally consistent across schema, C++ domain logic, repository, service, scheduler/CLI integration, tests, and documentation
+* all relevant verification must pass
+* no production experiment or recommendation state may be changed
+* no scheduler or experiment worker may be launched
+* no files may be staged
+* no commit may be created or amended
+* the working tree must remain available for manual review and a later manual `git commit --amend`
+
+CURRENT EXPECTED UNCOMMITTED SCOPE
+
+Begin by inspecting `git status --short`, `git diff --stat`, and the complete diff.
+
+The current expected modified files are:
+
+* Database/migrations/035_experiment_recommendation_ranking.sql
+* Sources/ExperimentRecommendationRanking.cpp
+* Sources/ExperimentRecommendationRanking.hpp
+* Sources/ExperimentRecommendationRankingRepository.cpp
+* Sources/ExperimentRecommendationRankingService.cpp
+* Sources/ExperimentScheduler.cpp
+* Tests/ExperimentRecommendationRankingMigrationTests.sql
+* Tests/ExperimentRecommendationRankingRepositoryTests.cpp
+* Tests/ExperimentRecommendationRankingTests.cpp
+* docs/Phase4BExperimentRecommendationRanking.rst
+* docs/architecture/Volume_VIII_Recommendation_Engine.md
+
+Do not assume this list is complete. Report any additional modified or untracked files and determine whether they belong to this task.
+
+PHASE BOUNDARY
+
+Phase 4B Step 2 remains recommendation ranking and comparison only.
+
+It must remain advisory.
+
+It must not:
+
+* approve recommendations
+* convert recommendations into experiments
+* create experiment rows
+* queue experiments
+* modify experiment status or phase
+* resume, retry, pause, cancel, or continue experiments
+* alter continuation decisions
+* launch the scheduler
+* launch train, inference, or analysis workers
+* modify checkpoint policy behavior
+* introduce Phase 4B Step 3 or later functionality
+
+NO-COMMIT REQUIREMENT
+
+Do not run:
+
+* `git add`
+* `git commit`
+* `git commit --amend`
+* `git rebase`
+* `git reset`
+* `git checkout`
+* `git restore`
+* `git stash`
+* any command that stages, commits, discards, rewrites, or hides the current changes
+
+At the end, verify explicitly that there are no staged changes.
+
+LIVE-SYSTEM SAFETY
+
+Before tests, determine whether scheduler or worker processes are running using read-only inspection.
+
+Do not launch or stop any scheduler or worker process.
+
+Do not run tests that depend on changing active experiment state.
+
+Treat the primary `LSTM` database as production evidence.
+
+Against the live database, permit only narrowly scoped read-only inspection when genuinely necessary.
+
+Do not against the live database:
+
+* reset the database
+* drop schemas, tables, indexes, constraints, functions, or data
+* truncate tables
+* apply or roll back test migrations
+* modify the migration ledger
+* insert, update, or delete recommendation, ranking, experiment, model, inference, analysis, checkpoint, continuation, or scheduler records
+* generate ranking snapshots unless the operation is proven read-only—which snapshot generation normally is not
+* run repository tests that write records
+* run cleanup routines whose scope includes existing production records
+
+DATABASE TEST ISOLATION
+
+Migration and repository tests must run only in a disposable test database or a rigorously isolated disposable schema created specifically for this verification.
+
+Prefer the repository's established isolated-test mechanism if one exists.
+
+Before using it, inspect the test setup and prove that:
+
+* the target is not the live `LSTM` schema
+* connection configuration cannot silently fall back to the production database
+* cleanup is constrained to the disposable test namespace
+* test identifiers cannot collide with live rows
+* migrations are applied in the intended order
+* repeated runs start from a known state
+
+If no safe isolated PostgreSQL test environment is available, do not improvise by using the live database. Run all safe non-database verification and report the database tests as blocked with the precise reason and the exact safe setup required.
+
+After database tests, verify that no disposable schemas, databases, test rows, or test processes remain.
+
+REVIEW AREAS
+
+1. Combined diff coherence
+
+Review the complete current diff rather than only the latest edits.
+
+Verify:
+
+* declarations and definitions match
+* names and types are consistent
+* ownership and transaction boundaries are clear
+* no stale implementation path remains
+* no duplicated ranking or identity logic exists across domain, repository, service, or CLI
+* no accidental unrelated changes are present
+* comments and documentation describe actual behavior
+* error handling is deterministic and actionable
+
+2. Ranking-policy identity and canonicalization
+
+Verify that ranking behavior affecting identity is represented completely and deterministically.
+
+This includes, as applicable:
+
+* ranking policy version
+* scope behavior
+* bucket definitions
+* bucket order
+* score direction
+* tie-breaking rules
+* limit application
+* component ordering
+* component-summary ordering
+* missing-value behavior
+* actionable/non-actionable behavior
+* validation rules
+* any behavior that could change ranked output or snapshot membership
+
+Verify:
+
+* canonical text is unambiguous and delimiter-safe
+* string framing handles embedded delimiters
+* UTF-8 values are deterministic
+* integer and boolean encoding is stable
+* floating-point encoding is locale-independent
+* `+0.0` and `-0.0` canonicalize consistently where semantically equivalent
+* NaN and infinity are rejected where unsupported
+* hashes are derived from canonical text
+* canonical text remains the authority when hash equality alone is insufficient
+* identity changes whenever ranking behavior changes
+* identity remains stable when behavior and inputs are unchanged
+
+3. Scope canonicalization
+
+Verify all supported ranking scopes.
+
+Confirm:
+
+* every defined scope has a stable canonical representation
+* no two scopes canonicalize identically
+* scope-specific fields are included exactly when applicable
+* invalid or incomplete scope definitions are rejected
+* scope encoding is consistent between domain logic, persistence, CLI output, tests, and documentation
+
+4. Membership and snapshot identity
+
+Verify deterministic recommendation membership identity.
+
+Confirm:
+
+* source recommendation identity is complete
+* ordering is canonical
+* input reordering does not alter identity
+* duplicate source members are rejected or handled exactly as documented
+* maximum input count is enforced at all relevant public boundaries
+* snapshot identity includes policy identity, scope identity, and complete membership identity
+* a behaviorally meaningful input change changes snapshot identity
+* an irrelevant presentation-order change does not
+* hash-collision-safe comparisons use canonical content where necessary
+
+5. Ranking validation and bucket behavior
+
+Verify input and output invariants.
+
+Confirm:
+
+* advisory-ready/actionable evaluations contain the required components
+* non-actionable evaluations do not carry forbidden components
+* component names are unique when required
+* component order and summary order are deterministic
+* finite numeric requirements are enforced
+* rank values are positive
+* ranks are contiguous or otherwise follow the documented invariant
+* bucket assignments match the canonical policy
+* bucket ordering is deterministic
+* tie-breaking is complete and stable
+* limit application occurs at the documented stage
+* repeated ranking of identical inputs produces byte-for-byte equivalent canonical output where intended
+
+6. Comparison semantics
+
+Verify ranking-snapshot and ranked-member comparison behavior.
+
+Confirm:
+
+* incompatible policies are rejected
+* incompatible scopes are rejected
+* incompatible identities are not silently compared
+* ranks must be valid
+* added, removed, moved, unchanged, and otherwise supported classifications are correct
+* component changes are detected deterministically
+* penalty or adjustment changes are detected
+* equal hashes with unequal canonical text do not produce false equivalence
+* comparison ordering is deterministic
+* CLI and repository representations preserve comparison meaning
+
+7. Migration 035
+
+Review the migration as both a fresh migration and an upgrade from the immediately preceding schema.
+
+Verify:
+
+* table definitions
+* primary keys
+* foreign keys
+* delete/update actions
+* unique constraints
+* check constraints
+* indexes
+* column nullability
+* defaults
+* timestamps
+* identity/canonical-text/hash storage
+* ranked-member ordering and rank constraints
+* component persistence
+* comparison-supporting fields
+* idempotency expectations, if migrations in this repository are expected to be rerunnable
+* compatibility with PostgreSQL versions supported by the project
+* consistency with repository SQL
+
+Verify that constraints enforce important invariants rather than relying solely on C++ checks where database enforcement is appropriate.
+
+Do not rewrite historical migrations unless repository policy explicitly permits it and the current migration has not been released. This task is expected to harden migration 035 only where justified.
+
+8. Repository correctness
+
+Verify:
+
+* SQL matches migration 035 exactly
+* inserts, reads, and comparisons preserve canonical identity
+* transaction boundaries are correct
+* partial snapshots cannot be committed
+* duplicate/idempotent behavior is deterministic
+* conflicts distinguish true identity equality from hash collision where applicable
+* row ordering is explicit
+* optional/null fields map correctly
+* numeric values round-trip without semantic corruption
+* limits are enforced before unsafe allocation or oversized SQL work
+* errors roll back cleanly
+* test cleanup is isolated
+* repeated repository test runs do not depend on prior residue
+
+9. Service orchestration
+
+Verify:
+
+* the service delegates ranking behavior to the domain implementation
+* the service does not duplicate canonicalization or ranking rules
+* source recommendations are loaded consistently
+* persistence occurs transactionally
+* duplicate generation behaves idempotently
+* comparison uses compatible persisted evidence
+* no advisory result is converted into experiment action
+* failures cannot leave partial persisted snapshots
+* machine-readable outputs are stable
+
+10. Scheduler and CLI integration
+
+Focus only on the ranking-related integration in `ExperimentScheduler.cpp`.
+
+Verify:
+
+* commands are explicit and non-overlapping
+* argument parsing rejects invalid combinations
+* read operations remain read-only
+* ranking-generation operations affect only recommendation-ranking persistence
+* no command can create, queue, resume, retry, cancel, pause, or modify experiments
+* output fields and ordering are deterministic
+* canonical identity information is exposed accurately where documented
+* errors return nonzero status where appropriate
+* human-readable and machine-readable modes do not contradict each other
+* command help matches implementation
+* no scheduler loop is started by standalone ranking commands
+
+Do not perform live write-oriented CLI integration tests against the production database.
+
+11. Documentation consistency
+
+Verify both Phase 4B documents against implemented behavior.
+
+Confirm documentation accurately states:
+
+* advisory-only boundary
+* policy identity
+* scope identity
+* membership identity
+* snapshot identity
+* bucket and tie behavior
+* limit behavior
+* component ordering
+* persistence model
+* comparison compatibility rules
+* CLI commands and output
+* migration behavior
+* idempotency and duplicate handling
+* known restrictions
+
+Remove or correct claims that are broader than the implementation.
+
+TEST AND VERIFICATION PLAN
+
+First discover the repository's established build and test commands. Use existing project mechanisms rather than inventing unrelated infrastructure.
+
+Run all safe relevant checks, including at minimum:
+
+A. Static inspection
+
+* `git status --short`
+* `git diff --stat`
+* `git diff --check`
+* inspect the complete relevant diff
+* search for stale ranking policy text, duplicated constants, duplicate SQL, TODOs, FIXME markers, and obsolete command names
+
+B. Strict pure C++ ranking tests
+
+Build the ranking unit tests with strict warnings appropriate to the existing project and run them.
+
+The suite must cover the combined canonicalization, ranking, validation, membership, identity, and comparison behavior.
+
+Run the completed ranking test executable three consecutive times to expose nondeterminism.
+
+C. Migration tests
+
+Using only a safe disposable database/schema:
+
+* test migration from the expected previous migration state
+* test schema objects and constraints
+* test invalid rows rejected by constraints
+* test uniqueness and identity behavior
+* test rollback/cleanup behavior where applicable
+* verify rerun behavior according to repository migration policy
+* verify no disposable objects remain afterward
+
+D. Repository tests
+
+Using only the disposable database/schema:
+
+* build and run the ranking repository tests
+* run them three consecutive times from clean isolated state
+* verify transactional rollback
+* verify deterministic ordering
+* verify duplicate/idempotent behavior
+* verify canonical-text/hash behavior
+* verify complete snapshot persistence and retrieval
+* verify cleanup
+
+E. Relevant regressions
+
+Run all relevant existing tests for:
+
+* Phase 4A recommendation identity
+* Phase 4A recommendation generation/persistence/service behavior
+* Phase 4B ranking domain
+* Phase 4B ranking repository/service
+* scheduler/CLI argument parsing or command behavior, where tests exist
+* migration ordering and migration-ledger behavior, using isolation
+
+Do not weaken or skip a failing relevant test merely to obtain a green result.
+
+F. Release build
+
+Build the project's normal Release target using the established command.
+
+Do not launch the resulting binary as a scheduler.
+
+Safe read-only commands such as help/version or purely local parser tests may be run if they cannot connect to or mutate the production database.
+
+G. Final hygiene
+
+Run:
+
+* `git diff --check`
+* `git status --short`
+* a check for staged changes
+* a check for leftover disposable PostgreSQL databases/schemas
+* a check for leftover test processes
+* a check that no scheduler or experiment worker was launched by this task
+
+DEFECT-FIXING RULE
+
+Do not change code merely for stylistic preference.
+
+Make changes only when the review identifies a concrete:
+
+* correctness defect
+* determinism defect
+* identity/canonicalization defect
+* migration/schema mismatch
+* transaction or rollback defect
+* unsafe live-database test behavior
+* missing validation
+* missing regression test for a material invariant
+* misleading documentation statement
+* CLI inconsistency
+* compilation or test failure
+* maintainability problem likely to cause divergent behavior, such as duplicated policy logic
+
+Keep fixes narrow and within Phase 4B Step 2.
+
+Do not redesign APIs or introduce new abstractions unless necessary to correct a demonstrated defect.
+
+If a defect is found:
+
+1. explain it briefly in the final report
+2. implement the smallest complete correction
+3. add or update focused regression coverage
+4. rerun the directly affected tests
+5. rerun the complete relevant verification matrix
+
+PROHIBITED SHORTCUTS
+
+Do not:
+
+* mark tests passed without running them
+* claim live-database safety without inspecting connection/test setup
+* use the production LSTM database as a disposable target
+* suppress warnings to make builds pass
+* weaken constraints or assertions without proof they are incorrect
+* delete failing tests
+* alter expected values simply to match faulty output
+* skip repeated deterministic runs
+* stage or commit changes
+* launch the scheduler
+* launch experiments
+* begin Phase 4B Step 3
+
+FINAL RESPONSE FORMAT
+
+Provide a concise but complete report with these sections:
+
+1. Verdict
+
+State one of:
+
+* READY TO AMEND
+* READY TO AMEND WITH NOTED NON-BLOCKING LIMITATIONS
+* NOT READY TO AMEND
+
+2. Defects found and fixes made
+
+For each defect:
+
+* severity
+* file(s)
+* issue
+* correction
+* regression coverage
+
+State explicitly if no code changes were necessary.
+
+3. Verification performed
+
+List exact commands or test targets run and their results.
+
+Include:
+
+* ranking test run count
+* repository test run count
+* migration test result
+* regression test result
+* Release build result
+* `git diff --check` result
+
+Do not report an unrun test as passed.
+
+4. Database and process safety
+
+State:
+
+* disposable database/schema used
+* proof the live LSTM database was not modified
+* cleanup result
+* scheduler/worker state before and after
+* whether any processes were launched
+
+5. Remaining risks or blocked checks
+
+List any check that could not be completed and why.
+
+6. Working-tree summary
+
+Include:
+
+* final `git status --short`
+* files changed by this consolidated pass, distinguished from pre-existing uncommitted files where possible
+* confirmation that no changes are staged
+* confirmation that no commit was created or amended
+
+7. Manual next step
+
+If and only if the verdict is ready, state that the human may inspect the final diff and manually amend the existing Phase 4B Step 2 commit.
+
+Do not perform that amend.

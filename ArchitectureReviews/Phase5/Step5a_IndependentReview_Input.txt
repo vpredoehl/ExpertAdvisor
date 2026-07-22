@@ -1,0 +1,113 @@
+Use model_reasoning_effort="xhigh".
+You are performing an INDEPENDENT architectural and implementation review of the current local checkout.
+
+This is NOT a continuation of previous work.
+Review the code as though it was written by another senior engineer.
+
+Repository rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Work only from the current local checkout.
+- Preserve the existing branch.
+- Do not create commits.
+
+Primary objective
+
+Determine whether Phase 5 Step 5a is actually ready to commit.
+
+Review the implementation for:
+
+• architectural correctness
+• lifecycle correctness
+• deterministic behavior
+• domain modeling
+• invariants
+• consistency
+• ownership
+• validation
+• exception safety
+• test completeness
+• future compatibility with Step 5b
+
+Pay particular attention to:
+
+- lifecycle modeling
+- canonical identities
+- metric collections
+- provenance validation
+- aggregate computation
+- output invariants
+- builder usage
+- duplicate handling
+- deterministic ordering
+- comparison semantics
+- validation diagnostics
+- serialization/versioning
+- API cleanliness
+
+You are encouraged to challenge assumptions.
+
+If you find:
+
+- architectural weaknesses
+- contract violations
+- incorrect invariants
+- incorrect ownership
+- incomplete validation
+- missing tests
+- undefined behavior
+- hidden edge cases
+
+then fix them.
+
+Do NOT make stylistic changes.
+
+Do NOT perform unrelated refactoring.
+
+Do NOT modify scheduler behavior.
+
+Do NOT modify experiment logic.
+
+Do NOT modify database schema.
+
+Do NOT modify Phase 5b.
+
+Verification
+
+After changes:
+
+1. Run the focused Step 5a tests.
+
+2. Run AddressSanitizer and UndefinedBehaviorSanitizer where supported.
+
+3. Run any nearby regression tests affected by the changes.
+
+4. Perform an incremental Xcode Release build only.
+
+Do NOT clean DerivedData.
+
+Do NOT create a fresh DerivedData directory unless absolutely required.
+
+Success criteria
+
+The implementation should be something you would personally approve for commit.
+
+At completion provide:
+
+- architectural assessment
+- defects corrected
+- remaining concerns (if any)
+- files modified
+- tests executed
+- build results
+- explicit recommendation:
+
+READY TO COMMIT
+
+or
+
+NOT READY TO COMMIT
+

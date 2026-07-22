@@ -1,0 +1,385 @@
+Use model_reasoning_effort="xhigh".
+
+Implement Phase 6C only on the current `phase6` branch.
+
+Phase 6A and Phase 6B are committed.
+
+Phase 6A defines the pure immutable advisory
+`RecommendationCampaignFollowUpProposal`.
+
+Phase 6B adds append-only persistence, validated immutable reload, and
+repeatable-read read-only operator preview.
+
+Objective
+
+Implement an explicit operator review decision for one persisted Phase 6B
+follow-up proposal while preserving the existing authority boundaries.
+
+Phase 6C must record only an immutable administrative review decision.
+
+It must not activate, execute, queue, schedule, create, modify, or authorize
+follow-up work.
+
+Repository rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do not switch branches.
+- Preserve the current `phase6` branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not stage files.
+- Preserve DerivedData.
+- Reuse existing Release build products.
+- Use Release builds only.
+
+Phase 6C responsibilities
+
+Implement:
+
+- a pure immutable operator-review decision contract;
+- explicit review outcomes:
+  - approved;
+  - rejected;
+- exact binding to one persisted Phase 6B proposal identity;
+- an append-only review-event repository and additive migration;
+- idempotent exact replay;
+- conflict detection for a different review decision over the same proposal;
+- read-only show/list presentation of persisted review decisions;
+- focused tests and architecture documentation.
+
+Authority boundary
+
+An approved Phase 6C review means only:
+
+- an operator has administratively approved the persisted advisory proposal
+  for possible consideration by a later explicitly authorized phase.
+
+It does NOT mean:
+
+- activated;
+- execution authorized;
+- follow-up authorized;
+- queued;
+- scheduled;
+- scheduler work;
+- worker launch;
+- experiment creation;
+- experiment modification;
+- campaign success;
+- profitability;
+- statistical validation.
+
+Do not implement any activation or execution adapter.
+
+Out of scope
+
+Do not implement:
+
+- proposal activation;
+- follow-up activation state;
+- follow-up execution;
+- scheduler integration;
+- queue insertion;
+- experiment creation;
+- experiment modification;
+- recommendation creation;
+- worker launch;
+- automatic approval;
+- automatic review;
+- bulk approval;
+- approval inferred from eligibility;
+- approval inferred from persistence;
+- approval inferred from preview;
+- mutation of Phase 6A or Phase 6B rows.
+
+Domain contract
+
+Design an immutable typed review value that binds exactly:
+
+- review contract version;
+- persisted follow-up proposal ID;
+- exact Phase 6A proposal contract version;
+- exact proposal canonical text;
+- exact proposal identity hash;
+- review decision;
+- reviewer identity;
+- reason text.
+
+Canonical identity must be deterministic and locale independent.
+
+Canonical text is authoritative.
+
+The tagged hash is only an accelerator.
+
+Exclude from review identity:
+
+- database review-event ID;
+- creation timestamp;
+- process ID;
+- CLI formatting;
+- scheduler state;
+- any later activation or execution state.
+
+Validation requirements
+
+Fail closed for:
+
+- unsupported review contract version;
+- invalid or missing persisted proposal ID;
+- malformed proposal canonical/hash pair;
+- invalid review decision;
+- empty or invalid reviewer identity;
+- empty or invalid reason text;
+- canonical text containing NUL;
+- review canonical/hash mismatch;
+- disagreement with the persisted Phase 6B proposal;
+- attempts to encode activation, execution, queue, scheduler, experiment, or
+  authorization state.
+
+Use stable explicit error reasons.
+
+Persistence
+
+Add one additive migration after migration 042.
+
+Prefer a single append-only review-event table unless a second table is
+strictly required.
+
+Persist:
+
+- exact review contract version;
+- exact persisted proposal ID;
+- exact proposal version/canonical/hash;
+- review decision;
+- reviewer identity;
+- reason text;
+- exact review canonical/hash;
+- generated review-event ID;
+- generated creation timestamp.
+
+Database requirements
+
+- restrictive foreign key to the Phase 6B proposal manifest;
+- `ON DELETE RESTRICT`;
+- byte-exact `C` collation for authoritative canonical text;
+- appropriate uniqueness for one effective review decision per proposal;
+- append-only runtime privileges;
+- runtime `SELECT`;
+- column-scoped `INSERT`;
+- sequence `USAGE`;
+- no runtime `UPDATE`, `DELETE`, or `TRUNCATE`;
+- no insertion of generated IDs or timestamps;
+- no mutation of Phase 6B proposal or member rows;
+- no experiment or scheduler table changes;
+- no lifecycle/activation/execution columns.
+
+Repository behavior
+
+The repository must:
+
+1. Accept only the immutable typed Phase 6C review contract.
+2. Verify the referenced persisted Phase 6B proposal exists.
+3. Verify exact proposal ID, contract version, canonical text, and hash.
+4. Serialize concurrent review attempts for the same persisted proposal.
+5. Return `recorded` for the first valid review.
+6. Return `existing_identical` for exact replay.
+7. Return a deterministic conflict for a different decision, reviewer, reason,
+   or review identity for the same proposal.
+8. Reload into an immutable typed review value.
+9. Validate all persisted fields and complete canonical identity on reload.
+10. Never update or supersede an existing review event in Phase 6C.
+
+Decision semantics
+
+Support exactly:
+
+- `approved`
+- `rejected`
+
+No pending, activated, executed, expired, superseded, or automatically approved
+state belongs in Phase 6C.
+
+A rejected review must be just as immutable and auditable as an approved one.
+
+Presentation
+
+Add read-only show/list functions or services for persisted Phase 6C review
+events.
+
+Output must clearly include:
+
+- review-event ID;
+- persisted follow-up proposal ID;
+- proposal identity hash;
+- review contract version;
+- review identity hash;
+- decision;
+- reviewer;
+- reason;
+- created timestamp;
+- exact negative safety fields.
+
+Every output record must state:
+
+- read_only=true;
+- persisted=true;
+- administrative_review=true;
+- activated=false;
+- execution_authorized=false;
+- follow_up_authorized=false;
+- queued=false;
+- scheduled=false;
+- scheduler_started=false;
+- scheduler_signaled=false;
+- workers_started=false;
+- experiments_created=false;
+- experiments_modified=false;
+- campaign_success_declared=false.
+
+Use read-only transactions for show/list operations.
+
+CLI integration
+
+Do not add CLI integration unless the existing project architecture clearly
+requires it for this phase and it can be added without crossing scope.
+
+If CLI integration is added, use explicit manual commands only and ensure they
+cannot activate or execute anything.
+
+Tests
+
+Add focused tests covering at minimum:
+
+Pure contract:
+
+- immutable/non-assignable types;
+- approved review construction;
+- rejected review construction;
+- deterministic canonical identity;
+- locale independence;
+- proposal identity sensitivity;
+- reviewer sensitivity;
+- reason sensitivity;
+- decision sensitivity;
+- malformed input rejection;
+- no authority flags.
+
+Migration/repository:
+
+- migration repeatability;
+- exact `C` collation;
+- restrictive foreign key;
+- privilege restrictions;
+- generated-column protection;
+- exact round trip;
+- canonical/hash preservation;
+- approved persistence;
+- rejected persistence;
+- exact replay;
+- conflicting second decision rejection;
+- conflicting reviewer rejection;
+- conflicting reason rejection;
+- concurrent identical persistence;
+- concurrent conflicting persistence;
+- malformed persisted hash rejection;
+- malformed canonical rejection;
+- malformed decision rejection;
+- proposal provenance mismatch rejection;
+- rollback on failed persistence;
+- no Phase 6B mutation;
+- no experiment or scheduler table mutation.
+
+Read-only presentation:
+
+- successful show;
+- not-found behavior;
+- list ordering and limit validation;
+- explicit negative authority fields;
+- no sequence advancement;
+- no advisory or row locks;
+- no writes.
+
+Regression
+
+Run:
+
+- Phase 6C focused tests;
+- Phase 6B repository, migration, and preview tests;
+- Phase 6A focused tests;
+- Phase 5A assessment tests;
+- Phase 5B integration/reporting tests;
+- Phase 5C policy tests;
+- relevant Phase 4D materialization tests;
+- Xcode plist validation;
+- `xcodebuild -list`;
+- incremental macOS arm64 `LSTM Release` build;
+- executable architecture verification;
+- `git diff --check`;
+- `git diff --cached --check`;
+- untracked-file whitespace checks.
+
+Use a disposable verification database only.
+
+Do not apply any new migration to the production LSTM database.
+
+Documentation
+
+Add:
+
+- a Phase 6C feature document;
+- a new ADR;
+- Volume VIII updates;
+- Volume XII updates;
+- Database README migration entry;
+- ADR index and revision-history updates.
+
+Documentation must clearly state that Phase 6C approval is administrative
+review only and grants no activation, execution, scheduler, experiment, or
+follow-up authorization.
+
+Do not alter Phase 6A or Phase 6B semantics.
+
+Worktree audit
+
+At the end confirm:
+
+- branch remains `phase6`;
+- HEAD unchanged;
+- no commit created;
+- nothing staged;
+- only intended Phase 6C files changed;
+- no scheduler source modified;
+- no production migration applied;
+- disposable databases removed;
+- DerivedData preserved.
+
+Deliverable
+
+Provide:
+
+1. Executive summary.
+2. Phase 6C domain design.
+3. Review identity and canonical grammar.
+4. Validation and failure semantics.
+5. Schema and migration.
+6. Repository and concurrency behavior.
+7. Read-only presentation.
+8. Authority-boundary assessment.
+9. Test coverage.
+10. Regression and build results.
+11. Documentation changes.
+12. Worktree audit.
+13. Remaining risks.
+14. Commit recommendation.
+
+Conclude with exactly one of:
+
+READY FOR INDEPENDENT REVIEW
+
+or
+
+NOT READY FOR INDEPENDENT REVIEW

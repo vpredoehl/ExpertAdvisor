@@ -1,0 +1,561 @@
+PHASE 6C INDEPENDENT REVIEW AND CORRECTIONS
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6C implementation has completed and the implementation run reports successful focused tests, regression tests, migration verification, Release build verification, architecture verification, documentation updates, and preservation of the Phase 6 authority boundary.
+
+The correct next step is an independent, adversarial review of the complete uncommitted Phase 6C change set before staging or committing it.
+
+The worktree also contains four separately created helper files that are already staged:
+
+- AGENTS.md
+- Scripts/build-release.sh
+- Scripts/capture-review.sh
+- Scripts/dev-status.sh
+
+Those staged files are not Phase 6C implementation files. They currently cause `git diff --cached --check` to report extra blank lines at EOF. The reviewer must preserve them and must not misattribute that pre-existing staged whitespace condition to Phase 6C. The reviewer should report it separately while still performing a complete whitespace audit of the Phase 6C files.
+
+This prompt therefore requires the reviewer to:
+
+1. Preserve the current `phase6` branch, HEAD, staging state, and DerivedData.
+2. Treat the staged helper files as user-owned, out-of-scope changes.
+3. Independently inspect every Phase 6C source, migration, test, project, and documentation change rather than trusting the implementation summary.
+4. Correct only concrete Phase 6C defects or missing verification.
+5. Re-run focused and regression verification using only disposable databases.
+6. Confirm that administrative approval remains non-authorizing and cannot activate, execute, schedule, queue, launch workers, or modify experiments.
+7. Distinguish Phase 6C readiness from unrelated staged-file whitespace.
+8. End with an explicit readiness conclusion for staging and commit review.
+
+The desired outcome is a trustworthy Phase 6C change set that is ready to stage after independent review, without disturbing scheduler operations, production data, staged helper files, or accepted Phase 6A/6B semantics.
+
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a focused independent review and, only where necessary, correction of the completed Phase 6C implementation on the current `phase6` branch.
+
+Phase 6A and Phase 6B are committed.
+
+Phase 6C has been implemented but is not staged or committed.
+
+GOAL
+
+Independently review the complete current Phase 6C implementation for:
+
+- correctness;
+- architectural consistency;
+- exact authority-boundary preservation;
+- immutable domain design;
+- deterministic canonical identity;
+- stable validation and failure semantics;
+- PostgreSQL schema correctness;
+- append-only persistence;
+- transactional safety;
+- concurrency safety;
+- exact replay and conflict behavior;
+- persisted provenance validation;
+- read-only presentation behavior;
+- least-privilege runtime permissions;
+- regression risk;
+- test adequacy;
+- Xcode project integration;
+- documentation accuracy;
+- readiness to stage and commit.
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6D or any later phase.
+
+Do not add activation, execution, scheduling, queueing, worker launch, experiment creation, experiment modification, campaign-success declaration, profitability, statistical validation, or automatic review behavior.
+
+Make changes only when the review identifies a concrete defect, missing verification, misleading contract, unsafe behavior, incorrect test, build integration problem, or documentation inconsistency.
+
+REPOSITORY AND WORKTREE RULES
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do not switch branches.
+- Preserve the current `phase6` branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not stage or unstage files.
+- Preserve DerivedData.
+- Reuse existing Release build products.
+- Use Release builds only.
+- Do not run Clean.
+
+At the beginning, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --cached --name-status`
+5. `git diff --name-status`
+6. all untracked Phase 6C files
+
+STAGED USER-OWNED FILES
+
+The following files were separately created by the operator and are already staged:
+
+- `AGENTS.md`
+- `Scripts/build-release.sh`
+- `Scripts/capture-review.sh`
+- `Scripts/dev-status.sh`
+
+These files are not part of Phase 6C.
+
+They currently cause `git diff --cached --check` to report extra blank lines at EOF.
+
+Requirements:
+
+- Do not modify them.
+- Do not unstage them.
+- Do not attribute their existing whitespace condition to Phase 6C.
+- Preserve their exact staged blobs and executable modes.
+- Record their initial staged blob IDs and verify the same blob IDs at the end.
+- Report the staged whitespace finding separately from the Phase 6C readiness conclusion.
+- Still run `git diff --cached --check` and report its exact result honestly.
+- Perform a separate whitespace check limited to Phase 6C paths.
+
+PHASE 6C INTENT
+
+Phase 6C records one immutable administrative operator-review decision over one exact persisted Phase 6B follow-up proposal.
+
+Supported decisions are exactly:
+
+- `approved`
+- `rejected`
+
+An approved Phase 6C review means only:
+
+- an operator administratively approved the exact persisted advisory proposal for possible consideration by a later explicitly authorized phase.
+
+It does not mean:
+
+- activated;
+- execution authorized;
+- follow-up authorized;
+- queued;
+- scheduled;
+- scheduler work;
+- scheduler signaled;
+- worker launch;
+- experiment creation;
+- experiment modification;
+- campaign success;
+- profitability;
+- statistical validation.
+
+A rejected review must be equally immutable and auditable.
+
+No Phase 6A or Phase 6B row may be mutated.
+
+INDEPENDENT REVIEW METHOD
+
+Do not rely on the implementation-run summary as proof.
+
+Inspect the actual current diff and all new files.
+
+Trace the complete implementation path:
+
+Domain contract
+→ canonical construction and validation
+→ repository persistence
+→ database constraints and privileges
+→ reload validation
+→ exact replay and conflict handling
+→ concurrent persistence
+→ read-only show/list presentation
+→ tests
+→ Xcode build integration
+→ documentation.
+
+Compare the implementation against established Phase 6A and Phase 6B patterns, but do not assume copied patterns are correct without verification.
+
+DOMAIN CONTRACT REVIEW
+
+Verify that the immutable typed Phase 6C review value binds exactly:
+
+- review contract version;
+- persisted Phase 6B follow-up proposal ID;
+- exact Phase 6A proposal contract version;
+- exact proposal canonical text;
+- exact proposal identity hash;
+- review decision;
+- reviewer identity;
+- reason text;
+- review canonical text;
+- review identity hash.
+
+Verify:
+
+- copy/move assignment is disabled where intended;
+- construction is controlled;
+- supported decisions are exactly approved and rejected;
+- deterministic canonical identity;
+- locale independence;
+- canonical text is authoritative;
+- tagged hash is only an accelerator;
+- generated database ID and timestamp are excluded from identity;
+- process, CLI, scheduler, activation, and execution state are excluded;
+- no positive authority flags exist;
+- all negative authority constants and presentation fields are correct.
+
+Review the canonical grammar byte by byte.
+
+Confirm that length-prefixing or escaping is unambiguous for arbitrary valid reviewer and reason text.
+
+Confirm that canonical reconstruction on reload is exact and not merely field-comparison based.
+
+VALIDATION REVIEW
+
+Verify fail-closed behavior and stable explicit reasons for:
+
+- unsupported review contract version;
+- nonpositive or missing persisted proposal ID;
+- unsupported proposal contract version;
+- malformed proposal canonical/hash pair;
+- invalid decision;
+- empty reviewer identity;
+- reviewer identity containing NUL;
+- invalid reviewer length or characters, if constrained;
+- empty reason text;
+- reason text containing NUL;
+- invalid reason length, if constrained;
+- review canonical containing NUL;
+- review canonical/hash mismatch;
+- disagreement with the persisted Phase 6B proposal;
+- persisted-row corruption;
+- any attempt to encode activation, execution, queue, scheduler, experiment, or authorization state.
+
+Check whether validation order produces deterministic errors.
+
+Check exception safety for invalid enum-to-text conversion and malformed persisted values.
+
+SCHEMA AND MIGRATION REVIEW
+
+Review migration 043 in full.
+
+Verify:
+
+- it is additive and repeatable;
+- exactly one append-only review-event table is used unless more are justified;
+- restrictive foreign key to the Phase 6B proposal manifest;
+- `ON DELETE RESTRICT`;
+- one effective immutable review event per persisted proposal;
+- exact approved/rejected constraint;
+- byte-exact `C` collation on authoritative canonical text;
+- appropriate canonical/hash format and size checks;
+- no activation, lifecycle, execution, scheduler, queue, or experiment columns;
+- generated review-event ID and timestamp;
+- runtime cannot insert generated ID or timestamp;
+- runtime receives SELECT;
+- runtime receives only column-scoped INSERT;
+- runtime receives sequence USAGE only;
+- runtime has no UPDATE, DELETE, TRUNCATE, broad INSERT, sequence SELECT, or sequence UPDATE;
+- PUBLIC has no inappropriate privileges;
+- trigger functions, if any, have safe search paths and restricted execution;
+- comments accurately state the non-authorizing semantics.
+
+Verify that migration repeatability does not weaken privileges, constraints, indexes, comments, or triggers.
+
+Verify that runtime insertion is actually possible with the granted privileges.
+
+REPOSITORY AND CONCURRENCY REVIEW
+
+Verify that the repository:
+
+1. accepts only the immutable typed Phase 6C review contract;
+2. verifies the referenced Phase 6B proposal exists;
+3. verifies exact proposal ID, contract version, canonical text, and hash;
+4. serializes concurrent review attempts for the same persisted proposal;
+5. returns `recorded` for the first valid review;
+6. returns `existing_identical` for exact replay;
+7. deterministically rejects a different decision, reviewer, reason, canonical, hash, or review identity for the same proposal;
+8. reloads into the immutable typed value;
+9. validates every persisted field and complete canonical identity on reload;
+10. never updates, supersedes, or deletes a review event.
+
+Review lock-key choice and collision behavior.
+
+Confirm that serialization is scoped to the exact persisted proposal rather than only a non-authoritative hash.
+
+Confirm that identical concurrent attempts converge.
+
+Confirm that conflicting concurrent attempts yield exactly one recorded event and one deterministic conflict.
+
+Confirm failed persistence rolls back completely and does not consume an effective review decision.
+
+Confirm repository behavior does not mutate:
+
+- Phase 6A data;
+- Phase 6B proposal or member rows;
+- experiment rows;
+- scheduler rows;
+- queue state;
+- worker state.
+
+READ-ONLY PRESENTATION REVIEW
+
+Verify show/list behavior includes:
+
+- review-event ID;
+- persisted follow-up proposal ID;
+- proposal identity hash;
+- review contract version;
+- review identity hash;
+- decision;
+- reviewer;
+- reason;
+- created timestamp.
+
+Every record must state exactly:
+
+- `read_only=true`
+- `persisted=true`
+- `administrative_review=true`
+- `activated=false`
+- `execution_authorized=false`
+- `follow_up_authorized=false`
+- `queued=false`
+- `scheduled=false`
+- `scheduler_started=false`
+- `scheduler_signaled=false`
+- `workers_started=false`
+- `experiments_created=false`
+- `experiments_modified=false`
+- `campaign_success_declared=false`
+
+Verify:
+
+- successful show;
+- deterministic not-found behavior;
+- list ordering;
+- limit validation;
+- safe and locale-independent machine escaping;
+- no output ambiguity;
+- read-only transactions;
+- no sequence advancement;
+- no advisory locks;
+- no row locks;
+- no writes.
+
+CLI AND AUTHORITY AUDIT
+
+Confirm no Phase 6C CLI integration was added unless absolutely required.
+
+Search the entire Phase 6C diff for:
+
+- activation;
+- execute or execution;
+- queue;
+- schedule or scheduler;
+- worker;
+- experiment INSERT/UPDATE/DELETE;
+- authorization;
+- success;
+- profitability;
+- automatic review or approval.
+
+Distinguish safety declarations and documentation from actual capabilities.
+
+Confirm no scheduler source was modified.
+
+Confirm no production workflow can infer approval from proposal eligibility, persistence, preview, or list/show output.
+
+TEST REVIEW
+
+Review the tests themselves for false positives, weak assertions, accidental dependence on production state, skipped coverage, and owner-role corruption paths that do not actually test runtime behavior.
+
+At minimum, confirm meaningful coverage for:
+
+Pure contract:
+
+- immutable/non-assignable types;
+- approved construction;
+- rejected construction;
+- deterministic identity;
+- locale independence;
+- proposal identity sensitivity;
+- proposal ID sensitivity;
+- reviewer sensitivity;
+- reason sensitivity;
+- decision sensitivity;
+- malformed input rejection;
+- no authority flags.
+
+Migration/repository:
+
+- migration repeatability;
+- exact C collation;
+- restrictive foreign key;
+- privilege restrictions;
+- generated-column protection;
+- exact round trip;
+- canonical/hash preservation;
+- approved persistence;
+- rejected persistence;
+- exact replay;
+- conflicting decision;
+- conflicting reviewer;
+- conflicting reason;
+- concurrent identical persistence;
+- concurrent conflicting persistence;
+- malformed persisted hash;
+- malformed canonical;
+- malformed decision;
+- proposal provenance mismatch;
+- rollback on failed persistence;
+- no Phase 6B mutation;
+- no experiment or scheduler mutation.
+
+Read-only presentation:
+
+- successful show;
+- not found;
+- list ordering;
+- limit validation;
+- explicit negative authority fields;
+- no sequence advancement;
+- no advisory or row locks;
+- no writes.
+
+Add or strengthen tests only for concrete gaps.
+
+DATABASE SAFETY
+
+Use a disposable verification database only.
+
+Before using it:
+
+- require `LSTM_TEST_DB_NAME`;
+- reject database name `LSTM`;
+- verify the resolved database is disposable.
+
+Do not apply migration 043 to the production `LSTM` database.
+
+Remove all disposable schemas and databases created by this review.
+
+Do not alter production experiment or scheduler data.
+
+SCHEDULER SAFETY
+
+Before launching any executable or test that might interact with the scheduler or production database:
+
+1. inspect running `LSTM_Release` processes;
+2. inspect scheduler status using a read-only command if safe;
+3. ensure the command uses the disposable test database;
+4. do not stop, continue, signal, pause, cancel, or modify any active experiment or worker.
+
+Do not run tests that could contend with active training/inference unless they are isolated and database-only.
+
+VERIFICATION
+
+Run the smallest focused checks first, then broader regressions.
+
+Required verification, adjusted only when an exact command is unavailable:
+
+1. Phase 6C pure contract tests.
+2. Phase 6C migration tests.
+3. Phase 6C repository/concurrency tests.
+4. Phase 6C presentation tests.
+5. Phase 6B repository, migration, and preview tests.
+6. Phase 6A focused tests.
+7. Phase 5A assessment tests.
+8. Phase 5B integration/reporting tests.
+9. Phase 5C policy tests.
+10. Relevant Phase 4D materialization tests.
+11. Xcode plist validation.
+12. `xcodebuild -list`.
+13. Incremental macOS arm64 `LSTM Release` build using:
+    `xcodebuild -project ExpertAdvisor.xcodeproj -scheme "LSTM Release" -configuration Release -derivedDataPath DerivedData/ExpertAdvisor build`
+14. Executable architecture verification.
+15. `git diff --check` for unstaged tracked Phase 6C changes.
+16. whitespace checks for all untracked Phase 6C files.
+17. `git diff --cached --check`, with the staged helper-file result reported separately.
+18. Verify no Phase 6C file is staged.
+19. Verify the staged helper blob IDs and modes are unchanged.
+
+Treat compiler warnings, build errors, and failing tests as defects unless clearly demonstrated to be unrelated.
+
+Do not suppress or ignore failures.
+
+DOCUMENTATION REVIEW
+
+Review:
+
+- Phase 6C feature document;
+- ADR-0008;
+- Volume VIII;
+- Volume XII;
+- Database README;
+- ADR index;
+- revision histories.
+
+Verify all documents agree that Phase 6C approval is administrative review only and grants no activation, execution, follow-up, scheduler, queue, worker, experiment, success, profitability, or statistical authority.
+
+Check migration numbering, table names, contract versions, identity grammar, outcomes, and error semantics against the code.
+
+Do not alter Phase 6A or Phase 6B semantics.
+
+FINAL WORKTREE AUDIT
+
+At the end, confirm:
+
+- branch remains `phase6`;
+- HEAD is unchanged;
+- no commit was created;
+- no files were staged or unstaged;
+- initial staged helper blob IDs and modes are unchanged;
+- only intended Phase 6C files were modified by this review;
+- no scheduler source was modified;
+- migration 043 was not applied to production;
+- disposable databases and schemas were removed;
+- DerivedData was preserved;
+- no active scheduler or workers were interrupted;
+- no production data was modified.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Independent findings ordered by severity.
+3. Corrections made, with justification.
+4. Phase 6C domain-contract assessment.
+5. Canonical identity and validation assessment.
+6. Migration and privilege assessment.
+7. Repository and concurrency assessment.
+8. Read-only presentation assessment.
+9. Authority-boundary assessment.
+10. Test-quality assessment.
+11. Focused and regression results.
+12. Build and architecture results.
+13. Documentation assessment.
+14. Separate staged helper-file whitespace finding.
+15. Worktree audit.
+16. Remaining risks or unverified assumptions.
+17. Files changed by this review.
+18. Exact behavioral changes.
+19. `git status --short`.
+20. `git diff --stat`.
+21. `git diff --cached --stat`.
+22. Recommendation on whether Phase 6C is ready to stage and proceed to commit review.
+
+Do not claim readiness merely because tests pass.
+
+Do not fail Phase 6C solely because the separately staged helper files have pre-existing EOF whitespace.
+
+Conclude with exactly one of:
+
+READY FOR PHASE 6C STAGING
+
+or
+
+NOT READY FOR PHASE 6C STAGING

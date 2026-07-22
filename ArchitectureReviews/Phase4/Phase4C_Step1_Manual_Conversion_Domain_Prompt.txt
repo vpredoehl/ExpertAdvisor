@@ -1,0 +1,103 @@
+PHASE 4C STEP 1 — MANUAL RECOMMENDATION CONVERSION DOMAIN CONTRACT
+
+Use high reasoning.
+
+REPOSITORY AND BRANCH
+
+Work in the current ExpertAdvisor repository and current branch.
+
+Before making changes:
+
+1.  Run git status --short.
+2.  Confirm the working tree is clean.
+3.  Record the current HEAD commit.
+4.  Do not start, stop, pause, resume, retry, cancel, queue, or
+    otherwise alter any experiment or scheduler process.
+5.  Do not run commands that write to the active LSTM database.
+6.  Do not modify the tracked database backup.
+
+CURRENT OPERATIONAL STATE
+
+The scheduler is intentionally stopped.
+
+There are: - no running workers - no queued experiments - two paused
+training experiments - several recent inference/analyze failures that
+occurred after build products were cleaned.
+
+For this task, treat the recent child_exit_code_127 failures as an
+unresolved operational incident.
+
+Do not investigate them. Do not modify scheduler launch behavior. Do not
+modify process creation. Do not modify executable path handling. Do not
+modify child-process diagnostics. Do not retry failed experiments. Do
+not resume paused experiments. Do not restart the scheduler.
+
+Those items are intentionally outside the scope of this task unless
+requested in a future review.
+
+GOAL
+
+Implement Phase 4C Step 1 as a pure, deterministic domain layer for
+manually converting an already-reviewed recommendation into a proposed
+experiment specification.
+
+This step defines and tests the conversion contract only.
+
+It must not persist a conversion, create an experiment, queue an
+experiment, modify scheduler state, or execute any recommendation.
+
+CORE REQUIREMENTS
+
+-   Manual authorization is mandatory.
+-   Ranking remains advisory and never authorizes conversion.
+-   Support only mutation families already represented by the
+    recommendation subsystem.
+-   Preserve every non-mutated source experiment parameter.
+-   Reject stale, inconsistent, blocked, unsupported, or ambiguous
+    recommendations.
+-   Produce deterministic canonical representations and identity hashes.
+-   No PostgreSQL access.
+-   No scheduler interaction.
+-   No CLI commands.
+-   No experiment creation.
+-   No persistence.
+-   Pure domain implementation with comprehensive deterministic unit
+    tests.
+
+VERIFICATION
+
+Report:
+
+1.  Initial and final git status --short
+2.  Files changed
+3.  Domain types/functions added
+4.  Supported mutation families
+5.  Eligibility and authorization rules
+6.  Canonical identity inputs
+7.  Tests compiled and executed
+8.  Debug build result
+9.  Release build result
+10. Confirmation that no database was accessed
+11. Confirmation that scheduler remained stopped
+12. Confirmation that no experiment state changed
+13. Confirmation that no paused experiment was resumed
+14. Confirmation that no failed experiment was retried
+15. Confirmation that no scheduler runtime or child-launch code was
+    modified
+16. Remaining risks or deferred work
+17. Final verdict: PASS PASS WITH FIXES FAIL
+
+Do not commit the changes.
+
+REASONING
+
+Phase 4B provides deterministic advisory rankings. Phase 4C Step 1
+establishes a pure conversion contract between reviewed recommendation
+evidence and a proposed experiment specification while deliberately
+remaining independent of persistence, scheduler execution, and database
+state.
+
+The recent child_exit_code_127 failures are intentionally treated as a
+separate operational incident that likely coincided with removal of
+build products. They are excluded from this task to keep Phase 4C
+narrowly focused and to avoid unrelated runtime changes.

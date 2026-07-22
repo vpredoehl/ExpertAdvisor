@@ -1,0 +1,231 @@
+Use model_reasoning_effort="xhigh".
+
+Perform an independent architecture review.
+
+Do NOT implement Phase 6.
+
+Do NOT modify code unless a genuine architectural defect is discovered that would make Phase 6 materially more difficult.
+
+This is a planning and readiness review only.
+
+Repository rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Work only from the current checkout.
+- Preserve the current branch.
+- Do not create commits.
+- Do not stage changes.
+- Do not clean DerivedData.
+
+Current state
+
+Phase 4 is complete.
+
+Phase 5A
+Campaign Outcome Assessment
+complete.
+
+Phase 5B
+Assessment reporting
+complete.
+
+Phase 5C
+Outcome Policy
+complete.
+
+All three have completed implementation,
+independent review,
+correction,
+independent re-review,
+and have now been committed.
+
+Goal
+
+Determine whether the architecture is ready to begin Phase 6.
+
+This is NOT a code review.
+
+This is NOT a feature request.
+
+This is NOT permission to redesign existing phases.
+
+Review objectives
+
+Review the current architecture for:
+
+1.
+Layering
+
+Verify the dependency graph remains:
+
+Phase 4
+↓
+
+Step 5A assessment
+
+↓
+
+Step 5C policy
+
+↓
+
+future operator workflow
+
+Confirm nothing depends upward.
+
+2.
+Extension points
+
+Determine whether Phase 6 can be added without modifying:
+
+Phase 4
+
+Step 5A
+
+Step 5B
+
+Step 5C
+
+If modifications appear necessary, determine whether they are:
+
+- mandatory
+- desirable
+- merely cosmetic
+
+3.
+Identity contracts
+
+Determine whether any canonical identity contracts should be considered frozen before Phase 6 begins.
+
+Look for:
+
+- provenance
+- versioning
+- hashes
+- serialization stability
+- auditability
+
+4.
+Responsibility boundaries
+
+Verify the current responsibilities remain clean.
+
+Assessment
+
+Policy
+
+Reporting
+
+Future operator workflow
+
+Recommendation persistence
+
+Approval
+
+Activation
+
+Execution
+
+Scheduler
+
+Repository
+
+CLI
+
+should each have independent responsibilities.
+
+5.
+Future persistence
+
+Determine whether persistence can be added without contaminating the pure assessment/policy layers.
+
+6.
+Workflow boundaries
+
+Determine whether any future operator workflow should depend only on:
+
+assessment
+
+policy decision
+
+immutable recommendation materialization
+
+rather than rebuilding any logic.
+
+7.
+Testing strategy
+
+Recommend the minimum testing strategy for Phase 6.
+
+Avoid excessive duplication.
+
+8.
+Risk assessment
+
+Identify any architectural risks that would become expensive if Phase 6 starts immediately.
+
+Ignore hypothetical future features.
+
+Focus only on realistic risks.
+
+Out of scope
+
+Do not redesign:
+
+LSTM
+
+scheduler
+
+training
+
+inference
+
+analysis
+
+campaign assessment
+
+campaign policy
+
+identity contracts
+
+unless a concrete architectural defect is found.
+
+Deliverable
+
+Provide:
+
+1.
+Overall readiness.
+
+2.
+Architecture strengths.
+
+3.
+Architecture weaknesses.
+
+4.
+Mandatory work before Phase 6.
+
+5.
+Optional improvements.
+
+6.
+Recommended Phase 6 decomposition.
+
+7.
+Smallest independently testable first milestone.
+
+8.
+Suggested implementation order.
+
+Conclude with exactly one of:
+
+READY TO BEGIN PHASE 6
+
+or
+
+NOT READY TO BEGIN PHASE 6

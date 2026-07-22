@@ -1,0 +1,514 @@
+Using High reasoning, perform a focused, independent review of the Phase 4B Step 2 canonicalization, deterministic ordering, and comparison implementation.
+
+GOAL
+
+Review only the ranking domain logic and comparison semantics that determine:
+
+- canonical ranking policy text
+- canonical scope text
+- canonical source membership
+- snapshot identity
+- deterministic ordering
+- bucket and rank assignment
+- comparison compatibility
+- score and component deltas
+- machine-readable identity/tie-break output where necessary to verify consistency
+
+This is a narrow post-implementation hardening review.
+
+Do not redesign the recommendation subsystem.
+
+Do not review or modify migration 035 trigger logic unless a domain/schema inconsistency directly proves a defect. The trigger is being reviewed separately.
+
+IMPORTANT COMMIT INSTRUCTION
+
+Do not create a commit.
+
+Do not stage changes.
+
+Do not push, merge, rebase, reset, or rewrite history.
+
+If concrete defects are found, fix only those defects and leave all changes unstaged and uncommitted so I can later amend the existing Phase 4B Step 2 commit myself.
+
+PRIMARY FILES
+
+Focus on:
+
+- Sources/ExperimentRecommendationRanking.hpp
+- Sources/ExperimentRecommendationRanking.cpp
+- Sources/ExperimentRecommendationRankingService.hpp
+- Sources/ExperimentRecommendationRankingService.cpp
+- Tests/ExperimentRecommendationRankingTests.cpp
+
+Inspect repository mapping or migration definitions only where required to confirm that the domain consumes the correct persisted fields:
+
+- Sources/ExperimentRecommendationRankingRepository.hpp
+- Sources/ExperimentRecommendationRankingRepository.cpp
+- Database/migrations/034_experiment_recommendation_evaluation.sql
+- Database/migrations/035_experiment_recommendation_ranking.sql
+- Tests/ExperimentRecommendationRankingRepositoryTests.cpp
+
+PHASE BOUNDARY
+
+Phase 4B Step 2 must remain advisory only.
+
+Do not add or alter:
+
+- recommendation approval or rejection
+- recommendation review transitions
+- experiment creation
+- experiment queueing
+- scheduler behavior
+- continuation behavior
+- profitability analysis
+- expected return
+- Sharpe ratio
+- drawdown
+- autonomous selection
+- trading execution
+- Phase 4B Step 3 functionality
+
+AUTHORITATIVE EVIDENCE
+
+Persisted Phase 4B Step 1 evaluation results and components remain authoritative.
+
+The ranking domain must not:
+
+- reload source experiment metrics
+- reconstruct Step 1 scores
+- introduce another score formula
+- reinterpret missing components as zero
+- select an arbitrary latest evaluation
+- infer profitability from rank
+
+REVIEW AREAS
+
+1. Canonical policy representation
+
+Verify that ranking-policy canonical text includes every semantic policy field and version needed to reproduce behavior.
+
+Check:
+
+- exact field order
+- stable delimiters
+- explicit versioning
+- locale independence
+- no timestamps or process-dependent state
+- no omitted ordering rule
+- no documentation/implementation mismatch
+
+Confirm hashes are accelerators only and canonical text remains authoritative.
+
+2. Scope canonicalization
+
+Review all seven scopes:
+
+- evaluation run
+- recommendation scan
+- symbol
+- horizon
+- family
+- symbol plus horizon
+- explicit global
+
+Verify:
+
+- exactly one scope is represented
+- canonical text distinguishes every scope type
+- NULL and absent filters are stable and unambiguous
+- explicit global cannot collide with an empty or malformed specific scope
+- text values are length framed or otherwise delimiter safe
+- identifiers cannot collide through formatting
+- control characters and leading/trailing whitespace are rejected consistently
+- scope canonicalization agrees with repository filtering and persisted snapshot columns
+
+Attempt adversarial values containing:
+
+- commas
+- semicolons
+- colons
+- equals signs
+- percent signs
+- multibyte UTF-8
+- embedded words such as NULL or global
+- common prefixes
+
+3. Source-membership canonicalization
+
+Verify membership identity includes the complete selected Step 1 evidence membership.
+
+Check:
+
+- deterministic sorting
+- evaluation identity canonical text
+- evaluation result ID uniqueness fallback
+- count
+- byte length versus character length
+- member ordinal
+- exact end-of-input behavior
+- duplicate evaluation-result rejection
+- duplicate canonical identity handling
+- malformed or empty membership behavior
+- maximum input boundary
+
+Attempt to construct canonical collisions using:
+
+- one identity containing serialized member-like text
+- result IDs with decimal-prefix relationships such as 1 and 10
+- multibyte identities
+- empty identities
+- duplicated identities with different result IDs
+- reordered input vectors
+- repeated identical evaluation-result rows
+
+Confirm reordered equivalent input produces the same canonical membership and snapshot identity.
+
+4. Snapshot identity
+
+Verify snapshot identity changes for every semantic difference:
+
+- ranking policy/version
+- scope type/value
+- explicit global
+- requested output limit
+- complete source membership
+- evaluation identity
+- evaluation-result ID
+
+Confirm it does not change because of:
+
+- input arrival order
+- timestamps
+- nonsemantic display metadata
+- unordered-container iteration
+- database row order
+
+Check consistency among:
+
+- canonical snapshot identity
+- membership canonical text
+- policy canonical text
+- scope canonical text
+- canonical hashes
+- repository-side validation
+- persisted schema columns
+
+5. Bucket mapping
+
+Review every persisted Step 1 disposition.
+
+Verify complete and exclusive mapping into:
+
+- advisory_ready
+- blocked
+- non_actionable
+
+Expected blocked order:
+
+1. pending duplicate
+2. active duplicate
+3. completed duplicate
+
+Expected non-actionable order:
+
+1. insufficient evidence
+2. stale source evidence
+3. unsupported recommendation family
+4. invalid persisted evidence
+
+Confirm:
+
+- no persisted disposition is omitted
+- unknown disposition cannot silently map to a valid bucket
+- blocked ordering is presentation only
+- bucket reason and inclusion reason are consistent
+- final score presence/absence requirements are correct
+
+6. Deterministic ordering
+
+Review comparators for strict weak ordering.
+
+Advisory-ready order:
+
+1. final score descending
+2. recommendation semantic hash
+3. evaluation identity hash
+4. evaluation-result ID
+
+Blocked order:
+
+1. blocked disposition priority
+2. recommendation semantic hash
+3. evaluation identity hash
+4. evaluation-result ID
+
+Non-actionable order:
+
+1. non-actionable disposition priority
+2. recommendation semantic hash
+3. evaluation identity hash
+4. evaluation-result ID
+
+Verify:
+
+- equal floating-point values
+- positive zero versus negative zero
+- NaN and infinity rejection
+- duplicate IDs
+- identical hashes with different canonical texts
+- hash collisions
+- result-ID fallback
+- no comparator inconsistency
+- no dependency on std::sort instability
+- rank assignment and global ordinal remain deterministic
+
+Canonical text, not hashes, must protect correctness where collisions are possible. Identify any place where ordering or equality trusts a hash without checking canonical identity.
+
+7. Floating-point canonicalization
+
+Review all ranking-related canonical double formatting.
+
+Check:
+
+- locale independence
+- round-trip precision
+- -0 normalization
+- NaN rejection
+- positive/negative infinity rejection
+- stable output across supported macOS toolchains
+- exact score tie-break representation
+- consistency between C++ canonical score text, PostgreSQL trigger validation, and machine output
+
+Do not redesign global floating-point formatting unless a concrete Step 2 defect is demonstrated.
+
+8. Top component selection
+
+Verify top positive and top penalty components use only persisted Step 1 components.
+
+Check:
+
+- contribution descending
+- component-name deterministic tie-break
+- penalty classification
+- empty side behavior
+- zero contributions
+- duplicate component names
+- component-count consistency
+- finite normalized values, weights, and contributions
+- no score reconstruction
+
+Confirm the C++ selection rule agrees exactly with migration-trigger validation and documentation.
+
+9. Direct evaluation comparison
+
+Review compatibility requirements.
+
+Confirm comparison requires the intended authoritative fields, including as applicable:
+
+- evaluation policy canonical identity/version
+- scoring policy canonical identity/version
+- evaluator version
+- recommendation family
+- final score availability
+
+Verify explicit states for:
+
+- comparable left winner
+- comparable right winner
+- identical score tie
+- incompatible policy
+- incompatible evaluator
+- incompatible family
+- missing score
+- any other defined incomparability
+
+Check score delta direction and exact NULL behavior.
+
+No winner may be fabricated for an incomparable pair.
+
+10. Component comparison
+
+Verify persisted components align by stable component name.
+
+Check:
+
+- missing left side
+- missing right side
+- both present
+- contribution delta direction
+- penalty flag mismatches
+- duplicate component names
+- ordering of component differences
+- maximum component count
+- largest positive difference
+- largest penalty difference
+- zero delta
+- missing-side delta remains NULL rather than zero
+
+Attempt adversarial component sets with:
+
+- same name but different penalty flags
+- duplicate names
+- only one side present
+- equal magnitude ties
+- all zero deltas
+- maximum allowed components
+
+11. Ranked-member comparison
+
+Verify:
+
+- ranks are compared only when both members belong to the same explicit snapshot
+- different snapshots return incomparable_scope
+- no implicit or latest snapshot selection
+- bucket differences are represented correctly
+- ranks are not compared across buckets unless explicitly intended
+- score/component comparison remains policy-compatible
+- member IDs and snapshot IDs are handled correctly
+- machine and human output report scope incomparability clearly
+
+12. Output identity consistency
+
+Review only output fields needed to validate deterministic identities and comparisons.
+
+Confirm machine output exposes distinct fields for:
+
+- recommendation semantic identity/hash
+- evaluation identity/hash
+- ranking snapshot identity/hash
+- all tie-breaks
+- bucket rank
+- global ordinal
+- score and NULL
+- comparison compatibility state
+
+Check:
+
+- percent escaping
+- explicit NULL
+- stable field names
+- no conflation of scientific identity with persistence ID
+- no omitted final tie-break
+- human output does not imply profitability or execution priority
+
+TEST REVIEW
+
+Inspect existing tests and add only high-value missing regression cases.
+
+Expected focused coverage includes:
+
+- all seven scope canonical forms
+- adversarial delimiter text
+- multibyte byte lengths
+- reordered input identity stability
+- policy-sensitive identity
+- limit-sensitive identity
+- membership-sensitive identity
+- duplicate evaluation-result rejection
+- complete disposition mapping
+- strict ordering tie-breaks
+- hash collision simulation where practical
+- equal scores
+- -0 and +0
+- NaN and infinity rejection
+- missing components
+- duplicate components
+- penalty-flag mismatch
+- zero component deltas
+- incompatible policies/evaluator/family
+- same-snapshot rank comparison
+- cross-snapshot incomparability
+- output tie-break and NULL fields
+
+CHANGES ALLOWED
+
+Make changes only for a concrete:
+
+- canonical collision
+- nondeterminism
+- incomplete identity
+- comparator defect
+- floating-point canonicalization defect
+- disposition mapping defect
+- comparison correctness defect
+- component alignment defect
+- missing high-value regression test
+- schema/domain/output inconsistency
+- misleading documentation directly related to canonicalization or comparison
+
+Do not make speculative refactors, formatting-only changes, naming churn, broad cleanup, or architecture changes.
+
+OPERATIONAL SAFETY
+
+The live scheduler and experiments may be running.
+
+This review should require no live database mutation.
+
+Do not:
+
+- stop, restart, signal, or reconfigure the scheduler
+- start another scheduler
+- queue or alter experiments
+- apply migrations
+- run live ranking writes
+- run live evaluation writes
+- modify the live migration ledger
+- create public ranking tables
+
+Prefer pure C++ tests.
+
+Repository tests may be run only if they use exact disposable schemas and do not inspect or mutate unrelated live rows.
+
+VERIFICATION
+
+At minimum:
+
+- strict C++20 compilation of ranking domain tests with:
+  -Wall -Wextra -Wpedantic -Werror
+- focused ranking/canonicalization/comparison tests
+- git diff --check
+- no staged changes
+
+If repository/output code changes, also:
+
+- rebuild the isolated ranking repository test binary with the complete required source list
+- run it three consecutive times
+- verify no disposable schema remains
+
+Do not claim a test passed unless it actually ran.
+
+FINAL RESPONSE
+
+Provide:
+
+1. Overall verdict
+2. Findings ordered by severity
+3. Exact corrections made, if any
+4. Tests run and outcomes
+5. Operational-safety confirmation
+6. Remaining risks
+7. Files modified by this review
+8. Current Git status
+
+If no defects are found, say so explicitly and leave the tree unchanged.
+
+If defects are found, leave fixes unstaged and uncommitted.
+
+Do not create a commit.
+
+Do not suggest or run a commit command.
+
+REASONING FOR THIS REVIEW
+
+Phase 4B Step 2 depends on deterministic scientific identity and comparison behavior. Even with strong persistence constraints, subtle canonicalization or comparator errors can produce duplicate snapshots, unstable rankings, incorrect retry identity, false winners, or misleading explanations.
+
+The highest-value remaining review area is therefore the pure domain boundary:
+
+- whether policy, scope, and membership canonicalization are collision-safe;
+- whether ranking order is a strict deterministic total order;
+- whether floating-point values are canonical and finite;
+- whether all Step 1 dispositions map correctly;
+- whether component comparison preserves NULL semantics;
+- and whether ranked comparisons never cross snapshot scope.
+
+This review is safe to perform while experiments run because it is primarily pure C++ inspection and testing and requires no scheduler interaction or live ranking migration.

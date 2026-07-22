@@ -1,0 +1,382 @@
+PHASE 6D
+FOCUSED INDEPENDENT RATIFICATION RE-REVIEW
+PROMPT AND REASONING
+
+REASONING
+
+The initial Phase 6D implementation was independently reviewed and found to
+duplicate Phase 6C's existing approved administrative-review semantics.
+
+A focused correction pass then redefined Phase 6D as a distinct immutable
+ratification authority.
+
+The corrected intended authority chain is:
+
+Phase 6C administrative review asks:
+
+    Is this exact persisted follow-up proposal acceptable on its merits for
+    possible advancement?
+
+Phase 6D ratification asks:
+
+    Given the exact approved Phase 6C review and complete authoritative
+    provenance, does a distinct authorized governance actor ratify this proposal
+    for entry into the next separately controlled phase?
+
+The correction also introduced a separation-of-duties rule:
+
+    Phase 6D ratifier identity must differ from the Phase 6C reviewer identity.
+
+Phase 6D ratification remains governance evidence only. It must not activate,
+execute, authorize follow-up execution, queue, schedule, signal or start the
+scheduler, launch workers, create or modify experiments or models, advance
+continuations, declare campaign success, or implement Phase 6E.
+
+The correction pass reported that it:
+
+- comprehensively renamed Phase 6D approval terminology to ratification;
+- replaced the uncommitted migration 044 rather than adding migration 045;
+- introduced a fixed ratification authority role;
+- encoded separation of duties;
+- preserved deterministic canonical identity;
+- preserved append-only persistence;
+- preserved exact replay and deterministic conflict behavior;
+- preserved transaction-scoped concurrency control;
+- preserved complete Phase 6C/6B/6A provenance validation;
+- preserved least-privilege PostgreSQL ACL behavior;
+- preserved the earlier independent-review test hardening:
+  - fixed golden hash;
+  - valid UTF-8 coverage;
+  - explicit DEL rejection;
+  - forced NULL-ACL fallback tests;
+  - lowercase PostgreSQL sequence ACL object type `s`.
+
+The full incremental Release build remains deferred because active scheduler,
+training, and inference workers made additional build contention unsafe.
+
+This re-review must independently verify that the correction genuinely resolves
+the authority-boundary defect and does not merely rename a duplicate approval.
+
+It must inspect every tracked change and every untracked file. Ordinary
+`git diff` excludes untracked file contents.
+
+This is an independent re-review. It is not a request to redesign Phase 6,
+implement Phase 6E, or expand operational authority.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a focused independent re-review of the current uncommitted corrected
+Phase 6D ratification implementation in the `ExpertAdvisor` repository on
+branch `phase6d`.
+
+GOAL
+
+Determine whether the corrected Phase 6D implementation:
+
+- now defines a legitimate governance authority distinct from Phase 6C;
+- enforces separation of duties correctly;
+- is consistently named and documented;
+- preserves deterministic identity and immutable semantics;
+- preserves transaction, replay, concurrency, and provenance safety;
+- preserves least-privilege database behavior;
+- remains completely non-operational;
+- is adequately tested;
+- is ready for staged commit review.
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6E or later behavior.
+
+Do not add activation, execution, follow-up execution authorization, campaign
+execution authorization, scheduling, queueing, scheduler signaling, worker
+launch, experiment/model mutation, continuation advancement, profitability,
+campaign-success logic, automatic ratification, or automatic review.
+
+Make changes only if the re-review identifies a concrete defect, missing
+verification, misleading contract, unsafe behavior, stale naming, inconsistent
+authority boundary, or test gap.
+
+STARTING STATE AND SAFETY AUDIT
+
+Before reviewing, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --cached --stat`
+5. `git diff --stat`
+6. complete untracked-file list
+7. `git log -5 --oneline --decorate`
+8. `git show --no-patch --decorate phase6c-complete`
+9. `git merge-base --is-ancestor phase6c-complete HEAD`
+10. scheduler and worker processes using OS process tools only
+
+Require branch `phase6d`, Phase 6C ancestry, an unstaged index, and changes
+limited to corrected Phase 6D ratification plus its review-test hardening.
+
+Do not destroy work if the state differs. Analyze and report it.
+
+OPERATIONAL SAFETY
+
+- Do not fetch, pull, merge, rebase, reset, switch branches, or rewrite history.
+- Do not create, amend, push, or stage a commit.
+- Do not run Clean.
+- Preserve DerivedData.
+- Do not interrupt scheduler or worker processes.
+- Do not issue signals or process-control commands.
+- Do not run `LSTM_Release --scheduler-status`.
+- Do not connect to or modify production database `LSTM`.
+- Use only explicitly named disposable test databases.
+- Reject case-insensitive database name `LSTM`.
+- Remove all disposable database objects at the end.
+- Use Release configuration only.
+- Do not start experiments.
+
+REVIEW THE COMPLETE CHANGE SET
+
+Review every modified tracked file and every untracked file. Do not rely only on
+`git diff`. Inspect each untracked file directly or against `/dev/null`.
+
+Confirm no obsolete Phase 6D approval implementation remains and the change set
+contains only corrected Phase 6D ratification code, migration 044, repository,
+service, tests, project integration, documents, ADR, architecture updates, and
+the prior independent-review hardening.
+
+PRIMARY AUTHORITY-BOUNDARY RE-REVIEW
+
+Answer independently:
+
+1. What exact decision does Phase 6C record?
+2. What exact decision does Phase 6D record?
+3. Is the distinction semantic, not merely terminological?
+4. Does Phase 6D ratify advancement rather than re-approve merits?
+5. Is the consequence clearly bounded?
+6. Does ratification grant no Phase 6E authority?
+7. Could review, approval, ratification, activation, or execution be confused?
+8. Is the fixed authority role meaningful and consistently used?
+9. Is caller-defined arbitrary authority impossible?
+10. Does the correction resolve the original blocker?
+
+Treat remaining semantic duplication as blocking.
+
+SEPARATION-OF-DUTIES REVIEW
+
+Verify:
+
+    ratifier_identity != reviewer_identity
+
+Review enforcement in the pure builder, canonical identity, migration
+constraint/trigger, repository, service, replay/concurrency behavior, tests, and
+documentation.
+
+Determine whether comparison is exact and deterministic, whether case
+sensitivity is intentional, whether alternate text representations can bypass
+it, whether malformed storage or direct runtime-role SQL can bypass it, whether
+owner-level corruption is detected on reload, whether exact replay remains
+possible, and whether self-ratification fails with a stable reason.
+
+The reviewer identity must come from authoritative Phase 6C storage, not the
+caller.
+
+NAMING AND STALE-TERM REVIEW
+
+Search the repository for old uncommitted Phase 6D approval terminology:
+
+- `FollowUpProposalApproval`
+- `follow_up_proposal_approval`
+- `Phase6DRecommendationCampaignFollowUpProposalApproval`
+- `phase-6d-follow-up-proposal-administrative-approval`
+- `approval_event`
+- `approval_contract_version`
+- `approval_decision`
+- `approver_identity`
+- `approval_reason`
+- old migration, ADR, and Phase 6D document filenames
+
+Do not flag legitimate Phase 6C, Phase 4D, campaign approval, or unrelated
+approval concepts.
+
+Confirm no obsolete source/header/test/document/migration remains; project
+entries, includes, SQL objects, errors, canonical fields, and links are
+ratification-consistent.
+
+DOMAIN CONTRACT REVIEW
+
+Review:
+
+- contract version;
+- exact Phase 6C review-event identity;
+- exact Phase 6B and Phase 6A bindings;
+- approved-review eligibility;
+- fixed authority role;
+- decision text `ratified`;
+- reviewer and ratifier identity binding;
+- separation of duties;
+- ratification basis;
+- UTF-8/control handling;
+- locale-independent canonical formatting;
+- field order and byte-length framing;
+- canonical size limits;
+- tagged-hash validation;
+- canonical-first equality;
+- immutable/non-assignable semantics;
+- exact replay;
+- fixed negative operational flags;
+- stable failure reasons.
+
+Verify metadata, time, PID, locale, presentation, scheduler state, and database
+metadata do not affect identity. Verify the role cannot be caller-injected and
+the canonical distinctly encodes `review_decision=approved` and
+`ratification_decision=ratified`.
+
+MIGRATION 044 REVIEW
+
+Verify:
+
+- migration remains 044 and old approval migration is absent;
+- all object names are ratification-based;
+- additive ordering after 043;
+- one append-only ratification per exact review/proposal;
+- full Phase 6C/6B provenance;
+- restrictive foreign keys;
+- approved-review and separation-of-duties enforcement;
+- fixed role and `ratified` state;
+- C collation, size checks, generated metadata protection;
+- safe trigger identity, invoker/definer choice, and pinned search path;
+- PUBLIC revocation and runtime least privilege;
+- correct table/function/sequence ACL fallback;
+- lowercase sequence object type `s`;
+- no update/delete/truncate/generated-field/table-level insert authority;
+- repeatability, clean install, and upgrade from 043;
+- no mutation of Phase 6A/6B/6C, experiment, model, scheduler, or lifecycle
+  tables.
+
+Explicitly test whether direct runtime-role insertion can bypass separation of
+duties.
+
+REPOSITORY REVIEW
+
+Verify validation-before-write, advisory locking over the review-event conflict
+domain, exact Phase 6C and 6B reload, authoritative reviewer identity,
+approved-only eligibility, separation of duties, fixed role, first-write,
+exact replay, changed ratifier/basis/role/upstream conflicts, equivalent and
+conflicting concurrency, hash-collision behavior, rollback, malformed storage,
+missing/stale provenance, deterministic errors, immutable hydration, read-only
+lookup/list behavior, and no upstream/lifecycle side effects.
+
+Check for unsafe or undocumented transaction-isolation assumptions.
+
+SERVICE REVIEW
+
+Verify one transaction loads the exact review, checks expected identity,
+eligibility, and separation of duties, constructs ratification once, persists
+atomically, commits after persistence, and returns the authoritative result.
+
+Verify the service exposes no activation, execution, scheduler, worker,
+experiment, model, continuation, profitability, or success authority. Confirm
+omitting CLI integration remains correct.
+
+TEST REVIEW
+
+Confirm meaningful coverage of:
+
+1. construction and immutability;
+2. `ratified` decision;
+3. fixed authority role;
+4. golden canonical and hash;
+5. locale independence;
+6. valid UTF-8 and NUL/control/DEL rejection;
+7. exact approved-review binding;
+8. rejected, missing, and stale review refusal;
+9. self-ratification refusal;
+10. distinct reviewer/ratifier success;
+11. replay and changed ratifier/basis conflicts;
+12. injected-role refusal;
+13. hash collision;
+14. equivalent/conflicting concurrency;
+15. rollback and malformed storage;
+16. append-only and least privilege;
+17. PUBLIC and NULL-ACL fallback;
+18. lowercase sequence ACL type `s`;
+19. trigger/generated-column protection;
+20. read-only operations without sequence advance or locks;
+21. unchanged Phase 6A/6B/6C and experiment/model/scheduler fixtures;
+22. clean install and upgrade from 043;
+23. project membership and Phase 6A/6B/6C regressions;
+24. no operational side effects.
+
+Look for owner-only tests, weak assertions, implementation-restating tests,
+self-ratification gaps, direct-SQL bypass gaps, or missing canonical-role
+enforcement.
+
+VERIFICATION
+
+Run the strongest safe verification, including corrected pure tests,
+migration/repository/service tests, separation-of-duties and direct-runtime-role
+bypass tests, NULL-ACL and concurrency tests, clean install, upgrade from 043,
+Phase 6A/6B/6C regressions, project membership, `xcodebuild -list`,
+`plutil -lint`, stale-name searches, `git diff --check`, and final audits.
+
+RELEASE BUILD
+
+Reassess load using OS tools only. If safe, run:
+
+    xcodebuild       -project ExpertAdvisor.xcodeproj       -scheme "LSTM Release"       -configuration Release       -derivedDataPath DerivedData/ExpertAdvisor       build
+
+Then verify executable architecture with `file` or `lipo -info`.
+
+Do not run Clean. If active workers still make the build unsafe, do not
+interrupt them. Report the build as the remaining mechanical gap and provide
+the exact command; do not treat deferral as an architectural failure.
+
+CORRECTIONS
+
+Make only narrow corrections for concrete defects. Do not stage or commit.
+Rerun directly affected checks and enough regressions after any correction.
+
+FINAL SELF-REVIEW
+
+Inspect the complete final diff including untracked files; confirm obsolete
+approval files/symbols/objects are absent, no unrelated/generated artifacts
+changed, the index remains unchanged, `git diff --check` passes, and record
+exact status, diff stat, untracked files, worker presence, database cleanup, and
+confirmation of no interruption, production access, staging, commit, or push.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive verdict.
+2. Blocking and non-blocking findings.
+3. Phase 6C versus Phase 6D authority comparison.
+4. Separation-of-duties assessment.
+5. Naming/stale-term assessment.
+6. Domain contract assessment.
+7. Migration/privilege assessment.
+8. Repository/replay/concurrency assessment.
+9. Service and CLI assessment.
+10. Test adequacy.
+11. Build/project integration.
+12. Scheduler/production-data safety.
+13. Corrections made.
+14. Remaining risks/gaps.
+15. Exact final `git status --short`.
+16. Exact final `git diff --stat`.
+17. Complete untracked-file list.
+18. Readiness-to-commit recommendation.
+19. Recommended next action.
+
+End with exactly one of:
+
+PHASE 6D RATIFICATION INDEPENDENT RE-REVIEW PASSED — READY FOR STAGED COMMIT REVIEW
+
+or
+
+PHASE 6D RATIFICATION INDEPENDENT RE-REVIEW FOUND REQUIRED CORRECTIONS
+
+or
+
+PHASE 6D RATIFICATION INDEPENDENT RE-REVIEW BLOCKED

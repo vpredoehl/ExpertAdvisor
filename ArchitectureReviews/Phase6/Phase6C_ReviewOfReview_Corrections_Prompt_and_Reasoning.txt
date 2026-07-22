@@ -1,0 +1,306 @@
+PHASE 6C REVIEW-OF-REVIEW CORRECTIONS
+PROMPT AND REASONING
+
+REASONING
+
+The Phase 6C implementation was committed as:
+
+    2e1fc63 Implement Phase 6C immutable follow-up proposal administrative review
+
+A subsequent independent review inspected that exact commit, ran focused and regression verification, and made four unstaged corrections:
+
+- Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp
+- Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql
+- Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp
+- docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst
+
+The independent review reported:
+
+- one medium-severity defect: locale-dependent integer rendering could corrupt comma-delimited machine output;
+- one migration-verification gap: missing explicit assertions for PUBLIC privileges, SECURITY INVOKER, and hardened search_path;
+- one presentation-test gap: no hostile-locale and delimiter/UTF-8 escaping coverage;
+- one documentation-precision gap: the text overstated Unicode-whitespace rejection and omitted machine-rendering guarantees.
+
+The review then reported that all focused tests, regressions, disposable-database verification, Release build verification, architecture checks, scheduler-safety checks, and whitespace checks passed.
+
+The correct next step is a narrowly scoped review of those four review-generated corrections before staging and committing them.
+
+This pass must not reimplement Phase 6C, expand scope, add new Phase 6 behavior, or modify unrelated files. It should independently verify that each correction is necessary, correct, minimal, testable, compatible with existing contracts, and safe to commit.
+
+The desired outcome is either:
+
+- confirmation that the four corrections are ready to stage and commit; or
+- precise correction of any concrete defect introduced by the review changes, followed by focused verification.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a focused independent review of the current unstaged Phase 6C review corrections on the current `phase6` branch.
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6D or any later phase.
+
+Do not add CLI integration, activation, execution, scheduling, queueing, worker launch, experiment creation, experiment modification, campaign-success declaration, profitability, statistical validation, or automatic approval behavior.
+
+Make changes only if this review identifies a concrete defect, incorrect assertion, unsafe behavior, misleading documentation statement, portability problem, regression risk, or missing verification directly related to the four current correction files.
+
+CURRENT STATE
+
+Phase 6C implementation is already committed at:
+
+    2e1fc63d77af04949090a28f67be03b4fbea7be1
+
+The current unstaged review corrections should be limited to:
+
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp`
+- `docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst`
+
+The independent review output is available in:
+
+- `Phase6C_IndependentReview_and_Corrections_Output.txt`
+
+Treat that file as supporting evidence only. Do not trust its conclusions without independently checking the actual diff and relevant implementation.
+
+REPOSITORY RULES
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do not switch branches.
+- Preserve the current `phase6` branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not stage or unstage files.
+- Preserve DerivedData.
+- Reuse existing Release build products.
+- Use Release builds only.
+- Do not run Clean.
+- Do not modify unrelated files.
+- Do not alter active scheduler or worker processes.
+- Do not modify production database data.
+
+At the beginning, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --name-status`
+5. `git diff --stat`
+6. `git diff --cached --name-status`
+7. `git diff --check`
+8. `git diff --cached --check`
+
+Confirm that the current unstaged diff is limited to the four expected correction files. If it is not, report the discrepancy and avoid modifying unrelated paths.
+
+REVIEW SCOPE
+
+Review only the correction delta between HEAD and the current worktree.
+
+The review must independently examine:
+
+1. Locale-independent machine rendering correction.
+2. Hostile-locale and machine-escaping regression tests.
+3. Migration privilege and trigger-execution-context assertions.
+4. Documentation precision and consistency.
+
+PRESENTATION CORRECTION REVIEW
+
+Inspect:
+
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp`
+
+Verify that replacing direct stream insertion of integer fields with `std::to_string`:
+
+- prevents locale grouping, alternate numeric punctuation, or caller-locale formatting from corrupting comma-delimited machine output;
+- preserves ordinary output exactly for classic/default locales;
+- handles signed integer values consistently;
+- does not introduce allocation, exception, encoding, or formatting concerns material to this path;
+- does not change canonical identity or persisted data;
+- remains consistent with existing project machine-output conventions;
+- covers every integer field in Phase 6C machine records and not-found output that can be influenced by stream locale;
+- does not leave other locale-sensitive numeric fields in the same Phase 6C presentation path;
+- does not accidentally bypass existing escaping for text fields;
+- preserves all negative authority fields exactly.
+
+Search nearby and related presentation code for any missed Phase 6C numeric insertion that could still be locale-sensitive.
+
+Do not expand the change into broad presentation refactoring unless a concrete Phase 6C defect requires it.
+
+TEST CORRECTION REVIEW
+
+Inspect:
+
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp`
+
+Verify that the hostile-locale test:
+
+- would fail against the committed pre-correction implementation;
+- passes only because the corrected implementation is locale-independent;
+- uses a valid and portable `std::numpunct<char>` facet;
+- does not leak or misuse locale facet ownership;
+- produces deterministic grouping behavior on supported standard-library implementations;
+- verifies all relevant integer fields;
+- verifies delimiter escaping for comma, equals, percent, newline, and UTF-8 bytes;
+- verifies not-found output under the hostile locale;
+- avoids false positives caused by substring matching that could pass despite malformed output;
+- does not depend on machine locale, timezone, production data, or scheduler state.
+
+Strengthen assertions only if a concrete weakness is found.
+
+MIGRATION TEST CORRECTION REVIEW
+
+Inspect:
+
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql`
+- `Database/migrations/043_experiment_recommendation_campaign_follow_up_proposal_review.sql`
+
+Verify that the added SQL assertions correctly and portably test:
+
+- no PUBLIC privilege on the review sequence;
+- no PUBLIC execute privilege on the provenance trigger function;
+- trigger function is not SECURITY DEFINER;
+- trigger function has the exact hardened search path intended by the migration.
+
+Pay special attention to:
+
+- `regprocedure` resolution and schema-search behavior;
+- whether the test could resolve the wrong same-named function in another schema;
+- `acldefault` object-type codes;
+- use of `proacl`, `relacl`, and `aclexplode`;
+- PUBLIC grantee representation;
+- exact `proconfig` array ordering and formatting;
+- differences between an absent ACL and default privileges;
+- whether the assertion matches the migration's actual repeatable behavior;
+- PostgreSQL-version compatibility with the project's supported environment;
+- whether the test truly fails if the privilege or search-path hardening regresses.
+
+Correct only real test defects or ambiguity. Do not change migration 043 unless the review finds an actual migration defect rather than a test issue.
+
+DOCUMENTATION CORRECTION REVIEW
+
+Inspect:
+
+- `docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst`
+- the Phase 6C implementation's actual reason-validation logic;
+- relevant ADR and architecture documents for consistency.
+
+Verify that the revised text accurately describes:
+
+- byte-length limits;
+- UTF-8 validation;
+- ASCII whitespace handling;
+- prohibited controls;
+- exact preservation;
+- locale-independent decimal rendering;
+- percent escaping of delimiter-bearing or non-ASCII payload bytes.
+
+Confirm the documentation does not overclaim:
+
+- full Unicode whitespace classification;
+- normalization;
+- authorization;
+- activation;
+- execution;
+- scheduling;
+- queueing;
+- worker behavior;
+- profitability;
+- statistical validation.
+
+REVIEW OF THE PRIOR REVIEW OUTPUT
+
+Read:
+
+- `Phase6C_IndependentReview_and_Corrections_Output.txt`
+
+Use it to identify claimed verification and rationale, but independently confirm the claims material to these four corrections.
+
+Check for contradictions between:
+
+- the claimed findings;
+- the actual four-file diff;
+- the implementation;
+- the tests;
+- the migration;
+- the documentation.
+
+Do not rerun every broad regression merely because the prior review did. Run the smallest verification sufficient to validate these corrections, then broader checks only where needed.
+
+DATABASE AND SCHEDULER SAFETY
+
+Any database test must use a disposable database only.
+
+Before any database execution:
+
+- require `LSTM_TEST_DB_NAME`;
+- reject database name `LSTM`;
+- verify the resolved database is disposable;
+- inspect active `LSTM_Release` scheduler/worker processes;
+- do not stop, signal, pause, resume, or modify them.
+
+Do not apply migration 043 to production.
+
+Remove disposable databases or schemas created by this review.
+
+VERIFICATION
+
+Run focused checks appropriate to the corrections:
+
+1. Compile and run the Phase 6C repository/presentation test containing the hostile-locale coverage.
+2. Run the Phase 6C migration test against a disposable database.
+3. Run the Phase 6C pure contract test if needed to confirm no semantic regression.
+4. Validate the Xcode project plist.
+5. Run `xcodebuild -list`.
+6. Run an incremental macOS arm64 Release build:
+
+   `xcodebuild -project ExpertAdvisor.xcodeproj -scheme "LSTM Release" -configuration Release -derivedDataPath DerivedData/ExpertAdvisor build`
+
+7. Verify the resulting executable architecture.
+8. Run `git diff --check`.
+9. Run `git diff --cached --check`.
+10. Confirm no file outside the expected four-file correction set was modified.
+11. Confirm no file was staged or unstaged.
+12. Confirm branch and HEAD remain unchanged.
+13. Confirm scheduler and workers were not interrupted.
+14. Confirm production database was not modified.
+
+Use `-Wall -Wextra -Wpedantic -Werror` for manually compiled focused C++ tests where applicable.
+
+Treat warnings, build failures, and test failures as defects unless conclusively unrelated.
+
+FINAL DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Findings ordered by severity.
+3. Whether each of the four corrections is necessary, correct, and minimal.
+4. Any changes made during this review and why.
+5. Presentation-locale assessment.
+6. Test-quality assessment.
+7. Migration-test assessment.
+8. Documentation assessment.
+9. Focused test results.
+10. Release build and architecture results.
+11. Database and scheduler safety results.
+12. Remaining risks or unverified assumptions.
+13. Exact files changed by this review.
+14. `git status --short`.
+15. `git diff --stat`.
+16. `git diff --cached --stat`.
+17. Recommendation on whether the four corrections are ready to stage and commit.
+
+Conclude with exactly one of:
+
+READY TO STAGE PHASE 6C REVIEW CORRECTIONS
+
+or
+
+NOT READY TO STAGE PHASE 6C REVIEW CORRECTIONS

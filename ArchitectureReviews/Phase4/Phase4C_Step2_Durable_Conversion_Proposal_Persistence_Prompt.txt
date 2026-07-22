@@ -1,0 +1,357 @@
+PHASE 4C STEP 2 — DURABLE MANUAL CONVERSION PROPOSAL PERSISTENCE
+
+Use high reasoning.
+
+REPOSITORY AND BRANCH
+
+Work in the current ExpertAdvisor repository and current branch.
+
+The expected starting commit is:
+
+1ccc1fc Phase 4C Step 1: add manual recommendation conversion domain contract
+
+Before making changes:
+
+1. Run `git status --short`.
+2. Confirm the working tree is clean.
+3. Record the current HEAD commit.
+4. Confirm that Phase 4C Step 1 is present.
+5. Do not start, stop, pause, resume, retry, cancel, queue, or otherwise alter any experiment or scheduler process.
+6. Do not run the scheduler.
+7. Do not run commands that modify experiment state.
+8. Do not modify the tracked database backup.
+9. Do not investigate the earlier `child_exit_code_127` incident.
+
+CURRENT OPERATIONAL STATE
+
+The scheduler is intentionally stopped.
+
+There are no running workers and no queued experiments. Existing paused and failed experiments must remain unchanged.
+
+This task may use an isolated temporary PostgreSQL test database when required for repository and migration verification. It must not write to the active LSTM database.
+
+GOAL
+
+Implement Phase 4C Step 2 as the durable persistence layer for manually prepared recommendation conversion proposals.
+
+Phase 4C Step 1 already provides a pure deterministic function that validates supplied evidence and returns an in-memory `ProposedExperimentSpecification`.
+
+This step must persist that proposal as an immutable, auditable conversion-proposal record.
+
+It must not:
+
+- create an experiment row;
+- assign a runnable experiment;
+- queue or schedule an experiment;
+- alter experiment status or phase;
+- resume, retry, cancel, pause, or continue an experiment;
+- start a worker;
+- expose automatic conversion;
+- infer authorization from ranking;
+- treat persistence as execution authorization.
+
+The durable row is a prepared proposal only.
+
+PHASE BOUNDARY
+
+Phase 4C Step 2 owns durable proposal persistence and retrieval.
+
+It may add:
+
+- PostgreSQL schema and migration support;
+- repository interfaces and PostgreSQL implementations;
+- immutable proposal insertion;
+- exact duplicate lookup;
+- retrieval by proposal ID, recommendation ID, source experiment ID, and conversion identity;
+- deterministic mapping between domain values and persisted values;
+- isolated persistence tests;
+- documentation.
+
+It must not add:
+
+- experiment creation;
+- proposal execution;
+- scheduler polling;
+- automatic queueing;
+- autonomous approval;
+- profitability-based authorization;
+- recommendation ranking authorization;
+- CLI commands that create or queue experiments;
+- background processing;
+- mutation of persisted proposals after creation, except narrowly defined administrative metadata if already required by repository conventions.
+
+ARCHITECTURAL REQUIREMENTS
+
+Preserve the existing ownership boundaries:
+
+1. The Phase 4C Step 1 pure domain function remains the sole authority for conversion eligibility and proposal derivation.
+2. The repository must not independently reinterpret authorization, ranking, mutation eligibility, or canonical identity.
+3. Persistence accepts a successfully built `ProposedExperimentSpecification` and stores it faithfully.
+4. Canonical conversion text is authoritative for equality.
+5. The hash is only an indexed accelerator and must never be trusted without exact canonical-text comparison.
+6. Ranking provenance remains optional advisory metadata and is not part of conversion identity or authorization.
+7. Persisting a proposal does not authorize experiment creation or execution.
+8. No scheduler component may depend on, scan, or act on these rows in this step.
+9. Existing Phase 4A and Phase 4B recommendation behavior must remain unchanged.
+
+SCHEMA REQUIREMENTS
+
+Design a narrowly scoped table for immutable manual conversion proposals.
+
+The exact naming should follow existing project conventions, but the persisted record must include enough information to reconstruct and audit the Step 1 proposal without consulting volatile process state.
+
+At minimum, persist:
+
+- proposal primary key;
+- recommendation ID;
+- source experiment ID;
+- conversion contract version;
+- changed mutation parameter;
+- canonical source value;
+- canonical proposed value;
+- recommendation semantic hash;
+- evaluation identity hash;
+- evaluation policy hash;
+- scoring policy hash;
+- review authorization hash;
+- optional ranking snapshot identity hash;
+- complete proposed invocation/configuration fields required to reconstruct `ExperimentInvocationConfiguration`;
+- authoritative conversion identity canonical text;
+- conversion identity hash;
+- creation timestamp.
+
+Also persist canonical source/proposed invocation representations or equivalent complete structured values when needed to preserve exact auditability. Do not omit information merely because it can currently be recomputed from mutable source rows.
+
+Constraints must enforce, where appropriate:
+
+- positive recommendation ID;
+- positive source experiment ID;
+- valid contract version;
+- non-empty mutation parameter;
+- non-empty authoritative canonical identity;
+- non-empty identity hash;
+- uniqueness that prevents exact duplicate proposal persistence.
+
+Hash uniqueness alone is insufficient. If PostgreSQL cannot directly express exact canonical duplicate semantics with the desired index design, implement safe transactional lookup plus an appropriate uniqueness constraint and document the collision handling.
+
+Do not add foreign-key behavior that can delete proposal audit history through cascading deletion.
+
+MIGRATION REQUIREMENTS
+
+Add an idempotent migration following existing repository conventions.
+
+The migration must:
+
+- create the proposal table and indexes safely;
+- preserve existing data;
+- be repeatable without damage;
+- avoid changing experiment, model, inference, analysis, scheduler, or recommendation semantics;
+- be represented in the canonical schema/bootstrap path used by the project;
+- update the tracked canonical database definition only through the project’s established schema workflow, without connecting to or modifying the active LSTM database.
+
+Do not create or restore a production database backup during this task.
+
+REPOSITORY CONTRACT
+
+Add a narrow repository abstraction and PostgreSQL implementation consistent with the existing recommendation repositories.
+
+The repository should support at least:
+
+1. Insert an immutable conversion proposal.
+2. Return the persisted proposal including its assigned proposal ID.
+3. Find by proposal ID.
+4. Find by exact conversion identity.
+5. List or find proposals by recommendation ID.
+6. List or find proposals by source experiment ID.
+7. Deterministically map all persisted fields back into a domain record.
+8. Detect an existing exact canonical proposal and return a stable duplicate outcome rather than creating another row.
+
+Insertion must be transactional and concurrency-safe.
+
+Two concurrent attempts to persist the same canonical conversion proposal must result in one durable proposal, not two logically identical rows.
+
+Do not implement update or delete methods unless an existing repository convention absolutely requires them. Immutable audit records should not be casually mutable.
+
+SERVICE BOUNDARY
+
+If a service is needed, keep it narrow.
+
+A persistence service may:
+
+- accept a completed Step 1 `ProposedExperimentSpecification`;
+- validate structural persistence invariants;
+- call the repository;
+- return created or existing-identical status.
+
+It must not:
+
+- reconstruct approval decisions;
+- select recommendations;
+- use rank as authorization;
+- call `BuildProposedExperimentSpecification` from database state unless that orchestration is explicitly necessary and remains fully manual;
+- create experiments;
+- queue work;
+- contact the scheduler.
+
+Prefer the smallest design that cleanly separates pure domain conversion from persistence.
+
+DUPLICATE AND COLLISION HANDLING
+
+Implement exact duplicate semantics.
+
+Required behavior:
+
+- same authoritative canonical text: return the existing proposal deterministically;
+- same hash but different canonical text: treat as a hash collision, not as a duplicate;
+- concurrent same-canonical insertion: exactly one row survives;
+- different recommendation or evidence provenance that changes canonical identity: create a distinct proposal;
+- ranking-only changes: must not change conversion identity and therefore must not create a new logical proposal.
+
+Add stable result types or reason codes for:
+
+- created;
+- existing identical proposal;
+- hash collision or inconsistent persisted identity;
+- invalid persistence input;
+- repository failure, following existing project error conventions.
+
+Do not silently collapse different canonical identities.
+
+TEST REQUIREMENTS
+
+Add deterministic unit and isolated PostgreSQL integration tests covering at least:
+
+1. Round-trip persistence of every field.
+2. Reconstruction of the proposed invocation/configuration.
+3. Insert and retrieve by proposal ID.
+4. Lookup by exact canonical identity.
+5. Lookup/list by recommendation ID.
+6. Lookup/list by source experiment ID.
+7. Same proposal inserted twice returns one durable row.
+8. Concurrent duplicate insertion produces one row.
+9. Same hash with different canonical text is not treated as identical.
+10. Ranking metadata remains advisory and does not alter conversion identity.
+11. Different authorization/evaluation/scoring/source/proposed values yield distinct identities.
+12. Invalid or incomplete persistence records are rejected.
+13. No update/delete path mutates immutable proposals.
+14. Migration is idempotent.
+15. No experiment row is created.
+16. No experiment status or scheduler state changes.
+17. Existing recommendation repository and ranking/evaluation tests remain passing.
+
+Use an isolated temporary test database or transaction rollback strategy consistent with the existing project tests.
+
+Never point tests at the active LSTM database.
+
+BUILD AND VERIFICATION
+
+The required application build target is:
+
+- LSTM Release
+
+The Debug target is optional and must not block completion. Do not spend time repairing Debug-only build configuration unless this task directly changes Debug-specific behavior.
+
+Required verification:
+
+1. Compile the new and directly affected unit tests with strict C++20 warnings:
+   `-Wall -Wextra -Wpedantic -Werror`
+2. Run the new conversion persistence tests.
+3. Run directly affected Phase 4A, Phase 4B, and Phase 4C Step 1 tests.
+4. Validate the Xcode project file.
+5. Run `git diff --check`.
+6. Clean-build LSTM Release.
+7. If Release is blocked only by an external Metal/Xcode toolchain issue, report it precisely and separately from source correctness. Do not download components or alter unrelated build settings without explicit authorization.
+8. Confirm the new production source files are members of the Release target.
+
+Do not launch the built application.
+
+DOCUMENTATION
+
+Add or update documentation describing:
+
+- the immutable conversion-proposal table;
+- the repository boundary;
+- exact canonical duplicate handling;
+- hash-collision handling;
+- concurrency behavior;
+- retrieval capabilities;
+- why proposal persistence is not experiment creation;
+- why ranking remains advisory;
+- the absence of scheduler integration;
+- deferred Phase 4C work.
+
+Update Volume VIII or the appropriate architecture documentation only as needed to record the new durable proposal-persistence capability and preserve the boundary against execution.
+
+Do not claim that recommendation-to-experiment execution is implemented.
+
+CODE REVIEW BEFORE COMPLETION
+
+Before reporting completion, inspect the full diff for:
+
+- accidental experiment creation;
+- queueing or scheduler coupling;
+- duplicated domain validation in the repository;
+- missing canonical-text comparisons;
+- hash-only duplicate detection;
+- unsafe transaction behavior;
+- mutable audit records;
+- cascade-delete risk;
+- incomplete round-trip fields;
+- locale-sensitive canonical handling;
+- nondeterministic iteration or serialization;
+- active database access;
+- unrelated changes.
+
+Fix concrete defects found during this review, then rerun affected tests.
+
+VERIFICATION REPORT
+
+Report:
+
+1. Initial and final `git status --short`.
+2. Starting and ending HEAD commit.
+3. Files changed.
+4. Schema/table/indexes added.
+5. Migration and bootstrap/schema changes.
+6. Repository and service types/functions added.
+7. Persisted fields and round-trip guarantees.
+8. Duplicate and hash-collision behavior.
+9. Transaction and concurrency behavior.
+10. Tests compiled and executed.
+11. Isolated PostgreSQL test method and database name/location.
+12. Confirmation that the active LSTM database was not accessed or modified.
+13. LSTM Release build result.
+14. Debug build result only if voluntarily performed.
+15. Confirmation that no experiment row was created.
+16. Confirmation that no experiment state changed.
+17. Confirmation that no paused experiment was resumed.
+18. Confirmation that no failed experiment was retried.
+19. Confirmation that the scheduler remained stopped.
+20. Confirmation that no scheduler runtime or child-launch code changed.
+21. Confirmation that ranking remains advisory.
+22. Deferred work and remaining risks.
+23. Final verdict:
+    - PASS
+    - PASS WITH FIXES
+    - FAIL
+
+Do not commit the changes.
+
+REASONING
+
+Phase 4C Step 1 established the pure deterministic contract that validates a manually authorized recommendation and derives a complete in-memory `ProposedExperimentSpecification`.
+
+The next safe increment is to persist that exact proposal as an immutable audit record without crossing into experiment creation or scheduler execution.
+
+Durable persistence is needed before operational conversion because later steps must have:
+
+- a stable proposal identifier;
+- exact canonical duplicate detection;
+- concurrency-safe idempotency;
+- complete reconstruction of the proposed invocation;
+- durable authorization and evidence provenance;
+- an auditable separation between “proposal prepared” and “experiment created.”
+
+Keeping this step persistence-only preserves the architecture boundary. It allows the system to remember and inspect manually prepared proposals while preventing a persisted recommendation proposal from becoming executable merely because it exists.
+
+Experiment creation, explicit operator execution commands, transactional proposal-to-experiment conversion, queueing, budgets, and scheduler interaction remain deferred to later Phase 4C steps.

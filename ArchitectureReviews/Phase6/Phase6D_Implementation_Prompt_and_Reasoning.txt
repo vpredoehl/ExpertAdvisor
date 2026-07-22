@@ -1,0 +1,496 @@
+PHASE 6D
+AUTHORITATIVE NEXT-INCREMENT IMPLEMENTATION
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6C is complete and permanently marked:
+
+    branch before transition: phase6
+    final Phase 6C correction: 9689d7d14f6354610525ca8dc9e430af06350862
+    milestone tag: phase6c-complete
+    new development branch: phase6d
+
+The Phase 6C completion process established that:
+
+- the Phase 6C implementation and its correction are fully committed;
+- the final independent post-amend verification passed;
+- local and remote Phase 6C state were synchronized;
+- the repository was clean;
+- the Phase 6C milestone tag was pushed;
+- Phase 6D work can begin without changing or reopening Phase 6C.
+
+The next Codex task should not guess Phase 6D from conversational shorthand. The
+repository's current planning documents, phase specifications, implementation
+history, tests, and authority chain are the source of truth.
+
+Codex should therefore begin by reconstructing the authoritative Phase 6
+roadmap from the repository and determining the exact Phase 6D contract. It
+should then implement only that increment.
+
+If the repository confirms that Phase 6D is the immutable administrative
+approval authority for reviewed follow-up proposals, Codex should implement that
+authority narrowly. If the authoritative repository documentation defines Phase
+6D differently, Codex must follow the repository and explain the discrepancy
+rather than imposing the assumed approval design.
+
+The architectural expectations remain:
+
+- preserve every previously established authority boundary;
+- consume authoritative persisted upstream records instead of recomputing them;
+- add one explicit authority only;
+- keep records immutable and auditable;
+- maintain deterministic identity and exact replay behavior;
+- provide transactional and concurrency safety;
+- retain strict least-privilege database behavior;
+- add no scheduler, worker, activation, or execution behavior unless the
+  authoritative Phase 6D specification explicitly requires it;
+- avoid broad redesign or future-phase implementation;
+- preserve running experiments, the scheduler, production data, and DerivedData.
+
+This is an implementation task, not merely a proposal. Codex should inspect,
+implement, test, document, and leave the completed Phase 6D changes uncommitted
+for independent review.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Implement the exact next Phase 6 increment, Phase 6D, in the current
+`ExpertAdvisor` repository on branch `phase6d`.
+
+STARTING MILESTONE
+
+The branch was created from the fully verified Phase 6C tip:
+
+    9689d7d14f6354610525ca8dc9e430af06350862
+    Harden Phase 6C review presentation and verification
+
+The completed Phase 6C milestone is tagged:
+
+    phase6c-complete
+
+Do not modify the tag.
+
+Do not rewrite Phase 6C history.
+
+Do not amend or replace commit `9689d7d`.
+
+PRIMARY GOAL
+
+Recover the authoritative Phase 6 roadmap and Phase 6D contract from the
+repository, then implement exactly Phase 6D and nothing beyond it.
+
+Do not assume the conversational label for Phase 6D is authoritative.
+
+If repository planning and architecture documents confirm that Phase 6D is the
+immutable administrative approval authority for reviewed follow-up proposals,
+implement that authority narrowly.
+
+If the repository defines Phase 6D differently, follow the authoritative
+repository definition and explicitly explain the difference in the final
+report.
+
+Do not stop after analysis. Implement the recovered Phase 6D increment fully
+unless a concrete repository contradiction makes implementation unsafe.
+
+FIRST: ESTABLISH AUTHORITATIVE CONTEXT
+
+Before editing, inspect enough of the repository to reconstruct:
+
+1. the complete Phase 6A → 6B → 6C chain;
+2. the intended Phase 6D responsibility;
+3. authoritative upstream persisted records and identities;
+4. existing domain, repository, service/workflow, presentation, CLI, migration,
+   test, and documentation patterns;
+5. authority boundaries between administrative review, approval,
+   materialization, activation, execution, scheduling, and experiment creation;
+6. database role and privilege conventions;
+7. current Xcode project integration and test-target conventions;
+8. repository guidance files and any phase roadmap, readiness review, handoff,
+   proposal, or implementation documents.
+
+Search broadly enough to avoid relying on filenames alone.
+
+Give precedence to:
+
+- current committed repository documentation;
+- current production domain/repository contracts;
+- migration invariants;
+- tests that encode architectural boundaries;
+- the latest verified Phase 6C state.
+
+Record the recovered Phase 6D contract before implementation.
+
+INITIAL SAFETY AND REPOSITORY AUDIT
+
+Record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --cached --stat`
+5. `git diff --stat`
+6. `git log -5 --oneline --decorate`
+7. `git show --no-patch --decorate phase6c-complete`
+8. `git merge-base --is-ancestor phase6c-complete HEAD`
+9. scheduler and worker processes using operating-system process tools only.
+
+Require:
+
+- branch is `phase6d`;
+- HEAD is the Phase 6C completion commit or a direct unchanged descendant created
+  only by the user after branching;
+- worktree and index are initially clean;
+- the Phase 6C tag is an ancestor;
+- no unrelated local changes are present.
+
+If these conditions are not met, do not destroy work. Analyze the state and
+proceed only where safe.
+
+OPERATIONAL SAFETY
+
+- Do not fetch, pull, merge, rebase, reset, or switch branches.
+- Do not create, amend, or push a commit.
+- Leave implementation changes uncommitted for review.
+- Do not stage files unless an existing repository test harness absolutely
+  requires it; normally leave index unchanged.
+- Do not run Clean.
+- Preserve DerivedData.
+- Do not interrupt scheduler or worker processes.
+- Do not issue signals or process-control commands.
+- Do not run `LSTM_Release --scheduler-status`.
+- Do not connect to or modify production database `LSTM`.
+- Use only explicitly named disposable test databases or schemas.
+- Reject case-insensitive database name `LSTM`.
+- Remove all disposable database objects at the end.
+- Use Release configuration for any required project build.
+- Avoid launching the normal scheduler application path.
+- Do not start experiments.
+
+PHASE 6D SCOPE
+
+Implement only the exact authority recovered for Phase 6D.
+
+If Phase 6D is confirmed as follow-up proposal administrative approval, the
+implementation must satisfy all of the following unless the repository's
+authoritative contract is stricter:
+
+A. Upstream authority
+
+- Approval consumes one exact persisted Phase 6C administrative review.
+- It must not reconstruct or recompute the Phase 6A proposal, Phase 6B
+  persistence/materialization decision, or Phase 6C review decision.
+- It must verify the complete authoritative upstream identity and provenance
+  chain.
+- Define and enforce which Phase 6C decisions are approval-eligible.
+- A rejected, malformed, missing, stale, or identity-inconsistent review must
+  not be approvable.
+- Approval of a review must not silently approve a different proposal or review
+  event.
+
+B. Pure domain contract
+
+Create or extend a pure domain type for the Phase 6D record with:
+
+- explicit contract version;
+- exact upstream review-event identity;
+- exact reviewed follow-up proposal identity;
+- explicit administrative approval decision or state, as required by the
+  recovered contract;
+- approver identity;
+- reason or administrative basis where required;
+- deterministic canonical representation;
+- deterministic identity hash;
+- strict validation;
+- immutable value semantics;
+- exact replay behavior;
+- clear distinction between approval evidence and any later execution
+  authorization.
+
+Do not use locale-sensitive formatting in canonical or machine-readable
+identity material.
+
+Preserve exact UTF-8 and control-character rules established by adjacent
+contracts.
+
+C. Persistence
+
+Add append-only persistence through a new migration only if Phase 6D requires
+new durable records.
+
+The migration must provide:
+
+- primary key and immutable business identity;
+- complete foreign-key provenance;
+- unique constraints matching exact replay semantics;
+- validation constraints;
+- append-only enforcement;
+- provenance enforcement;
+- no update/delete authority for the runtime role;
+- least-privilege sequence/table/function access;
+- explicit revocation of unintended PUBLIC privileges;
+- safe trigger function execution context;
+- schema qualification;
+- migration ordering consistent with the repository;
+- compatibility with a clean install and upgrade from the current schema.
+
+Do not modify an already committed migration unless the repository's migration
+policy explicitly allows it. Prefer a new migration.
+
+D. Repository behavior
+
+Implement repository operations that are:
+
+- transactional;
+- concurrency-safe;
+- deterministic;
+- idempotent for exact replay;
+- fail-closed for identity or payload mismatch;
+- collision-aware;
+- append-only;
+- explicit about read-only lookup/list behavior;
+- unable to mutate Phase 6A, 6B, or 6C records.
+
+Concurrent equivalent approvals must converge on one authoritative persisted
+record or otherwise follow the exact recovered contract without duplicate
+authority.
+
+Concurrent conflicting approvals must be rejected deterministically.
+
+E. Service/workflow boundary
+
+Add the narrow Phase 6D application/service operation required by the
+architecture.
+
+It must:
+
+- load the exact persisted upstream record;
+- validate complete provenance and eligibility;
+- construct the pure Phase 6D value;
+- persist atomically;
+- return the persisted result;
+- expose no activation, execution, scheduling, or experiment authority;
+- not call scheduler, worker, training, inference, analysis, experiment, model,
+  continuation, campaign activation, or campaign execution paths.
+
+Reuse established repository authorities rather than duplicating SQL or
+validation in presentation/CLI code.
+
+F. Presentation and CLI
+
+Only add CLI integration if the authoritative Phase 6D increment and current
+project sequencing require CLI exposure now.
+
+If CLI is included:
+
+- require explicit administrative invocation;
+- use unambiguous identifiers;
+- use strict parsing;
+- provide deterministic machine-readable output;
+- percent-escape delimiter-bearing and non-ASCII payload bytes according to
+  established conventions;
+- render integers locale-independently;
+- include exact negative safety declarations;
+- distinguish preview/read-only lookup from persistence;
+- never imply activation, execution authorization, queueing, scheduling,
+  scheduler signaling, worker launch, experiment creation/modification, or
+  campaign success.
+
+If CLI is not part of this increment, document why and test the service
+authority directly.
+
+G. Authority boundary
+
+Phase 6D must not, unless the recovered specification explicitly says otherwise:
+
+- activate a campaign;
+- execute a campaign;
+- authorize execution;
+- authorize follow-up execution;
+- queue or schedule work;
+- signal the scheduler;
+- launch workers;
+- create or modify experiments;
+- create or modify models;
+- advance continuation chains;
+- declare campaign success;
+- calculate or claim profitability;
+- perform statistical validation;
+- auto-review or auto-approve;
+- turn an administrative record into operational capability.
+
+Negative safety fields are declarations and assertions, not capabilities.
+
+H. Tests
+
+Add focused tests consistent with adjacent phases.
+
+Cover at minimum:
+
+1. pure contract construction and validation;
+2. deterministic canonical identity/hash;
+3. malformed and hostile UTF-8/control inputs;
+4. locale independence;
+5. exact upstream identity/provenance validation;
+6. eligibility rules;
+7. missing upstream review;
+8. rejected or non-eligible review;
+9. exact replay;
+10. conflicting replay;
+11. hash collision or identity mismatch handling;
+12. concurrent equivalent writes;
+13. concurrent conflicting writes;
+14. transaction rollback;
+15. append-only behavior;
+16. UPDATE/DELETE denial;
+17. runtime-role least privilege;
+18. PUBLIC privilege absence, including NULL ACL fallback;
+19. trigger function identity and safe execution context;
+20. read-only lookup/list semantics;
+21. machine-output escaping and exact safety statements, if presentation exists;
+22. absence of activation/execution/scheduler/experiment side effects;
+23. clean-install migration behavior;
+24. upgrade-path migration behavior;
+25. project-file integration;
+26. regression coverage for Phase 6A, 6B, and 6C.
+
+Use disposable PostgreSQL only.
+
+Do not weaken existing tests to make new work pass.
+
+I. Documentation
+
+Add or update the authoritative Phase 6D documentation to state:
+
+- purpose;
+- exact upstream authority consumed;
+- domain identity and canonical contract;
+- persistence and immutability;
+- replay and concurrency behavior;
+- eligibility rules;
+- CLI/service behavior;
+- database privileges;
+- explicit non-authorities;
+- relationship to Phase 6A, 6B, and 6C;
+- what later phases still own;
+- operational safety and testing.
+
+Do not claim capabilities that are not implemented.
+
+IMPLEMENTATION QUALITY
+
+Review your own changes for:
+
+- correctness;
+- architectural consistency;
+- regression risk;
+- transactional safety;
+- concurrency safety;
+- SQL injection and identifier safety;
+- privilege safety;
+- deterministic identity;
+- exception safety;
+- resource lifetime;
+- maintainability;
+- documentation accuracy;
+- test adequacy;
+- Xcode project integration.
+
+Prefer existing project abstractions and naming conventions.
+
+Do not create a parallel framework.
+
+Do not add speculative generality for future phases.
+
+VERIFICATION
+
+Run the strongest focused verification that is safe while workers are active.
+
+At minimum:
+
+- all new pure Phase 6D tests;
+- all new repository/database tests;
+- relevant Phase 6A/6B/6C regressions;
+- migration assertions on a disposable PostgreSQL database;
+- explicit NULL-ACL fallback checks;
+- concurrency tests;
+- project-file lint;
+- `xcodebuild -list -project ExpertAdvisor.xcodeproj`;
+- an incremental Release build if source/project integration changed;
+- architecture verification of the resulting Release executable if built;
+- `git diff --check`;
+- final worktree/index audit.
+
+Do not run a build if active worker resource contention makes it unsafe and the
+new work can be fully verified through focused standalone targets. If a build is
+deferred, state that clearly and provide the exact remaining command.
+
+Do not use Debug configuration.
+
+DATABASE TEST GUARDS
+
+Before database tests:
+
+- require explicit `LSTM_TEST_DB_NAME`;
+- reject case-insensitive `LSTM`;
+- require a clearly disposable name;
+- verify connection target before applying migrations;
+- use Bash 3.2-compatible scripting;
+- install only the migrations required for the exact clean-install or upgrade
+  scenario;
+- remove the disposable database at the end, including after failure.
+
+Do not connect to production even read-only.
+
+FINAL SELF-REVIEW
+
+Before reporting completion:
+
+1. inspect the complete diff;
+2. confirm no unrelated file changed;
+3. confirm no generated artifact or test output is tracked;
+4. confirm index remains unchanged unless explicitly justified;
+5. run `git diff --check`;
+6. record exact `git status --short`;
+7. record exact `git diff --stat`;
+8. record scheduler/worker PID presence with OS tools only;
+9. confirm no scheduler/worker interruption;
+10. confirm no production database access;
+11. confirm all disposable database objects were removed;
+12. confirm no commit or push occurred.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Authoritative Phase 6D definition recovered from the repository.
+3. Any discrepancy from the assumed follow-up approval interpretation.
+4. Architecture and authority-chain analysis.
+5. Files changed.
+6. Domain contract implemented.
+7. Persistence and migration behavior.
+8. Repository and transaction behavior.
+9. Service/workflow behavior.
+10. CLI/presentation behavior, or why CLI was intentionally deferred.
+11. Authority-boundary assessment.
+12. Tests added and verification results.
+13. Database privilege and migration safety assessment.
+14. Concurrency and idempotence assessment.
+15. Build/project integration results.
+16. Scheduler and production-data safety assessment.
+17. Remaining risks, deferred items, or unverified assumptions.
+18. Exact final `git status --short`.
+19. Exact final `git diff --stat`.
+20. Recommended independent-review focus.
+21. Confirmation that changes remain uncommitted.
+
+End with exactly one of:
+
+PHASE 6D IMPLEMENTATION COMPLETE AND READY FOR INDEPENDENT REVIEW
+
+or
+
+PHASE 6D IMPLEMENTATION INCOMPLETE

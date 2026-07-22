@@ -1,0 +1,316 @@
+Using xhigh reasoning, perform an independent architectural and code review of the completed Phase 5 Step 5c implementation.
+
+GOAL
+
+Determine whether Step 5c is architecturally correct, scientifically consistent, internally coherent, regression-safe, and ready to commit.
+
+This is an independent review.
+
+Do not assume the implementation is correct simply because its own verification passed.
+
+Challenge assumptions where appropriate.
+
+Do not implement new features.
+
+Do not redesign the Phase 5 architecture.
+
+Only recommend code changes if you identify concrete defects, inconsistencies, missing validation, incorrect semantics, unsafe behavior, incomplete verification, or documentation inaccuracies.
+
+────────────────────────────────────────────────────────
+PHASE BOUNDARY
+────────────────────────────────────────────────────────
+
+Step 5c introduces only an advisory campaign outcome policy layer.
+
+It must remain completely read-only.
+
+It must NOT:
+
+• modify PostgreSQL
+• modify campaign materializations
+• modify assessments
+• queue experiments
+• create recommendations
+• approve recommendations
+• authorize execution
+• change scheduler behavior
+• change Phase 4 workflows
+• introduce persistence
+• introduce background processing
+• modify experiment lifecycle
+
+The implementation should consume the immutable Step 5a assessment produced by Step 5b.
+
+────────────────────────────────────────────────────────
+PRIMARY REVIEW OBJECTIVES
+────────────────────────────────────────────────────────
+
+Verify that the policy layer is:
+
+• deterministic
+• pure
+• side-effect free
+• reproducible
+• versioned
+• canonically represented
+• hash-stable
+• isolated from persistence
+• isolated from scheduler logic
+
+Verify that the implementation cleanly separates:
+
+scientific evidence
+
+from
+
+policy interpretation
+
+from
+
+future operator decisions.
+
+────────────────────────────────────────────────────────
+POLICY REVIEW
+────────────────────────────────────────────────────────
+
+Review the policy semantics.
+
+Determine whether:
+
+• evidence sufficiency is correct
+
+• aggregate interpretation rules are internally consistent
+
+• favorable
+
+• neutral
+
+• unfavorable
+
+• mixed
+
+• inconclusive
+
+are mutually coherent.
+
+Review precedence.
+
+Look for contradictory combinations.
+
+Determine whether a campaign can incorrectly become favorable despite conflicting evidence.
+
+Review handling of:
+
+• failed members
+
+• cancelled members
+
+• context-changed members
+
+• inconsistent members
+
+• unavailable metrics
+
+• unsupported metrics
+
+• missing source values
+
+• missing result values
+
+• mixed deltas
+
+• zero deltas
+
+• insufficient comparable evidence
+
+Review whether
+
+eligible_for_operator_review
+
+is appropriately conservative.
+
+Determine whether the default
+
+minimumComparableMemberCount
+
+is scientifically reasonable.
+
+────────────────────────────────────────────────────────
+IDENTITY REVIEW
+────────────────────────────────────────────────────────
+
+Verify canonical identity construction.
+
+Ensure every policy-affecting field participates in:
+
+• canonical representation
+
+• policy hash
+
+• decision hash
+
+Verify unsupported contract versions fail safely.
+
+Verify ordering independence.
+
+Verify locale independence.
+
+Verify duplicate identities are deterministic.
+
+Verify timestamps do not accidentally influence semantic identity.
+
+────────────────────────────────────────────────────────
+BOUNDARY REVIEW
+────────────────────────────────────────────────────────
+
+Verify Step 5c does not:
+
+• access repositories
+
+• perform SQL
+
+• require transactions
+
+• create services
+
+• modify CLI behavior beyond documentation
+
+• introduce persistence
+
+• modify scheduler state
+
+• alter assessment generation
+
+Ensure dependency direction remains:
+
+assessment
+
+↓
+
+policy
+
+↓
+
+future consumers
+
+Never the reverse.
+
+────────────────────────────────────────────────────────
+TEST REVIEW
+────────────────────────────────────────────────────────
+
+Evaluate whether the new tests adequately verify:
+
+• favorable campaigns
+
+• neutral campaigns
+
+• unfavorable campaigns
+
+• mixed campaigns
+
+• inconclusive campaigns
+
+• insufficient evidence
+
+• failed members
+
+• context changes
+
+• metric gaps
+
+• identity stability
+
+• canonical serialization
+
+• version validation
+
+• malformed hashes
+
+• ordering independence
+
+• policy evolution
+
+Determine whether important edge cases remain untested.
+
+────────────────────────────────────────────────────────
+DOCUMENTATION REVIEW
+────────────────────────────────────────────────────────
+
+Verify documentation accurately reflects implementation.
+
+Ensure documentation does not imply:
+
+• automatic recommendation generation
+
+• automatic execution
+
+• operator approval
+
+• scheduler integration
+
+unless those behaviors actually exist.
+
+────────────────────────────────────────────────────────
+REGRESSION REVIEW
+────────────────────────────────────────────────────────
+
+Determine whether Step 5c could accidentally affect:
+
+• Step 5a assessment
+
+• Step 5b database integration
+
+• campaign status
+
+• recommendation workflow
+
+• proposal review
+
+• execution planning
+
+• Phase 4 behavior
+
+• scheduler operation
+
+────────────────────────────────────────────────────────
+DELIVERABLE
+────────────────────────────────────────────────────────
+
+Produce:
+
+1. Executive summary.
+
+2. Architectural assessment.
+
+3. Scientific policy assessment.
+
+4. Determinism and identity assessment.
+
+5. Boundary verification.
+
+6. Test adequacy assessment.
+
+7. Documentation assessment.
+
+8. Regression assessment.
+
+9. Any required corrections.
+
+Conclude with exactly one of:
+
+READY TO COMMIT
+
+or
+
+NOT READY TO COMMIT
+
+If NOT READY TO COMMIT, clearly distinguish:
+
+• mandatory corrections
+
+from
+
+• optional improvements.
+
+Do not modify code unless a concrete defect is identified.

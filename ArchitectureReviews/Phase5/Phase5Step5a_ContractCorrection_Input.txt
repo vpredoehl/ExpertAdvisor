@@ -1,0 +1,260 @@
+# Phase 5 Step 5a Contract Correction
+
+Use model_reasoning_effort="xhigh".
+
+Implement the required architectural corrections to the current uncommitted Phase 5 Step 5a outcome-assessment domain model.
+
+Do not fetch, pull, rebase, merge, reset, switch branches, push, or open a pull request. Work only with the current local checkout and current uncommitted Step 5a files.
+
+Use incremental builds by default. Do not clean the Xcode build folder unless a concrete build failure indicates that a clean is necessary. If a clean becomes necessary, explain the reason in the final response.
+
+CURRENT STATE
+
+Expected branch:
+phase5
+
+Expected committed HEAD:
+8b9939e
+
+Expected uncommitted files include:
+
+- Sources/ExperimentRecommendationCampaignOutcomeAssessment.hpp
+- Sources/ExperimentRecommendationCampaignOutcomeAssessment.cpp
+- Tests/ExperimentRecommendationCampaignOutcomeAssessmentTests.cpp
+- ExpertAdvisor.xcodeproj/project.pbxproj
+
+Begin by verifying, without changing repository state:
+
+git branch --show-current
+git rev-parse HEAD
+git log -1 --oneline
+git status --short
+git diff --check
+git diff --cached --check
+
+If branch or HEAD differs, report the difference and continue cautiously using the current local checkout. Do not synchronize with any remote.
+
+GOAL
+
+Correct the Step 5a public domain contract before Step 5b begins.
+
+The implementation must remain a pure, immutable, deterministic domain layer. Do not add repository, database, service, CLI, scheduler, worker, filesystem, or persistence behavior.
+
+BLOCKING ARCHITECTURAL CORRECTIONS
+
+1. Separate lifecycle, consistency, and scientific comparison.
+
+Represent terminal/lifecycle state explicitly, including at minimum:
+
+- not_terminal
+- succeeded
+- failed
+- cancelled
+- unknown
+
+Represent consistency independently:
+
+- consistent
+- inconsistent
+
+Preserve deterministic diagnostic codes for inconsistent downstream evidence.
+
+Do not use MissingResultEvidence as a substitute for lifecycle state.
+
+Derive explicit member-level outcomes sufficient to distinguish, at minimum:
+
+- not ready / nonterminal
+- succeeded and comparable
+- succeeded with context change
+- succeeded with metric gap
+- terminal failed
+- terminal cancelled
+- inconsistent
+
+Names may differ if the resulting contract is clearer and internally consistent.
+
+2. Replace singular metrics with deterministic metric collections.
+
+Source evidence and result evidence must support multiple scientific metrics for the same campaign member.
+
+Requirements:
+
+- one member can carry inference accuracy and leader score simultaneously;
+- future metrics can be added without redesigning member cardinality;
+- reject duplicate metric identities within one evidence collection;
+- canonicalize and order metrics deterministically by metric identity;
+- derive one comparison per metric;
+- keep member outcome counts separate from per-metric comparison and delta counts;
+- metric input order must not affect identity or output ordering.
+
+3. Make successful-result payload conditional on lifecycle.
+
+Failed, cancelled, inconsistent, proposal-only, and otherwise nonterminal members must not require fabricated:
+
+- experiment IDs
+- model IDs
+- result IDs
+- context
+- metric values
+
+A proposal-only member must be representable as nonterminal/not ready rather than being mislabeled MissingResultEvidence.
+
+4. Add exact result provenance validation.
+
+Bind result evidence to the exact materialized campaign member and its expected downstream experiment identity.
+
+Requirements:
+
+- validate result experiment identity against the member's expected experiment evidence when present;
+- reject cross-member reuse of the same result experiment or result identity;
+- reject provenance mismatches deterministically;
+- preserve malformed downstream evidence as an inconsistent member with diagnostics when exact top-level materialization membership remains trustworthy;
+- only fail the entire assessment when the materialization/member identity itself cannot be trusted.
+
+5. Protect output invariants.
+
+Derived member and aggregate outputs must be valid by construction or completely validated at construction.
+
+Prevent callers from creating contradictory combinations of:
+
+- lifecycle
+- consistency
+- diagnostics
+- comparisons
+- summaries
+- counts
+- canonical identities
+
+Restrict constructors/factories as appropriate, or perform complete cross-field validation.
+
+6. Preserve Step 5a scope and existing strengths.
+
+Retain:
+
+- immutable output objects;
+- finite-number validation;
+- positive-ID validation where IDs are present and required;
+- contiguous ordinal validation;
+- uniqueness validation;
+- deterministic member ordering;
+- deterministic diagnostic ordering;
+- deterministic metric/comparison ordering;
+- locale-independent canonicalization and hashing;
+- observed_at excluded from evidence identity;
+- no external I/O or persistence.
+
+IDENTITY REQUIREMENTS
+
+Update canonical identity and hashing so that they bind:
+
+- explicit lifecycle state;
+- independent consistency state;
+- deterministic diagnostics;
+- all canonicalized source metrics;
+- all canonicalized result metrics;
+- all derived per-metric comparisons;
+- exact member/result provenance;
+- aggregate member and metric summaries.
+
+Input metric order must not change identity.
+
+Changing any lifecycle state, consistency state, diagnostic, metric value, metric presence, comparison result, or provenance must change identity where scientifically or operationally meaningful.
+
+TEST REQUIREMENTS
+
+Expand focused tests to cover at minimum:
+
+1. inference accuracy and leader score on the same member;
+2. a future third metric;
+3. shuffled source and result metric order producing identical canonical output and identity;
+4. duplicate metric identities rejected;
+5. successful comparable member;
+6. successful member with changed context;
+7. successful member with a metric gap;
+8. failed member;
+9. cancelled member;
+10. nonterminal member;
+11. proposal-only member represented as nonterminal/not ready, not MissingResultEvidence;
+12. inconsistent downstream evidence retained with deterministic diagnostics;
+13. malformed result provenance;
+14. cross-member result experiment reuse;
+15. cross-member result identity reuse;
+16. aggregate precedence for inconsistency, failure, cancellation, nonterminal, and successful outcomes;
+17. member counts separated from per-metric comparison counts;
+18. identity changes for every lifecycle, consistency, diagnostic, metric, comparison, and provenance change;
+19. public construction cannot produce contradictory aggregates;
+20. deterministic ordering and canonicalization.
+
+VERIFICATION
+
+Run focused unit tests for the Step 5a domain model with warnings treated as errors.
+
+Run the relevant existing recommendation-campaign pure regression tests.
+
+Run an incremental Xcode Debug build.
+
+Run an incremental Xcode Release build if the Debug build and focused tests pass.
+
+Do not clean before building unless required by a specific failure.
+
+Run:
+
+git diff --check
+git diff --cached --check
+
+Do not stage or commit.
+
+Do not connect to PostgreSQL or run database-backed tests because Step 5a is a pure domain step.
+
+Do not modify unrelated files.
+
+DOCUMENTATION
+
+If Step 5a documentation already exists in the uncommitted work, update it to match the corrected contract.
+
+If no Step 5a documentation exists, add only the minimal focused document necessary to describe:
+
+- purpose and boundary;
+- lifecycle/consistency/comparison separation;
+- multi-metric model;
+- provenance validation;
+- deterministic identity;
+- explicit non-goals.
+
+Do not prematurely document Step 5b implementation details.
+
+FINAL RESPONSE
+
+Provide:
+
+## Repository state
+
+## Changes made
+
+## Corrected public contract
+
+## Multi-metric behavior
+
+## Lifecycle and consistency behavior
+
+## Provenance and invariant protection
+
+## Tests added or changed
+
+## Verification results
+
+Include exact commands and pass/fail outcomes.
+
+## Files changed
+
+## Remaining risks
+
+## Recommendation
+
+End with exactly one of:
+
+“Phase 5 Step 5a is ready for independent review.”
+
+“Phase 5 Step 5a is not ready for independent review.”
+
+Do not commit.

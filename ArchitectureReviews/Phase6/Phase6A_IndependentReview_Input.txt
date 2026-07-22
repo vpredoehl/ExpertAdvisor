@@ -1,0 +1,302 @@
+Use model_reasoning_effort="xhigh".
+
+Perform an independent architecture and implementation review.
+
+Do NOT implement Phase 6A.
+
+Do NOT improve the code simply because you would have written it differently.
+
+Modify code only if you discover a concrete defect that prevents recommending the implementation for commit.
+
+Approach this review as if you did not participate in the implementation.
+
+Your task is to determine whether the implementation satisfies the intended Phase 6A contract.
+
+Repository rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Preserve the current branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not stage files.
+- Preserve DerivedData.
+- Reuse existing Release build products.
+
+Current state
+
+Phase 4 complete.
+
+Phase 5A complete.
+
+Phase 5B complete.
+
+Phase 5C complete.
+
+Phase 6 readiness review concluded:
+
+READY TO BEGIN PHASE 6
+
+Phase 6A implementation completed and reported:
+
+READY FOR INDEPENDENT REVIEW
+
+Review goals
+
+Determine whether the implementation truly satisfies the intended architecture.
+
+Focus especially on:
+
+1.
+Architectural boundary
+
+Verify Phase 6A remains:
+
+- pure
+- immutable
+- deterministic
+- database-free
+- advisory
+- non-authoritative
+- non-persistent
+- non-scheduler-aware
+
+Verify no authority leaks into the proposal.
+
+2.
+Dependency direction
+
+Verify Phase 6A depends only upon immutable upstream contracts.
+
+It must not recreate or reinterpret scientific evidence.
+
+It must not recreate Step 5C policy.
+
+It must not own campaign interpretation.
+
+3.
+Validation seam
+
+This is the highest-priority review item.
+
+Determine whether:
+
+- production and tests share the identical validation logic
+- validation cannot drift
+- malformed-input tests are meaningful
+- the seam introduces no hidden capability
+
+4.
+Identity binding
+
+Verify exact alignment of:
+
+assessment
+
+policy
+
+decision
+
+campaign
+
+materialization
+
+ordered members
+
+expected experiment IDs
+
+Verify canonical text remains authoritative.
+
+Hash must never become authoritative.
+
+5.
+Canonical grammar
+
+Review the grammar for:
+
+determinism
+
+ordering
+
+locale independence
+
+length framing
+
+behavioral completeness
+
+minimality
+
+absence of display-only fields
+
+Verify observedAt remains excluded.
+
+6.
+Authority boundary
+
+Confirm the proposal cannot accidentally represent:
+
+approval
+
+activation
+
+execution
+
+scheduler work
+
+campaign success
+
+follow-up authorization
+
+7.
+Trust boundary
+
+Verify Phase 6A trusts Step 5C.
+
+It must never recalculate:
+
+eligibility
+
+interpretation
+
+policy
+
+recommendation
+
+metrics
+
+direction
+
+8.
+Failure semantics
+
+Review refusal ordering.
+
+Determine whether malformed identities are rejected before business interpretation.
+
+Look for hidden ambiguity.
+
+9.
+Canonical size limit
+
+Review:
+
+1 MiB limit
+
+overflow handling
+
+boundary conditions
+
+version implications
+
+future persistence implications
+
+10.
+Tests
+
+Determine whether the tests genuinely prove behavior.
+
+Look for:
+
+implementation mirroring
+
+derived golden vectors
+
+weak identity testing
+
+missing negative cases
+
+hidden assumptions
+
+11.
+Documentation
+
+Review:
+
+Phase6ARecommendationCampaignFollowUpProposal.rst
+
+ADR-0006
+
+Volume VIII changes
+
+Verify they authorize only Phase 6A.
+
+They must not implicitly authorize later phases.
+
+Out of scope
+
+Do not redesign:
+
+Phase 4
+
+Phase 5
+
+scheduler
+
+repository
+
+future persistence
+
+approval workflow
+
+activation
+
+execution
+
+unless an actual architectural defect requires it.
+
+Verification
+
+Run:
+
+- focused Phase 6A tests
+- ASan
+- UBSan
+- Phase 5A tests
+- Phase 5B tests
+- Phase 5C tests
+- Phase 4D materialization tests
+- campaign-status tests
+- git diff --check
+- git diff --cached --check
+- whitespace checks
+- incremental Release build only
+
+Treat the existing LLVM toolchain warning as environmental if unchanged.
+
+Worktree audit
+
+Confirm:
+
+- branch unchanged
+- HEAD unchanged
+- nothing staged
+- no commit created
+- unrelated files untouched
+
+Deliverable
+
+Provide:
+
+1. Executive summary.
+2. Architecture assessment.
+3. Validation seam assessment.
+4. Identity grammar assessment.
+5. Authority-boundary assessment.
+6. Test assessment.
+7. Documentation assessment.
+8. Verification results.
+9. Worktree audit.
+10. Mandatory corrections.
+11. Optional improvements.
+12. Commit recommendation.
+
+Conclude with exactly one of:
+
+READY TO COMMIT
+
+or
+
+NOT READY TO COMMIT

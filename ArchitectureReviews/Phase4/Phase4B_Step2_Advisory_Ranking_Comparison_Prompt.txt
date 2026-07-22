@@ -1,0 +1,1013 @@
+Using High reasoning, implement Phase 4B Step 2: deterministic advisory ranking, comparison, and recommendation presentation for the LSTM Research Platform.
+
+WORK ORDER
+
+ID
+
+WO-004B-002
+
+TITLE
+
+Phase 4B Step 2 Advisory Ranking, Comparison, and Presentation
+
+ARCHITECTURE AUTHORITY
+
+This implementation must conform to the permanent architecture documentation under:
+
+docs/architecture/
+
+Primary governing references:
+
+- Volume I — Foundation and Engineering Constitution
+- Volume VIII — Recommendation Engine
+- ADR-0001 — PostgreSQL as the durable source of truth
+- ADR-0002 — Deterministic experiment identity
+- ADR-0003 — Advisory recommendation evaluation
+- ADR-0004 — Scheduler ownership boundaries
+
+Also conform to the completed Phase 4B Step 1 implementation and its committed contract:
+
+- deterministic advisory evaluation
+- persisted evaluation runs
+- persisted evaluation results
+- persisted score components
+- append-only partial-run evidence
+- stable eligibility and disposition states
+- advisory-only CLI output
+- no experiment creation or queueing
+
+If this work order conflicts with accepted architecture or the committed Step 1 behavior, stop and report the conflict before changing runtime behavior.
+
+CURRENT BASELINE
+
+Phase 4B Step 1 is committed as:
+
+1205801a4e9f88d449b42775e53b3c5a512362fd
+phase4b: add deterministic advisory recommendation evaluation
+
+Step 1 provides:
+
+- evaluation policy versioning
+- deterministic evidence identity
+- deterministic evaluation identity
+- advisory eligibility classification
+- reuse of the existing Phase 4A Step 4 scoring policy
+- persisted evaluation runs, results, and components
+- stable machine-readable evaluation output
+- human-readable evaluation summaries
+- dry-run support
+- isolated migration/repository/concurrency tests
+- no experiment or scheduler mutation
+
+GOAL
+
+Implement the advisory ranking, comparison, and presentation layer over persisted Phase 4B Step 1 evaluation evidence.
+
+This step must answer:
+
+1. Which evaluated recommendations rank highest within a defined advisory scope?
+2. Why does one recommendation rank above another?
+3. Which recommendations are comparable?
+4. Which recommendations are blocked, stale, duplicate, or incomplete?
+5. What evidence and score components explain rank differences?
+6. Can the ranking be reproduced exactly from persisted Step 1 evidence?
+7. Can users inspect rankings without recalculating source experiment evidence?
+8. Can users compare two or more recommendations deterministically?
+9. Can ranking snapshots remain auditable when later evaluations or policies change?
+10. Can the same ranking request converge idempotently under concurrency?
+
+PHASE BOUNDARY
+
+Phase 4B Step 2 remains strictly advisory.
+
+It may:
+
+- read persisted Step 1 evaluation runs
+- read persisted Step 1 evaluation results and components
+- create deterministic ranking snapshots
+- persist advisory ranking snapshots
+- persist ranking members and comparison evidence
+- group recommendations into explicitly defined scopes
+- compare recommendations
+- explain ordering and score differences
+- present eligible and blocked recommendations separately
+- add explicit CLI commands for ranking, comparison, and presentation
+- support dry-run ranking
+- emit stable machine-readable and human-readable output
+- add additive PostgreSQL migrations
+- add focused tests and documentation
+
+It must not:
+
+- recalculate source experiment evidence as the authoritative ranking input
+- silently rerun Phase 4B Step 1 evaluation
+- change Step 1 evaluation results
+- modify Step 1 score components
+- approve recommendations
+- reject recommendations automatically
+- expire recommendations automatically
+- convert recommendations into experiments
+- create experiment rows
+- queue experiments
+- change experiment status or phase
+- change recommendation review state
+- modify scheduler configuration
+- enter scheduler polling
+- alter continuation policy behavior
+- alter checkpoint policy behavior
+- mutate models
+- mutate inference or analysis evidence
+- introduce profitability metrics
+- introduce expected-return claims
+- introduce opaque learned ranking
+- perform autonomous research execution
+
+PRIMARY DELIVERABLE
+
+Create a cohesive advisory ranking and comparison subsystem with:
+
+1. Pure deterministic ranking policy.
+2. Explicit ranking scopes.
+3. Versioned ranking identity.
+4. Persisted ranking snapshots.
+5. Persisted ranking members.
+6. Deterministic comparison results.
+7. Stable tie-breaking.
+8. Stable explanations and reason codes.
+9. CLI ranking, comparison, and presentation commands.
+10. Dry-run behavior.
+11. Tests proving no source evidence, experiment, recommendation review, or scheduler mutation.
+12. One controlled local commit after all verification passes.
+
+RANKING SOURCE OF TRUTH
+
+Persisted Phase 4B Step 1 evaluation evidence is the authoritative input.
+
+Step 2 must rank from:
+
+- evaluation run identity
+- evaluation result identity
+- recommendation semantic hash
+- evaluation identity hash
+- scoring policy version
+- evaluator version
+- eligibility
+- disposition
+- final score
+- score components
+- missing-evidence count
+- persisted recommendation metadata required for display and grouping
+
+Do not reload experiment metrics and independently reconstruct Step 1 scores.
+
+A ranking snapshot may join recommendation metadata for symbol, horizon, changed parameter/family, source experiment ID, source model ID, source analysis ID, source scan ID, proposed value, source value, and structural metadata.
+
+Such joins are presentation and scope inputs only. They must not redefine the persisted Step 1 score.
+
+RANKING POLICY
+
+Introduce an explicit typed policy equivalent to RecommendationRankingPolicy.
+
+The exact name may follow existing conventions.
+
+The policy must be deterministic, versioned, canonicalized, hashable, validated, persisted with the snapshot, independent of database row order, independent of wall-clock time, and explicit about inclusion and exclusion.
+
+The first policy version should remain simple and explainable.
+
+Do not add new weighted scoring formulas in Step 2.
+
+Step 2 ranks existing final advisory scores and classifications.
+
+ELIGIBILITY ORDER
+
+Define a stable advisory order.
+
+At minimum, separate:
+
+1. immediately rankable advisory-ready recommendations
+2. blocked or deferred recommendations with valid evidence
+3. incomplete, stale, unsupported, or invalid recommendations
+
+Recommended top-level buckets:
+
+- advisory_ready
+- blocked
+- non_actionable
+
+Exact names must be documented and stable.
+
+Do not mix an ineligible recommendation into the eligible leaderboard merely because it has a historical score.
+
+Blocked and non-actionable recommendations must remain inspectable.
+
+RANKING ORDER
+
+Within the immediately rankable bucket, use deterministic ordering based on persisted Step 1 evidence.
+
+Recommended ordering:
+
+1. final advisory score descending
+2. explicit policy-defined tie-break fields
+3. recommendation semantic hash
+4. evaluation identity hash
+5. evaluation result ID only as a final persisted uniqueness fallback, not as scientific preference
+
+Tie-breaking must be documented.
+
+Do not use insertion order, PostgreSQL physical row order, created timestamp, current wall clock, process order, or unordered container iteration.
+
+BLOCKED AND NON-ACTIONABLE ORDER
+
+Blocked recommendations should have a deterministic presentation order.
+
+The policy should define stable disposition priority, for example:
+
+- blocked_pending_duplicate
+- blocked_active_duplicate
+- completed_duplicate
+
+Non-actionable presentation may define stable priority, for example:
+
+- insufficient_evidence
+- stale_source_evidence
+- unsupported_recommendation_family
+- invalid_persisted_evidence
+
+The exact order must be justified and tested.
+
+Do not imply that blocked or non-actionable ordering is a recommendation for execution.
+
+RANKING SCOPES
+
+Support clearly defined ranking scopes.
+
+At minimum evaluate whether these scopes fit the current architecture:
+
+- evaluation run
+- recommendation scan
+- symbol
+- prediction horizon
+- recommendation family / changed parameter
+- symbol + horizon
+- global advisory snapshot
+
+Implement only scopes that can be defined cleanly from persisted evidence.
+
+Every scope must have an explicit type, canonical representation, validation, stable null behavior, stable filter ordering, bounded result size, and deterministic membership.
+
+A ranking request must not ambiguously combine incompatible scopes.
+
+COMPARABILITY
+
+Define when two recommendation evaluations are meaningfully comparable.
+
+At minimum inspect:
+
+- same scoring policy version
+- same evaluator version
+- same ranking policy version
+- same evaluation-policy contract
+- same recommendation family where family-specific interpretation matters
+- same scope where rank position is compared
+- presence of final score
+- advisory eligibility
+
+Comparisons across different scoring policy versions must not silently produce a direct “better than” conclusion.
+
+Use stable comparison states such as:
+
+- comparable
+- incomparable_policy_version
+- incomparable_evaluator_version
+- incomparable_missing_score
+- incomparable_scope
+- incomparable_family
+- identical_score_tie
+- left_ranked_higher
+- right_ranked_higher
+
+Implement only states justified by the current design.
+
+COMPARISON OUTPUT
+
+A comparison should expose:
+
+- left evaluation result ID
+- right evaluation result ID
+- comparability state
+- left score
+- right score
+- score delta
+- left rank
+- right rank
+- rank delta
+- differing components
+- largest positive difference
+- largest penalty difference
+- policy versions
+- semantic identities
+- explanation
+- advisory-only disclaimer
+
+Component comparison must use persisted Step 1 components.
+
+Do not recalculate components from source evidence.
+
+RANKING SNAPSHOT IDENTITY
+
+A ranking snapshot identity must be deterministic and versioned.
+
+It should include:
+
+- ranking policy canonical text
+- ranking policy version
+- exact scope canonical text
+- ordered or canonically sorted input evaluation identities
+- source evaluation-run identities or selected evaluation-result identities
+- inclusion/exclusion policy
+- limit
+- grouping policy
+- comparison compatibility policy where relevant
+
+Canonical serialization must define a version prefix, field ordering, null representation, string length framing or equivalent unambiguous encoding, numeric formatting, collection ordering, and duplicate handling.
+
+Canonical text is authoritative.
+
+Hashes are lookup accelerators only.
+
+SNAPSHOT MEMBERSHIP
+
+Persist the exact evaluation-result membership used by a ranking snapshot.
+
+Do not define a historical ranking only as a query that changes when new evaluations arrive.
+
+A persisted snapshot must remain reproducible after later evaluation runs, later scoring policy versions, later ranking policy versions, recommendation status changes, new experiments, and new recommendations.
+
+Persist sufficient evidence for each member, including:
+
+- evaluation result ID
+- recommendation ID
+- bucket
+- rank within bucket
+- rank within scope where applicable
+- final score
+- disposition
+- tie-break values
+- inclusion reason
+- exclusion or block reason
+- comparison-policy compatibility markers
+- snapshot-time presentation metadata where needed
+
+Do not duplicate all Step 1 components into Step 2 tables unless required for immutable historical presentation.
+
+Prefer foreign keys to immutable Step 1 evidence.
+
+PERSISTENCE
+
+Add only additive migrations.
+
+Prefer new recommendation-owned tables equivalent to:
+
+- experiment_recommendation_ranking_snapshot
+- experiment_recommendation_ranking_member
+
+Optional comparison persistence should be added only if comparisons need durable history.
+
+Do not persist ad hoc comparison rows merely because the CLI can display a comparison.
+
+Exact names must follow repository conventions.
+
+SCHEMA REQUIREMENTS
+
+Require:
+
+- primary keys
+- foreign keys
+- unique constraints
+- check constraints
+- finite numeric checks
+- scope validation
+- rank positivity
+- bucket validation
+- snapshot identity uniqueness
+- one member per evaluation result per snapshot
+- unique rank within bucket/scope
+- restrictive foreign keys
+- no cascading deletion of Step 1 evidence
+- append-only snapshot/member history for runtime role
+- no triggers that modify experiments, recommendations, evaluation results, or scheduler state
+
+Runtime role permissions should normally be:
+
+- snapshot: SELECT, INSERT, and narrowly scoped lifecycle UPDATE only if snapshot construction uses a running/completed/failed lifecycle
+- member: SELECT, INSERT
+- no runtime DELETE
+- no unrestricted UPDATE to immutable identity or policy columns
+
+MIGRATION POLICY
+
+Use the next available migration number after 034.
+
+Inspect the migration ledger before selecting the number.
+
+Do not apply the new migration to the live schema during implementation or review.
+
+Migration tests must use an isolated schema or rollback-only fixture.
+
+REPOSITORY RESPONSIBILITIES
+
+Repository code owns:
+
+- loading immutable Step 1 evaluations for ranking
+- applying persisted-scope filters
+- mapping typed rows
+- beginning or finding an idempotent snapshot
+- persisting ranking members
+- loading snapshots
+- loading ranking members
+- loading comparison inputs
+- bounded listing
+- stable error mapping
+- exact retry verification
+
+Repository code must not invent ranking policy, recalculate Step 1 scores, mutate Step 1 results, mutate recommendation review state, or mutate experiment state.
+
+Raw pqxx rows must not escape repository boundaries.
+
+SERVICE RESPONSIBILITIES
+
+Service code owns:
+
+- validating ranking policy
+- validating scope
+- loading immutable evaluation evidence
+- invoking pure deterministic ranking
+- assigning buckets and ranks
+- orchestrating persistence
+- handling dry-run
+- comparing persisted evaluations
+- generating explanations
+- formatting structured results
+- mapping repository conflicts into stable outcomes
+
+The service must not launch scheduler work.
+
+DOMAIN RESPONSIBILITIES
+
+Pure domain code should own:
+
+- ranking policy validation
+- ranking policy canonicalization
+- scope canonicalization
+- bucket assignment
+- deterministic ordering
+- tie-breaking
+- comparability rules
+- component delta calculation
+- explanation reason codes
+- snapshot identity construction inputs
+
+The domain layer must not depend on PostgreSQL, pqxx, CLI parsing, filesystem state, scheduler state, current time, or hidden global state.
+
+PRESENTATION
+
+Provide both concise and detailed presentation modes.
+
+Human-readable ranking output should show:
+
+- snapshot ID or dry-run marker
+- scope
+- ranking policy version
+- source evaluation policy/scoring versions
+- eligible leaderboard
+- blocked recommendations
+- non-actionable recommendations
+- rank
+- recommendation ID
+- symbol
+- horizon
+- family
+- proposed change
+- final advisory score
+- disposition
+- top positive component
+- top penalty
+- concise explanation
+- explicit advisory-only disclaimer
+
+Detailed inspection should show:
+
+- full tie-break sequence
+- all persisted score components
+- inclusion reason
+- bucket reason
+- source evaluation identity
+- recommendation semantic hash
+- evaluation identity hash
+- ranking snapshot identity
+- policy versions
+
+MACHINE-READABLE OUTPUT
+
+Use stable event names and field names.
+
+Include fields equivalent to:
+
+Ranking snapshot:
+
+- ranking_snapshot_id
+- ranking_snapshot_identity_hash
+- ranking_policy_version
+- ranking_policy_hash
+- scope_type
+- scope_value
+- source_evaluation_run_id or source selection identity
+- member_count
+- advisory_ready_count
+- blocked_count
+- non_actionable_count
+- persisted
+- experiment_created=false
+- experiment_queued=false
+- scheduler_modified=false
+
+Ranking member:
+
+- ranking_snapshot_id
+- ranking_member_id
+- evaluation_result_id
+- recommendation_id
+- recommendation_semantic_hash
+- evaluation_identity_hash
+- bucket
+- bucket_rank
+- global_ordinal
+- final_score
+- disposition
+- tie_break_1
+- tie_break_2
+- inclusion_reason
+- block_reason
+- top_positive_component
+- top_penalty_component
+- persisted
+- experiment_created=false
+- experiment_queued=false
+- scheduler_modified=false
+
+Comparison:
+
+- left_evaluation_result_id
+- right_evaluation_result_id
+- comparability
+- left_score
+- right_score
+- score_delta
+- left_rank
+- right_rank
+- rank_delta
+- largest_positive_difference
+- largest_penalty_difference
+- explanation
+- experiment_created=false
+- experiment_queued=false
+- scheduler_modified=false
+
+Do not label one identity type as another.
+
+Use existing project escaping rules.
+
+CLI
+
+Add explicit opt-in commands consistent with existing conventions.
+
+The interface should support operations equivalent to:
+
+- rank evaluation results from one evaluation run
+- rank evaluation results from one recommendation scan
+- create a global advisory ranking snapshot
+- dry-run a ranking
+- list ranking snapshots
+- inspect one ranking snapshot
+- list ranking members
+- inspect one ranking member
+- compare two evaluation results
+- compare two ranked members where meaningful
+- filter presentation by bucket
+- bound output with a limit
+
+Suggested conceptual commands:
+
+- --rank-experiment-recommendation-evaluations
+- --recommendation-ranking-evaluation-run-id=ID
+- --recommendation-ranking-scan-id=ID
+- --recommendation-ranking-symbol=SYMBOL
+- --recommendation-ranking-horizon=N
+- --recommendation-ranking-family=NAME
+- --recommendation-ranking-limit=N
+- --recommendation-ranking-dry-run
+- --list-experiment-recommendation-ranking-snapshots
+- --recommendation-ranking-status=ID
+- --list-experiment-recommendation-ranking-members=ID
+- --recommendation-ranking-member-status=ID
+- --compare-experiment-recommendation-evaluations=LEFT:RIGHT
+
+These are suggestions only. Use names consistent with the current parser.
+
+CLI VALIDATION
+
+Verify:
+
+- exactly one top-level command
+- ranking requires an explicit source selection
+- incompatible source scopes are rejected
+- dry-run applies only to ranking creation
+- list filters apply only to list commands
+- comparison requires exactly two positive IDs
+- malformed scope values fail before database writes
+- incompatible policy versions return a comparison state, not a fabricated winner
+- ranking commands cannot be combined with queueing, scheduling, continuation, review action, or experiment lifecycle commands
+- help text is complete
+- no ranking command enters scheduler polling
+
+DRY-RUN
+
+Dry-run must:
+
+- read persisted Step 1 evaluation evidence
+- calculate deterministic ranking
+- emit the same member ordering and explanations as persisted mode
+- perform no snapshot insert
+- perform no member insert
+- perform no update
+- leave no failed-run row
+- report persisted=false
+
+Dry-run identity output should still expose the deterministic snapshot identity hash.
+
+IDEMPOTENCY
+
+Repeated identical ranking requests over the same immutable Step 1 input set and policy must converge on one authoritative snapshot.
+
+A retry must compare snapshot canonical identity, policy canonical text, scope canonical text, source membership, ordered members, bucket assignment, rank, tie-break values, and counts.
+
+A mismatch must fail rather than overwrite history.
+
+Changed membership, policy, scope, limit, or source evaluation identity must create a distinct snapshot identity.
+
+CONCURRENCY
+
+Test:
+
+- two identical ranking requests
+- same source, same policy, same scope
+- different scopes
+- different evaluation runs
+- rank persistence collisions
+- snapshot lifecycle race
+- exact retry
+- conflicting retry
+
+Unrelated snapshots should proceed concurrently.
+
+Locks, if needed, must be limited to ranking-owned rows.
+
+Do not lock experiment, recommendation, model, inference, analysis, continuation, checkpoint, or Step 1 evaluation-result rows for update.
+
+STEP 1 IMMUTABILITY
+
+Add regression tests proving Step 2 does not modify:
+
+- experiment_recommendation_evaluation_run
+- experiment_recommendation_evaluation_result
+- experiment_recommendation_evaluation_component
+- experiment_recommendation
+- experiment_recommendation_review_event
+- experiment
+- model
+- inference evidence
+- analysis evidence
+- checkpoint evidence
+- continuation evidence
+
+Step 2 may only write its own ranking-owned tables.
+
+COMPARISON RULES
+
+Comparison should primarily operate on persisted evaluations.
+
+When both evaluations belong to a persisted ranking snapshot, expose rank comparison.
+
+When no common ranking snapshot is specified, compare score and components only if policies are compatible.
+
+Do not choose an arbitrary latest snapshot without an explicit documented rule.
+
+If multiple common snapshots exist, require a snapshot ID or return an ambiguity error.
+
+Component comparison must:
+
+- align components by stable component name
+- preserve penalty semantics
+- report missing component on either side explicitly
+- use canonical persisted values
+- reject nonfinite persisted values
+- avoid recomputing normalization
+
+TESTING
+
+Add focused tests.
+
+Pure domain tests:
+
+- ranking policy validation
+- ranking policy canonicalization
+- scope canonicalization
+- advisory bucket assignment
+- blocked/non-actionable priority
+- score ordering
+- deterministic tie-breaking
+- order independence
+- stable snapshot identity
+- membership changes produce new identity
+- policy changes produce new identity
+- scope changes produce new identity
+- limit changes produce new identity
+- comparability states
+- score delta
+- rank delta
+- component alignment
+- missing component
+- penalty difference
+- incompatible policy versions
+
+Migration tests in an isolated schema:
+
+- migration can run twice
+- snapshot/member tables exist
+- constraints exist
+- runtime privileges are narrow
+- immutable snapshot columns cannot be updated
+- member rows are append-only
+- Step 1 foreign keys work
+- rank uniqueness works
+- bucket validation works
+- finite checks work
+- no source tables are modified
+
+Repository/service tests in an isolated schema:
+
+- rank one Step 1 evaluation run
+- rank one recommendation scan
+- rank filtered symbol/horizon/family scope
+- eligible, blocked, and non-actionable buckets
+- exact retry
+- retry mismatch
+- changed source membership
+- changed policy
+- zero members
+- dry-run
+- list snapshots
+- inspect snapshot
+- list members
+- inspect member
+- compare evaluations
+- compare ranked members
+- concurrency
+- rollback after partial failure
+- no Step 1 mutation
+- no experiment or scheduler mutation
+
+CLI tests:
+
+- parsing
+- mutual exclusion
+- required source
+- incompatible scopes
+- dry-run
+- limits
+- malformed comparison pair
+- not-found exit codes
+- help text
+- stable machine fields
+- human leaderboard
+- blocked section
+- non-actionable section
+- advisory disclaimer
+- escaping
+- no scheduler launch
+- no queue or experiment creation command combination
+
+Regression tests:
+
+- Phase 4A identity
+- candidate generation
+- recommendation persistence
+- Step 4 scoring
+- recommendation review
+- Phase 4B Step 1 evaluation
+- continuation inheritance
+- scheduler child-state behavior
+
+Build verification:
+
+- strict C++20 compilation with warnings as errors
+- Release build
+
+PERFORMANCE AND BOUNDS
+
+Ranking must be bounded.
+
+Define and validate:
+
+- maximum input evaluations
+- maximum output members
+- maximum comparison component count
+- maximum list limit
+
+Avoid N+1 queries for components where practical.
+
+Load ranking evidence in bounded batches.
+
+Do not optimize prematurely with denormalized mutable caches.
+
+DOCUMENTATION
+
+Update:
+
+- implementation documentation for Phase 4B Step 2
+- Volume VIII implementation status and contracts
+- CLI documentation
+- migration documentation if required
+
+Document:
+
+- ranking policy version
+- ranking scopes
+- bucket definitions
+- tie-breaking
+- comparability
+- snapshot identity
+- snapshot membership
+- idempotency
+- concurrency
+- dry-run
+- presentation
+- machine-readable fields
+- advisory-only boundary
+- no-profitability limitation
+- deferred approval/execution work
+
+Do not rewrite Volume I.
+
+If a material architecture decision is not already covered, propose the smallest ADR update rather than silently changing governance.
+
+OPERATIONAL SAFETY
+
+Assume the scheduler and experiments are active.
+
+Before editing:
+
+1. Inspect current branch and clean status.
+2. Verify the Step 1 commit is present.
+3. Inspect the migration ledger.
+4. Confirm the next migration number.
+5. Confirm the new ranking tables are absent from the live schema.
+6. Confirm scheduler PID/state.
+7. Inspect tests before running them.
+
+During implementation:
+
+- do not apply the new migration to the live schema
+- do not apply migration 034 automatically unless the normal operational process explicitly requires it
+- do not evaluate or rank live recommendations unless explicitly requested
+- do not start or stop the scheduler
+- do not signal workers
+- do not alter worker limits
+- do not queue experiments
+- do not alter recommendation review states
+- use isolated schemas for write tests
+- clean up exact isolated schemas after tests
+
+At completion verify:
+
+- new ranking migration is not live-applied
+- public ranking tables are absent
+- isolated schemas count is zero
+- scheduler remains under the same PID
+- no experiment, recommendation, evaluation, review, model, inference, analysis, checkpoint, or continuation row changed
+
+IMPLEMENTATION DISCIPLINE
+
+Preserve unrelated worktree changes.
+
+Do not use git add ..
+
+Do not perform broad refactors.
+
+Do not move ranking policy into ExperimentScheduler.cpp.
+
+Do not modify Phase 4A scoring formulas.
+
+Do not modify Step 1 evaluation classifications unless a concrete prerequisite defect is found and separately justified.
+
+Do not combine Step 2 with approval or execution.
+
+EXPECTED FILES
+
+Changes should normally be limited to:
+
+- new recommendation ranking domain files
+- new ranking repository files
+- new ranking service files
+- focused CLI additions in ExperimentScheduler.cpp
+- one additive ranking migration
+- focused ranking tests
+- focused documentation
+- Volume VIII implementation-status updates
+- Xcode project membership
+
+Unexpected files require explicit justification.
+
+ACCEPTANCE CRITERIA
+
+Step 2 is complete only when:
+
+- ranking uses persisted Step 1 evidence as authority
+- no Step 1 score is recalculated from experiment evidence
+- ranking policy is deterministic and versioned
+- scopes are explicit
+- buckets are explicit
+- tie-breaking is deterministic
+- snapshot identity is canonical and versioned
+- snapshot membership is immutable and reproducible
+- comparison states are explicit
+- incompatible policies do not produce fabricated winners
+- dry-run performs no writes
+- persistence is idempotent
+- concurrency converges safely
+- machine fields are semantically correct
+- human presentation separates eligible, blocked, and non-actionable recommendations
+- no experiment or scheduler state changes
+- no recommendation approval/review state changes
+- no profitability metric is fabricated
+- focused tests pass
+- Phase 4A and Step 1 regressions pass
+- Release build passes
+- live schema remains unchanged
+- documentation matches implementation
+- one atomic local commit is created
+
+COMPLETION PROCEDURE
+
+After all acceptance criteria pass:
+
+1. Run git status.
+2. Review the complete unstaged diff.
+3. Run git diff --check.
+4. Stage only the explicit Phase 4B Step 2 files.
+5. Do not use git add ..
+6. Review the staged diff with git diff --cached.
+7. Confirm no generated reports, raw data, database dumps, logs, build products, or unrelated files are staged.
+8. Create one atomic commit with:
+
+phase4b: add advisory recommendation ranking and comparison
+
+9. Do not push.
+10. Do not merge.
+11. Do not rebase.
+12. Report the full commit hash.
+13. Report final git status.
+14. Confirm whether the worktree is clean.
+
+FINAL RESPONSE
+
+Provide:
+
+1. Architecture conformance summary.
+2. Pre-edit findings.
+3. Files changed.
+4. Migration and schema summary.
+5. Ranking policy and scope definitions.
+6. Bucket and tie-break definitions.
+7. Snapshot identity and idempotency.
+8. Comparison rules.
+9. CLI commands and examples.
+10. Machine-readable contracts.
+11. Human presentation behavior.
+12. Tests and commands run with results.
+13. Regression results.
+14. Release build result.
+15. Operational safety verification.
+16. Deferred Phase 4B work.
+17. Commit hash.
+18. Final Git status.
+
+REASONING
+
+Phase 4B Step 1 created immutable, deterministic advisory evaluation evidence. Step 2 should not reopen source experiment evidence or invent a second score. Its role is to organize persisted evaluations into reproducible advisory views, make ordering transparent, and explain why recommendations differ.
+
+Persisted ranking snapshots are necessary because a query over current evaluations is not a durable historical decision artifact. Exact membership, scope, policy, bucket, tie-break values, and rank must remain inspectable after later evaluations and policy versions are added.
+
+Comparison must also be policy-aware. Recommendations evaluated under incompatible scoring or evaluator versions cannot be presented as directly better or worse without an explicit compatibility rule. Step 2 therefore introduces deterministic comparability states and component-level differences rather than fabricated conclusions.
+
+This increment remains advisory. It improves research visibility and decision support while preserving the separation between evaluation, ranking, approval, experiment creation, queueing, profitability analysis, and scheduler execution.

@@ -1,0 +1,50 @@
+Phase 5 Step 5a Independent Architectural Review
+
+Pull the latest HEAD on the current branch before reviewing.
+
+Use model_reasoning_effort=“xhigh”.
+
+Perform a read-only architectural review of the current unstaged
+implementation of Phase 5 Step 5a.
+
+Do NOT modify any files.
+
+Focus on these questions:
+
+1.  Does the Step 5a domain model support multiple scientific metrics
+    per campaign member (for example inference accuracy, leader score,
+    and future metrics) without requiring a redesign in Step 5b?
+
+2.  Does the current contract correctly distinguish:
+
+    -   successful terminal completion
+    -   failed experiments
+    -   cancelled experiments
+    -   inconsistent or malformed evidence
+    -   non-terminal experiments
+
+    Ensure these are not unintentionally collapsed into
+    MissingResultEvidence or a generic Terminal state.
+
+3.  Verify that the implementation remains within the intended Step 5a
+    boundary:
+
+    -   pure immutable domain model
+    -   validation
+    -   identity
+    -   deterministic ordering
+    -   no repository
+    -   no database access
+    -   no CLI
+    -   no scheduler changes
+    -   no persistence
+
+4.  Identify any contract changes that should be made BEFORE Step 5b
+    begins.
+
+5.  Do not suggest stylistic refactors unless they materially improve
+    the architecture.
+
+Provide: - Executive summary - Findings - Risks - Recommended changes
+(if any) - Final recommendation: - Ready to commit - Commit after minor
+fixes - Do not commit yet

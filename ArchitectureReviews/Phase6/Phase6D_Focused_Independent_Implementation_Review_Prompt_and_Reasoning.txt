@@ -1,0 +1,436 @@
+PHASE 6D
+FOCUSED INDEPENDENT IMPLEMENTATION REVIEW
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6D has been implemented on branch `phase6d` and remains fully
+uncommitted for review.
+
+The current working tree contains five modified tracked files and twelve
+untracked Phase 6D files:
+
+Modified:
+- Database/README.md
+- ExpertAdvisor.xcodeproj/project.pbxproj
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+- docs/architecture/Volume_XII_Database.md
+- docs/architecture/adr/README.md
+
+Untracked:
+- Database/migrations/044_experiment_recommendation_campaign_follow_up_proposal_approval.sql
+- Sources/ExperimentRecommendationCampaignFollowUpProposalApproval.cpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalApproval.hpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalApprovalRepository.cpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalApprovalRepository.hpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalApprovalService.cpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalApprovalService.hpp
+- Tests/ExperimentRecommendationCampaignFollowUpProposalApprovalMigrationTests.sql
+- Tests/ExperimentRecommendationCampaignFollowUpProposalApprovalRepositoryTests.cpp
+- Tests/ExperimentRecommendationCampaignFollowUpProposalApprovalTests.cpp
+- docs/Phase6DRecommendationCampaignFollowUpProposalApproval.rst
+- docs/architecture/adr/ADR-0009-phase-6d-follow-up-proposal-administrative-approval.md
+
+The implementation run reported success, but two areas require especially
+careful independent review:
+
+1. Phase 6C already records an immutable approved/rejected administrative
+   review. Phase 6D adds a second approval authority. The review must determine
+   whether this distinction is real, necessary, consistently named, and
+   architecturally coherent rather than duplicative.
+
+2. The complete incremental Release build was deferred because multiple
+   training workers were active. The review should run the Release build if it
+   is operationally safe and verify final project integration.
+
+The review must inspect both tracked diffs and every untracked file. Ordinary
+`git diff` does not show untracked file contents, so Codex must explicitly read
+and review them.
+
+This is an independent review, not a redesign exercise and not a request to
+implement Phase 6E or later work.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a focused independent review of the current uncommitted Phase 6D
+implementation in the `ExpertAdvisor` repository on branch `phase6d`.
+
+GOAL
+
+Determine whether the implementation is correct, architecturally justified,
+safe, complete, maintainable, adequately tested, and ready to commit.
+
+Review for:
+
+- correctness;
+- architectural consistency;
+- authority-boundary clarity;
+- semantic duplication or ambiguity with Phase 6C;
+- deterministic identity;
+- immutable value semantics;
+- transaction safety;
+- concurrency safety;
+- idempotence and conflict behavior;
+- exact upstream provenance;
+- database privilege safety;
+- migration correctness;
+- rollback and upgrade safety;
+- service-boundary correctness;
+- CLI/non-CLI sequencing;
+- project integration;
+- regression risk;
+- documentation accuracy;
+- test adequacy;
+- readiness to commit.
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6E or later work.
+
+Do not add activation, execution, scheduling, queueing, scheduler signaling,
+worker launch, experiment mutation, model mutation, continuation behavior,
+profitability logic, campaign-success logic, or automatic approval.
+
+Make changes only if the review identifies a concrete defect, missing
+verification, misleading contract, unsafe behavior, inconsistency, or test gap.
+
+STARTING STATE AND SAFETY AUDIT
+
+Before reviewing, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --cached --stat`
+5. `git diff --stat`
+6. `git log -5 --oneline --decorate`
+7. `git show --no-patch --decorate phase6c-complete`
+8. `git merge-base --is-ancestor phase6c-complete HEAD`
+9. scheduler and worker processes using OS process tools only.
+
+Require:
+
+- branch is `phase6d`;
+- Phase 6C completion is an ancestor;
+- index is unstaged unless user changes occurred after this prompt;
+- current uncommitted work is the Phase 6D implementation;
+- no unrelated changes are present.
+
+Do not destroy work if the state differs. Analyze and report it.
+
+OPERATIONAL SAFETY
+
+- Do not fetch, pull, merge, rebase, reset, switch branches, or rewrite history.
+- Do not create, amend, or push a commit.
+- Do not stage files.
+- Do not run Clean.
+- Preserve DerivedData.
+- Do not interrupt scheduler or worker processes.
+- Do not issue signals or process-control commands.
+- Do not run `LSTM_Release --scheduler-status`.
+- Do not connect to or modify production database `LSTM`.
+- Use only explicitly named disposable test databases.
+- Reject case-insensitive database name `LSTM`.
+- Remove disposable database objects at the end.
+- Use Release configuration only.
+- Do not start experiments.
+
+REVIEW ALL CHANGES
+
+Review every modified tracked file and every untracked file.
+
+Do not rely only on `git diff`.
+
+For untracked files, inspect their full contents directly or use an equivalent
+explicit diff against `/dev/null`.
+
+Confirm the full change set is limited to the intended Phase 6D increment.
+
+PRIMARY ARCHITECTURAL QUESTION
+
+Independently determine whether Phase 6D is a legitimate distinct authority.
+
+Phase 6C already records one immutable administrative review with decision
+`approved` or `rejected`.
+
+Phase 6D reportedly records a second immutable administrative approval that
+consumes only an exact Phase 6C approved review.
+
+Answer all of the following:
+
+1. What exact decision does Phase 6D record that Phase 6C does not?
+2. Is that distinction encoded in type names, field names, canonical identity,
+   documentation, service semantics, and tests?
+3. Could an operator, maintainer, or later phase reasonably confuse Phase 6C
+   approval with Phase 6D approval?
+4. Does Phase 6D create genuine new governance evidence, or merely duplicate
+   Phase 6C's approved decision?
+5. Is the approved-only eligibility rule correct?
+6. Is a Phase 6C rejected review correctly and permanently ineligible?
+7. Does Phase 6D still remain non-operational and non-authorizing?
+8. Is the roadmap interpretation supported by committed architecture, or is it
+   an unsupported extrapolation?
+9. Should any naming or documentation be corrected before commit?
+10. If the distinction is not sufficiently defensible, identify that as a
+    blocking architectural defect rather than accepting the implementation.
+
+DOMAIN CONTRACT REVIEW
+
+Review the Phase 6D pure contract for:
+
+- supported contract version;
+- exact Phase 6C review-event identity;
+- exact Phase 6B proposal identity;
+- exact Phase 6A proposal binding;
+- approval eligibility;
+- approver identity validation;
+- reason validation;
+- UTF-8 and control-character handling;
+- locale-independent canonical formatting;
+- canonical field ordering;
+- byte-length framing;
+- canonical size limits;
+- tagged hash validation;
+- canonical-first equality;
+- immutable/non-assignable semantics;
+- exact replay semantics;
+- fixed negative authority flags;
+- absence of caller-controlled operational state;
+- stable and meaningful failure reasons.
+
+Verify that generated persistence metadata does not enter domain identity.
+
+Check for accidental identity dependence on time, PID, locale, presentation, or
+database metadata.
+
+PERSISTENCE AND MIGRATION REVIEW
+
+Review migration `044` in detail.
+
+Verify:
+
+- additive migration ordering after `043`;
+- correct object names;
+- complete Phase 6C provenance binding;
+- correct foreign keys and restrictive delete behavior;
+- exact approved-review eligibility enforcement;
+- canonical bytewise collation;
+- appropriate checks and size bounds;
+- append-only behavior;
+- generated-ID and timestamp protection;
+- safe trigger function behavior;
+- correct SECURITY INVOKER/DEFINER choice;
+- schema-qualified references where required;
+- safe search path;
+- explicit PUBLIC privilege revocation;
+- runtime least privilege;
+- correct table, sequence, and function ACL fallback handling;
+- no UPDATE, DELETE, TRUNCATE, generated-column insert, or unintended
+  table-level INSERT authority;
+- migration repeatability;
+- clean-install behavior;
+- upgrade-from-043 behavior;
+- no mutation of Phase 6A, 6B, 6C, experiment, scheduler, or lifecycle tables.
+
+Pay special attention to PostgreSQL ACL object-type codes. Confirm sequence
+fallback uses lowercase `s`, not uppercase `S`.
+
+REPOSITORY REVIEW
+
+Verify repository behavior for:
+
+- validation before persistence;
+- exact Phase 6C reload;
+- exact Phase 6B reload where required;
+- proposal/review/approval identity alignment;
+- approved-only eligibility;
+- transaction-scoped advisory locking;
+- lock-key correctness and collision domains;
+- first-write behavior;
+- exact replay behavior;
+- conflicting replay behavior;
+- equivalent concurrent writes;
+- conflicting concurrent writes;
+- hash collision behavior;
+- rollback behavior;
+- malformed storage;
+- missing upstream rows;
+- stale or mismatched provenance;
+- unique-constraint race handling;
+- deterministic error mapping;
+- immutable hydrated return type;
+- read-only lookup/list behavior;
+- no side effects on upstream or lifecycle tables.
+
+Check whether any transaction isolation assumptions are undocumented or unsafe.
+
+SERVICE REVIEW
+
+Verify the Phase 6D service:
+
+- consumes an exact persisted Phase 6C review;
+- rejects missing or rejected reviews;
+- constructs the pure value once;
+- persists atomically;
+- returns the authoritative persisted result;
+- maps errors accurately;
+- exposes no activation, execution, scheduling, queue, scheduler, worker,
+  experiment, model, continuation, profitability, or success authority;
+- does not duplicate repository SQL or validation;
+- is named clearly enough to distinguish it from Phase 6C review approval.
+
+Review whether omitting main-program CLI integration is correct for this
+increment.
+
+If CLI is intentionally deferred, verify documentation and tests clearly say
+so.
+
+TEST REVIEW
+
+Review all Phase 6D tests for correctness, not merely presence.
+
+Confirm meaningful coverage of:
+
+1. pure construction;
+2. immutability;
+3. canonical golden values;
+4. locale independence;
+5. UTF-8 and hostile control input;
+6. approved-review eligibility;
+7. rejected-review ineligibility;
+8. missing upstream review;
+9. stale identity;
+10. exact replay;
+11. conflicting replay;
+12. hash collision;
+13. concurrent equivalent writes;
+14. concurrent conflicting writes;
+15. rollback;
+16. malformed persisted data;
+17. append-only enforcement;
+18. runtime privileges;
+19. PUBLIC ACL fallback;
+20. trigger function privileges;
+21. generated columns;
+22. read-only lookup/list behavior;
+23. no sequence advance from reads;
+24. no advisory or tuple locks from reads;
+25. unchanged Phase 6A/6B/6C data;
+26. unchanged experiment and scheduler fixtures;
+27. clean-install migration path;
+28. upgrade-from-043 path;
+29. project-file membership;
+30. Phase 6A/6B/6C regressions.
+
+Look for tests that merely restate implementation logic, use weak assertions,
+or accidentally run as an owner instead of the runtime role.
+
+VERIFICATION
+
+Run the strongest safe verification.
+
+At minimum:
+
+- all Phase 6D pure tests;
+- all Phase 6D migration/repository/service tests;
+- relevant Phase 6A/6B/6C regressions;
+- disposable PostgreSQL clean-install tests;
+- disposable PostgreSQL upgrade-from-043 tests;
+- explicit NULL-ACL fallback tests;
+- concurrency tests;
+- project-file lint;
+- `xcodebuild -list -project ExpertAdvisor.xcodeproj`;
+- `git diff --check`;
+- final worktree/index audit.
+
+RELEASE BUILD
+
+The implementation run deferred the full incremental Release build because
+training workers were active.
+
+Reassess current process load using OS tools only.
+
+If operationally safe, run:
+
+    xcodebuild \
+      -project ExpertAdvisor.xcodeproj \
+      -scheme "LSTM Release" \
+      -configuration Release \
+      -derivedDataPath DerivedData/ExpertAdvisor \
+      build
+
+Then verify the built executable architecture with `file` or `lipo -info`.
+
+Do not run Clean.
+
+If active resource contention still makes the build unsafe, do not interrupt
+workers. Clearly mark the Release build as the only remaining verification gap
+and provide the exact command.
+
+CORRECTIONS
+
+If a concrete defect is found, make only the narrowest justified correction.
+
+Do not stage or commit it.
+
+After any correction, rerun the directly affected verification and enough
+regression coverage to establish safety.
+
+Do not make stylistic or speculative redesign changes.
+
+FINAL SELF-REVIEW
+
+Before reporting:
+
+1. inspect the complete final diff, including all untracked files;
+2. confirm no unrelated file changed;
+3. confirm no generated artifact or test output is tracked;
+4. confirm index remains unchanged;
+5. run `git diff --check`;
+6. record exact `git status --short`;
+7. record exact `git diff --stat`;
+8. list all untracked Phase 6D files;
+9. record scheduler/worker PID presence with OS tools only;
+10. confirm no scheduler/worker interruption;
+11. confirm no production database access;
+12. confirm all disposable databases were removed;
+13. confirm no commit, stage, or push occurred.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive verdict.
+2. Blocking findings first, ordered by severity.
+3. Non-blocking findings.
+4. Explicit answer to the Phase 6C versus Phase 6D authority distinction.
+5. Domain contract assessment.
+6. Migration and database privilege assessment.
+7. Repository, transaction, replay, and concurrency assessment.
+8. Service-boundary assessment.
+9. CLI sequencing assessment.
+10. Test adequacy assessment.
+11. Release build and project integration results.
+12. Scheduler and production-data safety assessment.
+13. Corrections made, if any.
+14. Remaining risks or verification gaps.
+15. Exact final `git status --short`.
+16. Exact final `git diff --stat`.
+17. Complete untracked-file list.
+18. Readiness-to-commit recommendation.
+19. Recommended next action.
+
+End with exactly one of:
+
+PHASE 6D INDEPENDENT REVIEW PASSED — READY FOR STAGED COMMIT REVIEW
+
+or
+
+PHASE 6D INDEPENDENT REVIEW FOUND REQUIRED CORRECTIONS
+
+or
+
+PHASE 6D INDEPENDENT REVIEW BLOCKED

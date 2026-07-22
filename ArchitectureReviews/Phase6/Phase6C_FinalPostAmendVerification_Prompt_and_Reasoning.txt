@@ -1,0 +1,384 @@
+PHASE 6C REVIEW CORRECTIONS
+FINAL POST-AMEND VERIFICATION
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6C was originally committed as:
+
+    2e1fc63 Implement Phase 6C immutable follow-up proposal administrative review
+
+The first correction commit was:
+
+    9238f11 Harden Phase 6C review presentation and verification
+
+A focused post-commit verification found one low-severity defect in the migration test:
+
+    acldefault('S', relation.relowner)
+
+used PostgreSQL object type `S`, which means foreign server, instead of lowercase
+`s`, which means sequence.
+
+The production Phase 6C implementation, presentation correction, strengthened C++
+tests, documentation, authority boundary, Release build, and focused database
+verification were otherwise sound.
+
+The one-character correction was applied:
+
+    acldefault('s', relation.relowner)
+
+The existing correction commit was then amended and pushed with
+`--force-with-lease`, producing:
+
+    9689d7d Harden Phase 6C review presentation and verification
+
+There are no other developers working on this branch. Using
+`--force-with-lease` was therefore a controlled history replacement, and the
+lease protected against replacing an unexpected remote update.
+
+The appropriate next step is a final, narrow verification of the amended commit.
+This review should:
+
+1. confirm the current local and remote `phase6` tips resolve to the amended
+   commit;
+2. confirm the amended commit is directly based on `2e1fc63`;
+3. confirm the amended commit contains exactly the intended four-file Phase 6C
+   correction set;
+4. confirm the sequence ACL fallback now uses lowercase `s`;
+5. confirm the committed file is identical to the already verified worktree fix;
+6. rerun only the checks needed to close the previous failed verdict;
+7. leave branch, history, worktree, index, scheduler processes, production data,
+   and DerivedData unchanged.
+
+This is not another broad Phase 6C review. The preceding post-commit review
+already independently verified the production correction, presentation tests,
+documentation, project integration, focused C++ tests, disposable database
+tests, Release build, arm64 architecture, and operational safety.
+
+The final review should concentrate on the amended commit's identity, scope,
+remote synchronization, corrected PostgreSQL object-type code, and clean final
+state.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a final focused post-amend verification of the current Phase 6C
+correction commit:
+
+    9689d7d Harden Phase 6C review presentation and verification
+
+on branch `phase6`.
+
+The expected parent is:
+
+    2e1fc63d77af04949090a28f67be03b4fbea7be1
+
+The superseded commit was:
+
+    9238f11bc0b9d96f10532e33ece28a9d0f0dad96
+
+The amended commit was pushed to remote `github`, branch `phase6`, using
+`--force-with-lease`.
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6D or any later phase.
+
+Do not add CLI integration, activation, execution, scheduling, queueing, worker
+launch, experiment creation, experiment modification, campaign-success
+declaration, profitability, statistical validation, automatic review, or
+automatic approval behavior.
+
+Do not amend, reset, rebase, revert, cherry-pick, squash, or otherwise rewrite
+history.
+
+Do not create a commit.
+
+Do not push.
+
+Do not fetch or pull. Verify the existing remote-tracking reference only. If the
+remote-tracking reference is absent or stale relative to the known successful
+push output, report that limitation rather than contacting the network.
+
+Do not modify files unless a concrete defect remains in the amended commit. If
+a defect is found, correct only that defect, leave it unstaged and uncommitted,
+and conclude that final verification failed.
+
+EXPECTED COMMIT SCOPE
+
+The amended commit must modify exactly:
+
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp`
+- `docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst`
+
+No other file may be part of the commit.
+
+REPOSITORY AND OPERATIONAL RULES
+
+- Do not pull.
+- Do not fetch.
+- Do not merge.
+- Do not rebase.
+- Do not reset.
+- Do not switch branches.
+- Preserve branch `phase6`.
+- Preserve HEAD.
+- Do not stage or unstage files.
+- Do not create commits.
+- Do not push.
+- Preserve DerivedData.
+- Use Release builds only if a build is actually required.
+- Do not run Clean.
+- Do not interrupt scheduler or worker processes.
+- Do not modify production database data.
+- Do not run `LSTM_Release --scheduler-status`; it updates scheduler-owned
+  metadata and is not read-only.
+- Inspect scheduler and worker processes only with operating-system process
+  tools.
+
+INITIAL STATE AND COMMIT IDENTITY
+
+At the beginning, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git rev-parse 9689d7d`
+4. `git rev-parse 9689d7d^`
+5. `git log -3 --oneline --decorate`
+6. `git status --short`
+7. `git diff --cached --name-status`
+8. `git diff --name-status`
+9. `git diff --cached --check`
+10. `git diff --check`
+11. `git show --name-status --stat --summary 9689d7d`
+12. `git show --raw --summary --format=fuller 9689d7d`
+13. `git show --numstat --format=fuller 9689d7d`
+14. `git branch -vv`
+15. `git rev-parse --verify refs/remotes/github/phase6`, if that reference exists.
+
+Confirm before reviewing content:
+
+- branch is `phase6`;
+- HEAD resolves to commit `9689d7d`;
+- its direct parent is exactly
+  `2e1fc63d77af04949090a28f67be03b4fbea7be1`;
+- worktree is clean;
+- index is clean;
+- the commit contains exactly the four expected files;
+- all four retain mode `100644`;
+- there are no renames, copies, binaries, or hidden mode changes;
+- all whitespace checks pass;
+- the existing `github/phase6` remote-tracking reference, if present, resolves
+  to HEAD.
+
+Do not treat the obsolete `9238f11` hash being absent from current branch
+history as a defect. It was intentionally replaced by the amended commit.
+
+AMENDED DELTA REVIEW
+
+Review the complete amended delta:
+
+    git diff 2e1fc63 9689d7d -- \
+      Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp \
+      Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql \
+      Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp \
+      docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst
+
+Confirm that it is the same logical correction set previously reviewed, except
+that the migration test now correctly uses:
+
+    acldefault('s', relation.relowner)
+
+for the sequence ACL fallback.
+
+Compare the migration-test blob in the amended commit against the final
+worktree/file content verified by the previous review.
+
+Confirm there is no remaining occurrence of:
+
+    acldefault('S'
+
+in the Phase 6C migration test.
+
+POSTGRESQL ACL CORRECTION REVIEW
+
+Independently verify:
+
+- `acldefault('s', owner_oid)` is the correct PostgreSQL sequence default ACL;
+- uppercase `S` is not used for a sequence fallback;
+- `coalesce(relation.relacl, acldefault('s', relation.relowner))` correctly
+  models the effective built-in ACL when `relacl` is NULL;
+- `aclexplode(...)` and `privilege.grantee = 0` correctly detect PUBLIC;
+- the explicit migration ACL path and the NULL-ACL fallback are both logically
+  covered;
+- the one-character fix changes tests only and grants no production authority;
+- migration 043 itself remains unchanged.
+
+If useful, use the installed PostgreSQL 17.10 server or `psql` to run a tiny
+read-only/disposable probe confirming:
+
+    acldefault('s', ...)
+    acldefault('S', ...)
+
+represent different object classes.
+
+Do not connect to production `LSTM`.
+
+FOCUSED REGRESSION CLOSURE
+
+The previous review already passed:
+
+- Phase 6C pure contract test;
+- repository/presentation test;
+- disposable PostgreSQL repository and migration assertions;
+- signed hostile-locale probe;
+- project-file lint;
+- Xcode project listing;
+- incremental Release build;
+- arm64 executable verification.
+
+Do not repeat all of that unless the amended commit differs beyond the intended
+one-character migration-test correction.
+
+Run at minimum:
+
+1. `git diff --check 2e1fc63 9689d7d`
+2. `git diff --cached --check`
+3. `git diff --check`
+4. inspect the exact committed SQL line;
+5. run the standalone Phase 6C migration assertions against a disposable
+   PostgreSQL database or schema using the prior exact harness, if readily
+   available;
+6. exercise the NULL sequence ACL fallback explicitly, so the corrected
+   lowercase `s` path is actually evaluated;
+7. run a deliberate control proving uppercase `S` is not the correct sequence
+   object type;
+8. `plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj`;
+9. `xcodebuild -list -project ExpertAdvisor.xcodeproj`.
+
+A new Release build is not required if:
+
+- no source or project file differs from the previously built correction set;
+- only the SQL test character changed;
+- the worktree is clean;
+- and commit/blob comparison confirms all C++ and project content is identical
+  to the previously verified state.
+
+State this reliance explicitly.
+
+DISPOSABLE DATABASE SAFETY
+
+Before any database execution:
+
+- require an explicit `LSTM_TEST_DB_NAME`;
+- reject case-insensitive `LSTM`;
+- require a clearly disposable database name;
+- use Bash 3.2-compatible shell syntax;
+- verify the database is not production;
+- inspect scheduler and worker processes using OS process tools only;
+- do not issue signals or process-control commands;
+- do not run `--scheduler-status`.
+
+Remove any disposable database or schema created by this review.
+
+AUTHORITY AND SCOPE AUDIT
+
+Confirm the amended commit adds no:
+
+- activation or execution authority;
+- follow-up authorization;
+- queueing or scheduling;
+- scheduler signaling;
+- worker launch;
+- experiment creation or modification;
+- campaign-success declaration;
+- profitability or statistical validation;
+- automatic review or approval.
+
+Distinguish negative safety declarations and verification assertions from
+actual capability.
+
+FORCE-WITH-LEASE ASSESSMENT
+
+Record that the amendment changed the commit hash from `9238f11` to `9689d7d`.
+
+Confirm:
+
+- the current commit has the intended parent and content;
+- the existing remote-tracking branch, if available, points to the amended
+  commit;
+- no merge commit or extra commit was introduced;
+- force-with-lease did not alter any history before `2e1fc63`;
+- no further history rewrite is needed.
+
+Do not criticize the controlled amendment merely because it replaced a pushed
+commit. Evaluate the resulting repository state and safety.
+
+FINAL AUDIT
+
+At the end, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git rev-parse HEAD^`
+4. `git status --short`
+5. `git diff --cached --stat`
+6. `git diff --stat`
+7. `git diff --cached --check`
+8. `git diff --check`
+9. `git branch -vv`
+10. scheduler and worker PID presence using OS process tools only.
+
+Confirm:
+
+- branch remains `phase6`;
+- HEAD remains the amended `9689d7d` commit;
+- parent remains `2e1fc63`;
+- index and worktree remain clean;
+- no commit was created;
+- no history was rewritten during this review;
+- no push, fetch, or pull occurred;
+- no unexpected file was modified;
+- DerivedData was preserved;
+- no Clean was run;
+- no scheduler or worker was interrupted;
+- `LSTM_Release --scheduler-status` was not run;
+- production database was not accessed or modified;
+- disposable database objects were removed.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Findings ordered by severity.
+3. Amended commit identity and parentage.
+4. Local and existing remote-tracking synchronization assessment.
+5. Exact committed-file inventory.
+6. PostgreSQL sequence ACL correction assessment.
+7. Confirmation that the rest of the four-file correction set matches the
+   previously verified content.
+8. Authority-boundary and scope assessment.
+9. Verification performed.
+10. Prior verification relied upon and why.
+11. Database and scheduler safety assessment.
+12. Force-with-lease/history assessment.
+13. Remaining risks or unverified assumptions.
+14. Any changes made during this review and why.
+15. Exact final `git status --short`.
+16. Exact final `git diff --cached --stat`.
+17. Exact final `git diff --stat`.
+18. Recommendation on whether amended commit `9689d7d` is accepted as the final
+    Phase 6C correction commit.
+
+Conclude with exactly one of:
+
+FINAL POST-AMEND VERIFICATION PASSED FOR 9689D7D
+
+or
+
+FINAL POST-AMEND VERIFICATION FAILED FOR 9689D7D

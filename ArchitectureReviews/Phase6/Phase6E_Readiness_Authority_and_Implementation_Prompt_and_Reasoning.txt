@@ -1,0 +1,511 @@
+PHASE 6E
+READINESS, AUTHORITY-BOUNDARY DEFINITION, AND IMPLEMENTATION
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6D is now committed as:
+
+    d78771f Implement Phase 6D governance ratification
+
+The Release build succeeded for arm64, `git diff --cached --check` passed before
+commit, and the complete Phase 6D change set was committed.
+
+The established Phase 6 authority chain is now:
+
+Phase 6A
+    Pure, identity-bound, non-authorizing follow-up proposal.
+
+Phase 6B
+    Exact append-only persistence and read-only preview.
+
+Phase 6C
+    Immutable administrative merits review with `approved` or `rejected`.
+
+Phase 6D
+    Immutable governance ratification of advancement after an exact approved
+    Phase 6C review, with mandatory reviewer/ratifier separation.
+
+Phase 6D explicitly grants no Phase 6E capability and no operational authority.
+
+The committed Phase 6D record says that Phase 6E requires a separate accepted
+capability and operational-safety design. It does not, by itself, conclusively
+establish whether the next narrow authority is:
+
+- activation;
+- execution authorization;
+- follow-up authorization;
+- lifecycle admission;
+- handoff into an existing execution authority;
+- or another more precise boundary already defined elsewhere in the repository.
+
+Therefore this run must not assume that “Phase 6E” means a broad operational
+implementation.
+
+The correct workflow is:
+
+1. audit the committed repository and authoritative architecture;
+2. determine whether Phase 6E has an already-established exact purpose;
+3. distinguish activation, authorization, execution, materialization, queueing,
+   scheduling, and scheduler ownership;
+4. define the narrowest legitimate Phase 6E capability;
+5. implement only if the authority is sufficiently established;
+6. otherwise stop after producing a concrete readiness/design-gap report.
+
+The scheduler and production experiment workers may be active. Preserve them.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a repository-grounded Phase 6E readiness analysis and, only if the
+committed architecture establishes a sufficiently precise and legitimate next
+authority, implement the narrowest complete Phase 6E increment in the
+`ExpertAdvisor` repository.
+
+Do not infer Phase 6E solely from its sequence number.
+
+Do not assume Phase 6E means activation, execution, queueing, scheduling, or
+scheduler integration until the committed repository establishes that meaning.
+
+PRIMARY GOAL
+
+Determine the exact next authority after Phase 6D governance ratification.
+
+Then do exactly one of the following:
+
+A. If the committed repository defines Phase 6E precisely enough:
+
+   Implement that exact narrow authority with complete domain, persistence,
+   transaction, concurrency, privilege, test, project-integration, and
+   documentation support.
+
+B. If the repository does not define Phase 6E precisely enough:
+
+   Do not invent an authority and do not make speculative implementation
+   changes. Produce a detailed readiness report identifying:
+
+   - the authoritative evidence found;
+   - the unresolved authority decision;
+   - concrete alternatives;
+   - risks of each alternative;
+   - the smallest architecture decision needed before implementation;
+   - a recommended Phase 6E definition;
+   - a ready-to-run implementation prompt for that recommended definition.
+
+STARTING STATE AUDIT
+
+Before analysis or modification, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --cached --stat`
+5. `git diff --stat`
+6. complete untracked-file list
+7. `git log -8 --oneline --decorate`
+8. `git show --stat --oneline d78771f`
+9. `git show --no-patch --decorate d78771f`
+10. whether `d78771f` is an ancestor of HEAD
+11. local and remote branch/ref relationships relevant to Phase 6
+12. scheduler and worker processes using OS process tools only
+
+Expected baseline:
+
+- Phase 6D commit `d78771f` is present;
+- the working tree and index are clean;
+- no unrelated user changes exist.
+
+Do not discard, overwrite, stage, or modify unexpected work.
+
+BRANCHING
+
+If the worktree is clean and Phase 6D is the current baseline:
+
+- create and switch to a new local branch named `phase6e`;
+- branch from the exact current Phase 6D commit;
+- do not push the branch;
+- do not create a commit.
+
+If branch creation would overwrite or conflict with existing work, stop and
+report the condition without destructive action.
+
+OPERATIONAL SAFETY
+
+- Do not fetch, pull, merge, rebase, reset, cherry-pick, or rewrite history.
+- Do not stage, commit, amend, tag, or push.
+- Do not use `git add`.
+- Do not run Clean.
+- Preserve DerivedData.
+- Do not stop, suspend, resume, renice, or signal scheduler or worker processes.
+- Do not run scheduler control commands.
+- Do not run `LSTM_Release --scheduler-status`.
+- Do not start experiments.
+- Do not connect to or modify production database `LSTM`.
+- Reject case-insensitive production database name `LSTM`.
+- Use only explicitly named disposable test databases and schemas.
+- Remove all disposable database objects before completion.
+- Use Release configuration only for project builds.
+
+AUTHORITATIVE REPOSITORY RESEARCH
+
+Search committed code, docs, ADRs, migrations, tests, commit history, tags, and
+branches for evidence concerning:
+
+- Phase 6E;
+- Phase 6F and later phases, if they reveal sequencing;
+- activation;
+- operational authorization;
+- execution authorization;
+- follow-up authorization;
+- lifecycle admission;
+- materialization;
+- handoff;
+- queueing;
+- scheduling;
+- scheduler ownership;
+- worker launch;
+- experiment creation;
+- experiment mutation;
+- continuation creation or advancement;
+- campaign execution;
+- existing Phase 4C conversion-execution authority;
+- existing Phase 4D materialization/handoff authority;
+- campaign activation and launch components;
+- manual versus automatic authority;
+- idempotent command/event patterns;
+- irreversible lifecycle transitions.
+
+Inspect at minimum:
+
+- Phase 6A, 6B, 6C, and 6D phase documents;
+- ADR-0006 through ADR-0009;
+- Volume VIII;
+- Volume XII;
+- scheduler ownership ADRs;
+- Phase 4C and Phase 4D architecture and implementation;
+- campaign approval, materialization, launch, and conversion services;
+- Phase 5 outcome and follow-up architecture;
+- all migrations through 044;
+- relevant tests;
+- commit messages and tags around Phases 4–6.
+
+Do not treat uncommitted prompt/output files as architecture authority.
+
+AUTHORITY-BOUNDARY ANALYSIS
+
+Explicitly answer:
+
+1. What fact does Phase 6D ratification establish?
+2. What capability remains absent after Phase 6D?
+3. What is the first legitimate consumer of a ratification?
+4. Does a committed component already own the eventual execution operation?
+5. Should Phase 6E create new operational authority or only authorize/handoff to
+   an existing authority?
+6. Is activation distinct from execution authorization?
+7. Is execution authorization distinct from actual execution?
+8. Is queueing distinct from authorization?
+9. Is scheduler admission distinct from worker launch?
+10. Can Phase 6E safely remain non-operational while creating an authorization
+    or handoff artifact?
+11. What separation-of-duties rules are required among reviewer, ratifier,
+    authorizer, activator, and executor?
+12. What exact immutable upstream identity must Phase 6E consume?
+13. What replay/conflict domain is correct?
+14. What lifecycle state, if any, may Phase 6E create?
+15. What operations must remain forbidden until later phases?
+16. Is an ADR required before implementation?
+17. Is the authority precise enough to implement without architectural
+    invention?
+
+PREFERRED DESIGN PRINCIPLES
+
+Unless committed architecture clearly requires otherwise:
+
+- prefer an immutable, append-only authorization or handoff artifact over
+  immediate execution;
+- preserve a separate boundary between authorization and execution;
+- consume exact persisted Phase 6D ratification;
+- never recompute Phase 5, Phase 6A, Phase 6C, or Phase 6D truth;
+- keep canonical text authoritative and hashes accelerators only;
+- preserve exact replay and deterministic conflict behavior;
+- use one transaction-scoped conflict domain;
+- preserve least privilege;
+- preserve separation of duties;
+- add no automatic behavior;
+- add no scheduler polling behavior;
+- add no worker launch;
+- add no experiment/model mutation unless the committed Phase 6E authority
+  explicitly requires it;
+- reuse an existing execution authority rather than duplicating it;
+- keep production data untouched.
+
+IMPLEMENTATION GATE
+
+Before editing implementation files, write an internal decision statement with:
+
+- proposed exact Phase 6E name;
+- one-sentence authority question;
+- exact positive decision/state;
+- authoritative input;
+- resulting artifact or state;
+- explicit capabilities granted;
+- explicit capabilities not granted;
+- separation-of-duties rule;
+- replay/conflict key;
+- expected migration number;
+- relationship to any existing execution service;
+- why this is not semantic duplication of Phase 6C or 6D;
+- why this does not prematurely implement a later phase.
+
+Proceed only if every field can be supported by committed repository evidence
+or by a narrow, unavoidable architecture inference that is clearly documented.
+
+If not, stop without implementation and provide the readiness/design report.
+
+IF IMPLEMENTATION IS JUSTIFIED
+
+Implement the smallest complete Phase 6E increment.
+
+Expected quality requirements, adapted to the exact authority found:
+
+DOMAIN
+
+- pure immutable value;
+- explicit contract version;
+- exact Phase 6D ratification binding;
+- complete transitive upstream identity;
+- fixed authority role and decision/state;
+- separation-of-duties enforcement;
+- byte-exact deterministic canonical identity;
+- locale-independent formatting;
+- UTF-8 and control-byte validation;
+- bounded canonical size;
+- tagged hash accelerator;
+- generated persistence metadata excluded from identity;
+- fixed negative flags for every authority not granted;
+- stable failure reasons;
+- no default construction or mutation.
+
+DATABASE
+
+Use migration 045 only if a schema change is justified.
+
+- additive after migration 044;
+- append-only;
+- restrictive foreign keys;
+- exact Phase 6D/6C/6B provenance;
+- approved and ratified eligibility;
+- fixed role/decision checks;
+- separation-of-duties checks;
+- safe trigger context;
+- pinned search path;
+- explicit PUBLIC revocation;
+- runtime least privilege;
+- generated ID/timestamp protection;
+- no update/delete/truncate authority;
+- repeatable migration;
+- clean install and upgrade-from-044 tests;
+- no production-table mutation outside the exact accepted authority.
+
+REPOSITORY AND SERVICE
+
+- validation before persistence;
+- authoritative upstream reload;
+- one transaction;
+- transaction-scoped advisory locking;
+- first-write, exact-replay, and conflict behavior;
+- canonical-first equality;
+- collision defense;
+- rollback safety;
+- malformed-storage rejection;
+- deterministic error mapping;
+- immutable hydration;
+- read-only lookup/list operations where appropriate;
+- no side effects outside the exact Phase 6E authority.
+
+CLI
+
+Add no CLI merely for convenience.
+
+Add CLI only if the committed architecture requires an explicit human-operated
+entry point for Phase 6E and the CLI cannot be mistaken for execution or
+scheduler activation.
+
+Any CLI must:
+
+- require exact persisted identity;
+- be explicit and non-automatic;
+- support dry-run/read-only preview if meaningful;
+- print authority and non-authority boundaries;
+- avoid production side effects unless the exact Phase 6E operation is
+  explicitly invoked.
+
+TESTS
+
+Provide focused coverage for:
+
+- pure construction;
+- immutable semantics;
+- canonical golden value and hash;
+- locale independence;
+- UTF-8 and hostile controls;
+- exact Phase 6D binding;
+- missing, malformed, stale, or ineligible ratification;
+- separation of duties;
+- fixed role and decision;
+- caller-injected authority rejection;
+- exact replay;
+- changed-payload conflict;
+- concurrent equivalent and conflicting attempts;
+- rollback;
+- malformed storage;
+- hash collision;
+- append-only behavior;
+- runtime least privilege;
+- PUBLIC and NULL-ACL fallback;
+- clean installation;
+- upgrade from 044;
+- read-only operations;
+- no sequence advancement from reads;
+- no advisory or tuple locks from reads;
+- unchanged Phase 6A–6D evidence;
+- unchanged experiment, model, continuation, scheduler, and worker fixtures
+  unless exact Phase 6E authority intentionally changes one;
+- relevant Phase 4, 5, and 6 regressions;
+- project-file membership;
+- no operational side effects beyond the accepted authority.
+
+DOCUMENTATION
+
+Create or update:
+
+- Phase 6E phase document;
+- ADR-0010 if an architecture decision is made;
+- ADR index;
+- Volume VIII;
+- Volume XII;
+- Database README if migration 045 is added;
+- relevant references and revision histories.
+
+Documentation must precisely distinguish:
+
+- review;
+- ratification;
+- authorization;
+- activation;
+- execution;
+- handoff;
+- queueing;
+- scheduling;
+- worker launch.
+
+VERIFICATION
+
+Run the strongest safe checks.
+
+At minimum:
+
+- focused pure tests;
+- migration/repository/service tests if implemented;
+- clean and upgrade paths;
+- concurrency;
+- privilege tests;
+- relevant Phase 6A–6D regressions;
+- Phase 4/5 regressions implicated by reused authority;
+- Xcode project membership;
+- `xcodebuild -list -project ExpertAdvisor.xcodeproj`;
+- `plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj`;
+- stale-name and authority searches;
+- `git diff --check`;
+- final tracked and untracked audit.
+
+RELEASE BUILD
+
+Use OS process tools to reassess load.
+
+If safe, run an incremental build without Clean:
+
+    xcodebuild \
+      -project ExpertAdvisor.xcodeproj \
+      -scheme "LSTM Release" \
+      -configuration Release \
+      -derivedDataPath DerivedData/ExpertAdvisor \
+      build
+
+Then verify:
+
+    file DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release
+
+If active workers make the build unsafe, defer it without interrupting them and
+report the exact command as a mechanical verification gap.
+
+FINAL AUDIT
+
+Before reporting:
+
+1. inspect every tracked modification;
+2. inspect every untracked file directly;
+3. confirm no unrelated changes;
+4. confirm no generated artifacts are included;
+5. confirm index remains empty;
+6. run `git diff --check`;
+7. record exact `git status --short`;
+8. record exact `git diff --stat`;
+9. list all untracked files;
+10. confirm branch and HEAD;
+11. confirm scheduler/worker processes were not interrupted;
+12. confirm production database was not accessed;
+13. confirm disposable objects were removed;
+14. confirm no staging, commit, tag, or push occurred.
+
+DELIVERABLE
+
+If implementation proceeds, provide:
+
+1. Executive summary.
+2. Exact Phase 6E authority definition.
+3. Repository evidence supporting that definition.
+4. Distinction from Phases 6C and 6D.
+5. Relationship to activation and execution.
+6. Architecture and data-flow summary.
+7. Files changed.
+8. Domain contract.
+9. Migration and privilege design.
+10. Repository/service/CLI behavior.
+11. Separation-of-duties policy.
+12. Replay and concurrency behavior.
+13. Tests and exact results.
+14. Release build result or deferral.
+15. Scheduler and production-data safety.
+16. Remaining risks.
+17. Exact final status and diff stat.
+18. Complete untracked-file list.
+19. Readiness for independent review.
+20. Recommended next action.
+
+End with exactly:
+
+PHASE 6E IMPLEMENTATION COMPLETE AND READY FOR INDEPENDENT REVIEW
+
+If implementation does not proceed, provide:
+
+1. Executive readiness verdict.
+2. Repository evidence.
+3. Why Phase 6E is not sufficiently defined.
+4. Candidate authority definitions.
+5. Recommended exact Phase 6E definition.
+6. Required ADR or architecture decision.
+7. Risks and prohibited scope.
+8. A complete follow-on implementation prompt.
+9. Exact repository status.
+10. Recommended next action.
+
+End with exactly:
+
+PHASE 6E REQUIRES AUTHORITY-BOUNDARY DECISION BEFORE IMPLEMENTATION
+
+If repository state or safety conditions block useful work, end with exactly:
+
+PHASE 6E READINESS REVIEW BLOCKED

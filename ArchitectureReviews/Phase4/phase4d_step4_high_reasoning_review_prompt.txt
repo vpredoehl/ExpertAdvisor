@@ -1,0 +1,458 @@
+Using High reasoning, perform a focused code review of the completed Phase 4D Step 4 implementation.
+
+GOAL
+
+Review the current uncommitted Phase 4D Step 4 changes for correctness, consistency, regression risk, maintainability, security, data integrity, transaction safety, deterministic behavior, and readiness to commit.
+
+Do not redesign Phase 4D.
+
+Do not implement Phase 4D Step 5.
+
+Do not add new capabilities unless the review identifies a concrete defect, missing verification, unsafe behavior, misleading documentation, schema inconsistency, privilege gap, transaction flaw, or mismatch between domain, repository, service, CLI, migration, tests, and documented behavior.
+
+The review must concentrate on the actual current diff.
+
+CONTEXT
+
+Phase 4D Step 4 materializes one explicitly approved deterministic campaign into the exact ordered set of existing Phase 4C conversion proposals.
+
+The implementation reportedly:
+
+- reconstructs the authoritative ranking snapshot, plan, review, and approval;
+- requires an approved campaign;
+- reuses the existing Phase 4C proposal domain and repository;
+- persists one immutable materialization manifest;
+- persists ordered member-to-proposal linkage rows;
+- creates missing identical Phase 4C proposals;
+- reuses pre-existing identical Phase 4C proposals;
+- performs all work in one PostgreSQL transaction;
+- supports exact replay and concurrent convergence;
+- rejects stale, rejected, malformed, conflicting, or empty approval evidence;
+- creates no experiments;
+- performs no Phase 4C review, execution, or activation;
+- does not contact the scheduler or workers.
+
+The reported starting HEAD is:
+
+01e355f8d6a80569cda035e7afffeb780062ce8b
+
+No commit or push has been made.
+
+PHASE BOUNDARY
+
+Step 4 may:
+
+- load one explicit campaign approval;
+- reconstruct exact Phase 4D evidence;
+- derive exact Phase 4C conversion proposals for selected members;
+- create or reuse those proposals;
+- persist immutable materialization evidence;
+- expose explicit write and read-only CLI commands.
+
+Step 4 must not:
+
+- create experiment rows;
+- modify experiment rows;
+- review Phase 4C proposals;
+- execute Phase 4C proposals;
+- activate Phase 4C conversions;
+- queue, resume, retry, pause, cancel, or continue experiments;
+- start, stop, signal, or reconfigure the scheduler;
+- start workers;
+- add background scans or automatic materialization;
+- infer approval;
+- accept rejected approval;
+- silently omit selected members;
+- silently add non-selected members;
+- partially commit a campaign.
+
+REVIEW SCOPE
+
+Review all Step 4 changes, including at minimum:
+
+- Database/migrations/041_experiment_recommendation_campaign_materialization.sql
+- Sources/ExperimentRecommendationCampaignMaterialization.hpp
+- Sources/ExperimentRecommendationCampaignMaterialization.cpp
+- Sources/ExperimentRecommendationCampaignMaterializationRepository.hpp
+- Sources/ExperimentRecommendationCampaignMaterializationRepository.cpp
+- Sources/ExperimentRecommendationCampaignMaterializationService.hpp
+- Sources/ExperimentRecommendationCampaignMaterializationService.cpp
+- Tests/ExperimentRecommendationCampaignMaterializationTests.cpp
+- Tests/ExperimentRecommendationCampaignMaterializationMigrationTests.sql
+- Tests/ExperimentRecommendationCampaignMaterializationRepositoryTests.cpp
+- docs/Phase4DExperimentRecommendationCampaignMaterialization.rst
+
+Also review all modified integration points:
+
+- Database/README.md
+- ExpertAdvisor.xcodeproj/project.pbxproj
+- Sources/ExperimentRecommendationCampaignApprovalRepository.hpp
+- Sources/ExperimentRecommendationCampaignApprovalRepository.cpp
+- Sources/ExperimentRecommendationCampaignPlanning.hpp
+- Sources/ExperimentRecommendationCampaignPlanning.cpp
+- Sources/ExperimentRecommendationConversionRepository.hpp
+- Sources/ExperimentRecommendationConversionRepository.cpp
+- Sources/ExperimentScheduler.cpp
+- docs/Phase4DExperimentRecommendationCampaignApproval.rst
+- docs/Phase4DExperimentRecommendationCampaignPlanning.rst
+- docs/Phase4DExperimentRecommendationCampaignReview.rst
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+
+REVIEW PRIORITIES
+
+1. Domain and canonical identity
+
+Verify:
+
+- materialization contract versioning is explicit;
+- all authorization- and provenance-relevant fields are bound;
+- variable strings are length-framed;
+- ordering semantics are intentional and documented;
+- timestamps are excluded from semantic identity;
+- exact canonical text is authoritative;
+- hashes are accelerators only;
+- changed operator, reason, approval, membership, or proposal provenance changes identity;
+- malformed, oversized, control-byte, and embedded-NUL inputs fail closed;
+- semantic equality is implemented consistently.
+
+Look for accidental omission of any field that could allow two materially different campaigns to share one identity.
+
+2. Approval reconstruction and stale-evidence protection
+
+Verify one transaction reconstructs and validates:
+
+- the explicit approval row;
+- approved decision;
+- ranking snapshot identity;
+- planning policy and scope;
+- campaign plan;
+- campaign review;
+- approval canonical evidence;
+- reviewer and reason;
+- summary counts;
+- deterministic ordering;
+- each selected member’s ranking, evaluation, review, scoring, recommendation, and source-experiment provenance.
+
+Check that persisted hashes are never trusted without exact canonical validation.
+
+Check the America/Chicago date canonicalization against existing repository behavior.
+
+Check the new non-midnight rejection rule for correctness and compatibility with existing persisted data.
+
+3. Proposal construction
+
+Verify every selected member is passed through the existing Phase 4C proposal contract.
+
+Check that:
+
+- no selected member is omitted;
+- no non-selected member is added;
+- each member maps to exactly one proposal;
+- proposal identity includes complete required provenance;
+- pre-existing identical proposals are reused;
+- incompatible pre-existing proposals conflict rather than being silently reused or replaced;
+- campaign approval does not bypass Phase 4C eligibility rules.
+
+4. Transaction and rollback
+
+Verify:
+
+- approval validation, reconstruction, proposal persistence, manifest insertion, and member insertion share one transaction;
+- repository functions do not secretly commit;
+- any failure rolls back newly inserted proposals and all materialization rows;
+- partial campaign materialization is impossible;
+- replay behavior does not leak partial state;
+- transaction boundaries remain correct through connection and transaction overloads.
+
+5. Concurrency and idempotency
+
+Verify:
+
+- exact replay returns the existing manifest;
+- concurrent identical requests converge;
+- changed operator or reason conflicts;
+- changed membership, proposal provenance, or approval evidence conflicts;
+- advisory locks are transaction-scoped;
+- lock keys are sufficiently narrow;
+- lock ordering prevents deadlock when multiple proposals are inserted;
+- no global serialization was introduced;
+- collision handling uses exact canonical comparison.
+
+Review the tests for whether they truly exercise concurrency rather than merely sequential replay.
+
+6. Schema integrity
+
+Audit migration 041 carefully.
+
+Verify:
+
+- table, sequence, indexes, constraints, and foreign keys match code;
+- composite foreign keys genuinely prove copied provenance;
+- referenced unique indexes are valid and stable;
+- no cascade delete exists;
+- one manifest per approval is enforced;
+- approved decision is enforced structurally;
+- member ordinals are deterministic and consistently one-based;
+- duplicate member and duplicate proposal linkage are prevented appropriately;
+- canonical text uses bytewise collation;
+- hash syntax checks match C++;
+- count constraints are meaningful;
+- migration rerun is safe;
+- migration ordering assumptions are valid;
+- large canonical values do not violate btree limits;
+- indexes support actual repository predicates;
+- no unnecessary or misleading indexes were added.
+
+Pay particular attention to the new unique indexes added to prior Phase 4C/4D tables. Confirm they are appropriate, non-breaking, and named consistently.
+
+7. Privileges and immutability
+
+Verify PUBLIC and runtime privileges.
+
+Confirm runtime `pqxx` cannot:
+
+- insert generated IDs;
+- insert generated timestamps;
+- update;
+- delete;
+- truncate;
+- alter prior evidence;
+- forge a rejected approval as approved;
+- forge member provenance.
+
+Check whether column-limited INSERT plus composite foreign keys is sufficient to prevent malformed direct SQL inserts.
+
+8. Repository and service layering
+
+Verify:
+
+- domain owns canonical construction and validation;
+- repository owns SQL and mapping;
+- service owns transaction, reconstruction, orchestration, and outcome classification;
+- scheduler code only handles top-level CLI routing;
+- no domain logic leaked into ExperimentScheduler.cpp;
+- existing repository overload behavior remains unchanged;
+- error strings and outcome enums are consistent and actionable;
+- optional values are handled safely.
+
+9. CLI behavior
+
+Review:
+
+- separated and `--option=value` forms;
+- missing metadata;
+- orphan metadata;
+- malformed IDs;
+- mutually exclusive commands;
+- list limits;
+- parser failure before database access;
+- no fallthrough to scheduler execution;
+- deterministic read-only output;
+- stable escaping;
+- truthful create/reuse counters;
+- distinction between initial persisted counts and current request counts;
+- no misleading use of “execution” for proposal materialization.
+
+10. Regression risk
+
+Check for changes that could break:
+
+- Phase 4A recommendation workflows;
+- Phase 4B ranking;
+- Phase 4C proposal creation;
+- Phase 4C proposal review;
+- Phase 4C execution;
+- Phase 4C activation;
+- Phase 4D planning;
+- Phase 4D review;
+- Phase 4D approval;
+- scheduler command dispatch;
+- Xcode project membership;
+- existing migration chains.
+
+11. Tests
+
+Review test quality, not just pass status.
+
+Check whether tests prove:
+
+- deterministic identity;
+- ordering sensitivity;
+- malformed input rejection;
+- exact replay;
+- changed operator/reason conflict;
+- rejected approval rejection;
+- stale evidence rejection;
+- pre-existing identical proposal reuse;
+- incompatible proposal conflict;
+- full member coverage;
+- no extra members;
+- rollback with zero residual rows;
+- concurrency convergence;
+- runtime immutability;
+- restrictive provenance;
+- unchanged experiments;
+- unchanged Phase 4C review/execution/activation state;
+- deterministic show/list output;
+- no unrelated sequence advancement;
+- cleanup of isolated schemas.
+
+Identify any test that passes without actually asserting the claimed behavior.
+
+12. Documentation
+
+Verify documentation matches the code exactly.
+
+Check that it clearly says:
+
+- materialization creates Phase 4C proposals only;
+- it does not create experiments;
+- it does not review, execute, or activate proposals;
+- it does not contact scheduler or workers;
+- exact replay and conflict semantics;
+- proposal reuse behavior;
+- transaction scope;
+- runtime privileges;
+- deferred work;
+- migration-chain limitations.
+
+REVIEW METHOD
+
+1. Record:
+
+```bash
+git status --short
+git rev-parse HEAD
+git diff --stat
+git diff --check
+```
+
+2. Inspect the full diff, not only new files.
+
+3. Trace one complete successful materialization path from CLI parsing through service, repository, SQL, commit, and output.
+
+4. Trace these failure paths:
+
+- missing approval;
+- rejected approval;
+- stale approval;
+- malformed persisted provenance;
+- unsupported selected member;
+- conflicting existing proposal;
+- member insertion failure;
+- concurrent identical request;
+- changed operator replay;
+- parser error.
+
+5. Compare migration 041 conventions with migrations 036, 038, 039, and 040.
+
+6. Confirm actual repository predicates match indexes.
+
+7. Rebuild any test binary that must be rerun from current source. Do not rely on stale `/tmp` binaries.
+
+8. Use only a disposable non-production PostgreSQL database.
+
+9. Do not launch the application scheduler or workers.
+
+CHANGE POLICY
+
+Do not make changes merely for style preference.
+
+Make changes only for a concrete:
+
+- correctness defect;
+- data-integrity gap;
+- security or privilege issue;
+- transaction or concurrency flaw;
+- misleading output;
+- missing or ineffective test;
+- documentation inconsistency;
+- build/project-membership issue;
+- regression risk.
+
+Keep fixes narrow.
+
+Do not broaden Step 4.
+
+Do not implement Step 5.
+
+Do not commit or push.
+
+VERIFICATION AFTER ANY FIX
+
+Run as appropriate:
+
+```bash
+git diff --check
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+```
+
+Strict compilation:
+
+```text
+-std=c++20 -Wall -Wextra -Wpedantic -Werror
+```
+
+Run new pure tests three consecutive times.
+
+Rebuild and run the Step 4 repository/migration/concurrency suite three consecutive times using an explicit disposable database.
+
+Rebuild and run directly relevant Phase 4C and Phase 4D regressions from current source.
+
+Run CLI parser checks.
+
+Run an isolated Release build:
+
+```bash
+xcodebuild \
+  -project ExpertAdvisor.xcodeproj \
+  -scheme "LSTM Release" \
+  -configuration Release \
+  -derivedDataPath /tmp/ExpertAdvisorPhase4DStep4ReviewDerivedData \
+  clean build \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+Confirm the existing scheduler and workers were not launched, stopped, signaled, or modified.
+
+FINAL REPORT
+
+Provide:
+
+1. Review verdict:
+   - READY
+   - READY AFTER FIXES
+   - NOT READY
+
+2. Findings ordered by severity.
+
+For each finding include:
+
+- severity;
+- file and line;
+- concrete defect or risk;
+- why it matters;
+- exact fix made or recommended;
+- verification performed.
+
+3. Summary of any changes made.
+
+4. Exact files changed by the review.
+
+5. Commands run and exact results.
+
+6. PostgreSQL verification result.
+
+7. Release build result.
+
+8. Regression-test result.
+
+9. Confirmation that experiments, scheduler, and workers were untouched.
+
+10. Remaining risks or deferred work.
+
+11. Final `git status --short`.
+
+12. Final HEAD.
+
+Do not commit or push.

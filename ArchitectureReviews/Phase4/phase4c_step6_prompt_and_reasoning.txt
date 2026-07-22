@@ -1,0 +1,412 @@
+PHASE 4C STEP 6 — END-TO-END CONVERSION WORKFLOW OBSERVABILITY
+
+REASONING
+
+Phase 4C now has the complete explicit manual mutation chain:
+
+1. Step 2 persists a recommendation-conversion proposal.
+2. Step 3 records append-only operator review decisions.
+3. Step 4 executes an approved proposal by creating exactly one paused experiment.
+4. Step 5 separately activates that exact experiment by moving it from paused/train to pending/train.
+
+The current working tree contains the uncommitted Step 5 implementation. Preserve those changes. Do not reset, discard, overwrite, or commit them.
+
+Before adding any new mutation or automation, the next safe Phase 4 step is read-only end-to-end observability. An operator should be able to inspect one proposal or one workflow and see the complete durable chain without manually joining several tables or issuing multiple commands.
+
+This step should not alter recommendation policy, create experiments, review proposals, execute proposals, activate experiments, or affect scheduler behavior. It should provide a deterministic, machine-readable and human-readable view of:
+
+recommendation → proposal → latest review disposition → execution → activation → experiment lifecycle
+
+That gives us a reliable operational checkpoint before moving toward broader Phase 4 automation, campaign control, or profitability-aware selection.
+
+PROMPT FOR CODEX
+
+Using high reasoning, implement Phase 4C Step 6: read-only end-to-end observability for the manual recommendation-conversion workflow.
+
+CURRENT WORKING TREE
+
+The branch is:
+
+  phase0-architecture
+
+The working tree intentionally contains the uncommitted Phase 4C Step 5 implementation described in uncommitted.txt.
+
+Treat those changes as authoritative in-progress work.
+
+You must:
+
+- preserve every existing Step 5 change;
+- inspect the actual working tree rather than assuming HEAD contains Step 5;
+- review Step 5 for compatibility with this task;
+- fix Step 5 defects only when necessary for correctness or compilation;
+- not reset, clean, checkout, stash, discard, or overwrite the working tree;
+- not commit.
+
+Do not begin by reverting to commit 645ea257. The uncommitted Step 5 files are part of the required starting point.
+
+GOAL
+
+Add a read-only workflow query that reconstructs and reports the complete durable Phase 4C chain for a conversion proposal.
+
+The primary lookup should accept a proposal ID and report, when present:
+
+- recommendation-conversion proposal;
+- source recommendation and source experiment identifiers;
+- proposal identity and hash;
+- proposal creation timestamp;
+- all review decisions or at least the latest authoritative review decision;
+- current review disposition;
+- approving review-decision ID used by execution;
+- conversion execution;
+- created experiment ID;
+- execution identity and hash;
+- conversion activation;
+- activation identity and hash;
+- exact previous and resulting lifecycle states;
+- current experiment status and phase;
+- current experiment worker/lifecycle fields useful for operational diagnosis;
+- whether the workflow is currently:
+  - proposed
+  - pending_review
+  - rejected
+  - approved_not_executed
+  - executed_paused
+  - activated_pending
+  - scheduler_claimed_or_running
+  - completed
+  - failed
+  - cancelled
+  - inconsistent
+
+Use naming consistent with the existing project.
+
+READ-ONLY BOUNDARY
+
+Step 6 must be strictly observational.
+
+It must not:
+
+- insert, update, or delete any row;
+- approve or reject a proposal;
+- execute a proposal;
+- activate an execution;
+- create, queue, pause, resume, cancel, retry, or modify an experiment;
+- start the scheduler;
+- start a worker;
+- add automatic scans;
+- make the scheduler query Phase 4C tables;
+- alter recommendation scoring, ranking, evaluation, or conversion;
+- introduce background processing;
+- add triggers that mutate workflow state;
+- commit changes.
+
+WORKFLOW STATE DERIVATION
+
+Derive workflow state deterministically from durable records.
+
+At minimum:
+
+- no review decision:
+    pending_review
+
+- latest review disposition reject:
+    rejected
+
+- latest review disposition approve, no execution:
+    approved_not_executed
+
+- execution exists, no activation, linked experiment remains paused/train:
+    executed_paused
+
+- activation exists, experiment remains pending/train:
+    activated_pending
+
+- activation exists and experiment is running or has worker ownership:
+    scheduler_claimed_or_running
+
+- activation exists and experiment is completed:
+    completed
+
+- activation exists and experiment is failed:
+    failed
+
+- activation exists and experiment is cancelled:
+    cancelled
+
+- any impossible or provenance-breaking combination:
+    inconsistent
+
+A proposal that exists but has no review may also be labeled proposed plus a more specific pending_review state if the project favors separate stage and state fields.
+
+Do not infer state from timestamps when stronger IDs, foreign keys, review ordering, or lifecycle fields exist.
+
+The greatest review-decision ID remains the authoritative latest review disposition, consistent with Step 3.
+
+INTEGRITY DIAGNOSTICS
+
+The read model must detect and clearly report inconsistencies instead of silently normalizing them.
+
+Detect at least:
+
+- execution exists but references a non-approve review;
+- execution proposal ID does not match the requested proposal;
+- activation provenance does not match execution;
+- activation exists without execution;
+- activation says paused→pending but experiment is still paused with no valid replay explanation;
+- execution exists but linked experiment is missing;
+- activation exists but linked experiment differs;
+- stored canonical/hash mismatch detected by existing repository validation;
+- multiple records where uniqueness should make only one possible;
+- experiment lifecycle state incompatible with whether activation exists;
+- unsupported contract versions;
+- missing required schemas.
+
+Return deterministic diagnostic codes and preserve all useful IDs in output.
+
+Do not repair inconsistencies.
+
+REPOSITORY AND READ MODEL
+
+Add a narrowly scoped read-only repository/read-model layer.
+
+Prefer one aggregate structure such as:
+
+  RecommendationConversionWorkflowView
+
+It should contain optional persisted records for:
+
+- proposal;
+- latest review;
+- execution;
+- activation;
+- current experiment lifecycle snapshot.
+
+Also include:
+
+- derived workflow state;
+- integrity status;
+- zero or more deterministic diagnostic codes.
+
+Repository functions should include at least:
+
+- schema availability check for Steps 2–5;
+- find workflow by proposal ID;
+- optionally find workflow by execution ID;
+- optionally find workflow by experiment ID;
+- list workflows with filters and a bounded limit.
+
+Keep all SQL out of CLI parsing code.
+
+Reuse existing proposal, review, execution, and activation mapping/validation code where practical. Do not duplicate canonical validation logic unnecessarily.
+
+DATABASE ACCESS
+
+This is read-only functionality.
+
+Do not add a migration unless a migration is genuinely required for a missing supporting index or view. Prefer repository queries over a database view unless a view materially improves correctness.
+
+If adding an index:
+
+- justify it with the exact query;
+- make it idempotent;
+- do not broaden runtime privileges;
+- add migration tests.
+
+No new INSERT, UPDATE, DELETE, TRUNCATE, or sequence privileges are permitted for this step.
+
+CLI
+
+Add a primary command such as:
+
+  --recommendation-conversion-workflow=PROPOSAL_ID
+
+Also add a bounded list command such as:
+
+  --list-recommendation-conversion-workflows
+
+Recommended filters:
+
+- --conversion-workflow-state=STATE
+- --conversion-workflow-limit=N
+- --conversion-workflow-experiment=EXPERIMENT_ID
+- --conversion-workflow-execution=EXECUTION_ID
+
+Follow existing command parsing and mutual-exclusion conventions.
+
+The single-workflow command should emit:
+
+1. one stable machine-readable summary line;
+2. optional human-readable explanation lines.
+
+The summary should include at least:
+
+- workflow_state;
+- integrity_status;
+- proposal_id;
+- recommendation_id;
+- latest_review_decision_id or null;
+- latest_review_disposition;
+- execution_id or null;
+- activation_id or null;
+- experiment_id or null;
+- experiment_status or null;
+- experiment_phase or null;
+- worker_pid or null;
+- current_operation or null;
+- proposal_identity_hash;
+- execution_identity_hash or null;
+- activation_identity_hash or null;
+- diagnostic_count;
+- diagnostic codes.
+
+Machine-readable values must use the existing escaping convention.
+
+A missing proposal should have a clear event name and nonzero exit code.
+
+An inconsistent workflow should be reported successfully as an observed workflow with integrity_status=inconsistent, unless the repository cannot safely read or validate the records. Do not disguise observed inconsistency as command failure.
+
+LISTING
+
+The bounded list should:
+
+- default to a conservative limit;
+- enforce a hard maximum;
+- use deterministic ordering;
+- avoid unbounded table scans in normal operation;
+- support filtering by derived or persisted state where practical;
+- emit one machine-readable row per workflow;
+- include a final count summary.
+
+If derived-state filtering cannot be implemented safely in SQL without excessive duplication, fetch a bounded deterministic candidate set and filter in the service layer. Document the tradeoff.
+
+SCHEDULER ISOLATION
+
+Do not alter:
+
+- scheduler polling;
+- scheduler experiment selection;
+- worker launch;
+- continuation automation;
+- checkpoint inference;
+- analysis workers;
+- recommendation evaluation;
+- recommendation ranking.
+
+The scheduler must remain unaware of proposal, review, execution, activation, and workflow-view records.
+
+TESTS
+
+Add focused domain tests and live-PostgreSQL repository tests.
+
+Cover at least:
+
+1. schema missing before migrations;
+2. proposal not found;
+3. proposal with no review;
+4. proposal with latest rejection;
+5. proposal approved but not executed;
+6. executed proposal with paused/train experiment;
+7. activated proposal with pending/train experiment;
+8. activated experiment subsequently running;
+9. activated experiment completed;
+10. activated experiment failed;
+11. activated experiment cancelled;
+12. multiple review decisions use greatest decision ID;
+13. exact execution approving-decision provenance;
+14. exact activation execution/proposal/review/experiment provenance;
+15. canonical/hash validation reuse;
+16. missing linked experiment produces inconsistency diagnostic;
+17. incompatible lifecycle state produces inconsistency diagnostic;
+18. synthetic provenance mismatch is rejected by constraints or diagnosed;
+19. list ordering is deterministic;
+20. list limit and hard maximum;
+21. list state filtering;
+22. CLI single success output;
+23. CLI not-found output and exit code;
+24. CLI inconsistent workflow output;
+25. CLI list output and final count;
+26. all commands are read-only;
+27. Step 2 repository tests pass;
+28. Step 3 repository tests pass;
+29. Step 4 repository tests pass;
+30. Step 5 repository tests pass;
+31. normal Release build passes.
+
+Tests must:
+
+- use a disposable database;
+- refuse the active LSTM database;
+- avoid fixed sequence-value assumptions;
+- avoid timing sleeps for concurrency;
+- clean up isolated schemas;
+- verify no workflow query mutates updated_at or any audit table.
+
+STEP 5 VERIFICATION FIRST
+
+Because Step 5 is currently uncommitted, verify it before relying on it.
+
+Run or provide exact commands for:
+
+- Step 5 domain tests;
+- migration 039 assertions;
+- Step 5 live-PostgreSQL repository tests;
+- Step 2–4 repository regressions;
+- Release build.
+
+Use the existing PostgreSQL server with a disposable database if sandbox initdb is unavailable.
+
+Do not use the active LSTM database.
+
+If PostgreSQL cannot be reached in the Codex environment, compile all repository tests and provide exact local commands for the user, but do not claim they passed.
+
+If the Metal toolchain blocks the final Xcode link, distinguish project-source compilation from external Metal toolchain failure. Do not change unrelated Metal settings or download toolchains without explicit permission.
+
+DOCUMENTATION
+
+Update the Phase 4 documentation to show the complete manual workflow:
+
+recommend → propose → review → execute to paused → activate to pending → scheduler lifecycle
+
+Document:
+
+- the new read-only commands;
+- workflow-state derivation;
+- authoritative review ordering;
+- integrity diagnostics;
+- scheduler isolation;
+- that observation never mutates workflow records;
+- examples for healthy and inconsistent workflows;
+- exact PostgreSQL verification commands.
+
+FINAL REVIEW
+
+Before reporting completion:
+
+- inspect the full diff, including pre-existing uncommitted Step 5 changes;
+- run git diff --check;
+- validate the Xcode project;
+- verify new source membership in both application targets;
+- check git status;
+- ensure nothing is staged;
+- ensure no commit was created;
+- explicitly confirm no Step 5 files were lost.
+
+FINAL REPORT
+
+Return:
+
+1. concise Step 6 implementation summary;
+2. confirmation that all pre-existing Step 5 changes were preserved;
+3. workflow-state model;
+4. integrity diagnostic model;
+5. repository/query design;
+6. CLI commands and output examples;
+7. files changed, separating pre-existing Step 5 changes from new Step 6 changes;
+8. exact build and test commands with results;
+9. PostgreSQL verification status;
+10. Release/Metal verification status;
+11. remaining risks or unverified items;
+12. confirmation that all new behavior is read-only;
+13. confirmation that scheduler behavior was not modified;
+14. confirmation that no experiment was created, activated, queued, or started during implementation;
+15. confirmation that no commit was created.

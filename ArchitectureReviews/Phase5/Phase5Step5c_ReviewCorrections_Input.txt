@@ -1,0 +1,316 @@
+Use model_reasoning_effort="xhigh".
+
+You are applying a focused correction and hardening pass to the current uncommitted Phase 5 Step 5c implementation after an independent review concluded NOT READY TO COMMIT.
+
+This task is not a redesign and not a new Phase 5 feature. Address the mandatory review findings and the prudent optional test improvements only.
+
+Repository rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do NOT switch branches.
+- Work only from the current local checkout.
+- Preserve the current branch and unrelated worktree changes.
+- Do not create a commit.
+- Do not stage files.
+- Do not clean DerivedData.
+- Reuse the existing DerivedData.
+- Perform an Xcode Release build only.
+- Do not perform a Debug build.
+
+Current expected baseline
+
+- Branch: phase5
+- HEAD should remain the Step 5b commit.
+- The uncommitted Step 5c files and documentation are the intended work under review.
+- Step 5c is a pure, database-free, read-only advisory campaign outcome policy over the immutable Step 5a assessment.
+- Step 5c must not add persistence, SQL, repositories, services, CLI, scheduler behavior, experiment mutation, recommendation generation, approval, or follow-up authorization.
+
+Primary objective
+
+Correct the independent review blockers:
+
+1. Add fixed golden canonical identity vectors.
+2. Add safe validation coverage for malformed identity/hash evidence.
+3. Add safe coverage for unsupported Step 5a assessment contract versions.
+4. Correct the documentation wording that calls the assessment authoritative.
+
+Also add the prudent optional test improvements:
+
+5. Add a compact aggregate-precedence matrix.
+6. Add explicit follow-up eligibility tests for neutral, unfavorable, and mixed campaigns.
+7. Clarify that minimumComparableMemberCount is an advisory evidence-coverage threshold, not statistical sufficiency.
+
+Do not broaden the policy semantics unless a concrete defect is exposed while implementing these corrections.
+
+Mandatory correction 1 — golden identity vectors
+
+Current self-consistency checks such as:
+
+    hash == RecommendationCanonicalHash(canonicalText)
+
+are necessary but not sufficient because canonical serialization and the expected hash can drift together.
+
+Add fixed, literal expected vectors for at least:
+
+- the default version-1 outcome policy canonical text;
+- the default version-1 outcome policy hash;
+- one representative version-1 policy-decision canonical text;
+- that representative decision's fixed expected hash.
+
+Requirements:
+
+- Expected canonical strings and hashes must be literal test constants.
+- Do not calculate the expected hash from the expected canonical string inside the assertion.
+- Select a stable representative assessment/decision fixture with explicit, deterministic evidence.
+- The golden decision vector must exercise meaningful member and metric output, not an empty or trivial placeholder.
+- Preserve locale independence and ordering independence.
+- If the existing canonical text contains unintended instability or omissions, correct it narrowly and update documentation.
+- Do not change contract versions merely to satisfy tests unless an actual identity-contract defect requires it. Explain any such necessity before editing.
+
+Mandatory correction 2 — malformed identity/hash validation
+
+Add safe test coverage for malformed identity/hash evidence.
+
+Do not use const_cast, placement mutation of const fields, raw-memory corruption, undefined behavior, or ABI-dependent object hacks.
+
+Use one of these safe approaches, choosing the smallest maintainable option:
+
+- prove via compile-time/public-construction tests that malformed immutable objects cannot be constructed through the supported public API; and separately test all externally constructible malformed inputs;
+- add a narrow internal validation helper or test seam that accepts a plain validation view and is not a new production capability;
+- use an existing deserialization or reconstruction boundary if one already exists.
+
+Cover, as safely applicable:
+
+- malformed policy canonical/hash pairing;
+- malformed assessment canonical/hash pairing;
+- malformed campaign identity canonical/hash pairing;
+- malformed materialization identity canonical/hash pairing;
+- materialization-to-campaign identity mismatch;
+- malformed member identity shape or duplicate identity sets;
+- duplicate comparison metric identity.
+
+The production API must continue to fail closed.
+
+Do not weaken immutability just to make tests easier.
+
+Mandatory correction 3 — unsupported assessment contract
+
+Add safe verification that Step 5c rejects an unsupported Step 5a assessment contract version.
+
+Because the immutable public assessment type may prevent construction of an unsupported object, use the same safe validation seam or public-construction proof selected above.
+
+The test must establish one of the following clearly:
+
+- an unsupported assessment contract is rejected by policy validation; or
+- the supported public API makes such an input unconstructible and the validation boundary rejects the equivalent plain validation view.
+
+Do not use undefined behavior to alter a valid object's version.
+
+Mandatory correction 4 — documentation terminology
+
+Find and correct wording that describes the Step 5b result itself as an "authoritative assessment."
+
+The assessment is non-authoritative. The accurate distinction is:
+
+- authoritative persisted evidence is loaded;
+- a non-authoritative, point-in-time assessment is built from that evidence.
+
+Use wording such as:
+
+    assessment built from authoritative evidence
+
+Review the full Step 5 outcome documentation and Volume VIII for similar ambiguity.
+
+Do not weaken statements about the authority of persisted Phase 4/5 evidence.
+
+Optional improvement 1 — aggregate precedence matrix
+
+Add a compact, readable test matrix for aggregate interpretation precedence.
+
+Cover at least:
+
+- all favorable comparable members -> favorable;
+- all neutral comparable members -> neutral;
+- all unfavorable comparable members -> unfavorable;
+- favorable + unfavorable -> mixed;
+- favorable + neutral -> favorable, if that is the documented policy;
+- unfavorable + neutral -> unfavorable, if that is the documented policy;
+- favorable + failed -> mixed;
+- all failed -> unfavorable;
+- cancelled present -> inconclusive;
+- not-ready present -> inconclusive;
+- inconsistent present -> inconclusive;
+- context-changed present -> inconclusive;
+- metric-gap present -> inconclusive;
+- comparable count below minimum -> inconclusive unless all members failed.
+
+If any expected result differs from current implementation, first determine whether the implementation or documentation is defective. Make only the narrow correction needed for consistency.
+
+Optional improvement 2 — eligibility matrix
+
+Add explicit tests proving follow-up eligibility remains conservative.
+
+At minimum:
+
+- favorable conclusive campaign -> eligible_for_operator_review;
+- neutral conclusive campaign -> not_eligible;
+- unfavorable conclusive campaign -> not_eligible;
+- mixed conclusive campaign -> not_eligible;
+- inconclusive campaign -> not_eligible;
+- sufficient evidence is not by itself enough for eligibility;
+- follow_up_authorized remains false in every case.
+
+If current implementation marks neutral, unfavorable, or mixed campaigns eligible, treat that as a concrete defect and correct it.
+
+Optional improvement 3 — minimum evidence wording
+
+Clarify in documentation and test comments that:
+
+    minimumComparableMemberCount
+
+is an advisory evidence-coverage threshold only.
+
+It is not:
+
+- statistical significance;
+- confidence;
+- causal evidence;
+- profitability evidence;
+- a guarantee of repeatability;
+- campaign success.
+
+Do not introduce statistical thresholds or new policy fields in this pass.
+
+Identity completeness review
+
+While adding golden vectors, verify that the version-1 policy identity binds every behavior-affecting policy field:
+
+- contract version;
+- minimum comparable member count;
+- sorted required metric identities;
+- metric directions;
+- fixed all-member consistency/terminal/comparability requirements;
+- fixed non-authorizing semantics.
+
+Verify that the decision identity binds:
+
+- decision contract version;
+- complete policy canonical text and hash;
+- assessment contract version;
+- complete assessment canonical text and hash;
+- campaign approval identity;
+- materialization identity;
+- ordered member identities, including expected experiment identity if semantically present;
+- assessment lifecycle, consistency, outcome, and diagnostics where intended;
+- evidence classification;
+- every metric evaluation and judgment;
+- member interpretation;
+- summary counts;
+- evidence, interpretation, and follow-up reasons;
+- evidence sufficiency;
+- campaign interpretation;
+- follow-up eligibility;
+- follow-up authorization false.
+
+If a behavior-bearing or provenance-bearing field is missing, treat it as a concrete defect and add it narrowly. Update the fixed golden vector accordingly.
+
+Pay particular attention to whether expectedExperimentId and assessment diagnostics are currently omitted from policy decision canonical text even though the decision object carries them. Determine whether omission is intentional because the complete upstream assessment canonical text is already bound, or whether direct policy-decision canonical completeness requires them. Do not duplicate fields without reason; document the rationale.
+
+Scope boundary
+
+Step 5c must remain:
+
+- pure;
+- deterministic;
+- database-free;
+- read-only;
+- non-persistent;
+- advisory;
+- non-authoritative;
+- non-success-declaring;
+- non-follow-up-authorizing.
+
+Do not add:
+
+- repository code;
+- SQL;
+- transaction handling;
+- service code;
+- CLI parsing or output;
+- migrations;
+- schema;
+- privileges;
+- scheduler dispatch;
+- experiment creation or mutation;
+- recommendation creation;
+- operator review persistence;
+- approval;
+- automatic follow-up.
+
+Testing and verification
+
+After corrections:
+
+1. Run the Step 5c focused tests.
+2. Run Step 5a assessment tests.
+3. Run Step 5b integration/formatting tests.
+4. Run campaign status tests.
+5. Run affected Phase 4C/4D and Phase 5 regressions.
+6. Run AddressSanitizer and UndefinedBehaviorSanitizer for the Step 5c pure test where supported.
+7. Run existing database-backed Step 5b/status verification if available and already configured.
+8. Run existing CLI regression tests if available; Step 5c itself must add no CLI.
+9. Run:
+   - git diff --check
+   - git diff --cached --check
+10. Check untracked Step 5c source, test, and documentation files for whitespace errors.
+11. Validate the Xcode project.
+12. Perform an incremental Release build only:
+
+    xcodebuild -project ExpertAdvisor.xcodeproj \
+      -scheme "LSTM Release" \
+      -configuration Release \
+      -destination "platform=macOS,arch=arm64" \
+      build
+
+Do not run a Debug build.
+Do not clean DerivedData.
+Do not use a fresh DerivedData directory unless the existing one is concretely unusable.
+
+Worktree safety
+
+At completion:
+
+- list every modified and untracked intended Step 5c file;
+- identify unrelated pre-existing or concurrent changes;
+- confirm nothing is staged;
+- confirm no commit was created;
+- confirm branch and HEAD were preserved.
+
+Completion report
+
+Provide:
+
+1. Mandatory findings addressed.
+2. Optional improvements implemented.
+3. Any production semantics changed and why.
+4. Golden canonical/hash vectors added.
+5. Safe malformed-input and unsupported-version test strategy.
+6. Identity-completeness conclusions.
+7. Documentation corrections.
+8. Tests and sanitizers executed.
+9. Database and CLI regression results, if run.
+10. Release build result.
+11. Worktree safety audit.
+12. Remaining concerns.
+
+Conclude with exactly one of:
+
+READY FOR INDEPENDENT RE-REVIEW
+
+or
+
+NOT READY FOR INDEPENDENT RE-REVIEW

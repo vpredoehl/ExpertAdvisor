@@ -1,0 +1,296 @@
+Use model_reasoning_effort="xhigh".
+
+You are implementing the next coherent Phase 5 step after the completed and independently reviewed Phase 5 Step 5b campaign outcome-assessment integration.
+
+This task is discovery-first. Do not assume the exact Step 5c shape until you inspect the current repository, Phase 5 documentation, and recent commits.
+
+Repository and execution rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do NOT switch branches.
+- Work only from the current local checkout.
+- Preserve the current branch and unrelated worktree changes.
+- Do not create a commit.
+- Do not stage files.
+- Do not clean DerivedData.
+- Reuse the existing DerivedData.
+- Perform an Xcode Release build only.
+- Do not perform a Debug build.
+
+Primary objective
+
+Identify and implement the smallest correct next Phase 5 increment after Step 5b.
+
+The implementation must build on:
+
+- the authoritative Phase 5 campaign status projection;
+- the pure Step 5a outcome-assessment domain model;
+- the Step 5b read-only repository/service/CLI integration;
+- existing Phase 4C and Phase 4D recommendation, proposal, approval, materialization, execution, activation, and launch contracts.
+
+The next step must preserve the current architecture and must not silently expand into a broad campaign automation subsystem.
+
+Required discovery before editing
+
+1. Record:
+   - current branch
+   - HEAD
+   - complete worktree status
+   - recent Phase 5 commits
+
+2. Read:
+   - all Phase 5 documentation
+   - the Phase 5 Step 5a and Step 5b implementation
+   - nearby Phase 4C and Phase 4D campaign workflow documentation
+   - tests that define the current Phase 5 boundary
+
+3. Determine what the repository and documentation identify as the next unimplemented Phase 5 responsibility.
+
+4. Explicitly distinguish among possible next-step concerns such as:
+   - campaign outcome policy
+   - campaign success/failure interpretation
+   - follow-up recommendation generation
+   - follow-up authorization
+   - persistence of assessment decisions
+   - operator review
+   - scheduler integration
+   - reporting only
+
+5. Choose only the smallest coherent next step supported by the current architecture.
+
+6. Before editing, state:
+   - the discovered next-step scope
+   - why it is the correct next boundary
+   - what remains explicitly out of scope
+
+Phase boundary
+
+Do not assume that Step 5c should automatically execute or queue anything.
+
+Unless the current architecture and documentation unambiguously require otherwise, the next step must remain advisory and read-only.
+
+Do not add:
+
+- experiment creation
+- experiment queueing
+- experiment activation
+- scheduler mutation
+- worker launch
+- retry behavior
+- continuation behavior
+- campaign state mutation
+- automatic follow-up
+- implicit approval
+- implicit authorization
+
+Any transition from advisory assessment to authoritative decision or follow-up authorization must be explicit, versioned, auditable, and separately reviewed.
+
+Implementation requirements
+
+After discovery, implement the smallest correct next layer.
+
+If the next step is a pure policy layer, it should:
+
+- consume the immutable Step 5a assessment;
+- remain database-free;
+- produce deterministic immutable output;
+- use explicit versioned policy identity;
+- distinguish evidence classification from policy judgment;
+- avoid changing Step 5a assessment semantics;
+- avoid recomputing scientific evidence;
+- preserve all inconsistent, incomplete, context-changed, failed, cancelled, and not-ready states;
+- fail closed on unsupported contract versions or invalid enums;
+- make no follow-up authorization decision unless that is explicitly the scoped responsibility.
+
+If the next step is an integration layer, it should:
+
+- reuse the Step 5b authoritative assessment loader;
+- use one read-only repeatable-read snapshot;
+- avoid duplicating repository queries or lifecycle logic;
+- keep SQL in repository code;
+- keep policy in a pure domain/service layer;
+- keep formatting separate;
+- add no schema unless persistence is explicitly required by the discovered phase contract.
+
+If the next step is operator review or persistence, it must:
+
+- use explicit immutable identity binding;
+- preserve assessment canonical text and hash;
+- use append-only or immutable semantics consistent with existing Phase 4 review patterns;
+- separate review, approval, and execution authority;
+- require explicit confirmation for writes;
+- include complete privilege, migration, repository, service, CLI, and test coverage;
+- not queue or launch experiments.
+
+Do not invent a schema or write path merely because one could be useful.
+
+Identity and determinism
+
+Any new authoritative or advisory object must:
+
+- have an explicit contract version;
+- have canonical text;
+- have a canonical hash;
+- bind the exact upstream assessment identity;
+- preserve campaign approval, materialization, and assessment identities;
+- be deterministic under input reordering;
+- reject duplicate or ambiguous member identities;
+- reject invalid enum values;
+- preserve explicit null and missing states;
+- remain stable across locale and stream formatting state.
+
+Policy requirements
+
+If campaign outcome policy is the discovered next step, do not reduce the assessment to a single simplistic threshold.
+
+The policy must explicitly account for:
+
+- inconsistent members
+- failed members
+- cancelled members
+- not-ready members
+- context-changed successful members
+- metric-gap successful members
+- comparable successful members
+- positive, zero, and negative deltas
+- missing metrics
+- unsupported metrics
+- minimum evidence requirements
+- mixed-member campaigns
+
+Policy decisions must be conservative and explainable.
+
+Separate at least:
+
+- evidence sufficiency
+- campaign interpretation
+- follow-up eligibility
+- follow-up authorization
+
+Do not conflate them.
+
+CLI and output
+
+Only add a CLI if it matches existing Phase 5 conventions and materially exposes the new step.
+
+If added:
+
+- support joined and separated forms;
+- reject duplicate options;
+- reject conflicts with other standalone operations;
+- reject --yes for read-only commands;
+- reject --dry-run for intrinsically read-only commands;
+- require --yes for any write command;
+- preserve machine-parseable deterministic output;
+- percent-encode variable text;
+- use explicit nulls;
+- expose contract versions and identity hashes;
+- state whether the result is advisory, authoritative, persisted, or follow-up-authorizing;
+- never overstate campaign success.
+
+Testing requirements
+
+Add focused tests for the discovered scope.
+
+At minimum, cover as applicable:
+
+- valid comparable campaign
+- mixed positive and negative deltas
+- zero deltas
+- context-changed evidence
+- missing source metric
+- missing result metric
+- unavailable metric values
+- unsupported metrics
+- failed member
+- cancelled member
+- not-ready member
+- inconsistent member
+- mixed-member aggregate behavior
+- unsupported contract version
+- invalid enum values
+- duplicate member identity
+- deterministic ordering
+- deterministic canonical identity
+- locale independence
+- stream-state restoration
+- no writes
+- no scheduler activity
+- CLI parser conflicts
+- explicit advisory/authority flags
+
+If database integration is added, also cover:
+
+- one repeatable-read, read-only snapshot
+- concurrent-update stability
+- no sequence advancement
+- no row locks
+- no advisory locks
+- no inserts, updates, or deletes
+
+Verification
+
+After implementation:
+
+1. Run all new focused tests.
+2. Re-run Step 5a tests.
+3. Re-run Step 5b tests.
+4. Re-run campaign status tests.
+5. Re-run affected Phase 4C/4D and Phase 5 regressions.
+6. Run AddressSanitizer and UndefinedBehaviorSanitizer where supported.
+7. Run database-backed tests if applicable.
+8. Run CLI tests if applicable.
+9. Run:
+   - git diff --check
+   - git diff --cached --check
+10. Check untracked source, test, and documentation files for whitespace errors.
+11. Validate the Xcode project.
+12. Perform an incremental Xcode Release build only:
+
+    xcodebuild -project ExpertAdvisor.xcodeproj \
+      -scheme "LSTM Release" \
+      -configuration Release \
+      -destination "platform=macOS,arch=arm64" \
+      build
+
+Do not clean DerivedData.
+Do not use a fresh DerivedData directory unless the existing one is concretely unusable.
+
+Worktree safety
+
+At completion:
+
+- identify every modified file;
+- identify unrelated pre-existing or concurrent changes;
+- confirm nothing is staged;
+- confirm no commit was created;
+- confirm branch and HEAD were preserved.
+
+Completion report
+
+Provide:
+
+- discovered next-step scope
+- reasoning for the selected phase boundary
+- implementation summary
+- identity and authority model
+- advisory versus authoritative behavior
+- persistence behavior
+- CLI behavior, if added
+- files modified
+- tests executed
+- sanitizer results
+- database verification, if applicable
+- Release build result
+- remaining concerns
+- explicit recommendation:
+
+READY FOR INDEPENDENT REVIEW
+
+or
+
+NOT READY FOR INDEPENDENT REVIEW

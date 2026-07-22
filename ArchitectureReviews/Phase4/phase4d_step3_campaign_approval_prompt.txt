@@ -1,0 +1,464 @@
+Phase 4D Step 3 — Explicit Recommendation Campaign Approval (Persisted, Non-Executing)
+
+Reasoning level: High
+
+CONTEXT
+
+Phase 4D Step 1 implemented deterministic, read-only recommendation campaign planning.
+
+Phase 4D Step 2 implemented deterministic, read-only recommendation campaign review, including:
+
+- authoritative plan validation
+- selected and excluded recommendation reporting
+- ordered exclusion reasons
+- exact duplicate grouping
+- parameter-family, symbol, and horizon coverage
+- deterministic ordering verification
+- canonical plan and review identities
+- read-only CLI output
+
+Step 2 is committed as:
+
+75a3d43 Implement Phase 4D Step 2 recommendation campaign review.
+
+The PostgreSQL repository test passed against the disposable database
+phase4d_campaign_test with exit status 0.
+
+GOAL
+
+Implement Phase 4D Step 3 by adding an explicit, durable campaign approval layer over the exact deterministic campaign review produced by Steps 1 and 2.
+
+This step establishes immutable operator approval evidence for a reviewed campaign, but it must remain non-executing.
+
+A successful approval must authorize only a specific canonical campaign review identity. It must not itself create, activate, queue, resume, or modify any experiment.
+
+CORE PIPELINE
+
+recommendation ranking
+→ deterministic read-only campaign plan
+→ deterministic read-only campaign review
+→ explicit persisted campaign approval
+→ future campaign execution
+
+Only the first four stages are in scope after this step.
+
+PRIMARY OBJECTIVES
+
+1. Add a persisted campaign approval domain and repository layer.
+
+2. Bind every approval request to one exact, validated Phase 4D Step 2 campaign review identity.
+
+3. Persist sufficient immutable provenance to prove exactly what was reviewed and approved, including at minimum:
+
+   - ranking snapshot identity
+   - planning policy identity
+   - planning scope identity
+   - campaign plan identity
+   - campaign review identity
+   - review contract version
+   - candidate count
+   - selected count
+   - excluded count
+   - duplicate and coverage summary counts
+   - deterministic ordering verification
+   - explicit operator-supplied reviewer identity
+   - explicit operator-supplied review reason or note
+   - review decision
+   - creation timestamp
+
+4. Add explicit CLI commands to:
+
+   - create a campaign approval decision for an exact reviewed campaign
+   - inspect one campaign approval
+   - list campaign approvals with deterministic ordering and bounded limits
+
+5. Reuse existing Phase 4A–4C persistence, audit, identity, transaction, CLI, and repository conventions where appropriate.
+
+6. Preserve strict separation between advisory approval and experiment execution.
+
+MANDATORY BOUNDARIES
+
+This step MAY:
+
+- add narrowly scoped PostgreSQL migrations
+- add campaign approval tables and indexes
+- persist immutable campaign review/approval evidence
+- read ranking, recommendation, conversion-workflow, plan, and review evidence
+- validate that the current reconstructed review matches the requested canonical identity
+- record an explicit human decision
+- expose read-only inspection/list commands
+
+This step MUST NOT:
+
+- create experiment rows
+- create conversion experiments
+- activate conversion proposals
+- queue, resume, retry, pause, cancel, or modify experiments
+- change scheduler state
+- start workers
+- add scheduler polling or background scans
+- automatically approve any campaign
+- infer reviewer identity
+- infer approval from scores, thresholds, rankings, or model quality
+- treat campaign approval as profitability evidence
+- execute approved campaigns
+- modify existing recommendation workflow state
+- mutate existing Phase 4C proposal, review, conversion, activation, or workflow records
+- silently replace or revise an existing approval decision
+- authorize a campaign review whose identity cannot be reconstructed and verified exactly
+
+APPROVAL MODEL
+
+Use explicit operator decisions.
+
+At minimum support:
+
+- approved
+- rejected
+
+Consider whether expired or superseded belongs in this step only if existing project conventions clearly require it. Do not add speculative lifecycle states.
+
+An approval decision must be immutable after insertion.
+
+If correction is necessary, use a separate new audit decision only if that matches established repository conventions. Do not implement mutable updates to historical review evidence.
+
+The implementation must clearly distinguish:
+
+- campaign plan
+- campaign review
+- campaign approval decision
+- future campaign execution
+
+Do not name approval records in a way that implies execution has occurred.
+
+CANONICAL IDENTITY
+
+Define a versioned canonical identity for persisted campaign approval evidence.
+
+The approval identity must bind all authorization-relevant data, including:
+
+- exact campaign review identity hash and canonical reference
+- exact campaign plan identity hash
+- exact planning policy identity hash
+- exact scope canonical identity
+- ranking snapshot identifier and identity
+- review contract version
+- decision
+- explicit reviewer identity
+- explicit reason/note, using length-framed canonical text
+- any other immutable fields necessary to prevent ambiguous approval
+
+Display timestamps must not make logically identical approval requests nondeterministic unless timestamp inclusion is an established audit requirement. Clearly distinguish semantic identity from database row identity and audit timestamp.
+
+Do not use hashes as substitutes for authoritative canonical comparisons where canonical text is available.
+
+STALE-EVIDENCE PROTECTION
+
+Before persisting an approval:
+
+1. Load the explicit ranking snapshot and authoritative Phase 4C workflow evidence using the existing read-only planner repository.
+
+2. Reconstruct the deterministic campaign plan.
+
+3. Reconstruct and validate the deterministic campaign review.
+
+4. Require the caller to provide the expected campaign review identity hash.
+
+5. Reject the request if the reconstructed review identity does not match exactly.
+
+6. Persist the approval and all required provenance in one PostgreSQL transaction.
+
+The command must never approve “whatever the current review happens to be” without the caller explicitly supplying the expected review identity.
+
+IDEMPOTENCY AND CONCURRENCY
+
+Provide deterministic duplicate prevention.
+
+At minimum:
+
+- the same semantic approval request must not create duplicate rows
+- conflicting decisions for the same exact campaign review must be rejected clearly unless an existing immutable multi-review policy explicitly permits them
+- concurrent identical requests must resolve deterministically
+- use PostgreSQL uniqueness constraints and transactional handling rather than process-local checks
+- do not rely on advisory locks unless existing project conventions make them necessary
+
+Define and test the expected behavior for:
+
+- repeated identical approval
+- repeated identical rejection
+- approval followed by rejection
+- rejection followed by approval
+- same review identity with a different reviewer or reason
+- stale or mismatched review identity
+- missing ranking snapshot
+- malformed reviewer identity
+- empty or oversized reason/note
+- invalid decision
+- zero-selected-candidate campaign review
+
+ZERO-SELECTION POLICY
+
+Make the policy explicit.
+
+Recommended default:
+
+- permit recording a rejected decision for a valid zero-selection review
+- do not permit approving a campaign with zero selected recommendations
+
+If existing architecture documents establish a different rule, follow them and document the reason.
+
+DATABASE DESIGN
+
+Inspect existing Phase 4A–4C migration and repository conventions before choosing names.
+
+Prefer a narrow immutable audit table, or a narrowly separated proposal/decision structure only if existing conventions strongly support that design.
+
+The schema should provide:
+
+- surrogate primary key
+- semantic/canonical identity and hash
+- foreign or provenance references where appropriate
+- exact review, plan, policy, scope, and ranking snapshot identity fields
+- decision
+- reviewer identity
+- review reason/note
+- immutable creation timestamp
+- uniqueness constraints for semantic idempotency
+- indexes for deterministic lookup and listing
+
+Avoid denormalized member rows unless they are necessary to preserve authoritative approved membership independently of future source changes. If approved membership must be persisted, bind each member to its exact ordinal, recommendation identity, decision, and relevant invocation identity, and explain why.
+
+Do not introduce campaign execution tables in this step.
+
+TRANSACTION AND PRIVILEGE SAFETY
+
+All persistence must occur in an explicit PostgreSQL transaction.
+
+On validation failure, identity mismatch, conflict, or database error:
+
+- no partial approval evidence may remain
+- no sequence or unrelated table should be changed beyond unavoidable PostgreSQL sequence semantics already accepted by project conventions
+- no existing recommendation, proposal, experiment, or scheduler row may be modified
+
+Update database privilege documentation and grants only as narrowly required.
+
+CLI
+
+Add explicit commands using existing CLI conventions.
+
+Suggested shape:
+
+--approve-recommendation-campaign
+--reject-recommendation-campaign
+--campaign-ranking-snapshot=ID
+--campaign-review-identity-hash=HASH
+--campaign-reviewer=TEXT
+--campaign-review-reason=TEXT
+
+Inspection:
+
+--show-recommendation-campaign-approval=ID
+
+Listing:
+
+--list-recommendation-campaign-approvals
+--campaign-approval-decision=approved|rejected
+--campaign-approval-limit=N
+
+Exact option names may be adjusted to match project conventions, but approval and rejection must remain explicit top-level operator actions.
+
+CLI requirements:
+
+- approve and reject are mutually exclusive
+- ranking snapshot and expected review identity are mandatory for decision creation
+- reviewer identity must be explicitly supplied
+- reason/note validation must be deterministic
+- orphan approval options must be rejected
+- inspection and listing are read-only
+- listing order must be deterministic
+- output must be stable and machine-readable
+- every creation result must state explicitly that no experiment or scheduler action occurred
+
+Example safety fields:
+
+campaign_approval_recorded=true
+campaign_execution_started=false
+experiment_created=false
+experiment_modified=false
+scheduler_started=false
+worker_started=false
+
+Do not label a persisted approval command as read_only=true, because it writes approval evidence. Instead report the exact narrow mutation and all prohibited side effects as false.
+
+SERVICES AND LAYERING
+
+Keep responsibilities separated:
+
+- pure approval domain validation and canonicalization
+- repository persistence and lookup
+- orchestration service that reconstructs and verifies the Step 2 review
+- CLI parsing and presentation
+- no campaign-execution dependency
+
+Do not place substantial domain logic directly in ExperimentScheduler.cpp.
+
+Do not redesign the existing planner or review layer unless a concrete correctness defect requires a minimal fix.
+
+TESTING
+
+Add comprehensive pure unit tests for:
+
+- decision parsing and validation
+- canonical identity stability
+- identity changes when authorization-relevant fields change
+- display-time independence where intended
+- reviewer and reason validation
+- zero-selection policy
+- malformed inputs
+- deterministic output ordering
+- exact review-identity binding
+
+Add PostgreSQL repository/integration tests using an explicitly named disposable non-LSTM database.
+
+Tests must cover:
+
+- successful approval
+- successful rejection
+- exact persisted provenance
+- identical retry idempotency
+- concurrent or uniqueness-conflict behavior where practical
+- conflicting decision rejection
+- stale review identity rejection
+- missing ranking snapshot
+- malformed reviewer/reason
+- deterministic show/list output
+- bounded list limit
+- no experiment row creation
+- no experiment status/phase/update timestamp changes
+- no Phase 4C workflow mutation
+- no scheduler-related mutation
+- transaction rollback on failure
+
+Capture before/after counts and relevant timestamps for:
+
+- experiment
+- recommendation tables
+- Phase 4C proposal/review/conversion/activation/audit tables
+- new campaign approval tables
+
+Use a sentinel mechanism consistent with prior repository tests to detect unintended writes.
+
+The repository test must refuse to run against database name LSTM.
+
+MIGRATIONS
+
+If schema changes are needed:
+
+- add a forward migration using existing numbering and naming conventions
+- add or update schema documentation
+- include grants consistent with least privilege
+- do not modify old migrations
+- do not add execution-related columns or tables
+
+DOCUMENTATION
+
+Add a dedicated Phase 4D Step 3 document.
+
+Update:
+
+- Phase 4D planning documentation
+- Phase 4D review documentation
+- Volume VIII recommendation architecture
+- Database README
+- migration/schema documentation
+- CLI usage/help text
+
+Document clearly:
+
+- what approval authorizes
+- what approval does not do
+- identity and stale-evidence guarantees
+- idempotency/conflict behavior
+- zero-selection policy
+- explicit reviewer requirement
+- deferred campaign execution
+
+PHASE BOUNDARY STATEMENT
+
+The architecture must state unambiguously:
+
+Campaign approval records explicit human authorization for one exact deterministic campaign review. It does not create or modify experiments and does not execute the campaign.
+
+WORKFLOW
+
+1. Inspect the current committed Step 1 and Step 2 implementation and existing Phase 4C approval/audit patterns.
+
+2. Present a concise implementation plan before editing.
+
+3. Implement the narrowest coherent Step 3 design.
+
+4. Run formatting/diff checks and strict compilation.
+
+5. Run pure tests repeatedly to confirm deterministic behavior.
+
+6. Build repository tests.
+
+7. Run repository tests against an explicitly disposable PostgreSQL database if environment permissions allow.
+
+8. Run existing Phase 4A, Phase 4B, Phase 4C, and Phase 4D regressions.
+
+9. Run a clean Release build.
+
+10. Perform a final focused audit for:
+    - unintended experiment writes
+    - scheduler behavior changes
+    - mutable historical evidence
+    - stale-review approval
+    - missing uniqueness constraints
+    - identity omissions
+    - misleading CLI safety claims
+    - documentation/schema inconsistency
+
+Do not commit or push.
+
+VERIFICATION
+
+Required:
+
+- clean Release build succeeds
+- existing recommendation tests pass
+- Step 1 planner tests pass
+- Step 2 review tests pass
+- new Step 3 pure tests pass
+- new Step 3 repository tests pass against a disposable database
+- migrations apply cleanly to a disposable database
+- duplicate/idempotency behavior is verified
+- stale review identity is rejected
+- no experiment or scheduler state changes occur
+- no Phase 4C workflow state changes occur
+- git diff --check passes
+- Xcode project validation passes
+- no changes are staged
+- no commit is created
+
+FINAL REPORT
+
+Report:
+
+1. implementation summary
+2. schema and migration changes
+3. canonical approval identity
+4. stale-evidence verification
+5. idempotency and conflict semantics
+6. CLI commands and example output
+7. tests run and exact results
+8. PostgreSQL disposable-database result
+9. Release build result
+10. safety audit
+11. files changed
+12. remaining deferred work
+13. current Git status and HEAD
+
+SUCCESS CRITERIA
+
+Phase 4D Step 3 is complete when an operator can explicitly approve or reject one exact deterministic campaign review, the decision is persisted immutably and idempotently with complete provenance, and absolutely no experiment, conversion, scheduler, or campaign-execution action occurs.

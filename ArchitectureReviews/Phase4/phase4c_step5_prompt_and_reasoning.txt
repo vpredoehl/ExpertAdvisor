@@ -1,0 +1,314 @@
+PHASE 4C STEP 5 — EXPLICIT MANUAL ACTIVATION OF A CONVERTED EXPERIMENT
+
+REASONING
+
+Phase 4C Step 4 now provides the durable boundary between an approved recommendation-conversion proposal and exactly one newly created experiment. The created experiment is deliberately paused, is not scheduler-owned, and cannot start merely because a recommendation was approved or converted.
+
+The next safe step is to add a second, explicit operator action that activates that already-created paused experiment. This preserves the separation of duties:
+
+1. recommendation generation and ranking remain advisory;
+2. proposal preparation records conversion intent;
+3. review records approval or rejection;
+4. execution creates exactly one paused experiment;
+5. activation is a separate, auditable decision that makes the experiment eligible for the existing scheduler.
+
+Activation must not create another experiment, reinterpret the recommendation, or introduce recommendation-driven scheduler automation. It should reuse the existing experiment lifecycle and queueing behavior, while adding durable provenance and strong idempotency around this specific Phase 4C transition.
+
+PROMPT FOR CODEX
+
+Using high reasoning, implement Phase 4C Step 5: explicit manual activation of an already executed recommendation-conversion proposal.
+
+REPOSITORY AND BRANCH
+
+Use the current repository state on:
+
+  branch: phase0-architecture
+
+The branch includes Phase 4C Step 4 and its live-PostgreSQL verification. Treat the current implementation as authoritative. Do not rediscover or redesign the completed Step 2, Step 3, or Step 4 architecture.
+
+Before editing, inspect the current Phase 4C migrations, repositories, services, CLI wiring, tests, documentation, and the existing experiment pause/resume/requeue lifecycle. Reuse established lifecycle behavior rather than duplicating it.
+
+GOAL
+
+Add a deliberate, explicit, durable operator action that activates the single paused experiment created by a Phase 4C conversion execution.
+
+A successful activation must:
+
+- operate only on an existing durable conversion-execution record;
+- target exactly the experiment linked by that execution record;
+- verify that the experiment is still in the precise safe pre-activation state;
+- transition that existing experiment into the normal scheduler-eligible state using established experiment lifecycle semantics;
+- create durable append-only activation evidence;
+- be transactionally idempotent;
+- prevent duplicate activation under concurrent requests;
+- preserve proposal, review, execution, experiment, and activation provenance;
+- never create another experiment;
+- never directly launch a worker;
+- never bypass the scheduler.
+
+PHASE BOUNDARY
+
+Step 5 remains an explicit manual administrative action.
+
+It must not:
+
+- automatically activate an experiment after approval;
+- automatically activate an experiment after conversion;
+- scan for executions to activate;
+- add scheduler polling of recommendation, proposal, review, execution, or activation tables;
+- start training, inference, or analysis directly;
+- create a second experiment;
+- mutate recommendations, ranking snapshots, proposals, reviews, or execution records;
+- approve or reject proposals;
+- alter recommendation scoring or ranking;
+- add broad workflow orchestration;
+- redesign the experiment scheduler;
+- commit changes.
+
+REQUIRED DOMAIN BEHAVIOR
+
+Introduce a clear activation result model with outcomes such as:
+
+- activated
+- existing_identical
+- not_found
+- invalid_state
+- conflict
+
+Use naming consistent with the current Phase 4C code.
+
+The durable activation identity must be deterministic and must bind at least:
+
+- activation contract version;
+- conversion execution ID;
+- proposal ID;
+- approving review-decision ID;
+- experiment ID;
+- intended lifecycle transition;
+- resulting scheduler-eligible status/phase;
+- any lifecycle-relevant immutable values required to prove that replay refers to the same activation.
+
+Store both canonical activation identity and its hash, following the existing canonicalization and hash conventions.
+
+DATABASE MIGRATION
+
+Add the next numbered migration after 038.
+
+Create one append-only activation table with a narrow responsibility. It should link:
+
+- conversion execution;
+- proposal;
+- approving review decision where useful for direct provenance;
+- experiment;
+- activation contract version;
+- canonical activation identity;
+- activation identity hash;
+- created timestamp.
+
+Enforce database-backed invariants, including:
+
+- exactly one activation record per conversion execution;
+- exactly one activation record for the linked experiment through this workflow;
+- foreign-key consistency among execution, proposal, review decision, and experiment;
+- positive identifiers;
+- supported contract version;
+- nonempty bounded canonical/hash fields;
+- restrictive deletion behavior;
+- no UPDATE or DELETE privilege for the runtime role;
+- no PUBLIC privileges;
+- only the minimum SELECT/INSERT/sequence privileges required by the runtime role.
+
+Prefer composite foreign keys or other database constraints where they materially prove cross-record consistency. Do not rely only on application checks for duplicate prevention or provenance.
+
+SAFE PRE-ACTIVATION STATE
+
+The operation must reject activation unless the linked experiment is still exactly the experiment produced by Step 4 and remains safe to activate.
+
+At minimum, verify the current experiment is:
+
+- status = paused;
+- phase = train;
+- worker_pid IS NULL;
+- current_operation IS NULL;
+- current_epoch IS NULL unless the existing experiment-creation contract intentionally sets it;
+- not already running, pending, completed, failed, cancelled, or otherwise lifecycle-advanced;
+- still consistent with the immutable proposal/execution provenance used to create it.
+
+Also verify that the execution record itself is valid and references an approving review decision protected by the Step 4 schema.
+
+Do not silently repair an invalid state. Return a deterministic failure with a specific reason.
+
+ACTIVATION TRANSITION
+
+Use the existing project-defined scheduler-eligible lifecycle transition. Do not invent a parallel queue mechanism.
+
+Determine from the current code whether the correct existing state is:
+
+- pending/train,
+- queued/train,
+- or another established equivalent.
+
+Apply exactly the same field clearing/initialization rules used by the normal experiment resume/requeue path.
+
+The activation operation must not spawn a process. It only makes the experiment eligible for the existing scheduler.
+
+TRANSACTIONAL AND CONCURRENT BEHAVIOR
+
+The activation must be atomic:
+
+- validate execution and linked experiment;
+- acquire a proposal/execution/experiment-scoped database lock suitable for the runtime role;
+- insert durable activation evidence;
+- transition the existing experiment;
+- commit both together.
+
+If any part fails, neither the activation row nor lifecycle transition may remain committed.
+
+Concurrent identical activation requests must result in:
+
+- one lifecycle transition;
+- one activation row;
+- all successful callers receiving the same persisted activation and experiment identity;
+- no duplicate rows;
+- no sequence-value assumptions.
+
+A replay after successful activation must return existing_identical without trying to repeat the lifecycle update.
+
+If an activation row exists but its canonical identity differs from the current deterministic identity, return conflict and do not mutate anything.
+
+Do not require table-level UPDATE privileges merely to lock a row if that conflicts with the established restricted runtime role. Reuse the advisory-lock pattern from Step 4 when appropriate.
+
+REPOSITORY API
+
+Add narrowly scoped repository functions to:
+
+- detect whether the activation schema exists;
+- activate a conversion execution transactionally;
+- find activation by activation ID;
+- find activation by conversion execution ID;
+- optionally find activation by experiment ID if useful for status output.
+
+Keep persistence and transaction logic in the repository layer.
+
+Do not put SQL in CLI parsing code.
+
+SERVICE AND CLI
+
+Add an explicit CLI command with a clear name, preferably centered on the execution ID, for example:
+
+  --activate-recommendation-conversion-execution=EXECUTION_ID
+
+Also add a read-only status command, for example:
+
+  --recommendation-conversion-activation-status=ACTIVATION_ID
+
+Follow existing project CLI conventions for:
+
+- argument parsing;
+- exit codes;
+- stdout/stderr separation;
+- machine-readable output;
+- help text;
+- database connection handling;
+- schema-missing diagnostics.
+
+Successful activation output should identify at least:
+
+- outcome;
+- activation ID;
+- execution ID;
+- proposal ID;
+- review-decision ID;
+- experiment ID;
+- previous status/phase;
+- resulting status/phase;
+- activation identity hash.
+
+Invalid or rejected operations must produce no misleading success output.
+
+SCHEDULER ISOLATION
+
+Do not modify scheduler scans, worker launch logic, continuation automation, checkpoint inference, analyzer behavior, or recommendation generation.
+
+The scheduler must continue to know only about the ordinary experiment lifecycle state. It must not query the Phase 4C activation table.
+
+TESTS
+
+Add focused domain/unit tests where useful and comprehensive live-PostgreSQL repository tests.
+
+Cover at least:
+
+1. missing activation schema;
+2. nonexistent execution ID;
+3. valid Step 4 execution whose experiment is paused/train;
+4. successful activation changes only the existing experiment;
+5. activation creates no additional experiment row;
+6. successful activation persists one activation record;
+7. exact proposal/review/execution/experiment provenance;
+8. replay returns existing_identical;
+9. replay does not update lifecycle fields again;
+10. concurrent identical activation creates one activation row;
+11. concurrent identical activation performs one transition;
+12. pending/running/completed/failed/cancelled experiment is rejected;
+13. mismatched execution/experiment provenance is rejected;
+14. an execution authorized by anything other than approve cannot activate;
+15. database constraints reject inconsistent foreign-key combinations;
+16. database constraints reject duplicate execution activation;
+17. runtime role cannot UPDATE or DELETE activation history;
+18. runtime role has only required privileges;
+19. embedded NUL and invalid canonical/hash inputs are rejected before PostgreSQL insertion where applicable;
+20. transaction rollback leaves the experiment paused if activation-audit insertion fails;
+21. transaction rollback removes activation evidence if lifecycle transition fails;
+22. CLI success output and exit code;
+23. CLI not-found output and exit code;
+24. CLI invalid-state output and exit code;
+25. Step 2, Step 3, and Step 4 repository tests still pass.
+
+Tests must not depend on specific sequence values. Synchronize concurrency tests deterministically; do not use timing sleeps as the primary synchronization mechanism.
+
+DOCUMENTATION
+
+Update the Phase 4 documentation and database migration documentation to state clearly:
+
+- conversion creates one paused experiment;
+- activation is a separate explicit operator action;
+- activation does not directly start a worker;
+- activation only moves the existing experiment into the established scheduler-eligible lifecycle state;
+- the scheduler does not consume Phase 4C audit tables;
+- activation history is append-only and idempotent;
+- exact command examples and status output;
+- how to verify the migration and runtime privileges.
+
+BUILD AND VERIFICATION
+
+Perform a focused review of the final diff before reporting completion.
+
+Run:
+
+- relevant non-database unit tests;
+- the normal project Release build;
+- the Step 2 repository tests;
+- the Step 3 repository tests;
+- the Step 4 repository tests;
+- the new Step 5 live-PostgreSQL repository tests.
+
+Use a disposable PostgreSQL database for live tests. Report exact build/test commands and results. Do not claim PostgreSQL verification if it was not actually run.
+
+Check git status and summarize every modified/untracked file.
+
+Do not commit.
+
+FINAL REPORT
+
+Return:
+
+1. concise implementation summary;
+2. exact lifecycle transition chosen and why it matches existing code;
+3. schema and privilege design;
+4. idempotency/concurrency design;
+5. files changed;
+6. build and test commands with results;
+7. any remaining risks or unverified items;
+8. confirmation that the scheduler was not modified;
+9. confirmation that no experiment is automatically started;
+10. confirmation that no commit was created.
