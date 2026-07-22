@@ -1,8 +1,8 @@
 # Volume XII — Database
 
-Status: Foundation outline
-Version: 0.1.0
-Last revised: 2026-07-15
+Status: Foundation aligned through Phase 6B
+Version: 0.2.0
+Last revised: 2026-07-20
 
 ## 1. Purpose
 
@@ -24,8 +24,9 @@ authorization are specified by their owning volumes.
 ### 2.3 Current implementation status
 
 PostgreSQL is the implemented durable source of truth. Ordered SQL migrations
-are checksum-recorded by the project runner. This outline does not modify the
-schema.
+are checksum-recorded by the project runner. Phase 6B migration 042 adds an
+append-only exact follow-up-proposal manifest and ordered member table for
+read-only operator preview, without lifecycle or scheduler state.
 
 ## 3. Responsibilities
 
@@ -69,6 +70,9 @@ truth; migrations own schema evolution; scheduler/workers use least privilege.
 The schema represents experiments, models, evidence, policies, lifecycle,
 continuations, recommendations, scoring, reviews, and migration history.
 Exact inventories belong to migrations and domain volumes.
+Phase 6B follow-up proposal rows durably preserve the complete immutable Phase
+6A advisory value. Their row ID, hash-collision ordinal, and creation timestamp
+are repository metadata outside the authoritative proposal identity.
 
 ### 5.2 Provenance and versions
 
@@ -94,6 +98,8 @@ consistent snapshot when required by the domain.
 
 Repositories use short explicit read-write transactions. Related mutable state
 and immutable audit/provenance commit atomically. External work is excluded.
+Phase 6B inserts one proposal manifest and its complete ordered members under a
+hash-scoped advisory lock; a deferred trigger rejects partial membership.
 
 ### 6.3 Failure semantics
 
@@ -198,6 +204,8 @@ permissions, backup, concurrency, and observability decisions.
 
 - [Volume I §§7–9, 15](Volume_I_Foundation.md)
 - [ADR-0001](adr/ADR-0001-postgresql-source-of-truth.md)
+- [ADR-0007](adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md)
+- [Phase 6B persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
 - [`migrate_lstm_db.sh`](../../migrate_lstm_db.sh)
 - [`Database/migrations`](../../Database/migrations)
 
@@ -206,3 +214,4 @@ permissions, backup, concurrency, and observability decisions.
 | Version | Date | Change | ADR |
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Established database ownership and migration-governance outline. | ADR-0001 |
+| 0.2.0 | 2026-07-20 | Recorded the append-only exact Phase 6B follow-up-proposal schema, collision-safe transaction, and least-privilege read-only preview boundary. | ADR-0001, ADR-0007 |

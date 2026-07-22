@@ -75,6 +75,7 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0004](ADR-0004-scheduler-ownership-boundaries.md) | Accepted | Scheduler work requires explicit ownership and durable lifecycle claims. |
 | [ADR-0005](ADR-0005-manual-recommendation-conversion.md) | Accepted | Explicit approved-proposal conversion creates one paused experiment. |
 | [ADR-0006](ADR-0006-phase-6a-follow-up-proposal.md) | Accepted | Phase 6A follow-up proposals are pure, identity-bound, and non-authorizing. |
+| [ADR-0007](ADR-0007-phase-6b-follow-up-proposal-persistence.md) | Accepted | Phase 6B persists exact advisory proposals for read-only preview without action authority. |
 
 ## 8. Revision history
 
@@ -83,3 +84,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.0.0 | 2026-07-15 | Established ADR numbering, statuses, required sections, workflow, and initial index. |
 | 1.1.0 | 2026-07-19 | Added ADR-0005 for explicit manual conversion to a paused experiment. |
 | 1.2.0 | 2026-07-20 | Added ADR-0006 for the pure non-authorizing Phase 6A follow-up proposal. |
+| 1.3.0 | 2026-07-20 | Added ADR-0007 for exact append-only Phase 6B persistence and read-only preview. |

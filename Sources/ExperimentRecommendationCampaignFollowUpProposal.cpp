@@ -102,8 +102,19 @@ std::string OptionalLongLong(const std::optional<long long>& value)
 }
 
 std::string ProposalCanonicalText(
-    const Assessment& assessment,
-    const Decision& policyDecision,
+    int assessmentContractVersion,
+    const std::string& assessmentCanonicalText,
+    const std::string& assessmentIdentityHash,
+    int policyContractVersion,
+    const std::string& policyCanonicalText,
+    const std::string& policyIdentityHash,
+    int policyDecisionContractVersion,
+    const std::string& policyDecisionCanonicalText,
+    const std::string& policyDecisionIdentityHash,
+    const RecommendationCampaignOutcomeAssessmentCampaignIdentity&
+        campaignIdentity,
+    const RecommendationCampaignOutcomeAssessmentMaterializationIdentity&
+        materializationIdentity,
     const RecommendationCampaignFollowUpProposalSummary& summary,
     const std::vector<ProposalMember>& members)
 {
@@ -124,44 +135,42 @@ std::string ProposalCanonicalText(
            ";scheduler_work=false"
            ";declares_campaign_success=false"
         << ";assessment_contract_version="
-        << assessment.identity.contractVersion
+        << assessmentContractVersion
         << ";assessment_canonical="
-        << LengthPrefixed(assessment.identity.canonicalText)
-        << ";assessment_hash=" << LengthPrefixed(assessment.identity.hash)
+        << LengthPrefixed(assessmentCanonicalText)
+        << ";assessment_hash=" << LengthPrefixed(assessmentIdentityHash)
         << ";policy_contract_version="
-        << policyDecision.policy.identity.contractVersion
+        << policyContractVersion
         << ";policy_canonical="
-        << LengthPrefixed(policyDecision.policy.identity.canonicalText)
+        << LengthPrefixed(policyCanonicalText)
         << ";policy_hash="
-        << LengthPrefixed(policyDecision.policy.identity.hash)
+        << LengthPrefixed(policyIdentityHash)
         << ";policy_decision_contract_version="
-        << policyDecision.identity.contractVersion
+        << policyDecisionContractVersion
         << ";policy_decision_canonical="
-        << LengthPrefixed(policyDecision.identity.canonicalText)
+        << LengthPrefixed(policyDecisionCanonicalText)
         << ";policy_decision_hash="
-        << LengthPrefixed(policyDecision.identity.hash)
+        << LengthPrefixed(policyDecisionIdentityHash)
         << ";campaign_approval_id="
-        << assessment.campaignIdentity.campaignApprovalId
+        << campaignIdentity.campaignApprovalId
         << ";campaign_identity="
-        << LengthPrefixed(assessment.campaignIdentity.identityCanonical)
+        << LengthPrefixed(campaignIdentity.identityCanonical)
         << ";campaign_identity_hash="
-        << LengthPrefixed(assessment.campaignIdentity.identityHash)
+        << LengthPrefixed(campaignIdentity.identityHash)
         << ";materialization_id="
-        << assessment.materializationIdentity.materializationId
+        << materializationIdentity.materializationId
         << ";materialization_campaign_approval_id="
-        << assessment.materializationIdentity.campaignApprovalId
+        << materializationIdentity.campaignApprovalId
         << ";materialization_campaign_identity_hash="
-        << LengthPrefixed(
-               assessment.materializationIdentity.campaignIdentityHash)
+        << LengthPrefixed(materializationIdentity.campaignIdentityHash)
         << ";materialization_contract_version="
-        << assessment.materializationIdentity.contractVersion
+        << materializationIdentity.contractVersion
         << ";materialization_member_count="
-        << assessment.materializationIdentity.memberCount
+        << materializationIdentity.memberCount
         << ";materialization_identity="
-        << LengthPrefixed(
-               assessment.materializationIdentity.identityCanonical)
+        << LengthPrefixed(materializationIdentity.identityCanonical)
         << ";materialization_identity_hash="
-        << LengthPrefixed(assessment.materializationIdentity.identityHash)
+        << LengthPrefixed(materializationIdentity.identityHash)
         << ";member_count=" << members.size();
     for (const auto& member : members)
     {
@@ -443,6 +452,16 @@ RecommendationCampaignFollowUpProposal::
         summary.memberCount != memberCount)
         throw std::logic_error(
             "recommendation_campaign_follow_up_proposal_invariant_failed");
+    const std::string expectedCanonical = ProposalCanonicalText(
+        assessmentContractVersion, assessmentCanonicalText,
+        assessmentIdentityHash, policyContractVersion, policyCanonicalText,
+        policyIdentityHash, policyDecisionContractVersion,
+        policyDecisionCanonicalText, policyDecisionIdentityHash,
+        campaignIdentity, materializationIdentity, summary, members);
+    if (identity.canonicalText != expectedCanonical ||
+        identity.hash != RecommendationCanonicalHash(expectedCanonical))
+        throw std::logic_error(
+            "recommendation_campaign_follow_up_proposal_identity_payload_mismatch");
 }
 
 struct RecommendationCampaignFollowUpProposalBuilder
@@ -468,7 +487,15 @@ struct RecommendationCampaignFollowUpProposalBuilder
             static_cast<int>(members.size()),
             {ProposalReason::EligibleFavorablePolicyDecision});
         std::string canonical = ProposalCanonicalText(
-            assessment, policyDecision, summary, members);
+            assessment.identity.contractVersion,
+            assessment.identity.canonicalText, assessment.identity.hash,
+            policyDecision.policy.identity.contractVersion,
+            policyDecision.policy.identity.canonicalText,
+            policyDecision.policy.identity.hash,
+            policyDecision.identity.contractVersion,
+            policyDecision.identity.canonicalText,
+            policyDecision.identity.hash, assessment.campaignIdentity,
+            assessment.materializationIdentity, summary, members);
         ValidateRecommendationCampaignFollowUpProposalCanonicalSize(
             canonical.size());
         RecommendationCampaignFollowUpProposalIdentity identity(

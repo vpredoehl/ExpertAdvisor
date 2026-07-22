@@ -114,6 +114,9 @@ struct RecommendationCampaignFollowUpProposalValidationView
 };
 
 struct RecommendationCampaignFollowUpProposalBuilder;
+// Phase 6B is the only persistence boundary allowed to hydrate this exact
+// immutable value. Friendship does not expose a general construction API.
+struct RecommendationCampaignFollowUpProposalPersistenceBuilder;
 
 struct RecommendationCampaignFollowUpProposalIdentity
 {
@@ -135,6 +138,7 @@ private:
         std::string canonicalText,
         std::string hash);
     friend struct RecommendationCampaignFollowUpProposalBuilder;
+    friend struct RecommendationCampaignFollowUpProposalPersistenceBuilder;
 };
 
 struct RecommendationCampaignFollowUpProposalMember
@@ -152,6 +156,7 @@ private:
     explicit RecommendationCampaignFollowUpProposalMember(
         RecommendationCampaignOutcomeAssessmentMemberIdentity identity);
     friend struct RecommendationCampaignFollowUpProposalBuilder;
+    friend struct RecommendationCampaignFollowUpProposalPersistenceBuilder;
 };
 
 struct RecommendationCampaignFollowUpProposalSummary
@@ -185,6 +190,7 @@ private:
         int memberCount,
         std::vector<RecommendationCampaignFollowUpProposalReason> reasons);
     friend struct RecommendationCampaignFollowUpProposalBuilder;
+    friend struct RecommendationCampaignFollowUpProposalPersistenceBuilder;
 };
 
 struct RecommendationCampaignFollowUpProposal
@@ -250,6 +256,7 @@ private:
         RecommendationCampaignFollowUpProposalSummary summary,
         std::vector<RecommendationCampaignFollowUpProposalMember> members);
     friend struct RecommendationCampaignFollowUpProposalBuilder;
+    friend struct RecommendationCampaignFollowUpProposalPersistenceBuilder;
 };
 
 RecommendationCampaignFollowUpProposalValidationView

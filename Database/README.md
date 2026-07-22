@@ -53,6 +53,9 @@ Recommendation conversion and campaign-approval history is created by:
   `experiment_recommendation_campaign_materialization` and
   `experiment_recommendation_campaign_materialization_member`, with
   invoker-rights provenance and deferred completeness enforcement
+- `042_experiment_recommendation_campaign_follow_up_proposal.sql`:
+  immutable exact Phase 6A proposal manifests and ordered members for Phase 6B
+  read-only operator preview
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -130,6 +133,13 @@ materialization membership and project bounded exact Phase 4C, experiment,
 model, final-inference, and final-analysis evidence. It takes no advisory or row
 lock, advances no sequence, writes no cached campaign state, and neither polls
 nor controls the scheduler or workers.
+Phase 6B adds append-only persistence for the exact immutable Phase 6A
+follow-up proposal. Canonical text remains authoritative, exact retries are
+idempotent, hash collisions remain distinct, and deferred completeness plus
+upstream-provenance triggers protect the ordered manifest. Runtime access is
+limited to `SELECT`, column-scoped `INSERT`, and sequence `USAGE`. The
+read-only preview path adds no approval, activation, execution, experiment,
+queue, scheduler, worker, or follow-up authorization behavior.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
