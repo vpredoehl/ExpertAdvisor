@@ -19,7 +19,10 @@ LSTM_DB_HOST=127.0.0.1 LSTM_DB_NAME=LSTM LSTM_DB_ADMIN_USER=vjp ./migrate_lstm_d
 ```
 
 The migration user must have enough PostgreSQL privileges to create tables,
-create indexes, and grant privileges to the runtime user `pqxx`.
+create indexes, and grant privileges to the runtime user `pqxx`. Campaign
+Operations migration `045` additionally requires authority to create or manage
+its NOLOGIN owner and capability roles and to transfer object ownership to its
+owner role.
 
 The LSTM runtime user `pqxx` should not need schema-creation privileges after
 migrations are applied. It only needs DML privileges on runtime tables such as
@@ -63,6 +66,10 @@ Recommendation conversion and campaign-approval history is created by:
   one immutable Phase 6D governance ratification per exact eligible approved
   Phase 6C review, with mandatory reviewer/ratifier separation and no Phase 6E
   or operational authority
+- `045_campaign_operations_foundation.sql`:
+  immutable Campaign Operations V1 campaign, optional exact Phase 6D
+  provenance, serialized authorization evidence, same-transaction audit
+  references, and disabled-by-default capability roles; no operational workflow
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -172,6 +179,17 @@ ratification remains non-operational evidence: it grants no Phase 6E
 capability and does not authorize follow-up or execution, activate, queue,
 schedule, signal/start the scheduler, launch a worker, create/modify an
 experiment or model, or declare campaign success.
+
+Campaign Operations Phase 1 adds only its foundational domain persistence.
+One immutable operational campaign binds one exact Phase 4D materialization;
+row existence directly derives `awaiting_operational_authorization`. Optional
+Phase 6D evidence is provenance/prerequisite only. Authorization history is an
+append-only, fork-resistant chain whose persisted kinds are exactly `granted`,
+`revoked`, and `expiry_observed`; supersession is represented by one successor
+`granted` row. The migration creates separate NOLOGIN capability roles but does
+not grant them to `pqxx`, so no runtime workflow is enabled. It creates no
+budget, reservation, request, dispatch, cancellation, completion, lifecycle,
+scheduler, worker, UI, or CLI behavior.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
