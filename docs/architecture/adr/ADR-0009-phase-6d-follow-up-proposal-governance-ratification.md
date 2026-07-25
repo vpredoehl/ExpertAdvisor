@@ -1,6 +1,6 @@
 # ADR-0009: Phase 6D ratifies governance advancement after approved review
 
-Status: Proposed
+Status: Accepted
 Date: 2026-07-22
 Deciders: Project architecture
 Affected volumes: Volume VIII §§2–11; Volume XII §§2–11
@@ -19,7 +19,7 @@ independent authorized actor has inspected the exact approved review and full
 provenance and ratified advancement into the next separately controlled
 phase. That evidence must not itself grant the next phase's capabilities.
 
-## 2. Proposed decision
+## 2. Decision
 
 Phase 6D defines pure immutable governance ratification, additive migration
 044, an exact-binding append-only repository, and one transactional service.
@@ -47,8 +47,9 @@ Phase 6D defines pure immutable governance ratification, additive migration
   `USAGE` only. Existing ratifications cannot be updated or removed.
 - Phase 6D adds no CLI or operational adapter.
 
-Ratification is governance evidence only. It grants no Phase 6E capability,
-follow-up authorization, execution authorization, or lifecycle authority.
+Ratification is governance evidence only. It grants no Campaign Operations
+capability, follow-up authorization, execution authorization, or lifecycle
+authority. Any later operational consumer requires its own accepted authority.
 
 ## 3. Rationale and decision drivers
 
@@ -95,12 +96,23 @@ follow-up authorization, execution authorization, or lifecycle authority.
 
 ## 5. Compatibility and migration
 
-Migration 044 is uncommitted and undeployed, so it is replaced in place rather
-than followed by migration 045. It is additive after migration 043 and does
-not alter Phase 6A, 6B, or 6C rows, identities, APIs, or privileges. It touches
-no experiment, model, continuation, lifecycle, queue, or scheduler table.
+Migration 044 and its Phase 6D domain, repository, service, and tests were
+implemented and committed before this acceptance alignment. Migration 044 is
+additive after migration 043 and does not alter Phase 6A, 6B, or 6C rows,
+identities, APIs, or privileges. It touches no experiment, model,
+continuation, lifecycle, queue, Campaign Operations, or scheduler table.
 
-## 6. Verification and operational evidence
+## 6. Implementation implications
+
+- The Phase 6D service validates and persists governance evidence only; it has
+  no Campaign Operations, lifecycle, experiment, scheduler, or worker adapter.
+- Consumers may validate the exact immutable ratification as prerequisite or
+  provenance, but must also possess their own accepted operational authority.
+- The historical negative canonical field remains byte-compatible and cannot
+  be reinterpreted as a roadmap phase or positive capability.
+- Existing migration 044 rows and canonical identities remain unchanged.
+
+## 7. Verification and operational evidence
 
 - Pure warnings-as-errors tests for immutable semantics, fixed role and
   decisions, golden canonical/hash, locale, UTF-8/DEL validation, separation
@@ -112,29 +124,37 @@ no experiment, model, continuation, lifecycle, queue, or scheduler table.
 - Phase 6A/6B/6C regression tests, exact Xcode project membership, diff audit,
   and an incremental Release build only when scheduler-worker load is safe.
 
-## 7. Alternatives considered
+## 8. Alternatives considered
 
-### 7.1 Keep a second administrative approval
+### 8.1 Keep a second administrative approval
 
 Rejected because it repeats Phase 6C without a distinct question, role,
 policy, or consequence.
 
-### 7.2 Allow the Phase 6C reviewer to ratify
+### 8.2 Allow the Phase 6C reviewer to ratify
 
 Rejected because no committed authority permits self-ratification and it
 would remove the independent governance check that distinguishes Phase 6D.
 
-### 7.3 Treat Phase 6C approval as automatic ratification
+### 8.3 Treat Phase 6C approval as automatic ratification
 
 Rejected because merits review does not establish the separate governance
 decision to advance.
 
-### 7.4 Add Phase 6E activation or execution authority
+### 8.4 Add activation or execution authority
 
 Rejected because the next phase requires a separate accepted capability and
 operational safety design.
 
-## 8. References
+## 9. Relationships to other ADRs
+
+- ADR-0006 through ADR-0008 define the exact advisory proposal, persistence,
+  and administrative merits-review chain consumed by Phase 6D.
+- ADR-0010 permits a ratification to be optional Campaign Operations
+  prerequisite/provenance while retaining Phase 4D as the only V1 origin.
+- ADR-0011 remains the only operational permission to act.
+
+## 10. References
 
 - [Volume VIII](../Volume_VIII_Recommendation_Engine.md)
 - [Volume XII](../Volume_XII_Database.md)
@@ -148,8 +168,9 @@ operational safety design.
 - [ADR-0007](ADR-0007-phase-6b-follow-up-proposal-persistence.md)
 - [ADR-0008](ADR-0008-phase-6c-follow-up-proposal-administrative-review.md)
 
-## 9. Revision history
+## 11. Revision history
 
 | Date | Change |
 |---|---|
 | 2026-07-22 | Proposed distinct Phase 6D governance ratification with mandatory separation of duties and no Phase 6E capability. |
+| 2026-07-24 | Accepted the implemented governance-only contract, aligned migration history, and clarified that later operational authority must be separate. |

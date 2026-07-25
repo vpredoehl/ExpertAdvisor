@@ -77,7 +77,15 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0006](ADR-0006-phase-6a-follow-up-proposal.md) | Accepted | Phase 6A follow-up proposals are pure, identity-bound, and non-authorizing. |
 | [ADR-0007](ADR-0007-phase-6b-follow-up-proposal-persistence.md) | Accepted | Phase 6B persists exact advisory proposals for read-only preview without action authority. |
 | [ADR-0008](ADR-0008-phase-6c-follow-up-proposal-administrative-review.md) | Accepted | Phase 6C records one immutable administrative proposal review without action authority. |
-| [ADR-0009](ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md) | Proposed | Phase 6D separately ratifies governance advancement after an approved review, with mandatory separation of duties and no Phase 6E authority. |
+| [ADR-0009](ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md) | Accepted | Phase 6D separately ratifies governance advancement after an approved review, with mandatory separation of duties and no operational authority. |
+| [ADR-0010](ADR-0010-campaign-operations-ownership-and-scope.md) | Accepted | Campaign Operations owns bounded orchestration over one exact Phase 4D materialization. |
+| [ADR-0011](ADR-0011-campaign-operational-authorization.md) | Accepted | One explicit append-only grant chain is the only Campaign Operations permission to act. |
+| [ADR-0012](ADR-0012-campaign-budget-and-reservations.md) | Accepted | One member-unit ledger and deterministic reservations own campaign budget accounting. |
+| [ADR-0013](ADR-0013-operational-request-and-handoff.md) | Accepted | A durable request/outbox precedes one atomic accepted Phase 5 lifecycle handoff. |
+| [ADR-0014](ADR-0014-campaign-lifecycle-controls-completion-and-archival.md) | Accepted | Derived campaign lifecycle, campaign-only controls, completion, and non-destructive archival remain separate from experiment execution. |
+| [ADR-0015](ADR-0015-cancellation-reconciliation-and-recovery.md) | Accepted | Cancellation intent/settlement, detection-only reconciliation, and bounded recovery preserve owning-service authority. |
+| [ADR-0016](ADR-0016-scheduler-atomic-claim-hardening.md) | Accepted | Scheduler-owned atomic claim hardening gates production campaign dispatch. |
+| [ADR-0017](ADR-0017-campaign-privileges-and-audit.md) | Accepted | Separate least-privilege capabilities, invoker-rights Phase 5 invocation, and append-only audit prevent authority overlap. |
 
 ## 8. Revision history
 
@@ -89,3 +97,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.3.0 | 2026-07-20 | Added ADR-0007 for exact append-only Phase 6B persistence and read-only preview. |
 | 1.4.0 | 2026-07-21 | Added ADR-0008 for exact append-only Phase 6C administrative review without action authority. |
 | 1.5.0 | 2026-07-22 | Proposed ADR-0009 for exact append-only Phase 6D governance ratification with mandatory separation of duties and no Phase 6E authority. |
+| 1.6.0 | 2026-07-24 | Accepted ADR-0009 and ADR-0010 through ADR-0017 to close Phase 6D and Campaign Operations architectural authority. |

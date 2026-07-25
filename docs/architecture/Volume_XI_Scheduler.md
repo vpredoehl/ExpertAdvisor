@@ -1,8 +1,8 @@
 # Volume XI — Scheduler
 
-Status: Foundation outline
-Version: 0.1.0
-Last revised: 2026-07-15
+Status: Foundation with accepted atomic-claim hardening; hardening not implemented
+Version: 0.2.0
+Last revised: 2026-07-24
 
 ## 1. Purpose
 
@@ -34,6 +34,13 @@ suppresses ordinary train, infer, analyze, checkpoint, and continuation
 launches. Unix suspension is separate from experiment lifecycle status. See
 [`GlobalExperimentControls.rst`](../GlobalExperimentControls.rst) for operator,
 process-identity, checkpoint, inference, dry-run, and restart semantics.
+
+ADR-0016 accepts the required hardening of ordinary scheduler claims: an exact
+pending/phase recheck, durable scheduler-attempt identity, and conditional
+lifecycle claim must commit atomically before process launch. Repository review
+found that this target is not yet fully implemented. Campaign Operations
+production dispatch therefore remains disabled; its accepted handoff produces
+only ordinary experiments and adds no scheduler work class.
 
 ## 3. Responsibilities
 
@@ -69,8 +76,9 @@ outcome → release capacity.
 ### 4.3 Ownership boundaries
 
 Lifecycle services define legal transitions; scheduler selects and claims;
-workers calculate and report; repositories persist. Advisory subsystems cannot
-enter this flow without an accepted ADR.
+workers calculate and report; repositories persist. Campaign Operations ends
+at accepted lifecycle handoff and may observe scheduler/lifecycle evidence
+read-only. The scheduler does not read Campaign Operations policy tables.
 
 ## 5. Data model
 
@@ -194,7 +202,7 @@ Typed work classes, capacity policies, claim services, and worker adapters.
 ### 11.2 Deferred capabilities
 
 Distributed schedulers, remote workers, priority budgets, and research-campaign
-integration.
+priority/capacity policy.
 
 ### 11.3 Required decisions
 
@@ -205,6 +213,7 @@ idempotency, recovery, operator control, and regression scope.
 
 - [Volume I §§8–10](Volume_I_Foundation.md)
 - [ADR-0004](adr/ADR-0004-scheduler-ownership-boundaries.md)
+- [ADR-0016](adr/ADR-0016-scheduler-atomic-claim-hardening.md)
 - [Volume VII](Volume_VII_Experiment_Lifecycle.md)
 - [Volume XII](Volume_XII_Database.md)
 
@@ -213,3 +222,4 @@ idempotency, recovery, operator control, and regression scope.
 | Version | Date | Change | ADR |
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Established scheduler ownership and safety outline. | ADR-0004 |
+| 0.2.0 | 2026-07-24 | Accepted atomic claim/attempt hardening, preserved ordinary experiment work classes, and gated Campaign Operations production dispatch pending implementation and independent verification. | ADR-0004, ADR-0016 |

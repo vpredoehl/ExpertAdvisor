@@ -12,9 +12,10 @@ records one immutable ``approved`` or ``rejected`` administrative review.
 
 Phase 6D asks whether, given that exact approved review and its complete
 authoritative provenance, an authorized governance actor ratifies advancement
-of the reviewed proposal into the next separately controlled phase.  The only
-positive Phase 6D decision is ``ratified``.  Ratification is immutable
-governance evidence; it does not grant any capability in Phase 6E.
+of the reviewed proposal for possible consideration by a separately controlled
+consumer.  The only positive Phase 6D decision is ``ratified``.  Ratification
+is immutable governance evidence; it grants no Campaign Operations or other
+operational capability.
 
 Eligibility and separation of duties
 ------------------------------------
@@ -62,8 +63,9 @@ The canonical grammar begins with
 It encodes the exact review and proposal provenance, reviewer, approved-review
 eligibility, fixed authority role, ``ratified`` decision, ratifier, basis,
 ``separation_of_duties_required=true``, and the advancement-only governance
-meaning.  It also fixes ``phase_6e_capability_granted=false`` and all negative
-operational authority fields.
+meaning.  The historical version-1 field
+``phase_6e_capability_granted=false`` remains part of canonical compatibility;
+it and all negative operational-authority fields deny downstream capability.
 
 Delimiter-capable values use byte-length framing.  Decimal integers and byte
 lengths use the classic locale.  Canonical text is authoritative and bounded
@@ -119,12 +121,11 @@ trigger-function execution.  Privilege verification treats NULL ACLs through
 PostgreSQL defaults, including lowercase sequence object type ``s``.
 
 Ratification does not activate or execute anything; authorize follow-up or
-campaign execution; queue or schedule work; signal or start the scheduler;
+Campaign Operations; queue or schedule work; signal or start the scheduler;
 launch workers; create or modify experiments, models, recommendations, or
 continuations; declare campaign success or profitability; or claim
-statistical validation.  Phase 6E remains a separate authority because any
-later capability requires its own accepted contract, transaction, safety
-rules, and explicit consumer.
+statistical validation.  Any later capability requires its own accepted
+contract, transaction, safety rules, and explicit consumer.
 
 Verification and operational safety
 -----------------------------------

@@ -1,8 +1,8 @@
 # Volume VIII — Recommendation Engine
 
-Status: Foundation aligned through Phase 6C; proposed Phase 6D recorded
-Version: 2.4.0
-Last revised: 2026-07-22
+Status: Foundation aligned through accepted and implemented Phase 6D
+Version: 2.5.0
+Last revised: 2026-07-24
 
 ## 1. Purpose
 
@@ -41,11 +41,11 @@ Phase 6C records exactly one immutable approved or rejected administrative
 review for one exact persisted Phase 6B proposal. Approval permits only possible
 consideration by a later explicitly authorized phase; it grants no action,
 follow-up, lifecycle, experiment, worker, or scheduler authority.
-Phase 6D separately records one immutable governance ratification for
-advancement of one exact persisted Phase 6C ``approved`` review into the next
-separately controlled phase. The fixed ratifier role and mandatory reviewer/
-ratifier separation make this authority distinct from merits review. It grants
-no Phase 6E capability or operational authority.
+Phase 6D separately records one immutable governance ratification for possible
+advancement of one exact persisted Phase 6C ``approved`` review to a separately
+controlled consumer. The fixed ratifier role and mandatory reviewer/ratifier
+separation make this authority distinct from merits review. It grants no
+Campaign Operations or other operational authority.
 
 ## 2. Scope
 
@@ -65,7 +65,7 @@ follow-up proposal are in scope as advisory values. Phase 6B exact append-only
 proposal persistence/read-only preview and Phase 6C explicit immutable
 administrative review/read-only presentation are also in scope. Phase 6D exact
 append-only governance ratification and its transactional typed service are in
-scope without Phase 6E, activation, or execution capability.
+scope without activation or execution capability.
 
 ### 2.2 Out of scope
 
@@ -119,8 +119,9 @@ review evidence only and no activation or execution adapter.
 Phase 6D loads one exact Phase 6C event and permits only its ``approved``
 outcome to receive one separately identified append-only ``ratified``
 governance decision from a different actor under the fixed
-``follow_up_governance_ratifier`` role. It adds no Phase 6E, activation, or
-execution adapter.
+``follow_up_governance_ratifier`` role. It adds no activation or execution
+adapter; the historical Phase 6E-named negative canonical field remains
+compatibility evidence, not a roadmap phase.
 Detailed contracts remain in the Phase documents referenced in §12.
 
 ## 3. Responsibilities
@@ -168,11 +169,11 @@ Phase 6C approval MUST NOT be treated as activation, execution authorization,
 follow-up authorization, queueing, scheduling, scheduler work, worker launch,
 experiment creation/modification, campaign success, profitability, or
 statistical validation.
-Phase 6D governance ratification MUST NOT be treated as Phase 6E capability,
-activation, execution authorization, follow-up authorization, queueing,
-scheduling, scheduler work, worker launch, experiment/model creation or
-modification, continuation advancement, campaign success, profitability, or
-statistical validation.
+Phase 6D governance ratification MUST NOT be treated as Campaign Operations or
+other downstream capability, activation, execution authorization, follow-up
+authorization, queueing, scheduling, scheduler work, worker launch,
+experiment/model creation or modification, continuation advancement, campaign
+success, profitability, or statistical validation.
 
 ## 4. Architecture
 
@@ -241,7 +242,7 @@ persist and preview only that exact value; it introduces no downstream action
 arrow. Phase 6C may record only one administrative decision and likewise adds
 no downstream action arrow. Phase 6D may record only one separate governance
 ratification of advancement after an eligible Phase 6C review and also adds no
-downstream action arrow or Phase 6E capability.
+downstream action arrow or operational capability.
 
 ### 4.3 Ownership boundaries
 
@@ -729,9 +730,9 @@ advancement after one exact persisted Phase 6C approved review. Its canonical
 binds the complete review and proposal identity, reviewer, fixed role,
 distinct ratifier, basis, and separation policy. Exact retry is idempotent;
 every changed payload conflicts. The service loads rather than reconstructs
-the authoritative upstream chain. Phase 6D adds no CLI, Phase 6E, activation,
-execution, follow-up authorization, scheduler, worker, experiment, model,
-continuation, or success capability.
+the authoritative upstream chain. Phase 6D adds no CLI, Campaign Operations,
+activation, execution, follow-up authorization, scheduler, worker, experiment,
+model, continuation, or success capability.
 
 ## 12. References
 
@@ -798,3 +799,4 @@ continuation, or success capability.
 | 2.2.0 | 2026-07-20 | Recorded exact append-only Phase 6B proposal persistence, immutable validated reload, and read-only preview without operator-decision or action authority. | ADR-0001, ADR-0004, ADR-0006, ADR-0007 |
 | 2.3.0 | 2026-07-21 | Recorded exact append-only Phase 6C approved/rejected administrative review, deterministic replay/conflict, and read-only presentation without action authority. | ADR-0001, ADR-0004, ADR-0006, ADR-0007, ADR-0008 |
 | 2.4.0 | 2026-07-22 | Recorded proposed append-only Phase 6D governance ratification after one eligible Phase 6C review, mandatory separation of duties, and deterministic replay/conflict without Phase 6E authority. | ADR-0001, ADR-0004, ADR-0006, ADR-0007, ADR-0008, ADR-0009 |
+| 2.5.0 | 2026-07-24 | Aligned accepted and implemented Phase 6D as governance-only prerequisite/provenance with no Campaign Operations authority. | ADR-0009, ADR-0010 |

@@ -1,43 +1,44 @@
 # Campaign Operations Architecture
 
-Status: **Corrected candidate baseline; not yet accepted implementation authority**
+Status: **Accepted Campaign Operations V1 architecture**
 
-Architecture contract version: **1.1-candidate**
+Architecture contract version: **1.2**
 
-Operational implementation status: **Not implemented**
+Operational implementation status: **Phase 1 foundation implemented; later increments not implemented**
 
-Last amended: **2026-07-22**
+Last amended: **2026-07-24**
 
 # 1. Executive Decision, Authority, and Acceptance Status
 
-This file is the repository's authoritative Campaign Operations amendment target and
-the complete *candidate* specification; it is not yet governing architecture authority.
-It is the only Campaign Operations architecture artifact amended by this change. It is complete
-enough for Phase A decision work, but it does not make itself governing merely by being
-complete. Under Volume I §16 and the ADR index, material identity, ownership, schema,
-transaction, scheduler, lifecycle, and privilege decisions become implementation
-authority only through the accepted ADRs identified in §30. A Proposed ADR is not
-implementation authority.
+This file is the repository's detailed normative Campaign Operations V1
+specification and the accepted refinement of Volume X. Its authority comes
+from accepted ADR-0010 through ADR-0017; it does not override those ADRs or
+Volume I. A Proposed ADR remains non-authoritative.
 
 The current authority facts are deliberately separate:
 
-- **Operational implementation status:** Recommendation Governance Phases 4–6,
-  including the Phase 6D implementation and migration 044, exist as committed
-  implementation evidence. Campaign Operations has no production implementation.
-- **Architectural acceptance status:** ADR-0003 through ADR-0008 are Accepted.
-  ADR-0009 remains Proposed, as do all not-yet-authored Campaign Operations ADRs.
-  Consequently this document is a corrected candidate baseline, not an Accepted ADR or
-  authority to migrate, dispatch, or activate a campaign.
-- **Documentation-alignment work:** the proper decider must independently decide
-  ADR-0009; only after an explicit acceptance decision may ADR-0009, the ADR index,
-  Volumes VIII and XII, and the Phase 6D implementation document be aligned as listed
-  in §3. ADR-0010 must then be accepted as the first Campaign Operations authority.
-  This amendment records those required actions but does not perform or presume them.
+- **Operational implementation status:** Recommendation Governance Phases 4–6
+  are implemented. Campaign Operations Phase 1 implements foundational pure
+  value/canonical/validation contracts, budget arithmetic, and completion
+  classification helpers; migration 045 and its repositories persist only the
+  immutable campaign, optional governance provenance, authorization, and
+  audit foundation. Budget persistence, reservation, request, dispatch,
+  campaign controls, reconciliation, completion persistence, and archival read
+  behavior are not implemented unless later repository evidence says
+  otherwise.
+- **Architectural acceptance status:** ADR-0009 and ADR-0010 through ADR-0017
+  are Accepted. Volume X incorporates this specification as its detailed V1
+  contract.
+- **Production enablement status:** architecture acceptance authorizes bounded
+  implementation under the per-increment gates in §31. It does not grant
+  database-role membership, enable a runtime service, operate a scheduler, or
+  permit production dispatch. ADR-0016 implementation and independent
+  verification remain prerequisites for production dispatch.
 
-The executive decision of this candidate is to define Campaign Operations as a new,
-bounded subsystem for durable, long-lived coordination of explicitly authorized work
-over one exact Phase 4D materialization. It is not a new Recommendation Governance
-phase and must never be called Phase 6E.
+Campaign Operations is a bounded subsystem for durable, long-lived
+coordination of explicitly authorized work over one exact Phase 4D
+materialization. It is not a new Recommendation Governance phase and must
+never be called Phase 6E.
 
 Campaign Operations is a new, bounded subsystem for durable, long-lived coordination of explicitly authorized recommendation-campaign work. It does not extend Recommendation Governance, replace Experiment Lifecycle, allocate scheduler capacity, supervise workers, or interpret scientific results.
 
@@ -82,9 +83,9 @@ The central decisions are:
   implemented, and independently verified; only then may production dispatch be
   enabled.
 
-The first implementation increment is documentation and ADR work only. No production
-implementation, migration, campaign activation, experiment creation, or scheduler
-change is authorized by this document.
+Implementation remains incremental. Architecture acceptance never authorizes
+production data mutation, deployment, scheduler operation, or role enablement
+without a separately scoped implementation or operational task.
 
 # 2. Repository-Grounded Context
 
@@ -118,48 +119,19 @@ Phase 6D is implementation-complete within its deliberately non-operational scop
 - The Xcode project includes the implementation.
 - Volume VIII states that Phases 6A–6D are implemented.
 
-Formal architectural acceptance is not currently demonstrable, however:
+Formal architectural closure is now complete:
 
-- ADR-0009 says `Status: Proposed`.
-- Its decision section is titled “Proposed decision.”
-- Its migration section says migration 044 is “uncommitted and undeployed,” despite migration 044 and the implementation being committed at HEAD.
-- The ADR index lists ADR-0009 as `Proposed`.
-- Volume VIII says “proposed Phase 6D recorded.”
-- Volume XII says “proposed Phase 6D recorded.”
-- Both affected volumes describe Phase 6D as implemented while their status and revision history still call it proposed.
-- `AGENTS.md` also has stale development-status text: it names branch `phase6`, omits Phase 6D from completed work, while the actual branch is `campaign-operations`.
+- ADR-0009 is Accepted and records the implemented migration 044 history.
+- The ADR index and Volumes VIII/XII align Phase 6D as implemented,
+  governance-only evidence.
+- Phase 6D documentation states that any operational consumer requires its own
+  accepted authority; it does not imply a Phase 6E roadmap.
+- ADR-0010 through ADR-0017 accept the bounded Campaign Operations ownership,
+  authorization, accounting, request/handoff, lifecycle, recovery, scheduler,
+  privilege, and audit decisions.
 
-Under Volume I §16 and the ADR status definitions, “Proposed” is not implementation authority. The correct conclusion is therefore:
-
-- Operational implementation status: complete for Phase 6D’s governance-only contract.
-- Formal architectural closure: incomplete until project architecture records acceptance and aligns the documentation.
-
-Required documentation-only corrections, after acceptance is confirmed:
-
-1. ADR-0009:
-   - change status to `Accepted`;
-   - rename “Proposed decision” to “Decision”;
-   - replace the stale “uncommitted and undeployed” statement with implemented migration history;
-   - add an acceptance/implementation-alignment revision entry;
-   - express the negative boundary as “no operational authorization or downstream capability,” without inventing a Phase 6E roadmap item.
-
-2. ADR index:
-   - change ADR-0009’s index status to `Accepted`;
-   - add a revision-history entry recording acceptance.
-
-3. Volume VIII:
-   - change the volume status to aligned through accepted and implemented Phase 6D;
-   - replace the revision-history word “proposed”;
-   - retain the absolute prohibition against treating ratification as operational authority.
-
-4. Volume XII:
-   - make the equivalent status and revision-history corrections;
-   - retain migration 044’s append-only and least-privilege boundaries.
-
-5. Phase 6D implementation document:
-   - replace prospective wording that “Phase 6E remains” with the neutral statement that any future operational capability requires its own accepted authority.
-
-No Campaign Operations implementation may rely on the current Proposed/Accepted ambiguity. No Phase 6E should be invented merely to continue numbering.
+Phase 6D remains optional prerequisite/provenance for the same exact Phase 4D
+scope and never becomes operational authorization.
 
 # 4. Scope and Architectural Rationale
 
@@ -427,8 +399,11 @@ The names below are normative conceptual names; the accepted schema ADR may add 
 project prefix without changing meaning. All canonical columns use PostgreSQL `C`
 collation. Every foreign key is `ON DELETE RESTRICT`. Generated row IDs and
 `created_at` values are locator/audit metadata, never semantic identity. Hash indexes
-are accelerators; authoritative uniqueness is enforced by direct natural columns or
-canonical text as well as canonical comparison in repositories.
+are non-unique accelerators; authoritative database uniqueness is enforced by bounded
+typed natural columns. Potentially oversized canonical text MUST NOT be a direct
+B-tree uniqueness key. Repositories always compare complete canonical bytes after a
+natural-key/hash lookup, so hash collisions remain distinct and changed payloads
+conflict deterministically.
 
 Append-only tables deny runtime `UPDATE`, `DELETE`, and `TRUNCATE`, accept only
 payload-column `INSERT`, protect generated columns, and use insert triggers only for
@@ -442,21 +417,21 @@ event in the same transaction. No process-local mutex supplies durable correctne
 
 | Table | Purpose, primary/foreign keys | Natural uniqueness, checks, immutability, and indexes | Runtime access and projection relationship |
 |---|---|---|---|
-| `campaign_operations_campaign` | PK `operational_campaign_id`; restrictive FK to the exact Phase 4D materialization. Immutable materialization ID/version/canonical/hash, fixed origin literal, action-scope contract, campaign canonical/hash. The successfully inserted row is the authoritative creation fact and derives initial state `awaiting_operational_authorization`. | `UNIQUE(materialization_id)` enforces at most one V1 campaign independent of provenance. `CHECK(origin_kind='phase4d_materialization_v1')`; supported versions, non-empty canonical, tagged-hash shape, and exact member count checks. Unique canonical identity plus hash lookup index. | Owned by `campaign_operations_owner`; payload insert only to `campaign_operations_campaign_creator`; all Campaign Operations services may read. It is not a mutable status row; its same-transaction audit reference proves creation causality but is not competing state authority. |
-| `campaign_operations_governance_provenance_event` | PK event ID; FKs to campaign and exact Phase 6D ratification/review/proposal chain. Optional provenance/prerequisite evidence only. | Unique `(campaign_id, ratification_event_id)` and canonical identity; exact copied canonical/hash fields validated by trigger and reload. Append-only. It cannot change origin, scope, grant, or request state. | Insert only to authorizer role; read to authorization/audit roles. No scheduler/lifecycle privileges. |
+| `campaign_operations_campaign` | PK `operational_campaign_id`; restrictive FK to the exact Phase 4D materialization. Immutable materialization ID/version/canonical/hash, fixed origin literal, action-scope contract, campaign canonical/hash. The successfully inserted row is the authoritative creation fact and derives initial state `awaiting_operational_authorization`. | `UNIQUE(materialization_id)` enforces at most one V1 campaign independent of provenance. `CHECK(origin_kind='phase4d_materialization_v1')`; supported versions, non-empty canonical, tagged-hash shape, and exact member count checks. The canonical hash index is non-unique; exact canonical comparison decides replay/conflict. | Owned by `campaign_operations_owner`; payload insert only to `campaign_operations_campaign_creator`; all Campaign Operations services may read. It is not a mutable status row; its same-transaction audit reference proves creation causality but is not competing state authority. |
+| `campaign_operations_governance_provenance_event` | PK event ID; FKs to campaign and exact Phase 6D ratification/review/proposal chain. Optional provenance/prerequisite evidence only. | Unique typed `(campaign_id, ratification_event_id)` natural key; non-unique hash index; exact copied canonical/hash fields validated by trigger, hydration, and full canonical replay comparison. Append-only. It cannot change origin, scope, grant, or request state. | Insert only to authorizer role; read to authorization/audit roles. No scheduler/lifecycle privileges. |
 | `campaign_operations_authorization_event` | PK authorization event ID; FK campaign; self-FK `previous_event_id`; immutable effective event kind (`granted`, `revoked`, or `expiry_observed`), exact prerequisite evidence, action/scope, fixed role, actor/reason, `not_before`, nullable `expires_at`, canonical/hash. `supersede` is a service operation represented by one successor `granted` row. | Unique `(campaign_id, action_kind, scope_contract_version, chain_version)` and unique non-null `previous_event_id`; chain version positive and predecessor exactly `n-1`; event-shape checks. A unique prior edge plus the transaction rule prevents competing successors/heads. No `superseded` kind or row exists. Append-only; indexes on chain head and canonical hash. | Payload insert only through authorizer transition capability. Dispatch/reservation read. No budget, request, lifecycle, or scheduler mutation grant. |
 | `campaign_operations_budget_ledger_entry` | PK budget entry ID; FK campaign; self-FK prior entry. The **only** budget authority. Immutable version, kind (`grant`, `amend`, `revoke`, `supersede`), signed delta, prior total, resulting total, unit literal, status, actor/reason, canonical/hash. | Unique `(campaign_id, ledger_version)` and unique non-null prior entry; `resulting_total=prior_total+delta`, all totals nonnegative, first entry is `grant`, `revoke` produces `revoked` head, `supersede` is required to leave a revoked head. Under-lock service check and deferred constraint require `resulting_total >= committed+held`. Index campaign/version descending and hash. Append-only. No separate snapshot or adjustment table exists. | Insert only to budget administrator. Reservation/dispatch/completion read. The latest entry is derived under lock, never copied into an authoritative mutable budget snapshot. |
-| `campaign_operations_reservation` | PK reservation ID; FKs campaign, accepting authorization grant, and budget entry; immutable logical-operation canonical/hash, exact full scope, unit type/amount, optional semantic expiry. Guarded `state`, `state_version`, and settlement event FK. | Unique logical-operation canonical and later unique consuming request; amount equals authoritative materialization member count; states `held|committed|released|expired|reconciliation_required`; terminal shape checks prohibit commitment after release/expiry and release/expiry after commitment. Index campaign/state/expiry and budget entry. | Insert/guarded transition only to reservation service; dispatcher gets only commit transition; cancellation/settlement gets release/expiry transition only through the §19 authorization-if-required → budget → campaign → reservation → request order. Current state is authoritative only with its same-transaction event history. |
-| `campaign_operations_reservation_event` | PK event ID; FK reservation and optional binding-set/request/cancellation/reconciliation cause. Immutable acquisition, commitment, release, expiry, or inconsistency evidence with prior/resulting versions and canonical/hash. | Unique `(reservation_id, resulting_state_version)` and canonical identity; shape checks tie event kind to state. Append-only; index reservation/version. | Insert only through the same named reservation transition that updates the reservation row. Read by audit/completion. |
-| `campaign_operations_request` | PK request ID; FKs campaign, exact accepting authorization grant, and reservation. Immutable logical-operation key, action/version, exact materialization canonical/hash and full member count, prerequisite identities, accepting actor/reason, request canonical/hash. Guarded state/version and dispatch lease fields. | `UNIQUE(campaign_id, action_kind, action_contract_version)` is the V1 full-scope logical-operation uniqueness domain; `UNIQUE(logical_operation_canonical)` and `UNIQUE(reservation_id)`. States are `ready|dispatching|bound|permanently_failed|cancelled|reconciliation_required`; no undefined `recorded` state. Lease fields are present only in `dispatching`; terminal states cannot lease. Index dispatchable state/lease expiry. | Request service inserts; dispatcher may acquire/clear lease and bind through named transitions; cancellation/settlement may terminalize. Immutable payload never changes. |
-| `campaign_operations_dispatch_attempt` | PK attempt ID; FK request. Immutable **acquisition** audit: ordinal, expected/resulting request version, lease token digest/expiry, dispatcher, canonical/hash. It contains no later outcome. | Unique `(request_id, attempt_ordinal)` and unique acquisition canonical. Attempt ordinal is allocated under request lock. Append-only; index request/ordinal. It is audit-only and never dispatch authority. | Dispatcher inserts on successful lease acquisition. All transition authorization comes from locked request state/version and lease, not this table. |
+| `campaign_operations_reservation` | PK reservation ID; FKs campaign, accepting authorization grant, and budget entry; immutable logical-operation canonical/hash, exact full scope, unit type/amount, optional semantic expiry. Guarded `state`, `state_version`, and settlement event FK. | Unique typed V1 logical-operation natural key and later unique consuming request; non-unique canonical-hash index; amount equals authoritative materialization member count; states `held|committed|released|expired|reconciliation_required`; terminal shape checks prohibit commitment after release/expiry and release/expiry after commitment. Index campaign/state/expiry and budget entry. | Insert/guarded transition only to reservation service; dispatcher gets only commit transition; cancellation/settlement gets release/expiry transition only through the §19 authorization-if-required → budget → campaign → reservation → request order. Current state is authoritative only with its same-transaction event history. |
+| `campaign_operations_reservation_event` | PK event ID; FK reservation and optional binding-set/request/cancellation/reconciliation cause. Immutable acquisition, commitment, release, expiry, or inconsistency evidence with prior/resulting versions and canonical/hash. | Unique typed `(reservation_id, resulting_state_version)` natural key; non-unique hash index and full canonical comparison; shape checks tie event kind to state. Append-only; index reservation/version. | Insert only through the same named reservation transition that updates the reservation row. Read by audit/completion. |
+| `campaign_operations_request` | PK request ID; FKs campaign, exact accepting authorization grant, and reservation. Immutable logical-operation key, action/version, exact materialization canonical/hash and full member count, prerequisite identities, accepting actor/reason, request canonical/hash. Guarded state/version and dispatch lease fields. | `UNIQUE(campaign_id, action_kind, action_contract_version)` is the V1 full-scope logical-operation uniqueness domain; `UNIQUE(reservation_id)` enforces one consumer. Canonical hash indexes are non-unique and full canonical comparison decides replay/conflict. States are `ready|dispatching|bound|permanently_failed|cancelled|reconciliation_required`; no undefined `recorded` state. Lease fields are present only in `dispatching`; terminal states cannot lease. Index dispatchable state/lease expiry. | Request service inserts; dispatcher may acquire/clear lease and bind through named transitions; cancellation/settlement may terminalize. Immutable payload never changes. |
+| `campaign_operations_dispatch_attempt` | PK attempt ID; FK request. Immutable **acquisition** audit: ordinal, expected/resulting request version, lease token digest/expiry, dispatcher, canonical/hash. It contains no later outcome. | Unique typed `(request_id, attempt_ordinal)` natural key; non-unique hash index and full canonical comparison. Attempt ordinal is allocated under request lock. Append-only; index request/ordinal. It is audit-only and never dispatch authority. | Dispatcher inserts on successful lease acquisition. All transition authorization comes from locked request state/version and lease, not this table. |
 | `campaign_operations_dispatch_attempt_outcome` | PK outcome ID; unique FK attempt; immutable terminal result, diagnostics, request/binding/reservation resulting versions, canonical/hash. | One outcome per attempt; outcome enum and causal-shape checks. Exact retry returns the row; changed outcome conflicts. Append-only; index result/reason. | Dispatcher or owning recovery transition inserts. It never changes request state by itself. |
 | `campaign_operations_request_binding` | PK binding ID; FKs request, exact materialization member, proposal, approving review, conversion execution, activation, and experiment. Immutable per-member creation/reuse dispositions and canonical/hash. | Unique `(request_id, materialization_member_id)`; exact proposal/member FKs; deferred completeness trigger requires exactly the persisted ordered materialization membership before request can become `bound`. Dispositions freeze `created` versus `adopted_existing_pending` and exact Phase 5 execution/activation results. Append-only; indexes request/member and experiment. | Insert only by dispatcher inside the accepted Phase 5 transaction. Lifecycle/scheduler cannot write it. Later experiment progress never invalidates it. |
 | `campaign_operations_downstream_control_owner` | PK control-owner ID; FKs binding, request, and experiment. Immutable V1 control attribution. | `UNIQUE(experiment_id)` and `UNIQUE(binding_id)`; mode is `created_control` or `authorized_adoption_control`. Adoption mode requires an authorization event containing `adopt_existing_pending_and_control`, enforced by service plus trigger. Append-only. V1 defines no transfer/release row or operation. | Dispatcher inserts atomically with binding. Cancellation may read and invoke lifecycle control but cannot update ownership. |
-| `campaign_operations_control_event` | PK control event ID; FK campaign and optional prior control event. Immutable `pause` or `resume`, expected control version, actor/capability/reason, canonical/hash. | Unique `(campaign_id, control_version)` and previous-event chain; alternating/legal-state checks; canonical uniqueness. Append-only; index campaign/version descending. | Campaign-control role inserts. Optional state projection is derived from the unique latest event. |
+| `campaign_operations_control_event` | PK control event ID; FK campaign and optional prior control event. Immutable `pause` or `resume`, expected control version, actor/capability/reason, canonical/hash. | Unique typed `(campaign_id, control_version)` natural key and previous-event chain; alternating/legal-state checks; non-unique hash index and full canonical comparison. Append-only; index campaign/version descending. | Campaign-control role inserts. Optional state projection is derived from the unique latest event. |
 | `campaign_operations_cancellation_request` | PK cancellation request ID; FKs campaign and optional request/binding/control-owner target. Immutable scope, expected target version, actor/capability/reason, canonical/hash. | Natural unique target/scope/logical cancellation key; exact replay returns existing and changed payload conflicts. Append-only; index unsettled target. It contains no mutable or future settlement reference. | Cancellation role inserts. It does not receive direct experiment update or process-signal privileges. |
 | `campaign_operations_cancellation_settlement` | PK settlement ID; FK cancellation request and exact reservation/request transition or lifecycle control evidence. Immutable disposition and canonical/hash. | Unique cancellation request ID for terminal settlement; dispositions include `unbound_cancelled`, `lifecycle_request_accepted`, `already_terminal`, `running_cancellation_not_supported`, and `inconsistent`. Append-only; causal-shape checks and index disposition. | Insert by cancellation coordinator only after the Campaign Operations transition or accepted lifecycle service returns authoritative evidence. |
-| `campaign_operations_reconciliation_observation` | PK observation ID; FK campaign and typed target. Immutable reconcile-run key, reason code, expected version, exact point-in-time evidence canonical/hash, recommended owning service/action, diagnostics, canonical/hash. | Unique observation canonical; reason/action enum checks. Append-only; bounded-query indexes by unresolved target, state, and ID cursor. Observation time is metadata. | Reconciler may read authoritative tables and insert observations only; it receives no repair mutation capability. |
+| `campaign_operations_reconciliation_observation` | PK observation ID; FK campaign and typed target. Immutable reconcile-run key, reason code, expected version, exact point-in-time evidence canonical/hash, recommended owning service/action, diagnostics, canonical/hash. | Unique bounded typed reconcile-run/target/evidence-version natural key; non-unique hash index and full canonical comparison; reason/action enum checks. Append-only; bounded-query indexes by unresolved target, state, and ID cursor. Observation time is metadata. | Reconciler may read authoritative tables and insert observations only; it receives no repair mutation capability. |
 | `campaign_operations_reconciliation_resolution` | PK resolution ID; FK observation and exact event/transition produced by an owning service. Immutable result, resolver service/capability, canonical/hash. | Unique observation ID for effective resolution; exact causal FK is required; routine observation cannot self-resolve. Append-only. Unresolved state is `observation LEFT JOIN resolution WHERE resolution IS NULL`, so historical observations do not permanently dominate. | Insert only by the owning transition service or a narrow resolution recorder after that service commits. The reconciler cannot forge it. |
 | `campaign_operations_completion_event` | PK completion ID; unique FK campaign. Immutable terminal administrative state, classification, exact budget/reservation/request/binding/cancellation summaries, point-in-time terminal lifecycle evidence, actor/service reason, canonical/hash. | One row per campaign; deferred validation requires all completion prerequisites and disjoint classification. Append-only; hash index. No override/supersession column exists in V1. | Insert only to completion service. Later lifecycle retry/requeue cannot update/delete it. |
 | `campaign_operations_audit_reference_event` | PK audit ID; FKs the exact authoritative domain event/transition and causal identities. Immutable actor/capability/reason, expected/prior/resulting version, stable outcome/diagnostic, replay disposition, database time. | One same-transaction reference per material action/result where applicable; checks require at least one authoritative cause and prohibit invented unrelated IDs. Append-only; indexes campaign, request, actor, cause, time. | Insert by each narrow service only for its own actions. It is an index over authority, never a competing truth table. |
@@ -510,7 +485,7 @@ Authoritative identity inputs, natural/database uniqueness, and replay behavior 
 | Governance provenance event | Campaign canonical; exact Phase 6D ratification/review/proposal IDs, versions, canonicals/hashes; prerequisite-policy version. | Unique campaign/ratification pair. Append-only. Retry exact or conflict; never changes campaign scope. |
 | Operational authorization event/grant | Campaign canonical; chain version/prior event; effective event kind (`granted`, `revoked`, or `expiry_observed`); exact action/scope; prerequisite evidence; fixed role; actor/reason; required `not_before`; `expires_at=none` or normalized instant. A supersede request canonically identifies the single successor `granted` event and exact prior head; `supersede` is not serialized as an event kind. | Unique campaign/action/scope/version and prior-event edge. Append-only chain. A supersede increments the chain once and exact retry returns that same successor grant; stale prior/version, changed payload, or a competing successor conflicts. Effective-head evaluation considers only the unique highest event and treats it as active only when it is `granted` and all checks pass. Time passing changes effectiveness, never identity. |
 | Budget grant/amendment/revocation/supersession | Campaign canonical; ledger version/prior entry; kind/status; unit literal; delta/prior/resulting totals; administrator/reason and exact cause. | Unique campaign/version and prior edge. Append-only single authority. Exact retry returns entry; stale version or changed payload conflicts. |
-| Logical operation | Campaign canonical; action kind/version; exact materialization canonical/hash and full-scope literal. It intentionally excludes authorization grant, actor, reason, time, dispatcher, and budget-ledger entry. | Unique V1 campaign/action/version and canonical. Immutable durable idempotency key. Changed request payload under this key conflicts; no later actor/grant creates a second operation. |
+| Logical operation | Campaign canonical; action kind/version; exact materialization canonical/hash and full-scope literal. It intentionally excludes authorization grant, actor, reason, time, dispatcher, and budget-ledger entry. | Unique typed V1 campaign/action/version natural key; canonical bytes are authoritative but are not a direct oversized-text unique key. Immutable durable idempotency key. Changed request payload under this key conflicts; no later actor/grant creates a second operation. |
 | Reservation | Logical-operation canonical; campaign; accepting grant; budget head/version; full member scope and count; integer amount/unit; `expires_at=none` or normalized instant. | Unique logical operation and unique later consuming request. Immutable payload plus guarded state/version. Exact create retry reloads; state-transition retry uses reservation-event identity. |
 | Reservation transition/settlement | Reservation canonical; transition kind; expected/resulting state/version; exact request/binding/cancellation/reconciliation cause; amount. | Unique reservation/resulting version. Append-only event paired with guarded projection update. Exact retry returns event; changed or stale transition conflicts. |
 | Operational request | Logical-operation canonical; campaign; accepting grant; reservation; action/version; exact materialization and ordered-scope digest/count; immutable accepting actor/reason and prerequisite canonicals. | Unique logical operation, campaign/action/version, and reservation. Immutable payload plus guarded state/version/lease. Exact replay returns request; any changed payload conflicts. |
@@ -551,7 +526,10 @@ Collision handling:
 - a hash match only selects candidate rows or a serialization bucket;
 - complete canonical text decides equality;
 - same hash/different canonical values remain distinct and observable;
-- lock-key collisions add serialization only.
+- lock-key collisions add serialization only;
+- potentially oversized canonical text is never a direct B-tree uniqueness
+  key; bounded typed natural keys enforce database uniqueness and canonical
+  hash indexes remain non-unique.
 
 Replay:
 
@@ -1785,12 +1763,10 @@ them. No test may launch a real scheduler/worker or mutate production experiment
     - no real scheduler or worker launch;
     - inspect production processes before any future controlled integration test.
 
-# 30. ADR Recommendations
+# 30. Accepted ADR Authority
 
 ADR-0010, Campaign Operations ownership and its bounded relationship to reserved Volume
-X, is the first new Campaign Operations authority and must be accepted before any
-Campaign Operations code or schema. The following decisions remain independently
-reviewable:
+X, is the first Campaign Operations authority. The accepted records are:
 
 1. ADR-0010: ownership, V1 Phase 4D-only origin/scope, and Volume X boundary.
 2. ADR-0011: operational authorization chain, prerequisite evidence, actions, actor
@@ -1808,37 +1784,34 @@ reviewable:
 8. ADR-0017: least-privilege roles, narrow Phase 5/lifecycle capabilities, projections,
    audit, and migration privilege rollout.
 
-There is no blanket “all ADRs before any implementation” gate. Each increment below
-names its exact accepted ADR prerequisites. A proposed ADR never governs its increment,
-but an unrelated future ADR does not block already governed work. ADR-0009 is separate:
-the proper decider must decide it and align Phase 6 documentation in Phase A; this
-document neither accepts it nor treats it as authority. ADR-0016 acceptance,
-implementation, and independent verification gate **production dispatch only**, not
-documentation, pure domain work, or non-scheduler persistence.
+There is no blanket “all future ADRs before any implementation” gate. Each
+increment below names its exact accepted prerequisites. A proposed later ADR
+never governs its increment, but an unrelated future ADR does not block
+already governed work. ADR-0009 is separately Accepted as governance-only
+upstream evidence. ADR-0016 implementation and independent verification gate
+**production dispatch only**, not documentation, pure domain work, or
+non-scheduler persistence.
 
 # 31. Recommended Implementation Phases
 
 Each increment preserves existing Phase 4–6, lifecycle, scheduler, and production data
 behavior at its commit boundary.
 
-## 31.1 Phase A — Authority and documentation closure
+## 31.1 Phase A — Authority and documentation closure (complete)
 
-- **Gate:** ADR-0009 formally Accepted by the proper decider and its documentation
-  aligned, then ADR-0010 Accepted. This records a required future decision; it does not
-  presume that the current Proposed ADR is accepted. If the decider rejects ADR-0009,
-  this candidate must be amended to remove the Phase 6D prerequisite option before
-  baseline acceptance.
+- **Gate:** Satisfied on 2026-07-24: ADR-0009 and ADR-0010 through
+  ADR-0017 are Accepted and the affected architecture documents are aligned.
 - **Scope/contracts:** freeze the terminology, ownership table, Phase 4D-only V1 origin,
-  and status of this candidate architecture.
+  and accepted status of this architecture.
 - **Persistence/services/CLI:** none.
 - **Tests:** link/status/authority consistency checks and an independent verification of
   all focused-CEE corrections plus the three final-verification amendments in §36.
 - **Migration effect:** none.
 - **Exclusions:** no code, schema, role, command, dispatch, campaign activation, or
   scheduler change.
-- **Acceptance criteria:** ADR-0009 is explicitly Accepted by its proper decider;
-  ADR/index/Volumes VIII/XII/Phase 6D wording agree; ADR-0010 is Accepted; no text
-  implies Phase 6E or ratification-as-authority.
+- **Acceptance criteria:** Satisfied: ADR/index/Volumes VIII/XII/Phase 6D
+  wording agree, the Campaign Operations ADR set is Accepted, and no current
+  contract treats Phase 6D ratification as operational authority.
 - **Rollback/recovery:** documentation corrections are normal reviewed changes; an
   accepted ADR is superseded, not silently reverted.
 
@@ -2007,12 +1980,12 @@ behavior at its commit boundary.
 
 # 32. Risks
 
-Blocking risks:
+Blocking production-dispatch risk:
 
-- ADR-0009 remains formally proposed.
-- Current scheduler claim behavior does not satisfy safe cancellation or multi-scheduler races.
-- Campaign Operations ADR-0010 and the per-increment ADRs do not yet exist/are not
-  accepted, so this candidate cannot authorize runtime work.
+- Current scheduler claim behavior does not yet satisfy the accepted
+  cancellation and multiple-scheduler contract. ADR-0016 is accepted, but its
+  implementation and independent verification remain required before
+  production dispatch.
 
 Implementation risks:
 
@@ -2044,27 +2017,27 @@ Operational risks:
 - operators confusing an active budget, governance ratification, accepted request,
   pending experiment, scheduler claim, lifecycle completion, and scientific outcome.
 
-# 33. Open Architectural Questions
+# 33. Resolved Ambiguities and Deferred Extensions
 
-The V1 domain decisions are closed. The following external institutional or owning-
-subsystem decisions remain genuinely unresolved and are explicit gates, not coding
-discretion:
+No implementation-blocking V1 architectural ambiguity remains. ADR-0011,
+ADR-0014, ADR-0016, and ADR-0017 resolve the five external questions recorded
+by the candidate review:
 
-1. Which institutional authority grants each database/application capability, and
-   whether ADR-0011/0017 will require human-principal inequalities beyond the already
-   fixed Phase 6 reviewer/ratifier inequality. Capability separation is mandatory now;
-   additional human separation is not inferred.
-2. The exact PostgreSQL implementation (invoker-rights repository grants versus a
-   narrowly security-defined function) for invoking Phase 5 atomically without broad
-   experiment privilege. ADR-0017 must choose while preserving §18 semantics.
-3. The scheduler-attempt/capacity schema and claim algorithm that will satisfy ADR-0004.
-   ADR-0016 owns it; Campaign Operations Phase E remains disabled/test-only meanwhile.
-4. What separately accepted lifecycle/operator authority, if any, may request stop or
-   pause for a running experiment when current ordinary cancellation rejects it.
-   Campaign Operations records the request/settlement and never signals the process.
-5. Retention and archival periods for append-only canonical payloads, attempts,
-   observations, and audit. No runtime deletion is permitted until an accepted retention
-ADR answers it.
+1. Database/security administration explicitly assigns separate NOLOGIN
+   capabilities to authenticated service principals. No additional human
+   inequality is inferred beyond Phase 6 reviewer/ratifier separation.
+2. The dispatcher uses an invoker-rights application adapter and the existing
+   caller-owned Phase 5 transaction primitive under a dedicated narrow role;
+   no security-definer business workflow or broad `pqxx` privilege is used.
+3. ADR-0016 fixes scheduler-owned atomic conditional claim plus durable attempt
+   identity. Its implementation/verification is a production-dispatch gate,
+   not coding discretion for Campaign Operations.
+4. Campaign Operations gains no power over running processes. If accepted
+   lifecycle cancellation refuses claimed/running work, it records that
+   settlement and waits for terminal lifecycle evidence.
+5. Completion produces non-destructive logical archival in read models.
+   Physical retention/deletion remains a future ADR; until then deletion is
+   prohibited and the absence of a retention period does not block V1.
 
 All listed objects are owned by `campaign_operations_owner`. In addition to each row's
 write rule, the authorization, budget, reservation/request, dispatch, cancellation,
@@ -2079,20 +2052,17 @@ everything else is revoked as specified in §24.
 
 A workflow that converts a Phase 6 follow-up into a new exact materialization, partial-
 member dispatch, adaptive budgeting, forecasting, autonomous selection, profitability,
-and scientific policy are excluded future capabilities, not unresolved V1 decisions.
+scientific policy, physical retention, running-worker stop authority, and new scheduler
+work classes are excluded future capabilities, not unresolved V1 decisions.
 
 # 34. Acceptance Preconditions
 
-## 34.1 Candidate-baseline acceptance
+## 34.1 Baseline acceptance
 
-This amended document may be accepted as the Campaign Operations Phase A baseline only
-after an independent verification confirms all 14 focused-CEE corrections and the three
-targeted final-verification amendments in §36 and the proper decider records that
-acceptance. ADR-0009 must be formally Accepted by its proper decider and related
-documents must be aligned; that future acceptance is not
-assumed or created by this document.
-ADR-0010 must be accepted as the first Campaign Operations authority and explicitly
-bound this subsystem against reserved Volume X.
+The Campaign Operations Phase A baseline is Accepted. The focused review and
+targeted amendments in §36 resolved the 17 recorded findings; ADR-0009 and
+ADR-0010 through ADR-0017 are Accepted; the ADR index, Volumes VIII/X/XI/XII,
+and Phase 6D documentation are aligned.
 
 ## 34.2 Implementation acceptance
 
@@ -2114,7 +2084,7 @@ remain non-interchangeable; accepted Phase 4C/5 and lifecycle services are never
 bypassed; scheduler isolation is absolute; and production data/processes remain
 untouched by tests.
 
-Candidate acceptance additionally requires that campaign creation directly establishes
+Baseline acceptance additionally fixes that campaign creation directly establishes
 `awaiting_operational_authorization`, authorization supersession persists exactly one
 successor `granted` event, and every held-reservation settlement follows the §19
 budget-first order without changing the established retry, crash, ambiguity, or
@@ -2122,18 +2092,19 @@ reconciliation contracts.
 
 # 35. Overall Readiness Assessment
 
-This amended architecture is a complete, internally consistent candidate specification
-ready for independent baseline verification and Phase A ADR work. It is not itself an
-Accepted ADR and therefore does not authorize Campaign Operations migrations or runtime
-implementation.
+This architecture is a complete, internally consistent Accepted specification
+under ADR-0010 through ADR-0017. It authorizes bounded Campaign Operations
+implementation increment by increment under §31; it does not authorize
+deployment, production data mutation, role membership, or scheduler operation.
 
 The fixed upstream architecture supplies strong foundations: immutable materialization membership, exact canonical provenance, reusable Phase 5 transaction primitives, PostgreSQL transactions, and read-only lifecycle projections.
 
-The executable V1 scope question is closed: only one exact Phase 4D materialization is
-an origin, and Phase 6D is optional prerequisite/provenance. Remaining authority gates
-are the explicit ADR-0009 disposition/documentation alignment, per-increment Campaign
-Operations ADRs beginning with ADR-0010, and scheduler claim hardening before production
-dispatch.
+The executable V1 scope question is closed: only one exact Phase 4D
+materialization is an origin, and Phase 6D is optional
+prerequisite/provenance. The architectural authority gates are satisfied for
+Campaign Operations Phase 2 budget, reservation, and request-acceptance
+implementation. Scheduler claim hardening remains an implementation and
+independent-verification gate only before production dispatch.
 
 Campaign Operations is the correct next bounded concern. It refines the operational parts of Volume X, does not supersede completed Phases 4–6, and must not be labeled Phase 6E.
 
@@ -2173,3 +2144,83 @@ separate authority record.
 |---|---|---|---|
 | 1.0-candidate | 2026-07-22 | Incorporated the focused-CEE candidate corrections and froze V1 authority, identity, persistence, concurrency, recovery, privilege, migration, test, and increment contracts. | Candidate later found by final verification to require the three targeted amendments in 1.1; not implementation authority. |
 | 1.1-candidate | 2026-07-22 | Narrowly corrected held-reservation cancellation lock order, authorization supersession to one successor `granted` event, and campaign creation directly into durable `awaiting_operational_authorization`; no other architecture was redesigned. | Candidate awaiting focused verification of these three amendments, formal ADR-0009 alignment, and Accepted ADR-0010; not implementation authority. |
+| 1.2 | 2026-07-24 | Accepted the verified V1 specification under ADR-0010 through ADR-0017, aligned Phase 6D, resolved institutional/adapter/scheduler/running-work/archival ambiguities, and recorded implementation traceability. | Accepted implementation authority subject to per-increment gates; production dispatch remains gated by implemented and independently verified ADR-0016 hardening. |
+
+# 37. Architectural Authority Traceability Matrix
+
+| Campaign Operations feature or boundary | Authoritative owner | Authorizing ADR(s) | Normative specification |
+|---|---|---|---|
+| Campaign ownership and one-campaign-per-materialization identity | Campaign Operations | ADR-0010 | §§1, 5–7, 11–13 |
+| Campaign lifecycle and initial durable state | Campaign Operations, derived from authoritative facts | ADR-0010, ADR-0014 | §§5, 11, 13 |
+| Recommendation/proposal ownership | Recommendation Governance | ADR-0003, ADR-0005, ADR-0010 | §§2, 6–8 |
+| Immutable Phase 4D materialization and ordered membership | Recommendation Governance | ADR-0005, ADR-0010 | §§1–2, 5, 10–12 |
+| Phase 6D governance prerequisite/provenance | Recommendation Governance; consumed read-only by Campaign Operations | ADR-0009, ADR-0010, ADR-0011 | §§1–3, 5, 10–12 |
+| Operational authorization as the only permission to act | Campaign Operations authorizer | ADR-0011 | §§5, 10–13, 18–20 |
+| Authorization revocation, expiry, and one-event supersession | Campaign Operations authorizer | ADR-0011 | §§10, 12–13, 18–20 |
+| Capability assignment and human separation rule | Database/security administration and application authentication | ADR-0011, ADR-0017 | §§10, 24–25 |
+| Budget ownership and versioned single ledger | Campaign Operations budget administrator | ADR-0012 | §§11–12, 14, 18–20 |
+| Reservation accounting, commitment, release, and expiry | Campaign Operations reservation/request service | ADR-0012, ADR-0015 | §§11–15, 18–23 |
+| Request acceptance and durable outbox | Campaign Operations request service | ADR-0011–ADR-0013 | §§12, 15–16, 18–20 |
+| Logical-operation uniqueness and exact replay | Campaign Operations plus PostgreSQL constraints | ADR-0012, ADR-0013 | §§11–12, 15–16, 18–20 |
+| Dispatch selection and lease authority | Campaign Operations dispatcher; request state/version remains authority | ADR-0013 | §§11–13, 16, 18–20 |
+| Experiment creation/activation at handoff | Existing Phase 4C/5 and Experiment Lifecycle services | ADR-0005, ADR-0013 | §§6, 16, 18, 26–28 |
+| Narrow invoker-rights Phase 5 transaction adapter | Campaign Operations dispatcher using accepted Phase 5 workflow | ADR-0013, ADR-0017 | §§16, 18, 24, 27–28 |
+| Immutable request-to-experiment binding | Campaign Operations | ADR-0013 | §§11–13, 16, 18 |
+| Adoption and permanent V1 downstream control ownership | Campaign Operations dispatcher under extra grant | ADR-0011, ADR-0013 | §§10–12, 16, 18–21 |
+| Experiment resource ownership after handoff | Experiment Lifecycle; scheduler for execution | ADR-0004, ADR-0010, ADR-0013, ADR-0016 | §§6, 13, 16–17 |
+| Scheduler polling, capacity, atomic claims, attempts, and workers | Scheduler | ADR-0004, ADR-0016 | §§6, 13, 17 |
+| Production-dispatch enablement gate | Scheduler ownership plus operational deployment approval | ADR-0016 | §§1, 17, 31.8, 34–35 |
+| Campaign pause/resume | Campaign Operations; future orchestration only | ADR-0014 | §§11–13, 18, 21 |
+| Scheduler-global pause/resume/cancel controls | Scheduler/global control subsystem | ADR-0004, ADR-0016 | §§6, 8, 17, 21 |
+| Campaign cancellation intent and settlement | Campaign Operations cancellation coordinator | ADR-0015 | §§11–13, 18–23 |
+| Bound experiment cancellation | Experiment Lifecycle; Campaign Operations coordinates and records | ADR-0015, ADR-0016 | §§18, 21, 23 |
+| Running-work refusal/terminal wait | Experiment Lifecycle/Scheduler; no Campaign Operations process power | ADR-0015, ADR-0016 | §§17–18, 21–23 |
+| Reconciliation observation | Campaign Operations reconciler, detection only | ADR-0015 | §§11–13, 18, 23 |
+| Repair/resolution transition | Exact owning service; reconciler cannot repair | ADR-0015, ADR-0017 | §§18, 23–25, 27–28 |
+| Restart recovery and unknown-commit handling | Exact owning service using canonical lookup | ADR-0013, ADR-0015 | §§12, 16, 18, 20, 23 |
+| Global lock order and transactional guarantees | Owning services and PostgreSQL | ADR-0011–ADR-0015 | §§18–20 |
+| Exact replay, changed-payload conflict, and idempotency | Every owning service/repository | ADR-0011–ADR-0015, ADR-0017 | §§12, 18–20, 25 |
+| Operational completion and disjoint classification | Campaign Operations completion service | ADR-0014 | §§13, 18, 22 |
+| Scientific outcome interpretation | Recommendation Governance/Phase 5 policy; never Campaign Operations completion | ADR-0003, ADR-0010, ADR-0014 | §§6, 13, 22 |
+| Logical campaign archival | Read model derived from immutable completion | ADR-0014 | §§11, 13, 22–25 |
+| Physical retention/deletion | Deferred; no runtime owner or permission in V1 | ADR-0014, ADR-0017 | §§11.3, 24, 33 |
+| Auditability and causal attribution | Domain owners; audit stream is a derived causal index | ADR-0017 | §§11–12, 18, 24–25 |
+| Least-privilege roles and deployment enablement | Database/security administration | ADR-0017 | §§24–25, 27–29 |
+| Read-only status and rebuildable projections | Campaign Operations reader/projection writer | ADR-0014, ADR-0017 | §§11, 13, 24–29 |
+| Future origins, partial dispatch, adaptive budget, autonomy, retention, or new work class | Deferred to later owning-domain ADR | ADR-0010, ADR-0012, ADR-0014, ADR-0016 | §§4, 14–17, 30–33 |
+
+# 38. Authority Review Conflict Resolution
+
+| Conflict or implied contract | Why it conflicted | Minimum documentation correction | Result |
+|---|---|---|---|
+| Phase 6D implementation and migration 044 existed while ADR-0009 and Volumes VIII/XII still said `Proposed`. | Under Volume I, implemented evidence cannot silently make a Proposed ADR authoritative. | Accept ADR-0009, align implementation history and affected volumes, and retain the absolute negative operational boundary. | Resolved; Phase 6D is accepted governance-only evidence. |
+| The reviewed Campaign Operations specification was complete but explicitly a candidate, while migration 045/Phase 1 implemented part of it and the Phase 2 prompt assumed accepted authority. | Implementation history does not promote candidate text, and Phase 2 correctly stopped at the missing ADR gate. | Accept ADR-0010 through ADR-0017, incorporate the detailed specification through Volume X, and record actual Phase 1 versus later implementation status. | Resolved; future increments have exact accepted gates. |
+| Some candidate table descriptions used “unique canonical” shorthand, while migration 045 and its tests prohibit direct B-tree uniqueness on potentially oversized canonical text. | Direct oversized-text uniqueness can fail PostgreSQL index-size limits and contradicted implemented collision-safe persistence. | Preserve canonical semantic identity but specify bounded typed natural uniqueness, non-unique hash indexes, and complete canonical comparison. | Resolved without changing any canonical identity. |
+| The stopped Phase 2 implementation prompt described a budget authority payload as carrying an accepting operational-authorization event, while the reviewed budget model permits budget administration before or after authorization. | The prompt was an implementation request that explicitly deferred to missing accepted architecture; treating its suggested payload as authority would couple funding to permission and contradict the candidate's separate gates. | ADR-0012 makes budget entries campaign-scoped under a separate budget capability; ADR-0011 authorization is revalidated only when reserving, accepting, selecting, or handing off work. Audit may cite an authorization cause when applicable but it is not budget authority. | Resolved; budget and permission remain non-interchangeable. |
+| “Launch” in the accepted Phase 5 workflow could be confused with scheduler worker launch. | Phase 5 launch means atomic lifecycle handoff to ordinary `pending/train`; scheduler launch is a later, separate authority. | ADR-0013 fixes Phase 5 as lifecycle handoff; ADR-0016 fixes scheduler claims/process execution. | Resolved; no execution-authority overlap. |
+| Existing scheduler-global pause/resume/cancel controls could be confused with Campaign Operations pause/resume/cancellation. | Global controls suppress or signal scheduler-managed work; campaign controls govern future orchestration and delegate lifecycle cancellation. | ADR-0014 through ADR-0016 name the separate owners and prohibit reuse as campaign state. | Resolved. |
+| Institutional role assignment, narrow Phase 5 privilege mechanism, running-work behavior, and archival were left external to the candidate. | Leaving them to implementation discretion could create privilege or control overlap. | ADR-0015 and ADR-0017 fix explicit administrator role assignment, invoker-rights Phase 5 reuse, no running-process power, logical archival, and no physical deletion. | Resolved for V1; later expansion requires a new ADR. |
+| Volume XI states the required atomic scheduler boundary, while repository evidence shows the target is not yet fully implemented. | This is an implementation gap against ADR-0004, not authority for Campaign Operations to repair or bypass it. | ADR-0016 specifies the scheduler-owned hardening and retains a default-off production-dispatch gate. | Architecturally resolved; scheduler implementation remains future work. |
+
+The stale branch/development-status prose in `AGENTS.md` is not a Campaign
+Operations authority record and was not changed by this documentation-only
+closure. It does not override the ADR index, volumes, or accepted
+specification.
+
+# 39. Readiness Decision
+
+The Phase 6D acceptance mismatch and every Campaign Operations V1 implied
+contract identified by the architecture and review chain are now explicit in
+Accepted ADRs. No V1 authority overlap or implementation-blocking ambiguity
+remains.
+
+Campaign Operations implementation may continue increment by increment under
+§31. In particular, the budget, reservation, and request-acceptance increment
+is authorized by ADR-0010, ADR-0011, ADR-0012, the acceptance portion of
+ADR-0013, and ADR-0017. It still MUST NOT dispatch, invoke Phase 5, create or
+activate experiments, or interact with the scheduler in that increment.
+
+Production dispatch remains prohibited until ADR-0016 is implemented and
+independently verified.
+
+**READY FOR CAMPAIGN OPERATIONS IMPLEMENTATION**

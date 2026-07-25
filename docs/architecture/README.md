@@ -1,8 +1,8 @@
 # LSTM Research Platform Architecture
 
 Status: Authoritative documentation framework
-Architecture version: 1.0.0
-Last revised: 2026-07-15
+Architecture version: 1.1.0
+Last revised: 2026-07-24
 
 ## 1. Purpose and authority
 
@@ -21,7 +21,7 @@ meaning defined in Volume I §1.3.
 
 ## 2. Document organization
 
-| Volume | Domain | Initial status |
+| Volume | Domain | Current status |
 |---|---|---|
 | [I](Volume_I_Foundation.md) | Foundation and engineering constitution | Authoritative |
 | [II](Volume_II_Data_Pipeline.md) | Market-data ingestion, transformation, and feature inputs | Foundation outline |
@@ -32,9 +32,9 @@ meaning defined in Volume I §1.3.
 | [VII](Volume_VII_Experiment_Lifecycle.md) | Experiment identity, state, lineage, and continuation | Foundation outline |
 | [VIII](Volume_VIII_Recommendation_Engine.md) | Advisory recommendation generation, scoring, persistence, and review | Foundation outline |
 | [IX](Volume_IX_Trading_Profitability.md) | Trading simulation and profitability evidence | Reserved outline |
-| [X](Volume_X_Research_Automation.md) | Controlled research automation | Reserved outline |
-| [XI](Volume_XI_Scheduler.md) | Scheduler ownership, workers, recovery, and capacity | Foundation outline |
-| [XII](Volume_XII_Database.md) | PostgreSQL ownership, schema, migrations, and data integrity | Foundation outline |
+| [X](Volume_X_Research_Automation.md) | Controlled research automation and bounded Campaign Operations | Campaign Operations authoritative; broader automation reserved |
+| [XI](Volume_XI_Scheduler.md) | Scheduler ownership, workers, recovery, and capacity | Foundation with accepted claim hardening |
+| [XII](Volume_XII_Database.md) | PostgreSQL ownership, schema, migrations, and data integrity | Foundation aligned through Campaign Operations authority |
 
 The reusable [volume template](VOLUME_TEMPLATE.md) fixes the standard section
 order for Volumes II–XII. Stable headings permit references such as
@@ -147,8 +147,16 @@ The Phase 4 recommendation documents remain detailed implementation references:
 - [Recommendation scoring](../Phase4AExperimentRecommendationScoring.rst)
 - [Recommendation review](../Phase4AExperimentRecommendationReview.rst)
 
+The accepted
+[Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
+is the detailed normative refinement of Volume X under ADR-0010 through
+ADR-0017. Its traceability matrix identifies the exact ADR authority for each
+major feature. Review prompts, transcripts, and earlier candidate outputs
+remain historical evidence only.
+
 ## 9. Revision history
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-07-15 | Established the permanent architecture hierarchy, governance workflow, and implementation-prompt relationship. |
+| 1.1.0 | 2026-07-24 | Accepted the bounded Campaign Operations refinement, its ADR authority chain, and scheduler production-dispatch gate. |

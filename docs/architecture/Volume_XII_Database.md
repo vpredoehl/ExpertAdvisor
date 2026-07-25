@@ -1,8 +1,8 @@
 # Volume XII — Database
 
-Status: Foundation aligned through Phase 6C; proposed Phase 6D recorded
-Version: 0.4.0
-Last revised: 2026-07-22
+Status: Foundation aligned through Phase 6D and Campaign Operations authority
+Version: 0.5.0
+Last revised: 2026-07-24
 
 ## 1. Purpose
 
@@ -32,7 +32,14 @@ adds lifecycle, experiment, execution, queue, or scheduler state.
 Phase 6D migration 044 adds one append-only governance-ratification event per
 exact eligible approved Phase 6C review. The fixed ratifier role and mandatory
 reviewer/ratifier separation distinguish it from merits review. It adds no
-Phase 6E, lifecycle, experiment, execution, queue, or scheduler state.
+Campaign Operations, lifecycle, experiment, execution, queue, or scheduler
+state.
+
+Campaign Operations migration 045 adds the immutable operational-campaign,
+optional governance-provenance, append-only authorization-chain, and audit
+foundation. It adds no budget, reservation, request, dispatch, cancellation,
+completion, lifecycle, scheduler, worker, UI, or CLI behavior and grants no
+capability role to the runtime login.
 
 ## 3. Responsibilities
 
@@ -88,7 +95,13 @@ review version/canonical/hash, reviewer, exact reviewed proposal identity,
 approved eligibility, fixed authority role, ``ratified`` decision, distinct
 ratifier, basis, and complete ratification canonical/hash. Ratification-event
 ID and creation timestamp remain metadata outside identity, and ratification
-grants no Phase 6E or operational authority.
+grants no Campaign Operations or other operational authority.
+
+Campaign Operations entities and exact privilege boundaries are authorized
+incrementally by ADR-0010 through ADR-0017 and the accepted Campaign
+Operations specification. Domain events remain authoritative; guarded
+request/reservation projections and optional read projections never replace
+their same-transaction event evidence.
 
 ### 5.2 Provenance and versions
 
@@ -265,6 +278,8 @@ permissions, backup, concurrency, and observability decisions.
 - [ADR-0007](adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md)
 - [ADR-0008](adr/ADR-0008-phase-6c-follow-up-proposal-administrative-review.md)
 - [ADR-0009](adr/ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md)
+- [Campaign Operations ADR-0010 through ADR-0017](adr/README.md)
+- [Accepted Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 - [Phase 6B persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
 - [Phase 6C administrative review](../Phase6CRecommendationCampaignFollowUpProposalReview.rst)
 - [Phase 6D governance ratification](../Phase6DRecommendationCampaignFollowUpProposalRatification.rst)
@@ -279,3 +294,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.2.0 | 2026-07-20 | Recorded the append-only exact Phase 6B follow-up-proposal schema, collision-safe transaction, and least-privilege read-only preview boundary. | ADR-0001, ADR-0007 |
 | 0.3.0 | 2026-07-21 | Recorded one exact append-only Phase 6C administrative review event per proposal, deterministic replay/conflict, validated reload, and read-only presentation without action authority. | ADR-0001, ADR-0004, ADR-0008 |
 | 0.4.0 | 2026-07-22 | Recorded proposed append-only Phase 6D governance ratification per eligible approved review, fixed role, mandatory separation of duties, deterministic replay/conflict, and least privilege without Phase 6E authority. | ADR-0001, ADR-0004, ADR-0009 |
+| 0.5.0 | 2026-07-24 | Aligned accepted Phase 6D and recorded Campaign Operations' append-only, transactional, least-privilege authority and implemented Phase 1 foundation. | ADR-0009–ADR-0017 |
