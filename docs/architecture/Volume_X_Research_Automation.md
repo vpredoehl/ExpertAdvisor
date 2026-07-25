@@ -1,8 +1,8 @@
 # Volume X — Research Automation
 
-Status: Authoritative through Campaign Operations Phase 2; broader automation reserved
-Version: 1.1.0
-Last revised: 2026-07-24
+Status: Authoritative through isolated Campaign Operations Phase 3; broader automation reserved
+Version: 1.2.0
+Last revised: 2026-07-25
 
 ## 1. Purpose
 
@@ -35,9 +35,14 @@ Campaign Operations Phase 2 implements the append-only member-unit budget
 ledger and atomic acceptance of one complete-materialization request with a
 ``held`` reservation, ``ready`` durable request, acquisition event, and audit.
 It includes read-only budget/request status and explicit CLI commands.
-Dispatch, Phase 5 invocation, experiment activation, scheduler claiming,
-workers, campaign controls, later reservation transitions, and execution
-monitoring remain unimplemented. Broader autonomous research remains reserved;
+Campaign Operations Phase 3 implements architectural Phase E durable lease
+acquisition, immutable attempt/outcome evidence, atomic invocation of the
+existing transaction-bound Phase 5 workflow, complete ordered bindings,
+permanent V1 control ownership, and held-to-committed/bound settlement. Its
+single-request execution adapter is restricted to explicitly acknowledged
+disposable test databases; production dispatch remains disabled. Scheduler
+claiming, workers, campaign controls, cancellation/reconciliation, completion,
+archival, and execution monitoring remain unimplemented. Broader autonomous research remains reserved;
 existing recommendation and continuation capabilities MUST NOT be composed
 into it informally.
 
@@ -127,6 +132,10 @@ reconciled call.
 ### 6.3 Failure semantics
 
 Uncertain budget or request state fails closed and requires reconciliation.
+Phase 3 performs authoritative lease/binding/outcome lookup before retry,
+retries the complete affected acquisition or handoff transaction only for
+serialization/deadlock errors, and treats partial or ambiguous downstream
+evidence as reconciliation-required.
 
 ## 7. Concurrency
 
@@ -262,3 +271,4 @@ scheduler work classes each require a later accepted owning-domain ADR.
 | 0.1.0 | 2026-07-15 | Reserved the research-automation architecture and safety gates. | — |
 | 1.0.0 | 2026-07-24 | Accepted the bounded Campaign Operations refinement while retaining broader autonomous research as reserved. | ADR-0010–ADR-0017 |
 | 1.1.0 | 2026-07-24 | Implemented Phase 2 budget reservation and durable request acceptance without dispatch or lifecycle authority. | ADR-0010–ADR-0013, ADR-0017 |
+| 1.2.0 | 2026-07-25 | Implemented architectural Phase E durable dispatch and atomic lifecycle handoff for isolated verification; production dispatch and ADR-0016 remain gated. | ADR-0010–ADR-0017 |

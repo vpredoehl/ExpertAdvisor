@@ -4,6 +4,9 @@
 #include "../Sources/ExperimentRecommendationCampaignActivationRepository.hpp"
 #include "../Sources/ExperimentRecommendationConversionExecutionRepository.hpp"
 #include "../Sources/ExperimentRecommendationConversionProposalReviewRepository.hpp"
+#include "../Sources/CampaignOperationsDispatchService.hpp"
+#include "../Sources/CampaignOperationsRepository.hpp"
+#include "../Sources/CampaignOperationsService.hpp"
 
 #include <algorithm>
 #include <barrier>
@@ -16,6 +19,7 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -27,6 +31,28 @@
 
 #include <pqxx/pqxx>
 
+namespace EA::ExperimentRecommendation
+{
+std::string RecommendationMachineText(const std::string& value)
+{
+    std::ostringstream escaped;
+    escaped << std::uppercase << std::hex;
+    for (const unsigned char ch : value)
+    {
+        const bool alphanumeric =
+            (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9');
+        if (alphanumeric || ch == '-' || ch == '_' || ch == '.' ||
+            ch == ':' || ch == '/' || ch == ';')
+            escaped << static_cast<char>(ch);
+        else
+            escaped << '%' << std::setw(2) << std::setfill('0')
+                    << static_cast<unsigned int>(ch);
+    }
+    return escaped.str() == "NULL" ? "%4E%55%4C%4C" : escaped.str();
+}
+} // namespace EA::ExperimentRecommendation
+
 using namespace EA::ExperimentRecommendation;
 
 namespace
@@ -36,7 +62,8 @@ bool IsApprovedDatabase(const std::string& database)
 {
     constexpr std::string_view prefixes[]{
         "expertadvisor_phase5_step3_test_",
-        "expertadvisor_phase5_step3_final_"};
+        "expertadvisor_phase5_step3_final_",
+        "expertadvisor_campaign_operations_phase3_test_"};
     for (const auto prefix : prefixes)
     {
         if (!database.starts_with(prefix) || database.size() == prefix.size())
@@ -586,6 +613,192 @@ int RunReleaseLaunchCli(
     return WEXITSTATUS(status);
 }
 
+EA::CampaignOperations::AcceptedOperationalRequest
+CreatePhase3Request(pqxx::connection& owner, const std::string& schema,
+    long long materializationId,
+    std::optional<EA::CampaignOperations::UtcTimestamp>
+        authorizationExpiresAt = std::nullopt)
+{
+    using namespace EA::CampaignOperations;
+    EA::ExperimentRecommendation::
+        PersistedRecommendationCampaignMaterialization materialization;
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto loaded =
+            LoadRecommendationCampaignLaunchMaterialization(
+                transaction, materializationId);
+        assert(loaded);
+        materialization = *loaded;
+        transaction.commit();
+    }
+    const OperationalCampaign campaign = BuildOperationalCampaign(
+        materialization.materializationId, materialization.contractVersion,
+        materialization.identityCanonical, materialization.identityHash,
+        materialization.selectedMemberCount);
+    const PersistedOperationalCampaign persistedCampaign = [&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_campaign_creator;");
+        auto result = PersistOperationalCampaign(
+            transaction, campaign,
+            ActorIdentity("phase3.creator@example.test"),
+            Reason("Create isolated Phase 3 handoff fixture."));
+        transaction.commit();
+        return result.persisted;
+    }();
+    const PersistedOperationalAuthorizationEvent authorization = [&]
+    {
+        const auto grant = BuildOperationalAuthorizationEvent(
+            persistedCampaign.campaignId,
+            campaign.identity.canonicalText(), std::nullopt, std::nullopt,
+            std::nullopt, 1, AuthorizationEventKind::granted,
+            campaign.actionKind, campaign.actionContractVersion,
+            campaign.scopeKind, campaign.scopeContractVersion,
+            PrerequisitePolicy::phase4dMaterializationOnlyV1,
+            std::nullopt, std::nullopt, std::nullopt,
+            kCampaignOperationsAuthorizationRole,
+            ActorIdentity("phase3.authorizer@example.test"),
+            Reason("Authorize isolated complete materialization dispatch."),
+            UtcTimestamp("2020-01-01T00:00:00.000000Z"),
+            std::move(authorizationExpiresAt));
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_authorizer;");
+        auto result = PersistOperationalAuthorizationEvent(
+            transaction, grant);
+        transaction.commit();
+        return result.persisted;
+    }();
+    (void)authorization;
+    {
+        const auto budget = BuildBudgetLedgerEntry(
+            persistedCampaign.campaignId,
+            campaign.identity.canonicalText(), std::nullopt, std::nullopt,
+            std::nullopt, 1, BudgetLedgerEntryKind::grant,
+            BudgetLedgerStatus::active,
+            BudgetUnit::materializedMemberDispatch,
+            materialization.selectedMemberCount, 0,
+            materialization.selectedMemberCount,
+            ActorIdentity("phase3.budget@example.test"),
+            Reason("Fund isolated complete materialization dispatch."));
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_budget_administrator;");
+        (void)PersistBudgetLedgerEntry(transaction, budget);
+        transaction.commit();
+    }
+    pqxx::work transaction{owner};
+    SetSearchPath(transaction, schema);
+    transaction.exec(
+        "SET LOCAL ROLE campaign_operations_request_acceptor;");
+    auto accepted = PersistAcceptedOperationalRequest(transaction,
+        persistedCampaign.campaignId,
+        ActorIdentity("phase3.requester@example.test"),
+        Reason("Accept isolated complete materialization dispatch."),
+        std::nullopt);
+    transaction.commit();
+    return accepted.persisted;
+}
+
+EA::CampaignOperations::PersistedOperationalAuthorizationEvent
+GrantPhase3Adoption(pqxx::connection& owner,
+    const std::string& schema,
+    const EA::CampaignOperations::AcceptedOperationalRequest& accepted,
+    std::optional<EA::CampaignOperations::UtcTimestamp> expiresAt =
+        std::nullopt)
+{
+    using namespace EA::CampaignOperations;
+    const auto& operation = accepted.request.request.logicalOperation;
+    const auto grant = BuildOperationalAuthorizationEvent(
+        operation.campaignId, operation.campaignCanonicalText,
+        std::nullopt, std::nullopt, std::nullopt, 1,
+        AuthorizationEventKind::granted,
+        OperationalActionKind::adoptExistingPendingAndControl, 1,
+        operation.scopeKind, operation.scopeContractVersion,
+        PrerequisitePolicy::phase4dMaterializationOnlyV1,
+        std::nullopt, std::nullopt, std::nullopt,
+        kCampaignOperationsAuthorizationRole,
+        ActorIdentity("phase3.adoption.authorizer@example.test"),
+        Reason("Authorize exact existing pending work adoption."),
+        UtcTimestamp("2020-01-01T00:00:00.000000Z"),
+        std::move(expiresAt));
+    pqxx::work transaction{owner};
+    SetSearchPath(transaction, schema);
+    transaction.exec(
+        "SET LOCAL ROLE campaign_operations_authorizer;");
+    auto persisted =
+        PersistOperationalAuthorizationEvent(transaction, grant).persisted;
+    transaction.commit();
+    return persisted;
+}
+
+void RecordPhase3AdoptionAuthorizationSuccessor(
+    pqxx::connection& owner, const std::string& schema,
+    const EA::CampaignOperations::AcceptedOperationalRequest& accepted,
+    const EA::CampaignOperations::PersistedOperationalAuthorizationEvent&
+        prior,
+    EA::CampaignOperations::AuthorizationEventKind kind)
+{
+    using namespace EA::CampaignOperations;
+    const auto& operation = accepted.request.request.logicalOperation;
+    const auto successor = BuildOperationalAuthorizationEvent(
+        operation.campaignId, operation.campaignCanonicalText,
+        prior.authorizationEventId, prior.event.identity.canonicalText(),
+        prior.event.identity.hash(), prior.event.chainVersion + 1, kind,
+        OperationalActionKind::adoptExistingPendingAndControl, 1,
+        operation.scopeKind, operation.scopeContractVersion,
+        PrerequisitePolicy::phase4dMaterializationOnlyV1,
+        std::nullopt, std::nullopt, std::nullopt,
+        kCampaignOperationsAuthorizationRole,
+        ActorIdentity("phase3.adoption.successor@example.test"),
+        Reason(kind == AuthorizationEventKind::revoked
+            ? "Revoke exact adoption authority for verification."
+            : "Supersede exact adoption authority for verification."),
+        UtcTimestamp("2020-01-01T00:00:00.000000Z"), std::nullopt);
+    pqxx::work transaction{owner};
+    SetSearchPath(transaction, schema);
+    transaction.exec(
+        "SET LOCAL ROLE campaign_operations_authorizer;");
+    (void)PersistOperationalAuthorizationEvent(transaction, successor);
+    transaction.commit();
+}
+
+void RecordPhase3DispatchAuthorizationSuccessor(
+    pqxx::connection& owner, const std::string& schema,
+    const EA::CampaignOperations::AcceptedOperationalRequest& accepted,
+    EA::CampaignOperations::AuthorizationEventKind kind)
+{
+    using namespace EA::CampaignOperations;
+    const auto& request = accepted.request.request;
+    const auto& operation = request.logicalOperation;
+    const auto successor = BuildOperationalAuthorizationEvent(
+        operation.campaignId, operation.campaignCanonicalText,
+        request.acceptingAuthorizationEventId,
+        request.acceptingAuthorizationCanonicalText,
+        request.acceptingAuthorizationIdentityHash, 2, kind,
+        operation.actionKind, operation.actionContractVersion,
+        operation.scopeKind, operation.scopeContractVersion,
+        request.prerequisitePolicy, std::nullopt,
+        request.provenanceCanonicalText, request.provenanceIdentityHash,
+        kCampaignOperationsAuthorizationRole,
+        ActorIdentity("phase3.authorization.successor@example.test"),
+        Reason(kind == AuthorizationEventKind::revoked
+            ? "Revoke exact dispatch authority during race verification."
+            : "Supersede exact dispatch authority during race verification."),
+        UtcTimestamp("2020-01-01T00:00:00.000000Z"), std::nullopt);
+    pqxx::work transaction{owner};
+    SetSearchPath(transaction, schema);
+    transaction.exec(
+        "SET LOCAL ROLE campaign_operations_authorizer;");
+    (void)PersistOperationalAuthorizationEvent(transaction, successor);
+    transaction.commit();
+}
+
 } // namespace
 
 int main()
@@ -704,6 +917,47 @@ SELECT setval(pg_get_serial_sequence('experiment','experiment_id'),17,true);
                 setup.exec(sql);
                 setup.exec(sql);
             }
+            setup.exec(R"SQL(
+CREATE TABLE experiment_recommendation_campaign_follow_up_proposal(
+ recommendation_campaign_follow_up_proposal_id bigint PRIMARY KEY,
+ materialization_id bigint NOT NULL,
+ materialization_contract_version integer NOT NULL,
+ materialization_identity_canonical text NOT NULL,
+ materialization_identity_hash text NOT NULL,
+ member_count integer NOT NULL,
+ proposal_contract_version integer NOT NULL,
+ proposal_identity_canonical text NOT NULL,
+ proposal_identity_hash text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE experiment_recommendation_campaign_follow_up_proposal_member(
+ recommendation_campaign_follow_up_proposal_member_id bigint PRIMARY KEY);
+CREATE TABLE experiment_recommendation_campaign_follow_up_proposal_review_event(
+ recommendation_campaign_follow_up_proposal_review_event_id bigint
+ PRIMARY KEY);
+CREATE TABLE experiment_recommendation_campaign_follow_up_ratification_event(
+ recommendation_campaign_follow_up_ratification_event_id bigint PRIMARY KEY,
+ ratification_contract_version integer NOT NULL,
+ ratification_identity_canonical text NOT NULL,
+ ratification_identity_hash text NOT NULL,
+ recommendation_campaign_follow_up_proposal_review_event_id bigint NOT NULL,
+ review_contract_version integer NOT NULL,
+ review_identity_canonical text NOT NULL,
+ review_identity_hash text NOT NULL,
+ recommendation_campaign_follow_up_proposal_id bigint NOT NULL,
+ proposal_contract_version integer NOT NULL,
+ proposal_identity_canonical text NOT NULL,
+ proposal_identity_hash text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now());
+)SQL");
+            for (const char* migration : {
+                     "Database/migrations/045_campaign_operations_foundation.sql",
+                     "Database/migrations/047_campaign_operations_budget_request_acceptance.sql",
+                     "Database/migrations/048_campaign_operations_durable_dispatch_handoff.sql"})
+            {
+                const std::string sql = ReadFile(migration);
+                setup.exec(sql);
+                setup.exec(sql);
+            }
             setup.exec(ReadFile(
                 "Tests/ExperimentRecommendationCampaignMaterializationMigrationTests.sql"));
             setup.exec(
@@ -722,7 +976,8 @@ SELECT setval(pg_get_serial_sequence('experiment','experiment_id'),17,true);
             SetSearchPath(schemaBoundary, schema);
             assert(RecommendationCampaignLaunchSchemasExist(schemaBoundary));
             schemaBoundary.exec(
-                "DROP TABLE experiment_recommendation_conversion_activation;");
+                "DROP TABLE experiment_recommendation_conversion_activation "
+                "CASCADE;");
             assert(!RecommendationCampaignLaunchSchemasExist(schemaBoundary));
             // No commit: preserve the installed production schema after proving
             // that a missing activation object fails the Step 3 schema check.
@@ -1352,6 +1607,1921 @@ END $$;
         assert(RunReleaseLaunchCli(
             database, host, port, schema, 17, false) == 0);
         AssertPending(runtime, owner, schema, confirmedReleaseCli[0]);
+
+        currentStage = "campaign_operations_phase3_atomic_handoff";
+        const std::vector<CampaignProposal> phase3Proposals{
+            CreateApprovedProposal(runtime, 1.36, 26),
+            CreateApprovedProposal(runtime, 1.37, 27)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 18, phase3Proposals);
+            fixture.commit();
+        }
+        const auto phase3Request =
+            CreatePhase3Request(owner, schema, 18);
+        const std::string phase3ConnectionString = ownerString +
+            " options='-c search_path=" + schema +
+            " -c lock_timeout=5s -c statement_timeout=15s'";
+        const EA::CampaignOperations::IsolatedDispatchSafetyGate phase3Gate{
+            database,
+            EA::CampaignOperations::
+                kCampaignOperationsPhase3TestAcknowledgement};
+        const auto phase3Result =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString, phase3Request.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(phase3Result.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(!phase3Result.bindingSetIdentityHash.empty());
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(phase3Request.request.requestId.value())) == 2);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "campaign_operations_downstream_control_owner "
+            "WHERE operational_request_id=" +
+            std::to_string(phase3Request.request.requestId.value())) == 2);
+        assert(Text(owner, schema,
+            "SELECT request_state||':'||state_version::text||':'||"
+            "coalesce(lease_token_hash,'NULL') FROM "
+            "campaign_operations_operational_request "
+            "WHERE operational_request_id=" +
+            std::to_string(phase3Request.request.requestId.value())) ==
+            "bound:3:NULL");
+        assert(Text(owner, schema,
+            "SELECT reservation_state||':'||state_version::text FROM "
+            "campaign_operations_reservation WHERE reservation_id=" +
+            std::to_string(phase3Request.reservation.reservationId.value())) ==
+            "committed:2");
+        const auto replay =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString, phase3Request.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(replay.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                existingIdentical);
+        assert(replay.bindingSetIdentityHash ==
+            phase3Result.bindingSetIdentityHash);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=" +
+            std::to_string(phase3Request.request.requestId.value())) == 1);
+        {
+            pqxx::work progress{owner};
+            SetSearchPath(progress, schema);
+            progress.exec(
+                "UPDATE experiment SET status='running',phase='train',"
+                "updated_at=transaction_timestamp() WHERE experiment_id IN ("
+                "SELECT experiment_id FROM "
+                "campaign_operations_request_binding WHERE "
+                "operational_request_id=$1);",
+                pqxx::params{
+                    phase3Request.request.requestId.value()});
+            progress.commit();
+        }
+        int progressedReplayPhase5Invocations = 0;
+        const auto progressedReplay =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                phase3Request.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.progressed.replay@example.test"),
+                phase3Gate,
+                [&](EA::CampaignOperations::
+                        DispatchTestInjectionPoint point)
+                {
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                beforePhase5Invocation)
+                        ++progressedReplayPhase5Invocations;
+                });
+        assert(progressedReplay.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                existingIdentical);
+        assert(progressedReplayPhase5Invocations == 0);
+
+        currentStage =
+            "campaign_operations_phase3_create_with_adoption_grant";
+        const std::vector<CampaignProposal> createWithAdoptionProposals{
+            CreateApprovedProposal(runtime, 4.10, 400)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 230, createWithAdoptionProposals);
+            fixture.commit();
+        }
+        const auto createWithAdoptionRequest =
+            CreatePhase3Request(owner, schema, 230);
+        GrantPhase3Adoption(owner, schema, createWithAdoptionRequest);
+        const auto createdWithAdoption =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                createWithAdoptionRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.create.with.adoption@example.test"),
+                phase3Gate);
+        assert(createdWithAdoption.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(Text(owner, schema,
+            "SELECT binding.binding_disposition||':'||owner.control_mode||':'||"
+            "coalesce(owner.adoption_authorization_event_id::text,'NULL') "
+            "FROM campaign_operations_request_binding binding "
+            "JOIN campaign_operations_downstream_control_owner owner USING "
+            "(operational_request_id) WHERE binding.request_binding_id="
+            "owner.request_binding_id AND binding.operational_request_id=" +
+            std::to_string(
+                createWithAdoptionRequest.request.requestId.value())) ==
+            "created:created_control:NULL");
+
+        currentStage =
+            "campaign_operations_phase3_direct_phase5_overlap";
+        const std::vector<CampaignProposal> directOverlapProposals{
+            CreateApprovedProposal(runtime, 4.11, 401)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 231, directOverlapProposals);
+            fixture.commit();
+        }
+        const auto directOverlapRequest =
+            CreatePhase3Request(owner, schema, 231);
+        std::barrier handoffAtPhase5{2};
+        std::barrier allowHandoffPhase5{2};
+        std::optional<EA::CampaignOperations::DispatchServiceResult>
+            directOverlapHandoffResult;
+        std::exception_ptr directOverlapHandoffError;
+        std::thread directOverlapHandoff([&]
+        {
+            try
+            {
+                directOverlapHandoffResult.emplace(
+                    EA::CampaignOperations::
+                        DispatchOneRequestForIsolatedTest(
+                            phase3ConnectionString,
+                            directOverlapRequest.request.requestId, 1,
+                            EA::CampaignOperations::ActorIdentity(
+                                "phase3.direct.overlap@example.test"),
+                            phase3Gate,
+                            [&](EA::CampaignOperations::
+                                    DispatchTestInjectionPoint point)
+                            {
+                                if (point == EA::CampaignOperations::
+                                        DispatchTestInjectionPoint::
+                                            beforePhase5Invocation)
+                                {
+                                    handoffAtPhase5.arrive_and_wait();
+                                    allowHandoffPhase5.arrive_and_wait();
+                                }
+                            }));
+            }
+            catch (...)
+            {
+                directOverlapHandoffError = std::current_exception();
+            }
+        });
+        handoffAtPhase5.arrive_and_wait();
+        std::atomic<bool> directOverlapFinished{false};
+        std::optional<RecommendationCampaignLaunchPersistResult>
+            directOverlapLaunchResult;
+        std::exception_ptr directOverlapLaunchError;
+        std::thread directOverlapLaunch([&]
+        {
+            try
+            {
+                directOverlapLaunchResult.emplace(
+                    RunLaunch(runtimeString, 231));
+                directOverlapFinished = true;
+            }
+            catch (...)
+            {
+                directOverlapLaunchError = std::current_exception();
+            }
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        const bool directPhase5BypassedHandoffLock =
+            directOverlapFinished.load();
+        allowHandoffPhase5.arrive_and_wait();
+        directOverlapHandoff.join();
+        directOverlapLaunch.join();
+        if (directOverlapHandoffError)
+            std::rethrow_exception(directOverlapHandoffError);
+        if (directOverlapLaunchError)
+            std::rethrow_exception(directOverlapLaunchError);
+        assert(!directPhase5BypassedHandoffLock);
+        assert(directOverlapHandoffResult);
+        assert(directOverlapHandoffResult->classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(directOverlapLaunchResult);
+        assert(directOverlapLaunchResult->createdExecutions.empty());
+        assert(directOverlapLaunchResult->createdActivations.empty());
+        assert(Text(owner, schema,
+            "SELECT binding_disposition FROM "
+            "campaign_operations_request_binding WHERE "
+            "operational_request_id=" +
+            std::to_string(
+                directOverlapRequest.request.requestId.value())) ==
+            "created");
+
+        currentStage = "campaign_operations_phase3_rollback_restart";
+        const std::vector<CampaignProposal> rollbackProposals{
+            CreateApprovedProposal(runtime, 1.38, 28),
+            CreateApprovedProposal(runtime, 1.39, 29)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 19, rollbackProposals);
+            fixture.commit();
+        }
+        const auto rollbackRequest =
+            CreatePhase3Request(owner, schema, 19);
+        bool injectedRollback = false;
+        try
+        {
+            (void)EA::CampaignOperations::
+                DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    rollbackRequest.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.dispatcher@example.test"),
+                    phase3Gate,
+                    [](EA::CampaignOperations::
+                           DispatchTestInjectionPoint point)
+                    {
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    afterPhase5ExecutionMutation)
+                            throw std::runtime_error(
+                                "phase3_injected_rollback");
+                    });
+        }
+        catch (const std::runtime_error& error)
+        {
+            injectedRollback =
+                std::string(error.what()) == "phase3_injected_rollback";
+        }
+        assert(injectedRollback);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "experiment_recommendation_conversion_execution "
+            "WHERE recommendation_conversion_proposal_id IN (" +
+            std::to_string(
+                rollbackProposals[0].proposal.proposalId) + "," +
+            std::to_string(
+                rollbackProposals[1].proposal.proposalId) + ")") == 0);
+        assert(Text(owner, schema,
+            "SELECT request_state FROM "
+            "campaign_operations_operational_request "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                rollbackRequest.request.requestId.value())) ==
+            "dispatching");
+        const auto resumed =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                rollbackRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(resumed.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                rollbackRequest.request.requestId.value())) == 1);
+
+        currentStage = "campaign_operations_phase3_lost_response";
+        const std::vector<CampaignProposal> lostResponseProposals{
+            CreateApprovedProposal(runtime, 1.40, 30)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 20, lostResponseProposals);
+            fixture.commit();
+        }
+        const auto lostResponseRequest =
+            CreatePhase3Request(owner, schema, 20);
+        bool responseLost = false;
+        try
+        {
+            (void)EA::CampaignOperations::
+                DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    lostResponseRequest.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.dispatcher@example.test"),
+                    phase3Gate,
+                    [](EA::CampaignOperations::
+                           DispatchTestInjectionPoint point)
+                    {
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    afterSuccessfulCommitBeforeResponse)
+                            throw std::runtime_error(
+                                "phase3_response_lost");
+                    });
+        }
+        catch (const std::runtime_error& error)
+        {
+            responseLost =
+                std::string(error.what()) == "phase3_response_lost";
+        }
+        assert(responseLost);
+        const auto recovered =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                lostResponseRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(recovered.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                existingIdentical);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                lostResponseRequest.request.requestId.value())) == 1);
+
+        currentStage = "campaign_operations_phase3_adoption";
+        const std::vector<CampaignProposal> adoptionProposals{
+            CreateApprovedProposal(runtime, 1.41, 31)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 21, adoptionProposals);
+            fixture.commit();
+        }
+        (void)RunLaunch(runtimeString, 21);
+        const auto adoptionRequest =
+            CreatePhase3Request(owner, schema, 21);
+        GrantPhase3Adoption(owner, schema, adoptionRequest);
+        const auto adopted =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                adoptionRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(adopted.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                adoptedExistingPendingAndBound);
+        assert(Text(owner, schema,
+            "SELECT binding_disposition FROM "
+            "campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                adoptionRequest.request.requestId.value())) ==
+            "adopted_existing_pending");
+
+        currentStage = "campaign_operations_phase3_adoption_denied";
+        const std::vector<CampaignProposal> unauthorizedAdoptionProposals{
+            CreateApprovedProposal(runtime, 1.42, 32)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 22, unauthorizedAdoptionProposals);
+            fixture.commit();
+        }
+        (void)RunLaunch(runtimeString, 22);
+        const auto unauthorizedAdoptionRequest =
+            CreatePhase3Request(owner, schema, 22);
+        int unauthorizedAdoptionPhase5Invocations = 0;
+        const auto adoptionDenied =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                unauthorizedAdoptionRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate,
+                [&](EA::CampaignOperations::
+                        DispatchTestInjectionPoint point)
+                {
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                beforePhase5Invocation)
+                        ++unauthorizedAdoptionPhase5Invocations;
+                });
+        assert(unauthorizedAdoptionPhase5Invocations == 0);
+        assert(adoptionDenied.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                reconciliationRequired);
+        assert(adoptionDenied.downstreamEvidence ==
+            EA::CampaignOperations::DownstreamEvidenceClassification::
+                exactCompletePendingTrain);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                unauthorizedAdoptionRequest.request.requestId.value())) == 0);
+        const auto deniedReplay =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                unauthorizedAdoptionRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(deniedReplay.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                reconciliationRequired);
+        assert(deniedReplay.replayDisposition ==
+            EA::CampaignOperations::ExactReplayDisposition::
+                authoritativeExisting);
+
+        currentStage =
+            "campaign_operations_phase3_adoption_authority_matrix";
+        const auto verifyInactiveAdoption =
+            [&](long long materializationId, double threshold,
+                std::optional<EA::CampaignOperations::
+                    AuthorizationEventKind> successor,
+                std::optional<EA::CampaignOperations::UtcTimestamp>
+                    expiresAt)
+        {
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(
+                    runtime, threshold, materializationId + 100)};
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, materializationId, proposals);
+                fixture.commit();
+            }
+            (void)RunLaunch(runtimeString, materializationId);
+            const auto request =
+                CreatePhase3Request(owner, schema, materializationId);
+            const auto grant = GrantPhase3Adoption(
+                owner, schema, request, std::move(expiresAt));
+            if (successor)
+                RecordPhase3AdoptionAuthorizationSuccessor(
+                    owner, schema, request, grant, *successor);
+            const auto result =
+                EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    request.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.inactive.adoption@example.test"),
+                    phase3Gate);
+            assert(result.classification ==
+                EA::CampaignOperations::DispatchResultClassification::
+                    reconciliationRequired);
+            assert(result.downstreamEvidence ==
+                EA::CampaignOperations::DownstreamEvidenceClassification::
+                    exactCompletePendingTrain);
+            assert(result.diagnosticCode ==
+                "dispatch_adoption_authorization_required");
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "campaign_operations_request_binding WHERE "
+                "operational_request_id=" +
+                std::to_string(request.request.requestId.value())) == 0);
+            assert(Text(owner, schema,
+                "SELECT reservation_state FROM "
+                "campaign_operations_reservation WHERE reservation_id=" +
+                std::to_string(
+                    request.reservation.reservationId.value())) == "held");
+        };
+        verifyInactiveAdoption(
+            217, 3.82,
+            EA::CampaignOperations::AuthorizationEventKind::revoked,
+            std::nullopt);
+        verifyInactiveAdoption(
+            218, 3.83,
+            EA::CampaignOperations::AuthorizationEventKind::expiryObserved,
+            std::nullopt);
+        verifyInactiveAdoption(
+            219, 3.84, std::nullopt,
+            EA::CampaignOperations::UtcTimestamp(
+                "2021-01-01T00:00:00.000000Z"));
+
+        currentStage = "campaign_operations_phase3_paused_refusal";
+        const std::vector<CampaignProposal> pausedOnlyProposals{
+            CreateApprovedProposal(runtime, 1.43, 33)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 23, pausedOnlyProposals);
+            fixture.commit();
+        }
+        (void)Execute(runtime, pausedOnlyProposals.front());
+        const auto pausedOnlyRequest =
+            CreatePhase3Request(owner, schema, 23);
+        const auto pausedRefused =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                pausedOnlyRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(pausedRefused.downstreamEvidence ==
+            EA::CampaignOperations::DownstreamEvidenceClassification::
+                pausedOnlyEvidence);
+        assert(pausedRefused.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                reconciliationRequired);
+
+        currentStage = "campaign_operations_phase3_partial_refusal";
+        const std::vector<CampaignProposal> partialProposals{
+            CreateApprovedProposal(runtime, 1.44, 34),
+            CreateApprovedProposal(runtime, 1.45, 35)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 24, partialProposals);
+            fixture.commit();
+        }
+        (void)Execute(runtime, partialProposals.front());
+        const auto partialRequest =
+            CreatePhase3Request(owner, schema, 24);
+        const auto partialRefused =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                partialRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.dispatcher@example.test"),
+                phase3Gate);
+        assert(partialRefused.downstreamEvidence ==
+            EA::CampaignOperations::DownstreamEvidenceClassification::
+                partialPhase5Evidence);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "experiment_recommendation_conversion_execution "
+            "WHERE recommendation_conversion_proposal_id IN (" +
+            std::to_string(partialProposals[0].proposal.proposalId) + "," +
+            std::to_string(partialProposals[1].proposal.proposalId) + ")") ==
+            1);
+
+        currentStage = "campaign_operations_phase3_acquisition_rollback_matrix";
+        const std::vector<EA::CampaignOperations::DispatchTestInjectionPoint>
+            acquisitionRollbackPoints{
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    beforeRequestLeaseTransition,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterRequestLeaseTransitionBeforeAttempt,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterAttemptBeforeAcquisitionAudit,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    beforeAcquisitionCommit};
+        for (std::size_t index = 0;
+             index < acquisitionRollbackPoints.size(); ++index)
+        {
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(runtime, 1.50 + index / 100.0,
+                    40 + static_cast<int>(index))};
+            const long long materializationId =
+                100 + static_cast<long long>(index);
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, materializationId, proposals);
+                fixture.commit();
+            }
+            const auto request =
+                CreatePhase3Request(owner, schema, materializationId);
+            bool injected = false;
+            try
+            {
+                (void)EA::CampaignOperations::
+                    DispatchOneRequestForIsolatedTest(
+                        phase3ConnectionString, request.request.requestId, 1,
+                        EA::CampaignOperations::ActorIdentity(
+                            "phase3.rollback.dispatcher@example.test"),
+                        phase3Gate,
+                        [target = acquisitionRollbackPoints[index]](
+                            EA::CampaignOperations::
+                                DispatchTestInjectionPoint point)
+                        {
+                            if (point == target)
+                                throw std::runtime_error(
+                                    "phase3_acquisition_rollback");
+                        });
+            }
+            catch (const std::runtime_error& error)
+            {
+                injected = std::string(error.what()) ==
+                    "phase3_acquisition_rollback";
+            }
+            assert(injected);
+            const auto requestId =
+                std::to_string(request.request.requestId.value());
+            assert(Text(owner, schema,
+                "SELECT request_state||':'||state_version::text||':'||"
+                "coalesce(lease_token_hash,'NULL') FROM "
+                "campaign_operations_operational_request WHERE "
+                "operational_request_id=" + requestId) ==
+                "ready:1:NULL");
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+                "WHERE operational_request_id=" + requestId) == 0);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "campaign_operations_dispatch_audit_reference_event "
+                "WHERE operational_request_id=" + requestId) == 0);
+            assert(Text(owner, schema,
+                "SELECT reservation_state||':'||state_version::text FROM "
+                "campaign_operations_reservation WHERE reservation_id=" +
+                std::to_string(request.reservation.reservationId.value())) ==
+                "held:1");
+        }
+
+        currentStage = "campaign_operations_phase3_handoff_rollback_matrix";
+        const std::vector<EA::CampaignOperations::DispatchTestInjectionPoint>
+            handoffRollbackPoints{
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    beforeDownstreamEvidenceClassification,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    beforePhase5Invocation,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterPhase5ExecutionMutation,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterPhase5ActivationMutation,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterExperimentCreationOrReuseMutation,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    duringBindingInsertion,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterBindingSubset,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    duringControlOwnerInsertion,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterControlOwnerSubset,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    beforeReservationCommitmentEventInsertion,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterReservationCommitmentEventBeforeProjection,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterReservationProjectionBeforeRequestTransition,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterRequestTransitionBeforeAttemptOutcome,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    afterAttemptOutcomeBeforeAudit,
+                EA::CampaignOperations::DispatchTestInjectionPoint::
+                    beforeHandoffCommit};
+        for (std::size_t index = 0;
+             index < handoffRollbackPoints.size(); ++index)
+        {
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(runtime, 1.60 + index / 100.0,
+                    50 + static_cast<int>(index)),
+                CreateApprovedProposal(runtime, 1.80 + index / 100.0,
+                    80 + static_cast<int>(index))};
+            const long long materializationId =
+                120 + static_cast<long long>(index);
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, materializationId, proposals);
+                fixture.commit();
+            }
+            const auto request =
+                CreatePhase3Request(owner, schema, materializationId);
+            bool injected = false;
+            try
+            {
+                (void)EA::CampaignOperations::
+                    DispatchOneRequestForIsolatedTest(
+                        phase3ConnectionString, request.request.requestId, 1,
+                        EA::CampaignOperations::ActorIdentity(
+                            "phase3.rollback.dispatcher@example.test"),
+                        phase3Gate,
+                        [target = handoffRollbackPoints[index]](
+                            EA::CampaignOperations::
+                                DispatchTestInjectionPoint point)
+                        {
+                            if (point == target)
+                                throw std::runtime_error(
+                                    "phase3_handoff_rollback");
+                        });
+            }
+            catch (const std::runtime_error& error)
+            {
+                injected = std::string(error.what()) ==
+                    "phase3_handoff_rollback";
+            }
+            assert(injected);
+            const auto requestId =
+                std::to_string(request.request.requestId.value());
+            assert(Text(owner, schema,
+                "SELECT request_state||':'||state_version::text||':'||"
+                "(lease_token_hash IS NOT NULL)::text FROM "
+                "campaign_operations_operational_request WHERE "
+                "operational_request_id=" + requestId) ==
+                "dispatching:2:true");
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+                "WHERE operational_request_id=" + requestId) == 1);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "campaign_operations_dispatch_audit_reference_event "
+                "WHERE operational_request_id=" + requestId) == 1);
+            for (const char* table : {
+                     "campaign_operations_request_binding",
+                     "campaign_operations_downstream_control_owner",
+                     "campaign_operations_reservation_commitment"})
+                assert(Scalar(owner, schema,
+                    "SELECT count(*) FROM " + std::string(table) +
+                    " WHERE operational_request_id=" + requestId) == 0);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "campaign_operations_dispatch_attempt_outcome outcome "
+                "JOIN campaign_operations_dispatch_attempt attempt USING "
+                "(dispatch_attempt_id) WHERE "
+                "attempt.operational_request_id=" + requestId) == 0);
+            assert(Text(owner, schema,
+                "SELECT reservation_state||':'||state_version::text FROM "
+                "campaign_operations_reservation WHERE reservation_id=" +
+                std::to_string(request.reservation.reservationId.value())) ==
+                "held:1");
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "experiment_recommendation_conversion_execution WHERE "
+                "recommendation_conversion_proposal_id IN (" +
+                std::to_string(proposals[0].proposal.proposalId) + "," +
+                std::to_string(proposals[1].proposal.proposalId) + ")") == 0);
+        }
+
+        currentStage =
+            "campaign_operations_phase3_acquisition_retry";
+        const std::vector<CampaignProposal> acquisitionRetryProposals{
+            CreateApprovedProposal(runtime, 4.12, 402)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 232, acquisitionRetryProposals);
+            fixture.commit();
+        }
+        const auto acquisitionRetryRequest =
+            CreatePhase3Request(owner, schema, 232);
+        int acquisitionRetryInvocations = 0;
+        const auto acquisitionRetried =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                acquisitionRetryRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.acquisition.retry@example.test"),
+                phase3Gate,
+                [&](EA::CampaignOperations::
+                        DispatchTestInjectionPoint point)
+                {
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                afterRequestLeaseTransitionBeforeAttempt &&
+                        ++acquisitionRetryInvocations < 3)
+                        throw EA::CampaignOperations::
+                            DispatchTestSqlState("40P01");
+                });
+        assert(acquisitionRetryInvocations == 3);
+        assert(acquisitionRetried.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                acquisitionRetryRequest.request.requestId.value())) == 1);
+
+        currentStage =
+            "campaign_operations_phase3_acquisition_retry_exhaustion";
+        const std::vector<CampaignProposal> acquisitionExhaustedProposals{
+            CreateApprovedProposal(runtime, 4.13, 403)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 233, acquisitionExhaustedProposals);
+            fixture.commit();
+        }
+        const auto acquisitionExhaustedRequest =
+            CreatePhase3Request(owner, schema, 233);
+        int acquisitionExhaustedInvocations = 0;
+        const auto acquisitionExhausted =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                acquisitionExhaustedRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.acquisition.exhausted@example.test"),
+                phase3Gate,
+                [&](EA::CampaignOperations::
+                        DispatchTestInjectionPoint point)
+                {
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                afterRequestLeaseTransitionBeforeAttempt)
+                    {
+                        ++acquisitionExhaustedInvocations;
+                        throw EA::CampaignOperations::
+                            DispatchTestSqlState("40001");
+                    }
+                });
+        assert(acquisitionExhaustedInvocations == 3);
+        assert(acquisitionExhausted.failure ==
+            EA::CampaignOperations::DispatchServiceFailureClassification::
+                transientDatabaseRetryExhausted);
+        assert(acquisitionExhausted.transactionAttempts == 3);
+        assert(acquisitionExhausted.diagnosticCode ==
+            "dispatch_retry_exhausted_40001");
+        assert(Text(owner, schema,
+            "SELECT request_state||':'||state_version::text FROM "
+            "campaign_operations_operational_request WHERE "
+            "operational_request_id=" +
+            std::to_string(
+                acquisitionExhaustedRequest.request.requestId.value())) ==
+            "ready:1");
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                acquisitionExhaustedRequest.request.requestId.value())) == 0);
+
+        currentStage = "campaign_operations_phase3_whole_operation_retry";
+        for (const std::string sqlState : {"40001", "40P01"})
+        {
+            static long long retryMaterializationId = 160;
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(runtime,
+                    2.10 + retryMaterializationId / 1000.0,
+                    static_cast<int>(retryMaterializationId)),
+                CreateApprovedProposal(runtime,
+                    2.40 + retryMaterializationId / 1000.0,
+                    static_cast<int>(retryMaterializationId + 1))};
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, retryMaterializationId, proposals);
+                fixture.commit();
+            }
+            const auto request = CreatePhase3Request(
+                owner, schema, retryMaterializationId++);
+            int phase5Invocations = 0;
+            int authoritativeReloads = 0;
+            const auto result =
+                EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString, request.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.retry.dispatcher@example.test"),
+                    phase3Gate,
+                    [&](EA::CampaignOperations::
+                            DispatchTestInjectionPoint point)
+                    {
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    beforeDownstreamEvidenceClassification)
+                            ++authoritativeReloads;
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    afterPhase5ExecutionMutation)
+                        {
+                            ++phase5Invocations;
+                            if (phase5Invocations < 3)
+                                throw EA::CampaignOperations::
+                                    DispatchTestSqlState(sqlState);
+                        }
+                    });
+            assert(result.classification ==
+                EA::CampaignOperations::DispatchResultClassification::
+                    createdAndBound);
+            assert(result.transactionAttempts == 3);
+            assert(phase5Invocations == 3);
+            assert(authoritativeReloads == 3);
+            const auto requestId =
+                std::to_string(request.request.requestId.value());
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+                "WHERE operational_request_id=" + requestId) == 1);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM campaign_operations_request_binding "
+                "WHERE operational_request_id=" + requestId) == 2);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "experiment_recommendation_conversion_execution WHERE "
+                "recommendation_conversion_proposal_id IN (" +
+                std::to_string(proposals[0].proposal.proposalId) + "," +
+                std::to_string(proposals[1].proposal.proposalId) + ")") == 2);
+        }
+
+        currentStage =
+            "campaign_operations_phase3_unknown_commit_proven_absent_retry";
+        const std::vector<CampaignProposal> unknownAbsentProposals{
+            CreateApprovedProposal(runtime, 2.79, 320)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 220, unknownAbsentProposals);
+            fixture.commit();
+        }
+        const auto unknownAbsentRequest =
+            CreatePhase3Request(owner, schema, 220);
+        int unknownAbsentPhase5Invocations = 0;
+        int unknownAbsentFailures = 0;
+        const auto unknownAbsentRecovered =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                unknownAbsentRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.unknown.absent@example.test"),
+                phase3Gate,
+                [&](EA::CampaignOperations::
+                        DispatchTestInjectionPoint point)
+                {
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                beforePhase5Invocation)
+                        ++unknownAbsentPhase5Invocations;
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                beforeHandoffCommit &&
+                        unknownAbsentFailures++ < 2)
+                        throw pqxx::broken_connection(
+                            "phase3 deterministic lost connection");
+                });
+        assert(unknownAbsentRecovered.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(unknownAbsentRecovered.transactionAttempts == 3);
+        assert(unknownAbsentPhase5Invocations == 3);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "experiment_recommendation_conversion_execution WHERE "
+            "recommendation_conversion_proposal_id=" +
+            std::to_string(
+                unknownAbsentProposals.front().proposal.proposalId)) == 1);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                unknownAbsentRequest.request.requestId.value())) == 1);
+
+        currentStage = "campaign_operations_phase3_retry_exhaustion";
+        const std::vector<CampaignProposal> exhaustedProposals{
+            CreateApprovedProposal(runtime, 2.81, 181)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 180, exhaustedProposals);
+            fixture.commit();
+        }
+        const auto exhaustedRequest =
+            CreatePhase3Request(owner, schema, 180);
+        int exhaustedInvocations = 0;
+        const auto exhausted =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                exhaustedRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.retry.dispatcher@example.test"),
+                phase3Gate,
+                [&](EA::CampaignOperations::
+                        DispatchTestInjectionPoint point)
+                {
+                    if (point == EA::CampaignOperations::
+                            DispatchTestInjectionPoint::
+                                afterPhase5ExecutionMutation)
+                    {
+                        ++exhaustedInvocations;
+                        throw EA::CampaignOperations::
+                            DispatchTestSqlState("40001");
+                    }
+                });
+        assert(exhausted.failure == EA::CampaignOperations::
+            DispatchServiceFailureClassification::
+                transientDatabaseRetryExhausted);
+        assert(exhausted.transactionAttempts == 3);
+        assert(exhaustedInvocations == 3);
+        assert(exhausted.diagnosticCode ==
+            "dispatch_retry_exhausted_40001");
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "experiment_recommendation_conversion_execution WHERE "
+            "recommendation_conversion_proposal_id=" +
+            std::to_string(
+                exhaustedProposals.front().proposal.proposalId)) == 0);
+
+        currentStage = "campaign_operations_phase3_nonretryable_sql";
+        const std::vector<CampaignProposal> nonretryableProposals{
+            CreateApprovedProposal(runtime, 2.82, 182)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 181, nonretryableProposals);
+            fixture.commit();
+        }
+        const auto nonretryableRequest =
+            CreatePhase3Request(owner, schema, 181);
+        bool nonretryableObserved = false;
+        try
+        {
+            (void)EA::CampaignOperations::
+                DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    nonretryableRequest.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.retry.dispatcher@example.test"),
+                    phase3Gate,
+                    [](EA::CampaignOperations::
+                           DispatchTestInjectionPoint point)
+                    {
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    afterPhase5ExecutionMutation)
+                            throw EA::CampaignOperations::
+                                DispatchTestSqlState("22000");
+                    });
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            nonretryableObserved = error.sqlstate() == "22000";
+        }
+        assert(nonretryableObserved);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "experiment_recommendation_conversion_execution WHERE "
+            "recommendation_conversion_proposal_id=" +
+            std::to_string(
+                nonretryableProposals.front().proposal.proposalId)) == 0);
+
+        currentStage = "campaign_operations_phase3_authorization_races";
+        const std::vector<CampaignProposal> authorizationRaceProposals{
+            CreateApprovedProposal(runtime, 2.90, 190)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 190, authorizationRaceProposals);
+            fixture.commit();
+        }
+        const auto authorizationRaceRequest =
+            CreatePhase3Request(owner, schema, 190);
+        std::barrier authorizationLocked{2};
+        std::barrier allowAuthorizationCommit{2};
+        std::optional<EA::CampaignOperations::DispatchServiceResult>
+            authorizationRaceResult;
+        std::exception_ptr authorizationRaceError;
+        std::thread authorizationHandoff([&]
+        {
+            try
+            {
+                authorizationRaceResult.emplace(
+                    EA::CampaignOperations::
+                        DispatchOneRequestForIsolatedTest(
+                            phase3ConnectionString,
+                            authorizationRaceRequest.request.requestId, 1,
+                            EA::CampaignOperations::ActorIdentity(
+                                "phase3.authorization.race@example.test"),
+                            phase3Gate,
+                            [&](EA::CampaignOperations::
+                                    DispatchTestInjectionPoint point)
+                            {
+                                if (point == EA::CampaignOperations::
+                                        DispatchTestInjectionPoint::
+                                            beforeDownstreamEvidenceClassification)
+                                {
+                                    authorizationLocked.arrive_and_wait();
+                                    allowAuthorizationCommit.arrive_and_wait();
+                                }
+                            }));
+            }
+            catch (...)
+            {
+                authorizationRaceError = std::current_exception();
+            }
+        });
+        authorizationLocked.arrive_and_wait();
+        std::atomic<bool> revocationFinished{false};
+        std::exception_ptr revocationError;
+        std::thread revocation([&]
+        {
+            try
+            {
+                pqxx::connection connection{ownerString};
+                RecordPhase3DispatchAuthorizationSuccessor(
+                    connection, schema, authorizationRaceRequest,
+                    EA::CampaignOperations::AuthorizationEventKind::revoked);
+                revocationFinished = true;
+            }
+            catch (...)
+            {
+                revocationError = std::current_exception();
+            }
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        assert(!revocationFinished);
+        allowAuthorizationCommit.arrive_and_wait();
+        authorizationHandoff.join();
+        revocation.join();
+        if (authorizationRaceError)
+            std::rethrow_exception(authorizationRaceError);
+        if (revocationError) std::rethrow_exception(revocationError);
+        assert(authorizationRaceResult);
+        assert(authorizationRaceResult->classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(revocationFinished);
+        assert(Text(owner, schema,
+            "SELECT request_state FROM "
+            "campaign_operations_operational_request WHERE "
+            "operational_request_id=" +
+            std::to_string(
+                authorizationRaceRequest.request.requestId.value())) ==
+            "bound");
+
+        for (const auto [materializationId, kind] :
+             std::array<std::pair<long long,
+                 EA::CampaignOperations::AuthorizationEventKind>, 2>{
+                 std::pair{191LL, EA::CampaignOperations::
+                     AuthorizationEventKind::revoked},
+                 std::pair{192LL, EA::CampaignOperations::
+                     AuthorizationEventKind::granted}})
+        {
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(runtime,
+                    2.90 + materializationId / 1000.0,
+                    static_cast<int>(materializationId))};
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, materializationId, proposals);
+                fixture.commit();
+            }
+            const auto request =
+                CreatePhase3Request(owner, schema, materializationId);
+            RecordPhase3DispatchAuthorizationSuccessor(
+                owner, schema, request, kind);
+            bool denied = false;
+            try
+            {
+                (void)EA::CampaignOperations::
+                    DispatchOneRequestForIsolatedTest(
+                        phase3ConnectionString, request.request.requestId, 1,
+                        EA::CampaignOperations::ActorIdentity(
+                            "phase3.authorization.loser@example.test"),
+                        phase3Gate);
+            }
+            catch (const std::runtime_error& error)
+            {
+                denied = std::string(error.what()).find(
+                    "dispatch_authorization_not_head") !=
+                    std::string::npos;
+            }
+            assert(denied);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "campaign_operations_dispatch_attempt WHERE "
+                "operational_request_id=" +
+                std::to_string(request.request.requestId.value())) == 0);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "experiment_recommendation_conversion_execution WHERE "
+                "recommendation_conversion_proposal_id=" +
+                std::to_string(proposals.front().proposal.proposalId)) == 0);
+        }
+
+        const auto expiringAt = [&]
+        {
+            pqxx::read_transaction transaction{owner};
+            SetSearchPath(transaction, schema);
+            return EA::CampaignOperations::UtcTimestamp(
+                transaction.exec(
+                    "SELECT to_char((clock_timestamp()+"
+                    "interval '1.5 seconds') AT TIME ZONE 'UTC',"
+                    "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');")
+                    .one_row()[0].as<std::string>());
+        }();
+        const std::vector<CampaignProposal> expiryHandoffProposals{
+            CreateApprovedProposal(runtime, 2.99, 199)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 193, expiryHandoffProposals);
+            fixture.commit();
+        }
+        const auto expiryHandoffRequest =
+            CreatePhase3Request(owner, schema, 193, expiringAt);
+        std::barrier expiryValidated{2};
+        std::barrier allowExpiredTransactionCommit{2};
+        std::optional<EA::CampaignOperations::DispatchServiceResult>
+            expiryHandoffResult;
+        std::exception_ptr expiryHandoffError;
+        std::thread expiryHandoff([&]
+        {
+            try
+            {
+                expiryHandoffResult.emplace(
+                    EA::CampaignOperations::
+                        DispatchOneRequestForIsolatedTest(
+                            phase3ConnectionString,
+                            expiryHandoffRequest.request.requestId, 1,
+                            EA::CampaignOperations::ActorIdentity(
+                                "phase3.expiry.race@example.test"),
+                            phase3Gate,
+                            [&](EA::CampaignOperations::
+                                    DispatchTestInjectionPoint point)
+                            {
+                                if (point == EA::CampaignOperations::
+                                        DispatchTestInjectionPoint::
+                                            beforeDownstreamEvidenceClassification)
+                                {
+                                    expiryValidated.arrive_and_wait();
+                                    allowExpiredTransactionCommit.
+                                        arrive_and_wait();
+                                }
+                            }));
+            }
+            catch (...)
+            {
+                expiryHandoffError = std::current_exception();
+            }
+        });
+        expiryValidated.arrive_and_wait();
+        std::this_thread::sleep_for(std::chrono::milliseconds{1700});
+        allowExpiredTransactionCommit.arrive_and_wait();
+        expiryHandoff.join();
+        if (expiryHandoffError)
+            std::rethrow_exception(expiryHandoffError);
+        assert(expiryHandoffResult);
+        assert(expiryHandoffResult->classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+
+        const auto alreadyExpiredAt = [&]
+        {
+            pqxx::read_transaction transaction{owner};
+            SetSearchPath(transaction, schema);
+            return EA::CampaignOperations::UtcTimestamp(
+                transaction.exec(
+                    "SELECT to_char((clock_timestamp()+"
+                    "interval '1 second') AT TIME ZONE 'UTC',"
+                    "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');")
+                    .one_row()[0].as<std::string>());
+        }();
+        const std::vector<CampaignProposal> expiryDeniedProposals{
+            CreateApprovedProposal(runtime, 3.00, 200)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 194, expiryDeniedProposals);
+            fixture.commit();
+        }
+        const auto expiryDeniedRequest =
+            CreatePhase3Request(owner, schema, 194, alreadyExpiredAt);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1200});
+        bool expiryDenied = false;
+        try
+        {
+            (void)EA::CampaignOperations::
+                DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    expiryDeniedRequest.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.expiry.loser@example.test"),
+                    phase3Gate);
+        }
+        catch (const std::runtime_error& error)
+        {
+            expiryDenied = std::string(error.what()).find(
+                "dispatch_authorization_inactive") != std::string::npos;
+        }
+        assert(expiryDenied);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "experiment_recommendation_conversion_execution WHERE "
+            "recommendation_conversion_proposal_id=" +
+            std::to_string(
+                expiryDeniedProposals.front().proposal.proposalId)) == 0);
+
+        currentStage = "campaign_operations_phase3_budget_races";
+        const std::string budgetAdministratorConnectionString =
+            ownerString + " options='-c search_path=" + schema +
+            " -c role=campaign_operations_budget_administrator'";
+        const std::vector<CampaignProposal> budgetRaceProposals{
+            CreateApprovedProposal(runtime, 3.01, 201)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 200, budgetRaceProposals);
+            fixture.commit();
+        }
+        const auto budgetRaceRequest =
+            CreatePhase3Request(owner, schema, 200);
+        std::barrier budgetLocked{2};
+        std::barrier allowBudgetCommit{2};
+        std::optional<EA::CampaignOperations::DispatchServiceResult>
+            budgetRaceResult;
+        std::exception_ptr budgetRaceError;
+        std::thread budgetHandoff([&]
+        {
+            try
+            {
+                budgetRaceResult.emplace(
+                    EA::CampaignOperations::
+                        DispatchOneRequestForIsolatedTest(
+                            phase3ConnectionString,
+                            budgetRaceRequest.request.requestId, 1,
+                            EA::CampaignOperations::ActorIdentity(
+                                "phase3.budget.race@example.test"),
+                            phase3Gate,
+                            [&](EA::CampaignOperations::
+                                    DispatchTestInjectionPoint point)
+                            {
+                                if (point == EA::CampaignOperations::
+                                        DispatchTestInjectionPoint::
+                                            beforeDownstreamEvidenceClassification)
+                                {
+                                    budgetLocked.arrive_and_wait();
+                                    allowBudgetCommit.arrive_and_wait();
+                                }
+                            }));
+            }
+            catch (...)
+            {
+                budgetRaceError = std::current_exception();
+            }
+        });
+        budgetLocked.arrive_and_wait();
+        std::atomic<bool> budgetAmendFinished{false};
+        std::exception_ptr budgetAmendError;
+        std::thread budgetAmend([&]
+        {
+            try
+            {
+                pqxx::connection connection{
+                    budgetAdministratorConnectionString};
+                (void)EA::CampaignOperations::AdministerCampaignBudget(
+                    connection,
+                    {budgetRaceRequest.request.request.logicalOperation.
+                         campaignId.value(),
+                     1, EA::CampaignOperations::
+                            BudgetLedgerEntryKind::amend,
+                     1, "phase3.budget.race@example.test",
+                     "Amend budget after atomic handoff winner."});
+                budgetAmendFinished = true;
+            }
+            catch (...)
+            {
+                budgetAmendError = std::current_exception();
+            }
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        assert(!budgetAmendFinished);
+        allowBudgetCommit.arrive_and_wait();
+        budgetHandoff.join();
+        budgetAmend.join();
+        if (budgetRaceError) std::rethrow_exception(budgetRaceError);
+        if (budgetAmendError) std::rethrow_exception(budgetAmendError);
+        assert(budgetRaceResult);
+        assert(budgetRaceResult->classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        assert(budgetAmendFinished);
+        {
+            pqxx::connection connection{
+                budgetAdministratorConnectionString};
+            (void)EA::CampaignOperations::AdministerCampaignBudget(
+                connection,
+                {budgetRaceRequest.request.request.logicalOperation.
+                     campaignId.value(),
+                 2, EA::CampaignOperations::BudgetLedgerEntryKind::revoke,
+                 std::nullopt,
+                 "phase3.budget.race@example.test",
+                 "Revoke budget after committed handoff."});
+        }
+        assert(Text(owner, schema,
+            "SELECT reservation_state FROM "
+            "campaign_operations_reservation WHERE reservation_id=" +
+            std::to_string(
+                budgetRaceRequest.reservation.reservationId.value())) ==
+            "committed");
+
+        for (long long materializationId : {201LL, 202LL})
+        {
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(runtime,
+                    3.10 + materializationId / 1000.0,
+                    static_cast<int>(materializationId))};
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, materializationId, proposals);
+                fixture.commit();
+            }
+            const auto request =
+                CreatePhase3Request(owner, schema, materializationId);
+            pqxx::connection connection{
+                budgetAdministratorConnectionString};
+            if (materializationId == 201)
+            {
+                (void)EA::CampaignOperations::AdministerCampaignBudget(
+                    connection,
+                    {request.request.request.logicalOperation.campaignId.
+                         value(),
+                     1, EA::CampaignOperations::
+                            BudgetLedgerEntryKind::amend,
+                     1, "phase3.budget.mutation@example.test",
+                     "Amend budget before handoff."});
+            }
+            else
+            {
+                (void)EA::CampaignOperations::AdministerCampaignBudget(
+                    connection,
+                    {request.request.request.logicalOperation.campaignId.
+                         value(),
+                     1, EA::CampaignOperations::
+                            BudgetLedgerEntryKind::revoke,
+                     std::nullopt,
+                     "phase3.budget.mutation@example.test",
+                     "Revoke budget before handoff."});
+                (void)EA::CampaignOperations::AdministerCampaignBudget(
+                    connection,
+                    {request.request.request.logicalOperation.campaignId.
+                         value(),
+                     2, EA::CampaignOperations::
+                            BudgetLedgerEntryKind::supersede,
+                     request.reservation.reservation.amount,
+                     "phase3.budget.mutation@example.test",
+                     "Supersede revoked budget without lending authority."});
+            }
+            bool denied = false;
+            try
+            {
+                (void)EA::CampaignOperations::
+                    DispatchOneRequestForIsolatedTest(
+                        phase3ConnectionString, request.request.requestId, 1,
+                        EA::CampaignOperations::ActorIdentity(
+                            "phase3.budget.loser@example.test"),
+                        phase3Gate);
+            }
+            catch (const std::runtime_error& error)
+            {
+                denied = std::string(error.what()).find(
+                    "dispatch_budget_inactive") != std::string::npos;
+            }
+            assert(denied);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM "
+                "experiment_recommendation_conversion_execution WHERE "
+                "recommendation_conversion_proposal_id=" +
+                std::to_string(proposals.front().proposal.proposalId)) == 0);
+        }
+
+        currentStage = "campaign_operations_phase3_progressed_evidence";
+        for (const auto [materializationId, status] :
+             std::array<std::pair<long long, const char*>, 2>{
+                 std::pair{210LL, "running"},
+                 std::pair{211LL, "completed"}})
+        {
+            const std::vector<CampaignProposal> proposals{
+                CreateApprovedProposal(runtime,
+                    3.40 + materializationId / 1000.0,
+                    static_cast<int>(materializationId))};
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                InsertMaterialization(
+                    fixture, materializationId, proposals);
+                fixture.commit();
+            }
+            const auto direct = RunLaunch(
+                runtimeString, materializationId);
+            assert(direct.plan.members.size() == 1);
+            const auto experimentId =
+                direct.plan.members.front().experimentId;
+            assert(experimentId);
+            {
+                pqxx::work fixture{owner};
+                SetSearchPath(fixture, schema);
+                fixture.exec(
+                    "UPDATE experiment SET status=$1,phase='train' "
+                    "WHERE experiment_id=$2;",
+                    pqxx::params{status, *experimentId});
+                fixture.commit();
+            }
+            const auto request =
+                CreatePhase3Request(owner, schema, materializationId);
+            GrantPhase3Adoption(owner, schema, request);
+            const auto refused =
+                EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString, request.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.progressed@example.test"),
+                    phase3Gate);
+            assert(refused.classification ==
+                EA::CampaignOperations::DispatchResultClassification::
+                    reconciliationRequired);
+            assert(refused.downstreamEvidence ==
+                EA::CampaignOperations::DownstreamEvidenceClassification::
+                    progressedUnboundEvidence);
+            assert(Scalar(owner, schema,
+                "SELECT count(*) FROM campaign_operations_request_binding "
+                "WHERE operational_request_id=" +
+                std::to_string(request.request.requestId.value())) == 0);
+            assert(Text(owner, schema,
+                "SELECT reservation_state FROM "
+                "campaign_operations_reservation WHERE reservation_id=" +
+                std::to_string(request.reservation.reservationId.value())) ==
+                "held");
+        }
+
+        currentStage = "campaign_operations_phase3_mixed_evidence";
+        const std::vector<CampaignProposal> mixedEvidenceProposals{
+            CreateApprovedProposal(runtime, 3.62, 212),
+            CreateApprovedProposal(runtime, 3.63, 213)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 212, mixedEvidenceProposals);
+            fixture.commit();
+        }
+        const auto mixedExecutions = RunStep1(runtimeString, 212);
+        assert(mixedExecutions.size() == 2);
+        {
+            pqxx::work activation{runtime};
+            (void)ActivateRecommendationConversionExecutionInTransaction(
+                activation, mixedExecutions.front().executionId);
+            activation.commit();
+        }
+        const auto mixedRequest =
+            CreatePhase3Request(owner, schema, 212);
+        GrantPhase3Adoption(owner, schema, mixedRequest);
+        const auto mixedRefused =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString, mixedRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.mixed@example.test"),
+                phase3Gate);
+        assert(mixedRefused.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                reconciliationRequired);
+        assert(mixedRefused.downstreamEvidence ==
+            EA::CampaignOperations::DownstreamEvidenceClassification::
+                partialPhase5Evidence);
+
+        currentStage = "campaign_operations_phase3_control_owner_collision";
+        const std::vector<CampaignProposal> ownershipProposals{
+            CreateApprovedProposal(runtime, 3.70, 214)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 214, ownershipProposals);
+            InsertMaterialization(fixture, 215, ownershipProposals);
+            fixture.commit();
+        }
+        const auto owningRequest =
+            CreatePhase3Request(owner, schema, 214);
+        const auto owningResult =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString, owningRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.owner@example.test"),
+                phase3Gate);
+        assert(owningResult.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        const auto collidingRequest =
+            CreatePhase3Request(owner, schema, 215);
+        GrantPhase3Adoption(owner, schema, collidingRequest);
+        const auto collision =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                collidingRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase3.collision@example.test"),
+                phase3Gate);
+        assert(collision.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                reconciliationRequired);
+        assert(collision.diagnosticCode ==
+            "dispatch_control_owner_collision");
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                collidingRequest.request.requestId.value())) == 0);
+
+        currentStage = "campaign_operations_phase3_corruption_matrix";
+        const auto assertBindingCorruptionRejected =
+            [&](EA::CampaignOperations::OperationalRequestId requestId,
+                const std::string& corruption)
+        {
+            pqxx::work transaction{owner};
+            SetSearchPath(transaction, schema);
+            transaction.exec(corruption);
+            bool rejected = false;
+            try
+            {
+                (void)EA::CampaignOperations::
+                    FindAndValidateCompleteDispatchBinding(
+                        transaction, requestId);
+            }
+            catch (const std::exception&)
+            {
+                rejected = true;
+            }
+            assert(rejected);
+            transaction.abort();
+        };
+        const auto phase3RequestId =
+            phase3Request.request.requestId.value();
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_dispatch_attempt SET "
+            "attempt_identity_canonical=attempt_identity_canonical||"
+            "';corrupt=1' WHERE operational_request_id=" +
+                std::to_string(phase3RequestId));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_dispatch_attempt SET "
+            "attempt_ordinal=attempt_ordinal+1 WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_dispatch_attempt SET "
+            "lease_token_digest='fnv1a64:0000000000000000' WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "DELETE FROM campaign_operations_dispatch_audit_reference_event "
+            "WHERE dispatch_attempt_outcome_id IS NOT NULL AND "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            "; DELETE FROM campaign_operations_dispatch_attempt_outcome "
+            "WHERE dispatch_attempt_id IN (SELECT dispatch_attempt_id FROM "
+            "campaign_operations_dispatch_attempt WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            ");");
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_dispatch_attempt_outcome SET "
+            "resulting_request_version=resulting_request_version+1 WHERE "
+            "dispatch_attempt_id IN (SELECT dispatch_attempt_id FROM "
+            "campaign_operations_dispatch_attempt WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            ");");
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "DELETE FROM campaign_operations_downstream_control_owner "
+            "WHERE request_binding_id=(SELECT request_binding_id FROM "
+            "campaign_operations_request_binding WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            " ORDER BY member_ordinal DESC LIMIT 1); DELETE FROM "
+            "campaign_operations_request_binding WHERE request_binding_id=("
+            "SELECT request_binding_id FROM "
+            "campaign_operations_request_binding WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            " ORDER BY member_ordinal DESC LIMIT 1);");
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_request_binding SET "
+            "proposal_identity_canonical=proposal_identity_canonical||"
+            "';corrupt=1' WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            " AND member_ordinal=1;");
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_request_binding SET "
+            "binding_disposition='adopted_existing_pending',"
+            "execution_disposition='reused',"
+            "activation_disposition='reused' WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            " AND member_ordinal=1;");
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "DELETE FROM campaign_operations_downstream_control_owner "
+            "WHERE operational_request_id=" +
+                std::to_string(phase3RequestId) +
+            " AND request_binding_id=(SELECT request_binding_id FROM "
+            "campaign_operations_request_binding WHERE "
+            "operational_request_id=" + std::to_string(phase3RequestId) +
+            " ORDER BY member_ordinal LIMIT 1);");
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_downstream_control_owner SET "
+            "owner_identity_canonical=owner_identity_canonical||"
+            "';corrupt=1' WHERE operational_request_id=" +
+                std::to_string(phase3RequestId));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_reservation SET "
+            "reservation_state='held' WHERE reservation_id=" +
+                std::to_string(
+                    phase3Request.reservation.reservationId.value()));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_operational_request SET "
+            "state_version=state_version+1 WHERE operational_request_id=" +
+                std::to_string(phase3RequestId));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_dispatch_audit_reference_event SET "
+            "diagnostic_code='corrupt_audit_reference' WHERE "
+            "dispatch_attempt_outcome_id IS NOT NULL AND "
+            "operational_request_id=" + std::to_string(phase3RequestId));
+        assertBindingCorruptionRejected(
+            phase3Request.request.requestId,
+            "UPDATE campaign_operations_request_binding SET "
+            "binding_identity_canonical=binding_identity_canonical||"
+            "';hash_collision_bytes=1' WHERE operational_request_id=" +
+                std::to_string(phase3RequestId) +
+            " AND member_ordinal=1;");
+
+        currentStage =
+            "campaign_operations_phase3_unknown_commit_partial_binding";
+        const std::vector<CampaignProposal> corruptReplayProposals{
+            CreateApprovedProposal(runtime, 3.80, 216),
+            CreateApprovedProposal(runtime, 3.81, 217)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 216, corruptReplayProposals);
+            fixture.commit();
+        }
+        const auto corruptReplayRequest =
+            CreatePhase3Request(owner, schema, 216);
+        (void)EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+            phase3ConnectionString,
+            corruptReplayRequest.request.requestId, 1,
+            EA::CampaignOperations::ActorIdentity(
+                "phase3.corruption.fixture@example.test"),
+            phase3Gate);
+        {
+            pqxx::work corruption{owner};
+            SetSearchPath(corruption, schema);
+            corruption.exec(
+                "DELETE FROM "
+                "campaign_operations_downstream_control_owner "
+                "WHERE request_binding_id=(SELECT request_binding_id FROM "
+                "campaign_operations_request_binding WHERE "
+                "operational_request_id=$1 ORDER BY member_ordinal DESC "
+                "LIMIT 1);",
+                pqxx::params{
+                    corruptReplayRequest.request.requestId.value()});
+            corruption.exec(
+                "DELETE FROM campaign_operations_request_binding "
+                "WHERE request_binding_id=(SELECT request_binding_id FROM "
+                "campaign_operations_request_binding WHERE "
+                "operational_request_id=$1 ORDER BY member_ordinal DESC "
+                "LIMIT 1);",
+                pqxx::params{
+                    corruptReplayRequest.request.requestId.value()});
+            corruption.commit();
+        }
+        int corruptReplayPhase5Invocations = 0;
+        bool corruptReplayRejected = false;
+        try
+        {
+            (void)EA::CampaignOperations::
+                DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    corruptReplayRequest.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.corruption.replay@example.test"),
+                    phase3Gate,
+                    [&](EA::CampaignOperations::
+                            DispatchTestInjectionPoint point)
+                    {
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    beforePhase5Invocation)
+                            ++corruptReplayPhase5Invocations;
+                    });
+        }
+        catch (const std::exception&)
+        {
+            corruptReplayRejected = true;
+        }
+        assert(corruptReplayRejected);
+        assert(corruptReplayPhase5Invocations == 0);
+        {
+            pqxx::work corruption{owner};
+            SetSearchPath(corruption, schema);
+            corruption.exec(
+                "DELETE FROM campaign_operations_downstream_control_owner "
+                "WHERE operational_request_id=$1;",
+                pqxx::params{
+                    corruptReplayRequest.request.requestId.value()});
+            corruption.exec(
+                "DELETE FROM campaign_operations_request_binding "
+                "WHERE operational_request_id=$1;",
+                pqxx::params{
+                    corruptReplayRequest.request.requestId.value()});
+            corruption.commit();
+        }
+        int missingBindingPhase5Invocations = 0;
+        bool missingBindingRejected = false;
+        try
+        {
+            (void)EA::CampaignOperations::
+                DispatchOneRequestForIsolatedTest(
+                    phase3ConnectionString,
+                    corruptReplayRequest.request.requestId, 1,
+                    EA::CampaignOperations::ActorIdentity(
+                        "phase3.missing.binding@example.test"),
+                    phase3Gate,
+                    [&](EA::CampaignOperations::
+                            DispatchTestInjectionPoint point)
+                    {
+                        if (point == EA::CampaignOperations::
+                                DispatchTestInjectionPoint::
+                                    beforePhase5Invocation)
+                            ++missingBindingPhase5Invocations;
+                    });
+        }
+        catch (const std::exception&)
+        {
+            missingBindingRejected = true;
+        }
+        assert(missingBindingRejected);
+        assert(missingBindingPhase5Invocations == 0);
+
+        currentStage =
+            "campaign_operations_phase3_transactional_role_scope";
+        const long long alreadyBoundExperimentId = Scalar(owner, schema,
+            "SELECT experiment_id FROM campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                directOverlapRequest.request.requestId.value()));
+        {
+            pqxx::work pause{owner};
+            SetSearchPath(pause, schema);
+            pause.exec(
+                "UPDATE experiment SET status='paused',phase='train',"
+                "updated_at=transaction_timestamp() WHERE experiment_id=$1;",
+                pqxx::params{alreadyBoundExperimentId});
+            pause.commit();
+        }
+        bool alreadyBoundReactivationDenied = false;
+        try
+        {
+            pqxx::work forbidden{owner};
+            SetSearchPath(forbidden, schema);
+            forbidden.exec(
+                "SET LOCAL ROLE "
+                "campaign_operations_phase5_transactional;");
+            forbidden.exec(
+                "UPDATE experiment SET status='pending',phase='train',"
+                "updated_at=transaction_timestamp() WHERE experiment_id=$1;",
+                pqxx::params{alreadyBoundExperimentId});
+            forbidden.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            alreadyBoundReactivationDenied = PermissionDenied(error) ||
+                std::string{error.what()}.find(
+                    "Campaign Operations Phase 5 experiment update denied") !=
+                    std::string::npos;
+        }
+        assert(alreadyBoundReactivationDenied);
+
+        bool arbitraryExperimentInsertDenied = false;
+        try
+        {
+            pqxx::work forbidden{owner};
+            SetSearchPath(forbidden, schema);
+            forbidden.exec(
+                "SET LOCAL ROLE "
+                "campaign_operations_phase5_transactional;");
+            forbidden.exec(
+                "INSERT INTO experiment (symbol, prediction_horizon, "
+                "c_next_threshold, core_lr_mult, head_lr_mult, "
+                "target_epochs, checkpoint_interval, train_start, "
+                "train_end, infer_start, infer_end, status, phase, "
+                "resume_model_id, duplicate_nonce, invocation_mode, "
+                "updated_at) SELECT symbol, prediction_horizon, "
+                "c_next_threshold, core_lr_mult, head_lr_mult, "
+                "target_epochs, checkpoint_interval, train_start, "
+                "train_end, infer_start, infer_end, 'pending', 'train', "
+                "resume_model_id, duplicate_nonce + 900000, "
+                "invocation_mode, transaction_timestamp() "
+                "FROM experiment WHERE experiment_id=17;");
+            forbidden.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            arbitraryExperimentInsertDenied = PermissionDenied(error) ||
+                std::string{error.what()}.find(
+                    "Campaign Operations Phase 5 mutation lacks atomic "
+                    "binding") != std::string::npos;
+        }
+        assert(arbitraryExperimentInsertDenied);
 
         bool updateDenied = false;
         try

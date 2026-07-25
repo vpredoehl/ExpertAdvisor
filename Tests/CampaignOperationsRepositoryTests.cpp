@@ -1,5 +1,6 @@
 #include "../Sources/CampaignOperationsRepository.hpp"
 #include "../Sources/CampaignOperationsService.hpp"
+#include "../Sources/CampaignOperationsDispatchRepository.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
 #include "../Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.hpp"
@@ -7,6 +8,7 @@
 #include "../Sources/ExperimentRecommendationCampaignMaterializationRepository.hpp"
 
 #include <atomic>
+#include <barrier>
 #include <cassert>
 #include <cctype>
 #include <cstdint>
@@ -537,6 +539,53 @@ CREATE TABLE experiment_recommendation_campaign_materialization_member(
     recommendation_conversion_proposal_id bigint NOT NULL,
     proposal_identity_canonical text NOT NULL,
     proposal_identity_hash text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE experiment(
+    experiment_id bigserial PRIMARY KEY,
+    symbol text NOT NULL DEFAULT 'TEST',
+    prediction_horizon integer NOT NULL DEFAULT 1,
+    c_next_threshold double precision NOT NULL DEFAULT 0,
+    core_lr_mult double precision,
+    head_lr_mult double precision,
+    target_epochs integer NOT NULL DEFAULT 1,
+    checkpoint_interval integer NOT NULL DEFAULT 20,
+    train_start timestamptz NOT NULL DEFAULT now(),
+    train_end timestamptz NOT NULL DEFAULT now(),
+    infer_start timestamptz,
+    infer_end timestamptz,
+    status text NOT NULL DEFAULT 'paused',
+    phase text NOT NULL DEFAULT 'train',
+    invocation_mode text,
+    resume_model_id bigint,
+    duplicate_nonce bigint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE experiment_recommendation_conversion_proposal(
+    recommendation_conversion_proposal_id bigint PRIMARY KEY);
+CREATE TABLE experiment_recommendation_conversion_review_decision(
+    recommendation_conversion_review_decision_id bigint PRIMARY KEY);
+CREATE TABLE experiment_recommendation_conversion_execution(
+    recommendation_conversion_execution_id bigserial PRIMARY KEY,
+    recommendation_conversion_proposal_id bigint NOT NULL UNIQUE,
+    recommendation_conversion_review_decision_id bigint NOT NULL,
+    experiment_id bigint NOT NULL UNIQUE,
+    execution_contract_version integer NOT NULL,
+    authorization_decision text NOT NULL,
+    execution_identity_canonical text NOT NULL,
+    execution_identity_hash text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE experiment_recommendation_conversion_activation(
+    recommendation_conversion_activation_id bigserial PRIMARY KEY,
+    recommendation_conversion_execution_id bigint NOT NULL UNIQUE,
+    recommendation_conversion_proposal_id bigint NOT NULL,
+    recommendation_conversion_review_decision_id bigint NOT NULL,
+    experiment_id bigint NOT NULL UNIQUE,
+    activation_contract_version integer NOT NULL,
+    previous_status text NOT NULL,
+    previous_phase text NOT NULL,
+    resulting_status text NOT NULL,
+    resulting_phase text NOT NULL,
+    activation_identity_canonical text NOT NULL,
+    activation_identity_hash text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE experiment_recommendation_campaign_follow_up_proposal(
     recommendation_campaign_follow_up_proposal_id bigint PRIMARY KEY,
@@ -3011,6 +3060,208 @@ void TestBudgetReservationAndRequestAcceptance(
     }
 }
 
+void TestPhase3LeaseAcquisition(pqxx::connection& owner,
+    const std::string& connectionString, const std::string& schema)
+{
+    const std::string budgetConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_budget_administrator'";
+    const std::string requestConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_request_acceptor'";
+    const auto fixture = CreatePhase2AcceptanceFixture(
+        owner, budgetConnectionString, schema, 190, 2);
+    pqxx::connection acceptor{requestConnectionString};
+    const auto accepted = AcceptOperationalRequest(acceptor,
+        {fixture.campaign.campaignId.value(),
+            "phase3.requester@example.test",
+            "Accept exact Phase 3 lease fixture.", std::nullopt});
+    const auto requestId = accepted.persisted.request.requestId;
+    const LeaseTokenDigest digest = LeaseTokenDigest::Derive(
+        "phase3-lease-token-0123456789abcdef");
+    {
+        pqxx::read_transaction first{owner};
+        SetSearchPath(first, schema);
+        first.exec("SET LOCAL ROLE campaign_operations_dispatcher;");
+        const auto firstCandidates =
+            SelectDispatchCandidatesForIsolatedTest(first, 100);
+        pqxx::connection secondConnection{connectionString};
+        pqxx::read_transaction second{secondConnection};
+        SetSearchPath(second, schema);
+        second.exec("SET LOCAL ROLE campaign_operations_dispatcher;");
+        const auto secondCandidates =
+            SelectDispatchCandidatesForIsolatedTest(second, 100);
+        assert(std::is_sorted(
+            firstCandidates.begin(), firstCandidates.end(),
+            [](OperationalRequestId left, OperationalRequestId right)
+            {
+                return left.value() < right.value();
+            }));
+        assert(std::find(firstCandidates.begin(), firstCandidates.end(),
+                   requestId) != firstCandidates.end());
+        assert(std::find(secondCandidates.begin(), secondCandidates.end(),
+                   requestId) != secondCandidates.end());
+    }
+
+    DispatchLease lease = [&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        const auto acquired = AcquireDispatchLeaseInTransaction(
+            transaction, requestId, 1, digest,
+            ActorIdentity("phase3.dispatcher@example.test"));
+        transaction.commit();
+        return acquired;
+    }();
+    assert(lease.acquisition.attemptOrdinal == 1);
+    assert(lease.acquisition.expectedRequestVersion == 1);
+    assert(lease.acquisition.resultingRequestVersion == 2);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT request_state,state_version,lease_token_hash,"
+            "dispatcher_identity,production_dispatch_enabled "
+            "FROM campaign_operations_operational_request "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{requestId.value()}).one_row();
+        assert(row[0].as<std::string>() == "dispatching");
+        assert(row[1].as<int>() == 2);
+        assert(row[2].as<std::string>() == digest.value());
+        assert(row[2].as<std::string>().find("phase3-lease-token") ==
+            std::string::npos);
+        assert(row[3].as<std::string>() ==
+            "phase3.dispatcher@example.test");
+        assert(!row[4].as<bool>());
+        assert(transaction.exec(
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{requestId.value()}).one_row()[0].as<int>() == 1);
+    }
+    {
+        bool lost = false;
+        try
+        {
+            pqxx::work transaction{owner};
+            SetSearchPath(transaction, schema);
+            transaction.exec(
+                "SET LOCAL ROLE campaign_operations_dispatcher;");
+            (void)AcquireDispatchLeaseInTransaction(
+                transaction, requestId, 1, digest,
+                ActorIdentity("phase3.loser@example.test"));
+            transaction.commit();
+        }
+        catch (const std::exception&)
+        {
+            lost = true;
+        }
+        assert(lost);
+    }
+
+    const auto rollbackFixture = CreatePhase2AcceptanceFixture(
+        owner, budgetConnectionString, schema, 191, 1);
+    const auto rollbackAccepted = AcceptOperationalRequest(acceptor,
+        {rollbackFixture.campaign.campaignId.value(),
+            "phase3.rollback@example.test",
+            "Accept exact rollback lease fixture.", std::nullopt});
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            rollbackAccepted.persisted.request.requestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase3-rollback-token-0123456789abc"),
+            ActorIdentity("phase3.dispatcher@example.test"));
+        transaction.abort();
+    }
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT request_state,state_version,lease_token_hash IS NULL "
+            "FROM campaign_operations_operational_request "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{
+                rollbackAccepted.persisted.request.requestId.value()})
+            .one_row();
+        assert(row[0].as<std::string>() == "ready");
+        assert(row[1].as<int>() == 1);
+        assert(row[2].as<bool>());
+        assert(transaction.exec(
+            "SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{
+                rollbackAccepted.persisted.request.requestId.value()})
+            .one_row()[0].as<int>() == 0);
+    }
+
+    const auto contentionFixture = CreatePhase2AcceptanceFixture(
+        owner, budgetConnectionString, schema, 192, 1);
+    const auto contentionAccepted = AcceptOperationalRequest(acceptor,
+        {contentionFixture.campaign.campaignId.value(),
+            "phase3.contention@example.test",
+            "Accept exact contention lease fixture.", std::nullopt});
+    const auto contentionRequestId =
+        contentionAccepted.persisted.request.requestId;
+    std::barrier start{3};
+    std::atomic<int> winners{0};
+    std::atomic<int> losers{0};
+    auto acquire = [&](const char* token, const char* actor)
+    {
+        pqxx::connection connection{connectionString};
+        start.arrive_and_wait();
+        try
+        {
+            pqxx::work transaction{connection};
+            SetSearchPath(transaction, schema);
+            transaction.exec(
+                "SET LOCAL ROLE campaign_operations_dispatcher;");
+            (void)AcquireDispatchLeaseInTransaction(transaction,
+                contentionRequestId, 1, LeaseTokenDigest::Derive(token),
+                ActorIdentity(actor));
+            transaction.commit();
+            ++winners;
+        }
+        catch (const std::exception&)
+        {
+            ++losers;
+        }
+    };
+    std::thread firstAcquirer{acquire,
+        "phase3-contention-token-aaaaaaaaaaaaaaaa",
+        "phase3.first@example.test"};
+    std::thread secondAcquirer{acquire,
+        "phase3-contention-token-bbbbbbbbbbbbbbbb",
+        "phase3.second@example.test"};
+    start.arrive_and_wait();
+    firstAcquirer.join();
+    secondAcquirer.join();
+    assert(winners == 1);
+    assert(losers == 1);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT request_state,state_version,"
+            "(SELECT count(*) FROM campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=$1),"
+            "(SELECT min(attempt_ordinal) FROM "
+            "campaign_operations_dispatch_attempt "
+            "WHERE operational_request_id=$1) "
+            "FROM campaign_operations_operational_request "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{contentionRequestId.value()}).one_row();
+        assert(row[0].as<std::string>() == "dispatching");
+        assert(row[1].as<int>() == 2);
+        assert(row[2].as<int>() == 1);
+        assert(row[3].as<int>() == 1);
+    }
+}
+
 void DropSchema(pqxx::connection& connection, const std::string& schema)
 {
     pqxx::work transaction{connection};
@@ -3067,6 +3318,12 @@ int main()
             "Tests/CampaignOperationsMigrationTests.sql");
         ApplyFile(owner, schema,
             "Tests/CampaignOperationsPhase2MigrationTests.sql");
+        ApplyFile(owner, schema,
+            "Database/migrations/048_campaign_operations_durable_dispatch_handoff.sql");
+        ApplyFile(owner, schema,
+            "Database/migrations/048_campaign_operations_durable_dispatch_handoff.sql");
+        ApplyFile(owner, schema,
+            "Tests/CampaignOperationsPhase3MigrationTests.sql");
 
         const OperationalCampaign campaign =
             InsertMaterialization(owner, schema, 41, 3);
@@ -3208,6 +3465,7 @@ int main()
         TestOversizedCanonicals(owner, schema);
         TestBudgetReservationAndRequestAcceptance(
             owner, connectionString, schema);
+        TestPhase3LeaseAcquisition(owner, connectionString, schema);
         TestDirectCapabilityIntegrity(owner, connectionString, schema);
         TestPhase2CorrectionConcurrency(owner, connectionString, schema);
 

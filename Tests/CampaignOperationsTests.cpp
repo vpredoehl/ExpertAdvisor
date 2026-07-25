@@ -1,4 +1,5 @@
 #include "../Sources/CampaignOperations.hpp"
+#include "../Sources/CampaignOperationsDispatch.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
 
@@ -424,6 +425,76 @@ int main()
         (void)ClassifyCompletion({3, 3, 0, 0, false, true, false});
     }, ErrorCode::invalidCompletionEvidence,
         "campaign_operations_completion_evidence_invalid");
+
+    const LeaseTokenDigest leaseDigest = LeaseTokenDigest::Derive(
+        "0123456789abcdef0123456789abcdef");
+    const auto attempt = BuildDispatchAttemptAcquisition(
+        OperationalRequestId(31), request.identity.canonicalText(), 1, 1, 2,
+        leaseDigest, UtcTimestamp("2026-07-25T12:00:00.000000Z"),
+        ActorIdentity("phase3.dispatcher@example.test"));
+    const auto firstBinding = BuildRequestMemberBinding(
+        OperationalRequestId(31), request.identity.canonicalText(), 41,
+        "materialization-canonical", 4101, 1, "selected-one",
+        "fnv1a64:0000000000000001", 4201, "proposal-one",
+        "fnv1a64:0000000000000002", 4301, 4401, "execution-one",
+        "fnv1a64:0000000000000003", 4501, "activation-one",
+        "fnv1a64:0000000000000004", 4601, BindingDisposition::created,
+        Phase5ExecutionDisposition::created,
+        Phase5ActivationDisposition::created);
+    const auto secondBinding = BuildRequestMemberBinding(
+        OperationalRequestId(31), request.identity.canonicalText(), 41,
+        "materialization-canonical", 4102, 2, "selected-two",
+        "fnv1a64:0000000000000005", 4202, "proposal-two",
+        "fnv1a64:0000000000000006", 4302, 4402, "execution-two",
+        "fnv1a64:0000000000000007", 4502, "activation-two",
+        "fnv1a64:0000000000000008", 4602,
+        BindingDisposition::created,
+        Phase5ExecutionDisposition::created,
+        Phase5ActivationDisposition::created);
+    AssertError([&]
+    {
+        (void)BuildRequestMemberBinding(
+            OperationalRequestId(31), request.identity.canonicalText(), 41,
+            "materialization-canonical", 4103, 3, "selected-three",
+            "fnv1a64:000000000000000a", 4203, "proposal-three",
+            "fnv1a64:000000000000000b", 4303, 4403,
+            "execution-three", "fnv1a64:000000000000000c", 4503,
+            "activation-three", "fnv1a64:000000000000000d", 4603,
+            BindingDisposition::created,
+            Phase5ExecutionDisposition::reused,
+            Phase5ActivationDisposition::created);
+    }, ErrorCode::invalidOperationalRequest,
+        "campaign_operations_binding_disposition_invalid");
+    const auto bindingSet = BuildRequestBindingSet(
+        OperationalRequestId(31), request.identity.canonicalText(),
+        {firstBinding, secondBinding});
+    const auto owner = BuildDownstreamControlOwner(
+        OperationalRequestId(31), request.identity.canonicalText(),
+        secondBinding.identity.canonicalText(), 4602,
+        DownstreamControlMode::authorizedAdoptionControl,
+        AuthorizationEventId(47), "adoption-authorization",
+        "fnv1a64:0000000000000009");
+    const auto commitment = BuildReservationCommitment(
+        ReservationId(29), reservation.identity.canonicalText(),
+        OperationalRequestId(31), request.identity.canonicalText(),
+        bindingSet.identity.canonicalText(), bindingSet.identity.hash(),
+        1, 2, 3);
+    const auto outcome = BuildDispatchAttemptOutcomeEvidence(
+        DispatchAttemptId(51), attempt.identity.canonicalText(),
+        DispatchResultClassification::createdAndBound,
+        DownstreamEvidenceClassification::noPhase5Evidence,
+        SemanticConflictClassification::none,
+        UncertainCommitRecoveryClassification::provenNoCommit,
+        "dispatch_created_and_bound", 2, 3, 1, 2,
+        bindingSet.identity.canonicalText(), bindingSet.identity.hash());
+    assert(leaseDigest.value() == "fnv1a64:01527c9731f0ff55");
+    assert(attempt.identity.hash() == "fnv1a64:8a2997f32b017e15");
+    assert(firstBinding.identity.hash() == "fnv1a64:5a5d3859fafb3d66");
+    assert(secondBinding.identity.hash() == "fnv1a64:478d91a756482217");
+    assert(bindingSet.identity.hash() == "fnv1a64:3a32410aa5f73f02");
+    assert(owner.identity.hash() == "fnv1a64:337c848f545dad02");
+    assert(commitment.identity.hash() == "fnv1a64:dd92c2c4cd231c39");
+    assert(outcome.identity.hash() == "fnv1a64:b9275d5d0e0f49f8");
 
     return 0;
 }

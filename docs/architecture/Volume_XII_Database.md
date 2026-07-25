@@ -1,8 +1,8 @@
 # Volume XII — Database
 
-Status: Aligned through Phase 6D and Campaign Operations Phase 2
-Version: 0.6.0
-Last revised: 2026-07-24
+Status: Aligned through Phase 6D and isolated Campaign Operations Phase 3
+Version: 0.7.0
+Last revised: 2026-07-25
 
 ## 1. Purpose
 
@@ -53,6 +53,15 @@ The new budget-administrator and request-acceptor roles are distinct NOLOGIN
 capabilities and are not granted to ``pqxx``. No dispatch, lifecycle,
 experiment, scheduler, worker, control, cancellation, completion, or
 monitoring authority is added.
+
+Campaign Operations migration 048 adds immutable dispatch attempts and
+outcomes, complete per-member bindings, permanent V1 control owners,
+reservation commitment evidence, guarded lease/request/reservation
+transitions, commit-time binding completeness, and exact dispatch audit
+references. Dedicated dispatcher and transactional Phase 5 roles are NOLOGIN,
+are not members of or granted to `pqxx`, and receive only explicit allowlists.
+Production dispatch remains constrained false; no scheduler tables, scheduler
+attempts, claims, worker privileges, or production poller are added.
 
 ## 3. Responsibilities
 
@@ -309,3 +318,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.4.0 | 2026-07-22 | Recorded proposed append-only Phase 6D governance ratification per eligible approved review, fixed role, mandatory separation of duties, deterministic replay/conflict, and least privilege without Phase 6E authority. | ADR-0001, ADR-0004, ADR-0009 |
 | 0.5.0 | 2026-07-24 | Aligned accepted Phase 6D and recorded Campaign Operations' append-only, transactional, least-privilege authority and implemented Phase 1 foundation. | ADR-0009–ADR-0017 |
 | 0.6.0 | 2026-07-24 | Added Campaign Operations Phase 2 budget, reservation, durable request, acquisition, audit, and least-privilege persistence contracts. | ADR-0010–ADR-0013, ADR-0017 |
+| 0.7.0 | 2026-07-25 | Added isolated Phase 3 durable dispatch, atomic Phase 5 handoff evidence, complete bindings/control ownership, settlement, and narrow NOLOGIN capabilities without production or scheduler enablement. | ADR-0010–ADR-0017 |

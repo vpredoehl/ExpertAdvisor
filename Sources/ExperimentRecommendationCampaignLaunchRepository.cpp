@@ -116,6 +116,17 @@ LaunchRecommendationCampaignInTransaction(
     const RecommendationCampaignLaunchRequest& request,
     const PersistedRecommendationCampaignMaterialization& materialization)
 {
+    return LaunchRecommendationCampaignInTransaction(
+        transaction, request, materialization, {});
+}
+
+RecommendationCampaignLaunchPersistResult
+LaunchRecommendationCampaignInTransaction(
+    pqxx::transaction_base& transaction,
+    const RecommendationCampaignLaunchRequest& request,
+    const PersistedRecommendationCampaignMaterialization& materialization,
+    RecommendationCampaignLaunchTestHook testHook)
+{
     if (request.dryRun)
         throw std::invalid_argument("campaign_launch_write_request_required");
 
@@ -138,7 +149,20 @@ LaunchRecommendationCampaignInTransaction(
         if (result.createdExecutions.size() != executionPlan.members.size())
             throw std::runtime_error(
                 "campaign_launch_execution_count_mismatch");
+        if (testHook)
+        {
+            testHook(
+                RecommendationCampaignLaunchTestPoint::
+                    afterExecutionMutation);
+            testHook(
+                RecommendationCampaignLaunchTestPoint::
+                    afterExperimentCreationOrReuseMutation);
+        }
     }
+    else if (testHook)
+        testHook(
+            RecommendationCampaignLaunchTestPoint::
+                afterExperimentCreationOrReuseMutation);
 
     // Newly created executions are visible in this transaction. The existing
     // Step 2 lock helper resolves the complete set, sorts activation advisory
@@ -155,6 +179,10 @@ LaunchRecommendationCampaignInTransaction(
         if (result.createdActivations.size() != activationPlan.members.size())
             throw std::runtime_error(
                 "campaign_launch_activation_count_mismatch");
+        if (testHook)
+            testHook(
+                RecommendationCampaignLaunchTestPoint::
+                    afterActivationMutation);
     }
     return result;
 }
