@@ -30,6 +30,7 @@
 #include <pqxx/pqxx>
 
 #include "ExperimentScheduler.hpp"
+#include "GlobalExperimentControl.hpp"
 #include "CanonicalSymbol.hpp"
 #include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
@@ -90,6 +91,12 @@ struct SchedulerOptions
     std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
     bool stopAllExperiments = false;
+    bool pauseAllExperiments = false;
+    bool resumeAllExperiments = false;
+    bool cancelAllExperiments = false;
+    bool cancelImmediate = false;
+    bool cancelAfterNextCheckpoint = false;
+    bool inferBeforeCancel = false;
     std::optional<long long> pauseExperimentId;
     std::optional<long long> resumeExperimentId;
     std::optional<long long> cancelExperimentId;
@@ -410,6 +417,7 @@ struct CheckpointEvalRow
     std::optional<std::string> inferLogPath;
     std::optional<std::string> analysisLogPath;
     double inferStartedEpoch = 0.0;
+    std::optional<long long> cancellationRequestId;
 };
 
 struct RunningExperimentState
@@ -782,6 +790,12 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--include-parent-models" ||
             arg == "--stop-experiment" ||
             arg == "--stop-all-experiments" ||
+            arg == "--pause-all-experiments" ||
+            arg == "--resume-all-experiments" ||
+            arg == "--cancel-all-experiments" ||
+            arg == "--immediate" ||
+            arg == "--after-next-checkpoint" ||
+            arg == "--infer-before-cancel" ||
             arg == "--pause-experiment" ||
             arg == "--resume-experiment" ||
             arg == "--cancel-experiment" ||
@@ -1575,6 +1589,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.stopExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--stop-all-experiments")
             options.stopAllExperiments = true;
+        else if (arg == "--pause-all-experiments")
+            options.pauseAllExperiments = true;
+        else if (arg == "--resume-all-experiments")
+            options.resumeAllExperiments = true;
+        else if (arg == "--cancel-all-experiments")
+            options.cancelAllExperiments = true;
+        else if (arg == "--immediate")
+            options.cancelImmediate = true;
+        else if (arg == "--after-next-checkpoint")
+            options.cancelAfterNextCheckpoint = true;
+        else if (arg == "--infer-before-cancel")
+            options.inferBeforeCancel = true;
         else if (arg == "--pause-experiment")
             options.pauseExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--resume-experiment")
@@ -2909,6 +2935,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.listExperimentLineageId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
+        (options.pauseAllExperiments ? 1 : 0) +
+        (options.resumeAllExperiments ? 1 : 0) +
+        (options.cancelAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
         (options.resumeExperimentId.has_value() ? 1 : 0) +
         (options.cancelExperimentId.has_value() ? 1 : 0) +
@@ -3531,6 +3560,32 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     if (hasQueuePolicyOptions && !options.queueCheckpointInfer)
         throw std::invalid_argument("--checkpoint-policy options require --checkpoint-infer");
     ValidateCheckpointPolicyConfig(options);
+    const int globalControlCommandCount =
+        (options.pauseAllExperiments ? 1 : 0) +
+        (options.resumeAllExperiments ? 1 : 0) +
+        (options.cancelAllExperiments ? 1 : 0);
+    if (globalControlCommandCount > 1)
+        throw std::invalid_argument(
+            "pause-all, resume-all, and cancel-all are mutually exclusive");
+    if (options.cancelImmediate && options.cancelAfterNextCheckpoint)
+        throw std::invalid_argument(
+            "--immediate and --after-next-checkpoint are mutually exclusive");
+    if ((options.cancelImmediate || options.cancelAfterNextCheckpoint) &&
+        !options.cancelAllExperiments)
+        throw std::invalid_argument(
+            "cancellation mode requires --cancel-all-experiments");
+    if (options.inferBeforeCancel && !options.cancelAllExperiments)
+        throw std::invalid_argument(
+            "--infer-before-cancel requires --cancel-all-experiments");
+    if (options.cancelAllExperiments &&
+        ((options.cancelImmediate ? 1 : 0) +
+         (options.cancelAfterNextCheckpoint ? 1 : 0) != 1))
+        throw std::invalid_argument(
+            "--cancel-all-experiments requires exactly one of --immediate "
+            "or --after-next-checkpoint");
+    if (globalControlCommandCount > 0 && !options.dryRun && !options.yes)
+        throw std::invalid_argument(
+            "global experiment control writes require --yes");
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
     if (options.modelInfo && !options.modelInfoModelId.has_value())
@@ -3953,6 +4008,52 @@ bool RequireSchedulerTables(pqxx::work& w)
               << ",command=./migrate_lstm_db.sh"
               << std::endl;
     return false;
+}
+
+std::optional<EA::GlobalExperimentControl::ControlSnapshot>
+LoadLockedGlobalControl(pqxx::work& w)
+{
+    if (!TableExists(w, "experiment_global_control") ||
+        !TableExists(w, "experiment_admin_request"))
+    {
+        std::cerr
+            << "DATABASE_MIGRATION_REQUIRED,command=./migrate_lstm_db.sh,"
+            << "missing=global_experiment_control"
+            << std::endl;
+        return std::nullopt;
+    }
+    EA::GlobalExperimentControl::AcquireCoordinationLock(w);
+    return EA::GlobalExperimentControl::LoadControlSnapshot(w);
+}
+
+bool SchedulerLaunchAllowed(
+    pqxx::work& w,
+    const std::string& phase,
+    bool cancellationInference = false,
+    bool cancellationCheckpointTrain = false)
+{
+    const auto snapshot = LoadLockedGlobalControl(w);
+    if (!snapshot)
+        return false;
+    const bool allowed =
+        EA::GlobalExperimentControl::NormalSchedulingAllowed(*snapshot) ||
+        (cancellationInference &&
+         EA::GlobalExperimentControl::CancellationInferenceAllowed(*snapshot)) ||
+        (cancellationCheckpointTrain &&
+         EA::GlobalExperimentControl::CancellationCheckpointTrainAllowed(
+             *snapshot));
+    if (!allowed)
+    {
+        std::cout << "SCHEDULER_GLOBAL_CONTROL_BLOCK"
+                  << ",phase=" << phase
+                  << ",desired_state=" << snapshot->desiredState
+                  << ",active_request_id="
+                  << (snapshot->activeRequestId
+                          ? std::to_string(*snapshot->activeRequestId)
+                          : "NULL")
+                  << std::endl;
+    }
+    return allowed;
 }
 
 void SetTransactionReadWrite(pqxx::work& w)
@@ -4819,18 +4920,26 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     return experiment;
 }
 
-std::vector<ExperimentRow> LoadPendingExperiments(pqxx::work& w,
-                                                        const std::string& phase)
+std::vector<ExperimentRow> LoadPendingExperiments(
+    pqxx::work& w,
+    const std::string& phase,
+    bool cancellationOnly = false)
 {
-    pqxx::result rows = w.exec_params(
+    std::string sql =
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
         "FROM experiment "
-        "WHERE status = 'pending' AND phase = $1 "
-        "ORDER BY updated_at ASC, experiment_id ASC;",
-        phase);
+        "WHERE status = 'pending' AND phase = $1 ";
+    if (cancellationOnly)
+        sql +=
+            "AND cancellation_request_id=("
+            " SELECT active_request_id FROM experiment_global_control "
+            " WHERE singleton=true) "
+            "AND cancel_after_checkpoint_epoch IS NOT NULL ";
+    sql += "ORDER BY updated_at ASC, experiment_id ASC;";
+    pqxx::result rows = w.exec_params(sql, phase);
 
     std::vector<ExperimentRow> experiments;
     experiments.reserve(rows.size());
@@ -5960,81 +6069,73 @@ std::string BaseModelName(const ExperimentRow& experiment)
     return oss.str();
 }
 
-bool RunningTrainProcessExistsForExperiment(const ExperimentRow& experiment)
+struct DiscoveredManagedProcess
 {
-    FILE* pipe = ::popen("ps -axo command", "r");
-    if (!pipe)
-        return false;
+    int pid = -1;
+    int processGroupId = -1;
+    std::string executable;
+    std::string command;
+    std::string processStartIdentity;
+};
 
-    const std::string baseModelName = BaseModelName(experiment);
-    const std::string experimentNeedle = "experiment" + std::to_string(experiment.experimentId);
-    char buffer[4096];
-    bool found = false;
+std::optional<DiscoveredManagedProcess> DiscoverRunningProcessForExperiment(
+    const ExperimentRow& experiment,
+    const std::string& phase)
+{
+    FILE* pipe = ::popen("ps -axo pid=,pgid=,command=", "r");
+    if (!pipe)
+        return std::nullopt;
+
+    const std::string id = std::to_string(experiment.experimentId);
+    const std::regex experimentIdentity{
+        "(^|[[:space:]])--scheduler-experiment-id(=|[[:space:]]+)" +
+        id + "([[:space:]]|$)"};
+    const std::regex phaseIdentity{
+        phase == "train"
+            ? "(^|[[:space:]])--train([[:space:]]|$)"
+            : (phase == "infer"
+                   ? "(^|[[:space:]])--infer([[:space:]]|$)"
+                   : "(^|[[:space:]])--analyze-experiment(=|[[:space:]]+)" +
+                         id + "([[:space:]]|$)")};
+    char buffer[16384];
+    std::optional<DiscoveredManagedProcess> found;
     while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
     {
-        const std::string command{buffer};
-        if (command.find("LSTM_Release") == std::string::npos ||
-            command.find("--train") == std::string::npos)
+        std::istringstream line{buffer};
+        DiscoveredManagedProcess process;
+        if (!(line >> process.pid >> process.processGroupId))
+            continue;
+        std::getline(line, process.command);
+        const size_t begin = process.command.find_first_not_of(" \t");
+        if (begin != std::string::npos)
+            process.command.erase(0, begin);
+        const size_t executableEnd =
+            process.command.find_first_of(" \t");
+        process.executable =
+            process.command.substr(0, executableEnd);
+        const std::string& command = process.command;
+        const std::string executableName =
+            std::filesystem::path(process.executable).filename().string();
+        if (executableName != "LSTM_Release" &&
+            executableName != "LSTM")
+            continue;
+        if (!std::regex_search(command, phaseIdentity))
+            continue;
+        if (phase != "analyze" &&
+            !std::regex_search(command, experimentIdentity))
+            continue;
+        if (process.pid <= 1 || process.processGroupId <= 1 ||
+            command.find("--schedule-experiments") != std::string::npos)
         {
             continue;
         }
-        if (command.find(baseModelName) != std::string::npos ||
-            command.find(experimentNeedle) != std::string::npos)
-        {
-            found = true;
-            break;
-        }
-    }
-    ::pclose(pipe);
-    return found;
-}
-
-bool RunningProcessExistsForExperiment(const ExperimentRow& experiment,
-                                             const std::string& phase)
-{
-    if (phase == "train")
-        return RunningTrainProcessExistsForExperiment(experiment);
-
-    FILE* pipe = ::popen("ps -axo command", "r");
-    if (!pipe)
-        return false;
-
-    const std::string modelNeedle =
-        experiment.lastModelId.has_value() ? "--model=" + std::to_string(*experiment.lastModelId) : "";
-    const std::string analyzeNeedle = "--analyze-experiment=" + std::to_string(experiment.experimentId);
-    char buffer[4096];
-    bool found = false;
-    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
-    {
-        const std::string command{buffer};
-        if (command.find("LSTM_Release") == std::string::npos)
+        const auto processStartIdentity =
+            EA::GlobalExperimentControl::ReadProcessStartIdentity(process.pid);
+        if (!processStartIdentity)
             continue;
-
-        if (phase == "infer")
-        {
-            const bool dateRangeMatches =
-                !experiment.inferStart.has_value() ||
-                !experiment.inferEnd.has_value() ||
-                (command.find(experiment.inferStart->substr(0, 10)) != std::string::npos &&
-                 command.find(experiment.inferEnd->substr(0, 10)) != std::string::npos);
-            if (command.find("--infer") != std::string::npos &&
-                command.find("--infer-all") == std::string::npos &&
-                !modelNeedle.empty() &&
-                command.find(modelNeedle) != std::string::npos &&
-                dateRangeMatches)
-            {
-                found = true;
-                break;
-            }
-        }
-        else if (phase == "analyze")
-        {
-            if (command.find(analyzeNeedle) != std::string::npos)
-            {
-                found = true;
-                break;
-            }
-        }
+        process.processStartIdentity = *processStartIdentity;
+        found = std::move(process);
+        break;
     }
     ::pclose(pipe);
     return found;
@@ -6520,6 +6621,8 @@ CheckpointEvalRow RowToCheckpointEval(const pqxx::row& row)
     eval.inferStartedEpoch = row[22].is_null() ? 0.0 : row[22].as<double>();
     eval.experiment.inferLogPath = eval.inferLogPath;
     eval.experiment.analysisLogPath = eval.analysisLogPath;
+    if (row.size() > 23 && !row[23].is_null())
+        eval.cancellationRequestId = row[23].as<long long>();
     return eval;
 }
 
@@ -6536,10 +6639,12 @@ std::vector<CheckpointEvalRow> LoadCheckpointEvalRows(pqxx::work& w,
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
         "e.resume_model_id, e.train_log_path, "
-        "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision "
+        "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision, "
+        "ce.cancellation_request_id "
         "FROM experiment_checkpoint_eval ce "
         "JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         "WHERE ce.status = $1 AND ce.phase = $2 "
+        "AND (ce.phase <> 'analyze' OR ce.cancellation_request_id IS NULL) "
         "ORDER BY ce.created_at ASC, ce.checkpoint_eval_id ASC;",
         status,
         phase);
@@ -6563,7 +6668,8 @@ std::optional<CheckpointEvalRow> LoadCheckpointEvalById(pqxx::work& w,
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
         "e.resume_model_id, e.train_log_path, "
-        "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision "
+        "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision, "
+        "ce.cancellation_request_id "
         "FROM experiment_checkpoint_eval ce "
         "JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         "WHERE ce.checkpoint_eval_id = $1;",
@@ -10489,6 +10595,11 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
         pqxx::connection connection{LstmDbConnectionString()};
         pqxx::work w{connection};
         SetTransactionReadWrite(w);
+        if (!SchedulerLaunchAllowed(w, "continuation_queue"))
+        {
+            w.commit();
+            return 1;
+        }
 
         ContinuationPolicyConfig config;
         ContinuationEvaluation evaluation = EvaluateContinuationPolicy(
@@ -11139,6 +11250,19 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
 {
     const bool dryRun = options.continuationDryRun || options.dryRun;
     ContinuationAutoScanCounts counts;
+    {
+        pqxx::connection gateConnection{LstmDbConnectionString()};
+        pqxx::work gate{gateConnection};
+        if (!SchedulerLaunchAllowed(gate, "continuation_automation"))
+        {
+            gate.commit();
+            std::cout << "CONTINUATION_AUTO_SCAN_SKIPPED"
+                      << ",reason=global_experiment_control"
+                      << std::endl;
+            return counts;
+        }
+        gate.commit();
+    }
     std::cout << "CONTINUATION_AUTO_SCAN_STARTED"
               << ",auto_evaluate=1"
               << ",auto_queue=" << (options.autoQueueContinuations ? "1" : "0")
@@ -11547,33 +11671,104 @@ void MarkExperimentRunning(pqxx::work& w,
         "WHERE experiment_id = " + std::to_string(experiment.experimentId) + ";");
 }
 
-void PersistExperimentRunningBeforeLaunch(const ExperimentRow& experiment,
-                                                 const std::string& phase,
-                                                 const std::string& logPath)
-{
-    pqxx::connection c{LstmDbConnectionString()};
-    pqxx::work w{c};
-    SetTransactionReadWrite(w);
-    MarkExperimentRunning(w, experiment, phase, logPath);
-    w.commit();
-}
-
-void PersistExperimentWorkerPid(const ExperimentRow& experiment,
+void PersistExperimentWorkerPid(pqxx::work& w,
+                                const ExperimentRow& experiment,
                                 const std::string& phase,
-                                pid_t pid)
+                                pid_t pid,
+                                pid_t processGroupId,
+                                const std::string& executable,
+                                const std::string& commandLine,
+                                const std::string& processStartIdentity)
 {
-    pqxx::connection c{LstmDbConnectionString()};
-    pqxx::work w{c};
-    SetTransactionReadWrite(w);
     w.exec_params(
         "UPDATE experiment "
-        "SET worker_pid = $1, current_operation = $2, updated_at = now() "
-        "WHERE experiment_id = $3 AND status = 'running' AND phase = $4;",
+        "SET worker_pid = $1, worker_process_group_id = $2, "
+        "worker_executable = $3, worker_command_line = $4, "
+        "worker_process_start_identity = $5, "
+        "worker_control_state = 'running', current_operation = $6, "
+        "updated_at = now() "
+        "WHERE experiment_id = $7 AND status = 'running' AND phase = $8;",
         static_cast<int>(pid),
+        static_cast<int>(processGroupId),
+        executable,
+        commandLine,
+        processStartIdentity,
         phase,
         experiment.experimentId,
         phase);
-    w.commit();
+}
+
+std::string RequireProcessStartIdentity(pid_t pid)
+{
+    const auto identity =
+        EA::GlobalExperimentControl::ReadProcessStartIdentity(
+            static_cast<int>(pid));
+    if (!identity)
+        throw std::runtime_error(
+            "failed to capture worker process-start identity for pid " +
+            std::to_string(pid));
+    return *identity;
+}
+
+class SchedulerPidPersistenceError final : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
+
+void TerminateUncommittedSchedulerChildren(
+    const std::vector<pid_t>& processGroups)
+{
+    for (const pid_t pid : processGroups)
+    {
+        if (::kill(-pid, SIGTERM) != 0)
+            ::kill(pid, SIGTERM);
+        bool groupExited = false;
+        for (int attempt = 0; attempt < 30; ++attempt)
+        {
+            errno = 0;
+            const bool groupExists =
+                ::kill(-pid, 0) == 0 || errno == EPERM;
+            errno = 0;
+            const bool leaderExists =
+                ::kill(pid, 0) == 0 || errno == EPERM;
+            if (!groupExists && !leaderExists)
+            {
+                groupExited = true;
+                break;
+            }
+            ::usleep(100000);
+        }
+        if (!groupExited)
+        {
+            ::kill(-pid, SIGKILL);
+            ::kill(pid, SIGKILL);
+        }
+        gSchedulerOwnedChildren.erase(pid);
+    }
+}
+
+void MarkCancellationCheckpointRestartFailed(
+    pqxx::work& w,
+    const ExperimentRow& experiment,
+    const std::string& error)
+{
+    w.exec_params(
+        "UPDATE experiment SET status='cancelled',worker_pid=NULL,"
+        "worker_process_group_id=NULL,completed_at=now(),"
+        "cancellation_completed_at=now(),error_message=$1,updated_at=now() "
+        "WHERE experiment_id=$2 AND cancellation_request_id IS NOT NULL;",
+        error,
+        experiment.experimentId);
+    w.exec_params(
+        "UPDATE experiment_admin_worker_outcome o SET "
+        "outcome_status='partial',detail=$1,updated_at=now() "
+        "FROM experiment e WHERE e.experiment_id=$2 "
+        "AND o.request_id=e.cancellation_request_id "
+        "AND o.experiment_id=e.experiment_id "
+        "AND o.outcome_status='pending_checkpoint';",
+        error,
+        experiment.experimentId);
 }
 
 void LogPhaseTransition(long long experimentId,
@@ -11882,9 +12077,84 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
             LogRunningExperimentPresent(experiment, phase, logState, verbose);
             continue;
         }
-        if (RunningProcessExistsForExperiment(experiment, phase))
+        if (const auto discovered =
+                DiscoverRunningProcessForExperiment(experiment, phase);
+            discovered)
         {
+            PersistExperimentWorkerPid(
+                w,
+                experiment,
+                phase,
+                discovered->pid,
+                discovered->processGroupId,
+                discovered->executable,
+                discovered->command,
+                discovered->processStartIdentity);
             LogRunningExperimentPresent(experiment, phase, logState, verbose);
+            continue;
+        }
+
+        pqxx::result cancellation = w.exec_params(
+            "SELECT r.cancellation_mode,e.cancel_after_checkpoint_epoch,"
+            "e.cancellation_request_id "
+            "FROM experiment e JOIN experiment_admin_request r "
+            "ON r.request_id=e.cancellation_request_id "
+            "WHERE e.experiment_id=$1;",
+            experiment.experimentId);
+        if (!cancellation.empty())
+        {
+            const std::string mode =
+                cancellation[0][0].as<std::string>();
+            if (mode == "after_next_checkpoint" && phase == "train" &&
+                !cancellation[0][1].is_null())
+            {
+                const std::optional<long long> restartModel =
+                    FindLatestModelForExperiment(
+                        w, experiment.experimentId);
+                if (restartModel)
+                    w.exec_params(
+                        "UPDATE experiment SET status='pending',phase='train',"
+                        "worker_pid=NULL,worker_process_group_id=NULL,"
+                        "worker_control_state='running',last_model_id=$1,"
+                        "current_operation='cancel_checkpoint_restart_pending',"
+                        "error_message='cancellation_worker_restart_required',"
+                        "updated_at=now() WHERE experiment_id=$2 "
+                        "AND status='running';",
+                        *restartModel,
+                        experiment.experimentId);
+                else
+                {
+                    w.exec_params(
+                        "UPDATE experiment SET status='cancelled',"
+                        "worker_pid=NULL,worker_process_group_id=NULL,"
+                        "completed_at=now(),cancellation_completed_at=now(),"
+                        "error_message='cancelled_missing_worker_no_checkpoint',"
+                        "updated_at=now() WHERE experiment_id=$1 "
+                        "AND status='running';",
+                        experiment.experimentId);
+                    w.exec_params(
+                        "UPDATE experiment_admin_worker_outcome SET "
+                        "outcome_status='partial',"
+                        "detail='missing_worker_no_restart_checkpoint',"
+                        "updated_at=now() WHERE request_id=$1 "
+                        "AND experiment_id=$2 "
+                        "AND outcome_status='pending_checkpoint';",
+                        cancellation[0][2].as<long long>(),
+                        experiment.experimentId);
+                }
+            }
+            else
+            {
+                w.exec_params(
+                    "UPDATE experiment SET status='cancelled',worker_pid=NULL,"
+                    "worker_process_group_id=NULL,"
+                    "completed_at=COALESCE(completed_at,now()),"
+                    "cancellation_completed_at=now(),"
+                    "error_message='cancelled_missing_worker',updated_at=now() "
+                    "WHERE experiment_id=$1 AND status='running';",
+                    experiment.experimentId);
+            }
+            ++recoveredOrFailed;
             continue;
         }
 
@@ -12221,8 +12491,11 @@ void PersistObservedExperimentChild(pqxx::work& w,
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "status, phase, worker_pid "
-        "FROM experiment WHERE experiment_id = $1;",
+        "e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
+        "r.cancellation_mode,e.cancel_after_checkpoint_epoch "
+        "FROM experiment e LEFT JOIN experiment_admin_request r "
+        "ON r.request_id=e.cancellation_request_id "
+        "WHERE e.experiment_id = $1;",
         child.experimentId);
     if (rows.empty())
         return;
@@ -12233,6 +12506,18 @@ void PersistObservedExperimentChild(pqxx::work& w,
     const std::optional<int> workerPid = rows[0][19].is_null()
         ? std::nullopt
         : std::optional<int>{rows[0][19].as<int>()};
+    const std::optional<long long> cancellationRequestId =
+        rows[0][20].is_null()
+            ? std::nullopt
+            : std::optional<long long>{rows[0][20].as<long long>()};
+    const std::optional<std::string> cancellationMode =
+        rows[0][21].is_null()
+            ? std::nullopt
+            : std::optional<std::string>{rows[0][21].as<std::string>()};
+    const std::optional<int> cancellationCheckpoint =
+        rows[0][22].is_null()
+            ? std::nullopt
+            : std::optional<int>{rows[0][22].as<int>()};
     const std::string error = ObservedChildError(child, exitCode, signalNumber, coreDumped);
 
     if (status != "running" || phase != child.phase ||
@@ -12247,6 +12532,60 @@ void PersistObservedExperimentChild(pqxx::work& w,
                   << ",database_phase=" << phase
                   << ",exit_code=" << exitCode
                   << std::endl;
+        return;
+    }
+
+    if (cancellationRequestId)
+    {
+        if (cancellationMode == "after_next_checkpoint" &&
+            child.phase == "train" && cancellationCheckpoint)
+        {
+            const std::optional<long long> restartModel =
+                FindLatestModelForExperiment(w, child.experimentId);
+            if (restartModel)
+                w.exec_params(
+                    "UPDATE experiment SET status='pending',phase='train',"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "worker_control_state='running',last_model_id=$1,"
+                    "current_operation='cancel_checkpoint_restart_pending',"
+                    "error_message=$2,updated_at=now() "
+                    "WHERE experiment_id=$3 AND status='running';",
+                    *restartModel,
+                    error,
+                    child.experimentId);
+            else
+            {
+                w.exec_params(
+                    "UPDATE experiment SET status='cancelled',"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "completed_at=now(),cancellation_completed_at=now(),"
+                    "error_message='cancelled_missing_worker_no_checkpoint',"
+                    "updated_at=now() WHERE experiment_id=$1 "
+                    "AND status='running';",
+                    child.experimentId);
+                w.exec_params(
+                    "UPDATE experiment_admin_worker_outcome SET "
+                    "outcome_status='partial',"
+                    "detail='worker_exited_before_checkpoint_no_restart_model',"
+                    "updated_at=now() WHERE request_id=$1 "
+                    "AND experiment_id=$2 "
+                    "AND outcome_status='pending_checkpoint';",
+                    *cancellationRequestId,
+                    child.experimentId);
+            }
+        }
+        else
+        {
+            w.exec_params(
+                "UPDATE experiment SET status='cancelled',"
+                "worker_pid=NULL,worker_process_group_id=NULL,"
+                "completed_at=COALESCE(completed_at,now()),"
+                "cancellation_completed_at=now(),exit_code=$1,"
+                "error_message='cancelled_by_global_request',updated_at=now() "
+                "WHERE experiment_id=$2 AND status='running';",
+                exitCode,
+                child.experimentId);
+        }
         return;
     }
 
@@ -12334,7 +12673,26 @@ void PersistObservedCheckpointChild(pqxx::work& w,
     {
         const bool hasInferCompletedAt =
             ColumnExists(w, "experiment_checkpoint_eval", "infer_completed_at");
-        AdvanceCheckpointEvalToAnalyze(w, eval, *resultId, hasInferCompletedAt);
+        pqxx::result cancellation = w.exec_params(
+            "SELECT cancellation_request_id FROM experiment_checkpoint_eval "
+            "WHERE checkpoint_eval_id=$1;",
+            *child.checkpointEvalId);
+        if (!cancellation.empty() && !cancellation[0][0].is_null())
+        {
+            std::ostringstream sql;
+            sql << "UPDATE experiment_checkpoint_eval SET status='completed',"
+                << "phase='done',worker_pid=NULL,completed_at=now(),"
+                << "updated_at=now(),error_message=NULL";
+            if (hasInferCompletedAt)
+                sql << ",infer_completed_at=now()";
+            sql << " WHERE checkpoint_eval_id=$1;";
+            w.exec_params(sql.str(), *child.checkpointEvalId);
+        }
+        else
+        {
+            AdvanceCheckpointEvalToAnalyze(
+                w, eval, *resultId, hasInferCompletedAt);
+        }
         if (exitCode != 0)
         {
             w.exec_params(
@@ -12490,7 +12848,8 @@ void FinishSchedulerPollLogging(SchedulerEventLogState* logState)
 
 int RunTrainJobs(const SchedulerOptions& options,
                  const QueueSnapshot& snapshot,
-                 SchedulerEventLogState* logState)
+                 SchedulerEventLogState* logState,
+                 bool cancellationOnly = false)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -12498,14 +12857,21 @@ int RunTrainJobs(const SchedulerOptions& options,
         SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
+    if (!SchedulerLaunchAllowed(w, "train", false, cancellationOnly))
+    {
+        w.commit();
+        return 0;
+    }
 
-    const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "train");
+    const std::vector<ExperimentRow> jobs =
+        LoadPendingExperiments(w, "train", cancellationOnly);
     PhaseSchedulingStats stats;
     stats.phase = "train";
     stats.examined = static_cast<int>(jobs.size());
     stats.freeSlots = std::max(0, options.maxTrainProcs - RunningCountForPhase(snapshot, "train"));
     int freeSlots = stats.freeSlots;
     int rc = 0;
+    std::vector<pid_t> launchedInTransaction;
 
     EnsureLogDir(options.schedulerLogDir);
     for (const auto& job : jobs)
@@ -12517,16 +12883,33 @@ int RunTrainJobs(const SchedulerOptions& options,
             ++stats.skipped;
             LogSkip("train", job.experimentId, "model_not_found", logState, options.schedulerVerbose);
             if (!options.dryRun)
-                MarkExperimentFailed(w, job, "train_model_not_found");
+            {
+                if (cancellationOnly)
+                    MarkCancellationCheckpointRestartFailed(
+                        w, job, "cancel_checkpoint_restart_model_not_found");
+                else
+                    MarkExperimentFailed(w, job, "train_model_not_found");
+            }
             continue;
         }
-        if (RunningProcessExistsForExperiment(job, "train"))
+        if (const auto discovered =
+                DiscoverRunningProcessForExperiment(job, "train");
+            discovered)
         {
             ++stats.skipped;
             LogSkip("train", job.experimentId, "already_running", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 MarkExperimentRunning(w, job, "train", LogPathFor(options, job, "train"));
+                PersistExperimentWorkerPid(
+                    w,
+                    job,
+                    "train",
+                    discovered->pid,
+                    discovered->processGroupId,
+                    discovered->executable,
+                    discovered->command,
+                    discovered->processStartIdentity);
                 if (freeSlots > 0)
                     --freeSlots;
             }
@@ -12555,7 +12938,7 @@ int RunTrainJobs(const SchedulerOptions& options,
             continue;
         }
 
-        PersistExperimentRunningBeforeLaunch(job, "train", logPath);
+        MarkExperimentRunning(w, job, "train", logPath);
         if (job.lastModelId.has_value() && !job.resumeModelId.has_value())
         {
             std::cout << "SCHEDULER_RESUME_FROM_LAST_MODEL"
@@ -12577,12 +12960,21 @@ int RunTrainJobs(const SchedulerOptions& options,
         {
             const pid_t pid = LaunchChildProcess(
                 command, logPath, job.experimentId, "train", job.lastModelId);
+            launchedInTransaction.push_back(pid);
             try
             {
-                PersistExperimentWorkerPid(job, "train", pid);
+                const std::string processStartIdentity =
+                    RequireProcessStartIdentity(pid);
+                PersistExperimentWorkerPid(
+                    w, job, "train", pid, pid,
+                    command.front(), commandDisplay,
+                    processStartIdentity);
             }
             catch (const std::exception& e)
             {
+                w.abort();
+                TerminateUncommittedSchedulerChildren(
+                    launchedInTransaction);
                 std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
                           << ",experiment_id=" << job.experimentId
                           << ",worker_pid=" << pid
@@ -12590,19 +12982,27 @@ int RunTrainJobs(const SchedulerOptions& options,
                           << ",operation=train"
                           << ",error=" << e.what()
                           << std::endl;
-                --freeSlots;
-                ++stats.launched;
-                rc = 1;
-                continue;
+                throw SchedulerPidPersistenceError{e.what()};
             }
             --freeSlots;
             ++stats.launched;
         }
+        catch (const SchedulerPidPersistenceError&)
+        {
+            throw;
+        }
         catch (const std::exception& e)
         {
             const int launchError = SchedulerChildLaunchErrorNumber(e);
-            MarkExperimentFailed(
-                w, job, SchedulerLaunchFailureError(launchError));
+            if (cancellationOnly)
+                MarkCancellationCheckpointRestartFailed(
+                    w,
+                    job,
+                    "cancel_checkpoint_restart_" +
+                        SchedulerLaunchFailureError(launchError));
+            else
+                MarkExperimentFailed(
+                    w, job, SchedulerLaunchFailureError(launchError));
             std::cout << "EXPERIMENT_FAILED"
                       << ",experiment_id=" << job.experimentId
                       << ",phase=train"
@@ -12626,6 +13026,11 @@ int RunInferJobs(const SchedulerOptions& options,
         SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
+    if (!SchedulerLaunchAllowed(w, "infer"))
+    {
+        w.commit();
+        return 0;
+    }
 
     const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "infer");
     PhaseSchedulingStats stats;
@@ -12634,6 +13039,7 @@ int RunInferJobs(const SchedulerOptions& options,
     stats.freeSlots = std::max(0, options.maxInferProcs - RunningCountForPhase(snapshot, "infer"));
     int freeSlots = stats.freeSlots;
     int rc = 0;
+    std::vector<pid_t> launchedInTransaction;
 
     EnsureLogDir(options.schedulerLogDir);
     for (const auto& job : jobs)
@@ -12713,13 +13119,24 @@ int RunInferJobs(const SchedulerOptions& options,
             }
             continue;
         }
-        if (RunningProcessExistsForExperiment(job, "infer"))
+        if (const auto discovered =
+                DiscoverRunningProcessForExperiment(job, "infer");
+            discovered)
         {
             ++stats.skipped;
             LogSkip("infer", job.experimentId, "already_running", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 MarkExperimentRunning(w, job, "infer", LogPathFor(options, job, "infer"));
+                PersistExperimentWorkerPid(
+                    w,
+                    job,
+                    "infer",
+                    discovered->pid,
+                    discovered->processGroupId,
+                    discovered->executable,
+                    discovered->command,
+                    discovered->processStartIdentity);
                 if (freeSlots > 0)
                     --freeSlots;
             }
@@ -12748,7 +13165,7 @@ int RunInferJobs(const SchedulerOptions& options,
             continue;
         }
 
-        PersistExperimentRunningBeforeLaunch(job, "infer", logPath);
+        MarkExperimentRunning(w, job, "infer", logPath);
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=infer"
@@ -12763,12 +13180,21 @@ int RunInferJobs(const SchedulerOptions& options,
         {
             const pid_t pid = LaunchChildProcess(
                 command, logPath, job.experimentId, "infer", job.lastModelId);
+            launchedInTransaction.push_back(pid);
             try
             {
-                PersistExperimentWorkerPid(job, "infer", pid);
+                const std::string processStartIdentity =
+                    RequireProcessStartIdentity(pid);
+                PersistExperimentWorkerPid(
+                    w, job, "infer", pid, pid,
+                    command.front(), commandDisplay,
+                    processStartIdentity);
             }
             catch (const std::exception& e)
             {
+                w.abort();
+                TerminateUncommittedSchedulerChildren(
+                    launchedInTransaction);
                 std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
                           << ",experiment_id=" << job.experimentId
                           << ",worker_pid=" << pid
@@ -12776,13 +13202,14 @@ int RunInferJobs(const SchedulerOptions& options,
                           << ",operation=infer"
                           << ",error=" << e.what()
                           << std::endl;
-                --freeSlots;
-                ++stats.launched;
-                rc = 1;
-                continue;
+                throw SchedulerPidPersistenceError{e.what()};
             }
             --freeSlots;
             ++stats.launched;
+        }
+        catch (const SchedulerPidPersistenceError&)
+        {
+            throw;
         }
         catch (const std::exception& e)
         {
@@ -12812,6 +13239,11 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
         SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
+    if (!SchedulerLaunchAllowed(w, "analyze"))
+    {
+        w.commit();
+        return 0;
+    }
 
     const std::vector<ExperimentRow> jobs = LoadPendingExperiments(w, "analyze");
     PhaseSchedulingStats stats;
@@ -12820,6 +13252,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
     stats.freeSlots = std::max(0, options.maxAnalyzeProcs - RunningCountForPhase(snapshot, "analyze"));
     int freeSlots = stats.freeSlots;
     int rc = 0;
+    std::vector<pid_t> launchedInTransaction;
     bool reportsNeeded = false;
 
     EnsureLogDir(options.schedulerLogDir);
@@ -12862,13 +13295,24 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
             LogSkip("analyze", job.experimentId, "infer_log_missing", logState, options.schedulerVerbose);
             continue;
         }
-        if (RunningProcessExistsForExperiment(job, "analyze"))
+        if (const auto discovered =
+                DiscoverRunningProcessForExperiment(job, "analyze");
+            discovered)
         {
             ++stats.skipped;
             LogSkip("analyze", job.experimentId, "already_running", logState, options.schedulerVerbose);
             if (!options.dryRun)
             {
                 MarkExperimentRunning(w, job, "analyze", LogPathFor(options, job, "analysis"));
+                PersistExperimentWorkerPid(
+                    w,
+                    job,
+                    "analyze",
+                    discovered->pid,
+                    discovered->processGroupId,
+                    discovered->executable,
+                    discovered->command,
+                    discovered->processStartIdentity);
                 if (freeSlots > 0)
                     --freeSlots;
             }
@@ -12901,7 +13345,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
             continue;
         }
 
-        PersistExperimentRunningBeforeLaunch(job, "analyze", logPath);
+        MarkExperimentRunning(w, job, "analyze", logPath);
         std::cout << "EXPERIMENT_STARTED"
                   << ",experiment_id=" << job.experimentId
                   << ",phase=analyze"
@@ -12916,12 +13360,21 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
         {
             const pid_t pid = LaunchChildProcess(
                 command, logPath, job.experimentId, "analyze", job.lastModelId);
+            launchedInTransaction.push_back(pid);
             try
             {
-                PersistExperimentWorkerPid(job, "analyze", pid);
+                const std::string processStartIdentity =
+                    RequireProcessStartIdentity(pid);
+                PersistExperimentWorkerPid(
+                    w, job, "analyze", pid, pid,
+                    command.front(), commandDisplay,
+                    processStartIdentity);
             }
             catch (const std::exception& e)
             {
+                w.abort();
+                TerminateUncommittedSchedulerChildren(
+                    launchedInTransaction);
                 std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
                           << ",experiment_id=" << job.experimentId
                           << ",worker_pid=" << pid
@@ -12929,13 +13382,14 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
                           << ",operation=analyze"
                           << ",error=" << e.what()
                           << std::endl;
-                --freeSlots;
-                ++stats.launched;
-                rc = 1;
-                continue;
+                throw SchedulerPidPersistenceError{e.what()};
             }
             --freeSlots;
             ++stats.launched;
+        }
+        catch (const SchedulerPidPersistenceError&)
+        {
+            throw;
         }
         catch (const std::exception& e)
         {
@@ -13036,12 +13490,36 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
         SetTransactionReadWrite(w);
     if (!CheckpointEvalTableExists(w))
         return 0;
+    const auto control = LoadLockedGlobalControl(w);
+    if (!control)
+        return 1;
+    const bool normalScheduling =
+        EA::GlobalExperimentControl::NormalSchedulingAllowed(*control);
+    const bool cancellationInference =
+        EA::GlobalExperimentControl::CancellationInferenceAllowed(*control);
+    if (!normalScheduling && !cancellationInference)
+    {
+        std::cout << "SCHEDULER_GLOBAL_CONTROL_BLOCK"
+                  << ",phase=checkpoint_infer"
+                  << ",desired_state=" << control->desiredState
+                  << ",active_request_id="
+                  << (control->activeRequestId
+                          ? std::to_string(*control->activeRequestId)
+                          : "NULL")
+                  << std::endl;
+        w.commit();
+        return 0;
+    }
     const bool hasInferStartedAt = ColumnExists(w, "experiment_checkpoint_eval", "infer_started_at");
     const bool hasInferCompletedAt = ColumnExists(w, "experiment_checkpoint_eval", "infer_completed_at");
 
     int rc = 0;
+    std::vector<pid_t> launchedInTransaction;
     for (const auto& eval : LoadCheckpointEvalRows(w, "running", "infer"))
     {
+        if (cancellationInference &&
+            eval.cancellationRequestId != control->activeRequestId)
+            continue;
         if (SchedulerPidStillExists(eval.workerPid))
             continue;
         const std::optional<long long> inferenceResultId =
@@ -13049,10 +13527,22 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
                 w, eval, eval.inferStartedEpoch);
         if (inferenceResultId.has_value())
         {
-            AdvanceCheckpointEvalToAnalyze(w,
-                                           eval,
-                                           *inferenceResultId,
-                                           hasInferCompletedAt);
+            if (eval.cancellationRequestId)
+            {
+                std::ostringstream sql;
+                sql << "UPDATE experiment_checkpoint_eval SET "
+                    << "status='completed',phase='done',worker_pid=NULL,"
+                    << "completed_at=now(),updated_at=now(),error_message=NULL";
+                if (hasInferCompletedAt)
+                    sql << ",infer_completed_at=now()";
+                sql << " WHERE checkpoint_eval_id=$1;";
+                w.exec_params(sql.str(), eval.checkpointEvalId);
+            }
+            else
+            {
+                AdvanceCheckpointEvalToAnalyze(
+                    w, eval, *inferenceResultId, hasInferCompletedAt);
+            }
         }
         else
         {
@@ -13094,13 +13584,18 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
     EnsureLogDir(options.schedulerLogDir);
     for (const auto& eval : LoadCheckpointEvalRows(w, "pending", "infer"))
     {
+        if (cancellationInference &&
+            eval.cancellationRequestId != control->activeRequestId)
+            continue;
         if (freeSlots <= 0)
             break;
         if (!eval.experiment.inferStart.has_value() || !eval.experiment.inferEnd.has_value())
         {
             w.exec_params(
                 "UPDATE experiment_checkpoint_eval "
-                "SET status = 'skipped', completed_at = now(), updated_at = now(), error_message = 'missing_infer_range' "
+                "SET status = CASE WHEN cancellation_request_id IS NOT NULL "
+                "THEN 'failed' ELSE 'skipped' END,completed_at=now(),"
+                "updated_at=now(),error_message='missing_infer_range' "
                 "WHERE checkpoint_eval_id = $1;",
                 eval.checkpointEvalId);
             std::cout << "CHECKPOINT_EVAL_SKIPPED"
@@ -13114,10 +13609,22 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
             FindCompletedCheckpointInferenceResultId(w, eval);
         if (inferenceResultId.has_value())
         {
-            AdvanceCheckpointEvalToAnalyze(w,
-                                           eval,
-                                           *inferenceResultId,
-                                           hasInferCompletedAt);
+            if (eval.cancellationRequestId)
+            {
+                std::ostringstream sql;
+                sql << "UPDATE experiment_checkpoint_eval SET "
+                    << "status='completed',phase='done',worker_pid=NULL,"
+                    << "completed_at=now(),updated_at=now(),error_message=NULL";
+                if (hasInferCompletedAt)
+                    sql << ",infer_completed_at=now()";
+                sql << " WHERE checkpoint_eval_id=$1;";
+                w.exec_params(sql.str(), eval.checkpointEvalId);
+            }
+            else
+            {
+                AdvanceCheckpointEvalToAnalyze(
+                    w, eval, *inferenceResultId, hasInferCompletedAt);
+            }
             continue;
         }
 
@@ -13153,6 +13660,7 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
                 "checkpoint_infer",
                 eval.checkpointModelId,
                 eval.checkpointEvalId);
+            launchedInTransaction.push_back(pid);
         }
         catch (const std::exception& e)
         {
@@ -13176,21 +13684,31 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
 
         std::ostringstream sql;
         sql << "UPDATE experiment_checkpoint_eval "
-            << "SET status = 'running', phase = 'infer', worker_pid = $1, infer_log_path = $2, "
+            << "SET status = 'running', phase = 'infer', worker_pid = $1, "
+            << "worker_process_group_id = $1, worker_executable = $2, "
+            << "worker_command_line = $3, worker_process_start_identity = $4, "
+            << "worker_control_state = 'running', infer_log_path = $5, "
             << "started_at = COALESCE(started_at, now()), updated_at = now(), error_message = NULL";
         if (hasInferStartedAt)
             sql << ", infer_started_at = COALESCE(infer_started_at, now())";
-        sql << " WHERE checkpoint_eval_id = $3;";
+        sql << " WHERE checkpoint_eval_id = $6;";
         try
         {
+            const std::string processStartIdentity =
+                RequireProcessStartIdentity(pid);
             w.exec_params(sql.str(),
                           static_cast<int>(pid),
+                          command.front(),
+                          commandDisplay,
+                          processStartIdentity,
                           logPath,
                           eval.checkpointEvalId);
         }
         catch (const std::exception& e)
         {
-            const int killResult = ::kill(pid, SIGTERM);
+            w.abort();
+            TerminateUncommittedSchedulerChildren(
+                launchedInTransaction);
             std::cerr << "SCHEDULER_CHILD_PID_PERSIST_FAILED"
                       << ",experiment_id=" << eval.experiment.experimentId
                       << ",checkpoint_eval_id=" << eval.checkpointEvalId
@@ -13198,7 +13716,7 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
                       << ",phase=checkpoint_infer"
                       << ",operation=checkpoint_infer"
                       << ",child_termination_requested="
-                      << (killResult == 0 ? "1" : "0")
+                      << "1"
                       << ",error=" << e.what()
                       << std::endl;
             throw;
@@ -13223,6 +13741,11 @@ int RunCheckpointEvalAnalyzeJobs(const SchedulerOptions& options)
     SetTransactionReadWrite(w);
     if (!CheckpointEvalTableExists(w))
         return 0;
+    if (!SchedulerLaunchAllowed(w, "checkpoint_analyze"))
+    {
+        w.commit();
+        return 0;
+    }
     const bool hasAnalyzeStartedAt = ColumnExists(w, "experiment_checkpoint_eval", "analyze_started_at");
     const bool hasAnalyzeCompletedAt = ColumnExists(w, "experiment_checkpoint_eval", "analyze_completed_at");
     const bool hasAnalysisId = ColumnExists(w, "experiment_checkpoint_eval", "analysis_id");
@@ -13329,6 +13852,9 @@ int RunSchedulerOnce(const SchedulerOptions& options,
 {
     int rc = 0;
     QueueSnapshot snapshot;
+    bool normalSchedulingAllowed = false;
+    bool cancellationInferenceAllowed = false;
+    bool cancellationCheckpointTrainAllowed = false;
     BeginSchedulerPollLogging(logState);
     {
         pqxx::connection c{LstmDbConnectionString()};
@@ -13337,17 +13863,41 @@ int RunSchedulerOnce(const SchedulerOptions& options,
             SetTransactionReadWrite(w);
         if (!RequireSchedulerTables(w))
             return 1;
+        const auto control = LoadLockedGlobalControl(w);
+        if (!control)
+            return 1;
+        normalSchedulingAllowed =
+            EA::GlobalExperimentControl::NormalSchedulingAllowed(*control);
+        cancellationInferenceAllowed =
+            EA::GlobalExperimentControl::CancellationInferenceAllowed(*control);
+        cancellationCheckpointTrainAllowed =
+            EA::GlobalExperimentControl::CancellationCheckpointTrainAllowed(
+                *control);
         if (!options.dryRun)
         {
+            EA::GlobalExperimentControl::ReconcileActiveCancellation(w);
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             ReapSchedulerOwnedChildren(w);
             RecoverOrphanedRunningExperiments(w, logState, options.schedulerVerbose);
-            EnqueueCheckpointEvalRows(w);
-            rc |= FailInvalidSchedulerPhases(w);
+            if (normalSchedulingAllowed)
+            {
+                EnqueueCheckpointEvalRows(w);
+                rc |= FailInvalidSchedulerPhases(w);
+            }
         }
         snapshot = LoadQueueSnapshot(w);
         PrintQueueSnapshot(snapshot, logState, options.schedulerVerbose);
         w.commit();
+    }
+
+    if (!normalSchedulingAllowed)
+    {
+        if (cancellationCheckpointTrainAllowed)
+            rc |= RunTrainJobs(options, snapshot, logState, true);
+        if (cancellationInferenceAllowed)
+            rc |= RunCheckpointEvalInferJobs(options);
+        FinishSchedulerPollLogging(logState);
+        return rc;
     }
 
     rc |= RunTrainJobs(options, snapshot, logState);
@@ -13362,6 +13912,7 @@ int RunSchedulerOnce(const SchedulerOptions& options,
 int RunScheduler(const SchedulerOptions& options)
 {
     int recoveryCount = 0;
+    std::string initialGlobalState = "unknown";
     SchedulerEventLogState logState;
     {
         pqxx::connection c{LstmDbConnectionString()};
@@ -13369,8 +13920,13 @@ int RunScheduler(const SchedulerOptions& options)
         SetTransactionReadWrite(w);
         if (!RequireSchedulerTables(w))
             return 1;
+        const auto control = LoadLockedGlobalControl(w);
+        if (!control)
+            return 1;
+        initialGlobalState = control->desiredState;
         if (!options.dryRun)
         {
+            EA::GlobalExperimentControl::ReconcileActiveCancellation(w);
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             BeginSchedulerPollLogging(&logState);
             recoveryCount = RecoverOrphanedRunningExperiments(w, &logState, options.schedulerVerbose);
@@ -13399,6 +13955,7 @@ int RunScheduler(const SchedulerOptions& options)
               << ",continuation_dry_run="
               << ((options.continuationDryRun || options.dryRun) ? "1" : "0")
               << ",recover_orphans_only=" << (options.recoverOrphansOnly ? "1" : "0")
+              << ",global_desired_state=" << initialGlobalState
               << std::endl;
     if (options.dryRun)
         std::cout << "SCHEDULER_DRY_RUN=1" << std::endl;
@@ -16178,6 +16735,30 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     SetTransactionReadWrite(w);
     if (!RequireSchedulerTables(w))
         return 1;
+    const auto globalControl = LoadLockedGlobalControl(w);
+    if (!globalControl)
+        return 1;
+    const int globallyPausedWorkers = CountRows(
+        w,
+        "SELECT ("
+        " (SELECT count(*) FROM experiment WHERE status='running' "
+        "  AND worker_control_state='paused') +"
+        " (SELECT count(*) FROM experiment_checkpoint_eval "
+        "  WHERE status='running' AND phase='infer' "
+        "  AND worker_control_state='paused')"
+        ")::bigint;");
+    const int pendingCheckpointCancellations = CountRows(
+        w,
+        "SELECT count(*) FROM experiment "
+        "WHERE status IN ('running','pending') "
+        "AND cancel_after_checkpoint_epoch IS NOT NULL;");
+    pqxx::result latestAdmin = w.exec(
+        "SELECT request_id,action,COALESCE(cancellation_mode,'NULL'),"
+        "infer_before_cancel,status,requested_at::text,"
+        "COALESCE(completed_at::text,'NULL'),successful_count,"
+        "missing_count,rejected_count,failed_count "
+        "FROM experiment_admin_request "
+        "ORDER BY request_id DESC LIMIT 1;");
     BackfillRunningTrainingProgressFromLogs(w, std::nullopt);
 
     const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
@@ -16213,6 +16794,36 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     };
 
     std::cout << "Scheduler Status\n";
+    std::cout << "Global experiment execution: "
+              << globalControl->desiredState
+              << " active_request_id="
+              << (globalControl->activeRequestId
+                      ? std::to_string(*globalControl->activeRequestId)
+                      : "none")
+              << " paused_workers=" << globallyPausedWorkers
+              << " cancellation_mode="
+              << globalControl->cancellationMode.value_or("none")
+              << " infer_before_cancel="
+              << (globalControl->inferBeforeCancel ? "yes" : "no")
+              << " pending_checkpoint_cancellations="
+              << pendingCheckpointCancellations
+              << "\n";
+    if (!latestAdmin.empty())
+    {
+        std::cout << "Latest administrative request: id="
+                  << latestAdmin[0][0].as<long long>()
+                  << " action=" << latestAdmin[0][1].as<std::string>()
+                  << " mode=" << latestAdmin[0][2].as<std::string>()
+                  << " infer_before_cancel="
+                  << (latestAdmin[0][3].as<bool>() ? "yes" : "no")
+                  << " status=" << latestAdmin[0][4].as<std::string>()
+                  << " successful="
+                  << latestAdmin[0][7].as<int>()
+                  << " missing=" << latestAdmin[0][8].as<int>()
+                  << " rejected=" << latestAdmin[0][9].as<int>()
+                  << " failed=" << latestAdmin[0][10].as<int>()
+                  << "\n";
+    }
     if (schedulerRunning)
     {
         std::cout << "Scheduler process: "
@@ -16302,6 +16913,27 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     {
         std::cout << "\nSCHEDULER_STATUS"
                   << ",running=" << (schedulerRunning ? "1" : "0")
+                  << ",global_desired_state=" << globalControl->desiredState
+                  << ",active_admin_request_id="
+                  << (globalControl->activeRequestId
+                          ? std::to_string(*globalControl->activeRequestId)
+                          : "NULL")
+                  << ",globally_paused_workers=" << globallyPausedWorkers
+                  << ",active_cancellation_mode="
+                  << globalControl->cancellationMode.value_or("NULL")
+                  << ",active_infer_before_cancel="
+                  << (globalControl->inferBeforeCancel ? "1" : "0")
+                  << ",pending_checkpoint_cancellations="
+                  << pendingCheckpointCancellations
+                  << ",latest_admin_request_id="
+                  << (latestAdmin.empty()
+                          ? "NULL"
+                          : std::to_string(
+                                latestAdmin[0][0].as<long long>()))
+                  << ",latest_admin_status="
+                  << (latestAdmin.empty()
+                          ? "NULL"
+                          : latestAdmin[0][4].as<std::string>())
                   << ",pid=" << (schedulerRunning ? schedulerPid : "unknown")
                   << ",train_workers=" << processes.trainWorkers
                   << ",infer_workers=" << processes.inferWorkers
@@ -16464,6 +17096,16 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "evaluation/queue proposals without database writes.\n"
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
+        << "Usage: " << exe
+        << " --pause-all-experiments [--dry-run | --yes]\n"
+        << "Usage: " << exe
+        << " --resume-all-experiments [--dry-run | --yes]\n"
+        << "Usage: " << exe
+        << " --cancel-all-experiments (--immediate | --after-next-checkpoint) "
+        << "[--infer-before-cancel] [--dry-run | --yes]\n"
+        << "Global controls are database-authoritative and work without a running "
+        << "scheduler. Pause/resume signal only identity-validated managed process "
+        << "groups. Cancellation uses durable checkpoints for optional inference.\n"
         << "Usage: " << exe
         << " --generate-experiment-reports [--experiment-report-dir=PATH]\n"
         << "Usage: " << exe
@@ -17258,6 +17900,39 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return QueueExperiments(options);
         if (options.enqueueExperiment)
             return EnqueueExperiment(options);
+        if (options.pauseAllExperiments ||
+            options.resumeAllExperiments ||
+            options.cancelAllExperiments)
+        {
+            EA::GlobalExperimentControl::Command command;
+            command.action = options.pauseAllExperiments
+                ? EA::GlobalExperimentControl::Action::PauseAll
+                : (options.resumeAllExperiments
+                       ? EA::GlobalExperimentControl::Action::ResumeAll
+                       : EA::GlobalExperimentControl::Action::CancelAll);
+            if (options.cancelImmediate)
+                command.cancellationMode =
+                    EA::GlobalExperimentControl::CancellationMode::Immediate;
+            else if (options.cancelAfterNextCheckpoint)
+                command.cancellationMode =
+                    EA::GlobalExperimentControl::CancellationMode::
+                        AfterNextCheckpoint;
+            command.inferBeforeCancel = options.inferBeforeCancel;
+            command.dryRun = options.dryRun;
+            command.confirmed = options.yes;
+            const auto invocationStarted =
+                std::chrono::system_clock::now().time_since_epoch();
+            command.invocationIdentity =
+                std::string{"pid:"} + std::to_string(::getpid()) +
+                ";started_ns:" +
+                std::to_string(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        invocationStarted)
+                        .count()) +
+                ";executable:" + options.selfPath;
+            return EA::GlobalExperimentControl::RunCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
         if (options.scheduleExperiments)
             return RunScheduler(options);
         if (options.stopExperimentId.has_value() || options.stopAllExperiments)

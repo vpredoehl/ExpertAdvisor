@@ -27,6 +27,14 @@ The scheduler manages experiment training, inference, analysis, checkpoint, and
 configured continuation workflows. Recommendation generation, scoring, and
 review remain explicitly outside its polling loop.
 
+Global administrative execution control is database-authoritative. Scheduler
+claim/launch boundaries and pause, resume, or cancellation commands use one
+PostgreSQL advisory-lock protocol. An active request or persistent paused state
+suppresses ordinary train, infer, analyze, checkpoint, and continuation
+launches. Unix suspension is separate from experiment lifecycle status. See
+[`GlobalExperimentControls.rst`](../GlobalExperimentControls.rst) for operator,
+process-identity, checkpoint, inference, dry-run, and restart semantics.
+
 ## 3. Responsibilities
 
 ### 3.1 Owned responsibilities
@@ -68,8 +76,9 @@ enter this flow without an accepted ADR.
 
 ### 5.1 Authoritative entities
 
-Experiment phase/status, worker attempt, operation, PID/start time, capacity
-class, exit/failure state, scheduler version, and recovery metadata.
+Experiment phase/status, worker attempt, operation, PID/process group,
+executable, kernel process-start identity, capacity class, exit/failure state,
+scheduler version, and recovery metadata.
 
 ### 5.2 Provenance and versions
 
@@ -79,8 +88,11 @@ metadata, scheduler/build provenance, and attempt ownership.
 ### 5.3 Invariants and legacy data
 
 Status, phase, operation, worker fields, and attempt state must form valid
-shapes. Orphan recovery uses durable evidence plus process checks. Legacy rows
-are reconciled conservatively.
+shapes. Scheduler launches and conservative adoption persist the kernel
+process-start identity. Administrative signaling requires an exact PID,
+process-group, executable, experiment, phase, and process-start match. Orphan
+recovery uses durable evidence plus process checks. Legacy active rows without
+complete identity are rejected for signaling until conservatively adopted.
 
 ## 6. Transactions
 

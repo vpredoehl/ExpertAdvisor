@@ -39,6 +39,9 @@ Experiment scheduling tables are created by:
 
 - `005_experiment_scheduler.sql`: `experiment`
 - `006_experiment_analysis.sql`: `experiment_analysis_result`
+- `046_global_experiment_control.sql`: database-authoritative global desired
+  execution state, administrative request/outcome audit, cancellation targets,
+  and managed worker PID/process-group/executable/process-start identity
 
 Recommendation conversion and campaign-approval history is created by:
 
@@ -193,6 +196,11 @@ scheduler, worker, UI, or CLI behavior.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
+Migration 046 is additionally required before starting the scheduler or using
+``--pause-all-experiments``, ``--resume-all-experiments``, or
+``--cancel-all-experiments``.  See
+``docs/GlobalExperimentControls.rst`` for locking, process validation,
+checkpoint cancellation, inference, restart, dry-run, and audit semantics.
 
 ## Database Backups
 

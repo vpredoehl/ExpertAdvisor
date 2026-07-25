@@ -37,6 +37,7 @@
 #include "TargetLabel.hpp"
 #include "ExperimentScheduler.hpp"
 #include "ExperimentMetaAnalyzer.hpp"
+#include "GlobalExperimentControl.hpp"
 #include "CanonicalSymbol.hpp"
 #include "FxPriceSanity.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
@@ -3373,10 +3374,31 @@ void QueueCheckpointInferenceIfEligible(const std::optional<long long>& schedule
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
         w.exec("SET TRANSACTION READ WRITE;");
+        EA::GlobalExperimentControl::AcquireCoordinationLock(w);
         if (!SchedulerTableExists(w, "experiment_checkpoint_eval"))
         {
             w.commit();
             return;
+        }
+        if (SchedulerExperimentColumnExists(w, "cancellation_request_id"))
+        {
+            const pqxx::result cancellation = w.exec(
+                "SELECT cancellation_request_id FROM experiment "
+                "WHERE experiment_id=$1;",
+                pqxx::params{*schedulerExperimentId});
+            if (!cancellation.empty() && !cancellation[0][0].is_null())
+            {
+                w.commit();
+                std::cout << "CHECKPOINT_INFER_SKIPPED"
+                          << " experiment_id=" << *schedulerExperimentId
+                          << " checkpoint_epoch=" << checkpointEpoch
+                          << " checkpoint_model_id=" << checkpointModelId
+                          << " reason=global_cancellation"
+                          << " symbol=" << config->symbol
+                          << " horizon=" << config->predictionHorizon
+                          << std::endl;
+                return;
+            }
         }
 
         pqxx::result modelRows = w.exec_params(
@@ -3543,6 +3565,7 @@ struct CheckpointStopConfig
 {
     int requestedEpoch = 0;
     int effectiveEpoch = 0;
+    bool cancellationRequested = false;
 };
 
 std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional<long long>& experimentId,
@@ -3557,15 +3580,33 @@ std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional
     {
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
+        EA::GlobalExperimentControl::AcquireCoordinationLock(w);
         if (!SchedulerExperimentColumnExists(w, "stop_after_checkpoint_epoch"))
         {
             w.commit();
             return std::nullopt;
         }
 
-        pqxx::result rows = w.exec_params(
-            "SELECT stop_after_checkpoint_epoch FROM experiment WHERE experiment_id = $1;",
-            *experimentId);
+        const bool hasCancellationControl =
+            SchedulerExperimentColumnExists(w, "cancellation_request_id") &&
+            SchedulerExperimentColumnExists(
+                w, "last_checkpoint_stop_decision_epoch");
+        pqxx::result rows = hasCancellationControl
+            ? w.exec_params(
+                  "SELECT stop_after_checkpoint_epoch,cancellation_request_id "
+                  "FROM experiment WHERE experiment_id = $1 FOR UPDATE;",
+                  *experimentId)
+            : w.exec_params(
+                  "SELECT stop_after_checkpoint_epoch,NULL::bigint "
+                  "FROM experiment WHERE experiment_id = $1 FOR UPDATE;",
+                  *experimentId);
+        if (hasCancellationControl)
+            w.exec_params(
+                "UPDATE experiment "
+                "SET last_checkpoint_stop_decision_epoch=$1,updated_at=now() "
+                "WHERE experiment_id=$2;",
+                checkpointEpoch,
+                *experimentId);
         w.commit();
         if (rows.empty() || rows[0][0].is_null())
             return std::nullopt;
@@ -3619,7 +3660,10 @@ std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional
                   << " effective_epoch=" << effectiveEpoch
                   << " checkpoint_epoch=" << checkpointEpoch
                   << std::endl;
-        return CheckpointStopConfig{requestedEpoch, effectiveEpoch};
+        return CheckpointStopConfig{
+            requestedEpoch,
+            effectiveEpoch,
+            !rows[0][1].is_null()};
     }
     catch (const std::exception& e)
     {
@@ -3644,6 +3688,7 @@ bool RecordCheckpointStopReached(const std::optional<long long>& experimentId,
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
         w.exec("SET TRANSACTION READ WRITE;");
+        EA::GlobalExperimentControl::AcquireCoordinationLock(w);
         if (!SchedulerExperimentColumnExists(w, "stopped_at_checkpoint_epoch") ||
             !SchedulerExperimentColumnExists(w, "stopped_at_checkpoint_model_id"))
         {
@@ -3655,23 +3700,113 @@ bool RecordCheckpointStopReached(const std::optional<long long>& experimentId,
             return false;
         }
 
-        w.exec_params(
-            "UPDATE experiment "
-            "SET current_epoch = $1, "
-            "worker_pid = NULL, "
-            "current_operation = 'checkpoint_stopped', "
-            "stopped_at_checkpoint_epoch = $1, "
-            "stopped_at_checkpoint_model_id = $2, "
-            "last_model_id = $2, "
-            "status = 'pending', "
-            "phase = CASE WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL THEN 'infer' ELSE 'analyze' END, "
-            "exit_code = 0, "
-            "error_message = NULL, "
-            "updated_at = now() "
-            "WHERE experiment_id = $3 AND status = 'running' AND phase = 'train';",
-            epoch,
-            modelId,
-            *experimentId);
+        pqxx::result cancellation;
+        if (SchedulerExperimentColumnExists(w, "cancellation_request_id"))
+            cancellation = w.exec_params(
+                "SELECT cancellation_request_id,cancel_infer_before,symbol,"
+                "prediction_horizon,"
+                "infer_start IS NOT NULL AND infer_end IS NOT NULL "
+                "FROM experiment WHERE experiment_id=$1 FOR UPDATE;",
+                *experimentId);
+        const bool cancellationRequested =
+            !cancellation.empty() && !cancellation[0][0].is_null();
+        const bool inferBeforeCancel =
+            cancellationRequested && cancellation[0][1].as<bool>();
+        const bool cancellationInferenceAvailable =
+            inferBeforeCancel && cancellation[0][4].as<bool>();
+        const std::optional<long long> cancellationRequestId =
+            cancellationRequested
+                ? std::optional<long long>{
+                      cancellation[0][0].as<long long>()}
+                : std::nullopt;
+
+        if (cancellationRequested && cancellationInferenceAvailable)
+        {
+            w.exec_params(
+                "INSERT INTO experiment_checkpoint_eval ("
+                "experiment_id,parent_experiment_id,checkpoint_epoch,"
+                "checkpoint_model_id,symbol,prediction_horizon,"
+                "cancellation_request_id) "
+                "VALUES ($1,$1,$2,$3,$4,$5,$6) "
+                "ON CONFLICT (parent_experiment_id,checkpoint_model_id,"
+                "checkpoint_epoch) DO UPDATE SET "
+                "cancellation_request_id=EXCLUDED.cancellation_request_id,"
+                "updated_at=now();",
+                *experimentId,
+                epoch,
+                modelId,
+                cancellation[0][2].as<std::string>(),
+                cancellation[0][3].as<int>(),
+                *cancellationRequestId);
+        }
+        else if (cancellationRequested && !inferBeforeCancel)
+        {
+            w.exec_params(
+                "UPDATE experiment_checkpoint_eval SET status='failed',"
+                "phase='done',completed_at=now(),updated_at=now(),"
+                "error_message='suppressed_by_global_cancellation' "
+                "WHERE COALESCE(parent_experiment_id,experiment_id)=$1 "
+                "AND checkpoint_epoch=$2 AND checkpoint_model_id=$3 "
+                "AND status='pending';",
+                *experimentId,
+                epoch,
+                modelId);
+        }
+
+        if (cancellationRequested)
+        {
+            w.exec_params(
+                "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
+                "worker_process_group_id=NULL,"
+                "current_operation='cancel_checkpoint_reached',"
+                "stopped_at_checkpoint_epoch=$1,"
+                "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
+                "status='cancelled',phase='train',exit_code=0,"
+                "completed_at=now(),cancellation_completed_at=now(),"
+                "error_message='cancelled_at_requested_checkpoint',"
+                "updated_at=now() "
+                "WHERE experiment_id=$3 AND status='running' AND phase='train';",
+                epoch,
+                modelId,
+                *experimentId);
+            w.exec_params(
+                "UPDATE experiment_admin_worker_outcome SET "
+                "cancellation_checkpoint_model_id=$1,"
+                "inference_action=CASE WHEN $2 THEN 'queued' "
+                "WHEN $3 THEN 'failed' ELSE 'none' END,"
+                "outcome_status=CASE WHEN $2 THEN 'awaiting_inference' "
+                "WHEN $3 THEN 'partial' ELSE 'completed' END,"
+                "detail=CASE WHEN $3 AND NOT $2 "
+                "THEN 'cancellation_inference_range_missing' "
+                "ELSE 'cancellation_checkpoint_reached' END,updated_at=now() "
+                "WHERE request_id=$4 AND experiment_id=$5 "
+                "AND worker_kind='experiment';",
+                modelId,
+                cancellationInferenceAvailable,
+                inferBeforeCancel,
+                *cancellationRequestId,
+                *experimentId);
+        }
+        else
+        {
+            w.exec_params(
+                "UPDATE experiment "
+                "SET current_epoch = $1, "
+                "worker_pid = NULL, "
+                "current_operation = 'checkpoint_stopped', "
+                "stopped_at_checkpoint_epoch = $1, "
+                "stopped_at_checkpoint_model_id = $2, "
+                "last_model_id = $2, "
+                "status = 'pending', "
+                "phase = CASE WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL THEN 'infer' ELSE 'analyze' END, "
+                "exit_code = 0, "
+                "error_message = NULL, "
+                "updated_at = now() "
+                "WHERE experiment_id = $3 AND status = 'running' AND phase = 'train';",
+                epoch,
+                modelId,
+                *experimentId);
+        }
         w.commit();
 
         std::cout << "CHECKPOINT_STOP_REACHED"
@@ -3679,10 +3814,20 @@ bool RecordCheckpointStopReached(const std::optional<long long>& experimentId,
                   << " epoch=" << epoch
                   << " model_id=" << modelId
                   << std::endl;
-        std::cout << "CHECKPOINT_STOP_ADVANCE_TO_INFER"
-                  << " experiment_id=" << *experimentId
-                  << " model_id=" << modelId
-                  << std::endl;
+        if (cancellationRequested)
+            std::cout << "GLOBAL_CANCELLATION_CHECKPOINT_REACHED"
+                      << " request_id=" << *cancellationRequestId
+                      << " experiment_id=" << *experimentId
+                      << " epoch=" << epoch
+                      << " model_id=" << modelId
+                      << " infer_before_cancel="
+                      << (inferBeforeCancel ? "1" : "0")
+                      << std::endl;
+        else
+            std::cout << "CHECKPOINT_STOP_ADVANCE_TO_INFER"
+                      << " experiment_id=" << *experimentId
+                      << " model_id=" << modelId
+                      << std::endl;
         return true;
     }
     catch (const std::exception& e)
@@ -7236,12 +7381,25 @@ int main(int argc, const char * argv[])
                                                      epoch_count,
                                                      launchArgs.checkpointEvery);
                         if (checkpointStopConfig.has_value() &&
-                            RecordCheckpointStopReached(launchArgs.schedulerExperimentId,
-                                                        static_cast<int>(e + 1),
-                                                        *checkpointModelId))
+                            RecordCheckpointStopReached(
+                                launchArgs.schedulerExperimentId,
+                                static_cast<int>(e + 1),
+                                *checkpointModelId))
                         {
                             checkpointStopReached = true;
                             break;
+                        }
+                        if (checkpointStopConfig.has_value() &&
+                            checkpointStopConfig->cancellationRequested)
+                        {
+                            std::cerr
+                                << "GLOBAL_CANCELLATION_CHECKPOINT_RECORD_FAILED"
+                                << " experiment_id="
+                                << *launchArgs.schedulerExperimentId
+                                << " epoch=" << (e + 1)
+                                << " model_id=" << *checkpointModelId
+                                << std::endl;
+                            return 1;
                         }
                     }
                 }
