@@ -96,6 +96,48 @@ struct ValidatedWorker
     std::string detail;
 };
 
+struct SchedulerWorkerCandidate
+{
+    int pid = -1;
+    std::string kind;
+    std::string commandLine;
+    double cpuPercent = 0.0;
+    double memPercent = 0.0;
+    double rssMb = 0.0;
+};
+
+struct SchedulerWorkerClassification
+{
+    int pid = -1;
+    std::string kind;
+    bool managed = false;
+    IdentityResult identity = IdentityResult::IdentityValidationFailed;
+    std::string reason;
+    std::optional<long long> experimentId;
+    std::optional<long long> checkpointEvalId;
+    double cpuPercent = 0.0;
+    double memPercent = 0.0;
+    double rssMb = 0.0;
+};
+
+struct SchedulerWorkerAggregate
+{
+    int workers = 0;
+    double cpuPercent = 0.0;
+    double memPercent = 0.0;
+    double rssMb = 0.0;
+};
+
+struct SchedulerWorkerClassificationSummary
+{
+    SchedulerWorkerAggregate managedTrain;
+    SchedulerWorkerAggregate managedInfer;
+    SchedulerWorkerAggregate managedAnalyze;
+    SchedulerWorkerAggregate unmanagedTrain;
+    SchedulerWorkerAggregate unmanagedInfer;
+    SchedulerWorkerAggregate unmanagedAnalyze;
+};
+
 class ProcessOperations
 {
 public:
@@ -116,6 +158,17 @@ std::unique_ptr<ProcessOperations> CreateNativeProcessOperations();
 
 ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
                                       ProcessOperations& processes);
+
+// Classifies scheduler worker processes against their distinct authoritative
+// experiment or checkpoint-evaluation rows. Checkpoint-tagged commands are
+// never authorized by an experiment row, even if a PID or model happens to
+// overlap.
+std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
+    const std::vector<SchedulerWorkerCandidate>& candidates,
+    const std::vector<ManagedWorker>& authoritativeWorkers,
+    ProcessOperations& processes);
+SchedulerWorkerClassificationSummary SummarizeSchedulerWorkers(
+    const std::vector<SchedulerWorkerClassification>& classifications);
 
 struct SignalOutcome
 {
