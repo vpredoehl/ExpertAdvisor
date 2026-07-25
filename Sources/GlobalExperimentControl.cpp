@@ -856,6 +856,131 @@ ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
     return result;
 }
 
+std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
+    const std::vector<SchedulerWorkerCandidate>& candidates,
+    const std::vector<ManagedWorker>& authoritativeWorkers,
+    ProcessOperations& processes)
+{
+    std::vector<SchedulerWorkerClassification> classifications;
+    classifications.reserve(candidates.size());
+
+    for (const SchedulerWorkerCandidate& candidate : candidates)
+    {
+        SchedulerWorkerClassification classification;
+        classification.pid = candidate.pid;
+        classification.kind = candidate.kind;
+        classification.cpuPercent = candidate.cpuPercent;
+        classification.memPercent = candidate.memPercent;
+        classification.rssMb = candidate.rssMb;
+
+        const bool checkpointTagged =
+            candidate.commandLine.find("--scheduler-checkpoint-eval-id") !=
+            std::string::npos;
+        std::vector<const ManagedWorker*> matches;
+        for (const ManagedWorker& worker : authoritativeWorkers)
+        {
+            const std::string expectedKind =
+                worker.phase == "checkpoint_infer" ? "infer" : worker.phase;
+            if (worker.pid != candidate.pid ||
+                expectedKind != candidate.kind ||
+                worker.checkpointEvalId.has_value() != checkpointTagged)
+            {
+                continue;
+            }
+            if (checkpointTagged &&
+                (!worker.checkpointEvalId ||
+                 !ContainsExactOptionValue(
+                     candidate.commandLine,
+                     "--scheduler-checkpoint-eval-id",
+                     *worker.checkpointEvalId)))
+            {
+                continue;
+            }
+            matches.push_back(&worker);
+        }
+
+        if (matches.empty())
+        {
+            classification.reason = checkpointTagged
+                ? "no_matching_active_checkpoint_evaluation"
+                : "no_matching_running_experiment";
+            classifications.push_back(std::move(classification));
+            continue;
+        }
+        if (matches.size() != 1)
+        {
+            classification.reason = "ambiguous_authoritative_worker";
+            classifications.push_back(std::move(classification));
+            continue;
+        }
+
+        const ManagedWorker& worker = *matches.front();
+        classification.experimentId = worker.experimentId;
+        classification.checkpointEvalId = worker.checkpointEvalId;
+        if (!worker.commandLine || worker.commandLine->empty() ||
+            !ContainsWorkerIdentity(
+                *worker.commandLine, worker.experimentId, worker.phase) ||
+            (worker.phase == "checkpoint_infer" &&
+             (!worker.checkpointEvalId ||
+              !ContainsExactOptionValue(
+                  *worker.commandLine,
+                  "--scheduler-checkpoint-eval-id",
+                  *worker.checkpointEvalId))))
+        {
+            classification.reason =
+                "persisted_worker_command_line_identity_mismatch";
+            classifications.push_back(std::move(classification));
+            continue;
+        }
+
+        const ValidatedWorker validated =
+            ValidateManagedWorker(worker, processes);
+        classification.identity = validated.identity;
+        classification.managed =
+            validated.identity == IdentityResult::Validated;
+        classification.reason = classification.managed
+            ? "validated"
+            : validated.detail;
+        classifications.push_back(std::move(classification));
+    }
+    return classifications;
+}
+
+SchedulerWorkerClassificationSummary SummarizeSchedulerWorkers(
+    const std::vector<SchedulerWorkerClassification>& classifications)
+{
+    SchedulerWorkerClassificationSummary summary;
+    for (const auto& classification : classifications)
+    {
+        SchedulerWorkerAggregate* aggregate = nullptr;
+        if (classification.kind == "train")
+        {
+            aggregate = classification.managed
+                ? &summary.managedTrain
+                : &summary.unmanagedTrain;
+        }
+        else if (classification.kind == "infer")
+        {
+            aggregate = classification.managed
+                ? &summary.managedInfer
+                : &summary.unmanagedInfer;
+        }
+        else if (classification.kind == "analyze")
+        {
+            aggregate = classification.managed
+                ? &summary.managedAnalyze
+                : &summary.unmanagedAnalyze;
+        }
+        if (aggregate == nullptr)
+            continue;
+        ++aggregate->workers;
+        aggregate->cpuPercent += classification.cpuPercent;
+        aggregate->memPercent += classification.memPercent;
+        aggregate->rssMb += classification.rssMb;
+    }
+    return summary;
+}
+
 SignalOutcome PauseWorker(const ManagedWorker& worker,
                           ProcessOperations& processes)
 {
