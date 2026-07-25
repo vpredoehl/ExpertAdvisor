@@ -1,8 +1,8 @@
 # Volume XI — Scheduler
 
 Status: Foundation with accepted atomic-claim hardening; hardening not implemented
-Version: 0.2.0
-Last revised: 2026-07-24
+Version: 0.2.1
+Last revised: 2026-07-25
 
 ## 1. Purpose
 
@@ -88,6 +88,11 @@ Experiment phase/status, worker attempt, operation, PID/process group,
 executable, kernel process-start identity, capacity class, exit/failure state,
 scheduler version, and recovery metadata.
 
+Ordinary scheduler workers are authorized by active `experiment` execution
+state. Checkpoint inference workers are authorized independently by active
+`experiment_checkpoint_eval` state; completion of the parent experiment does
+not invalidate an otherwise matching checkpoint worker.
+
 ### 5.2 Provenance and versions
 
 Launches retain exact experiment/model IDs, operation, command/invocation
@@ -149,11 +154,17 @@ Dry-run and once modes must accurately describe write behavior.
 
 Events identify scheduler cycle, experiment, phase, attempt, operation,
 capacity, PID, transition, reason, and error.
+`SCHEDULER_STATUS_CHECKPOINT_JOB` reports each active checkpoint inference row,
+while the existing status and resource records include every validated
+checkpoint worker in managed inference totals exactly once.
 
 ### 8.3 Human output
 
 Summaries distinguish queued, claimed, running, recovering, failed, and
 completed work without overstating process observation.
+Scheduler status lists active checkpoint inference jobs separately and reports
+only processes that fail both experiment and checkpoint-evaluation ownership
+validation as unmanaged.
 
 ## 9. Testing
 
@@ -223,3 +234,4 @@ idempotency, recovery, operator control, and regression scope.
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Established scheduler ownership and safety outline. | ADR-0004 |
 | 0.2.0 | 2026-07-24 | Accepted atomic claim/attempt hardening, preserved ordinary experiment work classes, and gated Campaign Operations production dispatch pending implementation and independent verification. | ADR-0004, ADR-0016 |
+| 0.2.1 | 2026-07-25 | Documented checkpoint-evaluation worker ownership and status accounting. | ADR-0004 |

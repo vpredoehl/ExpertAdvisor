@@ -506,6 +506,24 @@ struct SchedulerStatusJob
     std::string errorMessage;
 };
 
+struct SchedulerCheckpointStatusJob
+{
+    long long checkpointEvalId = -1;
+    long long experimentId = -1;
+    int checkpointEpoch = 0;
+    long long checkpointModelId = -1;
+    std::string symbol;
+    int predictionHorizon = 0;
+    std::string status;
+    std::string phase;
+    std::optional<int> pid;
+    std::optional<double> cpuPercent;
+    std::optional<double> memPercent;
+    std::optional<double> rssMb;
+    std::string workerControlState;
+    std::optional<std::string> inferLogPath;
+};
+
 struct SchedulerProcessResource
 {
     int pid = -1;
@@ -13303,6 +13321,8 @@ int RunTrainJobs(const SchedulerOptions& options,
     return rc;
 }
 
+int CountRows(pqxx::work& w, const std::string& sql);
+
 int RunInferJobs(const SchedulerOptions& options,
                  const QueueSnapshot& snapshot,
                  SchedulerEventLogState* logState)
@@ -13323,7 +13343,14 @@ int RunInferJobs(const SchedulerOptions& options,
     PhaseSchedulingStats stats;
     stats.phase = "infer";
     stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots = std::max(0, options.maxInferProcs - RunningCountForPhase(snapshot, "infer"));
+    const int runningCheckpointInfer = CountRows(
+        w,
+        "SELECT count(*) FROM experiment_checkpoint_eval "
+        "WHERE status='running' AND phase='infer';");
+    stats.freeSlots = AvailableInferProcessSlots(
+        options.maxInferProcs,
+        RunningCountForPhase(snapshot, "infer"),
+        runningCheckpointInfer);
     int freeSlots = stats.freeSlots;
     int rc = 0;
     std::vector<pid_t> launchedInTransaction;
@@ -13861,7 +13888,10 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
 
     const int runningFinalInfer = CountRows(w, "SELECT count(*) FROM experiment WHERE status = 'running' AND phase = 'infer';");
     const int runningCheckpointInfer = CountRows(w, "SELECT count(*) FROM experiment_checkpoint_eval WHERE status = 'running' AND phase = 'infer';");
-    int freeSlots = std::max(0, options.maxInferProcs - runningFinalInfer - runningCheckpointInfer);
+    int freeSlots = AvailableInferProcessSlots(
+        options.maxInferProcs,
+        runningFinalInfer,
+        runningCheckpointInfer);
     if (freeSlots <= 0)
     {
         w.commit();
@@ -15272,6 +15302,88 @@ SchedulerStatusCounts LoadSchedulerStatusCounts(pqxx::work& w)
     return counts;
 }
 
+std::vector<EA::GlobalExperimentControl::ManagedWorker>
+LoadAuthoritativeSchedulerWorkers(pqxx::work& w)
+{
+    pqxx::result rows = w.exec(
+        "SELECT experiment_id,NULL::bigint AS checkpoint_eval_id,"
+        "status,phase,worker_pid,worker_process_group_id,worker_executable,"
+        "worker_command_line,worker_process_start_identity "
+        "FROM experiment "
+        "WHERE status='running' AND phase IN ('train','infer','analyze') "
+        "UNION ALL "
+        "SELECT COALESCE(parent_experiment_id,experiment_id),"
+        "checkpoint_eval_id,status,'checkpoint_infer',worker_pid,"
+        "worker_process_group_id,worker_executable,worker_command_line,"
+        "worker_process_start_identity "
+        "FROM experiment_checkpoint_eval "
+        "WHERE status='running' AND phase='infer' "
+        "ORDER BY 1,2 NULLS FIRST;");
+
+    std::vector<EA::GlobalExperimentControl::ManagedWorker> workers;
+    workers.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        EA::GlobalExperimentControl::ManagedWorker worker;
+        worker.experimentId = row[0].as<long long>();
+        worker.checkpointEvalId = OptionalLongLongCell(row, 1);
+        worker.lifecycleStatus = row[2].as<std::string>();
+        worker.phase = row[3].as<std::string>();
+        if (!row[4].is_null())
+            worker.pid = row[4].as<int>();
+        if (!row[5].is_null())
+            worker.processGroupId = row[5].as<int>();
+        worker.executable = OptionalStringCell(row, 6);
+        worker.commandLine = OptionalStringCell(row, 7);
+        worker.processStartIdentity = OptionalStringCell(row, 8);
+        workers.push_back(std::move(worker));
+    }
+    return workers;
+}
+
+std::vector<SchedulerCheckpointStatusJob>
+LoadActiveCheckpointStatusJobs(pqxx::work& w)
+{
+    pqxx::result rows = w.exec(
+        "SELECT ce.checkpoint_eval_id,"
+        "COALESCE(ce.parent_experiment_id,ce.experiment_id),"
+        "ce.checkpoint_epoch,ce.checkpoint_model_id,"
+        "COALESCE(ce.symbol,e.symbol),"
+        "COALESCE(ce.prediction_horizon,e.prediction_horizon),"
+        "ce.status,ce.phase,ce.worker_pid,ce.worker_control_state,"
+        "ce.infer_log_path "
+        "FROM experiment_checkpoint_eval ce "
+        "LEFT JOIN experiment e "
+        "ON e.experiment_id="
+        "COALESCE(ce.parent_experiment_id,ce.experiment_id) "
+        "WHERE ce.status='running' AND ce.phase='infer' "
+        "ORDER BY ce.created_at,ce.checkpoint_eval_id;");
+
+    std::vector<SchedulerCheckpointStatusJob> jobs;
+    jobs.reserve(rows.size());
+    for (const auto& row : rows)
+    {
+        SchedulerCheckpointStatusJob job;
+        job.checkpointEvalId = row[0].as<long long>();
+        job.experimentId = row[1].as<long long>();
+        job.checkpointEpoch = row[2].as<int>();
+        job.checkpointModelId = row[3].as<long long>();
+        job.symbol =
+            row[4].is_null() ? "unknown" : row[4].as<std::string>();
+        job.predictionHorizon =
+            row[5].is_null() ? 0 : row[5].as<int>();
+        job.status = row[6].as<std::string>();
+        job.phase = row[7].as<std::string>();
+        if (!row[8].is_null())
+            job.pid = row[8].as<int>();
+        job.workerControlState =
+            row[9].is_null() ? "unknown" : row[9].as<std::string>();
+        job.inferLogPath = OptionalStringCell(row, 10);
+        jobs.push_back(std::move(job));
+    }
+    return jobs;
+}
+
 std::string OptionalLongLongText(const std::optional<long long>& value);
 std::string OptionalIntText(const std::optional<int>& value);
 std::string OptionalDoubleText(const std::optional<double>& value, int precision);
@@ -16146,6 +16258,9 @@ void EnrichSchedulerStatusJobFromLogs(SchedulerStatusJob& job,
             for (const auto& process : processes.workerProcesses)
             {
                 if (process.kind == "infer" &&
+                    process.command.find(
+                        "--scheduler-checkpoint-eval-id") ==
+                        std::string::npos &&
                     CommandContainsOptionValue(process.command, "--model", *job.modelId))
                 {
                     job.pid = process.pid;
@@ -16267,15 +16382,21 @@ void EnrichSchedulerStatusJobs(std::vector<SchedulerStatusJob>& jobs,
         EnrichSchedulerStatusJobFromLogs(job, processes);
 }
 
-bool ContainsPid(const std::vector<int>& pids, int pid)
+void EnrichCheckpointStatusJobs(
+    std::vector<SchedulerCheckpointStatusJob>& jobs,
+    const SchedulerStatusProcessSnapshot& processes)
 {
-    return std::find(pids.begin(), pids.end(), pid) != pids.end();
-}
-
-void AddManagedPid(std::vector<int>& pids, const SchedulerStatusJob& job)
-{
-    if (job.pid.has_value() && !ContainsPid(pids, *job.pid))
-        pids.push_back(*job.pid);
+    for (auto& job : jobs)
+    {
+        if (!job.pid)
+            continue;
+        const auto resource = processes.resourcesByPid.find(*job.pid);
+        if (resource == processes.resourcesByPid.end())
+            continue;
+        job.cpuPercent = resource->second.cpuPercent;
+        job.memPercent = resource->second.memPercent;
+        job.rssMb = resource->second.rssMb;
+    }
 }
 
 std::string TruncateCommandForStatus(const std::string& command)
@@ -16288,71 +16409,123 @@ std::string TruncateCommandForStatus(const std::string& command)
 
 SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
     const SchedulerStatusProcessSnapshot& processes,
-    const std::vector<SchedulerStatusJob>& runningTrain,
-    const std::vector<SchedulerStatusJob>& runningInfer,
-    const std::vector<SchedulerStatusJob>& runningAnalyze)
+    const std::vector<EA::GlobalExperimentControl::ManagedWorker>&
+        authoritativeWorkers,
+    EA::GlobalExperimentControl::ProcessOperations& processOperations)
 {
-    std::vector<int> managedTrainPids;
-    std::vector<int> managedInferPids;
-    std::vector<int> managedAnalyzePids;
-    for (const auto& job : runningTrain)
-        AddManagedPid(managedTrainPids, job);
-    for (const auto& job : runningInfer)
-        AddManagedPid(managedInferPids, job);
-    for (const auto& job : runningAnalyze)
-        AddManagedPid(managedAnalyzePids, job);
-
-    SchedulerWorkerAccounting accounting;
+    std::vector<EA::GlobalExperimentControl::SchedulerWorkerCandidate>
+        candidates;
+    candidates.reserve(processes.workerProcesses.size());
     for (const auto& process : processes.workerProcesses)
     {
-        const bool managed =
-            (process.kind == "train" && ContainsPid(managedTrainPids, process.pid)) ||
-            (process.kind == "infer" && ContainsPid(managedInferPids, process.pid)) ||
-            (process.kind == "analyze" && ContainsPid(managedAnalyzePids, process.pid));
+        candidates.push_back(
+            EA::GlobalExperimentControl::SchedulerWorkerCandidate{
+                process.pid,
+                process.kind,
+                process.command,
+                process.resource.cpuPercent,
+                process.resource.memPercent,
+                process.resource.rssMb});
+    }
+    const auto classifications =
+        EA::GlobalExperimentControl::ClassifySchedulerWorkers(
+            candidates, authoritativeWorkers, processOperations);
+    const auto summary =
+        EA::GlobalExperimentControl::SummarizeSchedulerWorkers(
+            classifications);
 
-        if (managed)
-        {
-            if (process.kind == "train")
-            {
-                ++accounting.managedTrain;
-                AddResourceToAggregate(accounting.managedTrainResources, process.resource);
-            }
-            else if (process.kind == "infer")
-            {
-                ++accounting.managedInfer;
-                AddResourceToAggregate(accounting.managedInferResources, process.resource);
-            }
-            else if (process.kind == "analyze")
-            {
-                ++accounting.managedAnalyze;
-                AddResourceToAggregate(accounting.managedAnalysisResources, process.resource);
-            }
+    SchedulerWorkerAccounting accounting;
+    const auto copyAggregate = [](
+        const EA::GlobalExperimentControl::SchedulerWorkerAggregate& from,
+        SchedulerResourceAggregate& to) {
+        to.workers = from.workers;
+        to.cpuPercent = from.cpuPercent;
+        to.memPercent = from.memPercent;
+        to.rssMb = from.rssMb;
+    };
+    accounting.managedTrain = summary.managedTrain.workers;
+    accounting.managedInfer = summary.managedInfer.workers;
+    accounting.managedAnalyze = summary.managedAnalyze.workers;
+    accounting.unmanagedTrain = summary.unmanagedTrain.workers;
+    accounting.unmanagedInfer = summary.unmanagedInfer.workers;
+    accounting.unmanagedAnalyze = summary.unmanagedAnalyze.workers;
+    copyAggregate(
+        summary.managedTrain, accounting.managedTrainResources);
+    copyAggregate(
+        summary.managedInfer, accounting.managedInferResources);
+    copyAggregate(
+        summary.managedAnalyze, accounting.managedAnalysisResources);
+    copyAggregate(
+        summary.unmanagedTrain, accounting.unmanagedTrainResources);
+    copyAggregate(
+        summary.unmanagedInfer, accounting.unmanagedInferResources);
+    copyAggregate(
+        summary.unmanagedAnalyze, accounting.unmanagedAnalysisResources);
+
+    for (size_t i = 0; i < processes.workerProcesses.size(); ++i)
+    {
+        const auto& process = processes.workerProcesses[i];
+        const auto& classification = classifications[i];
+        if (classification.managed)
             continue;
-        }
-
-        if (process.kind == "train")
-        {
-            ++accounting.unmanagedTrain;
-            AddResourceToAggregate(accounting.unmanagedTrainResources, process.resource);
-        }
-        else if (process.kind == "infer")
-        {
-            ++accounting.unmanagedInfer;
-            AddResourceToAggregate(accounting.unmanagedInferResources, process.resource);
-        }
-        else if (process.kind == "analyze")
-        {
-            ++accounting.unmanagedAnalyze;
-            AddResourceToAggregate(accounting.unmanagedAnalysisResources, process.resource);
-        }
         accounting.unmanagedWorkers.push_back(SchedulerUnmanagedWorker{
             process.pid,
             process.kind,
-            "no_matching_running_experiment",
+            classification.reason,
             TruncateCommandForStatus(process.command)
         });
     }
     return accounting;
+}
+
+void PrintCheckpointStatusJobs(
+    const std::vector<SchedulerCheckpointStatusJob>& jobs)
+{
+    std::cout << "\nActive Checkpoint Inference Jobs\n";
+    if (jobs.empty())
+    {
+        std::cout << "  none\n";
+        return;
+    }
+    for (const auto& job : jobs)
+    {
+        std::cout << "  checkpoint_eval_id=" << job.checkpointEvalId
+                  << " experiment_id=" << job.experimentId
+                  << " epoch=" << job.checkpointEpoch
+                  << " model_id=" << job.checkpointModelId
+                  << " symbol=" << job.symbol
+                  << " horizon=" << job.predictionHorizon
+                  << " pid=" << OptionalIntText(job.pid)
+                  << " control=" << job.workerControlState
+                  << " cpu=" << OptionalDoubleText(job.cpuPercent, 1)
+                  << "% rss_mb=" << OptionalDoubleText(job.rssMb, 0)
+                  << " log=" << job.inferLogPath.value_or("none")
+                  << "\n";
+    }
+}
+
+void PrintCheckpointStatusJobMachine(
+    const SchedulerCheckpointStatusJob& job)
+{
+    std::cout << "SCHEDULER_STATUS_CHECKPOINT_JOB"
+              << ",checkpoint_eval_id=" << job.checkpointEvalId
+              << ",experiment_id=" << job.experimentId
+              << ",checkpoint_epoch=" << job.checkpointEpoch
+              << ",checkpoint_model_id=" << job.checkpointModelId
+              << ",status=" << job.status
+              << ",phase=" << job.phase
+              << ",symbol=" << job.symbol
+              << ",prediction_horizon=" << job.predictionHorizon
+              << ",pid=" << OptionalIntText(job.pid)
+              << ",worker_control_state=" << job.workerControlState
+              << ",cpu_percent="
+              << OptionalDoubleText(job.cpuPercent, 1)
+              << ",rss_mb=" << OptionalDoubleText(job.rssMb, 0)
+              << ",mem_percent="
+              << OptionalDoubleText(job.memPercent, 1)
+              << ",infer_log_path="
+              << job.inferLogPath.value_or("NULL")
+              << std::endl;
 }
 
 void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
@@ -17089,6 +17262,9 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     std::vector<SchedulerStatusJob> paused = LoadSchedulerStatusJobs(w, "paused", std::nullopt, 50, false);
     std::vector<SchedulerStatusJob> completed = LoadSchedulerStatusJobs(w, "completed", std::nullopt, 10, true);
     std::vector<SchedulerStatusJob> failed = LoadSchedulerStatusJobs(w, "failed", std::nullopt, 20, true);
+    const auto authoritativeWorkers = LoadAuthoritativeSchedulerWorkers(w);
+    std::vector<SchedulerCheckpointStatusJob> activeCheckpointInfer =
+        LoadActiveCheckpointStatusJobs(w);
     w.commit();
 
     EnrichSchedulerStatusJobs(runningTrain, processes);
@@ -17098,9 +17274,13 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     EnrichSchedulerStatusJobs(paused, processes);
     EnrichSchedulerStatusJobs(completed, processes);
     EnrichSchedulerStatusJobs(failed, processes);
+    EnrichCheckpointStatusJobs(activeCheckpointInfer, processes);
     PersistDiscoveredRunningTrainingMetadata(runningTrain);
+    auto processOperations =
+        EA::GlobalExperimentControl::CreateNativeProcessOperations();
     const SchedulerWorkerAccounting workerAccounting =
-        ComputeSchedulerWorkerAccounting(processes, runningTrain, runningInfer, runningAnalyze);
+        ComputeSchedulerWorkerAccounting(
+            processes, authoritativeWorkers, *processOperations);
 
     const bool schedulerRunning = !processes.schedulerPids.empty();
     const std::string schedulerPid =
@@ -17227,6 +17407,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
 
     PrintStatusJobTable("Active Training Jobs", runningTrain, useColor, true, false);
     PrintStatusJobTable("Active Inference Jobs", runningInfer, useColor, false, false);
+    PrintCheckpointStatusJobs(activeCheckpointInfer);
     PrintStatusJobTable("Active Analysis Jobs", runningAnalyze, useColor, false, false);
     PrintStatusJobTable("Queued Jobs", queued, useColor, false, false);
     PrintStatusJobTable("Paused Jobs", paused, useColor, false, false);
@@ -17371,6 +17552,8 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
             PrintSchedulerStatusJobMachine(job);
         for (const auto& job : runningInfer)
             PrintSchedulerStatusJobMachine(job);
+        for (const auto& job : activeCheckpointInfer)
+            PrintCheckpointStatusJobMachine(job);
         for (const auto& job : runningAnalyze)
             PrintSchedulerStatusJobMachine(job);
         for (const auto& job : queued)
