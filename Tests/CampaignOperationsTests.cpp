@@ -55,6 +55,9 @@ int main()
     static_assert(!OperationalCampaign::readinessEventPresent);
     static_assert(!OperationalCampaign::schedulerAuthorityGranted);
     static_assert(!OperationalCampaign::lifecycleAuthorityGranted);
+    static_assert(!OperationalRequest::dispatchAuthorityGranted);
+    static_assert(!OperationalRequest::schedulerAuthorityGranted);
+    static_assert(!OperationalRequest::lifecycleAuthorityGranted);
 
     const OperationalCampaign campaign = BuildCampaign();
     const std::string expectedCampaignCanonical =
@@ -298,6 +301,96 @@ int main()
             3, 5, 3, 0, BudgetLedgerStatus::active);
     }, ErrorCode::invalidBudgetAccounting,
         "campaign_operations_budget_accounting_invalid");
+
+    const LogicalOperation operation =
+        BuildLogicalOperation(OperationalCampaignId(7), campaign);
+    assert(operation.identity.canonicalText().starts_with(
+        "campaign_operations_logical_operation_v1;"));
+    assert(operation.identity.hash() ==
+        EA::ExperimentRecommendation::RecommendationCanonicalHash(
+            operation.identity.canonicalText()));
+    assert(operation.identity.hash() == "fnv1a64:f254a98743e91370");
+    const BudgetLedgerEntry budget = BuildBudgetLedgerEntry(
+        OperationalCampaignId(7), campaign.identity.canonicalText(),
+        std::nullopt, std::nullopt, std::nullopt, 1,
+        BudgetLedgerEntryKind::grant, BudgetLedgerStatus::active,
+        BudgetUnit::materializedMemberDispatch, 3, 0, 3,
+        ActorIdentity("budget.admin@example.test"),
+        Reason("Grant one complete three-member operation."));
+    assert(budget.identity.canonicalText().starts_with(
+        "campaign_operations_budget_ledger_entry_v1;"));
+    assert(budget.identity.hash() ==
+        EA::ExperimentRecommendation::RecommendationCanonicalHash(
+            budget.identity.canonicalText()));
+    assert(budget.identity.hash() == "fnv1a64:5258a9d40a8c3c38");
+    const Reservation reservation = BuildReservation(operation,
+        AuthorizationEventId(19), grant.identity.canonicalText(),
+        grant.identity.hash(), BudgetLedgerEntryId(23), 1,
+        budget.identity.canonicalText(), budget.identity.hash(), 3, 3,
+        BudgetUnit::materializedMemberDispatch,
+        UtcTimestamp("2026-08-01T00:00:00.000000Z"));
+    assert(reservation.identity.canonicalText().starts_with(
+        "campaign_operations_reservation_v1;"));
+    assert(reservation.identity.hash() == "fnv1a64:edf40f5e202de730");
+    assert(reservation.amount == reservation.memberCount);
+    const OperationalRequest request = BuildOperationalRequest(operation,
+        AuthorizationEventId(19), grant.identity.canonicalText(),
+        grant.identity.hash(), ReservationId(29),
+        reservation.identity.canonicalText(), reservation.identity.hash(), 3,
+        campaign.materializationIdentityHash,
+        ActorIdentity("requester@example.test"),
+        Reason("Accept one durable operation."),
+        PrerequisitePolicy::phase4dMaterializationOnlyV1,
+        std::nullopt, std::nullopt);
+    assert(request.identity.canonicalText().starts_with(
+        "campaign_operations_request_v1;"));
+    assert(request.identity.hash() == "fnv1a64:2c6c3922481b636c");
+    assert(request.logicalOperation.identity ==
+        reservation.logicalOperation.identity);
+    const ReservationEvent acquisition =
+        BuildReservationAcquisitionEvent(ReservationId(29),
+            reservation.identity.canonicalText(), OperationalRequestId(31),
+            request.identity.canonicalText(), 3);
+    assert(acquisition.identity.canonicalText().starts_with(
+        "campaign_operations_reservation_event_v1;"));
+    assert(acquisition.eventKind == ReservationEventKind::acquired);
+    assert(!acquisition.expectedState);
+    assert(acquisition.resultingState == ReservationState::held);
+    assert(acquisition.expectedVersion == 0);
+    assert(acquisition.resultingVersion == 1);
+    assert(acquisition.identity.hash() == "fnv1a64:20459a7ac198ce34");
+
+    AssertError([&]
+    {
+        (void)BuildBudgetLedgerEntry(OperationalCampaignId(7),
+            campaign.identity.canonicalText(), std::nullopt, std::nullopt,
+            std::nullopt, 2, BudgetLedgerEntryKind::amend,
+            BudgetLedgerStatus::active,
+            BudgetUnit::materializedMemberDispatch, 1, 3, 4,
+            ActorIdentity("budget.admin@example.test"), Reason("invalid"));
+    }, ErrorCode::invalidBudgetLedgerEntry,
+        "campaign_operations_budget_ledger_entry_invalid");
+    AssertError([&]
+    {
+        (void)BuildReservation(operation, AuthorizationEventId(19),
+            grant.identity.canonicalText(), grant.identity.hash(),
+            BudgetLedgerEntryId(23), 1, budget.identity.canonicalText(),
+            budget.identity.hash(), 3, 2,
+            BudgetUnit::materializedMemberDispatch, std::nullopt);
+    }, ErrorCode::invalidReservation,
+        "campaign_operations_reservation_invalid");
+    AssertError([&]
+    {
+        (void)BuildOperationalRequest(operation, AuthorizationEventId(19),
+            grant.identity.canonicalText(), grant.identity.hash(),
+            ReservationId(29), reservation.identity.canonicalText(),
+            reservation.identity.hash(), 3,
+            "fnv1a64:0000000000000000",
+            ActorIdentity("requester@example.test"), Reason("invalid"),
+            PrerequisitePolicy::phase4dMaterializationOnlyV1,
+            std::nullopt, std::nullopt);
+    }, ErrorCode::invalidOperationalRequest,
+        "campaign_operations_request_invalid");
     AssertError([]
     {
         (void)CalculateBudgetAccounting(3, 0, 0, 0,

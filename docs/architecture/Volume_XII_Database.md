@@ -1,7 +1,7 @@
 # Volume XII — Database
 
-Status: Foundation aligned through Phase 6D and Campaign Operations authority
-Version: 0.5.0
+Status: Aligned through Phase 6D and Campaign Operations Phase 2
+Version: 0.6.0
 Last revised: 2026-07-24
 
 ## 1. Purpose
@@ -40,6 +40,19 @@ optional governance-provenance, append-only authorization-chain, and audit
 foundation. It adds no budget, reservation, request, dispatch, cancellation,
 completion, lifecycle, scheduler, worker, UI, or CLI behavior and grants no
 capability role to the runtime login.
+
+Campaign Operations migration 047 adds the append-only budget ledger, guarded
+reservation/request projections, immutable reservation transition evidence,
+same-transaction audit completeness, and read-only status views. A held
+full-materialization reservation and ready request cannot commit separately.
+Request prerequisite/provenance evidence must exactly match its accepting
+authorization, cause-specific audits must exactly match their authoritative
+budget or request-acceptance mutation, and optional reservation expiry is
+validated against PostgreSQL ``transaction_timestamp()``.
+The new budget-administrator and request-acceptor roles are distinct NOLOGIN
+capabilities and are not granted to ``pqxx``. No dispatch, lifecycle,
+experiment, scheduler, worker, control, cancellation, completion, or
+monitoring authority is added.
 
 ## 3. Responsibilities
 
@@ -295,3 +308,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.3.0 | 2026-07-21 | Recorded one exact append-only Phase 6C administrative review event per proposal, deterministic replay/conflict, validated reload, and read-only presentation without action authority. | ADR-0001, ADR-0004, ADR-0008 |
 | 0.4.0 | 2026-07-22 | Recorded proposed append-only Phase 6D governance ratification per eligible approved review, fixed role, mandatory separation of duties, deterministic replay/conflict, and least privilege without Phase 6E authority. | ADR-0001, ADR-0004, ADR-0009 |
 | 0.5.0 | 2026-07-24 | Aligned accepted Phase 6D and recorded Campaign Operations' append-only, transactional, least-privilege authority and implemented Phase 1 foundation. | ADR-0009–ADR-0017 |
+| 0.6.0 | 2026-07-24 | Added Campaign Operations Phase 2 budget, reservation, durable request, acquisition, audit, and least-privilege persistence contracts. | ADR-0010–ADR-0013, ADR-0017 |

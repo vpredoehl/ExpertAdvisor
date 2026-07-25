@@ -53,6 +53,7 @@
 #include "ExperimentRecommendationCampaignLaunchService.hpp"
 #include "ExperimentRecommendationCampaignStatusService.hpp"
 #include "ExperimentRecommendationCampaignOutcomeAssessmentService.hpp"
+#include "CampaignOperationsService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -246,6 +247,18 @@ struct SchedulerOptions
     std::optional<long long>
         recommendationCampaignOutcomeAssessmentMaterializationId;
     bool campaignOutcomeAssessmentCommandSpecified = false;
+    std::optional<long long> campaignOperationsBudgetGrantCampaignId;
+    std::optional<long long> campaignOperationsBudgetAmendCampaignId;
+    std::optional<long long> campaignOperationsBudgetRevokeCampaignId;
+    std::optional<long long> campaignOperationsBudgetSupersedeCampaignId;
+    std::optional<long long> campaignOperationsAcceptRequestCampaignId;
+    std::optional<long long> campaignOperationsBudgetStatusCampaignId;
+    std::optional<long long> campaignOperationsRequestStatusRequestId;
+    std::optional<int> campaignOperationsExpectedBudgetVersion;
+    std::optional<long long> campaignOperationsBudgetValue;
+    std::optional<std::string> campaignOperationsActor;
+    std::optional<std::string> campaignOperationsReason;
+    std::optional<std::string> campaignOperationsReservationExpiresAt;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningPolicy
         campaignPlanningPolicy;
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
@@ -919,6 +932,18 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--launch-recommendation-campaign-materialization" ||
             arg == "--recommendation-campaign-status" ||
             arg == "--recommendation-campaign-outcome-assessment" ||
+            arg == "--campaign-operations-budget-grant" ||
+            arg == "--campaign-operations-budget-amend" ||
+            arg == "--campaign-operations-budget-revoke" ||
+            arg == "--campaign-operations-budget-supersede" ||
+            arg == "--campaign-operations-accept-request" ||
+            arg == "--campaign-operations-budget-status" ||
+            arg == "--campaign-operations-request-status" ||
+            arg == "--campaign-operations-expected-budget-version" ||
+            arg == "--campaign-operations-budget-value" ||
+            arg == "--campaign-operations-actor" ||
+            arg == "--campaign-operations-reason" ||
+            arg == "--campaign-operations-reservation-expires-at" ||
             arg == "--campaign-ranking-snapshot" ||
             arg == "--campaign-limit" ||
             arg == "--campaign-candidate-limit" ||
@@ -1316,6 +1341,26 @@ long long ParsePositiveLongLong(const std::string& optionName, const std::string
     }
     if (consumed != value.size() || parsed <= 0)
         throw std::invalid_argument("invalid " + optionName + " value '" + value + "'");
+    return parsed;
+}
+
+long long ParseSignedLongLong(
+    const std::string& optionName, const std::string& value)
+{
+    size_t consumed = 0;
+    long long parsed = 0;
+    try
+    {
+        parsed = std::stoll(value, &consumed, 10);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument(
+            "invalid " + optionName + " value '" + value + "'");
+    }
+    if (consumed != value.size())
+        throw std::invalid_argument(
+            "invalid " + optionName + " value '" + value + "'");
     return parsed;
 }
 
@@ -2038,6 +2083,118 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.recommendationCampaignOutcomeAssessmentMaterializationId =
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-budget-grant")
+        {
+            if (options.campaignOperationsBudgetGrantCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-budget-grant");
+            options.campaignOperationsBudgetGrantCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-budget-amend")
+        {
+            if (options.campaignOperationsBudgetAmendCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-budget-amend");
+            options.campaignOperationsBudgetAmendCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-budget-revoke")
+        {
+            if (options.campaignOperationsBudgetRevokeCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-budget-revoke");
+            options.campaignOperationsBudgetRevokeCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-budget-supersede")
+        {
+            if (options.campaignOperationsBudgetSupersedeCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-budget-supersede");
+            options.campaignOperationsBudgetSupersedeCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-accept-request")
+        {
+            if (options.campaignOperationsAcceptRequestCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-accept-request");
+            options.campaignOperationsAcceptRequestCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-budget-status")
+        {
+            if (options.campaignOperationsBudgetStatusCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-budget-status");
+            options.campaignOperationsBudgetStatusCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-request-status")
+        {
+            if (options.campaignOperationsRequestStatusRequestId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-request-status");
+            options.campaignOperationsRequestStatusRequestId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-expected-budget-version")
+        {
+            if (options.campaignOperationsExpectedBudgetVersion)
+                throw std::invalid_argument(
+                    "duplicate "
+                    "--campaign-operations-expected-budget-version");
+            const long long version = ParseSignedLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+            if (version < 0 ||
+                version > std::numeric_limits<int>::max())
+                throw std::invalid_argument(
+                    "invalid --campaign-operations-expected-budget-version");
+            options.campaignOperationsExpectedBudgetVersion =
+                static_cast<int>(version);
+        }
+        else if (arg == "--campaign-operations-budget-value")
+        {
+            if (options.campaignOperationsBudgetValue)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-budget-value");
+            options.campaignOperationsBudgetValue = ParseSignedLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-actor")
+        {
+            if (options.campaignOperationsActor)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-actor");
+            options.campaignOperationsActor =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (arg == "--campaign-operations-reason")
+        {
+            if (options.campaignOperationsReason)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-reason");
+            options.campaignOperationsReason =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (
+            arg == "--campaign-operations-reservation-expires-at")
+        {
+            if (options.campaignOperationsReservationExpiresAt)
+                throw std::invalid_argument(
+                    "duplicate "
+                    "--campaign-operations-reservation-expires-at");
+            options.campaignOperationsReservationExpiresAt =
+                RequireNextArg(argc, argv, i, arg);
         }
         else if (arg == "--campaign-ranking-snapshot")
         {
@@ -3022,6 +3179,21 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                  .has_value()
              ? 1
              : 0) +
+        (options.campaignOperationsBudgetGrantCampaignId.has_value() ? 1 : 0) +
+        (options.campaignOperationsBudgetAmendCampaignId.has_value() ? 1 : 0) +
+        (options.campaignOperationsBudgetRevokeCampaignId.has_value() ? 1 : 0) +
+        (options.campaignOperationsBudgetSupersedeCampaignId.has_value()
+             ? 1
+             : 0) +
+        (options.campaignOperationsAcceptRequestCampaignId.has_value()
+             ? 1
+             : 0) +
+        (options.campaignOperationsBudgetStatusCampaignId.has_value()
+             ? 1
+             : 0) +
+        (options.campaignOperationsRequestStatusRequestId.has_value()
+             ? 1
+             : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -3527,6 +3699,102 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 {*options.
                     recommendationCampaignOutcomeAssessmentMaterializationId});
     }
+    const bool campaignOperationsBudgetMutation =
+        options.campaignOperationsBudgetGrantCampaignId.has_value() ||
+        options.campaignOperationsBudgetAmendCampaignId.has_value() ||
+        options.campaignOperationsBudgetRevokeCampaignId.has_value() ||
+        options.campaignOperationsBudgetSupersedeCampaignId.has_value();
+    const bool campaignOperationsRequestMutation =
+        options.campaignOperationsAcceptRequestCampaignId.has_value();
+    const bool campaignOperationsMutation =
+        campaignOperationsBudgetMutation ||
+        campaignOperationsRequestMutation;
+    const bool campaignOperationsStatus =
+        options.campaignOperationsBudgetStatusCampaignId.has_value() ||
+        options.campaignOperationsRequestStatusRequestId.has_value();
+    const bool campaignOperationsMetadata =
+        options.campaignOperationsExpectedBudgetVersion.has_value() ||
+        options.campaignOperationsBudgetValue.has_value() ||
+        options.campaignOperationsActor.has_value() ||
+        options.campaignOperationsReason.has_value() ||
+        options.campaignOperationsReservationExpiresAt.has_value();
+    if (campaignOperationsMetadata && !campaignOperationsMutation)
+        throw std::invalid_argument(
+            "Campaign Operations metadata requires a budget mutation or "
+            "request acceptance command");
+    if (campaignOperationsMutation)
+    {
+        if (options.dryRun)
+            throw std::invalid_argument(
+                "--dry-run is not valid for durable Campaign Operations "
+                "mutations");
+        if (!options.yes)
+            throw std::invalid_argument(
+                "Campaign Operations mutation requires --yes");
+        if (!options.campaignOperationsActor ||
+            !options.campaignOperationsReason)
+            throw std::invalid_argument(
+                "Campaign Operations mutation requires "
+                "--campaign-operations-actor and "
+                "--campaign-operations-reason");
+    }
+    if (campaignOperationsStatus && (options.dryRun || options.yes))
+        throw std::invalid_argument(
+            "Campaign Operations status accepts neither --dry-run nor --yes");
+    if (campaignOperationsBudgetMutation)
+    {
+        if (!options.campaignOperationsExpectedBudgetVersion)
+            throw std::invalid_argument(
+                "budget mutation requires "
+                "--campaign-operations-expected-budget-version");
+        EA::CampaignOperations::BudgetAdministrationRequest request;
+        request.campaignId =
+            options.campaignOperationsBudgetGrantCampaignId
+                ? *options.campaignOperationsBudgetGrantCampaignId
+                : (options.campaignOperationsBudgetAmendCampaignId
+                          ? *options.campaignOperationsBudgetAmendCampaignId
+                          : (options.campaignOperationsBudgetRevokeCampaignId
+                                    ? *options.
+                                          campaignOperationsBudgetRevokeCampaignId
+                                    : *options.
+                                          campaignOperationsBudgetSupersedeCampaignId));
+        request.expectedLedgerVersion =
+            *options.campaignOperationsExpectedBudgetVersion;
+        request.kind = options.campaignOperationsBudgetGrantCampaignId
+            ? EA::CampaignOperations::BudgetLedgerEntryKind::grant
+            : (options.campaignOperationsBudgetAmendCampaignId
+                      ? EA::CampaignOperations::BudgetLedgerEntryKind::amend
+                      : (options.campaignOperationsBudgetRevokeCampaignId
+                                ? EA::CampaignOperations::
+                                      BudgetLedgerEntryKind::revoke
+                                : EA::CampaignOperations::
+                                      BudgetLedgerEntryKind::supersede));
+        request.value = options.campaignOperationsBudgetValue;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        (void)EA::CampaignOperations::
+            ValidateBudgetAdministrationRequest(request);
+    }
+    if (campaignOperationsRequestMutation)
+    {
+        if (options.campaignOperationsExpectedBudgetVersion ||
+            options.campaignOperationsBudgetValue)
+            throw std::invalid_argument(
+                "request acceptance does not accept budget mutation metadata");
+        EA::CampaignOperations::OperationalRequestAcceptanceRequest request;
+        request.campaignId =
+            *options.campaignOperationsAcceptRequestCampaignId;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        request.expiresAt =
+            options.campaignOperationsReservationExpiresAt;
+        (void)EA::CampaignOperations::
+            ValidateOperationalRequestAcceptanceRequest(request);
+    }
+    if (options.campaignOperationsReservationExpiresAt &&
+        !campaignOperationsRequestMutation)
+        throw std::invalid_argument(
+            "reservation expiry requires request acceptance");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -17358,6 +17626,33 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "the exact persisted source and result scientific evidence. It "
         << "persists nothing and authorizes no follow-up.\n"
         << "Usage: " << exe
+        << " --campaign-operations-budget-grant CAMPAIGN_ID | "
+        << "--campaign-operations-budget-amend CAMPAIGN_ID | "
+        << "--campaign-operations-budget-supersede CAMPAIGN_ID "
+        << "--campaign-operations-expected-budget-version N "
+        << "--campaign-operations-budget-value UNITS "
+        << "--campaign-operations-actor ACTOR "
+        << "--campaign-operations-reason REASON --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-budget-revoke CAMPAIGN_ID "
+        << "--campaign-operations-expected-budget-version N "
+        << "--campaign-operations-actor ACTOR "
+        << "--campaign-operations-reason REASON --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-accept-request CAMPAIGN_ID "
+        << "--campaign-operations-actor ACTOR "
+        << "--campaign-operations-reason REASON "
+        << "[--campaign-operations-reservation-expires-at "
+           "YYYY-MM-DDTHH:MM:SS.ffffffZ] --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-budget-status CAMPAIGN_ID | "
+        << "--campaign-operations-request-status REQUEST_ID\n"
+        << "Campaign Operations Phase 2 administers the member-unit budget "
+        << "ledger and atomically persists one held reservation plus one ready "
+        << "durable request. It never dispatches, invokes Phase 5, changes an "
+        << "experiment, starts the scheduler, or launches a worker. Capability "
+        << "role assignment remains a separate administrator action.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -17373,6 +17668,63 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Backup note: --backup-database writes a PostgreSQL custom-format dump with schema and data; "
         << "migrations remain schema history, and --backup-output=Database/backups/LSTM_latest.dump overwrites a stable file.\n"
         << "Queue exit codes: 0=created, 1=invalid_arguments, 2=database_error, 3=duplicates_only\n";
+}
+
+int RunCampaignOperationsCommand(const SchedulerOptions& options)
+{
+    const std::string connectionString = LstmDbConnectionString();
+    if (options.campaignOperationsBudgetStatusCampaignId)
+        return EA::CampaignOperations::RunCampaignBudgetStatusCommand(
+            connectionString,
+            EA::CampaignOperations::OperationalCampaignId(
+                *options.campaignOperationsBudgetStatusCampaignId),
+            std::cout, std::cerr);
+    if (options.campaignOperationsRequestStatusRequestId)
+        return EA::CampaignOperations::
+            RunCampaignOperationalRequestStatusCommand(
+                connectionString,
+                EA::CampaignOperations::OperationalRequestId(
+                    *options.campaignOperationsRequestStatusRequestId),
+                std::cout, std::cerr);
+    if (options.campaignOperationsAcceptRequestCampaignId)
+    {
+        EA::CampaignOperations::OperationalRequestAcceptanceRequest request;
+        request.campaignId =
+            *options.campaignOperationsAcceptRequestCampaignId;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        request.expiresAt =
+            options.campaignOperationsReservationExpiresAt;
+        return EA::CampaignOperations::
+            RunCampaignOperationalRequestAcceptanceCommand(
+                connectionString, request, std::cout, std::cerr);
+    }
+    EA::CampaignOperations::BudgetAdministrationRequest request;
+    request.campaignId = options.campaignOperationsBudgetGrantCampaignId
+        ? *options.campaignOperationsBudgetGrantCampaignId
+        : (options.campaignOperationsBudgetAmendCampaignId
+                  ? *options.campaignOperationsBudgetAmendCampaignId
+                  : (options.campaignOperationsBudgetRevokeCampaignId
+                            ? *options.
+                                  campaignOperationsBudgetRevokeCampaignId
+                            : *options.
+                                  campaignOperationsBudgetSupersedeCampaignId));
+    request.expectedLedgerVersion =
+        *options.campaignOperationsExpectedBudgetVersion;
+    request.kind = options.campaignOperationsBudgetGrantCampaignId
+        ? EA::CampaignOperations::BudgetLedgerEntryKind::grant
+        : (options.campaignOperationsBudgetAmendCampaignId
+                  ? EA::CampaignOperations::BudgetLedgerEntryKind::amend
+                  : (options.campaignOperationsBudgetRevokeCampaignId
+                            ? EA::CampaignOperations::
+                                  BudgetLedgerEntryKind::revoke
+                            : EA::CampaignOperations::
+                                  BudgetLedgerEntryKind::supersede));
+    request.value = options.campaignOperationsBudgetValue;
+    request.actorIdentity = *options.campaignOperationsActor;
+    request.reason = *options.campaignOperationsReason;
+    return EA::CampaignOperations::RunCampaignBudgetAdministrationCommand(
+        connectionString, request, std::cout, std::cerr);
 }
 
 int RunExperimentRecommendationCommand(const SchedulerOptions& options)
@@ -17949,6 +18301,14 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunQueueContinuationCommand(options);
         if (options.continuationStatusExperimentId.has_value())
             return RunContinuationStatusCommand(options);
+        if (options.campaignOperationsBudgetGrantCampaignId ||
+            options.campaignOperationsBudgetAmendCampaignId ||
+            options.campaignOperationsBudgetRevokeCampaignId ||
+            options.campaignOperationsBudgetSupersedeCampaignId ||
+            options.campaignOperationsAcceptRequestCampaignId ||
+            options.campaignOperationsBudgetStatusCampaignId ||
+            options.campaignOperationsRequestStatusRequestId)
+            return RunCampaignOperationsCommand(options);
         if (options.generateExperimentRecommendations ||
             options.listExperimentRecommendations ||
             options.recommendationStatusId.has_value() ||

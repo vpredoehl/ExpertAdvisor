@@ -1,7 +1,7 @@
 # Volume X — Research Automation
 
-Status: Authoritative for bounded Campaign Operations; broader automation reserved
-Version: 1.0.0
+Status: Authoritative through Campaign Operations Phase 2; broader automation reserved
+Version: 1.1.0
 Last revised: 2026-07-24
 
 ## 1. Purpose
@@ -29,14 +29,17 @@ creation, live trading, or bypassing scheduler/lifecycle ownership.
 
 ### 2.3 Current implementation status
 
-Campaign Operations Phase 1 implements foundational pure values,
-canonical/validation contracts, budget arithmetic, and completion
-classification helpers. Migration 045 and its repositories persist only the
-immutable campaign, optional governance provenance, append-only authorization,
-and audit foundations. Later accepted persistence and services remain
-unimplemented unless identified by migration, code, and tests. Broader
-autonomous research remains reserved; existing recommendation and continuation
-capabilities MUST NOT be composed into it informally.
+Campaign Operations Phase 1 implements the immutable campaign, optional
+governance provenance, append-only authorization, and audit foundation.
+Campaign Operations Phase 2 implements the append-only member-unit budget
+ledger and atomic acceptance of one complete-materialization request with a
+``held`` reservation, ``ready`` durable request, acquisition event, and audit.
+It includes read-only budget/request status and explicit CLI commands.
+Dispatch, Phase 5 invocation, experiment activation, scheduler claiming,
+workers, campaign controls, later reservation transitions, and execution
+monitoring remain unimplemented. Broader autonomous research remains reserved;
+existing recommendation and continuation capabilities MUST NOT be composed
+into it informally.
 
 ## 3. Responsibilities
 
@@ -148,15 +151,31 @@ request only when authoritative idempotency identity matches.
 
 ### 8.1 Commands and validation
 
-Any later Campaign Operations mutation command requires explicit campaign and
-expected identity/version, actor capability, reason, validation, and
-confirmation appropriate to its effect. This volume does not itself add CLI
-commands.
+Phase 2 budget mutation commands require one explicit campaign, expected ledger
+version, actor, reason, and ``--yes``. Request acceptance requires one explicit
+campaign, actor, reason, optional UTC microsecond reservation expiry, and
+``--yes``. Durable mutations reject ``--dry-run``; status commands reject both
+``--dry-run`` and ``--yes``. Duplicate Phase 2 command and value-bearing
+options are rejected.
+
+Implemented commands are
+``--campaign-operations-budget-grant``,
+``--campaign-operations-budget-amend``,
+``--campaign-operations-budget-revoke``,
+``--campaign-operations-budget-supersede``,
+``--campaign-operations-accept-request``,
+``--campaign-operations-budget-status``, and
+``--campaign-operations-request-status``. The database principal must hold the
+corresponding separately assigned capability role.
 
 ### 8.2 Machine output
 
-Events expose exact campaign, grant, budget, reservation, request, binding,
-control, cancellation, reconciliation, completion, and audit identities.
+Phase 2 acceptance output safely frames strings and exposes the exact campaign,
+authorization, budget entry/version, reservation/event, request/state/version,
+replay disposition, and disabled production-dispatch evidence. Request status
+includes its associated reservation and budget evidence. Later phases expose
+their own binding, control, cancellation, reconciliation, completion, and
+audit identities.
 
 ### 8.3 Human output
 
@@ -173,11 +192,15 @@ classification, and failure/retry state matrices.
 
 ### 9.2 Persistence and migration tests
 
-Ledger monotonicity, request idempotency, audit immutability, and permissions.
+Ledger monotonicity, request idempotency and prerequisite binding,
+cause-specific audit integrity, database-owned expiry validation, deferred
+rollback, exact capability ACLs, and immutability.
 
 ### 9.3 Concurrency and integration tests
 
-Budget races, duplicate requests, pause/stop races, and scheduler isolation.
+Authorization/budget mutation versus acceptance, duplicate and changed-payload
+requests, near-exhaustion and successor-ledger races, pause/stop races, and
+scheduler isolation.
 
 ### 9.4 Regression boundaries
 
@@ -238,3 +261,4 @@ scheduler work classes each require a later accepted owning-domain ADR.
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Reserved the research-automation architecture and safety gates. | — |
 | 1.0.0 | 2026-07-24 | Accepted the bounded Campaign Operations refinement while retaining broader autonomous research as reserved. | ADR-0010–ADR-0017 |
+| 1.1.0 | 2026-07-24 | Implemented Phase 2 budget reservation and durable request acceptance without dispatch or lifecycle authority. | ADR-0010–ADR-0013, ADR-0017 |

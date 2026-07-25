@@ -31,9 +31,16 @@ enum class ErrorCode
     invalidMaterialization,
     invalidProvenance,
     invalidAuthorizationEvent,
+    invalidBudgetLedgerEntry,
+    invalidLogicalOperation,
+    invalidReservation,
+    invalidReservationEvent,
+    invalidOperationalRequest,
     invalidBudgetAccounting,
     invalidCompletionEvidence,
     invalidEnumText,
+    authorizationDenied,
+    budgetDenied,
     persistenceConflict,
     persistenceCorruption
 };
@@ -270,6 +277,15 @@ enum class ReservationState
     reconciliationRequired
 };
 
+enum class ReservationEventKind
+{
+    acquired,
+    committed,
+    released,
+    expired,
+    reconciliationRequired
+};
+
 enum class RequestState
 {
     ready,
@@ -369,6 +385,7 @@ std::string ToText(BudgetLedgerEntryKind value);
 std::string ToText(BudgetLedgerStatus value);
 std::string ToText(BudgetUnit value);
 std::string ToText(ReservationState value);
+std::string ToText(ReservationEventKind value);
 std::string ToText(RequestState value);
 std::string ToText(ControlEventKind value);
 std::string ToText(DispatchOutcome value);
@@ -387,6 +404,12 @@ AuthorizationEventKind AuthorizationEventKindFromText(
     const std::string& text);
 AdministrativeCampaignState AdministrativeCampaignStateFromText(
     const std::string& text);
+BudgetLedgerEntryKind BudgetLedgerEntryKindFromText(const std::string& text);
+BudgetLedgerStatus BudgetLedgerStatusFromText(const std::string& text);
+BudgetUnit BudgetUnitFromText(const std::string& text);
+ReservationState ReservationStateFromText(const std::string& text);
+ReservationEventKind ReservationEventKindFromText(const std::string& text);
+RequestState RequestStateFromText(const std::string& text);
 
 struct OperationalCampaign final
 {
@@ -574,6 +597,246 @@ void ValidateOperationalAuthorizationEvent(
     const OperationalAuthorizationEvent& event);
 bool IsAuthorizationEffectiveAt(
     const OperationalAuthorizationEvent& head, const UtcTimestamp& databaseTime);
+
+struct BudgetLedgerEntry final
+{
+    const CanonicalIdentity identity;
+    const OperationalCampaignId campaignId;
+    const std::string campaignCanonicalText;
+    const std::optional<BudgetLedgerEntryId> previousEntryId;
+    const std::optional<std::string> previousEntryCanonicalText;
+    const std::optional<std::string> previousEntryIdentityHash;
+    const int ledgerVersion;
+    const BudgetLedgerEntryKind entryKind;
+    const BudgetLedgerStatus status;
+    const BudgetUnit unit;
+    const long long delta;
+    const long long priorTotal;
+    const long long resultingTotal;
+    const ActorIdentity administrator;
+    const Reason reason;
+
+    BudgetLedgerEntry(const BudgetLedgerEntry&) = default;
+    BudgetLedgerEntry(BudgetLedgerEntry&&) = default;
+    BudgetLedgerEntry& operator=(const BudgetLedgerEntry&) = delete;
+    BudgetLedgerEntry& operator=(BudgetLedgerEntry&&) = delete;
+    bool operator==(const BudgetLedgerEntry&) const = default;
+
+private:
+    BudgetLedgerEntry(CanonicalIdentity identity,
+        OperationalCampaignId campaignId, std::string campaignCanonicalText,
+        std::optional<BudgetLedgerEntryId> previousEntryId,
+        std::optional<std::string> previousEntryCanonicalText,
+        std::optional<std::string> previousEntryIdentityHash,
+        int ledgerVersion, BudgetLedgerEntryKind entryKind,
+        BudgetLedgerStatus status, BudgetUnit unit, long long delta,
+        long long priorTotal, long long resultingTotal,
+        ActorIdentity administrator, Reason reason);
+    friend BudgetLedgerEntry BuildBudgetLedgerEntry(OperationalCampaignId,
+        std::string, std::optional<BudgetLedgerEntryId>,
+        std::optional<std::string>, std::optional<std::string>, int,
+        BudgetLedgerEntryKind, BudgetLedgerStatus, BudgetUnit, long long,
+        long long, long long, ActorIdentity, Reason);
+};
+
+BudgetLedgerEntry BuildBudgetLedgerEntry(
+    OperationalCampaignId campaignId, std::string campaignCanonicalText,
+    std::optional<BudgetLedgerEntryId> previousEntryId,
+    std::optional<std::string> previousEntryCanonicalText,
+    std::optional<std::string> previousEntryIdentityHash, int ledgerVersion,
+    BudgetLedgerEntryKind entryKind, BudgetLedgerStatus status,
+    BudgetUnit unit, long long delta, long long priorTotal,
+    long long resultingTotal, ActorIdentity administrator, Reason reason);
+void ValidateBudgetLedgerEntry(const BudgetLedgerEntry& entry);
+
+struct LogicalOperation final
+{
+    const CanonicalIdentity identity;
+    const OperationalCampaignId campaignId;
+    const std::string campaignCanonicalText;
+    const OperationalActionKind actionKind;
+    const int actionContractVersion;
+    const long long materializationId;
+    const int materializationContractVersion;
+    const std::string materializationCanonicalText;
+    const std::string materializationIdentityHash;
+    const ScopeKind scopeKind;
+    const int scopeContractVersion;
+
+    LogicalOperation(const LogicalOperation&) = default;
+    LogicalOperation(LogicalOperation&&) = default;
+    LogicalOperation& operator=(const LogicalOperation&) = delete;
+    LogicalOperation& operator=(LogicalOperation&&) = delete;
+    bool operator==(const LogicalOperation&) const = default;
+
+private:
+    LogicalOperation(CanonicalIdentity identity,
+        OperationalCampaignId campaignId, std::string campaignCanonicalText,
+        OperationalActionKind actionKind, int actionContractVersion,
+        long long materializationId, int materializationContractVersion,
+        std::string materializationCanonicalText,
+        std::string materializationIdentityHash, ScopeKind scopeKind,
+        int scopeContractVersion);
+    friend LogicalOperation BuildLogicalOperation(OperationalCampaignId,
+        std::string, OperationalActionKind, int, long long, int, std::string,
+        std::string, ScopeKind, int);
+};
+
+LogicalOperation BuildLogicalOperation(
+    OperationalCampaignId campaignId, std::string campaignCanonicalText,
+    OperationalActionKind actionKind, int actionContractVersion,
+    long long materializationId, int materializationContractVersion,
+    std::string materializationCanonicalText,
+    std::string materializationIdentityHash, ScopeKind scopeKind,
+    int scopeContractVersion);
+LogicalOperation BuildLogicalOperation(
+    OperationalCampaignId campaignId, const OperationalCampaign& campaign);
+void ValidateLogicalOperation(const LogicalOperation& operation);
+
+struct Reservation final
+{
+    const CanonicalIdentity identity;
+    const LogicalOperation logicalOperation;
+    const AuthorizationEventId acceptingAuthorizationEventId;
+    const std::string acceptingAuthorizationCanonicalText;
+    const std::string acceptingAuthorizationIdentityHash;
+    const BudgetLedgerEntryId budgetLedgerEntryId;
+    const int budgetLedgerVersion;
+    const std::string budgetLedgerCanonicalText;
+    const std::string budgetLedgerIdentityHash;
+    const int memberCount;
+    const long long amount;
+    const BudgetUnit unit;
+    const std::optional<UtcTimestamp> expiresAt;
+
+    Reservation(const Reservation&) = default;
+    Reservation(Reservation&&) = default;
+    Reservation& operator=(const Reservation&) = delete;
+    Reservation& operator=(Reservation&&) = delete;
+    bool operator==(const Reservation&) const = default;
+
+private:
+    Reservation(CanonicalIdentity identity, LogicalOperation logicalOperation,
+        AuthorizationEventId acceptingAuthorizationEventId,
+        std::string acceptingAuthorizationCanonicalText,
+        std::string acceptingAuthorizationIdentityHash,
+        BudgetLedgerEntryId budgetLedgerEntryId, int budgetLedgerVersion,
+        std::string budgetLedgerCanonicalText,
+        std::string budgetLedgerIdentityHash, int memberCount,
+        long long amount, BudgetUnit unit,
+        std::optional<UtcTimestamp> expiresAt);
+    friend Reservation BuildReservation(LogicalOperation,
+        AuthorizationEventId, std::string, std::string, BudgetLedgerEntryId,
+        int, std::string, std::string, int, long long, BudgetUnit,
+        std::optional<UtcTimestamp>);
+};
+
+Reservation BuildReservation(LogicalOperation logicalOperation,
+    AuthorizationEventId acceptingAuthorizationEventId,
+    std::string acceptingAuthorizationCanonicalText,
+    std::string acceptingAuthorizationIdentityHash,
+    BudgetLedgerEntryId budgetLedgerEntryId, int budgetLedgerVersion,
+    std::string budgetLedgerCanonicalText,
+    std::string budgetLedgerIdentityHash, int memberCount, long long amount,
+    BudgetUnit unit, std::optional<UtcTimestamp> expiresAt);
+void ValidateReservation(const Reservation& reservation);
+
+struct OperationalRequest final
+{
+    static constexpr bool dispatchAuthorityGranted = false;
+    static constexpr bool schedulerAuthorityGranted = false;
+    static constexpr bool lifecycleAuthorityGranted = false;
+
+    const CanonicalIdentity identity;
+    const LogicalOperation logicalOperation;
+    const AuthorizationEventId acceptingAuthorizationEventId;
+    const std::string acceptingAuthorizationCanonicalText;
+    const std::string acceptingAuthorizationIdentityHash;
+    const ReservationId reservationId;
+    const std::string reservationCanonicalText;
+    const std::string reservationIdentityHash;
+    const int memberCount;
+    const std::string orderedScopeDigest;
+    const ActorIdentity acceptingActor;
+    const Reason reason;
+    const PrerequisitePolicy prerequisitePolicy;
+    const std::optional<std::string> provenanceCanonicalText;
+    const std::optional<std::string> provenanceIdentityHash;
+
+    OperationalRequest(const OperationalRequest&) = default;
+    OperationalRequest(OperationalRequest&&) = default;
+    OperationalRequest& operator=(const OperationalRequest&) = delete;
+    OperationalRequest& operator=(OperationalRequest&&) = delete;
+    bool operator==(const OperationalRequest&) const = default;
+
+private:
+    OperationalRequest(CanonicalIdentity identity,
+        LogicalOperation logicalOperation,
+        AuthorizationEventId acceptingAuthorizationEventId,
+        std::string acceptingAuthorizationCanonicalText,
+        std::string acceptingAuthorizationIdentityHash,
+        ReservationId reservationId, std::string reservationCanonicalText,
+        std::string reservationIdentityHash, int memberCount,
+        std::string orderedScopeDigest, ActorIdentity acceptingActor,
+        Reason reason, PrerequisitePolicy prerequisitePolicy,
+        std::optional<std::string> provenanceCanonicalText,
+        std::optional<std::string> provenanceIdentityHash);
+    friend OperationalRequest BuildOperationalRequest(LogicalOperation,
+        AuthorizationEventId, std::string, std::string, ReservationId,
+        std::string, std::string, int, std::string, ActorIdentity, Reason,
+        PrerequisitePolicy, std::optional<std::string>,
+        std::optional<std::string>);
+};
+
+OperationalRequest BuildOperationalRequest(
+    LogicalOperation logicalOperation,
+    AuthorizationEventId acceptingAuthorizationEventId,
+    std::string acceptingAuthorizationCanonicalText,
+    std::string acceptingAuthorizationIdentityHash,
+    ReservationId reservationId, std::string reservationCanonicalText,
+    std::string reservationIdentityHash, int memberCount,
+    std::string orderedScopeDigest, ActorIdentity acceptingActor,
+    Reason reason, PrerequisitePolicy prerequisitePolicy,
+    std::optional<std::string> provenanceCanonicalText,
+    std::optional<std::string> provenanceIdentityHash);
+void ValidateOperationalRequest(const OperationalRequest& request);
+
+struct ReservationEvent final
+{
+    const CanonicalIdentity identity;
+    const ReservationId reservationId;
+    const std::string reservationCanonicalText;
+    const ReservationEventKind eventKind;
+    const std::optional<ReservationState> expectedState;
+    const ReservationState resultingState;
+    const int expectedVersion;
+    const int resultingVersion;
+    const OperationalRequestId requestId;
+    const std::string requestCanonicalText;
+    const long long amount;
+
+    ReservationEvent(const ReservationEvent&) = default;
+    ReservationEvent(ReservationEvent&&) = default;
+    ReservationEvent& operator=(const ReservationEvent&) = delete;
+    ReservationEvent& operator=(ReservationEvent&&) = delete;
+    bool operator==(const ReservationEvent&) const = default;
+
+private:
+    ReservationEvent(CanonicalIdentity identity, ReservationId reservationId,
+        std::string reservationCanonicalText, ReservationEventKind eventKind,
+        std::optional<ReservationState> expectedState,
+        ReservationState resultingState, int expectedVersion,
+        int resultingVersion, OperationalRequestId requestId,
+        std::string requestCanonicalText, long long amount);
+    friend ReservationEvent BuildReservationAcquisitionEvent(ReservationId,
+        std::string, OperationalRequestId, std::string, long long);
+};
+
+ReservationEvent BuildReservationAcquisitionEvent(
+    ReservationId reservationId, std::string reservationCanonicalText,
+    OperationalRequestId requestId, std::string requestCanonicalText,
+    long long amount);
+void ValidateReservationEvent(const ReservationEvent& event);
 
 struct BudgetAccounting final
 {

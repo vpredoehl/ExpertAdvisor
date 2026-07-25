@@ -73,6 +73,11 @@ Recommendation conversion and campaign-approval history is created by:
   immutable Campaign Operations V1 campaign, optional exact Phase 6D
   provenance, serialized authorization evidence, same-transaction audit
   references, and disabled-by-default capability roles; no operational workflow
+- `047_campaign_operations_budget_request_acceptance.sql`:
+  append-only materialized-member budget ledger, guarded held reservations,
+  durable ready requests, acquisition events, accounting/status views,
+  same-transaction audit completeness, and separate disabled-by-default budget
+  administrator and request acceptor roles; no dispatch or lifecycle authority
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible
@@ -193,6 +198,36 @@ append-only, fork-resistant chain whose persisted kinds are exactly `granted`,
 not grant them to `pqxx`, so no runtime workflow is enabled. It creates no
 budget, reservation, request, dispatch, cancellation, completion, lifecycle,
 scheduler, worker, UI, or CLI behavior.
+
+Campaign Operations Phase 2 adds the first bounded operational authority.
+Budget grants, amendments, revocations, and explicit supersession form one
+append-only ledger per operational campaign. A request acceptance transaction
+locks authorization, budget, and campaign in the accepted order, validates the
+current operational grant and active budget, reserves exactly the immutable
+materialization member count, and atomically inserts one ``held`` reservation,
+one ``ready`` request, its acquisition event, and audit evidence. The
+authorization trigger takes the same authorization-domain lock as the
+repository, including for direct capability-role inserts. The logical
+operation key makes identical retries return the existing request and makes any
+changed actor, reason, authorization, expiry, or payload conflict. Deferred
+constraints prevent a budget entry, reservation, or request from committing
+without its required audit/acquisition evidence. Request evidence is bound
+exactly to the accepting authorization's action, scope, prerequisite policy,
+and optional governance provenance. Cause-specific audit constraints bind
+actor, reason, capability, versions, and causal IDs to the authoritative
+mutation, and PostgreSQL rejects a non-null reservation expiry that is not
+later than ``transaction_timestamp()``. Request status reports evidence
+consistent only after matching the exact request, reservation, authorization,
+prerequisite/provenance, budget, acquisition, and audit relationships.
+
+Migration 047 creates separate NOLOGIN
+``campaign_operations_budget_administrator`` and
+``campaign_operations_request_acceptor`` capabilities and grants neither to
+``pqxx``. Capability roles receive only the reads, column-scoped inserts,
+sequence usage, and narrow campaign-lock function needed by their workflows.
+They receive no update, delete, truncate, dispatch, scheduler, worker, or
+experiment-lifecycle privilege. Assigning either capability to a deployment
+principal is a separate reviewed administrator action.
 
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.

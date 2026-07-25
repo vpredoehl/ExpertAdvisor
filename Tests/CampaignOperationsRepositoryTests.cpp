@@ -1,4 +1,5 @@
 #include "../Sources/CampaignOperationsRepository.hpp"
+#include "../Sources/CampaignOperationsService.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
 #include "../Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.hpp"
@@ -14,6 +15,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -474,6 +476,18 @@ void SetCampaignCreatorRole(pqxx::transaction_base& transaction)
 void SetAuthorizerRole(pqxx::transaction_base& transaction)
 {
     transaction.exec("SET LOCAL ROLE campaign_operations_authorizer;");
+}
+
+void SetBudgetAdministratorRole(pqxx::transaction_base& transaction)
+{
+    transaction.exec(
+        "SET LOCAL ROLE campaign_operations_budget_administrator;");
+}
+
+void SetRequestAcceptorRole(pqxx::transaction_base& transaction)
+{
+    transaction.exec(
+        "SET LOCAL ROLE campaign_operations_request_acceptor;");
 }
 
 void ApplyFile(pqxx::connection& connection, const std::string& schema,
@@ -1503,6 +1517,1500 @@ void TestOversizedCanonicals(pqxx::connection& owner,
                persistedAuthorizationCampaign.campaignId) == 2);
 }
 
+PersistedOperationalAuthorizationEvent PersistActiveAuthorizationFixture(
+    pqxx::connection& owner, const std::string& schema,
+    const PersistedOperationalCampaign& campaign)
+{
+    const auto grant = BuildOperationalAuthorizationEvent(
+        campaign.campaignId, campaign.campaign.identity.canonicalText(),
+        std::nullopt, std::nullopt, std::nullopt, 1,
+        AuthorizationEventKind::granted, campaign.campaign.actionKind,
+        campaign.campaign.actionContractVersion,
+        campaign.campaign.scopeKind,
+        campaign.campaign.scopeContractVersion,
+        PrerequisitePolicy::phase4dMaterializationOnlyV1, std::nullopt,
+        std::nullopt, std::nullopt, kCampaignOperationsAuthorizationRole,
+        ActorIdentity("phase2.authorizer@example.test"),
+        Reason("Authorize durable full-materialization request acceptance."),
+        UtcTimestamp("2020-01-01T00:00:00.000000Z"), std::nullopt);
+    pqxx::work transaction{owner};
+    SetSearchPath(transaction, schema);
+    SetAuthorizerRole(transaction);
+    auto result = PersistOperationalAuthorizationEvent(transaction, grant);
+    transaction.commit();
+    return std::move(result.persisted);
+}
+
+struct Phase2AcceptanceFixture final
+{
+    PersistedOperationalCampaign campaign;
+    PersistedOperationalAuthorizationEvent authorization;
+    PersistedBudgetLedgerEntry budget;
+};
+
+Phase2AcceptanceFixture CreatePhase2AcceptanceFixture(
+    pqxx::connection& owner, const std::string& budgetConnectionString,
+    const std::string& schema, long long materializationId, int memberCount)
+{
+    const OperationalCampaign campaign =
+        InsertMaterialization(owner, schema, materializationId, memberCount);
+    const auto persistedCampaign =
+        PersistCampaignFixture(owner, schema, campaign);
+    const auto authorization =
+        PersistActiveAuthorizationFixture(owner, schema, persistedCampaign);
+    BudgetAdministrationRequest grant;
+    grant.campaignId = persistedCampaign.campaignId.value();
+    grant.expectedLedgerVersion = 0;
+    grant.kind = BudgetLedgerEntryKind::grant;
+    grant.value = memberCount;
+    grant.actorIdentity = "direct.budget.admin@example.test";
+    grant.reason = "Fund direct capability integrity fixture.";
+    pqxx::connection budgetConnection{budgetConnectionString};
+    auto budget = AdministerCampaignBudget(budgetConnection, grant);
+    return {persistedCampaign, authorization, std::move(budget.persisted)};
+}
+
+long long InsertDirectReservation(pqxx::transaction_base& transaction,
+    const Phase2AcceptanceFixture& fixture,
+    const std::optional<UtcTimestamp>& expiresAt)
+{
+    const LogicalOperation operation = BuildLogicalOperation(
+        fixture.campaign.campaignId, fixture.campaign.campaign);
+    const Reservation reservation = BuildReservation(operation,
+        fixture.authorization.authorizationEventId,
+        fixture.authorization.event.identity.canonicalText(),
+        fixture.authorization.event.identity.hash(),
+        fixture.budget.budgetLedgerEntryId, fixture.budget.entry.ledgerVersion,
+        fixture.budget.entry.identity.canonicalText(),
+        fixture.budget.entry.identity.hash(),
+        fixture.campaign.campaign.memberCount,
+        fixture.campaign.campaign.memberCount,
+        BudgetUnit::materializedMemberDispatch, expiresAt);
+    return transaction.exec(
+        "INSERT INTO campaign_operations_reservation ("
+        "operational_campaign_id,campaign_identity_canonical,"
+        "logical_operation_contract_version,logical_operation_canonical,"
+        "logical_operation_hash,authorization_event_id,"
+        "authorization_identity_canonical,authorization_identity_hash,"
+        "budget_ledger_entry_id,budget_ledger_version,"
+        "budget_identity_canonical,budget_identity_hash,action_kind,"
+        "action_contract_version,recommendation_campaign_materialization_id,"
+        "materialization_contract_version,materialization_identity_canonical,"
+        "materialization_identity_hash,scope_kind,scope_contract_version,"
+        "materialization_member_count,amount,budget_unit,expires_at,"
+        "reservation_contract_version,reservation_identity_canonical,"
+        "reservation_identity_hash,reservation_state,state_version) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,"
+        "$17,$18,$19,$20,$21,$22,$23,$24::timestamptz,$25,$26,$27,"
+        "'held',1) RETURNING reservation_id;",
+        pqxx::params{fixture.campaign.campaignId.value(),
+            fixture.campaign.campaign.identity.canonicalText(),
+            operation.identity.contractVersion(),
+            operation.identity.canonicalText(), operation.identity.hash(),
+            fixture.authorization.authorizationEventId.value(),
+            fixture.authorization.event.identity.canonicalText(),
+            fixture.authorization.event.identity.hash(),
+            fixture.budget.budgetLedgerEntryId.value(),
+            fixture.budget.entry.ledgerVersion,
+            fixture.budget.entry.identity.canonicalText(),
+            fixture.budget.entry.identity.hash(), ToText(operation.actionKind),
+            operation.actionContractVersion, operation.materializationId,
+            operation.materializationContractVersion,
+            operation.materializationCanonicalText,
+            operation.materializationIdentityHash,
+            ToText(operation.scopeKind), operation.scopeContractVersion,
+            fixture.campaign.campaign.memberCount,
+            fixture.campaign.campaign.memberCount,
+            ToText(BudgetUnit::materializedMemberDispatch),
+            expiresAt
+                ? std::optional<std::string>(expiresAt->value())
+                : std::nullopt,
+            reservation.identity.contractVersion(),
+            reservation.identity.canonicalText(), reservation.identity.hash()})
+        .one_row()[0]
+        .as<long long>();
+}
+
+long long InsertDirectRequest(pqxx::transaction_base& transaction,
+    const Phase2AcceptanceFixture& fixture, long long reservationId,
+    PrerequisitePolicy prerequisitePolicy,
+    const std::optional<std::string>& provenanceCanonical,
+    const std::optional<std::string>& provenanceHash)
+{
+    const LogicalOperation operation = BuildLogicalOperation(
+        fixture.campaign.campaignId, fixture.campaign.campaign);
+    const auto reservation = FindReservation(
+        transaction, ReservationId(reservationId));
+    assert(reservation);
+    const OperationalRequest request = BuildOperationalRequest(operation,
+        fixture.authorization.authorizationEventId,
+        fixture.authorization.event.identity.canonicalText(),
+        fixture.authorization.event.identity.hash(),
+        reservation->reservationId,
+        reservation->reservation.identity.canonicalText(),
+        reservation->reservation.identity.hash(),
+        fixture.campaign.campaign.memberCount,
+        fixture.campaign.campaign.materializationIdentityHash,
+        ActorIdentity("direct.requester@example.test"),
+        Reason("Attempt malformed direct request evidence."),
+        prerequisitePolicy, provenanceCanonical, provenanceHash);
+    return transaction.exec(
+        "INSERT INTO campaign_operations_operational_request ("
+        "operational_campaign_id,campaign_identity_canonical,"
+        "logical_operation_contract_version,logical_operation_canonical,"
+        "logical_operation_hash,authorization_event_id,"
+        "authorization_identity_canonical,authorization_identity_hash,"
+        "reservation_id,reservation_identity_canonical,"
+        "reservation_identity_hash,action_kind,action_contract_version,"
+        "recommendation_campaign_materialization_id,"
+        "materialization_contract_version,materialization_identity_canonical,"
+        "materialization_identity_hash,ordered_scope_digest,"
+        "materialization_member_count,accepting_actor_identity,reason,"
+        "prerequisite_policy,provenance_identity_canonical,"
+        "provenance_identity_hash,request_contract_version,"
+        "request_identity_canonical,request_identity_hash,request_state,"
+        "state_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,"
+        "$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,"
+        "'ready',1) RETURNING operational_request_id;",
+        pqxx::params{fixture.campaign.campaignId.value(),
+            fixture.campaign.campaign.identity.canonicalText(),
+            operation.identity.contractVersion(),
+            operation.identity.canonicalText(), operation.identity.hash(),
+            fixture.authorization.authorizationEventId.value(),
+            fixture.authorization.event.identity.canonicalText(),
+            fixture.authorization.event.identity.hash(), reservationId,
+            reservation->reservation.identity.canonicalText(),
+            reservation->reservation.identity.hash(),
+            ToText(operation.actionKind), operation.actionContractVersion,
+            operation.materializationId,
+            operation.materializationContractVersion,
+            operation.materializationCanonicalText,
+            operation.materializationIdentityHash,
+            fixture.campaign.campaign.materializationIdentityHash,
+            fixture.campaign.campaign.memberCount,
+            request.acceptingActor.value(), request.reason.value(),
+            ToText(prerequisitePolicy), provenanceCanonical, provenanceHash,
+            request.identity.contractVersion(),
+            request.identity.canonicalText(), request.identity.hash()})
+        .one_row()[0]
+        .as<long long>();
+}
+
+void InsertDirectBudgetGrantWithAudit(
+    pqxx::transaction_base& transaction,
+    const PersistedOperationalCampaign& campaign,
+    const std::optional<std::string>& auditActor,
+    const std::optional<std::string>& auditReason)
+{
+    const BudgetLedgerEntry entry = BuildBudgetLedgerEntry(
+        campaign.campaignId, campaign.campaign.identity.canonicalText(),
+        std::nullopt, std::nullopt, std::nullopt, 1,
+        BudgetLedgerEntryKind::grant, BudgetLedgerStatus::active,
+        BudgetUnit::materializedMemberDispatch, 1, 0, 1,
+        ActorIdentity("authoritative.budget.admin@example.test"),
+        Reason("Authoritative direct budget reason."));
+    const long long entryId = transaction.exec(
+        "INSERT INTO campaign_operations_budget_ledger_entry ("
+        "operational_campaign_id,campaign_identity_canonical,"
+        "previous_entry_id,previous_entry_identity_canonical,"
+        "previous_entry_identity_hash,ledger_version,entry_kind,"
+        "ledger_status,budget_unit,delta,prior_total,resulting_total,"
+        "administrator_identity,reason,budget_contract_version,"
+        "budget_identity_canonical,budget_identity_hash) "
+        "VALUES($1,$2,NULL,NULL,NULL,1,'grant','active',$3,1,0,1,$4,$5,"
+        "$6,$7,$8) RETURNING budget_ledger_entry_id;",
+        pqxx::params{campaign.campaignId.value(),
+            campaign.campaign.identity.canonicalText(), ToText(entry.unit),
+            entry.administrator.value(), entry.reason.value(),
+            entry.identity.contractVersion(), entry.identity.canonicalText(),
+            entry.identity.hash()})
+        .one_row()[0]
+        .as<long long>();
+    if (auditActor && auditReason)
+        transaction.exec(
+            "INSERT INTO campaign_operations_audit_reference_event ("
+            "operational_campaign_id,budget_ledger_entry_id,cause_kind,"
+            "actor_identity,capability,reason,prior_version,resulting_version,"
+            "outcome,replay_disposition) VALUES($1,$2,"
+            "'budget_ledger_recorded',$3,"
+            "'campaign_operations_budget_administrator',$4,NULL,1,"
+            "'recorded','recorded');",
+            pqxx::params{campaign.campaignId.value(), entryId, *auditActor,
+                *auditReason});
+}
+
+struct DirectAcceptanceAuditOverrides final
+{
+    std::string actor = "direct.requester@example.test";
+    std::string reason = "Attempt malformed direct request evidence.";
+    std::string capability = "campaign_operations_request_acceptor";
+    std::optional<long long> budgetLedgerEntryId;
+    std::optional<long long> authorizationEventId;
+    std::optional<int> resultingVersion;
+    bool includeAudit = true;
+};
+
+void InsertDirectAcquisitionAndAudit(
+    pqxx::transaction_base& transaction,
+    const Phase2AcceptanceFixture& fixture, long long reservationId,
+    long long requestId, bool includeAcquisition,
+    const DirectAcceptanceAuditOverrides& overrides)
+{
+    const auto reservation =
+        FindReservation(transaction, ReservationId(reservationId));
+    const auto request =
+        FindOperationalRequest(transaction, OperationalRequestId(requestId));
+    assert(reservation);
+    assert(request);
+    if (!includeAcquisition) return;
+    const ReservationEvent event = BuildReservationAcquisitionEvent(
+        reservation->reservationId,
+        reservation->reservation.identity.canonicalText(),
+        request->requestId, request->request.identity.canonicalText(),
+        reservation->reservation.amount);
+    const long long eventId = transaction.exec(
+        "INSERT INTO campaign_operations_reservation_event ("
+        "reservation_id,reservation_identity_canonical,transition_kind,"
+        "expected_state,resulting_state,expected_version,resulting_version,"
+        "operational_request_id,request_identity_canonical,amount,"
+        "reservation_event_contract_version,"
+        "reservation_event_identity_canonical,"
+        "reservation_event_identity_hash) VALUES($1,$2,'acquired',NULL,"
+        "'held',0,1,$3,$4,$5,$6,$7,$8) RETURNING reservation_event_id;",
+        pqxx::params{reservationId,
+            reservation->reservation.identity.canonicalText(), requestId,
+            request->request.identity.canonicalText(),
+            reservation->reservation.amount,
+            event.identity.contractVersion(), event.identity.canonicalText(),
+            event.identity.hash()})
+        .one_row()[0]
+        .as<long long>();
+    if (!overrides.includeAudit) return;
+    transaction.exec(
+        "INSERT INTO campaign_operations_audit_reference_event ("
+        "operational_campaign_id,authorization_event_id,"
+        "budget_ledger_entry_id,reservation_id,reservation_event_id,"
+        "operational_request_id,cause_kind,actor_identity,capability,reason,"
+        "prior_version,resulting_version,outcome,replay_disposition) "
+        "VALUES($1,$2,$3,$4,$5,$6,'reservation_request_accepted',$7,$8,$9,"
+        "NULL,$10,'recorded','recorded');",
+        pqxx::params{fixture.campaign.campaignId.value(),
+            overrides.authorizationEventId.value_or(
+                fixture.authorization.authorizationEventId.value()),
+            overrides.budgetLedgerEntryId.value_or(
+                fixture.budget.budgetLedgerEntryId.value()),
+            reservationId, eventId, requestId, overrides.actor,
+            overrides.capability, overrides.reason,
+            overrides.resultingVersion.value_or(1)});
+}
+
+template <typename Function>
+void ExpectSqlFailure(Function&& function)
+{
+    bool failed = false;
+    try
+    {
+        function();
+    }
+    catch (const pqxx::sql_error&)
+    {
+        failed = true;
+    }
+    assert(failed);
+}
+
+void TestDirectCapabilityIntegrity(pqxx::connection& owner,
+    const std::string& connectionString, const std::string& schema)
+{
+    const std::string budgetConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_budget_administrator'";
+    const std::string requestConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_request_acceptor'";
+    const auto policyFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 70, 1);
+    const CanonicalIdentity fakeProvenance =
+        CanonicalIdentity::Create(1, "direct-fake-provenance");
+
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        const long long reservationId =
+            InsertDirectReservation(transaction, policyFixture, std::nullopt);
+        (void)InsertDirectRequest(transaction, policyFixture, reservationId,
+            PrerequisitePolicy::
+                phase4dMaterializationPlusExactPhase6dRatificationV1,
+            fakeProvenance.canonicalText(), fakeProvenance.hash());
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               policyFixture.campaign.campaignId) == 0);
+
+    const auto provenanceFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 71, 1);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        const long long reservationId =
+            InsertDirectReservation(
+                transaction, provenanceFixture, std::nullopt);
+        (void)InsertDirectRequest(transaction, provenanceFixture,
+            reservationId,
+            PrerequisitePolicy::phase4dMaterializationOnlyV1,
+            fakeProvenance.canonicalText(), fakeProvenance.hash());
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               provenanceFixture.campaign.campaignId) == 0);
+
+    const auto expiryFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 72, 1);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        (void)InsertDirectReservation(transaction, expiryFixture,
+            UtcTimestamp("2000-01-01T00:00:00.000000Z"));
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               expiryFixture.campaign.campaignId) == 0);
+
+    for (const bool actorMismatch : {true, false})
+    {
+        const long long materializationId = actorMismatch ? 73 : 74;
+        const OperationalCampaign campaign =
+            InsertMaterialization(owner, schema, materializationId, 1);
+        const auto persisted =
+            PersistCampaignFixture(owner, schema, campaign);
+        ExpectSqlFailure([&]
+        {
+            pqxx::work transaction{owner};
+            SetSearchPath(transaction, schema);
+            SetBudgetAdministratorRole(transaction);
+            InsertDirectBudgetGrantWithAudit(transaction, persisted,
+                actorMismatch
+                    ? "false.audit.actor@example.test"
+                    : "authoritative.budget.admin@example.test",
+                actorMismatch
+                    ? "Authoritative direct budget reason."
+                    : "False audit reason.");
+            transaction.commit();
+        });
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_budget_ledger_entry",
+                   persisted.campaignId) == 0);
+    }
+
+    const auto reservationOnlyFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 76, 1);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        (void)InsertDirectReservation(
+            transaction, reservationOnlyFixture, std::nullopt);
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               reservationOnlyFixture.campaign.campaignId) == 0);
+
+    const auto requestOnlyFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 77, 1);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        const long long reservationId =
+            InsertDirectReservation(
+                transaction, requestOnlyFixture, std::nullopt);
+        (void)InsertDirectRequest(transaction, requestOnlyFixture,
+            reservationId,
+            PrerequisitePolicy::phase4dMaterializationOnlyV1,
+            std::nullopt, std::nullopt);
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_operational_request",
+               requestOnlyFixture.campaign.campaignId) == 0);
+
+    const auto missingAuditFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 78, 1);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        const long long reservationId =
+            InsertDirectReservation(
+                transaction, missingAuditFixture, std::nullopt);
+        const long long requestId = InsertDirectRequest(transaction,
+            missingAuditFixture, reservationId,
+            PrerequisitePolicy::phase4dMaterializationOnlyV1,
+            std::nullopt, std::nullopt);
+        DirectAcceptanceAuditOverrides overrides;
+        overrides.includeAudit = false;
+        InsertDirectAcquisitionAndAudit(transaction, missingAuditFixture,
+            reservationId, requestId, true, overrides);
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_operational_request",
+               missingAuditFixture.campaign.campaignId) == 0);
+
+    const OperationalCampaign missingBudgetAuditCampaign =
+        InsertMaterialization(owner, schema, 79, 1);
+    const auto missingBudgetAuditPersisted =
+        PersistCampaignFixture(owner, schema, missingBudgetAuditCampaign);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetBudgetAdministratorRole(transaction);
+        InsertDirectBudgetGrantWithAudit(transaction,
+            missingBudgetAuditPersisted, std::nullopt, std::nullopt);
+        transaction.commit();
+    });
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_budget_ledger_entry",
+               missingBudgetAuditPersisted.campaignId) == 0);
+
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec(
+            "INSERT INTO campaign_operations_reservation_event ("
+            "reservation_id,reservation_identity_canonical,transition_kind,"
+            "expected_state,resulting_state,expected_version,"
+            "resulting_version,operational_request_id,"
+            "request_identity_canonical,amount,"
+            "reservation_event_contract_version,"
+            "reservation_event_identity_canonical,"
+            "reservation_event_identity_hash) VALUES(999999,"
+            "'missing-reservation','acquired',NULL,'held',0,1,999999,"
+            "'missing-request',1,1,'missing-event',"
+            "'fnv1a64:0000000000000000');");
+        transaction.commit();
+    });
+
+    for (int mismatch = 0; mismatch < 6; ++mismatch)
+    {
+        const auto fixture = CreatePhase2AcceptanceFixture(owner,
+            budgetConnectionString, schema, 81 + mismatch, 1);
+        ExpectSqlFailure([&]
+        {
+            pqxx::work transaction{owner};
+            SetSearchPath(transaction, schema);
+            SetRequestAcceptorRole(transaction);
+            const long long reservationId =
+                InsertDirectReservation(transaction, fixture, std::nullopt);
+            const long long requestId = InsertDirectRequest(transaction,
+                fixture, reservationId,
+                PrerequisitePolicy::phase4dMaterializationOnlyV1,
+                std::nullopt, std::nullopt);
+            DirectAcceptanceAuditOverrides overrides;
+            if (mismatch == 0)
+                overrides.actor = "false.audit.actor@example.test";
+            else if (mismatch == 1)
+                overrides.reason = "False acceptance audit reason.";
+            else if (mismatch == 2)
+                overrides.capability =
+                    "campaign_operations_budget_administrator";
+            else if (mismatch == 3)
+                overrides.budgetLedgerEntryId =
+                    policyFixture.budget.budgetLedgerEntryId.value();
+            else if (mismatch == 4)
+                overrides.authorizationEventId =
+                    policyFixture.authorization.authorizationEventId.value();
+            else
+                overrides.resultingVersion = 2;
+            InsertDirectAcquisitionAndAudit(transaction, fixture,
+                reservationId, requestId, true, overrides);
+            transaction.commit();
+        });
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_operational_request",
+                   fixture.campaign.campaignId) == 0);
+    }
+
+    const auto crossFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 75, 1);
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec(
+            "INSERT INTO campaign_operations_budget_ledger_entry "
+            "(operational_campaign_id) VALUES($1);",
+            pqxx::params{crossFixture.campaign.campaignId.value()});
+    });
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec(
+            "INSERT INTO campaign_operations_reservation "
+            "(reservation_id,operational_campaign_id) VALUES(999999,$1);",
+            pqxx::params{crossFixture.campaign.campaignId.value()});
+    });
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec(
+            "UPDATE campaign_operations_reservation SET state_version=2;");
+    });
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec("DELETE FROM campaign_operations_reservation;");
+    });
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec("TRUNCATE campaign_operations_reservation;");
+    });
+    ExpectSqlFailure([&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        transaction.exec(
+            "ALTER SEQUENCE campaign_operations_reservation_reservation_id_seq "
+            "RESTART WITH 1;");
+    });
+
+    const auto hydrationFixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, 87, 1);
+    PersistResult<AcceptedOperationalRequest> accepted = [&]
+    {
+        pqxx::connection connection{requestConnectionString};
+        return AcceptOperationalRequest(connection,
+            {hydrationFixture.campaign.campaignId.value(),
+                "hydration.requester@example.test",
+                "Persist evidence for fail-closed hydration.",
+                std::nullopt});
+    }();
+    const OperationalRequest& persistedRequest =
+        accepted.persisted.request.request;
+    const OperationalRequest malformed = BuildOperationalRequest(
+        persistedRequest.logicalOperation,
+        persistedRequest.acceptingAuthorizationEventId,
+        persistedRequest.acceptingAuthorizationCanonicalText,
+        persistedRequest.acceptingAuthorizationIdentityHash,
+        persistedRequest.reservationId,
+        persistedRequest.reservationCanonicalText,
+        persistedRequest.reservationIdentityHash,
+        persistedRequest.memberCount, persistedRequest.orderedScopeDigest,
+        persistedRequest.acceptingActor, persistedRequest.reason,
+        PrerequisitePolicy::
+            phase4dMaterializationPlusExactPhase6dRatificationV1,
+        fakeProvenance.canonicalText(), fakeProvenance.hash());
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec("SET LOCAL ROLE campaign_operations_owner;");
+        transaction.exec(
+            "UPDATE campaign_operations_operational_request SET "
+            "prerequisite_policy=$1,provenance_identity_canonical=$2,"
+            "provenance_identity_hash=$3,request_identity_canonical=$4,"
+            "request_identity_hash=$5 WHERE operational_request_id=$6;",
+            pqxx::params{ToText(malformed.prerequisitePolicy),
+                malformed.provenanceCanonicalText,
+                malformed.provenanceIdentityHash,
+                malformed.identity.canonicalText(), malformed.identity.hash(),
+                accepted.persisted.request.requestId.value()});
+        transaction.commit();
+    }
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        bool rejected = false;
+        try
+        {
+            (void)FindOperationalRequest(transaction,
+                accepted.persisted.request.requestId);
+        }
+        catch (const Error& error)
+        {
+            rejected =
+                error.code() == ErrorCode::persistenceCorruption &&
+                std::string(error.what()) ==
+                    "campaign_operations_request_authorization_evidence_mismatch";
+        }
+        assert(rejected);
+    }
+    {
+        pqxx::connection statusConnection{requestConnectionString};
+        bool rejected = false;
+        try
+        {
+            (void)LoadOperationalRequestStatus(statusConnection,
+                accepted.persisted.request.requestId);
+        }
+        catch (const Error& error)
+        {
+            rejected =
+                error.code() == ErrorCode::persistenceCorruption &&
+                std::string(error.what()) ==
+                    "campaign_operations_reservation_reconciliation_required";
+        }
+        assert(rejected);
+    }
+}
+
+void TestPhase2CorrectionConcurrency(pqxx::connection& owner,
+    const std::string& connectionString, const std::string& schema)
+{
+    const std::string budgetConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_budget_administrator'";
+    const std::string requestConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_request_acceptor'";
+
+    {
+        const auto fixture = CreatePhase2AcceptanceFixture(owner,
+            budgetConnectionString, schema, 88, 2);
+        const OperationalRequestAcceptanceRequest firstRequest{
+            fixture.campaign.campaignId.value(),
+            "race.requester@example.test",
+            "Competing changed payload one.", std::nullopt};
+        OperationalRequestAcceptanceRequest secondRequest = firstRequest;
+        secondRequest.reason = "Competing changed payload two.";
+        std::atomic<bool> start{false};
+        bool firstRecorded = false;
+        bool secondRecorded = false;
+        bool firstConflict = false;
+        bool secondConflict = false;
+        std::exception_ptr firstUnexpected;
+        std::exception_ptr secondUnexpected;
+        const auto accept = [&](const OperationalRequestAcceptanceRequest& value,
+                                bool& recorded, bool& conflict,
+                                std::exception_ptr& unexpected)
+        {
+            try
+            {
+                pqxx::connection connection{requestConnectionString};
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                const auto result = AcceptOperationalRequest(connection, value);
+                recorded = result.outcome == PersistOutcome::recorded;
+            }
+            catch (const Error& error)
+            {
+                conflict = error.code() == ErrorCode::persistenceConflict;
+                if (!conflict) unexpected = std::current_exception();
+            }
+            catch (...)
+            {
+                unexpected = std::current_exception();
+            }
+        };
+        std::thread first(accept, std::cref(firstRequest),
+            std::ref(firstRecorded), std::ref(firstConflict),
+            std::ref(firstUnexpected));
+        std::thread second(accept, std::cref(secondRequest),
+            std::ref(secondRecorded), std::ref(secondConflict),
+            std::ref(secondUnexpected));
+        start.store(true, std::memory_order_release);
+        first.join();
+        second.join();
+        if (firstUnexpected) std::rethrow_exception(firstUnexpected);
+        if (secondUnexpected) std::rethrow_exception(secondUnexpected);
+        assert(firstRecorded != secondRecorded);
+        assert(firstConflict != secondConflict);
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_operational_request",
+                   fixture.campaign.campaignId) == 1);
+    }
+
+    {
+        const auto fixture = CreatePhase2AcceptanceFixture(owner,
+            budgetConnectionString, schema, 89, 2);
+        BudgetAdministrationRequest first;
+        first.campaignId = fixture.campaign.campaignId.value();
+        first.expectedLedgerVersion = 1;
+        first.kind = BudgetLedgerEntryKind::amend;
+        first.value = 1;
+        first.actorIdentity = "race.budget.admin@example.test";
+        first.reason = "Concurrent successor budget one.";
+        BudgetAdministrationRequest second = first;
+        second.value = 2;
+        second.reason = "Concurrent successor budget two.";
+        std::atomic<bool> start{false};
+        bool firstRecorded = false;
+        bool secondRecorded = false;
+        bool firstConflict = false;
+        bool secondConflict = false;
+        std::exception_ptr firstUnexpected;
+        std::exception_ptr secondUnexpected;
+        const auto amend = [&](const BudgetAdministrationRequest& value,
+                               bool& recorded, bool& conflict,
+                               std::exception_ptr& unexpected)
+        {
+            try
+            {
+                pqxx::connection connection{budgetConnectionString};
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                const auto result = AdministerCampaignBudget(connection, value);
+                recorded = result.outcome == PersistOutcome::recorded;
+            }
+            catch (const Error& error)
+            {
+                conflict = error.code() == ErrorCode::persistenceConflict;
+                if (!conflict) unexpected = std::current_exception();
+            }
+            catch (...)
+            {
+                unexpected = std::current_exception();
+            }
+        };
+        std::thread firstThread(amend, std::cref(first),
+            std::ref(firstRecorded), std::ref(firstConflict),
+            std::ref(firstUnexpected));
+        std::thread secondThread(amend, std::cref(second),
+            std::ref(secondRecorded), std::ref(secondConflict),
+            std::ref(secondUnexpected));
+        start.store(true, std::memory_order_release);
+        firstThread.join();
+        secondThread.join();
+        if (firstUnexpected) std::rethrow_exception(firstUnexpected);
+        if (secondUnexpected) std::rethrow_exception(secondUnexpected);
+        assert(firstRecorded != secondRecorded);
+        assert(firstConflict != secondConflict);
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_budget_ledger_entry",
+                   fixture.campaign.campaignId) == 2);
+    }
+
+    for (const bool revokeBudget : {false, true})
+    {
+        const long long materializationId = revokeBudget ? 91 : 90;
+        const auto fixture = CreatePhase2AcceptanceFixture(owner,
+            budgetConnectionString, schema, materializationId, 2);
+        OperationalRequestAcceptanceRequest acceptance{
+            fixture.campaign.campaignId.value(),
+            "budget.race.requester@example.test",
+            revokeBudget
+                ? "Race budget revocation against acceptance."
+                : "Race budget amendment against acceptance.",
+            std::nullopt};
+        BudgetAdministrationRequest mutation;
+        mutation.campaignId = fixture.campaign.campaignId.value();
+        mutation.expectedLedgerVersion = 1;
+        mutation.kind = revokeBudget
+            ? BudgetLedgerEntryKind::revoke
+            : BudgetLedgerEntryKind::amend;
+        mutation.value = revokeBudget
+            ? std::nullopt
+            : std::optional<long long>(-1);
+        mutation.actorIdentity = "budget.race.admin@example.test";
+        mutation.reason = revokeBudget
+            ? "Revoke concurrently with request acceptance."
+            : "Reduce concurrently below request requirement.";
+        std::atomic<bool> start{false};
+        bool accepted = false;
+        bool acceptanceDenied = false;
+        bool budgetRecorded = false;
+        bool budgetDenied = false;
+        std::exception_ptr acceptanceUnexpected;
+        std::exception_ptr budgetUnexpected;
+        std::thread acceptThread([&]
+        {
+            try
+            {
+                pqxx::connection connection{requestConnectionString};
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                accepted = AcceptOperationalRequest(connection, acceptance)
+                               .outcome == PersistOutcome::recorded;
+            }
+            catch (const Error& error)
+            {
+                acceptanceDenied = error.code() == ErrorCode::budgetDenied;
+                if (!acceptanceDenied)
+                    acceptanceUnexpected = std::current_exception();
+            }
+            catch (...)
+            {
+                acceptanceUnexpected = std::current_exception();
+            }
+        });
+        std::thread budgetThread([&]
+        {
+            try
+            {
+                pqxx::connection connection{budgetConnectionString};
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                budgetRecorded =
+                    AdministerCampaignBudget(connection, mutation).outcome ==
+                    PersistOutcome::recorded;
+            }
+            catch (const Error& error)
+            {
+                budgetDenied = error.code() == ErrorCode::budgetDenied;
+                if (!budgetDenied)
+                    budgetUnexpected = std::current_exception();
+            }
+            catch (...)
+            {
+                budgetUnexpected = std::current_exception();
+            }
+        });
+        start.store(true, std::memory_order_release);
+        acceptThread.join();
+        budgetThread.join();
+        if (acceptanceUnexpected)
+            std::rethrow_exception(acceptanceUnexpected);
+        if (budgetUnexpected) std::rethrow_exception(budgetUnexpected);
+        assert(accepted != acceptanceDenied);
+        assert(budgetRecorded != budgetDenied);
+        if (!revokeBudget)
+            assert(accepted != budgetRecorded);
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_operational_request",
+                   fixture.campaign.campaignId) == (accepted ? 1 : 0));
+    }
+
+    for (const bool supersede : {false, true})
+    {
+        const long long materializationId = supersede ? 93 : 92;
+        const auto fixture = CreatePhase2AcceptanceFixture(owner,
+            budgetConnectionString, schema, materializationId, 1);
+        const AuthorizationEventKind successorKind = supersede
+            ? AuthorizationEventKind::granted
+            : AuthorizationEventKind::revoked;
+        const OperationalAuthorizationEvent successor =
+            BuildOperationalAuthorizationEvent(
+                fixture.campaign.campaignId,
+                fixture.campaign.campaign.identity.canonicalText(),
+                fixture.authorization.authorizationEventId,
+                fixture.authorization.event.identity.canonicalText(),
+                fixture.authorization.event.identity.hash(), 2, successorKind,
+                fixture.campaign.campaign.actionKind,
+                fixture.campaign.campaign.actionContractVersion,
+                fixture.campaign.campaign.scopeKind,
+                fixture.campaign.campaign.scopeContractVersion,
+                PrerequisitePolicy::phase4dMaterializationOnlyV1,
+                std::nullopt, std::nullopt, std::nullopt,
+                kCampaignOperationsAuthorizationRole,
+                ActorIdentity("authorization.race@example.test"),
+                Reason(supersede
+                        ? "Supersede concurrently with acceptance."
+                        : "Revoke concurrently with acceptance."),
+                UtcTimestamp("2020-01-02T00:00:00.000000Z"),
+                std::nullopt);
+        OperationalRequestAcceptanceRequest acceptance{
+            fixture.campaign.campaignId.value(),
+            "authorization.race.requester@example.test",
+            supersede
+                ? "Race authorization supersession."
+                : "Race authorization revocation.",
+            std::nullopt};
+        std::atomic<bool> start{false};
+        bool accepted = false;
+        bool denied = false;
+        bool successorRecorded = false;
+        std::exception_ptr acceptanceUnexpected;
+        std::exception_ptr successorUnexpected;
+        std::thread acceptThread([&]
+        {
+            try
+            {
+                pqxx::connection connection{requestConnectionString};
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                accepted = AcceptOperationalRequest(connection, acceptance)
+                               .outcome == PersistOutcome::recorded;
+            }
+            catch (const Error& error)
+            {
+                denied = error.code() == ErrorCode::authorizationDenied;
+                if (!denied) acceptanceUnexpected = std::current_exception();
+            }
+            catch (...)
+            {
+                acceptanceUnexpected = std::current_exception();
+            }
+        });
+        std::thread successorThread([&]
+        {
+            try
+            {
+                pqxx::connection connection{connectionString};
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                pqxx::work transaction{connection};
+                SetSearchPath(transaction, schema);
+                SetAuthorizerRole(transaction);
+                successorRecorded =
+                    PersistOperationalAuthorizationEvent(
+                        transaction, successor).outcome ==
+                    PersistOutcome::recorded;
+                transaction.commit();
+            }
+            catch (...)
+            {
+                successorUnexpected = std::current_exception();
+            }
+        });
+        start.store(true, std::memory_order_release);
+        acceptThread.join();
+        successorThread.join();
+        if (acceptanceUnexpected)
+            std::rethrow_exception(acceptanceUnexpected);
+        if (successorUnexpected)
+            std::rethrow_exception(successorUnexpected);
+        assert(successorRecorded);
+        assert(accepted != denied);
+        if (supersede) assert(accepted);
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_operational_request",
+                   fixture.campaign.campaignId) == (accepted ? 1 : 0));
+    }
+
+    {
+        const auto fixture = CreatePhase2AcceptanceFixture(owner,
+            budgetConnectionString, schema, 94, 1);
+        const OperationalAuthorizationEvent revoke =
+            BuildOperationalAuthorizationEvent(
+                fixture.campaign.campaignId,
+                fixture.campaign.campaign.identity.canonicalText(),
+                fixture.authorization.authorizationEventId,
+                fixture.authorization.event.identity.canonicalText(),
+                fixture.authorization.event.identity.hash(), 2,
+                AuthorizationEventKind::revoked,
+                fixture.campaign.campaign.actionKind,
+                fixture.campaign.campaign.actionContractVersion,
+                fixture.campaign.campaign.scopeKind,
+                fixture.campaign.campaign.scopeContractVersion,
+                PrerequisitePolicy::phase4dMaterializationOnlyV1,
+                std::nullopt, std::nullopt, std::nullopt,
+                kCampaignOperationsAuthorizationRole,
+                ActorIdentity("direct.authorization.race@example.test"),
+                Reason("Direct authorization must share the acceptance lock."),
+                UtcTimestamp("2020-01-02T00:00:00.000000Z"),
+                std::nullopt);
+        pqxx::work lockHolder{owner};
+        SetSearchPath(lockHolder, schema);
+        LockOperationalAuthorizationDomain(
+            lockHolder, fixture.campaign.campaign);
+
+        bool lockTimedOut = false;
+        std::exception_ptr unexpected;
+        std::thread directWriter([&]
+        {
+            try
+            {
+                pqxx::connection connection{connectionString};
+                pqxx::work transaction{connection};
+                SetSearchPath(transaction, schema);
+                SetAuthorizerRole(transaction);
+                transaction.exec("SET LOCAL lock_timeout='250ms';");
+                (void)InsertAuthorizationDirect(transaction, revoke);
+                transaction.abort();
+            }
+            catch (const pqxx::sql_error& error)
+            {
+                lockTimedOut = error.sqlstate() == "55P03";
+                if (!lockTimedOut) unexpected = std::current_exception();
+            }
+            catch (...)
+            {
+                unexpected = std::current_exception();
+            }
+        });
+        directWriter.join();
+        if (unexpected) std::rethrow_exception(unexpected);
+        assert(lockTimedOut);
+        lockHolder.abort();
+        assert(CountRowsForCampaign(owner, schema,
+                   "campaign_operations_authorization_event",
+                   fixture.campaign.campaignId) == 1);
+    }
+}
+
+void TestBudgetReservationAndRequestAcceptance(
+    pqxx::connection& owner, const std::string& connectionString,
+    const std::string& schema)
+{
+    assert(CampaignOperationsMachineText("comma,\"quote\"\nline\tcontrol") ==
+        "comma%2C%22quote%22%0Aline%09control");
+    assert(CampaignOperationsMachineText("NULL") == "%4E%55%4C%4C");
+    const std::string budgetConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_budget_administrator'";
+    const std::string requestConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_request_acceptor'";
+    const std::string readerConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_reader'";
+    const OperationalCampaign campaign =
+        InsertMaterialization(owner, schema, 60, 3);
+    const auto persistedCampaign =
+        PersistCampaignFixture(owner, schema, campaign);
+    const auto authorization = PersistActiveAuthorizationFixture(
+        owner, schema, persistedCampaign);
+    assert(authorization.event.eventKind ==
+        AuthorizationEventKind::granted);
+
+    {
+        pqxx::connection connection{requestConnectionString};
+        bool denied = false;
+        try
+        {
+            (void)AcceptOperationalRequest(connection,
+                {persistedCampaign.campaignId.value(),
+                    "requester@example.test",
+                    "Accept one durable complete-materialization request.",
+                    std::nullopt});
+        }
+        catch (const Error& error)
+        {
+            denied = error.code() == ErrorCode::budgetDenied;
+        }
+        assert(denied);
+    }
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               persistedCampaign.campaignId) == 0);
+    BudgetAdministrationRequest grantRequest;
+    grantRequest.campaignId = persistedCampaign.campaignId.value();
+    grantRequest.expectedLedgerVersion = 0;
+    grantRequest.kind = BudgetLedgerEntryKind::grant;
+    grantRequest.value = 3;
+    grantRequest.actorIdentity = "budget.admin@example.test";
+    grantRequest.reason = "Fund the exact three-member materialization.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        const auto granted =
+            AdministerCampaignBudget(connection, grantRequest);
+        assert(granted.outcome == PersistOutcome::recorded);
+        assert(granted.persisted.entry.resultingTotal == 3);
+        assert(granted.persisted.entry.ledgerVersion == 1);
+    }
+    {
+        pqxx::connection connection{budgetConnectionString};
+        const auto replay =
+            AdministerCampaignBudget(connection, grantRequest);
+        assert(replay.outcome == PersistOutcome::existingIdentical);
+        BudgetAdministrationRequest changed = grantRequest;
+        changed.reason = "A changed reason conflicts with version one.";
+        bool conflicted = false;
+        try
+        {
+            (void)AdministerCampaignBudget(connection, changed);
+        }
+        catch (const Error& error)
+        {
+            conflicted = error.code() == ErrorCode::persistenceConflict;
+        }
+        assert(conflicted);
+    }
+
+    OperationalRequestAcceptanceRequest acceptance;
+    acceptance.campaignId = persistedCampaign.campaignId.value();
+    acceptance.actorIdentity = "requester@example.test";
+    acceptance.reason =
+        "Accept one durable complete-materialization request.";
+    {
+        pqxx::connection connection{requestConnectionString};
+        const auto recorded = AcceptOperationalRequest(connection, acceptance);
+        assert(recorded.outcome == PersistOutcome::recorded);
+        assert(recorded.persisted.reservation.state ==
+            ReservationState::held);
+        assert(recorded.persisted.request.state == RequestState::ready);
+        assert(!recorded.persisted.request.productionDispatchEnabled);
+        assert(recorded.persisted.reservation.reservation.amount == 3);
+        assert(recorded.persisted.acquisitionEvent.event.eventKind ==
+            ReservationEventKind::acquired);
+    }
+    {
+        std::ostringstream output;
+        std::ostringstream errors;
+        const int rc = RunCampaignOperationalRequestAcceptanceCommand(
+            requestConnectionString, acceptance, output, errors);
+        assert(rc == 0);
+        assert(errors.str().empty());
+        for (const std::string& field : {
+                 "operational_campaign_id=",
+                 "authorization_event_id=",
+                 "budget_ledger_entry_id=",
+                 "budget_ledger_version=",
+                 "reservation_id=",
+                 "reservation_event_id=",
+                 "operational_request_id=",
+                 "reservation_state=held",
+                 "reservation_state_version=1",
+                 "request_state=ready",
+                 "request_state_version=1",
+                 "replay_disposition=existing_identical",
+                 "production_dispatch_enabled=false"})
+            assert(output.str().find(field) != std::string::npos);
+    }
+    {
+        pqxx::connection connection{requestConnectionString};
+        const auto replay = AcceptOperationalRequest(connection, acceptance);
+        assert(replay.outcome == PersistOutcome::existingIdentical);
+        OperationalRequestAcceptanceRequest changed = acceptance;
+        changed.actorIdentity = "different.requester@example.test";
+        bool conflicted = false;
+        try
+        {
+            (void)AcceptOperationalRequest(connection, changed);
+        }
+        catch (const Error& error)
+        {
+            conflicted = error.code() == ErrorCode::persistenceConflict;
+        }
+        assert(conflicted);
+        const auto status = LoadCampaignBudgetStatus(
+            connection, persistedCampaign.campaignId);
+        assert(status.accountingConsistent);
+        assert(status.everReserved == 3);
+        assert(status.held == 3);
+        assert(status.reservable == 0);
+    }
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               persistedCampaign.campaignId) == 1);
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_operational_request",
+               persistedCampaign.campaignId) == 1);
+    assert(CountRows(owner, schema,
+               "campaign_operations_reservation_event") == 1);
+
+    BudgetAdministrationRequest belowHold = grantRequest;
+    belowHold.expectedLedgerVersion = 1;
+    belowHold.kind = BudgetLedgerEntryKind::amend;
+    belowHold.value = -1;
+    belowHold.reason = "This amendment must not reduce below the held units.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        bool denied = false;
+        try
+        {
+            (void)AdministerCampaignBudget(connection, belowHold);
+        }
+        catch (const Error& error)
+        {
+            denied = error.code() == ErrorCode::budgetDenied;
+        }
+        assert(denied);
+    }
+    BudgetAdministrationRequest revoke = grantRequest;
+    revoke.expectedLedgerVersion = 1;
+    revoke.kind = BudgetLedgerEntryKind::revoke;
+    revoke.value.reset();
+    revoke.reason = "Revoke availability while preserving the exact hold.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        const auto revoked = AdministerCampaignBudget(connection, revoke);
+        assert(revoked.persisted.entry.status ==
+            BudgetLedgerStatus::revoked);
+        assert(revoked.persisted.entry.resultingTotal == 3);
+        bool denied = false;
+        try
+        {
+            (void)AcceptOperationalRequest(connection, acceptance);
+        }
+        catch (const Error& error)
+        {
+            denied = error.code() == ErrorCode::authorizationDenied;
+        }
+        assert(denied);
+    }
+    {
+        pqxx::connection connection{requestConnectionString};
+        bool conflicted = false;
+        try
+        {
+            (void)AcceptOperationalRequest(connection, acceptance);
+        }
+        catch (const Error& error)
+        {
+            conflicted = error.code() == ErrorCode::persistenceConflict;
+        }
+        assert(conflicted);
+    }
+    BudgetAdministrationRequest supersede = grantRequest;
+    supersede.expectedLedgerVersion = 2;
+    supersede.kind = BudgetLedgerEntryKind::supersede;
+    supersede.value = 5;
+    supersede.reason =
+        "Explicitly supersede the revoked head with five units.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        const auto restored =
+            AdministerCampaignBudget(connection, supersede);
+        assert(restored.persisted.entry.status ==
+            BudgetLedgerStatus::active);
+        const auto status = LoadCampaignBudgetStatus(
+            connection, persistedCampaign.campaignId);
+        assert(status.held == 3);
+        assert(status.reservable == 2);
+    }
+
+    {
+        std::ostringstream output;
+        std::ostringstream errors;
+        const int rc = RunCampaignBudgetStatusCommand(
+            readerConnectionString, persistedCampaign.campaignId,
+            output, errors);
+        assert(rc == 0);
+        assert(errors.str().empty());
+        assert(output.str().find("accounting_consistent=true") !=
+            std::string::npos);
+    }
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto request = FindOperationalRequestByCampaignAction(
+            transaction, persistedCampaign.campaignId,
+            OperationalActionKind::dispatchFullMaterialization, 1);
+        assert(request);
+        std::ostringstream output;
+        std::ostringstream errors;
+        const int rc = RunCampaignOperationalRequestStatusCommand(
+            readerConnectionString, request->requestId, output, errors);
+        assert(rc == 0);
+        assert(errors.str().empty());
+        assert(output.str().find(
+            "production_dispatch_enabled=false") != std::string::npos);
+        for (const std::string& field : {
+                 "authorization_event_id=",
+                 "budget_ledger_entry_id=",
+                 "budget_ledger_version=",
+                 "reservation_id=",
+                 "reservation_state=held",
+                 "reservation_state_version=1",
+                 "reservation_amount=3",
+                 "reservation_budget_unit=materialized_member_dispatch",
+                 "reservation_identity_hash="})
+            assert(output.str().find(field) != std::string::npos);
+    }
+
+    const OperationalCampaign rollbackCampaign =
+        InsertMaterialization(owner, schema, 61, 2);
+    const auto persistedRollback =
+        PersistCampaignFixture(owner, schema, rollbackCampaign);
+    (void)PersistActiveAuthorizationFixture(
+        owner, schema, persistedRollback);
+    BudgetAdministrationRequest rollbackBudget = grantRequest;
+    rollbackBudget.campaignId = persistedRollback.campaignId.value();
+    rollbackBudget.value = 2;
+    rollbackBudget.reason = "Fund rollback acceptance fixture.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        (void)AdministerCampaignBudget(connection, rollbackBudget);
+    }
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetRequestAcceptorRole(transaction);
+        const auto result = PersistAcceptedOperationalRequest(transaction,
+            persistedRollback.campaignId,
+            ActorIdentity("rollback.requester@example.test"),
+            Reason("The outer transaction intentionally rolls back."),
+            std::nullopt);
+        assert(result.outcome == PersistOutcome::recorded);
+        transaction.abort();
+    }
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               persistedRollback.campaignId) == 0);
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_operational_request",
+               persistedRollback.campaignId) == 0);
+
+    const OperationalCampaign concurrentCampaign =
+        InsertMaterialization(owner, schema, 63, 2);
+    const auto persistedConcurrent =
+        PersistCampaignFixture(owner, schema, concurrentCampaign);
+    const auto concurrentAuthorization =
+        PersistActiveAuthorizationFixture(
+            owner, schema, persistedConcurrent);
+    BudgetAdministrationRequest concurrentBudget = grantRequest;
+    concurrentBudget.campaignId = persistedConcurrent.campaignId.value();
+    concurrentBudget.value = 2;
+    concurrentBudget.reason = "Fund concurrent duplicate acceptance.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        (void)AdministerCampaignBudget(connection, concurrentBudget);
+    }
+    const OperationalRequestAcceptanceRequest concurrentAcceptance{
+        persistedConcurrent.campaignId.value(),
+        "concurrent.requester@example.test",
+        "Accept one exact operation under concurrent retry.",
+        std::nullopt};
+    std::atomic<bool> start{false};
+    PersistOutcome firstOutcome = PersistOutcome::recorded;
+    PersistOutcome secondOutcome = PersistOutcome::recorded;
+    long long firstRequestId = 0;
+    long long secondRequestId = 0;
+    std::exception_ptr firstError;
+    std::exception_ptr secondError;
+    const auto accept = [&](PersistOutcome& outcome, long long& requestId,
+                            std::exception_ptr& error)
+    {
+        try
+        {
+            pqxx::connection connection{requestConnectionString};
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            const auto result =
+                AcceptOperationalRequest(connection, concurrentAcceptance);
+            outcome = result.outcome;
+            requestId = result.persisted.request.requestId.value();
+        }
+        catch (...)
+        {
+            error = std::current_exception();
+        }
+    };
+    std::thread first(accept, std::ref(firstOutcome),
+        std::ref(firstRequestId), std::ref(firstError));
+    std::thread second(accept, std::ref(secondOutcome),
+        std::ref(secondRequestId), std::ref(secondError));
+    start.store(true, std::memory_order_release);
+    first.join();
+    second.join();
+    if (firstError) std::rethrow_exception(firstError);
+    if (secondError) std::rethrow_exception(secondError);
+    assert(firstRequestId == secondRequestId);
+    assert((firstOutcome == PersistOutcome::recorded &&
+               secondOutcome == PersistOutcome::existingIdentical) ||
+        (secondOutcome == PersistOutcome::recorded &&
+            firstOutcome == PersistOutcome::existingIdentical));
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               persistedConcurrent.campaignId) == 1);
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_operational_request",
+               persistedConcurrent.campaignId) == 1);
+    const auto revokeAuthorization = BuildOperationalAuthorizationEvent(
+        persistedConcurrent.campaignId,
+        concurrentCampaign.identity.canonicalText(),
+        concurrentAuthorization.authorizationEventId,
+        concurrentAuthorization.event.identity.canonicalText(),
+        concurrentAuthorization.event.identity.hash(), 2,
+        AuthorizationEventKind::revoked,
+        concurrentCampaign.actionKind,
+        concurrentCampaign.actionContractVersion,
+        concurrentCampaign.scopeKind,
+        concurrentCampaign.scopeContractVersion,
+        PrerequisitePolicy::phase4dMaterializationOnlyV1, std::nullopt,
+        std::nullopt, std::nullopt,
+        kCampaignOperationsAuthorizationRole,
+        ActorIdentity("phase2.authorizer@example.test"),
+        Reason("Revoke the accepting grant after durable acceptance."),
+        UtcTimestamp("2020-01-02T00:00:00.000000Z"), std::nullopt);
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetAuthorizerRole(transaction);
+        (void)PersistOperationalAuthorizationEvent(
+            transaction, revokeAuthorization);
+        transaction.commit();
+    }
+    {
+        pqxx::connection connection{requestConnectionString};
+        bool conflicted = false;
+        try
+        {
+            (void)AcceptOperationalRequest(
+                connection, concurrentAcceptance);
+        }
+        catch (const Error& error)
+        {
+            conflicted = error.code() == ErrorCode::persistenceConflict;
+        }
+        assert(conflicted);
+    }
+
+    const OperationalCampaign unauthorizedCampaign =
+        InsertMaterialization(owner, schema, 62, 1);
+    const auto persistedUnauthorized =
+        PersistCampaignFixture(owner, schema, unauthorizedCampaign);
+    BudgetAdministrationRequest unauthorizedBudget = grantRequest;
+    unauthorizedBudget.campaignId =
+        persistedUnauthorized.campaignId.value();
+    unauthorizedBudget.value = 1;
+    unauthorizedBudget.reason =
+        "Budget does not substitute for operational authorization.";
+    {
+        pqxx::connection connection{budgetConnectionString};
+        (void)AdministerCampaignBudget(connection, unauthorizedBudget);
+    }
+    {
+        pqxx::connection connection{requestConnectionString};
+        bool denied = false;
+        try
+        {
+            (void)AcceptOperationalRequest(connection,
+                {persistedUnauthorized.campaignId.value(),
+                    "requester@example.test",
+                    "Authorization remains independently mandatory.",
+                    std::nullopt});
+        }
+        catch (const Error& error)
+        {
+            denied = error.code() == ErrorCode::authorizationDenied;
+        }
+        assert(denied);
+    }
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_reservation",
+               persistedUnauthorized.campaignId) == 0);
+
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        SetBudgetAdministratorRole(transaction);
+        bool requestInsertDenied = false;
+        try
+        {
+            transaction.exec(
+                "INSERT INTO campaign_operations_operational_request "
+                "(operational_campaign_id) VALUES($1);",
+                pqxx::params{persistedCampaign.campaignId.value()});
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            requestInsertDenied = error.sqlstate() == "42501" ||
+                std::string(error.what()).find("permission denied") !=
+                    std::string::npos;
+        }
+        assert(requestInsertDenied);
+        transaction.abort();
+    }
+}
+
 void DropSchema(pqxx::connection& connection, const std::string& schema)
 {
     pqxx::work transaction{connection};
@@ -1552,7 +3060,13 @@ int main()
         ApplyFile(owner, schema,
             "Database/migrations/045_campaign_operations_foundation.sql");
         ApplyFile(owner, schema,
+            "Database/migrations/047_campaign_operations_budget_request_acceptance.sql");
+        ApplyFile(owner, schema,
+            "Database/migrations/047_campaign_operations_budget_request_acceptance.sql");
+        ApplyFile(owner, schema,
             "Tests/CampaignOperationsMigrationTests.sql");
+        ApplyFile(owner, schema,
+            "Tests/CampaignOperationsPhase2MigrationTests.sql");
 
         const OperationalCampaign campaign =
             InsertMaterialization(owner, schema, 41, 3);
@@ -1692,6 +3206,10 @@ int main()
             pqxx::isolation_level::repeatable_read>(
             owner, connectionString, schema, 50);
         TestOversizedCanonicals(owner, schema);
+        TestBudgetReservationAndRequestAcceptance(
+            owner, connectionString, schema);
+        TestDirectCapabilityIntegrity(owner, connectionString, schema);
+        TestPhase2CorrectionConcurrency(owner, connectionString, schema);
 
         const OperationalCampaignId campaignId = [&]
         {

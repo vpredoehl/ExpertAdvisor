@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cctype>
+#include <limits>
 #include <locale>
 #include <sstream>
 #include <utility>
@@ -450,6 +451,25 @@ std::string ToText(ReservationState value)
     return InvalidEnumText<std::string>();
 }
 
+std::string ToText(ReservationEventKind value)
+{
+    switch (value)
+    {
+        EA_CAMPAIGN_OPERATIONS_TO_TEXT_CASE(
+            ReservationEventKind::acquired, "acquired");
+        EA_CAMPAIGN_OPERATIONS_TO_TEXT_CASE(
+            ReservationEventKind::committed, "committed");
+        EA_CAMPAIGN_OPERATIONS_TO_TEXT_CASE(
+            ReservationEventKind::released, "released");
+        EA_CAMPAIGN_OPERATIONS_TO_TEXT_CASE(
+            ReservationEventKind::expired, "expired");
+        EA_CAMPAIGN_OPERATIONS_TO_TEXT_CASE(
+            ReservationEventKind::reconciliationRequired,
+            "reconciliation_required");
+    }
+    return InvalidEnumText<std::string>();
+}
+
 std::string ToText(RequestState value)
 {
     switch (value)
@@ -723,6 +743,63 @@ AdministrativeCampaignState AdministrativeCampaignStateFromText(
     for (const auto value : values)
         if (ToText(value) == text) return value;
     return InvalidEnumText<AdministrativeCampaignState>();
+}
+
+BudgetLedgerEntryKind BudgetLedgerEntryKindFromText(const std::string& text)
+{
+    if (text == "grant") return BudgetLedgerEntryKind::grant;
+    if (text == "amend") return BudgetLedgerEntryKind::amend;
+    if (text == "revoke") return BudgetLedgerEntryKind::revoke;
+    if (text == "supersede") return BudgetLedgerEntryKind::supersede;
+    return InvalidEnumText<BudgetLedgerEntryKind>();
+}
+
+BudgetLedgerStatus BudgetLedgerStatusFromText(const std::string& text)
+{
+    if (text == "active") return BudgetLedgerStatus::active;
+    if (text == "revoked") return BudgetLedgerStatus::revoked;
+    return InvalidEnumText<BudgetLedgerStatus>();
+}
+
+BudgetUnit BudgetUnitFromText(const std::string& text)
+{
+    if (text == "materialized_member_dispatch")
+        return BudgetUnit::materializedMemberDispatch;
+    return InvalidEnumText<BudgetUnit>();
+}
+
+ReservationState ReservationStateFromText(const std::string& text)
+{
+    if (text == "held") return ReservationState::held;
+    if (text == "committed") return ReservationState::committed;
+    if (text == "released") return ReservationState::released;
+    if (text == "expired") return ReservationState::expired;
+    if (text == "reconciliation_required")
+        return ReservationState::reconciliationRequired;
+    return InvalidEnumText<ReservationState>();
+}
+
+ReservationEventKind ReservationEventKindFromText(const std::string& text)
+{
+    if (text == "acquired") return ReservationEventKind::acquired;
+    if (text == "committed") return ReservationEventKind::committed;
+    if (text == "released") return ReservationEventKind::released;
+    if (text == "expired") return ReservationEventKind::expired;
+    if (text == "reconciliation_required")
+        return ReservationEventKind::reconciliationRequired;
+    return InvalidEnumText<ReservationEventKind>();
+}
+
+RequestState RequestStateFromText(const std::string& text)
+{
+    if (text == "ready") return RequestState::ready;
+    if (text == "dispatching") return RequestState::dispatching;
+    if (text == "bound") return RequestState::bound;
+    if (text == "permanently_failed") return RequestState::permanentlyFailed;
+    if (text == "cancelled") return RequestState::cancelled;
+    if (text == "reconciliation_required")
+        return RequestState::reconciliationRequired;
+    return InvalidEnumText<RequestState>();
 }
 
 OperationalCampaign::OperationalCampaign(CanonicalIdentity identityValue,
@@ -1081,6 +1158,507 @@ bool IsAuthorizationEffectiveAt(
     return head.eventKind == AuthorizationEventKind::granted &&
         !(databaseTime < head.notBefore) &&
         (!head.expiresAt || databaseTime < *head.expiresAt);
+}
+
+BudgetLedgerEntry::BudgetLedgerEntry(CanonicalIdentity identityValue,
+    OperationalCampaignId campaignIdValue,
+    std::string campaignCanonicalTextValue,
+    std::optional<BudgetLedgerEntryId> previousEntryIdValue,
+    std::optional<std::string> previousEntryCanonicalTextValue,
+    std::optional<std::string> previousEntryIdentityHashValue,
+    int ledgerVersionValue, BudgetLedgerEntryKind entryKindValue,
+    BudgetLedgerStatus statusValue, BudgetUnit unitValue, long long deltaValue,
+    long long priorTotalValue, long long resultingTotalValue,
+    ActorIdentity administratorValue, Reason reasonValue)
+    : identity(std::move(identityValue)), campaignId(campaignIdValue),
+      campaignCanonicalText(std::move(campaignCanonicalTextValue)),
+      previousEntryId(std::move(previousEntryIdValue)),
+      previousEntryCanonicalText(
+          std::move(previousEntryCanonicalTextValue)),
+      previousEntryIdentityHash(std::move(previousEntryIdentityHashValue)),
+      ledgerVersion(ledgerVersionValue), entryKind(entryKindValue),
+      status(statusValue), unit(unitValue), delta(deltaValue),
+      priorTotal(priorTotalValue), resultingTotal(resultingTotalValue),
+      administrator(std::move(administratorValue)),
+      reason(std::move(reasonValue))
+{
+}
+
+BudgetLedgerEntry BuildBudgetLedgerEntry(
+    OperationalCampaignId campaignId, std::string campaignCanonicalText,
+    std::optional<BudgetLedgerEntryId> previousEntryId,
+    std::optional<std::string> previousEntryCanonicalText,
+    std::optional<std::string> previousEntryIdentityHash, int ledgerVersion,
+    BudgetLedgerEntryKind entryKind, BudgetLedgerStatus status,
+    BudgetUnit unit, long long delta, long long priorTotal,
+    long long resultingTotal, ActorIdentity administrator, Reason reason)
+{
+    const bool hasPrevious = previousEntryId.has_value() &&
+        previousEntryCanonicalText.has_value() &&
+        previousEntryIdentityHash.has_value();
+    if (ledgerVersion <= 0 ||
+        previousEntryId.has_value() !=
+            previousEntryCanonicalText.has_value() ||
+        previousEntryId.has_value() != previousEntryIdentityHash.has_value() ||
+        (ledgerVersion == 1 && hasPrevious) ||
+        (ledgerVersion > 1 && !hasPrevious) || priorTotal < 0 ||
+        resultingTotal < 0 ||
+        (delta > 0 &&
+            priorTotal > std::numeric_limits<long long>::max() - delta) ||
+        (delta < 0 &&
+            priorTotal < std::numeric_limits<long long>::min() - delta) ||
+        priorTotal + delta != resultingTotal)
+        throw Error(ErrorCode::invalidBudgetLedgerEntry,
+            "campaign_operations_budget_ledger_entry_invalid");
+    if ((entryKind == BudgetLedgerEntryKind::grant &&
+            (ledgerVersion != 1 || priorTotal != 0 || delta <= 0 ||
+                status != BudgetLedgerStatus::active)) ||
+        (entryKind != BudgetLedgerEntryKind::grant && ledgerVersion == 1) ||
+        (entryKind == BudgetLedgerEntryKind::amend &&
+            (delta == 0 || status != BudgetLedgerStatus::active)) ||
+        (entryKind == BudgetLedgerEntryKind::revoke &&
+            status != BudgetLedgerStatus::revoked) ||
+        (entryKind == BudgetLedgerEntryKind::supersede &&
+            status != BudgetLedgerStatus::active))
+        throw Error(ErrorCode::invalidBudgetLedgerEntry,
+            "campaign_operations_budget_ledger_transition_invalid");
+    ValidateCanonicalComponent(campaignCanonicalText,
+        ExperimentRecommendation::RecommendationCanonicalHash(
+            campaignCanonicalText),
+        "campaign_operations_campaign_identity_invalid");
+    if (hasPrevious)
+        ValidateCanonicalComponent(*previousEntryCanonicalText,
+            *previousEntryIdentityHash,
+            "campaign_operations_budget_predecessor_invalid");
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "campaign_operations_budget_ledger_entry_v1"
+        << ";campaign_canonical=" << LengthPrefixed(campaignCanonicalText)
+        << ";ledger_version=" << ledgerVersion
+        << ";previous_entry_canonical="
+        << OptionalCanonical(previousEntryCanonicalText)
+        << ";previous_entry_identity_hash="
+        << OptionalCanonical(previousEntryIdentityHash)
+        << ";entry_kind=" << ToText(entryKind)
+        << ";status=" << ToText(status)
+        << ";unit=" << ToText(unit)
+        << ";delta=" << delta
+        << ";prior_total=" << priorTotal
+        << ";resulting_total=" << resultingTotal
+        << ";administrator=" << LengthPrefixed(administrator.value())
+        << ";reason=" << LengthPrefixed(reason.value());
+    return BudgetLedgerEntry(
+        CanonicalIdentity::Create(
+            kCampaignOperationsContractVersion, output.str()),
+        campaignId, std::move(campaignCanonicalText),
+        std::move(previousEntryId), std::move(previousEntryCanonicalText),
+        std::move(previousEntryIdentityHash), ledgerVersion, entryKind, status,
+        unit, delta, priorTotal, resultingTotal, std::move(administrator),
+        std::move(reason));
+}
+
+void ValidateBudgetLedgerEntry(const BudgetLedgerEntry& entry)
+{
+    const auto rebuilt = BuildBudgetLedgerEntry(entry.campaignId,
+        entry.campaignCanonicalText, entry.previousEntryId,
+        entry.previousEntryCanonicalText, entry.previousEntryIdentityHash,
+        entry.ledgerVersion, entry.entryKind, entry.status, entry.unit,
+        entry.delta, entry.priorTotal, entry.resultingTotal,
+        entry.administrator, entry.reason);
+    if (rebuilt != entry)
+        throw Error(ErrorCode::invalidBudgetLedgerEntry,
+            "campaign_operations_budget_ledger_identity_mismatch");
+}
+
+LogicalOperation::LogicalOperation(CanonicalIdentity identityValue,
+    OperationalCampaignId campaignIdValue,
+    std::string campaignCanonicalTextValue,
+    OperationalActionKind actionKindValue, int actionContractVersionValue,
+    long long materializationIdValue, int materializationContractVersionValue,
+    std::string materializationCanonicalTextValue,
+    std::string materializationIdentityHashValue, ScopeKind scopeKindValue,
+    int scopeContractVersionValue)
+    : identity(std::move(identityValue)), campaignId(campaignIdValue),
+      campaignCanonicalText(std::move(campaignCanonicalTextValue)),
+      actionKind(actionKindValue),
+      actionContractVersion(actionContractVersionValue),
+      materializationId(materializationIdValue),
+      materializationContractVersion(materializationContractVersionValue),
+      materializationCanonicalText(
+          std::move(materializationCanonicalTextValue)),
+      materializationIdentityHash(std::move(materializationIdentityHashValue)),
+      scopeKind(scopeKindValue),
+      scopeContractVersion(scopeContractVersionValue)
+{
+}
+
+LogicalOperation BuildLogicalOperation(
+    OperationalCampaignId campaignId, std::string campaignCanonicalText,
+    OperationalActionKind actionKind, int actionContractVersion,
+    long long materializationId, int materializationContractVersion,
+    std::string materializationCanonicalText,
+    std::string materializationIdentityHash, ScopeKind scopeKind,
+    int scopeContractVersion)
+{
+    if (actionKind != OperationalActionKind::dispatchFullMaterialization ||
+        actionContractVersion != kCampaignOperationsActionContractVersion ||
+        scopeKind != ScopeKind::completeMaterialization ||
+        scopeContractVersion != kCampaignOperationsScopeContractVersion ||
+        materializationId <= 0 ||
+        materializationContractVersion != kCampaignOperationsContractVersion)
+        throw Error(ErrorCode::invalidLogicalOperation,
+            "campaign_operations_logical_operation_invalid");
+    ValidateCanonicalComponent(campaignCanonicalText,
+        ExperimentRecommendation::RecommendationCanonicalHash(
+            campaignCanonicalText),
+        "campaign_operations_campaign_identity_invalid");
+    ValidateCanonicalComponent(materializationCanonicalText,
+        materializationIdentityHash,
+        "campaign_operations_materialization_identity_invalid");
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "campaign_operations_logical_operation_v1"
+        << ";campaign_canonical=" << LengthPrefixed(campaignCanonicalText)
+        << ";action_kind=" << ToText(actionKind)
+        << ";action_contract_version=" << actionContractVersion
+        << ";materialization_id=" << materializationId
+        << ";materialization_contract_version="
+        << materializationContractVersion
+        << ";materialization_canonical="
+        << LengthPrefixed(materializationCanonicalText)
+        << ";materialization_identity_hash="
+        << LengthPrefixed(materializationIdentityHash)
+        << ";scope_kind=" << ToText(scopeKind)
+        << ";scope_contract_version=" << scopeContractVersion;
+    return LogicalOperation(
+        CanonicalIdentity::Create(
+            kCampaignOperationsContractVersion, output.str()),
+        campaignId, std::move(campaignCanonicalText), actionKind,
+        actionContractVersion, materializationId,
+        materializationContractVersion,
+        std::move(materializationCanonicalText),
+        std::move(materializationIdentityHash), scopeKind,
+        scopeContractVersion);
+}
+
+LogicalOperation BuildLogicalOperation(
+    OperationalCampaignId campaignId, const OperationalCampaign& campaign)
+{
+    ValidateOperationalCampaign(campaign);
+    return BuildLogicalOperation(campaignId,
+        campaign.identity.canonicalText(), campaign.actionKind,
+        campaign.actionContractVersion, campaign.materializationId,
+        campaign.materializationContractVersion,
+        campaign.materializationCanonicalText,
+        campaign.materializationIdentityHash, campaign.scopeKind,
+        campaign.scopeContractVersion);
+}
+
+void ValidateLogicalOperation(const LogicalOperation& operation)
+{
+    const auto rebuilt = BuildLogicalOperation(operation.campaignId,
+        operation.campaignCanonicalText, operation.actionKind,
+        operation.actionContractVersion, operation.materializationId,
+        operation.materializationContractVersion,
+        operation.materializationCanonicalText,
+        operation.materializationIdentityHash, operation.scopeKind,
+        operation.scopeContractVersion);
+    if (rebuilt != operation)
+        throw Error(ErrorCode::invalidLogicalOperation,
+            "campaign_operations_logical_operation_identity_mismatch");
+}
+
+Reservation::Reservation(CanonicalIdentity identityValue,
+    LogicalOperation logicalOperationValue,
+    AuthorizationEventId acceptingAuthorizationEventIdValue,
+    std::string acceptingAuthorizationCanonicalTextValue,
+    std::string acceptingAuthorizationIdentityHashValue,
+    BudgetLedgerEntryId budgetLedgerEntryIdValue,
+    int budgetLedgerVersionValue, std::string budgetLedgerCanonicalTextValue,
+    std::string budgetLedgerIdentityHashValue, int memberCountValue,
+    long long amountValue, BudgetUnit unitValue,
+    std::optional<UtcTimestamp> expiresAtValue)
+    : identity(std::move(identityValue)),
+      logicalOperation(std::move(logicalOperationValue)),
+      acceptingAuthorizationEventId(acceptingAuthorizationEventIdValue),
+      acceptingAuthorizationCanonicalText(
+          std::move(acceptingAuthorizationCanonicalTextValue)),
+      acceptingAuthorizationIdentityHash(
+          std::move(acceptingAuthorizationIdentityHashValue)),
+      budgetLedgerEntryId(budgetLedgerEntryIdValue),
+      budgetLedgerVersion(budgetLedgerVersionValue),
+      budgetLedgerCanonicalText(std::move(budgetLedgerCanonicalTextValue)),
+      budgetLedgerIdentityHash(std::move(budgetLedgerIdentityHashValue)),
+      memberCount(memberCountValue), amount(amountValue), unit(unitValue),
+      expiresAt(std::move(expiresAtValue))
+{
+}
+
+Reservation BuildReservation(LogicalOperation logicalOperation,
+    AuthorizationEventId acceptingAuthorizationEventId,
+    std::string acceptingAuthorizationCanonicalText,
+    std::string acceptingAuthorizationIdentityHash,
+    BudgetLedgerEntryId budgetLedgerEntryId, int budgetLedgerVersion,
+    std::string budgetLedgerCanonicalText,
+    std::string budgetLedgerIdentityHash, int memberCount, long long amount,
+    BudgetUnit unit, std::optional<UtcTimestamp> expiresAt)
+{
+    ValidateLogicalOperation(logicalOperation);
+    if (budgetLedgerVersion <= 0 || memberCount <= 0 ||
+        amount != memberCount ||
+        unit != BudgetUnit::materializedMemberDispatch)
+        throw Error(ErrorCode::invalidReservation,
+            "campaign_operations_reservation_invalid");
+    ValidateCanonicalComponent(acceptingAuthorizationCanonicalText,
+        acceptingAuthorizationIdentityHash,
+        "campaign_operations_reservation_authorization_invalid");
+    ValidateCanonicalComponent(budgetLedgerCanonicalText,
+        budgetLedgerIdentityHash,
+        "campaign_operations_reservation_budget_invalid");
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "campaign_operations_reservation_v1"
+        << ";logical_operation_canonical="
+        << LengthPrefixed(logicalOperation.identity.canonicalText())
+        << ";campaign_canonical="
+        << LengthPrefixed(logicalOperation.campaignCanonicalText)
+        << ";accepting_authorization_canonical="
+        << LengthPrefixed(acceptingAuthorizationCanonicalText)
+        << ";accepting_authorization_identity_hash="
+        << LengthPrefixed(acceptingAuthorizationIdentityHash)
+        << ";budget_entry_canonical="
+        << LengthPrefixed(budgetLedgerCanonicalText)
+        << ";budget_entry_identity_hash="
+        << LengthPrefixed(budgetLedgerIdentityHash)
+        << ";budget_version=" << budgetLedgerVersion
+        << ";materialization_canonical="
+        << LengthPrefixed(logicalOperation.materializationCanonicalText)
+        << ";materialization_identity_hash="
+        << LengthPrefixed(logicalOperation.materializationIdentityHash)
+        << ";scope_kind=" << ToText(logicalOperation.scopeKind)
+        << ";scope_contract_version="
+        << logicalOperation.scopeContractVersion
+        << ";member_count=" << memberCount
+        << ";amount=" << amount
+        << ";unit=" << ToText(unit)
+        << ";expires_at=" << OptionalTimestamp(expiresAt);
+    return Reservation(
+        CanonicalIdentity::Create(
+            kCampaignOperationsContractVersion, output.str()),
+        std::move(logicalOperation), acceptingAuthorizationEventId,
+        std::move(acceptingAuthorizationCanonicalText),
+        std::move(acceptingAuthorizationIdentityHash), budgetLedgerEntryId,
+        budgetLedgerVersion, std::move(budgetLedgerCanonicalText),
+        std::move(budgetLedgerIdentityHash), memberCount, amount, unit,
+        std::move(expiresAt));
+}
+
+void ValidateReservation(const Reservation& reservation)
+{
+    const auto rebuilt = BuildReservation(reservation.logicalOperation,
+        reservation.acceptingAuthorizationEventId,
+        reservation.acceptingAuthorizationCanonicalText,
+        reservation.acceptingAuthorizationIdentityHash,
+        reservation.budgetLedgerEntryId, reservation.budgetLedgerVersion,
+        reservation.budgetLedgerCanonicalText,
+        reservation.budgetLedgerIdentityHash, reservation.memberCount,
+        reservation.amount, reservation.unit, reservation.expiresAt);
+    if (rebuilt != reservation)
+        throw Error(ErrorCode::invalidReservation,
+            "campaign_operations_reservation_identity_mismatch");
+}
+
+OperationalRequest::OperationalRequest(CanonicalIdentity identityValue,
+    LogicalOperation logicalOperationValue,
+    AuthorizationEventId acceptingAuthorizationEventIdValue,
+    std::string acceptingAuthorizationCanonicalTextValue,
+    std::string acceptingAuthorizationIdentityHashValue,
+    ReservationId reservationIdValue,
+    std::string reservationCanonicalTextValue,
+    std::string reservationIdentityHashValue, int memberCountValue,
+    std::string orderedScopeDigestValue, ActorIdentity acceptingActorValue,
+    Reason reasonValue, PrerequisitePolicy prerequisitePolicyValue,
+    std::optional<std::string> provenanceCanonicalTextValue,
+    std::optional<std::string> provenanceIdentityHashValue)
+    : identity(std::move(identityValue)),
+      logicalOperation(std::move(logicalOperationValue)),
+      acceptingAuthorizationEventId(acceptingAuthorizationEventIdValue),
+      acceptingAuthorizationCanonicalText(
+          std::move(acceptingAuthorizationCanonicalTextValue)),
+      acceptingAuthorizationIdentityHash(
+          std::move(acceptingAuthorizationIdentityHashValue)),
+      reservationId(reservationIdValue),
+      reservationCanonicalText(std::move(reservationCanonicalTextValue)),
+      reservationIdentityHash(std::move(reservationIdentityHashValue)),
+      memberCount(memberCountValue),
+      orderedScopeDigest(std::move(orderedScopeDigestValue)),
+      acceptingActor(std::move(acceptingActorValue)),
+      reason(std::move(reasonValue)),
+      prerequisitePolicy(prerequisitePolicyValue),
+      provenanceCanonicalText(std::move(provenanceCanonicalTextValue)),
+      provenanceIdentityHash(std::move(provenanceIdentityHashValue))
+{
+}
+
+OperationalRequest BuildOperationalRequest(
+    LogicalOperation logicalOperation,
+    AuthorizationEventId acceptingAuthorizationEventId,
+    std::string acceptingAuthorizationCanonicalText,
+    std::string acceptingAuthorizationIdentityHash,
+    ReservationId reservationId, std::string reservationCanonicalText,
+    std::string reservationIdentityHash, int memberCount,
+    std::string orderedScopeDigest, ActorIdentity acceptingActor,
+    Reason reason, PrerequisitePolicy prerequisitePolicy,
+    std::optional<std::string> provenanceCanonicalText,
+    std::optional<std::string> provenanceIdentityHash)
+{
+    ValidateLogicalOperation(logicalOperation);
+    if (memberCount <= 0 ||
+        orderedScopeDigest != logicalOperation.materializationIdentityHash ||
+        provenanceCanonicalText.has_value() !=
+            provenanceIdentityHash.has_value())
+        throw Error(ErrorCode::invalidOperationalRequest,
+            "campaign_operations_request_invalid");
+    ValidateCanonicalComponent(acceptingAuthorizationCanonicalText,
+        acceptingAuthorizationIdentityHash,
+        "campaign_operations_request_authorization_invalid");
+    ValidateCanonicalComponent(reservationCanonicalText,
+        reservationIdentityHash,
+        "campaign_operations_request_reservation_invalid");
+    if (provenanceCanonicalText)
+        ValidateCanonicalComponent(*provenanceCanonicalText,
+            *provenanceIdentityHash,
+            "campaign_operations_request_provenance_invalid");
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "campaign_operations_request_v1"
+        << ";logical_operation_canonical="
+        << LengthPrefixed(logicalOperation.identity.canonicalText())
+        << ";campaign_canonical="
+        << LengthPrefixed(logicalOperation.campaignCanonicalText)
+        << ";accepting_authorization_canonical="
+        << LengthPrefixed(acceptingAuthorizationCanonicalText)
+        << ";accepting_authorization_identity_hash="
+        << LengthPrefixed(acceptingAuthorizationIdentityHash)
+        << ";reservation_canonical="
+        << LengthPrefixed(reservationCanonicalText)
+        << ";reservation_identity_hash="
+        << LengthPrefixed(reservationIdentityHash)
+        << ";action_kind=" << ToText(logicalOperation.actionKind)
+        << ";action_contract_version="
+        << logicalOperation.actionContractVersion
+        << ";materialization_canonical="
+        << LengthPrefixed(logicalOperation.materializationCanonicalText)
+        << ";materialization_identity_hash="
+        << LengthPrefixed(logicalOperation.materializationIdentityHash)
+        << ";ordered_scope_digest="
+        << LengthPrefixed(orderedScopeDigest)
+        << ";member_count=" << memberCount
+        << ";accepting_actor=" << LengthPrefixed(acceptingActor.value())
+        << ";reason=" << LengthPrefixed(reason.value())
+        << ";prerequisite_policy=" << ToText(prerequisitePolicy)
+        << ";provenance_canonical="
+        << OptionalCanonical(provenanceCanonicalText)
+        << ";provenance_identity_hash="
+        << OptionalCanonical(provenanceIdentityHash);
+    return OperationalRequest(
+        CanonicalIdentity::Create(
+            kCampaignOperationsContractVersion, output.str()),
+        std::move(logicalOperation), acceptingAuthorizationEventId,
+        std::move(acceptingAuthorizationCanonicalText),
+        std::move(acceptingAuthorizationIdentityHash), reservationId,
+        std::move(reservationCanonicalText),
+        std::move(reservationIdentityHash), memberCount,
+        std::move(orderedScopeDigest), std::move(acceptingActor),
+        std::move(reason), prerequisitePolicy,
+        std::move(provenanceCanonicalText),
+        std::move(provenanceIdentityHash));
+}
+
+void ValidateOperationalRequest(const OperationalRequest& request)
+{
+    const auto rebuilt = BuildOperationalRequest(request.logicalOperation,
+        request.acceptingAuthorizationEventId,
+        request.acceptingAuthorizationCanonicalText,
+        request.acceptingAuthorizationIdentityHash, request.reservationId,
+        request.reservationCanonicalText, request.reservationIdentityHash,
+        request.memberCount, request.orderedScopeDigest,
+        request.acceptingActor, request.reason, request.prerequisitePolicy,
+        request.provenanceCanonicalText, request.provenanceIdentityHash);
+    if (rebuilt != request)
+        throw Error(ErrorCode::invalidOperationalRequest,
+            "campaign_operations_request_identity_mismatch");
+}
+
+ReservationEvent::ReservationEvent(CanonicalIdentity identityValue,
+    ReservationId reservationIdValue,
+    std::string reservationCanonicalTextValue,
+    ReservationEventKind eventKindValue,
+    std::optional<ReservationState> expectedStateValue,
+    ReservationState resultingStateValue, int expectedVersionValue,
+    int resultingVersionValue, OperationalRequestId requestIdValue,
+    std::string requestCanonicalTextValue, long long amountValue)
+    : identity(std::move(identityValue)),
+      reservationId(reservationIdValue),
+      reservationCanonicalText(std::move(reservationCanonicalTextValue)),
+      eventKind(eventKindValue), expectedState(std::move(expectedStateValue)),
+      resultingState(resultingStateValue),
+      expectedVersion(expectedVersionValue),
+      resultingVersion(resultingVersionValue), requestId(requestIdValue),
+      requestCanonicalText(std::move(requestCanonicalTextValue)),
+      amount(amountValue)
+{
+}
+
+ReservationEvent BuildReservationAcquisitionEvent(
+    ReservationId reservationId, std::string reservationCanonicalText,
+    OperationalRequestId requestId, std::string requestCanonicalText,
+    long long amount)
+{
+    if (amount <= 0)
+        throw Error(ErrorCode::invalidReservationEvent,
+            "campaign_operations_reservation_event_invalid");
+    ValidateCanonicalComponent(reservationCanonicalText,
+        ExperimentRecommendation::RecommendationCanonicalHash(
+            reservationCanonicalText),
+        "campaign_operations_reservation_event_reservation_invalid");
+    ValidateCanonicalComponent(requestCanonicalText,
+        ExperimentRecommendation::RecommendationCanonicalHash(
+            requestCanonicalText),
+        "campaign_operations_reservation_event_request_invalid");
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "campaign_operations_reservation_event_v1"
+        << ";reservation_canonical="
+        << LengthPrefixed(reservationCanonicalText)
+        << ";transition_kind=acquired"
+        << ";expected_state=none"
+        << ";resulting_state=held"
+        << ";expected_version=0"
+        << ";resulting_version=1"
+        << ";request_canonical=" << LengthPrefixed(requestCanonicalText)
+        << ";amount=" << amount;
+    return ReservationEvent(
+        CanonicalIdentity::Create(
+            kCampaignOperationsContractVersion, output.str()),
+        reservationId, std::move(reservationCanonicalText),
+        ReservationEventKind::acquired, std::nullopt, ReservationState::held,
+        0, 1, requestId, std::move(requestCanonicalText), amount);
+}
+
+void ValidateReservationEvent(const ReservationEvent& event)
+{
+    if (event.eventKind != ReservationEventKind::acquired ||
+        event.expectedState || event.resultingState != ReservationState::held ||
+        event.expectedVersion != 0 || event.resultingVersion != 1)
+        throw Error(ErrorCode::invalidReservationEvent,
+            "campaign_operations_reservation_event_transition_invalid");
+    const auto rebuilt = BuildReservationAcquisitionEvent(event.reservationId,
+        event.reservationCanonicalText, event.requestId,
+        event.requestCanonicalText, event.amount);
+    if (rebuilt != event)
+        throw Error(ErrorCode::invalidReservationEvent,
+            "campaign_operations_reservation_event_identity_mismatch");
 }
 
 BudgetAccounting CalculateBudgetAccounting(long long granted,
