@@ -139,6 +139,7 @@ struct ControlSnapshot
 {
     std::string desiredState = "running";
     std::optional<long long> activeRequestId;
+    std::optional<long long> currentPauseRequestId;
     std::optional<std::string> activeAction;
     std::optional<std::string> cancellationMode;
     bool inferBeforeCancel = false;
@@ -150,9 +151,15 @@ bool NormalSchedulingAllowed(const ControlSnapshot& snapshot);
 bool CancellationInferenceAllowed(const ControlSnapshot& snapshot);
 bool CancellationCheckpointTrainAllowed(const ControlSnapshot& snapshot);
 
-// Completes checkpoint-cancellation audit rows whose worker/inference evidence
-// is now durable and clears a fully reconciled active cancellation request.
-void ReconcileActiveCancellation(pqxx::work& transaction);
+// Shared CLI contract for the final authoritative persisted request status.
+int RequestExitCodeForPersistedStatus(const std::string& status);
+
+// Claims (when permitted) and reconciles the exact active cancellation request.
+// Every mutation is fenced by the persisted application owner and live lease.
+// Returns false without mutation while a different owner holds a live lease.
+bool ReconcileActiveCancellation(pqxx::work& transaction,
+                                 const std::string& applicationOwner,
+                                 bool claimExpiredLease);
 
 int RunCommand(const std::string& connectionString,
                const Command& command,
@@ -164,6 +171,29 @@ int RunCommand(const std::string& connectionString,
 int RunCommandWithProcessOperationsForTesting(
     const std::string& connectionString,
     const Command& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes);
+
+struct ExperimentResumeCommand
+{
+    long long experimentId = -1;
+    bool dryRun = false;
+    bool confirmed = false;
+    std::string invocationIdentity;
+    std::optional<std::string> requesterIdentity;
+};
+
+// Preserves lifecycle-paused resume behavior and adds an audited selective
+// release path for a running worker suspended by the current global pause.
+int RunExperimentResumeCommand(const std::string& connectionString,
+                               const ExperimentResumeCommand& command,
+                               std::ostream& output,
+                               std::ostream& error);
+
+int RunExperimentResumeCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const ExperimentResumeCommand& command,
     std::ostream& output,
     std::ostream& error,
     ProcessOperations& processes);

@@ -5492,6 +5492,25 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
 {
     const std::string action = SchedulerControlActionName(options);
     const long long experimentId = SchedulerControlExperimentId(options);
+    if (options.resumeExperimentId.has_value())
+    {
+        EA::GlobalExperimentControl::ExperimentResumeCommand command;
+        command.experimentId = experimentId;
+        command.dryRun = options.dryRun;
+        command.confirmed = options.yes;
+        const auto invocationStarted =
+            std::chrono::system_clock::now().time_since_epoch();
+        command.invocationIdentity =
+            std::string{"pid:"} + std::to_string(::getpid()) +
+            ";started_ns:" +
+            std::to_string(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    invocationStarted)
+                    .count()) +
+            ";executable:" + options.selfPath;
+        return EA::GlobalExperimentControl::RunExperimentResumeCommand(
+            LstmDbConnectionString(), command, std::cout, std::cerr);
+    }
     const bool willApply = options.yes && !options.dryRun;
 
     pqxx::connection c{LstmDbConnectionString()};
@@ -14115,6 +14134,17 @@ int RunCheckpointEvalAnalyzeJobs(const SchedulerOptions& options)
     return rc;
 }
 
+std::string SchedulerCancellationReconciliationOwner(
+    const SchedulerOptions& options)
+{
+    const int pid = static_cast<int>(::getpid());
+    const std::optional<std::string> startIdentity =
+        EA::GlobalExperimentControl::ReadProcessStartIdentity(pid);
+    return "scheduler:pid:" + std::to_string(pid) +
+           ";start:" + startIdentity.value_or("unavailable") +
+           ";executable:" + options.selfPath;
+}
+
 int RunSchedulerOnce(const SchedulerOptions& options,
                      SchedulerEventLogState* logState)
 {
@@ -14143,7 +14173,10 @@ int RunSchedulerOnce(const SchedulerOptions& options,
                 *control);
         if (!options.dryRun)
         {
-            EA::GlobalExperimentControl::ReconcileActiveCancellation(w);
+            (void)EA::GlobalExperimentControl::ReconcileActiveCancellation(
+                w,
+                SchedulerCancellationReconciliationOwner(options),
+                true);
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             ReapSchedulerOwnedChildren(w);
             RecoverOrphanedRunningExperiments(w, logState, options.schedulerVerbose);
@@ -14194,7 +14227,10 @@ int RunScheduler(const SchedulerOptions& options)
         initialGlobalState = control->desiredState;
         if (!options.dryRun)
         {
-            EA::GlobalExperimentControl::ReconcileActiveCancellation(w);
+            (void)EA::GlobalExperimentControl::ReconcileActiveCancellation(
+                w,
+                SchedulerCancellationReconciliationOwner(options),
+                true);
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             BeginSchedulerPollLogging(&logState);
             recoveryCount = RecoverOrphanedRunningExperiments(w, &logState, options.schedulerVerbose);
@@ -17015,6 +17051,20 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         "  WHERE status='running' AND phase='infer' "
         "  AND worker_control_state='paused')"
         ")::bigint;");
+    const int selectivelyReleasedWorkers = CountRows(
+        w,
+        "SELECT ("
+        " (SELECT count(*) FROM experiment e "
+        "  JOIN experiment_global_control c ON c.singleton "
+        "  WHERE e.status='running' "
+        "  AND e.worker_control_state='running' "
+        "  AND e.worker_global_pause_request_id=c.current_pause_request_id) +"
+        " (SELECT count(*) FROM experiment_checkpoint_eval ce "
+        "  JOIN experiment_global_control c ON c.singleton "
+        "  WHERE ce.status='running' AND ce.phase='infer' "
+        "  AND ce.worker_control_state='running' "
+        "  AND ce.worker_global_pause_request_id=c.current_pause_request_id)"
+        ")::bigint;");
     const int pendingCheckpointCancellations = CountRows(
         w,
         "SELECT count(*) FROM experiment "
@@ -17068,7 +17118,13 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
               << (globalControl->activeRequestId
                       ? std::to_string(*globalControl->activeRequestId)
                       : "none")
+              << " current_pause_request_id="
+              << (globalControl->currentPauseRequestId
+                      ? std::to_string(*globalControl->currentPauseRequestId)
+                      : "none")
               << " paused_workers=" << globallyPausedWorkers
+              << " selectively_released_workers="
+              << selectivelyReleasedWorkers
               << " cancellation_mode="
               << globalControl->cancellationMode.value_or("none")
               << " infer_before_cancel="
@@ -17186,7 +17242,14 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << (globalControl->activeRequestId
                           ? std::to_string(*globalControl->activeRequestId)
                           : "NULL")
+                  << ",current_pause_request_id="
+                  << (globalControl->currentPauseRequestId
+                          ? std::to_string(
+                                *globalControl->currentPauseRequestId)
+                          : "NULL")
                   << ",globally_paused_workers=" << globallyPausedWorkers
+                  << ",selectively_released_workers="
+                  << selectivelyReleasedWorkers
                   << ",active_cancellation_mode="
                   << globalControl->cancellationMode.value_or("NULL")
                   << ",active_infer_before_cancel="
