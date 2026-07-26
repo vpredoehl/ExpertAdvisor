@@ -71,6 +71,47 @@ BEGIN
         RAISE EXCEPTION 'checkpoint worker control columns incomplete';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND table_name='experiment_global_control'
+          AND column_name='current_pause_request_id'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND table_name='experiment'
+          AND column_name='worker_global_pause_request_id'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND table_name='experiment_checkpoint_eval'
+          AND column_name='worker_global_pause_request_id'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND table_name='experiment_admin_request'
+          AND column_name='target_experiment_id'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND table_name='experiment_admin_worker_outcome'
+          AND column_name IN (
+              'worker_executable',
+              'worker_command_line',
+              'source_pause_request_id')
+        GROUP BY table_name HAVING count(*)=3
+    ) THEN
+        RAISE EXCEPTION 'selective resume control columns incomplete';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid='experiment_admin_request'::regclass
+          AND conname='experiment_admin_request_target_shape_check'
+    ) THEN
+        RAISE EXCEPTION 'selective resume request shape constraint missing';
+    END IF;
+
     IF NOT has_table_privilege(
             'pqxx','experiment_global_control','SELECT') OR
        NOT has_table_privilege(
@@ -89,6 +130,12 @@ BEGIN
 
     IF has_column_privilege(
             'pqxx','experiment_admin_worker_outcome','experiment_id','UPDATE') OR
+       has_column_privilege(
+            'pqxx','experiment_admin_worker_outcome','worker_executable','UPDATE') OR
+       has_column_privilege(
+            'pqxx','experiment_admin_worker_outcome','worker_command_line','UPDATE') OR
+       has_column_privilege(
+            'pqxx','experiment_admin_worker_outcome','source_pause_request_id','UPDATE') OR
        NOT has_column_privilege(
             'pqxx','experiment_admin_worker_outcome','outcome_status','UPDATE') THEN
         RAISE EXCEPTION 'worker outcome audit update privileges unsafe';

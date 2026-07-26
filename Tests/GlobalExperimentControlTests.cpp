@@ -114,6 +114,11 @@ int main()
     assert(NextCancellationCheckpoint(40, 20, 100, 40) == 40);
     assert(!NextCancellationCheckpoint(91, 20, 100, 80));
     assert(!NextCancellationCheckpoint(20, 0, 100, 20));
+    assert(RequestExitCodeForPersistedStatus("completed") == 0);
+    assert(RequestExitCodeForPersistedStatus("pending") == 0);
+    assert(RequestExitCodeForPersistedStatus("partial") == 1);
+    assert(RequestExitCodeForPersistedStatus("failed") == 1);
+    assert(RequestExitCodeForPersistedStatus("applying") == 1);
 
     ControlSnapshot running;
     assert(NormalSchedulingAllowed(running));
