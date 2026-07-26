@@ -159,5 +159,55 @@ restart reconstructs its launch gate and cancellation-inference authority from
 the database.  Repeating the same command shape resumes any still-planned
 signals from that persisted request; already-accounted outcomes are not
 reapplied.  Duplicate completed pause/resume commands remain idempotent and
-auditable.  A conflicting new administrative command is rejected while another
-request is active, and partial failures remain queryable for diagnosis.
+auditable.  Before rejecting a conflicting new administrative command,
+reconciliation atomically retires an active cancellation whose worker outcomes
+are already terminal; genuinely active requests are still rejected.  Partial
+failures remain queryable for diagnosis.
+
+Upgrade reconciliation also repairs pre-correction ``awaiting_inference`` rows
+whose cancellation checkpoint epoch, model ID, or both were not persisted.
+Missing identity is filled only when one cancellation-owned evaluation proves
+the request, experiment, checkpoint epoch, checkpoint model, model ownership,
+and persisted model-epoch metadata, or when the experiment's durable
+after-next-checkpoint stop evidence proves those same relationships.  A
+non-null identity value is never replaced.  Partial persisted identity must
+agree with the recovered half; multiple candidates, conflicting values,
+foreign ownership, cross-experiment linkage, or malformed model metadata
+produce a terminal diagnostic ``partial`` outcome instead of a heuristic
+latest-model choice.
+
+The same classifier repairs an after-next-checkpoint outcome left
+``pending_checkpoint`` after its experiment becomes terminal.  A successful
+repair requires an exact request link, a valid terminal
+``completed``/``done`` or ``cancelled``/``train`` lifecycle, agreement among
+the requested, cancel, stop, current, and stopped checkpoint epochs, and a
+stopped checkpoint model owned by the experiment with exactly matching epoch
+metadata.  Missing, conflicting, or foreign stopped-checkpoint evidence is
+classified terminally; it is not filtered out to await a worker that can no
+longer run.
+
+Cancellation inference attaches an unowned exact evaluation to the current
+request and treats the same owner as an idempotent replay.  A non-null owner
+belonging to another request is immutable: the owner is preserved and the
+current worker outcome becomes terminal ``partial``.  Duplicate exact rows are
+ambiguous and are never selected arbitrarily.  Completed reconciliation
+requires ``status='completed'``, ``phase='done'``, a completion timestamp, no
+worker PID, exact request/experiment/epoch/model linkage, and valid model
+ownership and epoch metadata.  Failed reconciliation requires an allowed
+terminal inference failure phase, a completion timestamp, no worker PID, and
+the same exact linkage.  Pending and running evaluations remain nonterminal
+only when their phase, worker, and timestamp lifecycle is internally valid.
+Malformed terminal or queued materializations become deterministic diagnostic
+``partial`` outcomes.
+
+Every reconciliation pass rebuilds request counts from worker outcomes.
+``pending_count`` includes only ``planned``, ``pending_checkpoint``, and
+``awaiting_inference`` work; both ``partial`` and ``failed`` contribute to
+``failed_count``.  Mixed terminal results produce request ``partial`` and fully
+successful results produce ``completed``.  ``completed_at`` is set only after
+``pending_count`` reaches zero and is preserved on replay.  Clearing
+``active_request_id`` occurs in that same transaction, once, after terminal
+accounting.  Scheduler restarts and repeated command/reconciliation replay
+therefore preserve evaluation counts, ownership, terminal timestamps, and
+diagnostics while allowing the next administrative request only after the
+previous request has converged.

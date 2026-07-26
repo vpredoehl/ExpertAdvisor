@@ -909,6 +909,9 @@ void ResetCrashFixtures(pqxx::connection& connection)
         "DELETE FROM experiment_admin_worker_outcome "
         "WHERE experiment_id BETWEEN 700000 AND 700099;");
     transaction.exec(
+        "DELETE FROM experiment_analysis_result "
+        "WHERE experiment_id BETWEEN 700000 AND 700099;");
+    transaction.exec(
         "DELETE FROM experiment WHERE experiment_id BETWEEN 700000 AND 700099;");
     transaction.exec(
         "DELETE FROM matrix WHERE model_id IN ("
@@ -1665,6 +1668,1274 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
     ResetCrashFixtures(connection);
 }
 
+void TestTerminalCompletedCheckpointReconciliation(
+    const std::string& connectionString,
+    pqxx::connection& connection)
+{
+    pqxx::work fixture{connection};
+    const long long requestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,application_owner,application_lease_until,status,"
+        "previous_global_state,resulting_global_state,"
+        "scheduler_running_observed,target_count,successful_count,"
+        "already_satisfied_count,missing_count,rejected_count,failed_count,"
+        "result_summary) VALUES ("
+        "'cancel_all','after_next_checkpoint',false,"
+        "'crash-window-terminal-completed','crash-fixture-requester',"
+        "'crash-window-terminal-completed',NULL,'pending',"
+        "'running','running',false,6,0,0,0,6,0,"
+        "'{\"target_count\":6,\"successful_count\":0,"
+        "\"already_satisfied_count\":0,\"missing_count\":0,"
+        "\"rejected_count\":6,\"failed_count\":0,"
+        "\"pending_count\":6}'::jsonb) RETURNING request_id;")
+                                    [0][0]
+                                        .as<long long>();
+    fixture.exec_params(
+        "INSERT INTO experiment ("
+        "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+        "target_epochs,infer_start,infer_end,completed_at,updated_at,"
+        "current_operation,cancellation_request_id,"
+        "cancel_after_checkpoint_epoch,stop_after_checkpoint_epoch,"
+        "stopped_at_checkpoint_epoch) "
+        "SELECT experiment_id,'completed','done',80,20,100,"
+        "'2020-02-02'::date,'2020-03-01'::date,"
+        "now()-interval '1 hour',now()-interval '1 hour',"
+        "'analysis', $1,80,80,80 "
+        "FROM generate_series(700020,700025) AS experiment_id;",
+        requestId);
+    fixture.exec(
+        "INSERT INTO experiment (experiment_id,status,phase,current_epoch,"
+        "current_operation) VALUES "
+        "(700026,'pending','train',0,'queued');");
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) "
+        "SELECT experiment_id,'periodic training checkpoint' "
+        "FROM generate_series(700020,700025) AS experiment_id;");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,80 "
+        "FROM model WHERE experiment_id BETWEEN 700020 AND 700025;");
+    fixture.exec(
+        "UPDATE experiment e SET stopped_at_checkpoint_model_id=m.model_id,"
+        "last_model_id=m.model_id "
+        "FROM model m WHERE m.experiment_id=e.experiment_id "
+        "AND e.experiment_id BETWEEN 700020 AND 700025;");
+    fixture.exec_params(
+        "INSERT INTO experiment_checkpoint_eval ("
+        "experiment_id,parent_experiment_id,checkpoint_epoch,"
+        "checkpoint_model_id,status,phase,completed_at,"
+        "cancellation_request_id) "
+        "SELECT e.experiment_id,e.experiment_id,80,"
+        "e.stopped_at_checkpoint_model_id,'completed','done',"
+        "now()-interval '50 minutes',$1 "
+        "FROM experiment e "
+        "WHERE e.experiment_id BETWEEN 700020 AND 700025;",
+        requestId);
+    fixture.exec(
+        "INSERT INTO experiment_analysis_result(experiment_id) "
+        "SELECT experiment_id FROM generate_series(700020,700025) "
+        "AS experiment_id;");
+    fixture.exec_params(
+        "INSERT INTO experiment_admin_worker_outcome ("
+        "request_id,worker_identity,experiment_id,worker_kind,phase,"
+        "lifecycle_status,worker_pid,worker_process_group_id,"
+        "worker_process_start_identity,identity_result,signal_result,"
+        "cancellation_checkpoint_epoch,inference_action,outcome_status,"
+        "detail) "
+        "SELECT $1,'experiment:'||experiment_id::text,experiment_id,"
+        "'experiment','train','running',910000+experiment_id::int,"
+        "910000+experiment_id::int,'1700000000:'||experiment_id::text,"
+        "'identity_validation_failed','identity_validation_failed',"
+        "80,'none','pending_checkpoint',"
+        "'missing_worker_requeued_from_durable_checkpoint' "
+        "FROM generate_series(700020,700025) AS experiment_id;",
+        requestId);
+    fixture.exec_params(
+        "UPDATE experiment_global_control SET desired_state='running',"
+        "active_request_id=$1,revision=revision+1,updated_at=now() "
+        "WHERE singleton;",
+        requestId);
+    fixture.commit();
+
+    const std::string completedExperimentEvidence = Scalar(
+        connection,
+        "SELECT string_agg("
+        "e.experiment_id::text||':'||e.status||':'||e.phase||':'||"
+        "e.current_epoch::text||':'||e.stop_after_checkpoint_epoch::text||':'||"
+        "e.stopped_at_checkpoint_epoch::text||':'||"
+        "e.stopped_at_checkpoint_model_id::text||':'||e.last_model_id::text||':'||"
+        "e.current_operation||':'||(e.completed_at IS NOT NULL)::text||':'||"
+        "(e.cancellation_completed_at IS NULL)::text,',' "
+        "ORDER BY e.experiment_id) "
+        "FROM experiment e WHERE e.experiment_id BETWEEN 700020 AND 700025;");
+    const std::string artifactEvidence = Scalar(
+        connection,
+        "SELECT "
+        "(SELECT count(*) FROM model "
+        " WHERE experiment_id BETWEEN 700020 AND 700025)::text||':'||"
+        "(SELECT count(*) FROM matrix tm JOIN model m USING(model_id) "
+        " WHERE m.experiment_id BETWEEN 700020 AND 700025)::text||':'||"
+        "(SELECT count(*) FROM experiment_checkpoint_eval "
+        " WHERE experiment_id BETWEEN 700020 AND 700025)::text||':'||"
+        "(SELECT count(*) FROM experiment_analysis_result "
+        " WHERE experiment_id BETWEEN 700020 AND 700025)::text;");
+
+    // A later administrative process is also a reconciliation entry point.
+    // It must atomically retire the durable cancellation before applying the
+    // non-conflicting resume request.
+    RecordingNativeProcesses processes;
+    std::string resumeOutput;
+    CHECK(Replay(
+              connectionString,
+              ReplayCommand(
+                  Action::ResumeAll,
+                  "crash-window-resume-after-terminal-completed"),
+              processes,
+              resumeOutput) == 0);
+    CHECK(processes.signals.empty());
+    CHECK(resumeOutput.find(
+              "GLOBAL_EXPERIMENT_CONTROL_SUMMARY") != std::string::npos);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||target_count::text||':'||"
+              "successful_count::text||':'||already_satisfied_count::text||':'||"
+              "missing_count::text||':'||rejected_count::text||':'||"
+              "failed_count::text||':'||"
+              "(result_summary->>'pending_count')||':'||"
+              "(result_summary->>'target_count')||':'||"
+              "(result_summary->>'rejected_count')||':'||"
+              "(completed_at IS NOT NULL)::text "
+              "FROM experiment_admin_request WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "partial:6:0:0:0:6:0:0:6:6:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text||':'||"
+              "count(*) FILTER (WHERE outcome_status='completed')::text||':'||"
+              "count(*) FILTER (WHERE "
+              "cancellation_checkpoint_model_id IS NOT NULL)::text||':'||"
+              "bool_and(cancellation_checkpoint_model_id="
+              "(SELECT stopped_at_checkpoint_model_id FROM experiment e "
+              " WHERE e.experiment_id=o.experiment_id))::text||':'||"
+              "bool_and(detail="
+              "'cancellation_checkpoint_reconciled_from_terminal_experiment')"
+              "::text FROM experiment_admin_worker_outcome o "
+              "WHERE request_id=" + std::to_string(requestId)) ==
+          "6:6:6:true:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT status FROM experiment_admin_request "
+              "WHERE invocation_identity="
+              "'crash-window-resume-after-terminal-completed'") ==
+          "completed");
+    CHECK(Scalar(
+              connection,
+              "SELECT desired_state||':'||(active_request_id IS NULL)::text "
+              "FROM experiment_global_control WHERE singleton") ==
+          "running:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||phase||':'||"
+              "(cancellation_request_id IS NULL)::text "
+              "FROM experiment WHERE experiment_id=700026") ==
+          "pending:train:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment "
+              "WHERE experiment_id BETWEEN 700020 AND 700026") == "7");
+    CHECK(Scalar(
+              connection,
+              "SELECT string_agg("
+              "e.experiment_id::text||':'||e.status||':'||e.phase||':'||"
+              "e.current_epoch::text||':'||"
+              "e.stop_after_checkpoint_epoch::text||':'||"
+              "e.stopped_at_checkpoint_epoch::text||':'||"
+              "e.stopped_at_checkpoint_model_id::text||':'||"
+              "e.last_model_id::text||':'||e.current_operation||':'||"
+              "(e.completed_at IS NOT NULL)::text||':'||"
+              "(e.cancellation_completed_at IS NULL)::text,',' "
+              "ORDER BY e.experiment_id) FROM experiment e "
+              "WHERE e.experiment_id BETWEEN 700020 AND 700025") ==
+          completedExperimentEvidence);
+    CHECK(Scalar(
+              connection,
+              "SELECT "
+              "(SELECT count(*) FROM model "
+              " WHERE experiment_id BETWEEN 700020 AND 700025)::text||':'||"
+              "(SELECT count(*) FROM matrix tm JOIN model m USING(model_id) "
+              " WHERE m.experiment_id BETWEEN 700020 AND 700025)::text||':'||"
+              "(SELECT count(*) FROM experiment_checkpoint_eval "
+              " WHERE experiment_id BETWEEN 700020 AND 700025)::text||':'||"
+              "(SELECT count(*) FROM experiment_analysis_result "
+              " WHERE experiment_id BETWEEN 700020 AND 700025)::text") ==
+          artifactEvidence);
+
+    const std::string terminalTimestamps = Scalar(
+        connection,
+        "SELECT r.completed_at::text||':'||"
+        "string_agg(o.updated_at::text,',' ORDER BY o.experiment_id) "
+        "FROM experiment_admin_request r "
+        "JOIN experiment_admin_worker_outcome o USING(request_id) "
+        "WHERE r.request_id=" + std::to_string(requestId) +
+            " GROUP BY r.completed_at;");
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work replay{restarted};
+        AcquireCoordinationLock(replay);
+        ReconcileActiveCancellation(replay);
+        replay.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT r.completed_at::text||':'||"
+              "string_agg(o.updated_at::text,',' ORDER BY o.experiment_id) "
+              "FROM experiment_admin_request r "
+              "JOIN experiment_admin_worker_outcome o USING(request_id) "
+              "WHERE r.request_id=" + std::to_string(requestId) +
+                  " GROUP BY r.completed_at;") ==
+          terminalTimestamps);
+
+    ResetCrashFixtures(connection);
+}
+
+void TestUnresolvedCheckpointRemainsActive(
+    const std::string& connectionString,
+    pqxx::connection& connection)
+{
+    pqxx::work fixture{connection};
+    const long long requestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,status,previous_global_state,"
+        "resulting_global_state,target_count,rejected_count,result_summary) "
+        "VALUES ('cancel_all','after_next_checkpoint',false,"
+        "'crash-window-genuinely-unresolved','crash-fixture-requester',"
+        "'pending','running','running',1,1,"
+        "'{\"target_count\":1,\"rejected_count\":1,"
+        "\"pending_count\":1}'::jsonb) RETURNING request_id;")
+                                    [0][0]
+                                        .as<long long>();
+    fixture.exec_params(
+        "INSERT INTO experiment ("
+        "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+        "target_epochs,cancellation_request_id,cancel_after_checkpoint_epoch,"
+        "stop_after_checkpoint_epoch,last_checkpoint_stop_decision_epoch,"
+        "current_operation) VALUES "
+        "(700030,'pending','train',60,20,100,$1,80,80,60,"
+        "'cancel_checkpoint_restart_pending');",
+        requestId);
+    const long long modelId = fixture.exec(
+        "INSERT INTO model(experiment_id,comment) VALUES "
+        "(700030,'periodic training checkpoint') RETURNING model_id;")
+                                  [0][0]
+                                      .as<long long>();
+    fixture.exec_params(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "VALUES ($1,'train_config_meta',0,10,60);",
+        modelId);
+    fixture.exec_params(
+        "UPDATE experiment SET last_model_id=$1 "
+        "WHERE experiment_id=700030;",
+        modelId);
+    fixture.exec_params(
+        "INSERT INTO experiment_admin_worker_outcome ("
+        "request_id,worker_identity,experiment_id,worker_kind,phase,"
+        "lifecycle_status,identity_result,signal_result,"
+        "cancellation_checkpoint_epoch,inference_action,outcome_status,detail) "
+        "VALUES ($1,'experiment:700030',700030,'experiment','train','running',"
+        "'identity_validation_failed','identity_validation_failed',80,'none',"
+        "'pending_checkpoint',"
+        "'missing_worker_requeued_from_durable_checkpoint');",
+        requestId);
+    fixture.exec_params(
+        "UPDATE experiment_global_control SET desired_state='running',"
+        "active_request_id=$1,revision=revision+1,updated_at=now() "
+        "WHERE singleton;",
+        requestId);
+    fixture.commit();
+
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work replay{restarted};
+        AcquireCoordinationLock(replay);
+        ReconcileActiveCancellation(replay);
+        replay.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||(completed_at IS NULL)::text||':'||"
+              "target_count::text||':'||rejected_count::text||':'||"
+              "(result_summary->>'pending_count') "
+              "FROM experiment_admin_request WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "pending:true:1:1:1");
+    CHECK(Scalar(
+              connection,
+              "SELECT outcome_status||':'||"
+              "(cancellation_checkpoint_model_id IS NULL)::text||':'||detail "
+              "FROM experiment_admin_worker_outcome WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "pending_checkpoint:true:"
+          "missing_worker_requeued_from_durable_checkpoint");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id::text FROM experiment_global_control "
+              "WHERE singleton") == std::to_string(requestId));
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||phase||':'||current_epoch::text||':'||"
+              "last_model_id::text FROM experiment "
+              "WHERE experiment_id=700030") ==
+          "pending:train:60:" + std::to_string(modelId));
+
+    RecordingNativeProcesses processes;
+    std::string resumeOutput;
+    CHECK(Replay(
+              connectionString,
+              ReplayCommand(
+                  Action::ResumeAll,
+                  "crash-window-resume-while-unresolved"),
+              processes,
+              resumeOutput) == 1);
+    CHECK(processes.signals.empty());
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id::text FROM experiment_global_control "
+              "WHERE singleton") == std::to_string(requestId));
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_admin_request "
+              "WHERE invocation_identity="
+              "'crash-window-resume-while-unresolved'") == "0");
+
+    ResetCrashFixtures(connection);
+}
+
+void TestImmediateAndCurrentBoundaryInferenceIdentity(
+    const std::string& connectionString,
+    pqxx::connection& connection)
+{
+    pqxx::work fixture{connection};
+    fixture.exec(
+        "INSERT INTO experiment ("
+        "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+        "target_epochs,infer_start,infer_end,worker_pid,"
+        "worker_process_group_id,worker_executable,worker_command_line,"
+        "worker_process_start_identity,current_operation) VALUES "
+        "(700040,'running','train',45,20,100,'2020-02-02','2020-03-01',"
+        "970040,970040,'/tmp/LSTM_Release',"
+        "'/tmp/LSTM_Release --train --scheduler-experiment-id=700040',"
+        "'1700000040:40','train');");
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) VALUES "
+        "(700040,'periodic training checkpoint');");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,40 "
+        "FROM model WHERE experiment_id=700040;");
+    fixture.exec(
+        "UPDATE experiment e SET last_model_id=m.model_id "
+        "FROM model m WHERE m.experiment_id=e.experiment_id "
+        "AND e.experiment_id=700040;");
+    fixture.commit();
+
+    RecordingNativeProcesses processes;
+    Command immediate = ReplayCommand(
+        Action::CancelAll,
+        "crash-window-exact-inference-immediate",
+        CancellationMode::Immediate);
+    immediate.inferBeforeCancel = true;
+    std::string output;
+    CHECK(Replay(
+              connectionString, immediate, processes, output) == 0);
+    CHECK(processes.signals.empty());
+    const long long immediateRequestId = std::stoll(Scalar(
+        connection,
+        "SELECT request_id::text FROM experiment_admin_request "
+        "WHERE invocation_identity="
+        "'crash-window-exact-inference-immediate'"));
+    CHECK(Scalar(
+              connection,
+              "SELECT o.cancellation_checkpoint_epoch::text||':'||"
+              "o.cancellation_checkpoint_model_id::text||':'||"
+              "ce.checkpoint_epoch::text||':'||ce.checkpoint_model_id::text||':'||"
+              "o.inference_action||':'||o.outcome_status "
+              "FROM experiment_admin_worker_outcome o "
+              "JOIN experiment_checkpoint_eval ce "
+              "ON ce.cancellation_request_id=o.request_id "
+              "AND COALESCE(ce.parent_experiment_id,ce.experiment_id)="
+              "o.experiment_id "
+              "AND ce.checkpoint_epoch=o.cancellation_checkpoint_epoch "
+              "AND ce.checkpoint_model_id=o.cancellation_checkpoint_model_id "
+              "WHERE o.request_id=" + std::to_string(immediateRequestId) +
+                  " AND o.experiment_id=700040") ==
+          "40:" +
+              Scalar(connection,
+                     "SELECT last_model_id::text FROM experiment "
+                     "WHERE experiment_id=700040") +
+              ":40:" +
+              Scalar(connection,
+                     "SELECT last_model_id::text FROM experiment "
+                     "WHERE experiment_id=700040") +
+              ":queued:awaiting_inference");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id=700040") == "1");
+
+    // Replaying the durable request before inference finishes must neither
+    // select a new identity nor create a duplicate evaluation.
+    CHECK(Replay(
+              connectionString, immediate, processes, output) == 0);
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id=700040") == "1");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_admin_request "
+              "WHERE invocation_identity="
+              "'crash-window-exact-inference-immediate'") == "1");
+    {
+        pqxx::work update{connection};
+        update.exec_params(
+            "UPDATE experiment_checkpoint_eval SET status='completed',"
+            "phase='done',completed_at=now(),updated_at=now() "
+            "WHERE cancellation_request_id=$1;",
+            immediateRequestId);
+        update.commit();
+    }
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work reconcile{restarted};
+        AcquireCoordinationLock(reconcile);
+        ReconcileActiveCancellation(reconcile);
+        reconcile.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||target_count::text||':'||"
+              "missing_count::text||':'||failed_count::text||':'||"
+              "(result_summary->>'pending_count') "
+              "FROM experiment_admin_request WHERE request_id=" +
+                  std::to_string(immediateRequestId)) ==
+          "completed:1:1:0:0");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id IS NULL "
+              "FROM experiment_global_control WHERE singleton") == "t");
+
+    // Seed a separate running fixture so a new request can exercise the
+    // after-next-checkpoint current-boundary selection.
+    {
+        pqxx::work boundaryFixture{connection};
+        boundaryFixture.exec(
+            "INSERT INTO experiment ("
+            "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+            "target_epochs,infer_start,infer_end,worker_pid,"
+            "worker_process_group_id,worker_executable,worker_command_line,"
+            "worker_process_start_identity,current_operation) VALUES "
+            "(700041,'running','train',40,20,100,"
+            "'2020-02-02','2020-03-01',970041,970041,"
+            "'/tmp/LSTM_Release',"
+            "'/tmp/LSTM_Release --train --scheduler-experiment-id=700041',"
+            "'1700000041:41','train');");
+        boundaryFixture.exec(
+            "INSERT INTO model(experiment_id,comment) VALUES "
+            "(700041,'periodic training checkpoint');");
+        boundaryFixture.exec(
+            "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+            "SELECT model_id,'train_config_meta',0,10,40 "
+            "FROM model WHERE experiment_id=700041;");
+        boundaryFixture.exec(
+            "UPDATE experiment e SET last_model_id=m.model_id "
+            "FROM model m WHERE m.experiment_id=e.experiment_id "
+            "AND e.experiment_id=700041;");
+        boundaryFixture.commit();
+    }
+    processes.signals.clear();
+    Command boundary = ReplayCommand(
+        Action::CancelAll,
+        "crash-window-exact-inference-current-boundary",
+        CancellationMode::AfterNextCheckpoint);
+    boundary.inferBeforeCancel = true;
+    CHECK(Replay(
+              connectionString, boundary, processes, output) == 0);
+    CHECK(processes.signals.empty());
+    const long long boundaryRequestId = std::stoll(Scalar(
+        connection,
+        "SELECT request_id::text FROM experiment_admin_request "
+        "WHERE invocation_identity="
+        "'crash-window-exact-inference-current-boundary'"));
+    CHECK(Scalar(
+              connection,
+              "SELECT o.cancellation_checkpoint_epoch::text||':'||"
+              "o.cancellation_checkpoint_model_id::text||':'||"
+              "ce.checkpoint_epoch::text||':'||ce.checkpoint_model_id::text||':'||"
+              "o.inference_action||':'||o.outcome_status "
+              "FROM experiment_admin_worker_outcome o "
+              "JOIN experiment_checkpoint_eval ce "
+              "ON ce.cancellation_request_id=o.request_id "
+              "AND COALESCE(ce.parent_experiment_id,ce.experiment_id)="
+              "o.experiment_id "
+              "AND ce.checkpoint_epoch=o.cancellation_checkpoint_epoch "
+              "AND ce.checkpoint_model_id=o.cancellation_checkpoint_model_id "
+              "WHERE o.request_id=" + std::to_string(boundaryRequestId)) ==
+          "40:" +
+              Scalar(connection,
+                     "SELECT last_model_id::text FROM experiment "
+                     "WHERE experiment_id=700041") +
+              ":40:" +
+              Scalar(connection,
+                     "SELECT last_model_id::text FROM experiment "
+                     "WHERE experiment_id=700041") +
+              ":queued:awaiting_inference");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id=700041") == "1");
+    {
+        pqxx::work update{connection};
+        update.exec_params(
+            "UPDATE experiment_checkpoint_eval SET status='failed',"
+            "phase='done',completed_at=now(),updated_at=now(),"
+            "error_message='current_boundary_inference_failed' "
+            "WHERE cancellation_request_id=$1;",
+            boundaryRequestId);
+        update.commit();
+    }
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work reconcile{restarted};
+        AcquireCoordinationLock(reconcile);
+        ReconcileActiveCancellation(reconcile);
+        reconcile.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT inference_action||':'||outcome_status||':'||detail "
+              "FROM experiment_admin_worker_outcome WHERE request_id=" +
+                  std::to_string(boundaryRequestId)) ==
+          "failed:partial:current_boundary_inference_failed");
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||target_count::text||':'||"
+              "missing_count::text||':'||failed_count::text||':'||"
+              "(result_summary->>'pending_count') "
+              "FROM experiment_admin_request WHERE request_id=" +
+                  std::to_string(boundaryRequestId)) ==
+          "partial:1:1:1:0");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id IS NULL "
+              "FROM experiment_global_control WHERE singleton") == "t");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id=700041") == "1");
+
+    ResetCrashFixtures(connection);
+}
+
+void TestTerminalInferenceReconciliation(
+    const std::string& connectionString,
+    pqxx::connection& connection)
+{
+    pqxx::work fixture{connection};
+    const long long requestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,status,previous_global_state,"
+        "resulting_global_state,target_count,rejected_count,result_summary) "
+        "VALUES ('cancel_all','after_next_checkpoint',true,"
+        "'crash-window-terminal-inference-matrix','crash-fixture-requester',"
+        "'pending','running','running',6,6,"
+        "'{\"target_count\":6,\"rejected_count\":6,"
+        "\"pending_count\":6}'::jsonb) RETURNING request_id;")
+                                    [0][0]
+                                        .as<long long>();
+    fixture.exec_params(
+        "INSERT INTO experiment ("
+        "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+        "target_epochs,infer_start,infer_end,completed_at,updated_at,"
+        "current_operation,cancellation_request_id,"
+        "cancel_after_checkpoint_epoch,stop_after_checkpoint_epoch,"
+        "stopped_at_checkpoint_epoch) "
+        "SELECT experiment_id,'completed','done',80,20,100,"
+        "CASE WHEN experiment_id=700055 THEN NULL ELSE '2020-02-02'::date END,"
+        "CASE WHEN experiment_id=700055 THEN NULL ELSE '2020-03-01'::date END,"
+        "now()-interval '1 hour',now()-interval '1 hour','analysis',"
+        "$1,80,80,80 FROM generate_series(700050,700055) AS experiment_id;",
+        requestId);
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) "
+        "SELECT experiment_id,'periodic training checkpoint' "
+        "FROM generate_series(700050,700055) AS experiment_id;");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,80 FROM model "
+        "WHERE experiment_id BETWEEN 700050 AND 700055;");
+    fixture.exec(
+        "UPDATE experiment e SET stopped_at_checkpoint_model_id=m.model_id,"
+        "last_model_id=m.model_id FROM model m "
+        "WHERE m.experiment_id=e.experiment_id "
+        "AND e.experiment_id BETWEEN 700050 AND 700055;");
+    fixture.exec(
+        "INSERT INTO experiment_checkpoint_eval ("
+        "experiment_id,parent_experiment_id,checkpoint_epoch,"
+        "checkpoint_model_id,status,phase,worker_pid,started_at,"
+        "completed_at,error_message) "
+        "SELECT e.experiment_id,e.experiment_id,80,"
+        "e.stopped_at_checkpoint_model_id,"
+        "CASE e.experiment_id WHEN 700050 THEN 'completed' "
+        "WHEN 700051 THEN 'failed' WHEN 700052 THEN 'pending' "
+        "ELSE 'running' END,"
+        "CASE WHEN e.experiment_id IN (700050,700051) THEN 'done' "
+        "ELSE 'infer' END,"
+        "CASE WHEN e.experiment_id=700053 THEN 970053 ELSE NULL END,"
+        "CASE WHEN e.experiment_id=700053 "
+        "THEN now()-interval '40 minutes' ELSE NULL END,"
+        "CASE WHEN e.experiment_id IN (700050,700051) "
+        "THEN now()-interval '30 minutes' ELSE NULL END,"
+        "CASE WHEN e.experiment_id=700051 "
+        "THEN 'existing_exact_inference_failed' ELSE NULL END "
+        "FROM experiment e WHERE e.experiment_id BETWEEN 700050 AND 700053;");
+    fixture.exec_params(
+        "INSERT INTO experiment_admin_worker_outcome ("
+        "request_id,worker_identity,experiment_id,worker_kind,phase,"
+        "lifecycle_status,identity_result,signal_result,"
+        "cancellation_checkpoint_epoch,inference_action,outcome_status,detail) "
+        "SELECT $1,'experiment:'||experiment_id::text,experiment_id,"
+        "'experiment','train','running','identity_validation_failed',"
+        "'identity_validation_failed',80,'none','pending_checkpoint',"
+        "'missing_worker_requeued_from_durable_checkpoint' "
+        "FROM generate_series(700050,700055) AS experiment_id;",
+        requestId);
+    fixture.exec_params(
+        "UPDATE experiment_global_control SET desired_state='running',"
+        "active_request_id=$1,revision=revision+1,updated_at=now() "
+        "WHERE singleton;",
+        requestId);
+    fixture.commit();
+
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work reconcile{restarted};
+        AcquireCoordinationLock(reconcile);
+        ReconcileActiveCancellation(reconcile);
+        reconcile.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT string_agg(experiment_id::text||':'||inference_action||"
+              "':'||outcome_status||':'||"
+              "(cancellation_checkpoint_epoch=80)::text||':'||"
+              "(cancellation_checkpoint_model_id IS NOT NULL)::text,',' "
+              "ORDER BY experiment_id) "
+              "FROM experiment_admin_worker_outcome WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "700050:completed:completed:true:true,"
+          "700051:failed:partial:true:true,"
+          "700052:queued:awaiting_inference:true:true,"
+          "700053:running:awaiting_inference:true:true,"
+          "700054:queued:awaiting_inference:true:true,"
+          "700055:no_checkpoint:partial:true:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text||':'||"
+              "count(*) FILTER (WHERE cancellation_request_id=" +
+                  std::to_string(requestId) +
+                  ")::text FROM experiment_checkpoint_eval "
+                  "WHERE parent_experiment_id BETWEEN 700050 AND 700055") ==
+          "5:5");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM "
+              "experiment_admin_worker_outcome o "
+              "LEFT JOIN experiment_checkpoint_eval ce "
+              "ON ce.cancellation_request_id=o.request_id "
+              "AND COALESCE(ce.parent_experiment_id,ce.experiment_id)="
+              "o.experiment_id "
+              "AND ce.checkpoint_epoch=o.cancellation_checkpoint_epoch "
+              "AND ce.checkpoint_model_id=o.cancellation_checkpoint_model_id "
+              "WHERE o.request_id=" + std::to_string(requestId) +
+                  " AND o.inference_action='queued' "
+                  "AND ce.checkpoint_eval_id IS NULL") == "0");
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||failed_count::text||':'||"
+              "(result_summary->>'pending_count') "
+              "FROM experiment_admin_request WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "pending:2:3");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id::text FROM experiment_global_control "
+              "WHERE singleton") == std::to_string(requestId));
+
+    {
+        pqxx::work update{connection};
+        update.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "status=CASE WHEN parent_experiment_id=700053 "
+            "THEN 'failed' ELSE 'completed' END,phase='done',"
+            "worker_pid=NULL,completed_at=now(),updated_at=now(),"
+            "error_message=CASE WHEN parent_experiment_id=700053 "
+            "THEN 'running_exact_inference_failed' ELSE NULL END "
+            "WHERE cancellation_request_id=$1 "
+            "AND parent_experiment_id IN (700052,700053,700054);",
+            requestId);
+        update.commit();
+    }
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work reconcile{restarted};
+        AcquireCoordinationLock(reconcile);
+        ReconcileActiveCancellation(reconcile);
+        reconcile.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||target_count::text||':'||"
+              "successful_count::text||':'||rejected_count::text||':'||"
+              "failed_count::text||':'||(result_summary->>'pending_count')||':'||"
+              "(completed_at IS NOT NULL)::text "
+              "FROM experiment_admin_request WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "partial:6:0:6:3:0:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id IS NULL FROM "
+              "experiment_global_control WHERE singleton") == "t");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id BETWEEN 700050 AND 700055") == "5");
+    const std::string terminalState = Scalar(
+        connection,
+        "SELECT r.completed_at::text||':'||"
+        "string_agg(o.updated_at::text,',' ORDER BY o.experiment_id) "
+        "FROM experiment_admin_request r "
+        "JOIN experiment_admin_worker_outcome o USING(request_id) "
+        "WHERE r.request_id=" + std::to_string(requestId) +
+            " GROUP BY r.completed_at;");
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work replay{restarted};
+        AcquireCoordinationLock(replay);
+        ReconcileActiveCancellation(replay);
+        replay.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT r.completed_at::text||':'||"
+              "string_agg(o.updated_at::text,',' ORDER BY o.experiment_id) "
+              "FROM experiment_admin_request r "
+              "JOIN experiment_admin_worker_outcome o USING(request_id) "
+              "WHERE r.request_id=" + std::to_string(requestId) +
+                  " GROUP BY r.completed_at;") ==
+          terminalState);
+
+    ResetCrashFixtures(connection);
+}
+
+void TestLegacyInferenceUpgradeMatrix(
+    const std::string& connectionString,
+    pqxx::connection& connection)
+{
+    pqxx::work fixture{connection};
+    const long long requestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,status,previous_global_state,"
+        "resulting_global_state,target_count,result_summary) VALUES ("
+        "'cancel_all','after_next_checkpoint',true,"
+        "'crash-window-legacy-upgrade-matrix','crash-fixture-requester',"
+        "'pending','running','running',16,"
+        "'{\"target_count\":16,\"pending_count\":15,\"failed_count\":1}'::jsonb) "
+        "RETURNING request_id;")[0][0].as<long long>();
+    const long long foreignRequestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,status,previous_global_state,"
+        "resulting_global_state) VALUES ("
+        "'cancel_all','immediate',true,"
+        "'crash-window-legacy-foreign-owner','crash-fixture-requester',"
+        "'completed','running','running') RETURNING request_id;")
+                                           [0][0]
+                                               .as<long long>();
+    fixture.exec_params(
+        "INSERT INTO experiment ("
+        "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+        "target_epochs,infer_start,infer_end,completed_at,"
+        "cancellation_completed_at,current_operation,cancellation_request_id,"
+        "cancel_after_checkpoint_epoch,stop_after_checkpoint_epoch,"
+        "stopped_at_checkpoint_epoch) "
+        "SELECT experiment_id,'cancelled','train',80,20,100,"
+        "'2020-02-02'::date,'2020-03-01'::date,now(),now(),"
+        "'cancel_checkpoint_reached',$1,80,80,80 "
+        "FROM generate_series(700060,700074) AS experiment_id;",
+        requestId);
+    fixture.exec(
+        "INSERT INTO experiment (experiment_id,status,phase,current_epoch,"
+        "current_operation) VALUES "
+        "(700075,'completed','done',80,'support'),"
+        "(700076,'completed','done',80,'foreign_model_support');");
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) "
+        "SELECT experiment_id,'periodic training checkpoint' "
+        "FROM generate_series(700060,700076) AS experiment_id;");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,80 FROM model "
+        "WHERE experiment_id BETWEEN 700060 AND 700076;");
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) VALUES "
+        "(700065,'periodic training checkpoint epoch 60'),"
+        "(700067,'conflicting periodic training checkpoint');");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,"
+        "CASE WHEN experiment_id=700065 THEN 60 ELSE 80 END "
+        "FROM model WHERE experiment_id IN (700065,700067) "
+        "AND comment NOT LIKE 'periodic training checkpoint';");
+    fixture.exec(
+        "UPDATE experiment e SET stopped_at_checkpoint_model_id=m.model_id,"
+        "last_model_id=m.model_id FROM model m "
+        "WHERE m.experiment_id=e.experiment_id "
+        "AND m.comment='periodic training checkpoint' "
+        "AND e.experiment_id BETWEEN 700060 AND 700074;");
+    fixture.exec(
+        "UPDATE experiment SET stopped_at_checkpoint_model_id=NULL,"
+        "last_model_id=NULL WHERE experiment_id=700068;");
+    fixture.exec(
+        "UPDATE experiment SET stopped_at_checkpoint_model_id=("
+        "SELECT model_id FROM model WHERE experiment_id=700076),"
+        "last_model_id=(SELECT model_id FROM model "
+        "WHERE experiment_id=700076) WHERE experiment_id=700069;");
+
+    fixture.exec_params(
+        "INSERT INTO experiment_checkpoint_eval ("
+        "experiment_id,parent_experiment_id,checkpoint_epoch,"
+        "checkpoint_model_id,status,phase,started_at,completed_at,worker_pid,"
+        "error_message,cancellation_request_id) "
+        "SELECT e.experiment_id,e.experiment_id,80,"
+        "e.stopped_at_checkpoint_model_id,"
+        "CASE e.experiment_id "
+        "WHEN 700060 THEN 'completed' WHEN 700061 THEN 'failed' "
+        "WHEN 700062 THEN 'pending' WHEN 700063 THEN 'running' "
+        "WHEN 700066 THEN 'pending' WHEN 700070 THEN 'completed' "
+        "WHEN 700071 THEN 'completed' WHEN 700072 THEN 'failed' "
+        "WHEN 700073 THEN 'completed' ELSE 'failed' END,"
+        "CASE e.experiment_id "
+        "WHEN 700061 THEN 'infer' WHEN 700062 THEN 'infer' "
+        "WHEN 700063 THEN 'infer' WHEN 700066 THEN 'infer' "
+        "WHEN 700070 THEN 'infer' WHEN 700072 THEN 'analyze' "
+        "WHEN 700074 THEN 'infer' ELSE 'done' END,"
+        "CASE WHEN e.experiment_id=700063 THEN now()-interval '5 minutes' "
+        "ELSE NULL END,"
+        "CASE WHEN e.experiment_id IN "
+        "(700060,700061,700070,700072,700073,700074) "
+        "THEN now()-interval '1 minute' ELSE NULL END,"
+        "CASE WHEN e.experiment_id=700063 THEN 970063 ELSE NULL END,"
+        "CASE WHEN e.experiment_id IN (700061,700074) "
+        "THEN 'legacy_exact_failure' ELSE NULL END,"
+        "CASE WHEN e.experiment_id=700066 THEN $2::bigint "
+        "ELSE $1::bigint END "
+        "FROM experiment e WHERE e.experiment_id IN "
+        "(700060,700061,700062,700063,700066,700070,700071,"
+        "700072,700073,700074);",
+        requestId,
+        foreignRequestId);
+    fixture.exec_params(
+        "INSERT INTO experiment_checkpoint_eval ("
+        "experiment_id,parent_experiment_id,checkpoint_epoch,"
+        "checkpoint_model_id,status,phase,cancellation_request_id) "
+        "SELECT 700065,700065,round(tm.value)::int,m.model_id,"
+        "'pending','infer',$1 FROM model m JOIN matrix tm USING(model_id) "
+        "WHERE m.experiment_id=700065;",
+        requestId);
+
+    fixture.exec_params(
+        "INSERT INTO experiment_admin_worker_outcome ("
+        "request_id,worker_identity,experiment_id,worker_kind,phase,"
+        "lifecycle_status,identity_result,signal_result,"
+        "cancellation_checkpoint_epoch,cancellation_checkpoint_model_id,"
+        "inference_action,outcome_status,detail) "
+        "SELECT $1,'experiment:'||experiment_id::text,experiment_id,"
+        "'experiment','train','running','process_missing','process_missing',"
+        "CASE WHEN experiment_id IN (700067,700068,700069) THEN 80 "
+        "WHEN experiment_id=700073 THEN 80 ELSE NULL END,"
+        "CASE WHEN experiment_id=700067 THEN ("
+        " SELECT model_id FROM model WHERE experiment_id=700067 "
+        " AND comment='conflicting periodic training checkpoint') "
+        "WHEN experiment_id=700074 THEN ("
+        " SELECT model_id FROM model WHERE experiment_id=700074) "
+        "ELSE NULL END,"
+        "CASE WHEN experiment_id IN (700067,700068,700069) "
+        "THEN 'none' ELSE 'queued' END,"
+        "CASE WHEN experiment_id IN (700067,700068,700069) "
+        "THEN 'pending_checkpoint' ELSE 'awaiting_inference' END,"
+        "'pre_correction_legacy_row_shape' "
+        "FROM generate_series(700060,700074) AS experiment_id;",
+        requestId);
+    fixture.exec_params(
+        "INSERT INTO experiment_admin_worker_outcome ("
+        "request_id,worker_identity,experiment_id,worker_kind,phase,"
+        "lifecycle_status,identity_result,signal_result,inference_action,"
+        "outcome_status,detail) VALUES ("
+        "$1,'experiment:700075',700075,'experiment','train','running',"
+        "'inspection_failed','signaling_failure','failed','failed',"
+        "'pre_correction_terminal_failure');",
+        requestId);
+    fixture.exec_params(
+        "UPDATE experiment_global_control SET desired_state='running',"
+        "active_request_id=$1,revision=revision+1,updated_at=now() "
+        "WHERE singleton;",
+        requestId);
+    fixture.commit();
+
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work reconcile{restarted};
+        AcquireCoordinationLock(reconcile);
+        ReconcileActiveCancellation(reconcile);
+        reconcile.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT string_agg(experiment_id::text||':'||"
+              "outcome_status||':'||inference_action,',' "
+              "ORDER BY experiment_id) "
+              "FROM experiment_admin_worker_outcome WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "700060:completed:completed,"
+          "700061:partial:failed,"
+          "700062:awaiting_inference:queued,"
+          "700063:awaiting_inference:running,"
+          "700064:awaiting_inference:queued,"
+          "700065:partial:failed,"
+          "700066:partial:failed,"
+          "700067:partial:failed,"
+          "700068:partial:failed,"
+          "700069:partial:failed,"
+          "700070:partial:failed,"
+          "700071:partial:failed,"
+          "700072:partial:failed,"
+          "700073:completed:completed,"
+          "700074:partial:failed,"
+          "700075:failed:failed");
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||failed_count::text||':'||"
+              "(result_summary->>'pending_count')||':'||"
+              "(completed_at IS NULL)::text FROM experiment_admin_request "
+              "WHERE request_id=" + std::to_string(requestId)) ==
+          "pending:11:3:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT bool_and(cancellation_checkpoint_epoch=80 "
+              "AND cancellation_checkpoint_model_id IS NOT NULL)::text "
+              "FROM experiment_admin_worker_outcome WHERE request_id=" +
+                  std::to_string(requestId) +
+                  " AND experiment_id IN "
+                  "(700060,700061,700062,700063,700064,700073,700074)") ==
+          "true");
+    CHECK(Scalar(
+              connection,
+              "SELECT cancellation_request_id::text FROM "
+              "experiment_checkpoint_eval WHERE parent_experiment_id=700066") ==
+          std::to_string(foreignRequestId));
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id=700064 "
+              "AND cancellation_request_id=" + std::to_string(requestId)) ==
+          "1");
+
+    {
+        pqxx::work finish{connection};
+        finish.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "status=CASE WHEN parent_experiment_id=700063 "
+            "THEN 'failed' ELSE 'completed' END,"
+            "phase=CASE WHEN parent_experiment_id=700063 "
+            "THEN 'infer' ELSE 'done' END,worker_pid=NULL,"
+            "completed_at=now(),error_message=CASE "
+            "WHEN parent_experiment_id=700063 "
+            "THEN 'legacy_running_failure' ELSE NULL END,updated_at=now() "
+            "WHERE cancellation_request_id=$1 "
+            "AND parent_experiment_id IN (700062,700063,700064);",
+            requestId);
+        finish.commit();
+    }
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work reconcile{restarted};
+        AcquireCoordinationLock(reconcile);
+        ReconcileActiveCancellation(reconcile);
+        reconcile.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||failed_count::text||':'||"
+              "(result_summary->>'pending_count')||':'||"
+              "(completed_at IS NOT NULL)::text FROM experiment_admin_request "
+              "WHERE request_id=" + std::to_string(requestId)) ==
+          "partial:12:0:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id IS NULL FROM "
+              "experiment_global_control WHERE singleton") == "t");
+
+    const std::string terminalAudit = Scalar(
+        connection,
+        "SELECT r.completed_at::text||':'||"
+        "string_agg(o.updated_at::text,',' ORDER BY o.experiment_id)||':'||"
+        "(SELECT count(*)::text FROM experiment_checkpoint_eval ce "
+        "WHERE ce.parent_experiment_id BETWEEN 700060 AND 700074)||':'||"
+        "(SELECT revision::text FROM experiment_global_control "
+        "WHERE singleton) "
+        "FROM experiment_admin_request r "
+        "JOIN experiment_admin_worker_outcome o USING(request_id) "
+        "WHERE r.request_id=" + std::to_string(requestId) +
+            " GROUP BY r.completed_at;");
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        pqxx::connection restarted{connectionString};
+        pqxx::work replay{restarted};
+        AcquireCoordinationLock(replay);
+        ReconcileActiveCancellation(replay);
+        replay.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT r.completed_at::text||':'||"
+              "string_agg(o.updated_at::text,',' ORDER BY o.experiment_id)||':'||"
+              "(SELECT count(*)::text FROM experiment_checkpoint_eval ce "
+              "WHERE ce.parent_experiment_id BETWEEN 700060 AND 700074)||':'||"
+              "(SELECT revision::text FROM experiment_global_control "
+              "WHERE singleton) "
+              "FROM experiment_admin_request r "
+              "JOIN experiment_admin_worker_outcome o USING(request_id) "
+              "WHERE r.request_id=" + std::to_string(requestId) +
+                  " GROUP BY r.completed_at;") ==
+          terminalAudit);
+
+    RecordingNativeProcesses processes;
+    std::string output;
+    CHECK(Replay(
+              connectionString,
+              ReplayCommand(
+                  Action::ResumeAll,
+                  "crash-window-command-after-legacy-repair"),
+              processes,
+              output) == 0);
+    CHECK(Scalar(
+              connection,
+              "SELECT status FROM experiment_admin_request "
+              "WHERE invocation_identity="
+              "'crash-window-command-after-legacy-repair'") == "completed");
+    ResetCrashFixtures(connection);
+}
+
+void TestProductionCheckpointStopOwnership(
+    const std::string& connectionString,
+    pqxx::connection& connection)
+{
+    pqxx::work fixture{connection};
+    const long long requestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,status,previous_global_state,"
+        "resulting_global_state,target_count,result_summary) VALUES ("
+        "'cancel_all','after_next_checkpoint',true,"
+        "'crash-window-production-checkpoint-stop',"
+        "'crash-fixture-requester','pending','running','running',4,"
+        "'{\"target_count\":4,\"pending_count\":4}'::jsonb) "
+        "RETURNING request_id;")[0][0].as<long long>();
+    const long long foreignRequestId = fixture.exec(
+        "INSERT INTO experiment_admin_request ("
+        "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+        "requester_identity,status,previous_global_state,"
+        "resulting_global_state) VALUES ("
+        "'cancel_all','immediate',true,"
+        "'crash-window-production-foreign-owner',"
+        "'crash-fixture-requester','completed','running','running') "
+        "RETURNING request_id;")[0][0].as<long long>();
+    fixture.exec_params(
+        "INSERT INTO experiment ("
+        "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+        "target_epochs,infer_start,infer_end,worker_pid,"
+        "cancellation_request_id,cancel_infer_before,"
+        "cancel_after_checkpoint_epoch,"
+        "stop_after_checkpoint_epoch,current_operation) "
+        "SELECT experiment_id,'running','train',79,20,100,"
+        "'2020-02-02'::date,'2020-03-01'::date,"
+        "970000+experiment_id::int,$1,true,80,80,'training' "
+        "FROM generate_series(700080,700083) AS experiment_id;",
+        requestId);
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) "
+        "SELECT experiment_id,'periodic training checkpoint' "
+        "FROM generate_series(700080,700083) AS experiment_id;");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,80 FROM model "
+        "WHERE experiment_id BETWEEN 700080 AND 700083;");
+    fixture.exec(
+        "INSERT INTO model(experiment_id,comment) VALUES "
+        "(700083,'persisted conflicting checkpoint');");
+    fixture.exec(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT model_id,'train_config_meta',0,10,80 FROM model "
+        "WHERE experiment_id=700083 "
+        "AND comment='persisted conflicting checkpoint';");
+    fixture.exec_params(
+        "INSERT INTO experiment_admin_worker_outcome ("
+        "request_id,worker_identity,experiment_id,worker_kind,phase,"
+        "lifecycle_status,cancellation_checkpoint_epoch,"
+        "cancellation_checkpoint_model_id,inference_action,"
+        "outcome_status,detail) "
+        "SELECT $1,'experiment:'||experiment_id::text,experiment_id,"
+        "'experiment','train','running',80,"
+        "CASE WHEN experiment_id=700083 THEN ("
+        " SELECT model_id FROM model WHERE experiment_id=700083 "
+        " AND comment='persisted conflicting checkpoint') ELSE NULL END,"
+        "'none','pending_checkpoint','production_checkpoint_pending' "
+        "FROM generate_series(700080,700083) AS experiment_id;",
+        requestId);
+    fixture.exec_params(
+        "INSERT INTO experiment_checkpoint_eval ("
+        "experiment_id,parent_experiment_id,checkpoint_epoch,"
+        "checkpoint_model_id,status,phase,cancellation_request_id) "
+        "SELECT e.experiment_id,e.experiment_id,80,m.model_id,"
+        "'pending','infer',CASE WHEN e.experiment_id=700080 "
+        "THEN NULL::bigint WHEN e.experiment_id=700081 THEN $1::bigint "
+        "ELSE $2::bigint END "
+        "FROM experiment e JOIN model m "
+        "ON m.experiment_id=e.experiment_id "
+        "AND m.comment='periodic training checkpoint' "
+        "WHERE e.experiment_id IN (700080,700081,700082);",
+        requestId,
+        foreignRequestId);
+    fixture.exec_params(
+        "UPDATE experiment_global_control SET active_request_id=$1,"
+        "revision=revision+1,updated_at=now() WHERE singleton;",
+        requestId);
+    fixture.commit();
+
+    for (long long experimentId = 700080;
+         experimentId <= 700083;
+         ++experimentId)
+    {
+        pqxx::work record{connection};
+        AcquireCoordinationLock(record);
+        const long long modelId = record.exec_params(
+            "SELECT model_id FROM model WHERE experiment_id=$1 "
+            "AND comment='periodic training checkpoint';",
+            experimentId)[0][0].as<long long>();
+        const CheckpointStopRecordResult result =
+            RecordCheckpointStopReached(
+                record, experimentId, 80, modelId);
+        CHECK(result.recorded);
+        record.commit();
+    }
+    const std::string productionOutcomes = Scalar(
+        connection,
+        "SELECT string_agg(experiment_id::text||':'||outcome_status||"
+        "':'||inference_action,',' ORDER BY experiment_id) "
+        "FROM experiment_admin_worker_outcome WHERE request_id=" +
+            std::to_string(requestId));
+    if (productionOutcomes !=
+          "700080:awaiting_inference:queued,"
+          "700081:awaiting_inference:queued,"
+          "700082:partial:failed,"
+          "700083:partial:failed")
+        std::cerr << "production_checkpoint_outcomes="
+                  << productionOutcomes << '\n';
+    CHECK(productionOutcomes ==
+          "700080:awaiting_inference:queued,"
+          "700081:awaiting_inference:queued,"
+          "700082:partial:failed,"
+          "700083:partial:failed");
+    CHECK(Scalar(
+              connection,
+              "SELECT string_agg(parent_experiment_id::text||':'||"
+              "cancellation_request_id::text,',' "
+              "ORDER BY parent_experiment_id) "
+              "FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id BETWEEN 700080 AND 700082") ==
+          "700080:" + std::to_string(requestId) + ",700081:" +
+              std::to_string(requestId) + ",700082:" +
+              std::to_string(foreignRequestId));
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_checkpoint_eval "
+              "WHERE parent_experiment_id=700083") == "0");
+
+    const std::string replayAudit = Scalar(
+        connection,
+        "SELECT o.updated_at::text||':'||ce.updated_at::text||':'||"
+        "ce.cancellation_request_id::text FROM "
+        "experiment_admin_worker_outcome o "
+        "JOIN experiment_checkpoint_eval ce "
+        "ON ce.parent_experiment_id=o.experiment_id "
+        "WHERE o.request_id=" + std::to_string(requestId) +
+            " AND o.experiment_id=700081;");
+    {
+        pqxx::work replay{connection};
+        AcquireCoordinationLock(replay);
+        const long long modelId = replay.exec(
+            "SELECT model_id FROM model WHERE experiment_id=700081 "
+            "AND comment='periodic training checkpoint';")[0][0].as<long long>();
+        const CheckpointStopRecordResult result =
+            RecordCheckpointStopReached(replay, 700081, 80, modelId);
+        CHECK(result.recorded);
+        replay.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT o.updated_at::text||':'||ce.updated_at::text||':'||"
+              "ce.cancellation_request_id::text FROM "
+              "experiment_admin_worker_outcome o "
+              "JOIN experiment_checkpoint_eval ce "
+              "ON ce.parent_experiment_id=o.experiment_id "
+              "WHERE o.request_id=" + std::to_string(requestId) +
+                  " AND o.experiment_id=700081;") ==
+          replayAudit);
+
+    {
+        pqxx::work finish{connection};
+        finish.exec_params(
+            "UPDATE experiment_checkpoint_eval SET status='completed',"
+            "phase='done',completed_at=now(),updated_at=now() "
+            "WHERE cancellation_request_id=$1 "
+            "AND parent_experiment_id IN (700080,700081);",
+            requestId);
+        AcquireCoordinationLock(finish);
+        ReconcileActiveCancellation(finish);
+        finish.commit();
+    }
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||failed_count::text||':'||"
+              "(result_summary->>'pending_count') FROM "
+              "experiment_admin_request WHERE request_id=" +
+                  std::to_string(requestId)) ==
+          "partial:2:0");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id IS NULL FROM "
+              "experiment_global_control WHERE singleton") == "t");
+    ResetCrashFixtures(connection);
+}
+
 int RunDatabaseCrashWindowTests(const std::string& selfPath,
                                 const std::string& connectionString)
 {
@@ -1673,6 +2944,14 @@ int RunDatabaseCrashWindowTests(const std::string& selfPath,
     TestPlanCommittedBeforeSignal(selfPath, connectionString, connection);
     TestAfterSignalBeforeAccounting(selfPath, connectionString, connection);
     TestAccountedBeforeReconciliation(connectionString, connection);
+    TestTerminalCompletedCheckpointReconciliation(
+        connectionString, connection);
+    TestUnresolvedCheckpointRemainsActive(connectionString, connection);
+    TestImmediateAndCurrentBoundaryInferenceIdentity(
+        connectionString, connection);
+    TestTerminalInferenceReconciliation(connectionString, connection);
+    TestLegacyInferenceUpgradeMatrix(connectionString, connection);
+    TestProductionCheckpointStopOwnership(connectionString, connection);
     std::cout << "GlobalExperimentControlCrashWindowTests passed\n";
     return 0;
 }

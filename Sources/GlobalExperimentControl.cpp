@@ -293,6 +293,7 @@ struct DbTarget
     std::optional<long long> latestCheckpointModelId;
     bool hasInferenceRange = false;
     std::optional<int> cancellationCheckpoint;
+    std::optional<long long> cancellationCheckpointModelId;
     bool signalImmediately = false;
     bool resumeBeforeAction = false;
     bool inferenceQueued = false;
@@ -301,6 +302,7 @@ struct DbTarget
     bool inferenceFailed = false;
     bool inferenceRequested = false;
     bool latestCheckpointAmbiguous = false;
+    std::string inferenceFailureDetail;
     std::string plan;
 };
 
@@ -373,7 +375,8 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         "SELECT COALESCE(ce.parent_experiment_id,ce.experiment_id),"
         "ce.worker_pid,ce.worker_process_group_id,ce.worker_executable,"
         "ce.worker_command_line,ce.worker_process_start_identity,"
-        "ce.worker_control_state,ce.checkpoint_eval_id "
+        "ce.worker_control_state,ce.checkpoint_eval_id,"
+        "ce.checkpoint_epoch,ce.checkpoint_model_id "
         "FROM experiment_checkpoint_eval ce "
         "WHERE ce.status='running' AND ce.phase='infer' "
         "ORDER BY ce.checkpoint_eval_id;");
@@ -397,6 +400,10 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
             !row[6].is_null() && row[6].as<std::string>() == "paused";
         target.checkpointEvalId = row[7].as<long long>();
         target.worker.checkpointEvalId = target.checkpointEvalId;
+        if (!row[8].is_null())
+            target.cancellationCheckpoint = row[8].as<int>();
+        if (!row[9].is_null())
+            target.cancellationCheckpointModelId = row[9].as<long long>();
         target.checkpointWorker = true;
         target.workerIdentity =
             "checkpoint_eval:" + std::to_string(*target.checkpointEvalId);
@@ -412,7 +419,7 @@ std::vector<DbTarget> LoadRetryTargets(pqxx::transaction_base& transaction,
     std::vector<DbTarget> targets = LoadTargets(transaction);
     pqxx::result outcomes = transaction.exec_params(
         "SELECT worker_identity,outcome_status,inference_action,"
-        "cancellation_checkpoint_epoch "
+        "cancellation_checkpoint_epoch,cancellation_checkpoint_model_id "
         "FROM experiment_admin_worker_outcome WHERE request_id=$1;",
         requestId);
 
@@ -432,6 +439,9 @@ std::vector<DbTarget> LoadRetryTargets(pqxx::transaction_base& transaction,
         const std::string outcomeStatus = (*outcome)[1].as<std::string>();
         if (!(*outcome)[3].is_null())
             target.cancellationCheckpoint = (*outcome)[3].as<int>();
+        if (!(*outcome)[4].is_null())
+            target.cancellationCheckpointModelId =
+                (*outcome)[4].as<long long>();
         if (outcomeStatus == "planned")
         {
             target.signalImmediately = action == Action::CancelAll;
@@ -472,14 +482,19 @@ void InsertOutcome(pqxx::transaction_base& transaction,
         "request_id,worker_identity,experiment_id,checkpoint_eval_id,"
         "worker_kind,phase,lifecycle_status,worker_pid,"
         "worker_process_group_id,worker_process_start_identity,"
-        "cancellation_checkpoint_epoch,"
+        "cancellation_checkpoint_epoch,cancellation_checkpoint_model_id,"
         "inference_action,outcome_status,detail) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) "
         "ON CONFLICT (request_id,worker_identity) DO UPDATE SET "
         "worker_pid=EXCLUDED.worker_pid,"
         "worker_process_group_id=EXCLUDED.worker_process_group_id,"
         "worker_process_start_identity=EXCLUDED.worker_process_start_identity,"
-        "cancellation_checkpoint_epoch=EXCLUDED.cancellation_checkpoint_epoch,"
+        "cancellation_checkpoint_epoch=COALESCE("
+        "experiment_admin_worker_outcome.cancellation_checkpoint_epoch,"
+        "EXCLUDED.cancellation_checkpoint_epoch),"
+        "cancellation_checkpoint_model_id=COALESCE("
+        "experiment_admin_worker_outcome.cancellation_checkpoint_model_id,"
+        "EXCLUDED.cancellation_checkpoint_model_id),"
         "inference_action=EXCLUDED.inference_action,"
         "outcome_status=EXCLUDED.outcome_status,"
         "detail=EXCLUDED.detail,updated_at=now();",
@@ -495,6 +510,7 @@ void InsertOutcome(pqxx::transaction_base& transaction,
         target.worker.processGroupId,
         target.worker.processStartIdentity,
         target.cancellationCheckpoint,
+        target.cancellationCheckpointModelId,
         inferenceAction,
         outcomeStatus,
         detail);
@@ -506,51 +522,138 @@ std::optional<long long> QueueCancellationInference(
     DbTarget& target)
 {
     if (!target.latestCheckpointEpoch || !target.latestCheckpointModelId ||
-        !target.hasInferenceRange || target.latestCheckpointAmbiguous)
+        target.latestCheckpointAmbiguous)
+    {
+        target.inferenceFailureDetail = target.latestCheckpointAmbiguous
+            ? "durable_checkpoint_identity_ambiguous"
+            : "no_valid_durable_checkpoint_for_inference";
         return std::nullopt;
+    }
 
-    pqxx::result existing = transaction.exec_params(
-        "SELECT checkpoint_eval_id,status,phase,cancellation_request_id "
-        "FROM experiment_checkpoint_eval "
-        "WHERE COALESCE(parent_experiment_id,experiment_id)=$1 "
-        "AND checkpoint_epoch=$2 AND checkpoint_model_id=$3 "
-        "ORDER BY checkpoint_eval_id LIMIT 1;",
+    target.cancellationCheckpoint = target.latestCheckpointEpoch;
+    target.cancellationCheckpointModelId = target.latestCheckpointModelId;
+
+    pqxx::result modelEvidence = transaction.exec_params(
+        "SELECT count(*) FILTER (WHERE m.experiment_id=$1)::int,"
+        "count(tm.*) FILTER (WHERE tm.param_name='train_config_meta' "
+        "AND tm.row_idx=0 AND tm.col_idx=10 "
+        "AND round(tm.value)::int=$2)::int "
+        "FROM model m LEFT JOIN matrix tm ON tm.model_id=m.model_id "
+        "WHERE m.model_id=$3 GROUP BY m.model_id;",
         target.worker.experimentId,
         *target.latestCheckpointEpoch,
         *target.latestCheckpointModelId);
-    if (!existing.empty())
+    if (modelEvidence.empty() || modelEvidence[0][0].as<int>() != 1)
     {
-        const std::string status = existing[0][1].as<std::string>();
-        const std::string phase = existing[0][2].as<std::string>();
+        target.inferenceFailureDetail =
+            "cancellation_checkpoint_model_foreign_or_missing";
+        return std::nullopt;
+    }
+    if (modelEvidence[0][1].as<int>() != 1)
+    {
+        target.inferenceFailureDetail =
+            "cancellation_checkpoint_epoch_metadata_invalid";
+        return std::nullopt;
+    }
+
+    pqxx::result existing = transaction.exec_params(
+        "SELECT checkpoint_eval_id,experiment_id,status,phase,"
+        "cancellation_request_id,started_at,completed_at,worker_pid,"
+        "error_message "
+        "FROM experiment_checkpoint_eval "
+        "WHERE parent_experiment_id=$1 "
+        "AND checkpoint_epoch=$2 AND checkpoint_model_id=$3 "
+        "ORDER BY checkpoint_eval_id;",
+        target.worker.experimentId,
+        *target.latestCheckpointEpoch,
+        *target.latestCheckpointModelId);
+    if (existing.size() > 1)
+    {
+        target.inferenceFailed = true;
+        target.inferenceFailureDetail =
+            "exact_checkpoint_evaluation_ambiguous";
+        return std::nullopt;
+    }
+    if (existing.size() == 1)
+    {
+        const std::string status = existing[0][2].as<std::string>();
+        const std::string phase = existing[0][3].as<std::string>();
         const bool belongsToOtherCancellation =
-            !existing[0][3].is_null() &&
-            existing[0][3].as<long long>() != requestId;
+            !existing[0][4].is_null() &&
+            existing[0][4].as<long long>() != requestId;
+        const bool crossExperiment =
+            existing[0][1].as<long long>() != target.worker.experimentId;
+        const bool workerPresent = !existing[0][7].is_null();
+        const bool started = !existing[0][5].is_null();
+        const bool completed = !existing[0][6].is_null();
+        std::string lifecycleFailure;
+        if (status == "completed" &&
+            (phase != "done" || !completed || workerPresent))
+            lifecycleFailure =
+                "exact_checkpoint_evaluation_completed_lifecycle_invalid";
+        else if (status == "failed" &&
+                 ((phase != "infer" && phase != "done") ||
+                  !completed || workerPresent))
+            lifecycleFailure =
+                "exact_checkpoint_evaluation_failed_lifecycle_invalid";
+        else if (status == "pending" &&
+                 (phase != "infer" || started || completed || workerPresent))
+            lifecycleFailure =
+                "exact_checkpoint_evaluation_pending_lifecycle_invalid";
+        else if (status == "running" &&
+                 (phase != "infer" || !started || completed ||
+                  !workerPresent))
+            lifecycleFailure =
+                "exact_checkpoint_evaluation_running_lifecycle_invalid";
+        else if (status != "completed" && status != "failed" &&
+                 status != "pending" && status != "running")
+            lifecycleFailure =
+                "exact_checkpoint_evaluation_status_invalid";
+        else if ((status == "pending" || status == "running") &&
+                 !target.hasInferenceRange)
+            lifecycleFailure = "cancellation_inference_range_missing";
+
+        if (crossExperiment)
+            target.inferenceFailureDetail =
+                "exact_checkpoint_evaluation_cross_experiment";
+        else if (belongsToOtherCancellation)
+            target.inferenceFailureDetail =
+                "exact_checkpoint_evaluation_owned_by_other_cancellation";
+        else if (!lifecycleFailure.empty())
+            target.inferenceFailureDetail = lifecycleFailure;
+        else if (status == "failed")
+            target.inferenceFailureDetail =
+                existing[0][8].is_null()
+                    ? "cancellation_checkpoint_inference_failed"
+                    : existing[0][8].as<std::string>();
         target.inferenceFailed =
-            status == "failed" || status == "skipped" ||
-            belongsToOtherCancellation ||
-            (status == "running" && phase != "infer");
+            crossExperiment || belongsToOtherCancellation ||
+            !lifecycleFailure.empty() || status == "failed";
         target.inferenceAlreadyCompleted =
-            !target.inferenceFailed &&
-            (status == "completed" || phase == "analyze" ||
-             phase == "done");
+            !target.inferenceFailed && status == "completed";
         target.inferenceAlreadyRunning =
-            status == "running" && phase == "infer";
-        if (belongsToOtherCancellation)
+            !target.inferenceFailed && status == "running";
+        if (crossExperiment || belongsToOtherCancellation ||
+            !lifecycleFailure.empty())
             return existing[0][0].as<long long>();
         transaction.exec_params(
-            "UPDATE experiment_checkpoint_eval "
-            "SET cancellation_request_id=$1,"
-            "status=CASE WHEN $3 THEN 'completed' ELSE status END,"
-            "phase=CASE WHEN $3 THEN 'done' ELSE phase END,"
-            "completed_at=CASE WHEN $3 THEN COALESCE(completed_at,now()) "
-            "ELSE completed_at END,"
-            "updated_at=now() WHERE checkpoint_eval_id=$2;",
+            "UPDATE experiment_checkpoint_eval SET cancellation_request_id=$1,"
+            "updated_at=now() WHERE checkpoint_eval_id=$2 "
+            "AND cancellation_request_id IS NULL;",
             requestId,
-            existing[0][0].as<long long>(),
-            target.inferenceAlreadyCompleted);
+            existing[0][0].as<long long>());
+        if (target.inferenceFailed)
+            return existing[0][0].as<long long>();
         target.inferenceQueued =
             !target.inferenceAlreadyCompleted && !target.inferenceFailed;
         return existing[0][0].as<long long>();
+    }
+
+    if (!target.hasInferenceRange)
+    {
+        target.inferenceFailureDetail =
+            "cancellation_inference_range_missing";
+        return std::nullopt;
     }
 
     pqxx::result inserted = transaction.exec_params(
@@ -565,7 +668,11 @@ std::optional<long long> QueueCancellationInference(
         requestId,
         target.worker.experimentId);
     if (inserted.empty())
+    {
+        target.inferenceFailureDetail =
+            "exact_checkpoint_evaluation_materialization_failed";
         return std::nullopt;
+    }
     target.inferenceQueued = true;
     return inserted[0][0].as<long long>();
 }
@@ -647,7 +754,8 @@ void UpdateRequestAccounting(pqxx::transaction_base& transaction,
         "status=CASE WHEN $2 OR totals.pending>0 THEN 'pending' "
         " WHEN totals.failed>0 OR totals.rejected>0 THEN 'partial' "
         " ELSE 'completed' END,"
-        "completed_at=CASE WHEN $2 OR totals.pending>0 THEN NULL ELSE now() END,"
+        "completed_at=CASE WHEN $2 OR totals.pending>0 THEN NULL "
+        "ELSE COALESCE(r.completed_at,now()) END,"
         "result_summary=jsonb_build_object("
         "'target_count',totals.target_count,'successful_count',totals.successful,"
         "'already_satisfied_count',totals.already,'missing_count',totals.missing,"
@@ -656,6 +764,384 @@ void UpdateRequestAccounting(pqxx::transaction_base& transaction,
         "FROM totals WHERE r.request_id=$1;",
         requestId,
         keepPending);
+}
+
+void TerminalizeCancellationOutcome(
+    pqxx::transaction_base& transaction,
+    long long requestId,
+    const std::string& workerIdentity,
+    const std::string& detail)
+{
+    transaction.exec_params(
+        "UPDATE experiment_admin_worker_outcome SET "
+        "outcome_status='partial',"
+        "inference_action=CASE "
+        "WHEN $1='cancellation_inference_range_missing' "
+        "THEN 'no_checkpoint' "
+        "WHEN outcome_status='awaiting_inference' "
+        "OR inference_action IN ('queued','running','already_completed') "
+        "OR EXISTS (SELECT 1 FROM experiment_admin_request r "
+        "WHERE r.request_id=$2 AND r.infer_before_cancel) "
+        "THEN 'failed' ELSE inference_action END,"
+        "detail=$1,updated_at=now() "
+        "WHERE request_id=$2 AND worker_identity=$3 "
+        "AND outcome_status IN "
+        "('planned','pending_checkpoint','awaiting_inference');",
+        detail,
+        requestId,
+        workerIdentity);
+}
+
+std::string CheckpointModelEvidenceFailure(
+    pqxx::transaction_base& transaction,
+    long long experimentId,
+    int checkpointEpoch,
+    long long checkpointModelId)
+{
+    pqxx::result evidence = transaction.exec_params(
+        "SELECT m.experiment_id,"
+        "count(tm.*) FILTER (WHERE tm.param_name='train_config_meta' "
+        "AND tm.row_idx=0 AND tm.col_idx=10 "
+        "AND round(tm.value)::int=$1)::int "
+        "FROM model m LEFT JOIN matrix tm ON tm.model_id=m.model_id "
+        "WHERE m.model_id=$2 GROUP BY m.experiment_id;",
+        checkpointEpoch,
+        checkpointModelId);
+    if (evidence.empty())
+        return "cancellation_checkpoint_model_missing";
+    if (evidence[0][0].as<long long>() != experimentId)
+        return "cancellation_checkpoint_model_cross_experiment";
+    if (evidence[0][1].as<int>() != 1)
+        return "cancellation_checkpoint_epoch_metadata_invalid";
+    return {};
+}
+
+struct CancellationExperimentEvidence
+{
+    std::string status;
+    std::string phase;
+    std::optional<int> currentEpoch;
+    bool completed = false;
+    bool cancellationCompleted = false;
+    std::optional<long long> cancellationRequestId;
+    std::optional<int> cancelAfterEpoch;
+    std::optional<int> stopAfterEpoch;
+    std::optional<int> stoppedEpoch;
+    std::optional<long long> stoppedModelId;
+    bool hasInferenceRange = false;
+};
+
+std::optional<CancellationExperimentEvidence>
+LoadCancellationExperimentEvidence(
+    pqxx::transaction_base& transaction,
+    long long experimentId)
+{
+    pqxx::result rows = transaction.exec_params(
+        "SELECT status,phase,current_epoch,completed_at,"
+        "cancellation_completed_at,cancellation_request_id,"
+        "cancel_after_checkpoint_epoch,stop_after_checkpoint_epoch,"
+        "stopped_at_checkpoint_epoch,stopped_at_checkpoint_model_id,"
+        "infer_start IS NOT NULL AND infer_end IS NOT NULL "
+        "FROM experiment WHERE experiment_id=$1;",
+        experimentId);
+    if (rows.empty())
+        return std::nullopt;
+    CancellationExperimentEvidence evidence;
+    evidence.status = rows[0][0].as<std::string>();
+    evidence.phase = rows[0][1].as<std::string>();
+    if (!rows[0][2].is_null())
+        evidence.currentEpoch = rows[0][2].as<int>();
+    evidence.completed = !rows[0][3].is_null();
+    evidence.cancellationCompleted = !rows[0][4].is_null();
+    if (!rows[0][5].is_null())
+        evidence.cancellationRequestId = rows[0][5].as<long long>();
+    if (!rows[0][6].is_null())
+        evidence.cancelAfterEpoch = rows[0][6].as<int>();
+    if (!rows[0][7].is_null())
+        evidence.stopAfterEpoch = rows[0][7].as<int>();
+    if (!rows[0][8].is_null())
+        evidence.stoppedEpoch = rows[0][8].as<int>();
+    if (!rows[0][9].is_null())
+        evidence.stoppedModelId = rows[0][9].as<long long>();
+    evidence.hasInferenceRange = rows[0][10].as<bool>();
+    return evidence;
+}
+
+bool IsTerminalExperiment(const CancellationExperimentEvidence& evidence)
+{
+    return evidence.status == "completed" ||
+           evidence.status == "cancelled" ||
+           evidence.status == "failed";
+}
+
+std::string TerminalExperimentLifecycleFailure(
+    const CancellationExperimentEvidence& evidence)
+{
+    if (evidence.status == "completed")
+        return evidence.phase == "done" && evidence.completed
+            ? std::string{}
+            : "terminal_experiment_completed_lifecycle_invalid";
+    if (evidence.status == "cancelled")
+        return evidence.phase == "train" && evidence.completed &&
+                       evidence.cancellationCompleted
+            ? std::string{}
+            : "terminal_experiment_cancelled_lifecycle_invalid";
+    if (evidence.status == "failed")
+        return evidence.phase == "done" && evidence.completed
+            ? "terminal_experiment_failed_before_cancellation_reconciliation"
+            : "terminal_experiment_failed_lifecycle_invalid";
+    return {};
+}
+
+std::optional<std::pair<int, long long>>
+RecoverIdentityFromOwnedEvaluation(
+    pqxx::transaction_base& transaction,
+    long long requestId,
+    long long experimentId,
+    const std::optional<int>& persistedEpoch,
+    const std::optional<long long>& persistedModelId,
+    std::string& failure)
+{
+    pqxx::result candidates = transaction.exec_params(
+        "SELECT ce.checkpoint_epoch,ce.checkpoint_model_id "
+        "FROM experiment_checkpoint_eval ce "
+        "JOIN model m ON m.model_id=ce.checkpoint_model_id "
+        "AND m.experiment_id=$1 "
+        "WHERE ce.cancellation_request_id=$2 "
+        "AND ce.parent_experiment_id=$1 AND ce.experiment_id=$1 "
+        "AND ($3::integer IS NULL OR ce.checkpoint_epoch=$3) "
+        "AND ($4::bigint IS NULL OR ce.checkpoint_model_id=$4) "
+        "AND (SELECT count(*) FROM matrix tm "
+        " WHERE tm.model_id=ce.checkpoint_model_id "
+        " AND tm.param_name='train_config_meta' "
+        " AND tm.row_idx=0 AND tm.col_idx=10 "
+        " AND round(tm.value)::int=ce.checkpoint_epoch)=1 "
+        "ORDER BY ce.checkpoint_eval_id;",
+        experimentId,
+        requestId,
+        persistedEpoch,
+        persistedModelId);
+    if (candidates.size() == 1)
+        return std::pair<int, long long>{
+            candidates[0][0].as<int>(),
+            candidates[0][1].as<long long>()};
+    if (candidates.size() > 1)
+    {
+        failure = "legacy_cancellation_inference_identity_ambiguous";
+        return std::nullopt;
+    }
+
+    pqxx::result related = transaction.exec_params(
+        "SELECT "
+        "count(*) FILTER (WHERE cancellation_request_id IS NOT NULL "
+        "AND cancellation_request_id<>$2)::int AS foreign_owned,"
+        "count(*) FILTER (WHERE cancellation_request_id IS NULL)::int "
+        "AS unowned,"
+        "count(*) FILTER (WHERE cancellation_request_id=$2 "
+        "AND experiment_id<>$1)::int AS cross_experiment,"
+        "count(*) FILTER (WHERE cancellation_request_id=$2)::int AS owned "
+        "FROM experiment_checkpoint_eval "
+        "WHERE parent_experiment_id=$1 "
+        "AND ($3::integer IS NULL OR checkpoint_epoch=$3) "
+        "AND ($4::bigint IS NULL OR checkpoint_model_id=$4);",
+        experimentId,
+        requestId,
+        persistedEpoch,
+        persistedModelId);
+    if (related[0][0].as<int>() > 0)
+        failure =
+            "legacy_cancellation_inference_evaluation_foreign_owned";
+    else if (related[0][2].as<int>() > 0)
+        failure =
+            "legacy_cancellation_inference_evaluation_cross_experiment";
+    else if (related[0][3].as<int>() > 0)
+        failure =
+            "legacy_cancellation_inference_evaluation_malformed";
+    else if (related[0][1].as<int>() > 0)
+        failure =
+            "legacy_cancellation_inference_unowned_evaluation_not_proof";
+    else
+        failure = "legacy_cancellation_inference_identity_unprovable";
+    return std::nullopt;
+}
+
+std::optional<std::pair<int, long long>> RecoverDurableStoppedIdentity(
+    pqxx::transaction_base& transaction,
+    long long requestId,
+    long long experimentId,
+    const CancellationExperimentEvidence& evidence,
+    const std::optional<int>& persistedEpoch,
+    const std::optional<long long>& persistedModelId,
+    std::string& failure)
+{
+    if (!evidence.cancellationRequestId ||
+        *evidence.cancellationRequestId != requestId)
+    {
+        failure = "terminal_experiment_cancellation_request_mismatch";
+        return std::nullopt;
+    }
+    if (!evidence.cancelAfterEpoch || !evidence.stopAfterEpoch ||
+        !evidence.stoppedEpoch || !evidence.currentEpoch)
+    {
+        failure = "terminal_checkpoint_epoch_evidence_missing";
+        return std::nullopt;
+    }
+    const int epoch = *evidence.stoppedEpoch;
+    if (*evidence.cancelAfterEpoch != epoch ||
+        *evidence.stopAfterEpoch != epoch ||
+        *evidence.currentEpoch != epoch)
+    {
+        failure = "terminal_checkpoint_epoch_evidence_conflicting";
+        return std::nullopt;
+    }
+    if (persistedEpoch && *persistedEpoch != epoch)
+    {
+        failure = "cancellation_checkpoint_epoch_conflict";
+        return std::nullopt;
+    }
+    if (!evidence.stoppedModelId)
+    {
+        failure = "terminal_checkpoint_stopped_model_missing";
+        return std::nullopt;
+    }
+    if (persistedModelId &&
+        *persistedModelId != *evidence.stoppedModelId)
+    {
+        failure = "cancellation_checkpoint_model_conflict";
+        return std::nullopt;
+    }
+    failure = CheckpointModelEvidenceFailure(
+        transaction,
+        experimentId,
+        epoch,
+        *evidence.stoppedModelId);
+    if (!failure.empty())
+        return std::nullopt;
+    return std::pair<int, long long>{epoch, *evidence.stoppedModelId};
+}
+
+void ReconcileCancellationInferenceOutcome(
+    pqxx::transaction_base& transaction,
+    long long requestId,
+    const std::string& workerIdentity,
+    long long experimentId,
+    const CancellationExperimentEvidence& experiment,
+    std::optional<int> persistedEpoch,
+    std::optional<long long> persistedModelId)
+{
+    std::string failure;
+    std::optional<std::pair<int, long long>> identity;
+    if (persistedEpoch && persistedModelId)
+    {
+        failure = CheckpointModelEvidenceFailure(
+            transaction,
+            experimentId,
+            *persistedEpoch,
+            *persistedModelId);
+        if (failure.empty())
+            identity = std::pair<int, long long>{
+                *persistedEpoch, *persistedModelId};
+    }
+    else
+    {
+        identity = RecoverIdentityFromOwnedEvaluation(
+            transaction,
+            requestId,
+            experimentId,
+            persistedEpoch,
+            persistedModelId,
+            failure);
+        if (!identity &&
+            failure !=
+                "legacy_cancellation_inference_identity_ambiguous")
+        {
+            std::string durableFailure;
+            const auto durable = RecoverDurableStoppedIdentity(
+                transaction,
+                requestId,
+                experimentId,
+                experiment,
+                persistedEpoch,
+                persistedModelId,
+                durableFailure);
+            if (durable)
+            {
+                identity = durable;
+                failure.clear();
+            }
+            else if (failure ==
+                     "legacy_cancellation_inference_identity_unprovable")
+                failure = durableFailure;
+        }
+    }
+    if (!identity)
+    {
+        TerminalizeCancellationOutcome(
+            transaction, requestId, workerIdentity, failure);
+        return;
+    }
+
+    transaction.exec_params(
+        "UPDATE experiment_admin_worker_outcome SET "
+        "cancellation_checkpoint_epoch=COALESCE("
+        "cancellation_checkpoint_epoch,$1),"
+        "cancellation_checkpoint_model_id=COALESCE("
+        "cancellation_checkpoint_model_id,$2),updated_at=now() "
+        "WHERE request_id=$3 AND worker_identity=$4 "
+        "AND (cancellation_checkpoint_epoch IS NULL "
+        "OR cancellation_checkpoint_model_id IS NULL) "
+        "AND (cancellation_checkpoint_epoch IS NULL "
+        "OR cancellation_checkpoint_epoch=$1) "
+        "AND (cancellation_checkpoint_model_id IS NULL "
+        "OR cancellation_checkpoint_model_id=$2);",
+        identity->first,
+        identity->second,
+        requestId,
+        workerIdentity);
+
+    DbTarget target;
+    target.worker.experimentId = experimentId;
+    target.latestCheckpointEpoch = identity->first;
+    target.latestCheckpointModelId = identity->second;
+    target.hasInferenceRange = experiment.hasInferenceRange;
+    const std::optional<long long> evaluationId =
+        QueueCancellationInference(transaction, requestId, target);
+    if (!evaluationId || target.inferenceFailed)
+    {
+        TerminalizeCancellationOutcome(
+            transaction,
+            requestId,
+            workerIdentity,
+            target.inferenceFailureDetail.empty()
+                ? "cancellation_checkpoint_evaluation_materialization_invalid"
+                : target.inferenceFailureDetail);
+        return;
+    }
+
+    const std::string inferenceAction =
+        target.inferenceAlreadyCompleted
+            ? "completed"
+            : (target.inferenceAlreadyRunning ? "running" : "queued");
+    const std::string outcomeStatus =
+        target.inferenceAlreadyCompleted ? "completed" : "awaiting_inference";
+    const std::string detail =
+        target.inferenceAlreadyCompleted
+            ? "cancellation_checkpoint_inference_completed"
+            : "cancellation_checkpoint_reached";
+    transaction.exec_params(
+        "UPDATE experiment_admin_worker_outcome SET "
+        "inference_action=$1,outcome_status=$2,detail=$3,updated_at=now() "
+        "WHERE request_id=$4 AND worker_identity=$5 "
+        "AND outcome_status IN "
+        "('planned','pending_checkpoint','awaiting_inference') "
+        "AND (inference_action IS DISTINCT FROM $1 "
+        "OR outcome_status IS DISTINCT FROM $2 "
+        "OR detail IS DISTINCT FROM $3);",
+        inferenceAction,
+        outcomeStatus,
+        detail,
+        requestId,
+        workerIdentity);
 }
 
 } // namespace
@@ -1105,6 +1591,205 @@ bool CancellationCheckpointTrainAllowed(const ControlSnapshot& snapshot)
            snapshot.cancellationMode == "after_next_checkpoint";
 }
 
+CheckpointStopRecordResult RecordCheckpointStopReached(
+    pqxx::work& transaction,
+    const std::optional<long long>& experimentId,
+    int epoch,
+    long long modelId)
+{
+    CheckpointStopRecordResult result;
+    if (!experimentId)
+    {
+        result.detail = "experiment_id_missing";
+        return result;
+    }
+
+    pqxx::result experiments = transaction.exec_params(
+        "SELECT cancellation_request_id,cancel_infer_before,"
+        "infer_start IS NOT NULL AND infer_end IS NOT NULL "
+        "FROM experiment WHERE experiment_id=$1 FOR UPDATE;",
+        *experimentId);
+    if (experiments.empty())
+    {
+        result.detail = "experiment_missing";
+        return result;
+    }
+
+    result.cancellationRequested = !experiments[0][0].is_null();
+    if (!result.cancellationRequested)
+    {
+        pqxx::result updated = transaction.exec_params(
+            "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
+            "worker_process_group_id=NULL,"
+            "current_operation='checkpoint_stopped',"
+            "stopped_at_checkpoint_epoch=$1,"
+            "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
+            "status='pending',"
+            "phase=CASE WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL "
+            "THEN 'infer' ELSE 'analyze' END,exit_code=0,error_message=NULL,"
+            "updated_at=now() WHERE experiment_id=$3 "
+            "AND status='running' AND phase='train';",
+            epoch,
+            modelId,
+            *experimentId);
+        result.recorded = updated.affected_rows() == 1;
+        result.detail = result.recorded
+            ? "checkpoint_stopped"
+            : "experiment_not_running_train";
+        return result;
+    }
+
+    const long long requestId = experiments[0][0].as<long long>();
+    result.cancellationRequestId = requestId;
+    const bool inferBeforeCancel = experiments[0][1].as<bool>();
+    result.inferenceRequested = inferBeforeCancel;
+    const bool hasInferenceRange = experiments[0][2].as<bool>();
+    pqxx::result outcomes = transaction.exec_params(
+        "SELECT worker_identity,cancellation_checkpoint_epoch,"
+        "cancellation_checkpoint_model_id,outcome_status "
+        "FROM experiment_admin_worker_outcome "
+        "WHERE request_id=$1 AND experiment_id=$2 "
+        "AND worker_kind='experiment' ORDER BY worker_identity FOR UPDATE;",
+        requestId,
+        *experimentId);
+
+    std::string failure = CheckpointModelEvidenceFailure(
+        transaction, *experimentId, epoch, modelId);
+    std::optional<int> persistedEpoch;
+    std::optional<long long> persistedModelId;
+    std::string workerIdentity;
+    if (outcomes.size() != 1)
+        failure = outcomes.empty()
+            ? "cancellation_worker_outcome_missing"
+            : "cancellation_worker_outcome_ambiguous";
+    else
+    {
+        workerIdentity = outcomes[0][0].as<std::string>();
+        if (!outcomes[0][1].is_null())
+            persistedEpoch = outcomes[0][1].as<int>();
+        if (!outcomes[0][2].is_null())
+            persistedModelId = outcomes[0][2].as<long long>();
+        if (persistedEpoch && *persistedEpoch != epoch)
+            failure = "cancellation_checkpoint_epoch_conflict";
+        else if (persistedModelId && *persistedModelId != modelId)
+            failure = "cancellation_checkpoint_model_conflict";
+    }
+
+    DbTarget target;
+    target.worker.experimentId = *experimentId;
+    target.latestCheckpointEpoch = epoch;
+    target.latestCheckpointModelId = modelId;
+    target.hasInferenceRange = hasInferenceRange;
+    std::optional<long long> evaluationId;
+    if (failure.empty() && inferBeforeCancel && hasInferenceRange)
+    {
+        evaluationId =
+            QueueCancellationInference(transaction, requestId, target);
+        if (!evaluationId || target.inferenceFailed)
+            failure = target.inferenceFailureDetail.empty()
+                ? "cancellation_checkpoint_evaluation_materialization_invalid"
+                : target.inferenceFailureDetail;
+    }
+    else if (failure.empty() && inferBeforeCancel)
+        failure = "cancellation_inference_range_missing";
+
+    if (!inferBeforeCancel)
+    {
+        transaction.exec_params(
+            "UPDATE experiment_checkpoint_eval SET status='failed',"
+            "phase='done',completed_at=COALESCE(completed_at,now()),"
+            "updated_at=now(),"
+            "error_message='suppressed_by_global_cancellation' "
+            "WHERE parent_experiment_id=$1 AND experiment_id=$1 "
+            "AND checkpoint_epoch=$2 AND checkpoint_model_id=$3 "
+            "AND status='pending' "
+            "AND (cancellation_request_id IS NULL "
+            "OR cancellation_request_id=$4);",
+            *experimentId,
+            epoch,
+            modelId,
+            requestId);
+    }
+
+    transaction.exec_params(
+        "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
+        "worker_process_group_id=NULL,"
+        "current_operation='cancel_checkpoint_reached',"
+        "stopped_at_checkpoint_epoch=$1,"
+        "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
+        "status='cancelled',phase='train',exit_code=0,"
+        "completed_at=COALESCE(completed_at,now()),"
+        "cancellation_completed_at=COALESCE(cancellation_completed_at,now()),"
+        "error_message='cancelled_at_requested_checkpoint',updated_at=now() "
+        "WHERE experiment_id=$3 "
+        "AND ((status='running' AND phase='train') "
+        "OR (status='cancelled' AND phase='train' "
+        "AND stopped_at_checkpoint_epoch=$1 "
+        "AND stopped_at_checkpoint_model_id=$2));",
+        epoch,
+        modelId,
+        *experimentId);
+    result.recorded = true;
+
+    if (outcomes.size() != 1)
+    {
+        result.detail = failure;
+        return result;
+    }
+    if (!failure.empty())
+    {
+        TerminalizeCancellationOutcome(
+            transaction, requestId, workerIdentity, failure);
+        ReconcileActiveCancellation(transaction);
+        result.detail = failure;
+        return result;
+    }
+
+    const std::string inferenceAction =
+        !inferBeforeCancel
+            ? "none"
+            : (target.inferenceAlreadyCompleted
+                   ? "completed"
+                   : (target.inferenceAlreadyRunning ? "running" : "queued"));
+    const std::string outcomeStatus =
+        !inferBeforeCancel || target.inferenceAlreadyCompleted
+            ? "completed"
+            : "awaiting_inference";
+    const std::string detail =
+        target.inferenceAlreadyCompleted
+            ? "cancellation_checkpoint_inference_completed"
+            : "cancellation_checkpoint_reached";
+    transaction.exec_params(
+        "UPDATE experiment_admin_worker_outcome SET "
+        "cancellation_checkpoint_epoch=COALESCE("
+        "cancellation_checkpoint_epoch,$1),"
+        "cancellation_checkpoint_model_id=COALESCE("
+        "cancellation_checkpoint_model_id,$2),"
+        "inference_action=$3,outcome_status=$4,detail=$5,updated_at=now() "
+        "WHERE request_id=$6 AND worker_identity=$7 "
+        "AND outcome_status IN "
+        "('planned','pending_checkpoint','awaiting_inference') "
+        "AND (cancellation_checkpoint_epoch IS NULL "
+        "OR cancellation_checkpoint_epoch=$1) "
+        "AND (cancellation_checkpoint_model_id IS NULL "
+        "OR cancellation_checkpoint_model_id=$2) "
+        "AND (cancellation_checkpoint_epoch IS NULL "
+        "OR cancellation_checkpoint_model_id IS NULL "
+        "OR inference_action IS DISTINCT FROM $3 "
+        "OR outcome_status IS DISTINCT FROM $4 "
+        "OR detail IS DISTINCT FROM $5);",
+        epoch,
+        modelId,
+        inferenceAction,
+        outcomeStatus,
+        detail,
+        requestId,
+        workerIdentity);
+    ReconcileActiveCancellation(transaction);
+    result.detail = detail;
+    return result;
+}
+
 void ReconcileActiveCancellation(pqxx::work& transaction)
 {
     const ControlSnapshot snapshot = LoadControlSnapshot(transaction);
@@ -1112,42 +1797,159 @@ void ReconcileActiveCancellation(pqxx::work& transaction)
         return;
     const long long requestId = *snapshot.activeRequestId;
 
-    transaction.exec_params(
-        "UPDATE experiment_admin_worker_outcome o SET "
-        "outcome_status='completed',inference_action='completed',"
-        "detail='cancellation_checkpoint_inference_completed',updated_at=now() "
-        "FROM experiment_checkpoint_eval ce "
-        "WHERE o.request_id=$1 AND o.outcome_status='awaiting_inference' "
-        "AND o.worker_kind='experiment' "
-        "AND ce.cancellation_request_id=o.request_id "
-        "AND COALESCE(ce.parent_experiment_id,ce.experiment_id)=o.experiment_id "
-        "AND ce.status='completed';",
+    pqxx::result outcomes = transaction.exec_params(
+        "SELECT worker_identity,experiment_id,outcome_status,"
+        "inference_action,cancellation_checkpoint_epoch,"
+        "cancellation_checkpoint_model_id "
+        "FROM experiment_admin_worker_outcome "
+        "WHERE request_id=$1 AND worker_kind='experiment' "
+        "AND outcome_status IN "
+        "('planned','pending_checkpoint','awaiting_inference') "
+        "ORDER BY experiment_id,worker_identity FOR UPDATE;",
         requestId);
-    transaction.exec_params(
-        "UPDATE experiment_admin_worker_outcome o SET "
-        "outcome_status='partial',inference_action='failed',"
-        "detail=COALESCE(ce.error_message,'cancellation_checkpoint_inference_failed'),"
-        "updated_at=now() "
-        "FROM experiment_checkpoint_eval ce "
-        "WHERE o.request_id=$1 AND o.outcome_status='awaiting_inference' "
-        "AND o.worker_kind='experiment' "
-        "AND ce.cancellation_request_id=o.request_id "
-        "AND COALESCE(ce.parent_experiment_id,ce.experiment_id)=o.experiment_id "
-        "AND ce.status='failed';",
-        requestId);
-    transaction.exec_params(
-        "UPDATE experiment_admin_worker_outcome o SET "
-        "outcome_status=CASE WHEN e.cancel_infer_before "
-        " THEN 'awaiting_inference' ELSE 'completed' END,"
-        "inference_action=CASE WHEN e.cancel_infer_before "
-        " THEN 'queued' ELSE inference_action END,"
-        "detail='cancellation_checkpoint_reached',updated_at=now() "
-        "FROM experiment e WHERE o.request_id=$1 "
-        "AND o.worker_kind='experiment' "
-        "AND o.experiment_id=e.experiment_id "
-        "AND o.outcome_status='pending_checkpoint' "
-        "AND e.status='cancelled';",
-        requestId);
+    for (const auto& row : outcomes)
+    {
+        const std::string workerIdentity = row[0].as<std::string>();
+        const long long experimentId = row[1].as<long long>();
+        const std::string outcomeStatus = row[2].as<std::string>();
+        const std::string inferenceAction = row[3].as<std::string>();
+        std::optional<int> checkpointEpoch;
+        std::optional<long long> checkpointModelId;
+        if (!row[4].is_null())
+            checkpointEpoch = row[4].as<int>();
+        if (!row[5].is_null())
+            checkpointModelId = row[5].as<long long>();
+
+        const auto experiment =
+            LoadCancellationExperimentEvidence(transaction, experimentId);
+        if (!experiment)
+        {
+            TerminalizeCancellationOutcome(
+                transaction,
+                requestId,
+                workerIdentity,
+                "cancellation_experiment_evidence_missing");
+            continue;
+        }
+        const bool terminal = IsTerminalExperiment(*experiment);
+        if (terminal)
+        {
+            const std::string lifecycleFailure =
+                TerminalExperimentLifecycleFailure(*experiment);
+            if (!lifecycleFailure.empty())
+            {
+                TerminalizeCancellationOutcome(
+                    transaction,
+                    requestId,
+                    workerIdentity,
+                    lifecycleFailure);
+                continue;
+            }
+            if (!experiment->cancellationRequestId ||
+                *experiment->cancellationRequestId != requestId)
+            {
+                TerminalizeCancellationOutcome(
+                    transaction,
+                    requestId,
+                    workerIdentity,
+                    "terminal_experiment_cancellation_request_mismatch");
+                continue;
+            }
+        }
+
+        if (outcomeStatus == "pending_checkpoint")
+        {
+            if (!terminal)
+                continue;
+            std::string failure;
+            const auto identity = RecoverDurableStoppedIdentity(
+                transaction,
+                requestId,
+                experimentId,
+                *experiment,
+                checkpointEpoch,
+                checkpointModelId,
+                failure);
+            if (!identity)
+            {
+                TerminalizeCancellationOutcome(
+                    transaction,
+                    requestId,
+                    workerIdentity,
+                    failure);
+                continue;
+            }
+            checkpointEpoch = identity->first;
+            checkpointModelId = identity->second;
+            transaction.exec_params(
+                "UPDATE experiment_admin_worker_outcome SET "
+                "cancellation_checkpoint_epoch=COALESCE("
+                "cancellation_checkpoint_epoch,$1),"
+                "cancellation_checkpoint_model_id=COALESCE("
+                "cancellation_checkpoint_model_id,$2),updated_at=now() "
+                "WHERE request_id=$3 AND worker_identity=$4 "
+                "AND (cancellation_checkpoint_epoch IS NULL "
+                "OR cancellation_checkpoint_model_id IS NULL);",
+                *checkpointEpoch,
+                *checkpointModelId,
+                requestId,
+                workerIdentity);
+            if (!snapshot.inferBeforeCancel)
+            {
+                transaction.exec_params(
+                    "UPDATE experiment_admin_worker_outcome SET "
+                    "outcome_status='completed',"
+                    "detail=CASE WHEN $1='completed' "
+                    "THEN 'cancellation_checkpoint_reconciled_from_terminal_experiment' "
+                    "ELSE 'cancellation_checkpoint_reached' END,"
+                    "updated_at=now() "
+                    "WHERE request_id=$2 AND worker_identity=$3 "
+                    "AND outcome_status='pending_checkpoint';",
+                    experiment->status,
+                    requestId,
+                    workerIdentity);
+                continue;
+            }
+            ReconcileCancellationInferenceOutcome(
+                transaction,
+                requestId,
+                workerIdentity,
+                experimentId,
+                *experiment,
+                checkpointEpoch,
+                checkpointModelId);
+            continue;
+        }
+
+        if (outcomeStatus == "awaiting_inference" ||
+            (outcomeStatus == "planned" &&
+             snapshot.inferBeforeCancel &&
+             inferenceAction != "none"))
+        {
+            ReconcileCancellationInferenceOutcome(
+                transaction,
+                requestId,
+                workerIdentity,
+                experimentId,
+                *experiment,
+                checkpointEpoch,
+                checkpointModelId);
+            continue;
+        }
+
+        if (outcomeStatus == "planned" && terminal)
+        {
+            transaction.exec_params(
+                "UPDATE experiment_admin_worker_outcome SET "
+                "outcome_status='completed',"
+                "detail='terminal_cancellation_reconciled_after_restart',"
+                "updated_at=now() "
+                "WHERE request_id=$1 AND worker_identity=$2 "
+                "AND outcome_status='planned';",
+                requestId,
+                workerIdentity);
+        }
+    }
 
     UpdateRequestAccounting(transaction, requestId, false);
     pqxx::result request = transaction.exec_params(
@@ -1322,19 +2124,28 @@ int RunCommandWithProcessOperationsForTesting(
         pqxx::work transaction{connection};
         transaction.exec("SET TRANSACTION READ WRITE;");
         AcquireCoordinationLock(transaction);
-        const ControlSnapshot snapshot = LoadControlSnapshot(transaction);
+        ControlSnapshot snapshot = LoadControlSnapshot(transaction);
+        const auto matchesCommandShape =
+            [&command](const ControlSnapshot& candidate) {
+                return candidate.activeAction &&
+                       *candidate.activeAction == ToString(command.action) &&
+                       candidate.inferBeforeCancel ==
+                           command.inferBeforeCancel &&
+                       ((!command.cancellationMode &&
+                         !candidate.cancellationMode) ||
+                        (command.cancellationMode &&
+                         candidate.cancellationMode &&
+                         *candidate.cancellationMode ==
+                             ToString(*command.cancellationMode)));
+            };
+        if (snapshot.activeRequestId && !matchesCommandShape(snapshot))
+        {
+            ReconcileActiveCancellation(transaction);
+            snapshot = LoadControlSnapshot(transaction);
+        }
         if (snapshot.activeRequestId)
         {
-            const bool sameRequestShape =
-                snapshot.activeAction &&
-                *snapshot.activeAction == ToString(command.action) &&
-                snapshot.inferBeforeCancel == command.inferBeforeCancel &&
-                ((!command.cancellationMode &&
-                  !snapshot.cancellationMode) ||
-                 (command.cancellationMode &&
-                  snapshot.cancellationMode &&
-                  *snapshot.cancellationMode ==
-                      ToString(*command.cancellationMode)));
+            const bool sameRequestShape = matchesCommandShape(snapshot);
             if (!sameRequestShape)
             {
                 error << "GLOBAL_EXPERIMENT_CONTROL_REJECTED,reason="

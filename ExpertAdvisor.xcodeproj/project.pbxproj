@@ -1135,10 +1135,10 @@
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					/opt/homebrew/opt/libpq/include,
-					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					"$(PROJECT_DIR)/MetaNN/**",
 					/opt/homebrew/opt/libomp/include,
 				);
-				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
+				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Headers";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
 			name = Debug;
@@ -1197,10 +1197,10 @@
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					/opt/homebrew/opt/libpq/include,
-					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					"$(PROJECT_DIR)/MetaNN/**",
 					/opt/homebrew/opt/libomp/include,
 				);
-				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
+				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Headers";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/ -I/usr/local/include/pqxx";
 			};
 			name = Release;
@@ -1397,12 +1397,12 @@
 				SYSTEM_HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					/opt/homebrew/include,
-					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					"$(PROJECT_DIR)/MetaNN/**",
 					/opt/homebrew/opt/libomp/include,
 					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					/opt/homebrew/opt/libpq/include,
 				);
-				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
+				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Headers";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
 			};
 			name = Debug;
@@ -1459,13 +1459,13 @@
 				PRODUCT_NAME = LSTM_Release;
 				SDKROOT = macosx;
 				SYSTEM_HEADER_SEARCH_PATHS = (
-					"'/Volumes/Developer SSD/ExpertAdvisor/MetaNN/'/**",
+					"$(PROJECT_DIR)/MetaNN/**",
 					/opt/homebrew/opt/libomp/include,
 					/opt/homebrew/include,
 					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					/opt/homebrew/opt/libpq/include,
 				);
-				USER_HEADER_SEARCH_PATHS = "'/Volumes/Developer SSD/ExpertAdvisor/Headers'";
+				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Headers";
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
 			};
 			name = Release;
