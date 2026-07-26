@@ -141,17 +141,19 @@ CREATE TABLE matrix (
 CREATE TABLE experiment_checkpoint_eval (
     checkpoint_eval_id bigserial PRIMARY KEY,
     experiment_id bigint NOT NULL REFERENCES experiment(experiment_id),
-    parent_experiment_id bigint REFERENCES experiment(experiment_id),
-    checkpoint_epoch integer,
-    checkpoint_model_id bigint REFERENCES model(model_id),
+    parent_experiment_id bigint NOT NULL REFERENCES experiment(experiment_id),
+    checkpoint_epoch integer NOT NULL,
+    checkpoint_model_id bigint NOT NULL REFERENCES model(model_id),
     symbol text,
     prediction_horizon integer,
     status text NOT NULL DEFAULT 'pending',
     phase text NOT NULL DEFAULT 'infer',
     worker_pid integer,
+    started_at timestamptz,
     completed_at timestamptz,
     error_message text,
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(parent_experiment_id, checkpoint_model_id, checkpoint_epoch)
 );
 SQL
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \

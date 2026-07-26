@@ -150,6 +150,24 @@ bool NormalSchedulingAllowed(const ControlSnapshot& snapshot);
 bool CancellationInferenceAllowed(const ControlSnapshot& snapshot);
 bool CancellationCheckpointTrainAllowed(const ControlSnapshot& snapshot);
 
+struct CheckpointStopRecordResult
+{
+    bool recorded = false;
+    bool cancellationRequested = false;
+    bool inferenceRequested = false;
+    std::optional<long long> cancellationRequestId;
+    std::string detail;
+};
+
+// Authoritative checkpoint-stop persistence used by the training worker.
+// The caller owns the transaction; this function preserves non-null audit
+// identity/ownership and classifies conflicts instead of overwriting them.
+CheckpointStopRecordResult RecordCheckpointStopReached(
+    pqxx::work& transaction,
+    const std::optional<long long>& experimentId,
+    int epoch,
+    long long modelId);
+
 // Completes checkpoint-cancellation audit rows whose worker/inference evidence
 // is now durable and clears a fully reconciled active cancellation request.
 void ReconcileActiveCancellation(pqxx::work& transaction);

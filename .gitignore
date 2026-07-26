@@ -28,3 +28,6 @@ review_backups/*
 
 *_Transcript.txt
 
+# Generated inputs, outputs, logs, and temporary files for this focused review.
+/GlobalCancel_StrandedPendingCheckpoint_*
+/vi
