@@ -15,6 +15,17 @@ migration_fixture_pgid=""
 migration_fixture_start_identity=""
 migration_fixture_executable=""
 
+duplicate_migration_versions="$(
+    for migration in "${repo_root}"/Database/migrations/*.sql; do
+        filename="$(basename "${migration}")"
+        printf '%s\n' "${filename%%_*}"
+    done | sort | uniq -d
+)"
+if [[ -n "${duplicate_migration_versions}" ]]; then
+    echo "duplicate migration versions: ${duplicate_migration_versions}" >&2
+    exit 1
+fi
+
 read_fixture_identity() {
     local target_pid="$1"
     local identity_line=""
@@ -285,7 +296,7 @@ UPDATE experiment_global_control SET desired_state='paused',
 FROM active WHERE singleton;
 SQL
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/047_global_pause_selective_resume.sql"
+    -f "${repo_root}/Database/migrations/049_global_pause_selective_resume.sql"
 test "$(
     psql -Atq -d "${test_db}" -c \
         "SELECT c.current_pause_request_id::text||':'||
@@ -346,7 +357,7 @@ psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/046_global_experiment_control.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
-    -f "${repo_root}/Database/migrations/047_global_pause_selective_resume.sql"
+    -f "${repo_root}/Database/migrations/049_global_pause_selective_resume.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/GlobalExperimentControlMigrationTests.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
@@ -464,7 +475,7 @@ SQL
 apply_047_schema() {
     local schema_name="$1"
     schema_psql "${schema_name}" \
-        -f "${repo_root}/Database/migrations/047_global_pause_selective_resume.sql"
+        -f "${repo_root}/Database/migrations/049_global_pause_selective_resume.sql"
 }
 
 assert_047_schema() {
@@ -481,7 +492,7 @@ drop_fixture_schema() {
 
 # Each migration scenario below owns an uncontaminated migration-046 schema.
 # No scenario can observe columns, constraints, indexes, or rows from a prior
-# application of migration 047.
+# application of migration 049.
 create_pre047_schema gp_mig_primary
 schema_psql gp_mig_primary <<'SQL'
 INSERT INTO experiment (
@@ -795,7 +806,7 @@ fi
 
 # End-to-end upgrade path in a final clean migration-046 schema: a real
 # disposable stopped worker has only migration-046-era persisted evidence.
-# Migration 047 freezes identity and generation evidence, then the production
+# Migration 049 freezes identity and generation evidence, then the production
 # selective-resume CLI consumes it.
 create_pre047_schema gp_mig_selective
 ln -s "${process_test_binary}" "${test_tmp}/Migration_LSTM_Release"

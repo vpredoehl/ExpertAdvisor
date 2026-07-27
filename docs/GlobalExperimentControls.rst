@@ -32,7 +32,7 @@ in ``experiment_admin_worker_outcome``.  The global desired state is
 ``running`` or ``paused``.  An active request is a separate gate, so lifecycle
 status is never used to represent Unix suspension.
 
-Migration ``047_global_pause_selective_resume.sql`` adds a durable pause
+Migration ``049_global_pause_selective_resume.sql`` adds a durable pause
 generation (``current_pause_request_id``), per-worker association with that
 generation, a targeted ``resume_experiment`` administrative request shape, and
 frozen executable/command evidence in worker outcomes. An association plus

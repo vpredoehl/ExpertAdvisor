@@ -4788,6 +4788,80 @@ void TestProductionCheckpointStopOwnership(pqxx::connection& connection)
               connection,
               "SELECT active_request_id IS NULL FROM "
               "experiment_global_control WHERE singleton") == "t");
+
+    {
+        pqxx::work staleFixture{connection};
+        const long long staleRequestId = staleFixture.exec(
+            "INSERT INTO experiment_admin_request ("
+            "action,cancellation_mode,infer_before_cancel,invocation_identity,"
+            "requester_identity,application_owner,status,"
+            "previous_global_state,resulting_global_state,target_count,"
+            "result_summary) VALUES ("
+            "'cancel_all','after_next_checkpoint',true,"
+            "'crash-window-stale-checkpoint-stop',"
+            "'crash-fixture-requester','crash-window-stale-checkpoint-stop',"
+            "'pending','running','running',1,"
+            "'{\"target_count\":1,\"pending_count\":1}'::jsonb) "
+            "RETURNING request_id;")[0][0].as<long long>();
+        staleFixture.exec_params(
+            "INSERT INTO experiment ("
+            "experiment_id,status,phase,current_epoch,checkpoint_interval,"
+            "target_epochs,infer_start,infer_end,cancellation_request_id,"
+            "cancel_infer_before,cancel_after_checkpoint_epoch,"
+            "stop_after_checkpoint_epoch,current_operation) VALUES ("
+            "700084,'pending','train',79,20,100,'2020-02-02','2020-03-01',"
+            "$1,true,80,80,'cancel_checkpoint_restart_pending');",
+            staleRequestId);
+        const long long staleModelId = staleFixture.exec(
+            "INSERT INTO model(experiment_id,comment) VALUES "
+            "(700084,'periodic training checkpoint') RETURNING model_id;")
+                                               [0][0]
+                                                   .as<long long>();
+        staleFixture.exec_params(
+            "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+            "VALUES ($1,'train_config_meta',0,10,80);",
+            staleModelId);
+        staleFixture.exec_params(
+            "INSERT INTO experiment_admin_worker_outcome ("
+            "request_id,worker_identity,experiment_id,worker_kind,phase,"
+            "lifecycle_status,cancellation_checkpoint_epoch,inference_action,"
+            "outcome_status,detail) VALUES ("
+            "$1,'experiment:700084',700084,'experiment','train','running',"
+            "80,'none','pending_checkpoint','stale_worker_fixture');",
+            staleRequestId);
+        staleFixture.exec_params(
+            "UPDATE experiment_global_control SET active_request_id=$1,"
+            "revision=revision+1,updated_at=now() WHERE singleton;",
+            staleRequestId);
+        staleFixture.commit();
+
+        pqxx::work staleRecord{connection};
+        AcquireCoordinationLock(staleRecord);
+        const CheckpointStopRecordResult staleResult =
+            RecordCheckpointStopReached(
+                staleRecord, 700084, 80, staleModelId);
+        CHECK(!staleResult.recorded);
+        CHECK(staleResult.detail == "experiment_not_running_train");
+        staleRecord.commit();
+
+        CHECK(Scalar(
+                  connection,
+                  "SELECT status||':'||current_epoch::text||':'||"
+                  "(stopped_at_checkpoint_epoch IS NULL)::text||':'||"
+                  "(stopped_at_checkpoint_model_id IS NULL)::text "
+                  "FROM experiment WHERE experiment_id=700084") ==
+              "pending:79:true:true");
+        CHECK(Scalar(
+                  connection,
+                  "SELECT outcome_status||':'||inference_action||':'||detail "
+                  "FROM experiment_admin_worker_outcome "
+                  "WHERE request_id=" + std::to_string(staleRequestId)) ==
+              "pending_checkpoint:none:stale_worker_fixture");
+        CHECK(Scalar(
+                  connection,
+                  "SELECT count(*)::text FROM experiment_checkpoint_eval "
+                  "WHERE parent_experiment_id=700084") == "0");
+    }
     ResetCrashFixtures(connection);
 }
 

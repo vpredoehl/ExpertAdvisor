@@ -2500,7 +2500,13 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
 
     pqxx::result experiments = transaction.exec_params(
         "SELECT cancellation_request_id,cancel_infer_before,"
-        "infer_start IS NOT NULL AND infer_end IS NOT NULL "
+        "infer_start IS NOT NULL AND infer_end IS NOT NULL,status,phase,"
+        "stopped_at_checkpoint_epoch,stopped_at_checkpoint_model_id,"
+        "EXISTS (SELECT 1 FROM experiment_admin_request r "
+        "JOIN experiment_global_control c "
+        "ON c.active_request_id=r.request_id "
+        "WHERE c.singleton AND r.request_id=experiment.cancellation_request_id "
+        "AND r.action='cancel_all') "
         "FROM experiment WHERE experiment_id=$1 FOR UPDATE;",
         *experimentId);
     if (experiments.empty())
@@ -2512,6 +2518,13 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
     result.cancellationRequested = !experiments[0][0].is_null();
     if (!result.cancellationRequested)
     {
+        const std::string modelFailure = CheckpointModelEvidenceFailure(
+            transaction, *experimentId, epoch, modelId);
+        if (!modelFailure.empty())
+        {
+            result.detail = modelFailure;
+            return result;
+        }
         pqxx::result updated = transaction.exec_params(
             "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
             "worker_process_group_id=NULL,"
@@ -2534,6 +2547,30 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
     }
 
     const long long requestId = experiments[0][0].as<long long>();
+    const std::string lifecycleStatus = experiments[0][3].as<std::string>();
+    const std::string lifecyclePhase = experiments[0][4].as<std::string>();
+    const bool exactReplay =
+        lifecycleStatus == "cancelled" && lifecyclePhase == "train" &&
+        !experiments[0][5].is_null() &&
+        experiments[0][5].as<int>() == epoch &&
+        !experiments[0][6].is_null() &&
+        experiments[0][6].as<long long>() == modelId;
+    const bool runningTrain =
+        lifecycleStatus == "running" && lifecyclePhase == "train";
+    if (!runningTrain && !exactReplay)
+    {
+        result.detail = "experiment_not_running_train";
+        return result;
+    }
+    const bool activeCancellation = experiments[0][7].as<bool>();
+    if (!activeCancellation)
+    {
+        result.recorded = exactReplay;
+        result.detail = exactReplay
+            ? "cancellation_checkpoint_replay"
+            : "cancellation_request_not_active";
+        return result;
+    }
     const auto reconcileUnderPersistedOwner = [&] {
         const pqxx::result owner = transaction.exec_params(
             "SELECT application_owner FROM experiment_admin_request "
@@ -2614,7 +2651,7 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
             requestId);
     }
 
-    transaction.exec_params(
+    const pqxx::result experimentUpdated = transaction.exec_params(
         "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
         "worker_process_group_id=NULL,"
         "current_operation='cancel_checkpoint_reached',"
@@ -2625,13 +2662,17 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
         "cancellation_completed_at=COALESCE(cancellation_completed_at,now()),"
         "error_message='cancelled_at_requested_checkpoint',updated_at=now() "
         "WHERE experiment_id=$3 "
+        "AND cancellation_request_id=$4 "
         "AND ((status='running' AND phase='train') "
         "OR (status='cancelled' AND phase='train' "
         "AND stopped_at_checkpoint_epoch=$1 "
         "AND stopped_at_checkpoint_model_id=$2));",
         epoch,
         modelId,
-        *experimentId);
+        *experimentId,
+        requestId);
+    RequireAffectedRows(
+        experimentUpdated, 1, "record_cancellation_checkpoint_stop");
     result.recorded = true;
 
     if (outcomes.size() != 1)
