@@ -28,3 +28,6 @@ review_backups/*
 
 *_Transcript.txt
 
+
+# Xcode build products
+DerivedData/
