@@ -1088,7 +1088,7 @@ INSERT INTO experiment (
 ) VALUES (
     'running','train',999998,999998,'LSTM_Release',
     'LSTM_Release --train --scheduler-experiment-id=3',21,
-    '2020-01-01','2020-02-01','training',now()
+    '2020-01-01','2020-02-01','train',now()
 );
 INSERT INTO model(experiment_id,comment)
 VALUES (3,'periodic training checkpoint');

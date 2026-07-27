@@ -7056,7 +7056,7 @@ void BackfillRunningTrainingProgressFromLogs(pqxx::work& w,
 
         w.exec_params(
             "UPDATE experiment "
-            "SET current_epoch = $1, current_operation = 'training', updated_at = now() "
+            "SET current_epoch = $1, current_operation = 'train', updated_at = now() "
             "WHERE experiment_id = $2 "
             "AND status = 'running' "
             "AND phase = 'train' "
@@ -7079,7 +7079,7 @@ void PersistDiscoveredRunningTrainingMetadata(const std::vector<SchedulerStatusJ
             continue;
 
         std::ostringstream sql;
-        sql << "UPDATE experiment SET current_operation = 'training'";
+        sql << "UPDATE experiment SET current_operation = 'train'";
         if (job.pid.has_value())
             sql << ", worker_pid = " << *job.pid;
         if (job.currentEpoch.has_value())
@@ -16702,11 +16702,11 @@ std::string CurrentOperationForStatusJob(const SchedulerStatusJob& job)
     if (!job.currentOperation.empty())
         return job.currentOperation;
     if (job.phase == "train")
-        return "training";
+        return "train";
     if (job.phase == "infer")
-        return "inference";
+        return "infer";
     if (job.phase == "analyze")
-        return "analysis";
+        return "analyze";
     if (job.phase == "done")
         return "done";
     return "unknown";

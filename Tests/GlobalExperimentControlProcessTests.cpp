@@ -4632,7 +4632,7 @@ void TestProductionCheckpointStopOwnership(pqxx::connection& connection)
         "stop_after_checkpoint_epoch,current_operation) "
         "SELECT experiment_id,'running','train',79,20,100,"
         "'2020-02-02'::date,'2020-03-01'::date,"
-        "970000+experiment_id::int,$1,true,80,80,'training' "
+        "970000+experiment_id::int,$1,true,80,80,'train' "
         "FROM generate_series(700080,700083) AS experiment_id;",
         requestId);
     fixture.exec(
