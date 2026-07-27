@@ -1,4 +1,5 @@
 #include "ExperimentRecommendationConversionWorkflowRepository.hpp"
+#include "ExperimentCurrentOperation.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -191,7 +192,8 @@ RecommendationConversionWorkflowView MapWorkflow(const pqxx::row& row)
             experiment.workerPid = row["worker_pid"].as<int>();
         if (!row["current_operation"].is_null())
             experiment.currentOperation =
-                row["current_operation"].as<std::string>();
+                EA::ExperimentLifecycle::NormalizePersistedCurrentOperation(
+                    row["current_operation"].as<std::string>());
         if (!row["current_epoch"].is_null())
             experiment.currentEpoch = row["current_epoch"].as<int>();
         view.experiment = experiment;

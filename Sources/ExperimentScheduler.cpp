@@ -32,6 +32,7 @@
 #include "ExperimentScheduler.hpp"
 #include "GlobalExperimentControl.hpp"
 #include "CanonicalSymbol.hpp"
+#include "ExperimentCurrentOperation.hpp"
 #include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
 #include "ContinuationPolicyPersistence.hpp"
@@ -11963,13 +11964,16 @@ void MarkExperimentRunning(pqxx::work& w,
                                   const std::string& phase,
                                   const std::string& logPath)
 {
+    const std::string currentOperation =
+        EA::ExperimentLifecycle::RequireCanonicalCurrentOperationForPhase(
+            phase);
     const char* logColumn = phase == "train" ? "train_log_path" :
                             phase == "infer" ? "infer_log_path" :
                             "analysis_log_path";
     w.exec(
         "UPDATE experiment SET status = 'running', started_at = COALESCE(started_at, now()), " +
         std::string{logColumn} + " = " + w.quote(logPath) +
-        ", current_operation = " + w.quote(phase) +
+        ", current_operation = " + w.quote(currentOperation) +
         ", worker_started_at = now()" +
         (phase == "train" ? ", current_epoch = NULL" : "") +
         ", worker_pid = NULL, updated_at = now() "
@@ -11985,6 +11989,9 @@ void PersistExperimentWorkerPid(pqxx::work& w,
                                 const std::string& commandLine,
                                 const std::string& processStartIdentity)
 {
+    const std::string currentOperation =
+        EA::ExperimentLifecycle::RequireCanonicalCurrentOperationForPhase(
+            phase);
     w.exec_params(
         "UPDATE experiment "
         "SET worker_pid = $1, worker_process_group_id = $2, "
@@ -11998,7 +12005,7 @@ void PersistExperimentWorkerPid(pqxx::work& w,
         executable,
         commandLine,
         processStartIdentity,
-        phase,
+        currentOperation,
         experiment.experimentId,
         phase);
 }
@@ -12421,7 +12428,7 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
                         "UPDATE experiment SET status='pending',phase='train',"
                         "worker_pid=NULL,worker_process_group_id=NULL,"
                         "worker_control_state='running',last_model_id=$1,"
-                        "current_operation='cancel_checkpoint_restart_pending',"
+                        "current_operation='train',"
                         "error_message='cancellation_worker_restart_required',"
                         "updated_at=now() WHERE experiment_id=$2 "
                         "AND status='running';",
@@ -12852,7 +12859,7 @@ void PersistObservedExperimentChild(pqxx::work& w,
                     "UPDATE experiment SET status='pending',phase='train',"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
                     "worker_control_state='running',last_model_id=$1,"
-                    "current_operation='cancel_checkpoint_restart_pending',"
+                    "current_operation='train',"
                     "error_message=$2,updated_at=now() "
                     "WHERE experiment_id=$3 AND status='running';",
                     *restartModel,
@@ -15972,7 +15979,13 @@ SchedulerStatusJob RowToSchedulerStatusJob(const pqxx::row& row)
     }
     if (!row[18].is_null())
         job.pid = row[18].as<int>();
-    job.currentOperation = row[19].is_null() ? "" : row[19].as<std::string>();
+    if (!row[19].is_null())
+    {
+        const auto currentOperation =
+            EA::ExperimentLifecycle::NormalizePersistedCurrentOperation(
+                row[19].as<std::string>());
+        job.currentOperation = currentOperation;
+    }
     if (!row[20].is_null())
         job.stopAfterCheckpointEpoch = row[20].as<int>();
     if (!row[21].is_null())
@@ -16699,17 +16712,13 @@ void PrintCompactStatusField(const std::string& label, const std::string& value)
 
 std::string CurrentOperationForStatusJob(const SchedulerStatusJob& job)
 {
-    if (!job.currentOperation.empty())
-        return job.currentOperation;
-    if (job.phase == "train")
-        return "train";
-    if (job.phase == "infer")
-        return "infer";
-    if (job.phase == "analyze")
-        return "analyze";
-    if (job.phase == "done")
-        return "done";
-    return "unknown";
+    const std::optional<std::string> currentOperation =
+        job.currentOperation.empty()
+            ? std::nullopt
+            : std::optional<std::string>{job.currentOperation};
+    return EA::ExperimentLifecycle::CurrentOperationForStatus(
+        currentOperation,
+        job.phase);
 }
 
 void PrintCompactStatusJob(const SchedulerStatusJob& job)

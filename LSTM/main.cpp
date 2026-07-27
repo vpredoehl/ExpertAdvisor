@@ -39,6 +39,7 @@
 #include "ExperimentMetaAnalyzer.hpp"
 #include "GlobalExperimentControl.hpp"
 #include "CanonicalSymbol.hpp"
+#include "ExperimentCurrentOperation.hpp"
 #include "FxPriceSanity.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
 
@@ -3170,8 +3171,7 @@ std::optional<long long> ResolveSchedulerExperimentIdForCurrentProcess()
 }
 
 void UpdateSchedulerExperimentProgress(const std::optional<long long>& experimentId,
-                                       int completedEpoch,
-                                       const std::string& operation)
+                                       int completedEpoch)
 {
     const std::optional<long long> effectiveExperimentId =
         experimentId.has_value() ? experimentId : ResolveSchedulerExperimentIdForCurrentProcess();
@@ -3184,11 +3184,12 @@ void UpdateSchedulerExperimentProgress(const std::optional<long long>& experimen
         w.exec("SET TRANSACTION READ WRITE;");
         w.exec_params(
             "UPDATE experiment "
-            "SET current_epoch = $1, worker_pid = $2, current_operation = $3, updated_at = now() "
+            "SET current_epoch = $1, worker_pid = $2, "
+            "current_operation = $3, updated_at = now() "
             "WHERE experiment_id = $4;",
             completedEpoch,
             static_cast<int>(::getpid()),
-            operation,
+            std::string{EA::ExperimentLifecycle::kTrainOperation},
             *effectiveExperimentId);
         w.commit();
     }
@@ -7266,8 +7267,7 @@ int main(int argc, const char * argv[])
                     }
                     l.completedEpochs = static_cast<size_t>(e + 1);
                     UpdateSchedulerExperimentProgress(launchArgs.schedulerExperimentId,
-                                                      static_cast<int>(e + 1),
-                                                      "training");
+                                                      static_cast<int>(e + 1));
                     const std::optional<long long> checkpointModelId =
                         SavePeriodicCheckpointIfDue(launchArgs,
                                                     resumeConfig,

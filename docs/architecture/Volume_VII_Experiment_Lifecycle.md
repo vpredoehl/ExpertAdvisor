@@ -1,8 +1,8 @@
 # Volume VII — Experiment Lifecycle
 
 Status: Foundation outline
-Version: 0.1.0
-Last revised: 2026-07-15
+Version: 0.1.1
+Last revised: 2026-07-27
 
 ## 1. Purpose
 
@@ -81,6 +81,12 @@ provenance, and mutable state remain distinct per Volume I §5.
 State/phase shapes, model ownership, lineage, attempt ownership, and terminal
 semantics require database enforcement. Legacy records are preserved and
 excluded where authoritative mapping is impossible.
+
+The authoritative ``experiment.current_operation`` values are ``train``,
+``infer``, and ``analyze``. The nouns ``training``, ``inference``, and
+``analysis`` may describe activities in prose, but they are not persisted
+operation values. Administrative and checkpoint state is not an operation and
+must be represented by its owning lifecycle/control fields.
 
 ## 6. Transactions
 
@@ -199,3 +205,4 @@ ADRs before implementation.
 | Version | Date | Change | ADR |
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Established the experiment-lifecycle outline. | — |
+| 0.1.1 | 2026-07-27 | Defined the sole canonical `current_operation` lifecycle vocabulary. | ADR-0004 |

@@ -359,6 +359,22 @@ psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/049_global_pause_selective_resume.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Tests/ExperimentCurrentOperationMigrationTests.sql"
+current_operation_failure_output="${test_tmp}/current_operation_migration_failure.out"
+if psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Tests/ExperimentCurrentOperationMigrationFailureTests.sql" \
+    >"${current_operation_failure_output}" 2>&1; then
+    echo "current_operation migration unexpectedly accepted unsupported data" >&2
+    exit 1
+fi
+grep -q "unsupported experiment.current_operation rows" \
+    "${current_operation_failure_output}"
+test "$(psql -v ON_ERROR_STOP=1 -Atq -d "${test_db}" -c \
+    "SELECT to_regnamespace(
+        'experiment_current_operation_migration_failure_test') IS NULL")" = "t"
+psql --single-transaction -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/050_experiment_current_operation_canonicalization.sql"
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/GlobalExperimentControlMigrationTests.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -c "GRANT SELECT ON model,matrix,experiment_analysis_result TO pqxx;"
@@ -797,6 +813,7 @@ if [[ -z "${process_test_binary}" ]]; then
     read -r -a pqxx_link_flags <<<"$(pkg-config --libs libpqxx)"
     "${CXX:-clang++}" -std=c++20 -O0 -g \
         -Wno-deprecated-declarations -Wno-c++23-attribute-extensions \
+        -I"${repo_root}/Headers" \
         "${pqxx_compile_flags[@]}" \
         "${repo_root}/Tests/GlobalExperimentControlProcessTests.cpp" \
         "${repo_root}/Sources/GlobalExperimentControl.cpp" \
@@ -1178,7 +1195,7 @@ INSERT INTO experiment (
     800002,'pending','train',10,20,100,NULL,NULL,'LSTM_Release',
     'LSTM_Release --train --scheduler-experiment-id=800002',
     '1700008002:2','running',${restart_cancel_request_id},20,20,
-    'cancel_checkpoint_restart_pending',
+    'train',
     'cancellation_worker_restart_required',now()-interval '1 minute'
 );
 INSERT INTO experiment (
@@ -1242,7 +1259,7 @@ test "$(scalar "SELECT status||':'||phase||':'||
     cancel_after_checkpoint_epoch::text||':'||
     stop_after_checkpoint_epoch::text
     FROM experiment WHERE experiment_id=800002")" = \
-    "pending:train:true:true:LSTM_Release:LSTM_Release --train --scheduler-experiment-id=800002:1700008002:2:running:true:$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=800002"):true:cancel_checkpoint_restart_pending:cancellation_worker_restart_required:${restart_cancel_request_id}:20:20"
+    "pending:train:true:true:LSTM_Release:LSTM_Release --train --scheduler-experiment-id=800002:1700008002:2:running:true:$(scalar "SELECT last_model_id FROM experiment WHERE experiment_id=800002"):true:train:cancellation_worker_restart_required:${restart_cancel_request_id}:20:20"
 restart_model_id="$(
     scalar "WITH cfg AS (
         SELECT model_id,max(value) FILTER (WHERE col_idx=10) completed_epochs
@@ -1473,5 +1490,9 @@ test "${invalid_infer}" -ne 0
 grep -q 'mutually exclusive' "${test_tmp}/invalid_pause_resume.out"
 grep -q 'requires exactly one' "${test_tmp}/invalid_cancel_mode.out"
 grep -q 'requires --cancel-all-experiments' "${test_tmp}/invalid_infer.out"
+
+test "$(scalar "SELECT count(*) FROM experiment
+    WHERE current_operation IS NOT NULL
+      AND current_operation NOT IN ('train','infer','analyze')")" = 0
 
 echo "GlobalExperimentControlIntegrationTests passed"

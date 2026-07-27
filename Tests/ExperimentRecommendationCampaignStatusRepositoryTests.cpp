@@ -699,13 +699,24 @@ SELECT setval(pg_get_serial_sequence('experiment','experiment_id'),17,true);
             SetSearchPath(mutate, schema);
             mutate.exec(
                 "UPDATE experiment SET status='running',phase='train',worker_pid=4321,"
-                "current_operation='train',worker_started_at=now(),started_at=now(),"
+                "current_operation='training',worker_started_at=now(),started_at=now(),"
                 "current_epoch=20 WHERE experiment_id=$1;",
                 pqxx::params{executionResult.execution->experimentId});
             mutate.commit();
         }
         snapshot = ReadRecommendationCampaignStatusSnapshot(runtime, {1});
         assert(snapshot.runningTrainCount == 1 && snapshot.activeWorkerCount == 1);
+        assert(snapshot.members[0].currentOperation ==
+               std::optional<std::string>{"train"});
+        output.str({});
+        output.clear();
+        errors.str({});
+        errors.clear();
+        assert(RunRecommendationCampaignStatusCommand(
+            runtimeString, {1}, output, errors) == 0);
+        assert(output.str().find("current_operation=train") != std::string::npos);
+        assert(output.str().find("current_operation=training") ==
+               std::string::npos);
 
         stage = "snapshot_consistency";
         pqxx::read_transaction stable{runtime};
@@ -757,13 +768,15 @@ INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,
                 pqxx::params{experimentId});
             mutate.exec(
                 "UPDATE experiment SET status='completed',phase='done',last_model_id=1001,"
-                "worker_pid=NULL,current_operation='analyze',current_epoch=120,"
+                "worker_pid=NULL,current_operation='analysis',current_epoch=120,"
                 "exit_code=0,error_message=NULL,completed_at=now() WHERE experiment_id=$1;",
                 pqxx::params{experimentId});
             mutate.commit();
         }
         snapshot = ReadRecommendationCampaignStatusSnapshot(runtime, {1});
         assert(snapshot.completedCount == 1);
+        assert(snapshot.members[0].currentOperation ==
+               std::optional<std::string>{"analyze"});
         assert(snapshot.members[0].trainComplete && snapshot.members[0].inferComplete &&
                snapshot.members[0].analyzeComplete);
         assert(snapshot.members[0].failedFinalAnalysisResultCount == 0);

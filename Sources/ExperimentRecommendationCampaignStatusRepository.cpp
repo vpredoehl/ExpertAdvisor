@@ -6,6 +6,7 @@
 #include "ExperimentRecommendationConversionActivation.hpp"
 #include "ExperimentRecommendationConversionExecutionRepository.hpp"
 #include "ExperimentRecommendationConversionWorkflowRepository.hpp"
+#include "ExperimentCurrentOperation.hpp"
 
 #include <algorithm>
 #include <map>
@@ -159,7 +160,9 @@ WHERE e.experiment_id IN ()SQL" + placeholders.str() +
         value.targetEpochs = row["target_epochs"].as<int>();
         value.currentEpoch = OptionalValue<int>(row, "current_epoch");
         value.workerPid = OptionalValue<int>(row, "worker_pid");
-        value.currentOperation = OptionalText(row, "current_operation");
+        value.currentOperation =
+            EA::ExperimentLifecycle::NormalizeOptionalPersistedCurrentOperation(
+                OptionalText(row, "current_operation"));
         value.workerStartedAt = OptionalText(row, "worker_started_at");
         value.startedAt = OptionalText(row, "started_at");
         value.completedAt = OptionalText(row, "completed_at");

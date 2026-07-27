@@ -236,7 +236,7 @@ CREATE TABLE experiment_recommendation_conversion_activation(
                     "train",
                     proposalId == 6 ? std::optional<int>{444} : std::nullopt,
                     proposalId == 6
-                        ? std::optional<std::string>{"train"}
+                        ? std::optional<std::string>{"training"}
                         : std::nullopt);
                 InsertExecution(
                     fixtures, executionId, proposalId, 100 + proposalId,
@@ -270,6 +270,11 @@ CREATE TABLE experiment_recommendation_conversion_activation(
         AssertState(
             runtime, 6,
             RecommendationConversionWorkflowState::schedulerClaimedOrRunning);
+        const auto legacyRunning =
+            FindRecommendationConversionWorkflow(runtime, 6);
+        assert(legacyRunning->experiment);
+        assert(legacyRunning->experiment->currentOperation ==
+               std::optional<std::string>{"train"});
         AssertState(runtime, 7, RecommendationConversionWorkflowState::completed);
         AssertState(runtime, 8, RecommendationConversionWorkflowState::failed);
         AssertState(runtime, 9, RecommendationConversionWorkflowState::cancelled);

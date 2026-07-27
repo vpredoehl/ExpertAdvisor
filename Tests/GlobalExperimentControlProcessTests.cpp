@@ -1667,7 +1667,7 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
         "completed_at=COALESCE(completed_at,$1),"
         "cancellation_completed_at=$1,worker_pid=NULL,"
         "worker_process_group_id=NULL,"
-        "current_operation='cancelled_by_global_request',"
+        "current_operation='infer',"
         "error_message='cancelled_by_global_request',updated_at=$1 "
         "WHERE experiment_id=700010 AND status='running';",
         accountedAt);
@@ -1696,7 +1696,7 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
         "UPDATE experiment SET status='pending',phase='train',worker_pid=NULL,"
         "worker_process_group_id=NULL,worker_control_state='running',"
         "last_model_id=$1,"
-        "current_operation='cancel_checkpoint_restart_pending',"
+        "current_operation='train',"
         "error_message='cancellation_worker_restart_required',updated_at=$2 "
         "WHERE experiment_id=700011 AND status='running';",
         restartModelId,
@@ -1749,7 +1749,7 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
           "pending:train:true:true:LSTM_Release:"
           "LSTM_Release --train --scheduler-experiment-id=700011:"
           "1700000011:11:running:true:" + std::to_string(restartModelId) +
-              ":true:cancel_checkpoint_restart_pending:"
+              ":true:train:"
               "cancellation_worker_restart_required:20:20");
     CHECK(Scalar(
               connection,
@@ -1799,7 +1799,7 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
               "WHERE e.experiment_id=700010 AND r.request_id=" +
                   std::to_string(requestId)) ==
           "cancelled:infer:true:true:running:true:"
-          "cancelled_by_global_request:cancelled_by_global_request:"
+          "infer:cancelled_by_global_request:"
           "true:true:true:true:true:true:true");
     CHECK(Scalar(
               connection,
@@ -1872,7 +1872,7 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
         completeTransaction.exec_params(
             "UPDATE experiment SET current_epoch=20,worker_pid=NULL,"
             "worker_process_group_id=NULL,"
-            "current_operation='cancel_checkpoint_reached',"
+            "current_operation='train',"
             "stopped_at_checkpoint_epoch=20,"
             "stopped_at_checkpoint_model_id=$1,last_model_id=$1,"
             "status='cancelled',phase='train',exit_code=0,"
@@ -1936,7 +1936,7 @@ void TestAccountedBeforeReconciliation(const std::string& connectionString,
               "(stopped_at_checkpoint_model_id=last_model_id)::text||':'||"
               "current_operation||':'||error_message FROM experiment "
               "WHERE experiment_id=700011") ==
-          "20:20:true:cancel_checkpoint_reached:"
+          "20:20:true:train:"
           "cancelled_at_requested_checkpoint");
     ResetCrashFixtures(connection);
 }
@@ -3556,13 +3556,13 @@ void TestTerminalCompletedCheckpointReconciliation(
         "SELECT experiment_id,'completed','done',80,20,100,"
         "'2020-02-02'::date,'2020-03-01'::date,"
         "now()-interval '1 hour',now()-interval '1 hour',"
-        "'analysis', $1,80,80,80 "
+        "'analyze', $1,80,80,80 "
         "FROM generate_series(700020,700025) AS experiment_id;",
         requestId);
     fixture.exec(
         "INSERT INTO experiment (experiment_id,status,phase,current_epoch,"
         "current_operation) VALUES "
-        "(700026,'pending','train',0,'queued');");
+        "(700026,'pending','train',0,'train');");
     fixture.exec(
         "INSERT INTO model(experiment_id,comment) "
         "SELECT experiment_id,'periodic training checkpoint' "
@@ -3778,7 +3778,7 @@ void TestUnresolvedCheckpointRemainsActive(
         "stop_after_checkpoint_epoch,last_checkpoint_stop_decision_epoch,"
         "current_operation) VALUES "
         "(700030,'pending','train',60,20,100,$1,80,80,60,"
-        "'cancel_checkpoint_restart_pending');",
+        "'train');",
         requestId);
     const long long modelId = fixture.exec(
         "INSERT INTO model(experiment_id,comment) VALUES "
@@ -4124,7 +4124,7 @@ void TestTerminalInferenceReconciliation(
         "SELECT experiment_id,'completed','done',80,20,100,"
         "CASE WHEN experiment_id=700055 THEN NULL ELSE '2020-02-02'::date END,"
         "CASE WHEN experiment_id=700055 THEN NULL ELSE '2020-03-01'::date END,"
-        "now()-interval '1 hour',now()-interval '1 hour','analysis',"
+        "now()-interval '1 hour',now()-interval '1 hour','analyze',"
         "$1,80,80,80 FROM generate_series(700050,700055) AS experiment_id;",
         requestId);
     fixture.exec(
@@ -4334,14 +4334,14 @@ void TestLegacyInferenceUpgradeMatrix(
         "stopped_at_checkpoint_epoch) "
         "SELECT experiment_id,'cancelled','train',80,20,100,"
         "'2020-02-02'::date,'2020-03-01'::date,now(),now(),"
-        "'cancel_checkpoint_reached',$1,80,80,80 "
+        "'train',$1,80,80,80 "
         "FROM generate_series(700060,700074) AS experiment_id;",
         requestId);
     fixture.exec(
         "INSERT INTO experiment (experiment_id,status,phase,current_epoch,"
         "current_operation) VALUES "
-        "(700075,'completed','done',80,'support'),"
-        "(700076,'completed','done',80,'foreign_model_support');");
+        "(700075,'completed','done',80,'analyze'),"
+        "(700076,'completed','done',80,'analyze');");
     fixture.exec(
         "INSERT INTO model(experiment_id,comment) "
         "SELECT experiment_id,'periodic training checkpoint' "
@@ -4810,7 +4810,7 @@ void TestProductionCheckpointStopOwnership(pqxx::connection& connection)
             "cancel_infer_before,cancel_after_checkpoint_epoch,"
             "stop_after_checkpoint_epoch,current_operation) VALUES ("
             "700084,'pending','train',79,20,100,'2020-02-02','2020-03-01',"
-            "$1,true,80,80,'cancel_checkpoint_restart_pending');",
+            "$1,true,80,80,'train');",
             staleRequestId);
         const long long staleModelId = staleFixture.exec(
             "INSERT INTO model(experiment_id,comment) VALUES "

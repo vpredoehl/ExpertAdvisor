@@ -1,8 +1,8 @@
 # Volume XI — Scheduler
 
 Status: Foundation with accepted atomic-claim hardening; hardening not implemented
-Version: 0.2.1
-Last revised: 2026-07-25
+Version: 0.2.2
+Last revised: 2026-07-27
 
 ## 1. Purpose
 
@@ -106,6 +106,28 @@ process-start identity. Administrative signaling requires an exact PID,
 process-group, executable, experiment, phase, and process-start match. Orphan
 recovery uses durable evidence plus process checks. Legacy active rows without
 complete identity are rejected for signaling until conservatively adopted.
+
+``experiment.current_operation`` has exactly one canonical vocabulary:
+``train``, ``infer``, or ``analyze``. These values name lifecycle work only.
+Unix suspension belongs to ``worker_control_state``; cancellation, checkpoint,
+retry, and recovery detail belongs to lifecycle status/phase, administrative
+outcomes, and diagnostics. Those control labels must never be stored as
+``current_operation``.
+
+Migration 050 exactly maps legacy ``training``, ``inference``, and ``analysis``
+values. It reconciles a historical control label only when status, phase, and
+the owning cancellation or checkpoint fields prove the legacy writer shape;
+unsupported or ambiguous rows abort the migration without being inferred from
+phase. The final constraint enforces the canonical set.
+
+The compatibility trigger canonicalizes only those same proved legacy writes
+during a rolling deployment, so a still-running pre-050 worker cannot
+reintroduce them. It is temporary: retain it until every pre-050 scheduler,
+worker, and administrative executable has exited and validation shows no
+legacy writes. A later reviewed migration may then drop the trigger and
+function while retaining the constraint. Current readers normalize the three
+noun-form aliases before migration, but preserve unsupported values as invalid
+diagnostic evidence rather than concealing them.
 
 ## 6. Transactions
 
@@ -235,3 +257,4 @@ idempotency, recovery, operator control, and regression scope.
 | 0.1.0 | 2026-07-15 | Established scheduler ownership and safety outline. | ADR-0004 |
 | 0.2.0 | 2026-07-24 | Accepted atomic claim/attempt hardening, preserved ordinary experiment work classes, and gated Campaign Operations production dispatch pending implementation and independent verification. | ADR-0004, ADR-0016 |
 | 0.2.1 | 2026-07-25 | Documented checkpoint-evaluation worker ownership and status accounting. | ADR-0004 |
+| 0.2.2 | 2026-07-27 | Restored the canonical `current_operation` vocabulary (`train`, `infer`, `analyze`) across persistence, recovery, administrative controls, and status reporting. | ADR-0004 |

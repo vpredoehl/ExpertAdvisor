@@ -42,6 +42,9 @@ Experiment scheduling tables are created by:
 - `046_global_experiment_control.sql`: database-authoritative global desired
   execution state, administrative request/outcome audit, cancellation targets,
   and managed worker PID/process-group/executable/process-start identity
+- `050_experiment_current_operation_canonicalization.sql`: reconciles legacy
+  operation/control labels and enforces the sole persisted
+  `current_operation` values `train`, `infer`, and `analyze`
 
 Recommendation conversion and campaign-approval history is created by:
 
@@ -233,7 +236,15 @@ The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
 Migration 046 is additionally required before starting the scheduler or using
 ``--pause-all-experiments``, ``--resume-all-experiments``, or
-``--cancel-all-experiments``.  See
+``--cancel-all-experiments``. Migration 050 must be applied before relying on
+the database-enforced canonical scheduler operation contract. Apply migrations
+with ``migrate_lstm_db.sh`` so reconciliation, trigger/constraint installation,
+and migration bookkeeping commit atomically. Migration 050 takes a brief
+exclusive lock on ``experiment``; deploy the corrected executable first and
+apply it in a monitored maintenance window after validating unsupported rows
+and taking a backup. Its compatibility trigger remains only until every
+pre-050 scheduler, worker, and administrative executable has exited; remove it
+later with a reviewed migration while retaining the constraint. See
 ``docs/GlobalExperimentControls.rst`` for locking, process validation,
 checkpoint cancellation, inference, restart, dry-run, and audit semantics.
 

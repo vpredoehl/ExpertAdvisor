@@ -1,4 +1,5 @@
 #include "GlobalExperimentControl.hpp"
+#include "ExperimentCurrentOperation.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -2528,7 +2529,9 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
         pqxx::result updated = transaction.exec_params(
             "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
             "worker_process_group_id=NULL,"
-            "current_operation='checkpoint_stopped',"
+            "current_operation=CASE "
+            "WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL "
+            "THEN 'infer' ELSE 'analyze' END,"
             "stopped_at_checkpoint_epoch=$1,"
             "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
             "status='pending',"
@@ -2654,7 +2657,7 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
     const pqxx::result experimentUpdated = transaction.exec_params(
         "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
         "worker_process_group_id=NULL,"
-        "current_operation='cancel_checkpoint_reached',"
+        "current_operation='train',"
         "stopped_at_checkpoint_epoch=$1,"
         "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
         "status='cancelled',phase='train',exit_code=0,"
@@ -3610,7 +3613,7 @@ int RunCommandWithProcessOperationsForTesting(
                         "UPDATE experiment SET status='pending',phase='train',"
                         "worker_pid=NULL,worker_process_group_id=NULL,"
                         "worker_control_state='running',last_model_id=$1,"
-                        "current_operation='cancel_checkpoint_restart_pending',"
+                        "current_operation='train',"
                         "error_message='cancellation_worker_restart_required',"
                         "updated_at=now() "
                         "WHERE experiment_id=$2 AND status='running' "
@@ -3930,12 +3933,16 @@ int RunCommandWithProcessOperationsForTesting(
             }
             else
             {
+                const std::string currentOperation =
+                    EA::ExperimentLifecycle::
+                        RequireCanonicalCurrentOperationForPhase(
+                            target.worker.phase);
                 cancelled = transaction.exec_params(
                     "UPDATE experiment SET status='cancelled',"
                     "completed_at=COALESCE(completed_at,now()),"
                     "cancellation_completed_at=now(),"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
-                    "current_operation='cancelled_by_global_request',"
+                    "current_operation=$10,"
                     "error_message=CASE WHEN $1 THEN "
                     "'cancelled_after_sigkill' ELSE 'cancelled_by_global_request' END,"
                     "updated_at=now() WHERE experiment_id=$2 "
@@ -3953,7 +3960,8 @@ int RunCommandWithProcessOperationsForTesting(
                     target.worker.processStartIdentity,
                     target.worker.executable,
                     target.worker.commandLine,
-                    requestId);
+                    requestId,
+                    currentOperation);
             }
             const bool exactLifecycleMutationExpected =
                 !target.frozenReplayTarget ||
