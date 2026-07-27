@@ -1,4 +1,5 @@
-DerivedData/*
+# Xcode build products
+DerivedData/
 Build/*
 ratedata.gaincapital.com
 *.swp
