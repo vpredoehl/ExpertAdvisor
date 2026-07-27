@@ -66,8 +66,9 @@ failure; arbitrary SQL errors propagate and are not treated as retryable.
 An unknown commit result is recovered only from a complete authoritative
 binding. Proven absence permits only the same whole-operation retry;
 partial, stale, contradictory, or ambiguous evidence fails closed. Phase 3
-does not repair projections or implement Phase F cancellation, reservation
-release, lease-expiry settlement, reconciliation observation, or repair.
+itself does not repair projections. Campaign Operations Phase 4 implements
+the separate Phase F cancellation, reservation release, lease-expiry
+observation, and bounded recovery authority.
 
 ## Privilege and execution safety
 

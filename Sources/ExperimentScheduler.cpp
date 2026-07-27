@@ -54,6 +54,7 @@
 #include "ExperimentRecommendationCampaignStatusService.hpp"
 #include "ExperimentRecommendationCampaignOutcomeAssessmentService.hpp"
 #include "CampaignOperationsService.hpp"
+#include "CampaignOperationsControlService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -254,6 +255,18 @@ struct SchedulerOptions
     std::optional<long long> campaignOperationsAcceptRequestCampaignId;
     std::optional<long long> campaignOperationsBudgetStatusCampaignId;
     std::optional<long long> campaignOperationsRequestStatusRequestId;
+    std::optional<long long> campaignOperationsPauseCampaignId;
+    std::optional<long long> campaignOperationsResumeCampaignId;
+    std::optional<long long> campaignOperationsCancelCampaignId;
+    std::optional<long long> campaignOperationsControlStatusCampaignId;
+    std::optional<std::string> campaignOperationsReconcileRunKey;
+    bool campaignOperationsReconcileRecover = false;
+    std::optional<int> campaignOperationsExpectedControlVersion;
+    std::optional<long long> campaignOperationsControlRequestId;
+    std::optional<int> campaignOperationsExpectedRequestVersion;
+    std::optional<std::string> campaignOperationsOperationKey;
+    std::optional<long long> campaignOperationsReconcileAfterRequestId;
+    std::optional<int> campaignOperationsReconcileLimit;
     std::optional<int> campaignOperationsExpectedBudgetVersion;
     std::optional<long long> campaignOperationsBudgetValue;
     std::optional<std::string> campaignOperationsActor;
@@ -939,6 +952,18 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--campaign-operations-accept-request" ||
             arg == "--campaign-operations-budget-status" ||
             arg == "--campaign-operations-request-status" ||
+            arg == "--campaign-operations-pause" ||
+            arg == "--campaign-operations-resume" ||
+            arg == "--campaign-operations-cancel" ||
+            arg == "--campaign-operations-control-status" ||
+            arg == "--campaign-operations-reconcile-observe" ||
+            arg == "--campaign-operations-reconcile-recover" ||
+            arg == "--campaign-operations-expected-control-version" ||
+            arg == "--campaign-operations-request-id" ||
+            arg == "--campaign-operations-expected-request-version" ||
+            arg == "--campaign-operations-operation-key" ||
+            arg == "--campaign-operations-reconcile-after-request-id" ||
+            arg == "--campaign-operations-reconcile-limit" ||
             arg == "--campaign-operations-expected-budget-version" ||
             arg == "--campaign-operations-budget-value" ||
             arg == "--campaign-operations-actor" ||
@@ -2147,6 +2172,122 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
         }
+        else if (arg == "--campaign-operations-pause")
+        {
+            if (options.campaignOperationsPauseCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-pause");
+            options.campaignOperationsPauseCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-resume")
+        {
+            if (options.campaignOperationsResumeCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-resume");
+            options.campaignOperationsResumeCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-cancel")
+        {
+            if (options.campaignOperationsCancelCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-cancel");
+            options.campaignOperationsCancelCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-control-status")
+        {
+            if (options.campaignOperationsControlStatusCampaignId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-control-status");
+            options.campaignOperationsControlStatusCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-reconcile-observe" ||
+                 arg == "--campaign-operations-reconcile-recover")
+        {
+            if (options.campaignOperationsReconcileRunKey)
+                throw std::invalid_argument(
+                    "duplicate Campaign Operations reconciliation command");
+            options.campaignOperationsReconcileRunKey =
+                RequireNextArg(argc, argv, i, arg);
+            options.campaignOperationsReconcileRecover =
+                arg == "--campaign-operations-reconcile-recover";
+        }
+        else if (
+            arg == "--campaign-operations-expected-control-version")
+        {
+            if (options.campaignOperationsExpectedControlVersion)
+                throw std::invalid_argument(
+                    "duplicate "
+                    "--campaign-operations-expected-control-version");
+            const long long value = ParseSignedLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+            if (value < 0 || value > std::numeric_limits<int>::max())
+                throw std::invalid_argument(
+                    "invalid "
+                    "--campaign-operations-expected-control-version");
+            options.campaignOperationsExpectedControlVersion =
+                static_cast<int>(value);
+        }
+        else if (arg == "--campaign-operations-request-id")
+        {
+            if (options.campaignOperationsControlRequestId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-request-id");
+            options.campaignOperationsControlRequestId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (
+            arg == "--campaign-operations-expected-request-version")
+        {
+            if (options.campaignOperationsExpectedRequestVersion)
+                throw std::invalid_argument(
+                    "duplicate "
+                    "--campaign-operations-expected-request-version");
+            const long long value = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+            if (value > std::numeric_limits<int>::max())
+                throw std::invalid_argument(
+                    "invalid "
+                    "--campaign-operations-expected-request-version");
+            options.campaignOperationsExpectedRequestVersion =
+                static_cast<int>(value);
+        }
+        else if (arg == "--campaign-operations-operation-key")
+        {
+            if (options.campaignOperationsOperationKey)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-operation-key");
+            options.campaignOperationsOperationKey =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (
+            arg == "--campaign-operations-reconcile-after-request-id")
+        {
+            if (options.campaignOperationsReconcileAfterRequestId)
+                throw std::invalid_argument(
+                    "duplicate "
+                    "--campaign-operations-reconcile-after-request-id");
+            options.campaignOperationsReconcileAfterRequestId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-reconcile-limit")
+        {
+            if (options.campaignOperationsReconcileLimit)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-reconcile-limit");
+            options.campaignOperationsReconcileLimit =
+                ParsePositiveInt(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
         else if (arg == "--campaign-operations-expected-budget-version")
         {
             if (options.campaignOperationsExpectedBudgetVersion)
@@ -3194,6 +3335,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.campaignOperationsRequestStatusRequestId.has_value()
              ? 1
              : 0) +
+        (options.campaignOperationsPauseCampaignId.has_value() ? 1 : 0) +
+        (options.campaignOperationsResumeCampaignId.has_value() ? 1 : 0) +
+        (options.campaignOperationsCancelCampaignId.has_value() ? 1 : 0) +
+        (options.campaignOperationsControlStatusCampaignId.has_value()
+             ? 1 : 0) +
+        (options.campaignOperationsReconcileRunKey.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
         (options.stopAfterCheckpoint.has_value() ? 1 : 0) +
@@ -3706,22 +3853,35 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsBudgetSupersedeCampaignId.has_value();
     const bool campaignOperationsRequestMutation =
         options.campaignOperationsAcceptRequestCampaignId.has_value();
+    const bool campaignOperationsControlMutation =
+        options.campaignOperationsPauseCampaignId.has_value() ||
+        options.campaignOperationsResumeCampaignId.has_value() ||
+        options.campaignOperationsCancelCampaignId.has_value() ||
+        options.campaignOperationsReconcileRunKey.has_value();
     const bool campaignOperationsMutation =
         campaignOperationsBudgetMutation ||
-        campaignOperationsRequestMutation;
+        campaignOperationsRequestMutation ||
+        campaignOperationsControlMutation;
     const bool campaignOperationsStatus =
         options.campaignOperationsBudgetStatusCampaignId.has_value() ||
-        options.campaignOperationsRequestStatusRequestId.has_value();
+        options.campaignOperationsRequestStatusRequestId.has_value() ||
+        options.campaignOperationsControlStatusCampaignId.has_value();
     const bool campaignOperationsMetadata =
         options.campaignOperationsExpectedBudgetVersion.has_value() ||
         options.campaignOperationsBudgetValue.has_value() ||
         options.campaignOperationsActor.has_value() ||
         options.campaignOperationsReason.has_value() ||
-        options.campaignOperationsReservationExpiresAt.has_value();
+        options.campaignOperationsReservationExpiresAt.has_value() ||
+        options.campaignOperationsExpectedControlVersion.has_value() ||
+        options.campaignOperationsControlRequestId.has_value() ||
+        options.campaignOperationsExpectedRequestVersion.has_value() ||
+        options.campaignOperationsOperationKey.has_value() ||
+        options.campaignOperationsReconcileAfterRequestId.has_value() ||
+        options.campaignOperationsReconcileLimit.has_value();
     if (campaignOperationsMetadata && !campaignOperationsMutation)
         throw std::invalid_argument(
             "Campaign Operations metadata requires a budget mutation or "
-            "request acceptance command");
+            "request acceptance or control command");
     if (campaignOperationsMutation)
     {
         if (options.dryRun)
@@ -3731,8 +3891,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         if (!options.yes)
             throw std::invalid_argument(
                 "Campaign Operations mutation requires --yes");
-        if (!options.campaignOperationsActor ||
-            !options.campaignOperationsReason)
+        if (!options.campaignOperationsReconcileRunKey &&
+            (!options.campaignOperationsActor ||
+             !options.campaignOperationsReason))
             throw std::invalid_argument(
                 "Campaign Operations mutation requires "
                 "--campaign-operations-actor and "
@@ -3791,10 +3952,95 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (void)EA::CampaignOperations::
             ValidateOperationalRequestAcceptanceRequest(request);
     }
+    if ((options.campaignOperationsExpectedBudgetVersion ||
+            options.campaignOperationsBudgetValue) &&
+        !campaignOperationsBudgetMutation &&
+        !campaignOperationsRequestMutation)
+        throw std::invalid_argument(
+            "budget metadata requires a budget mutation");
     if (options.campaignOperationsReservationExpiresAt &&
         !campaignOperationsRequestMutation)
         throw std::invalid_argument(
             "reservation expiry requires request acceptance");
+    const bool pauseOrResume =
+        options.campaignOperationsPauseCampaignId.has_value() ||
+        options.campaignOperationsResumeCampaignId.has_value();
+    if (pauseOrResume)
+    {
+        if (!options.campaignOperationsExpectedControlVersion)
+            throw std::invalid_argument(
+                "pause/resume requires "
+                "--campaign-operations-expected-control-version");
+        EA::CampaignOperations::CampaignControlRequest control;
+        control.campaignId = options.campaignOperationsPauseCampaignId
+            ? *options.campaignOperationsPauseCampaignId
+            : *options.campaignOperationsResumeCampaignId;
+        control.expectedControlVersion =
+            *options.campaignOperationsExpectedControlVersion;
+        control.action = options.campaignOperationsPauseCampaignId
+            ? EA::CampaignOperations::ControlEventKind::pause
+            : EA::CampaignOperations::ControlEventKind::resume;
+        control.actorIdentity = *options.campaignOperationsActor;
+        control.reason = *options.campaignOperationsReason;
+        (void)EA::CampaignOperations::ValidateCampaignControlRequest(
+            control);
+    }
+    if (options.campaignOperationsExpectedControlVersion &&
+        !pauseOrResume)
+        throw std::invalid_argument(
+            "control version requires pause or resume");
+    if (options.campaignOperationsCancelCampaignId)
+    {
+        if (!options.campaignOperationsControlRequestId ||
+            !options.campaignOperationsExpectedRequestVersion ||
+            !options.campaignOperationsOperationKey)
+            throw std::invalid_argument(
+                "cancellation requires --campaign-operations-request-id, "
+                "--campaign-operations-expected-request-version, and "
+                "--campaign-operations-operation-key");
+        EA::CampaignOperations::CampaignCancellationCommandRequest cancel;
+        cancel.campaignId =
+            *options.campaignOperationsCancelCampaignId;
+        cancel.requestId = options.campaignOperationsControlRequestId;
+        cancel.expectedRequestVersion =
+            options.campaignOperationsExpectedRequestVersion;
+        cancel.operationKey =
+            *options.campaignOperationsOperationKey;
+        cancel.actorIdentity = *options.campaignOperationsActor;
+        cancel.reason = *options.campaignOperationsReason;
+        (void)EA::CampaignOperations::
+            ValidateCampaignCancellationRequest(cancel);
+    }
+    if ((options.campaignOperationsControlRequestId ||
+            options.campaignOperationsExpectedRequestVersion ||
+            options.campaignOperationsOperationKey) &&
+        !options.campaignOperationsCancelCampaignId)
+        throw std::invalid_argument(
+            "cancellation metadata requires cancellation");
+    if (options.campaignOperationsReconcileRunKey)
+    {
+        if (options.campaignOperationsActor ||
+            options.campaignOperationsReason)
+            throw std::invalid_argument(
+                "reconciliation uses its service identity and accepts no "
+                "operator actor/reason");
+        EA::CampaignOperations::ReconciliationObserveRequest reconcile;
+        reconcile.runKey =
+            *options.campaignOperationsReconcileRunKey;
+        reconcile.afterRequestId =
+            options.campaignOperationsReconcileAfterRequestId.value_or(0);
+        reconcile.limit =
+            options.campaignOperationsReconcileLimit.value_or(100);
+        reconcile.resolveSafeTransitions =
+            options.campaignOperationsReconcileRecover;
+        (void)EA::CampaignOperations::
+            ValidateReconciliationObserveRequest(reconcile);
+    }
+    if ((options.campaignOperationsReconcileAfterRequestId ||
+            options.campaignOperationsReconcileLimit) &&
+        !options.campaignOperationsReconcileRunKey)
+        throw std::invalid_argument(
+            "reconciliation metadata requires reconciliation");
     const bool hasAutomaticContinuationOption =
         options.autoEvaluateContinuations ||
         options.autoQueueContinuations ||
@@ -7019,7 +7265,7 @@ void BackfillRunningTrainingProgressFromLogs(pqxx::work& w,
 
         w.exec_params(
             "UPDATE experiment "
-            "SET current_epoch = $1, current_operation = 'training', updated_at = now() "
+            "SET current_epoch = $1, current_operation = 'train', updated_at = now() "
             "WHERE experiment_id = $2 "
             "AND status = 'running' "
             "AND phase = 'train' "
@@ -7042,7 +7288,7 @@ void PersistDiscoveredRunningTrainingMetadata(const std::vector<SchedulerStatusJ
             continue;
 
         std::ostringstream sql;
-        sql << "UPDATE experiment SET current_operation = 'training'";
+        sql << "UPDATE experiment SET current_operation = 'train'";
         if (job.pid.has_value())
             sql << ", worker_pid = " << *job.pid;
         if (job.currentEpoch.has_value())
@@ -16493,11 +16739,11 @@ std::string CurrentOperationForStatusJob(const SchedulerStatusJob& job)
     if (!job.currentOperation.empty())
         return job.currentOperation;
     if (job.phase == "train")
-        return "training";
+        return "train";
     if (job.phase == "infer")
-        return "inference";
+        return "infer";
     if (job.phase == "analyze")
-        return "analysis";
+        return "analyze";
     if (job.phase == "done")
         return "done";
     return "unknown";
@@ -17648,10 +17894,37 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --campaign-operations-budget-status CAMPAIGN_ID | "
         << "--campaign-operations-request-status REQUEST_ID\n"
         << "Campaign Operations Phase 2 administers the member-unit budget "
-        << "ledger and atomically persists one held reservation plus one ready "
-        << "durable request. It never dispatches, invokes Phase 5, changes an "
-        << "experiment, starts the scheduler, or launches a worker. Capability "
-        << "role assignment remains a separate administrator action.\n"
+        << "ledger and atomically persists one held reservation plus one "
+        << "ready durable request. It never dispatches, invokes Phase 5, "
+        << "changes an experiment, starts the scheduler, or launches a "
+        << "worker. Capability role assignment remains a separate "
+        << "administrator action.\n"
+        << "Usage: " << exe
+        << " --campaign-operations-pause CAMPAIGN_ID | "
+        << "--campaign-operations-resume CAMPAIGN_ID "
+        << "--campaign-operations-expected-control-version N "
+        << "--campaign-operations-actor ACTOR "
+        << "--campaign-operations-reason REASON --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-cancel CAMPAIGN_ID "
+        << "--campaign-operations-request-id REQUEST_ID "
+        << "--campaign-operations-expected-request-version N "
+        << "--campaign-operations-operation-key KEY "
+        << "--campaign-operations-actor ACTOR "
+        << "--campaign-operations-reason REASON --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-control-status CAMPAIGN_ID | "
+        << "(--campaign-operations-reconcile-observe RUN_KEY | "
+        << "--campaign-operations-reconcile-recover RUN_KEY) "
+        << "[--campaign-operations-reconcile-after-request-id ID] "
+        << "[--campaign-operations-reconcile-limit N] --yes\n"
+        << "Campaign Operations Phase 4 controls only future Campaign "
+        << "Operations actions. It records cancellation intent separately "
+        << "from settlement, never refunds committed units, and delegates "
+        << "bound pending cancellation to lifecycle authority after releasing "
+        << "Campaign Operations locks. Reconciliation observes first; only "
+        << "the recover form invokes a named safe owning transition. Neither "
+        << "form signals workers or controls scheduler processes.\n"
         << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
@@ -17673,6 +17946,58 @@ void PrintExperimentSchedulerHelp(const char* executable)
 int RunCampaignOperationsCommand(const SchedulerOptions& options)
 {
     const std::string connectionString = LstmDbConnectionString();
+    if (options.campaignOperationsControlStatusCampaignId)
+        return EA::CampaignOperations::RunCampaignControlStatusCommand(
+            connectionString,
+            EA::CampaignOperations::OperationalCampaignId(
+                *options.campaignOperationsControlStatusCampaignId),
+            std::cout, std::cerr);
+    if (options.campaignOperationsReconcileRunKey)
+    {
+        EA::CampaignOperations::ReconciliationObserveRequest request;
+        request.runKey = *options.campaignOperationsReconcileRunKey;
+        request.afterRequestId =
+            options.campaignOperationsReconcileAfterRequestId.value_or(0);
+        request.limit =
+            options.campaignOperationsReconcileLimit.value_or(100);
+        request.resolveSafeTransitions =
+            options.campaignOperationsReconcileRecover;
+        return EA::CampaignOperations::RunCampaignReconciliationCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.campaignOperationsPauseCampaignId ||
+        options.campaignOperationsResumeCampaignId)
+    {
+        EA::CampaignOperations::CampaignControlRequest request;
+        request.campaignId = options.campaignOperationsPauseCampaignId
+            ? *options.campaignOperationsPauseCampaignId
+            : *options.campaignOperationsResumeCampaignId;
+        request.expectedControlVersion =
+            *options.campaignOperationsExpectedControlVersion;
+        request.action = options.campaignOperationsPauseCampaignId
+            ? EA::CampaignOperations::ControlEventKind::pause
+            : EA::CampaignOperations::ControlEventKind::resume;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        return EA::CampaignOperations::RunCampaignControlCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.campaignOperationsCancelCampaignId)
+    {
+        EA::CampaignOperations::CampaignCancellationCommandRequest request;
+        request.campaignId =
+            *options.campaignOperationsCancelCampaignId;
+        request.requestId =
+            options.campaignOperationsControlRequestId;
+        request.expectedRequestVersion =
+            options.campaignOperationsExpectedRequestVersion;
+        request.operationKey =
+            *options.campaignOperationsOperationKey;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        return EA::CampaignOperations::RunCampaignCancellationCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
     if (options.campaignOperationsBudgetStatusCampaignId)
         return EA::CampaignOperations::RunCampaignBudgetStatusCommand(
             connectionString,
@@ -18307,7 +18632,12 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.campaignOperationsBudgetSupersedeCampaignId ||
             options.campaignOperationsAcceptRequestCampaignId ||
             options.campaignOperationsBudgetStatusCampaignId ||
-            options.campaignOperationsRequestStatusRequestId)
+            options.campaignOperationsRequestStatusRequestId ||
+            options.campaignOperationsPauseCampaignId ||
+            options.campaignOperationsResumeCampaignId ||
+            options.campaignOperationsCancelCampaignId ||
+            options.campaignOperationsControlStatusCampaignId ||
+            options.campaignOperationsReconcileRunKey)
             return RunCampaignOperationsCommand(options);
         if (options.generateExperimentRecommendations ||
             options.listExperimentRecommendations ||

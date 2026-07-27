@@ -234,6 +234,20 @@ PersistResult<AcceptedOperationalRequest> AcceptOperationalRequest(
         !BudgetRequestSchemaExists(transaction))
         throw Error(ErrorCode::persistenceCorruption,
             "campaign_operations_budget_request_schema_required");
+    const bool controlSchema = transaction.exec(
+        "SELECT to_regclass('campaign_operations_control_event') "
+        "IS NOT NULL AND to_regclass("
+        "'campaign_operations_cancellation_request') IS NOT NULL;")
+        .one_row()[0].as<bool>();
+    if (controlSchema)
+    {
+        const auto allowed = transaction.exec(
+            "SELECT campaign_operations_future_actions_allowed($1);",
+            pqxx::params{validated.campaignId}).one_row()[0].as<bool>();
+        if (!allowed)
+            throw Error(ErrorCode::persistenceConflict,
+                "campaign_operations_request_control_blocked");
+    }
     auto result = PersistAcceptedOperationalRequest(transaction,
         OperationalCampaignId(validated.campaignId),
         ActorIdentity(validated.actorIdentity), Reason(validated.reason),

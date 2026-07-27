@@ -99,6 +99,23 @@ void ValidateBudgetHead(pqxx::transaction_base& transaction,
             "campaign_operations_dispatch_budget_inactive");
 }
 
+void ValidateCampaignControlGate(
+    pqxx::transaction_base& transaction, long long campaignId)
+{
+    const bool controlSchema = transaction.exec(
+        "SELECT to_regclass('campaign_operations_control_event') "
+        "IS NOT NULL AND to_regclass("
+        "'campaign_operations_cancellation_request') IS NOT NULL;")
+        .one_row()[0].as<bool>();
+    if (!controlSchema) return;
+    const auto allowed = transaction.exec(
+        "SELECT campaign_operations_future_actions_allowed($1);",
+        pqxx::params{campaignId}).one_row()[0].as<bool>();
+    if (!allowed)
+        throw std::runtime_error(
+            "campaign_operations_dispatch_control_blocked");
+}
+
 DispatchAttemptRecord MapAttempt(const pqxx::row& row)
 {
     const DispatchAttemptId attemptId(row[0].as<long long>());
@@ -167,13 +184,28 @@ std::vector<OperationalRequestId> SelectDispatchCandidatesForIsolatedTest(
     if (limit <= 0 || limit > kCampaignOperationsMaximumDispatchBatchSize)
         throw std::invalid_argument("campaign_operations_dispatch_limit");
     std::vector<OperationalRequestId> result;
-    const auto rows = transaction.exec(
-        "SELECT operational_request_id "
-        "FROM campaign_operations_operational_request "
-        "WHERE request_state='ready' "
-        "AND production_dispatch_enabled=false "
-        "ORDER BY operational_request_id LIMIT $1;",
-        pqxx::params{limit});
+    const bool controlSchema = transaction.exec(
+        "SELECT to_regclass('campaign_operations_control_event') "
+        "IS NOT NULL AND to_regclass("
+        "'campaign_operations_cancellation_request') IS NOT NULL;")
+        .one_row()[0].as<bool>();
+    const auto rows = controlSchema
+        ? transaction.exec(
+            "SELECT request.operational_request_id "
+            "FROM campaign_operations_operational_request request "
+            "WHERE request.request_state='ready' "
+            "AND request.production_dispatch_enabled=false "
+            "AND campaign_operations_future_actions_allowed("
+            " request.operational_campaign_id) "
+            "ORDER BY request.operational_request_id LIMIT $1;",
+            pqxx::params{limit})
+        : transaction.exec(
+            "SELECT operational_request_id "
+            "FROM campaign_operations_operational_request "
+            "WHERE request_state='ready' "
+            "AND production_dispatch_enabled=false "
+            "ORDER BY operational_request_id LIMIT $1;",
+            pqxx::params{limit});
     result.reserve(rows.size());
     for (const auto& row : rows)
         result.emplace_back(row[0].as<long long>());
@@ -213,6 +245,7 @@ DispatchLease AcquireDispatchLeaseInTransaction(
         reservationPreview[2].as<int>());
     (void)LockOperationalCampaign(
         transaction, OperationalCampaignId(campaignId));
+    ValidateCampaignControlGate(transaction, campaignId);
     const pqxx::row reservation = transaction.exec(
         "SELECT reservation_id,reservation_state,state_version,amount,"
         "recommendation_campaign_materialization_id,"
@@ -335,6 +368,7 @@ DispatchLockedAuthority LockAndRevalidateDispatchAuthority(
         reservationPreview[1].as<int>());
     (void)LockOperationalCampaign(
         transaction, OperationalCampaignId(campaignId));
+    ValidateCampaignControlGate(transaction, campaignId);
     const pqxx::row reservation = transaction.exec(
         "SELECT reservation_id,reservation_identity_canonical,"
         "reservation_state,state_version,amount,"

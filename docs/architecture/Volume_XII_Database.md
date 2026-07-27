@@ -1,7 +1,7 @@
 # Volume XII — Database
 
-Status: Aligned through Phase 6D and isolated Campaign Operations Phase 3
-Version: 0.7.0
+Status: Aligned through Phase 6D and Campaign Operations Phase 4
+Version: 0.8.0
 Last revised: 2026-07-25
 
 ## 1. Purpose
@@ -62,6 +62,20 @@ references. Dedicated dispatcher and transactional Phase 5 roles are NOLOGIN,
 are not members of or granted to `pqxx`, and receive only explicit allowlists.
 Production dispatch remains constrained false; no scheduler tables, scheduler
 attempts, claims, worker privileges, or production poller are added.
+
+Campaign Operations migration 049 adds append-only campaign control,
+cancellation request/settlement, lifecycle cancellation,
+reconciliation observation/resolution/cursor, and control-audit evidence.
+Every observation has a non-null foreign key to one cursor batch, and cursor
+plus exact membership commit atomically. Replay resolves the cursor identity
+and never infers membership from request ranges or mutable request state.
+Guarded transitions and deferred audit completeness make unbound cancellation
+and expired-lease recovery atomic. Lifecycle-owned cancellation is separately
+committed and replayed before bound settlement. Dedicated controller,
+cancellation coordinator, reconciler, recovery, and lifecycle roles are
+NOLOGIN, narrowly privileged, and not granted to `pqxx`. No scheduler or
+worker-process authority, production dispatch, completion, or archival is
+added.
 
 ## 3. Responsibilities
 
@@ -319,3 +333,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.5.0 | 2026-07-24 | Aligned accepted Phase 6D and recorded Campaign Operations' append-only, transactional, least-privilege authority and implemented Phase 1 foundation. | ADR-0009–ADR-0017 |
 | 0.6.0 | 2026-07-24 | Added Campaign Operations Phase 2 budget, reservation, durable request, acquisition, audit, and least-privilege persistence contracts. | ADR-0010–ADR-0013, ADR-0017 |
 | 0.7.0 | 2026-07-25 | Added isolated Phase 3 durable dispatch, atomic Phase 5 handoff evidence, complete bindings/control ownership, settlement, and narrow NOLOGIN capabilities without production or scheduler enablement. | ADR-0010–ADR-0017 |
+| 0.8.0 | 2026-07-25 | Added Phase 4 append-only controls, cancellation coordination and settlement, deterministic reconciliation evidence, and guarded expired-lease recovery without scheduler or worker authority. | ADR-0010–ADR-0017 |

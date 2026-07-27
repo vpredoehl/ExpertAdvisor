@@ -1,7 +1,7 @@
 # Volume X — Research Automation
 
-Status: Authoritative through isolated Campaign Operations Phase 3; broader automation reserved
-Version: 1.2.0
+Status: Authoritative through Campaign Operations Phase 4; broader automation reserved
+Version: 1.3.0
 Last revised: 2026-07-25
 
 ## 1. Purpose
@@ -40,9 +40,13 @@ acquisition, immutable attempt/outcome evidence, atomic invocation of the
 existing transaction-bound Phase 5 workflow, complete ordered bindings,
 permanent V1 control ownership, and held-to-committed/bound settlement. Its
 single-request execution adapter is restricted to explicitly acknowledged
-disposable test databases; production dispatch remains disabled. Scheduler
-claiming, workers, campaign controls, cancellation/reconciliation, completion,
-archival, and execution monitoring remain unimplemented. Broader autonomous research remains reserved;
+disposable test databases; production dispatch remains disabled.
+Campaign Operations Phase 4 implements architectural Phase F append-only
+pause/resume gates, cancellation intent and settlement, lifecycle-delegated
+bound cancellation, deterministic reconciliation observations, and safe
+expired-lease recovery. Scheduler claiming, workers, running-worker stop
+authority, completion, archival, and execution monitoring remain
+unimplemented. Broader autonomous research remains reserved;
 existing recommendation and continuation capabilities MUST NOT be composed
 into it informally.
 
@@ -135,7 +139,9 @@ Uncertain budget or request state fails closed and requires reconciliation.
 Phase 3 performs authoritative lease/binding/outcome lookup before retry,
 retries the complete affected acquisition or handoff transaction only for
 serialization/deadlock errors, and treats partial or ambiguous downstream
-evidence as reconciliation-required.
+evidence as reconciliation-required. Phase 4 persists those observations
+before repair and automatically resolves only an expired current lease with
+no binding, downstream execution, or current-attempt outcome.
 
 ## 7. Concurrency
 
@@ -149,7 +155,10 @@ binding/control owner, cancellation target, or completion decision.
 The global Campaign Operations order is authorization → budget → campaign →
 reservation → request, with ascending IDs within a level. Workflows omit only
 inapplicable earlier levels and MUST NOT acquire an earlier level after a
-later one.
+later one. Reconciliation batch persistence therefore locks every selected
+campaign in ascending ID order before every selected request in ascending ID
+order. Cursor and exact observation membership commit in that same
+transaction.
 
 ### 7.3 Winner, loser, and retry outcomes
 
@@ -272,3 +281,4 @@ scheduler work classes each require a later accepted owning-domain ADR.
 | 1.0.0 | 2026-07-24 | Accepted the bounded Campaign Operations refinement while retaining broader autonomous research as reserved. | ADR-0010–ADR-0017 |
 | 1.1.0 | 2026-07-24 | Implemented Phase 2 budget reservation and durable request acceptance without dispatch or lifecycle authority. | ADR-0010–ADR-0013, ADR-0017 |
 | 1.2.0 | 2026-07-25 | Implemented architectural Phase E durable dispatch and atomic lifecycle handoff for isolated verification; production dispatch and ADR-0016 remain gated. | ADR-0010–ADR-0017 |
+| 1.3.0 | 2026-07-25 | Implemented architectural Phase F controls, cancellation coordination, deterministic observations, and bounded expired-lease recovery without scheduler or worker authority. | ADR-0010–ADR-0017 |

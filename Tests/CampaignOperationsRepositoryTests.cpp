@@ -1,6 +1,8 @@
 #include "../Sources/CampaignOperationsRepository.hpp"
 #include "../Sources/CampaignOperationsService.hpp"
 #include "../Sources/CampaignOperationsDispatchRepository.hpp"
+#include "../Sources/CampaignOperationsControlRepository.hpp"
+#include "../Sources/CampaignOperationsControlService.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
 #include "../Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.hpp"
@@ -10,6 +12,7 @@
 #include <atomic>
 #include <barrier>
 #include <cassert>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -21,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
 
 #include <pqxx/pqxx>
@@ -558,6 +562,7 @@ CREATE TABLE experiment(
     invocation_mode text,
     resume_model_id bigint,
     duplicate_nonce bigint NOT NULL DEFAULT 0,
+    completed_at timestamptz,
     updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE experiment_recommendation_conversion_proposal(
     recommendation_conversion_proposal_id bigint PRIMARY KEY);
@@ -765,6 +770,14 @@ long long CountRows(pqxx::connection& connection, const std::string& schema,
                transaction.quote_name(table) + ";")
         .one_row()[0]
         .as<long long>();
+}
+
+long long Scalar(pqxx::connection& connection, const std::string& schema,
+    const std::string& query)
+{
+    pqxx::read_transaction transaction{connection};
+    SetSearchPath(transaction, schema);
+    return transaction.exec(query).one_row()[0].as<long long>();
 }
 
 long long CountRowsForCampaign(pqxx::connection& connection,
@@ -3262,6 +3275,1656 @@ void TestPhase3LeaseAcquisition(pqxx::connection& owner,
     }
 }
 
+PersistResult<AcceptedOperationalRequest> AcceptPhase4Fixture(
+    pqxx::connection& owner, const std::string& connectionString,
+    const std::string& schema, long long materializationId,
+    int memberCount,
+    std::optional<std::string> expiresAt = std::nullopt)
+{
+    const std::string budgetConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_budget_administrator'";
+    const std::string requestConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_request_acceptor'";
+    const auto fixture = CreatePhase2AcceptanceFixture(owner,
+        budgetConnectionString, schema, materializationId, memberCount);
+    pqxx::connection acceptor{requestConnectionString};
+    return AcceptOperationalRequest(acceptor,
+        {fixture.campaign.campaignId.value(),
+            "phase4.requester@example.test",
+            "Accept exact Phase F control fixture.",
+            std::move(expiresAt)});
+}
+
+void ExpireDispatchLeaseForTest(pqxx::connection& owner,
+    const std::string& schema, OperationalRequestId requestId,
+    bool shortenWhileActive = false)
+{
+    const auto setAcquisitionTrigger = [&](const char* state)
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec("SET LOCAL ROLE campaign_operations_owner;");
+        transaction.exec(
+            std::string(
+                "ALTER TABLE campaign_operations_operational_request ") +
+            state + " TRIGGER "
+            "campaign_operations_dispatch_acquisition_complete_trigger;");
+        transaction.commit();
+    };
+    setAcquisitionTrigger("DISABLE");
+    try
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec("SET LOCAL ROLE campaign_operations_owner;");
+        transaction.exec(
+            "UPDATE campaign_operations_operational_request "
+            "SET lease_expires_at=transaction_timestamp()" +
+            std::string(shortenWhileActive ? "+" : "-") +
+            "interval '" +
+            std::string(shortenWhileActive ? "5 seconds" : "1 second") +
+            "' "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{requestId.value()});
+        transaction.exec(
+            "UPDATE campaign_operations_dispatch_attempt "
+            "SET lease_expires_at=transaction_timestamp()" +
+            std::string(shortenWhileActive ? "+" : "-") +
+            "interval '" +
+            std::string(shortenWhileActive ? "5 seconds" : "1 second") +
+            "' "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{requestId.value()});
+        transaction.commit();
+    }
+    catch (...)
+    {
+        setAcquisitionTrigger("ENABLE");
+        throw;
+    }
+    setAcquisitionTrigger("ENABLE");
+}
+
+bool WaitForApplicationLockWait(
+    pqxx::connection& owner, const std::string& applicationName)
+{
+    for (int attempt = 0; attempt < 2500; ++attempt)
+    {
+        pqxx::read_transaction transaction{owner};
+        const bool waiting = transaction.exec(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity "
+            "WHERE application_name=$1 AND wait_event_type='Lock');",
+            pqxx::params{applicationName}).one_row()[0].as<bool>();
+        if (waiting) return true;
+        transaction.abort();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return false;
+}
+
+void TestPhase4ControlsCancellationAndReconciliation(
+    pqxx::connection& owner, const std::string& connectionString,
+    const std::string& schema)
+{
+    const std::string runtimeConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c lock_timeout=5s -c statement_timeout=15s'";
+    const std::string budgetConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_budget_administrator'";
+    const std::string requestConnectionString = connectionString +
+        " options='-c search_path=" + schema +
+        " -c role=campaign_operations_request_acceptor'";
+
+    const auto acceptanceGateFixture = CreatePhase2AcceptanceFixture(
+        owner, budgetConnectionString, schema, 209, 1);
+    pqxx::connection controlConnection{runtimeConnectionString};
+    CampaignControlRequest gatePause{
+        acceptanceGateFixture.campaign.campaignId.value(), 0,
+        ControlEventKind::pause, "phase4.operator@example.test",
+        "Pause before request acceptance."};
+    (void)ControlCampaign(controlConnection, gatePause);
+    bool pausedAcceptanceBlocked = false;
+    try
+    {
+        pqxx::connection acceptor{requestConnectionString};
+        (void)AcceptOperationalRequest(acceptor,
+            {acceptanceGateFixture.campaign.campaignId.value(),
+                "phase4.requester@example.test",
+                "Paused acceptance must fail.", std::nullopt});
+    }
+    catch (const Error& error)
+    {
+        pausedAcceptanceBlocked =
+            error.code() == ErrorCode::persistenceConflict;
+    }
+    assert(pausedAcceptanceBlocked);
+    CampaignControlRequest gateResume{
+        acceptanceGateFixture.campaign.campaignId.value(), 1,
+        ControlEventKind::resume, "phase4.operator@example.test",
+        "Resume before request acceptance."};
+    (void)ControlCampaign(controlConnection, gateResume);
+    {
+        pqxx::connection acceptor{requestConnectionString};
+        assert(AcceptOperationalRequest(acceptor,
+                   {acceptanceGateFixture.campaign.campaignId.value(),
+                       "phase4.requester@example.test",
+                       "Resumed acceptance must succeed.", std::nullopt})
+                   .outcome == PersistOutcome::recorded);
+    }
+
+    const auto pausedAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 210, 1);
+    const auto pausedCampaignId =
+        pausedAccepted.persisted.request.request.logicalOperation.campaignId;
+    CampaignControlRequest pause{pausedCampaignId.value(), 0,
+        ControlEventKind::pause, "phase4.operator@example.test",
+        "Pause only future Campaign Operations actions."};
+    const auto paused = ControlCampaign(controlConnection, pause);
+    assert(paused.replay == ControlReplayDisposition::recorded);
+    const auto pauseReplay = ControlCampaign(controlConnection, pause);
+    assert(pauseReplay.replay ==
+        ControlReplayDisposition::existingIdentical);
+    assert(pauseReplay.persisted.controlEventId ==
+        paused.persisted.controlEventId);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        const auto candidates =
+            SelectDispatchCandidatesForIsolatedTest(transaction, 100);
+        assert(std::find(candidates.begin(), candidates.end(),
+                   pausedAccepted.persisted.request.requestId) ==
+            candidates.end());
+    }
+    bool changedReplayConflicted = false;
+    try
+    {
+        CampaignControlRequest changed = pause;
+        changed.reason = "A changed duplicate must conflict.";
+        (void)ControlCampaign(controlConnection, changed);
+    }
+    catch (const Error& error)
+    {
+        changedReplayConflicted =
+            error.code() == ErrorCode::persistenceConflict;
+    }
+    assert(changedReplayConflicted);
+    CampaignControlRequest resume{pausedCampaignId.value(), 1,
+        ControlEventKind::resume, "phase4.operator@example.test",
+        "Resume future Campaign Operations actions."};
+    const auto resumed = ControlCampaign(controlConnection, resume);
+    assert(resumed.replay == ControlReplayDisposition::recorded);
+    assert(ControlCampaign(controlConnection, resume).replay ==
+        ControlReplayDisposition::existingIdentical);
+    const auto controlStatus =
+        LoadCampaignControlStatus(controlConnection, pausedCampaignId);
+    assert(!controlStatus.paused);
+    assert(controlStatus.controlVersion == 2);
+    CampaignCancellationCommandRequest statusSnapshotCancellation;
+    statusSnapshotCancellation.campaignId = pausedCampaignId.value();
+    statusSnapshotCancellation.requestId =
+        pausedAccepted.persisted.request.requestId.value();
+    statusSnapshotCancellation.expectedRequestVersion = 1;
+    statusSnapshotCancellation.operationKey =
+        "phase4-status-repeatable-read";
+    statusSnapshotCancellation.actorIdentity =
+        "phase4.operator@example.test";
+    statusSnapshotCancellation.reason =
+        "Commit cancellation between status projection reads.";
+    bool statusSnapshotMutationCommitted = false;
+    const auto statusBeforeConcurrentCancellation =
+        LoadCampaignControlStatus(controlConnection, pausedCampaignId,
+            [&](CampaignOperationsControlTestInjectionPoint point,
+                pqxx::transaction_base& transaction)
+            {
+                if (point !=
+                    CampaignOperationsControlTestInjectionPoint::
+                        afterStatusControlReadBeforeCancellationRead)
+                    return;
+                const auto settings = transaction.exec(
+                    "SELECT current_setting('transaction_isolation'),"
+                    "current_setting('transaction_read_only');").one_row();
+                assert(settings[0].as<std::string>() == "repeatable read");
+                assert(settings[1].as<std::string>() == "on");
+                const auto concurrent = CancelCampaign(
+                    runtimeConnectionString, statusSnapshotCancellation);
+                assert(concurrent.progress ==
+                    CancellationProgress::settled);
+                statusSnapshotMutationCommitted = true;
+            });
+    assert(statusSnapshotMutationCommitted);
+    assert(!statusBeforeConcurrentCancellation.cancellationRequested);
+    const auto statusAfterConcurrentCancellation =
+        LoadCampaignControlStatus(controlConnection, pausedCampaignId);
+    assert(statusAfterConcurrentCancellation.cancellationRequested);
+    assert(statusAfterConcurrentCancellation.cancellationSettled);
+
+    const auto rollbackAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 211, 1);
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_controller;");
+        const auto rollbackCampaign =
+            FindOperationalCampaign(transaction,
+                rollbackAccepted.persisted.request.request.logicalOperation
+                    .campaignId);
+        assert(rollbackCampaign);
+        const auto event = BuildCampaignControlEvent(
+            rollbackCampaign->campaignId,
+            rollbackCampaign->campaign.identity.canonicalText(),
+            std::nullopt, std::nullopt, 1, ControlEventKind::pause,
+            ActorIdentity("phase4.rollback@example.test"),
+            Reason("Rollback must leave no partial control evidence."));
+        const auto persisted =
+            PersistCampaignControlEvent(transaction, event);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_owner;");
+        transaction.exec(
+            "DELETE FROM campaign_operations_control_audit_reference_event "
+            "WHERE control_event_id=$1;",
+            pqxx::params{persisted.controlEventId.value()});
+        bool completenessRejected = false;
+        try
+        {
+            transaction.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            completenessRejected = error.sqlstate() == "23514";
+        }
+        assert(completenessRejected);
+    }
+    assert(CountRowsForCampaign(owner, schema,
+               "campaign_operations_control_event",
+               rollbackAccepted.persisted.request.request.logicalOperation
+                   .campaignId) == 0);
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE "
+            "campaign_operations_cancellation_coordinator;");
+        transaction.exec(
+            "SELECT transition_campaign_operations_request_cancelled("
+            "$1,1);",
+            pqxx::params{
+                rollbackAccepted.persisted.request.requestId.value()});
+        bool incompleteTransitionRejected = false;
+        try
+        {
+            transaction.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            incompleteTransitionRejected = error.sqlstate() == "23514";
+        }
+        assert(incompleteTransitionRejected);
+    }
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        assert(transaction.exec(
+            "SELECT request_state||':'||state_version::text "
+            "FROM campaign_operations_operational_request "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{
+                rollbackAccepted.persisted.request.requestId.value()})
+                   .one_row()[0]
+                   .as<std::string>() == "ready:1");
+    }
+
+    const auto cancellationAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 212, 2);
+    CampaignCancellationCommandRequest cancellation;
+    cancellation.campaignId =
+        cancellationAccepted.persisted.request.request.logicalOperation
+            .campaignId.value();
+    cancellation.requestId =
+        cancellationAccepted.persisted.request.requestId.value();
+    cancellation.expectedRequestVersion = 1;
+    cancellation.operationKey = "phase4-ready-cancel";
+    cancellation.actorIdentity = "phase4.operator@example.test";
+    cancellation.reason =
+        "Cancel the unbound request and release its held units.";
+    const auto cancelled =
+        CancelCampaign(runtimeConnectionString, cancellation);
+    assert(cancelled.replay == ControlReplayDisposition::recorded);
+    assert(cancelled.progress == CancellationProgress::settled);
+    assert(cancelled.settlement);
+    assert(cancelled.settlement->settlement.disposition ==
+        CancellationSettlementDisposition::unboundCancelled);
+    const auto cancelledReplay =
+        CancelCampaign(runtimeConnectionString, cancellation);
+    assert(cancelledReplay.replay ==
+        ControlReplayDisposition::existingIdentical);
+    assert(cancelledReplay.progress == CancellationProgress::settled);
+    assert(cancelledReplay.settlement);
+    assert(cancelledReplay.settlement->cancellationSettlementId ==
+        cancelled.settlement->cancellationSettlementId);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT request.request_state,request.state_version,"
+            "reservation.reservation_state,reservation.state_version "
+            "FROM campaign_operations_operational_request request "
+            "JOIN campaign_operations_reservation reservation "
+            "ON reservation.reservation_id=request.reservation_id "
+            "WHERE request.operational_request_id=$1;",
+            pqxx::params{
+                cancellationAccepted.persisted.request.requestId.value()})
+            .one_row();
+        assert(row[0].as<std::string>() == "cancelled");
+        assert(row[1].as<int>() == 2);
+        assert(row[2].as<std::string>() == "released");
+        assert(row[3].as<int>() == 2);
+    }
+
+    const auto concurrentCancellationAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 215, 1);
+    CampaignCancellationCommandRequest concurrentCancellation;
+    concurrentCancellation.campaignId =
+        concurrentCancellationAccepted.persisted.request.request
+            .logicalOperation.campaignId.value();
+    concurrentCancellation.requestId =
+        concurrentCancellationAccepted.persisted.request.requestId.value();
+    concurrentCancellation.expectedRequestVersion = 1;
+    concurrentCancellation.operationKey =
+        "phase4-concurrent-identical-cancel";
+    concurrentCancellation.actorIdentity =
+        "phase4.operator@example.test";
+    concurrentCancellation.reason =
+        "Concurrent exact cancellation calls must converge.";
+    std::barrier concurrentCancellationStart{3};
+    std::optional<CampaignCancellationResult> firstConcurrentCancellation;
+    std::optional<CampaignCancellationResult> secondConcurrentCancellation;
+    std::exception_ptr firstConcurrentCancellationError;
+    std::exception_ptr secondConcurrentCancellationError;
+    const auto cancelConcurrently =
+        [&](std::optional<CampaignCancellationResult>& result,
+            std::exception_ptr& error)
+        {
+            concurrentCancellationStart.arrive_and_wait();
+            try
+            {
+                result.emplace(CancelCampaign(
+                    runtimeConnectionString, concurrentCancellation));
+            }
+            catch (...)
+            {
+                error = std::current_exception();
+            }
+        };
+    std::thread firstConcurrentCancellationThread(cancelConcurrently,
+        std::ref(firstConcurrentCancellation),
+        std::ref(firstConcurrentCancellationError));
+    std::thread secondConcurrentCancellationThread(cancelConcurrently,
+        std::ref(secondConcurrentCancellation),
+        std::ref(secondConcurrentCancellationError));
+    concurrentCancellationStart.arrive_and_wait();
+    firstConcurrentCancellationThread.join();
+    secondConcurrentCancellationThread.join();
+    if (firstConcurrentCancellationError)
+        std::rethrow_exception(firstConcurrentCancellationError);
+    if (secondConcurrentCancellationError)
+        std::rethrow_exception(secondConcurrentCancellationError);
+    assert(firstConcurrentCancellation);
+    assert(secondConcurrentCancellation);
+    assert(firstConcurrentCancellation->progress ==
+        CancellationProgress::settled);
+    assert(secondConcurrentCancellation->progress ==
+        CancellationProgress::settled);
+    assert(firstConcurrentCancellation->settlement);
+    assert(secondConcurrentCancellation->settlement);
+    assert(firstConcurrentCancellation->request.cancellationRequestId ==
+        secondConcurrentCancellation->request.cancellationRequestId);
+    assert(firstConcurrentCancellation->settlement->
+            cancellationSettlementId ==
+        secondConcurrentCancellation->settlement->
+            cancellationSettlementId);
+
+    const auto retriedCancellationAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 217, 1);
+    CampaignCancellationCommandRequest retriedCancellationCommand;
+    retriedCancellationCommand.campaignId =
+        retriedCancellationAccepted.persisted.request.request
+            .logicalOperation.campaignId.value();
+    retriedCancellationCommand.requestId =
+        retriedCancellationAccepted.persisted.request.requestId.value();
+    retriedCancellationCommand.expectedRequestVersion = 1;
+    retriedCancellationCommand.operationKey =
+        "phase4-cancellation-intent-retry";
+    retriedCancellationCommand.actorIdentity =
+        "phase4.operator@example.test";
+    retriedCancellationCommand.reason =
+        "Retry the whole cancellation transaction after intent insertion.";
+    int cancellationIntentAttempts = 0;
+    const auto retriedCancellation = CancelCampaign(
+        runtimeConnectionString, retriedCancellationCommand,
+        [&](CampaignOperationsControlTestInjectionPoint point,
+            pqxx::transaction_base& transaction)
+        {
+            if (point != CampaignOperationsControlTestInjectionPoint::
+                    afterCancellationIntentInsertion)
+                return;
+            ++cancellationIntentAttempts;
+            if (cancellationIntentAttempts == 1)
+                transaction.exec(
+                    "DO $phase4_retry$ BEGIN RAISE EXCEPTION "
+                    "'deterministic Phase 4 cancellation retry' "
+                    "USING ERRCODE='40P01'; END $phase4_retry$;");
+        });
+    assert(cancellationIntentAttempts == 2);
+    assert(retriedCancellation.replay ==
+        ControlReplayDisposition::recorded);
+    assert(retriedCancellation.progress ==
+        CancellationProgress::settled);
+    assert(retriedCancellation.settlement);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT count(*),count(settlement.cancellation_settlement_id),"
+            "count(DISTINCT cancellation.cancellation_request_id),"
+            "count(DISTINCT settlement.cancellation_settlement_id) "
+            "FROM campaign_operations_cancellation_request cancellation "
+            "LEFT JOIN campaign_operations_cancellation_settlement settlement "
+            "USING(cancellation_request_id) "
+            "WHERE cancellation.operation_key=$1;",
+            pqxx::params{retriedCancellationCommand.operationKey}).one_row();
+        assert(row[0].as<int>() == 1);
+        assert(row[1].as<int>() == 1);
+        assert(row[2].as<int>() == 1);
+        assert(row[3].as<int>() == 1);
+        assert(transaction.exec(
+            "SELECT count(*) FROM campaign_operations_reservation_event "
+            "WHERE cancellation_request_id=$1;",
+            pqxx::params{
+                retriedCancellation.request.cancellationRequestId.value()})
+            .one_row()[0].as<int>() == 1);
+    }
+
+    const auto leasedAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 213, 1);
+    const auto leasedRequestId =
+        leasedAccepted.persisted.request.requestId;
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            leasedRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-cancellation-lease-token-0001"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(
+        owner, schema, leasedRequestId, true);
+    CampaignCancellationCommandRequest leasedCancellation;
+    leasedCancellation.campaignId =
+        leasedAccepted.persisted.request.request.logicalOperation
+            .campaignId.value();
+    leasedCancellation.requestId = leasedRequestId.value();
+    leasedCancellation.expectedRequestVersion = 2;
+    leasedCancellation.operationKey = "phase4-leased-cancel";
+    leasedCancellation.actorIdentity = "phase4.operator@example.test";
+    leasedCancellation.reason =
+        "Persist intent without stealing active dispatch ownership.";
+    const auto waiting =
+        CancelCampaign(runtimeConnectionString, leasedCancellation);
+    assert(waiting.progress ==
+        CancellationProgress::waitingForLeaseExpiry);
+    assert(!waiting.settlement);
+    assert(CancelCampaign(runtimeConnectionString, leasedCancellation)
+               .progress ==
+        CancellationProgress::waitingForLeaseExpiry);
+    auto overlappingCancellation = leasedCancellation;
+    overlappingCancellation.operationKey =
+        "phase4-leased-overlapping-cancel";
+    overlappingCancellation.reason =
+        "A distinct operation cannot acquire duplicate cancellation ownership.";
+    bool overlappingCancellationRejected = false;
+    try
+    {
+        (void)CancelCampaign(
+            runtimeConnectionString, overlappingCancellation);
+    }
+    catch (const Error& error)
+    {
+        overlappingCancellationRejected =
+            error.code() == ErrorCode::persistenceConflict &&
+            std::string(error.what()) ==
+                "campaign_operations_cancellation_target_already_owned";
+    }
+    assert(overlappingCancellationRejected);
+    assert(Scalar(owner, schema,
+        "SELECT count(*) FROM campaign_operations_cancellation_request "
+        "WHERE operational_request_id=" +
+        std::to_string(leasedRequestId.value())) == 1);
+    ReconciliationObserveRequest observeActiveLeaseCancellation;
+    observeActiveLeaseCancellation.runKey =
+        "phase4-active-lease-cancellation-observation";
+    observeActiveLeaseCancellation.afterRequestId =
+        leasedRequestId.value() - 1;
+    observeActiveLeaseCancellation.limit = 1;
+    const auto activeLeaseCancellationObservation =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, observeActiveLeaseCancellation);
+    assert(activeLeaseCancellationObservation.selectedCount == 1);
+    assert(activeLeaseCancellationObservation.observationCount == 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5200));
+    std::barrier cancellationReplayStart{3};
+    std::optional<CampaignCancellationResult> firstCancellationReplay;
+    std::optional<CampaignCancellationResult> secondCancellationReplay;
+    std::exception_ptr firstCancellationReplayError;
+    std::exception_ptr secondCancellationReplayError;
+    const auto replayCancellation =
+        [&](std::optional<CampaignCancellationResult>& result,
+            std::exception_ptr& error)
+        {
+            cancellationReplayStart.arrive_and_wait();
+            try
+            {
+                result.emplace(CancelCampaign(
+                    runtimeConnectionString, leasedCancellation));
+            }
+            catch (...)
+            {
+                error = std::current_exception();
+            }
+        };
+    std::thread firstCancellationReplayThread(replayCancellation,
+        std::ref(firstCancellationReplay),
+        std::ref(firstCancellationReplayError));
+    std::thread secondCancellationReplayThread(replayCancellation,
+        std::ref(secondCancellationReplay),
+        std::ref(secondCancellationReplayError));
+    cancellationReplayStart.arrive_and_wait();
+    firstCancellationReplayThread.join();
+    secondCancellationReplayThread.join();
+    if (firstCancellationReplayError)
+        std::rethrow_exception(firstCancellationReplayError);
+    if (secondCancellationReplayError)
+        std::rethrow_exception(secondCancellationReplayError);
+    assert(firstCancellationReplay);
+    assert(secondCancellationReplay);
+    assert(firstCancellationReplay->replay ==
+        ControlReplayDisposition::existingIdentical);
+    assert(secondCancellationReplay->replay ==
+        ControlReplayDisposition::existingIdentical);
+    assert(firstCancellationReplay->progress ==
+        CancellationProgress::settled);
+    assert(secondCancellationReplay->progress ==
+        CancellationProgress::settled);
+    assert(firstCancellationReplay->request.cancellationRequestId ==
+        waiting.request.cancellationRequestId);
+    assert(secondCancellationReplay->request.cancellationRequestId ==
+        waiting.request.cancellationRequestId);
+    assert(firstCancellationReplay->settlement);
+    assert(secondCancellationReplay->settlement);
+    assert(firstCancellationReplay->settlement->
+            cancellationSettlementId ==
+        secondCancellationReplay->settlement->
+            cancellationSettlementId);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_cancellation_request "
+            "WHERE operation_key=$1;",
+            pqxx::params{leasedCancellation.operationKey})
+            .one_row()[0].as<int>() == 1);
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_cancellation_settlement "
+            "WHERE cancellation_request_id=$1;",
+            pqxx::params{waiting.request.cancellationRequestId.value()})
+            .one_row()[0].as<int>() == 1);
+        const auto resolution = transaction.exec(
+            "SELECT count(*),"
+            "min(resolution.owning_capability),"
+            "min(resolution.resolution_disposition),"
+            "min(resolution.transition_identity_hash),"
+            "bool_and(resolution.cancellation_settlement_id IS NOT NULL),"
+            "bool_and(resolution.dispatch_attempt_outcome_id IS NULL) "
+            "FROM campaign_operations_reconciliation_observation observation "
+            "LEFT JOIN campaign_operations_reconciliation_resolution resolution "
+            "USING(reconciliation_observation_id) "
+            "WHERE observation.operational_request_id=$1 "
+            "AND observation.reason_code="
+            "'cancellation_settlement_pending';",
+            pqxx::params{leasedRequestId.value()}).one_row();
+        assert(resolution[0].as<int>() == 1);
+        assert(resolution[1].as<std::string>() ==
+            "campaign_operations_cancellation_coordinator");
+        assert(resolution[2].as<std::string>() ==
+            "cancellation_settled");
+        assert(resolution[3].as<std::string>() ==
+            firstCancellationReplay->settlement->settlement.identity.hash());
+        assert(resolution[4].as<bool>());
+        assert(resolution[5].as<bool>());
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_observation observation "
+            "LEFT JOIN campaign_operations_reconciliation_resolution resolution "
+            "USING(reconciliation_observation_id) "
+            "WHERE observation.operational_request_id=$1 "
+            "AND observation.reason_code="
+            "'cancellation_settlement_pending' "
+            "AND resolution.reconciliation_resolution_id IS NULL;",
+            pqxx::params{leasedRequestId.value()})
+            .one_row()[0].as<int>() == 0);
+    }
+
+    const auto expiredAmbiguousAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 224, 1);
+    const auto expiredAmbiguousRequestId =
+        expiredAmbiguousAccepted.persisted.request.requestId;
+    DispatchLease expiredAmbiguousLease = [&]
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        auto lease = AcquireDispatchLeaseInTransaction(transaction,
+            expiredAmbiguousRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-expired-ambiguous-outcome-token"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+        return lease;
+    }();
+    ExpireDispatchLeaseForTest(
+        owner, schema, expiredAmbiguousRequestId);
+    {
+        const auto outcome = BuildDispatchAttemptOutcomeEvidence(
+            expiredAmbiguousLease.attemptId,
+            expiredAmbiguousLease.acquisition.identity.canonicalText(),
+            DispatchResultClassification::reconciliationRequired,
+            DownstreamEvidenceClassification::causallyAmbiguous,
+            SemanticConflictClassification::none,
+            UncertainCommitRecoveryClassification::ambiguousEvidence,
+            "dispatch_outcome_unknown", 2, 2, 1, 1,
+            std::nullopt, std::nullopt);
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_phase5_transactional;");
+        const auto outcomeId = transaction.exec(
+            "INSERT INTO campaign_operations_dispatch_attempt_outcome("
+            "dispatch_attempt_id,attempt_identity_canonical,"
+            "result_classification,downstream_evidence_classification,"
+            "semantic_conflict_classification,"
+            "uncertain_commit_recovery_classification,diagnostic_code,"
+            "expected_request_version,resulting_request_version,"
+            "expected_reservation_version,resulting_reservation_version,"
+            "outcome_contract_version,outcome_identity_canonical,"
+            "outcome_identity_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,"
+            "$10,$11,1,$12,$13) "
+            "RETURNING dispatch_attempt_outcome_id;",
+            pqxx::params{expiredAmbiguousLease.attemptId.value(),
+                expiredAmbiguousLease.acquisition.identity.canonicalText(),
+                ToText(outcome.result), ToText(outcome.downstreamEvidence),
+                ToText(outcome.conflict), ToText(outcome.recovery),
+                outcome.diagnosticCode, outcome.expectedRequestVersion,
+                outcome.resultingRequestVersion,
+                outcome.expectedReservationVersion,
+                outcome.resultingReservationVersion,
+                outcome.identity.canonicalText(),
+                outcome.identity.hash()}).one_row()[0].as<long long>();
+        transaction.exec(
+            "INSERT INTO campaign_operations_dispatch_audit_reference_event("
+            "operational_campaign_id,operational_request_id,"
+            "dispatch_attempt_id,dispatch_attempt_outcome_id,cause_kind,"
+            "actor_identity,capability,prior_version,resulting_version,"
+            "outcome,replay_disposition,diagnostic_code) VALUES($1,$2,$3,$4,"
+            "'dispatch_handoff_failed','phase4.dispatcher@example.test',"
+            "'campaign_operations_phase5_transactional',2,2,"
+            "'reconciliation_required','reconciliation_required',"
+            "'dispatch_outcome_unknown');",
+            pqxx::params{
+                expiredAmbiguousAccepted.persisted.request.request
+                    .logicalOperation.campaignId.value(),
+                expiredAmbiguousRequestId.value(),
+                expiredAmbiguousLease.attemptId.value(), outcomeId});
+        transaction.commit();
+    }
+    CampaignCancellationCommandRequest expiredAmbiguousCancellation;
+    expiredAmbiguousCancellation.campaignId =
+        expiredAmbiguousAccepted.persisted.request.request.logicalOperation
+            .campaignId.value();
+    expiredAmbiguousCancellation.requestId =
+        expiredAmbiguousRequestId.value();
+    expiredAmbiguousCancellation.expectedRequestVersion = 2;
+    expiredAmbiguousCancellation.operationKey =
+        "phase4-expired-ambiguous-cancellation";
+    expiredAmbiguousCancellation.actorIdentity =
+        "phase4.operator@example.test";
+    expiredAmbiguousCancellation.reason =
+        "Expired downstream evidence requires reconciliation.";
+    const auto expiredAmbiguousResult = CancelCampaign(
+        runtimeConnectionString, expiredAmbiguousCancellation);
+    assert(expiredAmbiguousResult.progress ==
+        CancellationProgress::reconciliationRequired);
+    assert(!expiredAmbiguousResult.settlement);
+
+    const auto recoveryAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 214, 1);
+    const auto recoveryRequestId =
+        recoveryAccepted.persisted.request.requestId;
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            recoveryRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-reconciliation-lease-token-01"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(owner, schema, recoveryRequestId);
+    std::string utcReconciliationEvidence;
+    std::string chicagoReconciliationEvidence;
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec("SET LOCAL TIME ZONE 'UTC';");
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_reconciler;");
+        utcReconciliationEvidence =
+            BuildReconciliationEvidenceCanonical(
+                LoadReconciliationCandidate(
+                    transaction, recoveryRequestId));
+    }
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL TIME ZONE 'America/Chicago';");
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_reconciler;");
+        chicagoReconciliationEvidence =
+            BuildReconciliationEvidenceCanonical(
+                LoadReconciliationCandidate(
+                    transaction, recoveryRequestId));
+    }
+    assert(utcReconciliationEvidence ==
+        chicagoReconciliationEvidence);
+    assert(utcReconciliationEvidence.find("-05") ==
+        std::string::npos);
+    assert(utcReconciliationEvidence.find("-06") ==
+        std::string::npos);
+    ReconciliationObserveRequest observe;
+    observe.runKey = "phase4-restart-recovery";
+    observe.afterRequestId = recoveryRequestId.value() - 1;
+    observe.limit = 1;
+    observe.resolveSafeTransitions = false;
+    const auto observationOnly =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, observe);
+    assert(observationOnly.observationCount == 1);
+    assert(observationOnly.resolutionCount == 0);
+    long long recoveryObservationId = 0;
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        recoveryObservationId = transaction.exec(
+            "SELECT reconciliation_observation_id "
+            "FROM campaign_operations_reconciliation_observation "
+            "WHERE run_key=$1 AND operational_request_id=$2;",
+            pqxx::params{observe.runKey, recoveryRequestId.value()})
+            .one_row()[0].as<long long>();
+    }
+    {
+        pqxx::connection connection{runtimeConnectionString};
+        pqxx::work transaction{connection};
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_recovery;");
+        bool fabricatedCauseRejected = false;
+        try
+        {
+            transaction.exec(
+                "SELECT append_campaign_operations_recovery_resolution("
+                "$1,'fabricated-transition','fnv1a64:0000000000000000',"
+                "'request_returned_ready','fabricated-resolution',"
+                "'fnv1a64:0000000000000000');",
+                pqxx::params{recoveryObservationId});
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            fabricatedCauseRejected = error.sqlstate() == "23514";
+        }
+        assert(fabricatedCauseRejected);
+        transaction.abort();
+    }
+    {
+        pqxx::connection connection{runtimeConnectionString};
+        pqxx::work transaction{connection};
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_recovery;");
+        bool foreignCapabilityRejected = false;
+        try
+        {
+            transaction.exec(
+                "SELECT append_campaign_operations_cancellation_resolution("
+                "$1,'fabricated-transition','fnv1a64:0000000000000000',"
+                "'fabricated-resolution','fnv1a64:0000000000000000');",
+                pqxx::params{recoveryObservationId});
+        }
+        catch (const pqxx::sql_error&)
+        {
+            foreignCapabilityRejected = true;
+        }
+        assert(foreignCapabilityRejected);
+        transaction.abort();
+    }
+    observe.resolveSafeTransitions = true;
+    const auto recovered =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, observe);
+    assert(recovered.observationCount == 1);
+    assert(recovered.resolutionCount == 1);
+    const auto replayAfterRestart =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, observe);
+    assert(replayAfterRestart.selectedCount == 1);
+    assert(replayAfterRestart.observationCount == 1);
+    assert(replayAfterRestart.resolutionCount == 1);
+    assert(replayAfterRestart.lastTargetId == recoveryRequestId.value());
+    ReconciliationObserveRequest completedCursor = observe;
+    completedCursor.afterRequestId = recoveryRequestId.value();
+    const auto completedBatch =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, completedCursor);
+    assert(completedBatch.selectedCount == 0);
+    assert(completedBatch.lastTargetId == recoveryRequestId.value());
+    const auto completedBatchReplay =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, completedCursor);
+    assert(completedBatchReplay.selectedCount == 0);
+    assert(completedBatchReplay.lastTargetId == recoveryRequestId.value());
+    {
+        pqxx::connection connection{runtimeConnectionString};
+        pqxx::work transaction{connection};
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_reconciler;");
+        bool changedCursorConflicted = false;
+        try
+        {
+            (void)PersistReconciliationBatch(transaction, observe.runKey,
+                observe.afterRequestId, observe.limit + 1, {});
+        }
+        catch (const Error& error)
+        {
+            changedCursorConflicted =
+                error.code() == ErrorCode::persistenceConflict;
+        }
+        assert(changedCursorConflicted);
+        transaction.abort();
+    }
+    for (const auto& [runKey, lastTargetId, selectedCount] :
+         std::vector<std::tuple<std::string, long long, int>>{
+             {"phase4-malformed-cursor-missing-observation",
+                 recoveryRequestId.value(), 1},
+             {"phase4-malformed-cursor-last-target",
+                 recoveryRequestId.value(), 0}})
+    {
+        pqxx::connection connection{runtimeConnectionString};
+        pqxx::work transaction{connection};
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_reconciler;");
+        transaction.exec(
+            "INSERT INTO campaign_operations_reconciliation_cursor_event("
+            "run_key,prior_target_id,last_target_id,requested_limit,"
+            "selected_count) VALUES($1,$2,$3,1,$4);",
+            pqxx::params{runKey, recoveryRequestId.value() - 1,
+                lastTargetId, selectedCount});
+        bool malformedCursorRejected = false;
+        try
+        {
+            transaction.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            malformedCursorRejected = error.sqlstate() == "23514";
+        }
+        assert(malformedCursorRejected);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_cursor_event "
+            "WHERE run_key='" + runKey + "'") == 0);
+    }
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT request_state,state_version,lease_token_hash IS NULL,"
+            "lease_expires_at IS NULL,dispatcher_identity IS NULL "
+            "FROM campaign_operations_operational_request "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{recoveryRequestId.value()}).one_row();
+        assert(row[0].as<std::string>() == "ready");
+        assert(row[1].as<int>() == 3);
+        assert(row[2].as<bool>());
+        assert(row[3].as<bool>());
+        assert(row[4].as<bool>());
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{recoveryRequestId.value()})
+            .one_row()[0].as<int>() == 1);
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_resolution resolution "
+            "JOIN campaign_operations_reconciliation_observation observation "
+            "USING(reconciliation_observation_id) "
+            "WHERE observation.operational_request_id=$1;",
+            pqxx::params{recoveryRequestId.value()})
+            .one_row()[0].as<int>() == 1);
+        const auto causalOwnership = transaction.exec(
+            "SELECT resolution.owning_capability,"
+            "resolution.cancellation_settlement_id IS NULL,"
+            "resolution.dispatch_attempt_outcome_id IS NOT NULL "
+            "FROM campaign_operations_reconciliation_resolution resolution "
+            "WHERE resolution.reconciliation_observation_id=$1;",
+            pqxx::params{recoveryObservationId}).one_row();
+        assert(causalOwnership[0].as<std::string>() ==
+            "campaign_operations_recovery");
+        assert(causalOwnership[1].as<bool>());
+        assert(causalOwnership[2].as<bool>());
+    }
+
+    const auto crashBatchAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 218, 1);
+    const auto crashBatchRequestId =
+        crashBatchAccepted.persisted.request.requestId;
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            crashBatchRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-atomic-batch-crash-token-0001"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(owner, schema, crashBatchRequestId);
+    ReconciliationObserveRequest crashBatchObserve;
+    crashBatchObserve.runKey = "phase4-atomic-batch-crash";
+    crashBatchObserve.afterRequestId = crashBatchRequestId.value() - 1;
+    crashBatchObserve.limit = 1;
+    bool batchCrashInjected = false;
+    try
+    {
+        (void)ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, crashBatchObserve,
+            [&](CampaignOperationsControlTestInjectionPoint point,
+                pqxx::transaction_base&)
+            {
+                if (point == CampaignOperationsControlTestInjectionPoint::
+                        beforeReconciliationBatchCommit)
+                {
+                    batchCrashInjected = true;
+                    throw std::runtime_error(
+                        "phase4_atomic_batch_crash_injected");
+                }
+            });
+    }
+    catch (const std::runtime_error& error)
+    {
+        assert(std::string(error.what()) ==
+            "phase4_atomic_batch_crash_injected");
+    }
+    assert(batchCrashInjected);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_cursor_event "
+            "WHERE run_key=$1;",
+            pqxx::params{crashBatchObserve.runKey})
+            .one_row()[0].as<int>() == 0);
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE run_key=$1;",
+            pqxx::params{crashBatchObserve.runKey})
+            .one_row()[0].as<int>() == 0);
+    }
+    const auto crashBatchRestart =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, crashBatchObserve);
+    const auto crashBatchReplay =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, crashBatchObserve);
+    assert(crashBatchRestart.selectedCount == 1);
+    assert(crashBatchRestart.observationCount == 1);
+    assert(crashBatchReplay.selectedCount == 1);
+    assert(crashBatchReplay.observationCount == 1);
+    assert(crashBatchReplay.lastTargetId ==
+        crashBatchRequestId.value());
+
+    const auto overlapFiller = AcceptPhase4Fixture(
+        owner, connectionString, schema, 219, 1);
+    const auto overlapAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 220, 1);
+    const auto overlapRequestId =
+        overlapAccepted.persisted.request.requestId;
+    assert(overlapFiller.persisted.request.requestId.value() ==
+        overlapRequestId.value() - 1);
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            overlapRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-overlapping-cursor-token-0001"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(owner, schema, overlapRequestId);
+    ReconciliationObserveRequest firstOverlap;
+    firstOverlap.runKey = "phase4-overlapping-exact-cursors";
+    firstOverlap.afterRequestId = overlapRequestId.value() - 1;
+    firstOverlap.limit = 1;
+    const auto firstOverlapBatch =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, firstOverlap);
+    ReconciliationObserveRequest secondOverlap = firstOverlap;
+    secondOverlap.afterRequestId = overlapRequestId.value() - 2;
+    const auto secondOverlapBatch =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, secondOverlap);
+    assert(firstOverlapBatch.selectedCount == 1);
+    assert(firstOverlapBatch.observationCount == 1);
+    assert(secondOverlapBatch.selectedCount == 1);
+    assert(secondOverlapBatch.observationCount == 1);
+    long long firstOverlapCursorId = 0;
+    long long secondOverlapCursorId = 0;
+    long long firstOverlapObservationId = 0;
+    long long secondOverlapObservationId = 0;
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        firstOverlapCursorId = transaction.exec(
+            "SELECT reconciliation_cursor_event_id FROM "
+            "campaign_operations_reconciliation_cursor_event "
+            "WHERE run_key=$1 AND prior_target_id=$2;",
+            pqxx::params{firstOverlap.runKey,
+                firstOverlap.afterRequestId})
+            .one_row()[0].as<long long>();
+        secondOverlapCursorId = transaction.exec(
+            "SELECT reconciliation_cursor_event_id FROM "
+            "campaign_operations_reconciliation_cursor_event "
+            "WHERE run_key=$1 AND prior_target_id=$2;",
+            pqxx::params{secondOverlap.runKey,
+                secondOverlap.afterRequestId})
+            .one_row()[0].as<long long>();
+        assert(firstOverlapCursorId != secondOverlapCursorId);
+        firstOverlapObservationId = transaction.exec(
+            "SELECT reconciliation_observation_id FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE reconciliation_cursor_event_id=$1;",
+            pqxx::params{firstOverlapCursorId})
+            .one_row()[0].as<long long>();
+        secondOverlapObservationId = transaction.exec(
+            "SELECT reconciliation_observation_id FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE reconciliation_cursor_event_id=$1;",
+            pqxx::params{secondOverlapCursorId})
+            .one_row()[0].as<long long>();
+        assert(firstOverlapObservationId != secondOverlapObservationId);
+        assert(transaction.exec(
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE run_key=$1 AND operational_request_id=$2;",
+            pqxx::params{firstOverlap.runKey,
+                overlapRequestId.value()})
+            .one_row()[0].as<int>() == 2);
+    }
+    firstOverlap.resolveSafeTransitions = true;
+    const auto resolvedFirstOverlap =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, firstOverlap);
+    assert(resolvedFirstOverlap.resolutionCount == 1);
+    secondOverlap.resolveSafeTransitions = true;
+    const auto exactChangedStateReplay =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, secondOverlap);
+    assert(exactChangedStateReplay.selectedCount == 1);
+    assert(exactChangedStateReplay.observationCount == 1);
+    assert(exactChangedStateReplay.resolutionCount == 1);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        assert(transaction.exec(
+            "SELECT reconciliation_observation_id FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE reconciliation_cursor_event_id=$1;",
+            pqxx::params{firstOverlapCursorId})
+            .one_row()[0].as<long long>() ==
+            firstOverlapObservationId);
+        assert(transaction.exec(
+            "SELECT reconciliation_observation_id FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE reconciliation_cursor_event_id=$1;",
+            pqxx::params{secondOverlapCursorId})
+            .one_row()[0].as<long long>() ==
+            secondOverlapObservationId);
+        const auto converged = transaction.exec(
+            "SELECT count(*),count(DISTINCT "
+            "resolution.transition_identity_canonical),"
+            "count(DISTINCT resolution.transition_identity_hash),"
+            "count(*) FILTER (WHERE "
+            "resolution.resolution_disposition='request_returned_ready'),"
+            "count(*) FILTER (WHERE "
+            "resolution.resolution_disposition='already_resolved') "
+            "FROM campaign_operations_reconciliation_resolution resolution "
+            "JOIN campaign_operations_reconciliation_observation observation "
+            "USING(reconciliation_observation_id) "
+            "WHERE observation.operational_request_id=$1 "
+            "AND observation.run_key=$2;",
+            pqxx::params{overlapRequestId.value(),
+                firstOverlap.runKey}).one_row();
+        assert(converged[0].as<int>() == 2);
+        assert(converged[1].as<int>() == 1);
+        assert(converged[2].as<int>() == 1);
+        assert(converged[3].as<int>() == 1);
+        assert(converged[4].as<int>() == 1);
+    }
+
+    const auto cancellationLockRaceAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 221, 1);
+    const auto cancellationLockRaceRequestId =
+        cancellationLockRaceAccepted.persisted.request.requestId;
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            cancellationLockRaceRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-observe-cancel-lock-race-0001"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(
+        owner, schema, cancellationLockRaceRequestId);
+    ReconciliationObserveRequest cancellationLockRaceObserve;
+    cancellationLockRaceObserve.runKey =
+        "phase4-observe-cancellation-lock-order";
+    cancellationLockRaceObserve.afterRequestId =
+        cancellationLockRaceRequestId.value() - 1;
+    cancellationLockRaceObserve.limit = 1;
+    CampaignCancellationCommandRequest cancellationLockRaceCommand;
+    cancellationLockRaceCommand.campaignId =
+        cancellationLockRaceAccepted.persisted.request.request
+            .logicalOperation.campaignId.value();
+    cancellationLockRaceCommand.requestId =
+        cancellationLockRaceRequestId.value();
+    cancellationLockRaceCommand.expectedRequestVersion = 2;
+    cancellationLockRaceCommand.operationKey =
+        "phase4-observe-cancellation-lock-order";
+    cancellationLockRaceCommand.actorIdentity =
+        "phase4.operator@example.test";
+    cancellationLockRaceCommand.reason =
+        "Race cancellation against ordered reconciliation persistence.";
+    std::atomic<bool> cancellationRaceCampaignLocked{false};
+    std::atomic<bool> releaseCancellationRace{false};
+    std::optional<ReconciliationBatchResult> cancellationRaceObservation;
+    std::optional<CampaignCancellationResult> cancellationRaceResult;
+    std::exception_ptr cancellationRaceObservationError;
+    std::exception_ptr cancellationRaceError;
+    const std::string cancellationRaceObserveApplication =
+        "phase4_observe_cancel_observer";
+    const std::string cancellationRaceCancelApplication =
+        "phase4_observe_cancel_canceller";
+    std::thread cancellationRaceObservationThread([&]
+    {
+        try
+        {
+            cancellationRaceObservation.emplace(
+                ObserveAndRecoverCampaignOperations(
+                    runtimeConnectionString + " application_name=" +
+                        cancellationRaceObserveApplication,
+                    cancellationLockRaceObserve,
+                    [&](CampaignOperationsControlTestInjectionPoint point,
+                        pqxx::transaction_base&)
+                    {
+                        if (point !=
+                            CampaignOperationsControlTestInjectionPoint::
+                                afterReconciliationCampaignLocksBeforeRequestLocks)
+                            return;
+                        cancellationRaceCampaignLocked.store(
+                            true, std::memory_order_release);
+                        while (!releaseCancellationRace.load(
+                            std::memory_order_acquire))
+                            std::this_thread::yield();
+                    }));
+        }
+        catch (...)
+        {
+            cancellationRaceObservationError =
+                std::current_exception();
+        }
+    });
+    for (int attempt = 0;
+         attempt < 2500 &&
+         !cancellationRaceCampaignLocked.load(std::memory_order_acquire);
+         ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    assert(cancellationRaceCampaignLocked.load(
+        std::memory_order_acquire));
+    std::thread cancellationRaceThread([&]
+    {
+        try
+        {
+            cancellationRaceResult.emplace(CancelCampaign(
+                runtimeConnectionString + " application_name=" +
+                    cancellationRaceCancelApplication,
+                cancellationLockRaceCommand));
+        }
+        catch (...)
+        {
+            cancellationRaceError = std::current_exception();
+        }
+    });
+    assert(WaitForApplicationLockWait(
+        owner, cancellationRaceCancelApplication));
+    releaseCancellationRace.store(true, std::memory_order_release);
+    cancellationRaceObservationThread.join();
+    cancellationRaceThread.join();
+    if (cancellationRaceObservationError)
+        std::rethrow_exception(cancellationRaceObservationError);
+    if (cancellationRaceError)
+        std::rethrow_exception(cancellationRaceError);
+    assert(cancellationRaceObservation);
+    assert(cancellationRaceObservation->observationCount == 1);
+    assert(cancellationRaceResult);
+    assert(cancellationRaceResult->progress ==
+        CancellationProgress::settled);
+
+    const auto recoveryLockRaceFiller = AcceptPhase4Fixture(
+        owner, connectionString, schema, 222, 1);
+    const auto recoveryLockRaceAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 223, 1);
+    const auto recoveryLockRaceRequestId =
+        recoveryLockRaceAccepted.persisted.request.requestId;
+    assert(recoveryLockRaceFiller.persisted.request.requestId.value() ==
+        recoveryLockRaceRequestId.value() - 1);
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            recoveryLockRaceRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-observe-recovery-lock-race-01"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(
+        owner, schema, recoveryLockRaceRequestId);
+    ReconciliationObserveRequest recoveryLockRaceFirst;
+    recoveryLockRaceFirst.runKey =
+        "phase4-observe-recovery-lock-order";
+    recoveryLockRaceFirst.afterRequestId =
+        recoveryLockRaceRequestId.value() - 1;
+    recoveryLockRaceFirst.limit = 1;
+    const auto recoveryLockRaceFirstResult =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, recoveryLockRaceFirst);
+    assert(recoveryLockRaceFirstResult.observationCount == 1);
+    std::optional<PersistedReconciliationObservation>
+        recoveryLockRaceEvidence;
+    {
+        pqxx::connection connection{runtimeConnectionString};
+        pqxx::read_transaction transaction{connection};
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_reconciler;");
+        const auto cursor = FindReconciliationCursor(transaction,
+            recoveryLockRaceFirst.runKey,
+            recoveryLockRaceFirst.afterRequestId);
+        assert(cursor);
+        const auto persisted = LoadReconciliationObservationsForCursor(
+            transaction, cursor->reconciliationCursorEventId);
+        assert(persisted.size() == 1);
+        recoveryLockRaceEvidence.emplace(persisted.front());
+    }
+    ReconciliationObserveRequest recoveryLockRaceSecond =
+        recoveryLockRaceFirst;
+    recoveryLockRaceSecond.afterRequestId =
+        recoveryLockRaceRequestId.value() - 2;
+    std::atomic<bool> recoveryRaceCampaignLocked{false};
+    std::atomic<bool> releaseRecoveryRace{false};
+    std::optional<ReconciliationBatchResult> recoveryRaceObservation;
+    std::optional<PersistedReconciliationResolution> recoveryRaceResolution;
+    std::exception_ptr recoveryRaceObservationError;
+    std::exception_ptr recoveryRaceError;
+    const std::string recoveryRaceObserveApplication =
+        "phase4_observe_recovery_observer";
+    const std::string recoveryRaceRecoveryApplication =
+        "phase4_observe_recovery_worker";
+    std::thread recoveryRaceObservationThread([&]
+    {
+        try
+        {
+            recoveryRaceObservation.emplace(
+                ObserveAndRecoverCampaignOperations(
+                    runtimeConnectionString + " application_name=" +
+                        recoveryRaceObserveApplication,
+                    recoveryLockRaceSecond,
+                    [&](CampaignOperationsControlTestInjectionPoint point,
+                        pqxx::transaction_base&)
+                    {
+                        if (point !=
+                            CampaignOperationsControlTestInjectionPoint::
+                                afterReconciliationCampaignLocksBeforeRequestLocks)
+                            return;
+                        recoveryRaceCampaignLocked.store(
+                            true, std::memory_order_release);
+                        while (!releaseRecoveryRace.load(
+                            std::memory_order_acquire))
+                            std::this_thread::yield();
+                    }));
+        }
+        catch (...)
+        {
+            recoveryRaceObservationError =
+                std::current_exception();
+        }
+    });
+    for (int attempt = 0;
+         attempt < 2500 &&
+         !recoveryRaceCampaignLocked.load(std::memory_order_acquire);
+         ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    assert(recoveryRaceCampaignLocked.load(std::memory_order_acquire));
+    std::thread recoveryRaceThread([&]
+    {
+        try
+        {
+            pqxx::connection connection{
+                runtimeConnectionString + " application_name=" +
+                    recoveryRaceRecoveryApplication};
+            pqxx::work transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE campaign_operations_recovery;");
+            recoveryRaceResolution.emplace(
+                RecoverExpiredDispatchLeaseInTransaction(
+                    transaction, *recoveryLockRaceEvidence));
+            transaction.commit();
+        }
+        catch (...)
+        {
+            recoveryRaceError = std::current_exception();
+        }
+    });
+    assert(WaitForApplicationLockWait(
+        owner, recoveryRaceRecoveryApplication));
+    releaseRecoveryRace.store(true, std::memory_order_release);
+    recoveryRaceObservationThread.join();
+    recoveryRaceThread.join();
+    if (recoveryRaceObservationError)
+        std::rethrow_exception(recoveryRaceObservationError);
+    if (recoveryRaceError)
+        std::rethrow_exception(recoveryRaceError);
+    assert(recoveryRaceObservation);
+    assert(recoveryRaceObservation->observationCount == 1);
+    assert(recoveryRaceResolution);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        assert(transaction.exec(
+            "SELECT request_state FROM "
+            "campaign_operations_operational_request "
+            "WHERE operational_request_id=$1;",
+            pqxx::params{recoveryLockRaceRequestId.value()})
+            .one_row()[0].as<std::string>() == "ready");
+        assert(transaction.exec(
+            "SELECT count(DISTINCT reconciliation_cursor_event_id) "
+            "FROM campaign_operations_reconciliation_observation "
+            "WHERE run_key=$1 AND operational_request_id=$2;",
+            pqxx::params{recoveryLockRaceFirst.runKey,
+                recoveryLockRaceRequestId.value()})
+            .one_row()[0].as<int>() == 2);
+    }
+
+    std::optional<ReconciliationObserveRequest>
+        retryableRecoveryObservation;
+    for (const auto& [sqlState, materializationId] :
+         std::vector<std::pair<std::string, long long>>{
+             {"40001", 225}, {"40P01", 226}})
+    {
+        const auto retryAccepted = AcceptPhase4Fixture(
+            owner, connectionString, schema, materializationId, 1);
+        const auto retryRequestId =
+            retryAccepted.persisted.request.requestId;
+        {
+            pqxx::work transaction{owner};
+            SetSearchPath(transaction, schema);
+            transaction.exec(
+                "SET LOCAL ROLE campaign_operations_dispatcher;");
+            (void)AcquireDispatchLeaseInTransaction(transaction,
+                retryRequestId, 1,
+                LeaseTokenDigest::Derive(
+                    "phase4-reconciliation-retry-" + sqlState),
+                ActorIdentity("phase4.dispatcher@example.test"));
+            transaction.commit();
+        }
+        ExpireDispatchLeaseForTest(owner, schema, retryRequestId);
+        ReconciliationObserveRequest retryObserve;
+        retryObserve.runKey =
+            "phase4-reconciliation-retry-" + sqlState;
+        retryObserve.afterRequestId = retryRequestId.value() - 1;
+        retryObserve.limit = 1;
+        int batchAttempts = 0;
+        const auto retriedBatch =
+            ObserveAndRecoverCampaignOperations(
+                runtimeConnectionString, retryObserve,
+                [&](CampaignOperationsControlTestInjectionPoint point,
+                    pqxx::transaction_base& transaction)
+                {
+                    if (point !=
+                        CampaignOperationsControlTestInjectionPoint::
+                            beforeReconciliationBatchCommit)
+                        return;
+                    ++batchAttempts;
+                    if (batchAttempts == 1)
+                        transaction.exec(
+                            "DO $phase4_reconciliation_retry$ BEGIN "
+                            "RAISE EXCEPTION "
+                            "'deterministic reconciliation retry' "
+                            "USING ERRCODE='" + sqlState + "'; "
+                            "END $phase4_reconciliation_retry$;");
+                });
+        assert(batchAttempts == 2);
+        assert(retriedBatch.selectedCount == 1);
+        assert(retriedBatch.observationCount == 1);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_cursor_event "
+            "WHERE run_key='" + retryObserve.runKey + "'") == 1);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_observation "
+            "WHERE run_key='" + retryObserve.runKey + "'") == 1);
+        if (sqlState == "40001")
+            retryableRecoveryObservation.emplace(retryObserve);
+    }
+    assert(retryableRecoveryObservation);
+    retryableRecoveryObservation->resolveSafeTransitions = true;
+    int recoveryAttempts = 0;
+    const auto retriedRecovery =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, *retryableRecoveryObservation,
+            [&](CampaignOperationsControlTestInjectionPoint point,
+                pqxx::transaction_base& transaction)
+            {
+                if (point !=
+                    CampaignOperationsControlTestInjectionPoint::
+                        beforeReconciliationRecoveryCommit)
+                    return;
+                ++recoveryAttempts;
+                if (recoveryAttempts == 1)
+                    transaction.exec(
+                        "DO $phase4_recovery_retry$ BEGIN "
+                        "RAISE EXCEPTION "
+                        "'deterministic recovery retry' "
+                        "USING ERRCODE='40001'; "
+                        "END $phase4_recovery_retry$;");
+            });
+    assert(recoveryAttempts == 2);
+    assert(retriedRecovery.resolutionCount == 1);
+
+    const auto uncertainCommitAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 227, 1);
+    const auto uncertainCommitRequestId =
+        uncertainCommitAccepted.persisted.request.requestId;
+    {
+        pqxx::work transaction{owner};
+        SetSearchPath(transaction, schema);
+        transaction.exec(
+            "SET LOCAL ROLE campaign_operations_dispatcher;");
+        (void)AcquireDispatchLeaseInTransaction(transaction,
+            uncertainCommitRequestId, 1,
+            LeaseTokenDigest::Derive(
+                "phase4-reconciliation-uncertain-commit"),
+            ActorIdentity("phase4.dispatcher@example.test"));
+        transaction.commit();
+    }
+    ExpireDispatchLeaseForTest(
+        owner, schema, uncertainCommitRequestId);
+    ReconciliationObserveRequest uncertainCommitObserve;
+    uncertainCommitObserve.runKey =
+        "phase4-reconciliation-uncertain-commit";
+    uncertainCommitObserve.afterRequestId =
+        uncertainCommitRequestId.value() - 1;
+    uncertainCommitObserve.limit = 1;
+    int batchCommitResponseLosses = 0;
+    const auto uncertainBatch =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, uncertainCommitObserve,
+            [&](CampaignOperationsControlTestInjectionPoint point,
+                pqxx::transaction_base&)
+            {
+                if (point ==
+                        CampaignOperationsControlTestInjectionPoint::
+                            afterReconciliationBatchCommitBeforeResponse &&
+                    batchCommitResponseLosses++ == 0)
+                    throw pqxx::broken_connection(
+                        "deterministic reconciliation commit response loss");
+            });
+    assert(batchCommitResponseLosses == 1);
+    assert(uncertainBatch.observationCount == 1);
+    assert(Scalar(owner, schema,
+        "SELECT count(*) FROM "
+        "campaign_operations_reconciliation_cursor_event "
+        "WHERE run_key='" + uncertainCommitObserve.runKey + "'") == 1);
+    assert(Scalar(owner, schema,
+        "SELECT count(*) FROM "
+        "campaign_operations_reconciliation_observation "
+        "WHERE run_key='" + uncertainCommitObserve.runKey + "'") == 1);
+
+    uncertainCommitObserve.resolveSafeTransitions = true;
+    int recoveryCommitResponseLosses = 0;
+    const auto uncertainRecovery =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, uncertainCommitObserve,
+            [&](CampaignOperationsControlTestInjectionPoint point,
+                pqxx::transaction_base&)
+            {
+                if (point ==
+                        CampaignOperationsControlTestInjectionPoint::
+                            afterReconciliationRecoveryCommitBeforeResponse &&
+                    recoveryCommitResponseLosses++ == 0)
+                    throw pqxx::broken_connection(
+                        "deterministic recovery commit response loss");
+            });
+    assert(recoveryCommitResponseLosses == 1);
+    assert(uncertainRecovery.resolutionCount == 1);
+    assert(Scalar(owner, schema,
+        "SELECT count(*) FROM "
+        "campaign_operations_reconciliation_resolution resolution "
+        "JOIN campaign_operations_reconciliation_observation observation "
+        "USING(reconciliation_observation_id) "
+        "WHERE observation.run_key='" +
+        uncertainCommitObserve.runKey + "'") == 1);
+
+    std::string reservationExpiry;
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        reservationExpiry = transaction.exec(
+            "SELECT to_char(("
+            "clock_timestamp()+interval '1 second') AT TIME ZONE 'UTC',"
+            "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');")
+            .one_row()[0].as<std::string>();
+    }
+    const auto expiringReservationAccepted = AcceptPhase4Fixture(
+        owner, connectionString, schema, 216, 1, reservationExpiry);
+    const auto expiringReservationRequestId =
+        expiringReservationAccepted.persisted.request.requestId;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    ReconciliationObserveRequest observeExpiredReservation;
+    observeExpiredReservation.runKey =
+        "phase4-expired-reservation-observation";
+    observeExpiredReservation.afterRequestId =
+        expiringReservationRequestId.value() - 1;
+    observeExpiredReservation.limit = 1;
+    observeExpiredReservation.resolveSafeTransitions = true;
+    const auto expiredReservationObservation =
+        ObserveAndRecoverCampaignOperations(
+            runtimeConnectionString, observeExpiredReservation);
+    assert(expiredReservationObservation.selectedCount == 1);
+    assert(expiredReservationObservation.observationCount == 1);
+    assert(expiredReservationObservation.resolutionCount == 0);
+    {
+        pqxx::read_transaction transaction{owner};
+        SetSearchPath(transaction, schema);
+        const auto row = transaction.exec(
+            "SELECT request.request_state,reservation.reservation_state,"
+            "observation.reason_code,observation.recommended_service,"
+            "observation.recommended_action "
+            "FROM campaign_operations_operational_request request "
+            "JOIN campaign_operations_reservation reservation "
+            "ON reservation.reservation_id=request.reservation_id "
+            "JOIN campaign_operations_reconciliation_observation observation "
+            "ON observation.operational_request_id="
+            "request.operational_request_id "
+            "WHERE request.operational_request_id=$1;",
+            pqxx::params{expiringReservationRequestId.value()})
+            .one_row();
+        assert(row[0].as<std::string>() == "ready");
+        assert(row[1].as<std::string>() == "held");
+        assert(row[2].as<std::string>() ==
+            "reservation_expired_no_downstream_evidence");
+        assert(row[3].as<std::string>() ==
+            "campaign_operations_reservation_service");
+        assert(row[4].as<std::string>() ==
+            "expire_held_reservation");
+    }
+}
+
 void DropSchema(pqxx::connection& connection, const std::string& schema)
 {
     pqxx::work transaction{connection};
@@ -3324,6 +4987,12 @@ int main()
             "Database/migrations/048_campaign_operations_durable_dispatch_handoff.sql");
         ApplyFile(owner, schema,
             "Tests/CampaignOperationsPhase3MigrationTests.sql");
+        ApplyFile(owner, schema,
+            "Database/migrations/049_campaign_operations_controls_cancellation_reconciliation.sql");
+        ApplyFile(owner, schema,
+            "Database/migrations/049_campaign_operations_controls_cancellation_reconciliation.sql");
+        ApplyFile(owner, schema,
+            "Tests/CampaignOperationsPhase4MigrationTests.sql");
 
         const OperationalCampaign campaign =
             InsertMaterialization(owner, schema, 41, 3);
@@ -3466,6 +5135,12 @@ int main()
         TestBudgetReservationAndRequestAcceptance(
             owner, connectionString, schema);
         TestPhase3LeaseAcquisition(owner, connectionString, schema);
+        TestPhase4ControlsCancellationAndReconciliation(
+            owner, connectionString, schema);
+        ApplyFile(owner, schema,
+            "Database/migrations/049_campaign_operations_controls_cancellation_reconciliation.sql");
+        ApplyFile(owner, schema,
+            "Tests/CampaignOperationsPhase4MigrationTests.sql");
         TestDirectCapabilityIntegrity(owner, connectionString, schema);
         TestPhase2CorrectionConcurrency(owner, connectionString, schema);
 
@@ -3628,8 +5303,10 @@ int main()
 
         DropSchema(owner, schema);
     }
-    catch (...)
+    catch (const std::exception& error)
     {
+        std::cerr << "CampaignOperationsRepositoryTests_failed: "
+                  << error.what() << '\n';
         try
         {
             DropSchema(owner, schema);
@@ -3637,7 +5314,7 @@ int main()
         catch (...)
         {
         }
-        throw;
+        return 1;
     }
     return 0;
 }

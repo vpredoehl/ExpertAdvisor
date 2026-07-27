@@ -52,7 +52,10 @@ completion/audit, read-only status, and optional projection writing.
   events.
 - Functions use a pinned safe `search_path`; trigger/function execution is
   denied to `PUBLIC` and unrelated roles.
-- Reconciliation may read accepted evidence and append observations only.
+- Reconciliation may read accepted evidence, execute only the campaign and
+  request lock helpers required by global ordering, and atomically append an
+  exact cursor batch plus observations. It has no reservation, budget, or
+  resolution lock/mutation capability.
   Scheduler/workers have no Campaign Operations privileges; Campaign
   Operations has no scheduler-claim, capacity, process, or worker privileges.
 - Status readers use approved views/read models and read-only repeatable

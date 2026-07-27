@@ -191,6 +191,12 @@
 		0B61000F3086000100AAA001 /* CampaignOperationsBindingRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6100043086000100AAA001 /* CampaignOperationsBindingRepository.cpp */; };
 		0B6100103086000100AAA001 /* CampaignOperationsDispatchService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6100063086000100AAA001 /* CampaignOperationsDispatchService.cpp */; };
 		0B6100113086000100AAA001 /* CampaignOperationsDispatchService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6100063086000100AAA001 /* CampaignOperationsDispatchService.cpp */; };
+		0B6200063087000100AAA001 /* CampaignOperationsControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6200003087000100AAA001 /* CampaignOperationsControl.cpp */; };
+		0B6200073087000100AAA001 /* CampaignOperationsControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6200003087000100AAA001 /* CampaignOperationsControl.cpp */; };
+		0B6200083087000100AAA001 /* CampaignOperationsControlRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6200023087000100AAA001 /* CampaignOperationsControlRepository.cpp */; };
+		0B6200093087000100AAA001 /* CampaignOperationsControlRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6200023087000100AAA001 /* CampaignOperationsControlRepository.cpp */; };
+		0B62000A3087000100AAA001 /* CampaignOperationsControlService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6200043087000100AAA001 /* CampaignOperationsControlService.cpp */; };
+		0B62000B3087000100AAA001 /* CampaignOperationsControlService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6200043087000100AAA001 /* CampaignOperationsControlService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -462,6 +468,12 @@
 		0B6100053086000100AAA001 /* CampaignOperationsBindingRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsBindingRepository.hpp; path = Sources/CampaignOperationsBindingRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0B6100063086000100AAA001 /* CampaignOperationsDispatchService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsDispatchService.cpp; path = Sources/CampaignOperationsDispatchService.cpp; sourceTree = SOURCE_ROOT; };
 		0B6100073086000100AAA001 /* CampaignOperationsDispatchService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsDispatchService.hpp; path = Sources/CampaignOperationsDispatchService.hpp; sourceTree = SOURCE_ROOT; };
+		0B6200003087000100AAA001 /* CampaignOperationsControl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsControl.cpp; path = Sources/CampaignOperationsControl.cpp; sourceTree = SOURCE_ROOT; };
+		0B6200013087000100AAA001 /* CampaignOperationsControl.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsControl.hpp; path = Sources/CampaignOperationsControl.hpp; sourceTree = SOURCE_ROOT; };
+		0B6200023087000100AAA001 /* CampaignOperationsControlRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsControlRepository.cpp; path = Sources/CampaignOperationsControlRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0B6200033087000100AAA001 /* CampaignOperationsControlRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsControlRepository.hpp; path = Sources/CampaignOperationsControlRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0B6200043087000100AAA001 /* CampaignOperationsControlService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsControlService.cpp; path = Sources/CampaignOperationsControlService.cpp; sourceTree = SOURCE_ROOT; };
+		0B6200053087000100AAA001 /* CampaignOperationsControlService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsControlService.hpp; path = Sources/CampaignOperationsControlService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -701,6 +713,12 @@
 				0B6100053086000100AAA001 /* CampaignOperationsBindingRepository.hpp */,
 				0B6100063086000100AAA001 /* CampaignOperationsDispatchService.cpp */,
 				0B6100073086000100AAA001 /* CampaignOperationsDispatchService.hpp */,
+				0B6200003087000100AAA001 /* CampaignOperationsControl.cpp */,
+				0B6200013087000100AAA001 /* CampaignOperationsControl.hpp */,
+				0B6200023087000100AAA001 /* CampaignOperationsControlRepository.cpp */,
+				0B6200033087000100AAA001 /* CampaignOperationsControlRepository.hpp */,
+				0B6200043087000100AAA001 /* CampaignOperationsControlService.cpp */,
+				0B6200053087000100AAA001 /* CampaignOperationsControlService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -966,6 +984,9 @@
 				0B61000C3086000100AAA001 /* CampaignOperationsDispatchRepository.cpp in Sources */,
 				0B61000E3086000100AAA001 /* CampaignOperationsBindingRepository.cpp in Sources */,
 				0B6100103086000100AAA001 /* CampaignOperationsDispatchService.cpp in Sources */,
+				0B6200063087000100AAA001 /* CampaignOperationsControl.cpp in Sources */,
+				0B6200083087000100AAA001 /* CampaignOperationsControlRepository.cpp in Sources */,
+				0B62000A3087000100AAA001 /* CampaignOperationsControlService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -1060,6 +1081,9 @@
 				0B61000D3086000100AAA001 /* CampaignOperationsDispatchRepository.cpp in Sources */,
 				0B61000F3086000100AAA001 /* CampaignOperationsBindingRepository.cpp in Sources */,
 				0B6100113086000100AAA001 /* CampaignOperationsDispatchService.cpp in Sources */,
+				0B6200073087000100AAA001 /* CampaignOperationsControl.cpp in Sources */,
+				0B6200093087000100AAA001 /* CampaignOperationsControlRepository.cpp in Sources */,
+				0B62000B3087000100AAA001 /* CampaignOperationsControlService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,

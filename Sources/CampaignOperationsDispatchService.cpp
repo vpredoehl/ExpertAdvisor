@@ -99,6 +99,16 @@ std::optional<DispatchServiceResult> LookupBeforeRetry(
         FindAndValidateCompleteDispatchBinding(transaction, requestId);
     if (existing)
         return ExistingResult(*existing, transactionAttempts, recovery);
+    const auto requestState = transaction.exec(
+        "SELECT request_state FROM "
+        "campaign_operations_operational_request "
+        "WHERE operational_request_id=$1;",
+        pqxx::params{requestId.value()});
+    if (requestState.empty())
+        throw std::runtime_error(
+            "campaign_operations_dispatch_request_not_found");
+    if (requestState.one_row()[0].as<std::string>() == "ready")
+        return std::nullopt;
     const auto outcome = FindLatestDispatchOutcome(transaction, requestId);
     if (!outcome) return std::nullopt;
     if (outcome->result == DispatchResultClassification::createdAndBound ||

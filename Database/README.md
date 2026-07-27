@@ -229,6 +229,40 @@ They receive no update, delete, truncate, dispatch, scheduler, worker, or
 experiment-lifecycle privilege. Assigning either capability to a deployment
 principal is a separate reviewed administrator action.
 
+Campaign Operations Phase 3 migration 048 adds durable lease acquisition,
+immutable dispatch attempt/outcome evidence, complete ordered bindings,
+permanent V1 control ownership, and atomic held-to-committed/bound Phase 5
+handoff. Its dispatcher and transaction-bound Phase 5 roles are separate
+NOLOGIN capabilities. Production dispatch remains constrained false.
+
+Campaign Operations Phase 4 migration 049 implements architectural Phase F.
+It adds append-only pause/resume controls, cancellation intent, lifecycle
+cancellation evidence, cancellation settlement, reconciliation observations,
+resolutions and cursors, and cause-specific control audit. Each observation is
+linked to one durable cursor identity; cursor and exact membership commit
+atomically under a deferred database completeness constraint, and replay loads
+by identity rather than run-key/request ranges. PostgreSQL admits only one
+cancellation owner for each request (or campaign-only target), formats
+reconciliation timestamps as fixed UTC microseconds, and creates resolutions
+only through capability-specific functions that validate and store typed
+causal settlement or dispatch-outcome references.
+Pause gates request
+acceptance and every Phase 3 selection/acquisition/handoff check without
+signaling a scheduler or worker. Unbound cancellation atomically releases held
+units and cancels the request; bound cancellation delegates through a narrow
+lifecycle capability and never releases committed units. Expired dispatch
+leases return to ``ready`` only after PostgreSQL time and exact absence of
+binding, downstream execution, and current-attempt outcome are revalidated.
+Reconciliation observation and recovery transactions use bounded
+whole-transaction retries; an uncertain commit is resolved by exact durable
+cursor or resolution lookup before any retry.
+All new capability roles are NOLOGIN and are not granted to ``pqxx``.
+If an earlier staged form of migration 049 already contains observations
+without durable cursor membership, the corrected migration aborts atomically
+instead of guessing membership from the superseded run-key/request-range
+scheme. No production Phase 4 contract was released with that representation;
+preserve such staged evidence for review rather than rewriting it.
+
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
 Migration 046 is additionally required before starting the scheduler or using
