@@ -931,21 +931,18 @@ std::optional<long long> QueueCancellationInference(
         if (crossExperiment || belongsToOtherCancellation ||
             !lifecycleFailure.empty())
             return existing[0][0].as<long long>();
-        const pqxx::result assigned = transaction.exec_params(
-            "UPDATE experiment_checkpoint_eval "
-            "SET cancellation_request_id=$1,"
-            "status=CASE WHEN $3 THEN 'completed' ELSE status END,"
-            "phase=CASE WHEN $3 THEN 'done' ELSE phase END,"
-            "completed_at=CASE WHEN $3 THEN COALESCE(completed_at,now()) "
-            "ELSE completed_at END,"
-            "updated_at=now() WHERE checkpoint_eval_id=$2 "
-            "AND (cancellation_request_id IS NULL "
-            "OR cancellation_request_id=$1);",
-            requestId,
-            existing[0][0].as<long long>(),
-            target.inferenceAlreadyCompleted);
-        RequireAffectedRows(
-            assigned, 1, "assign_cancellation_inference_request");
+        if (existing[0][4].is_null())
+        {
+            const pqxx::result assigned = transaction.exec_params(
+                "UPDATE experiment_checkpoint_eval "
+                "SET cancellation_request_id=$1,updated_at=now() "
+                "WHERE checkpoint_eval_id=$2 "
+                "AND cancellation_request_id IS NULL;",
+                requestId,
+                existing[0][0].as<long long>());
+            RequireAffectedRows(
+                assigned, 1, "assign_cancellation_inference_request");
+        }
         if (target.inferenceFailed)
             return existing[0][0].as<long long>();
         target.inferenceQueued =
@@ -1252,19 +1249,18 @@ bool OwnsActiveRequest(pqxx::transaction_base& transaction,
 }
 
 bool HasUnresolvedWorkerOutcome(pqxx::transaction_base& transaction,
-                                long long requestId)
+                                long long requestId,
+                                bool failedIsUnresolved = true)
 {
     return transaction.exec_params(
         "SELECT EXISTS ("
         " SELECT 1 FROM experiment_admin_worker_outcome "
         " WHERE request_id=$1 AND ("
         " outcome_status IN ('planned','pending_checkpoint',"
-        "'awaiting_inference','failed') "
-        " OR identity_result IN ('stale_pid','identity_validation_failed',"
-        "'unsafe_process_group','permission_denied','inspection_failed') "
-        " OR signal_result IN ('stale_pid','identity_validation_failed',"
-        "'permission_failure','signaling_failure')));",
-        requestId)[0][0].as<bool>();
+        "'awaiting_inference') "
+        " OR ($2 AND outcome_status='failed')));",
+        requestId,
+        failedIsUnresolved)[0][0].as<bool>();
 }
 
 void ClearPauseGenerationAfterResolvedRequest(
@@ -2921,7 +2917,7 @@ bool ReconcileActiveCancellation(pqxx::work& transaction,
         requestId,
         applicationOwner).one_row();
     const bool unresolved =
-        HasUnresolvedWorkerOutcome(transaction, requestId);
+        HasUnresolvedWorkerOutcome(transaction, requestId, false);
     if (request[0].as<std::string>() != "pending" && !unresolved)
     {
         if (pauseRequestId)

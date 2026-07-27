@@ -215,12 +215,16 @@ INSERT INTO experiment (
     '/tmp/replacement --train --scheduler-experiment-id=990004',
     '1700000000:4','running'
 );
+INSERT INTO model(model_id,experiment_id,comment) VALUES (
+    999002,990002,'selective resume migration checkpoint fixture'
+);
 INSERT INTO experiment_checkpoint_eval (
-    checkpoint_eval_id,experiment_id,parent_experiment_id,status,phase,
-    worker_pid,worker_process_group_id,worker_executable,worker_command_line,
-    worker_process_start_identity,worker_control_state
+    checkpoint_eval_id,experiment_id,parent_experiment_id,checkpoint_epoch,
+    checkpoint_model_id,status,phase,worker_pid,worker_process_group_id,
+    worker_executable,worker_command_line,worker_process_start_identity,
+    worker_control_state
 ) VALUES (
-    999002,990002,990002,'running','infer',999002,999002,
+    999002,990002,990002,20,999002,'running','infer',999002,999002,
     '/tmp/LSTM_Release',
     '/tmp/LSTM_Release --infer --scheduler-experiment-id=990002 --scheduler-checkpoint-eval-id=999002',
     '1700000000:22','paused'

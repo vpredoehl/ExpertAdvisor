@@ -1124,15 +1124,25 @@ void InsertRunningCheckpointChild(pqxx::connection& connection,
 {
     CHECK(worker.checkpointEvalId);
     pqxx::work transaction{connection};
+    const long long checkpointModelId = transaction.exec_params(
+        "INSERT INTO model(experiment_id,comment) "
+        "VALUES ($1,'selective resume checkpoint child fixture') "
+        "RETURNING model_id;",
+        worker.experimentId)[0][0].as<long long>();
+    transaction.exec_params(
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "VALUES ($1,'train_config_meta',0,10,20);",
+        checkpointModelId);
     transaction.exec_params(
         "INSERT INTO experiment_checkpoint_eval ("
-        "checkpoint_eval_id,experiment_id,parent_experiment_id,status,phase,"
-        "worker_pid,worker_process_group_id,worker_executable,"
-        "worker_command_line,worker_process_start_identity,"
-        "worker_control_state) "
-        "VALUES ($1,$2,$2,'running','infer',$3,$4,$5,$6,$7,'running');",
+        "checkpoint_eval_id,experiment_id,parent_experiment_id,"
+        "checkpoint_epoch,checkpoint_model_id,status,phase,worker_pid,"
+        "worker_process_group_id,worker_executable,worker_command_line,"
+        "worker_process_start_identity,worker_control_state) "
+        "VALUES ($1,$2,$2,20,$3,'running','infer',$4,$5,$6,$7,$8,'running');",
         *worker.checkpointEvalId,
         worker.experimentId,
+        checkpointModelId,
         worker.pid,
         *worker.processGroupId,
         *worker.executable,
@@ -3348,10 +3358,19 @@ void TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
                 AcquireCoordinationLock(transaction);
                 transaction.exec_params(
                     "UPDATE experiment SET status='cancelled',"
+                    "current_epoch=20,stopped_at_checkpoint_epoch=20,"
+                    "stopped_at_checkpoint_model_id=("
+                    "SELECT checkpoint_model_id "
+                    "FROM experiment_checkpoint_eval "
+                    "WHERE checkpoint_eval_id=$2),"
+                    "last_model_id=(SELECT checkpoint_model_id "
+                    "FROM experiment_checkpoint_eval "
+                    "WHERE checkpoint_eval_id=$2),"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
                     "completed_at=now(),cancellation_completed_at=now(),"
                     "updated_at=now() WHERE experiment_id=$1;",
-                    experimentId);
+                    experimentId,
+                    checkpointEvalId);
                 CHECK(ReconcileActiveCancellation(
                     transaction,
                     "selective-resume-cancel-mix-scheduler-owner",
@@ -4582,9 +4601,7 @@ void TestLegacyInferenceUpgradeMatrix(
     ResetCrashFixtures(connection);
 }
 
-void TestProductionCheckpointStopOwnership(
-    const std::string& connectionString,
-    pqxx::connection& connection)
+void TestProductionCheckpointStopOwnership(pqxx::connection& connection)
 {
     pqxx::work fixture{connection};
     const long long requestId = fixture.exec(
@@ -4789,7 +4806,7 @@ int RunDatabaseCrashWindowTests(const std::string& selfPath,
         connectionString, connection);
     TestTerminalInferenceReconciliation(connectionString, connection);
     TestLegacyInferenceUpgradeMatrix(connectionString, connection);
-    TestProductionCheckpointStopOwnership(connectionString, connection);
+    TestProductionCheckpointStopOwnership(connection);
     TestSelectiveResumeFromGlobalPause(
         selfPath, connectionString, connection);
     TestSelectiveLeaseTakeoverFencesStaleOwner(
