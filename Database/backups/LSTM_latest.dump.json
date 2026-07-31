@@ -1,14 +1,14 @@
 {
   "database": "LSTM",
   "backup_path": "Database/backups/LSTM_latest.dump",
-  "size_bytes": 230023104,
-  "git_commit": "e66e77d",
-  "created_at": "2026-07-19T02:29:48Z",
+  "size_bytes": 345789562,
+  "git_commit": "939e126",
+  "created_at": "2026-07-31T03:19:28Z",
   "format": "custom",
   "includes_schema": true,
   "includes_data": true,
-  "schema_version": "033",
-  "model_count": 681,
-  "experiment_count": 223,
-  "analysis_count": 166
+  "schema_version": "049",
+  "model_count": 1022,
+  "experiment_count": 314,
+  "analysis_count": 475
 }
