@@ -1,5 +1,6 @@
 #include "GlobalExperimentControl.hpp"
 #include "ExperimentCurrentOperation.hpp"
+#include "SchedulerOwnershipRepository.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <functional>
 #include <libproc.h>
 #include <sstream>
 #include <stdexcept>
@@ -195,7 +197,17 @@ public:
             !processState.empty() &&
             (processState[0] == 'T' || processState[0] == 't');
         observation.commandLine = observedCommand;
-        observation.executable = FirstCommandToken(observedCommand);
+        char executablePath[PROC_PIDPATHINFO_MAXSIZE] = {};
+        const int executableLength = ::proc_pidpath(
+            pid, executablePath, sizeof(executablePath));
+        if (executableLength <= 0)
+            return observation;
+        char* canonicalExecutable =
+            ::realpath(executablePath, nullptr);
+        if (canonicalExecutable == nullptr)
+            return observation;
+        observation.executable = canonicalExecutable;
+        std::free(canonicalExecutable);
         const std::optional<std::string> startIdentityAfter =
             ReadProcessStartIdentity(pid);
         if (!startIdentityAfter ||
@@ -310,10 +322,33 @@ struct DbTarget
     bool authoritativeRowExists = false;
     bool authoritativeActive = false;
     bool authoritativeExactMatch = false;
+    bool authoritativeExactTerminalDeparture = false;
     bool authoritativePendingCancellation = false;
     std::string authoritativeMismatchDetail;
     std::string plan;
 };
+
+using SignalAuthorization = std::function<bool(
+    const ManagedWorker&,
+    const ProcessObservation&,
+    int,
+    int&,
+    std::string&)>;
+
+SignalOutcome PauseWorkerAuthorized(
+    const ManagedWorker& worker,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize);
+SignalOutcome ResumeWorkerAuthorized(
+    const ManagedWorker& worker,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize);
+SignalOutcome CancelWorkerAuthorized(
+    const ManagedWorker& worker,
+    bool resumeFirst,
+    std::chrono::milliseconds grace,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize);
 
 void RequireAffectedRows(const pqxx::result& result,
                          pqxx::result::size_type expected,
@@ -355,7 +390,8 @@ void LoadAuthoritativeTargetState(pqxx::transaction_base& transaction,
             "SELECT status,phase,worker_pid,worker_process_group_id,"
             "worker_process_start_identity,worker_executable,"
             "worker_command_line,worker_control_state,"
-            "worker_global_pause_request_id,cancellation_request_id "
+            "worker_global_pause_request_id,cancellation_request_id,"
+            "active_scheduler_worker_attempt_id "
             "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
             *target.checkpointEvalId);
     }
@@ -365,7 +401,8 @@ void LoadAuthoritativeTargetState(pqxx::transaction_base& transaction,
             "SELECT status,phase,worker_pid,worker_process_group_id,"
             "worker_process_start_identity,worker_executable,"
             "worker_command_line,worker_control_state,"
-            "worker_global_pause_request_id,cancellation_request_id "
+            "worker_global_pause_request_id,cancellation_request_id,"
+            "active_scheduler_worker_attempt_id "
             "FROM experiment WHERE experiment_id=$1;",
             target.worker.experimentId);
     }
@@ -388,7 +425,47 @@ void LoadAuthoritativeTargetState(pqxx::transaction_base& transaction,
         OptionalIntegerEqual(target.worker.processGroupId, rows[0][3]) &&
         OptionalTextEqual(target.worker.processStartIdentity, rows[0][4]) &&
         OptionalTextEqual(target.worker.executable, rows[0][5]) &&
-        OptionalTextEqual(target.worker.commandLine, rows[0][6]);
+        OptionalTextEqual(target.worker.commandLine, rows[0][6]) &&
+        target.worker.workerAttemptId.has_value() &&
+        !rows[0][10].is_null() &&
+        rows[0][10].as<long long>() ==
+            *target.worker.workerAttemptId;
+
+    if (!target.authoritativeActive &&
+        !rows.empty() &&
+        rows[0][10].is_null() &&
+        target.worker.workerAttemptId)
+    {
+        target.authoritativeExactTerminalDeparture =
+            transaction.exec_params(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM experiment_scheduler_worker_attempt a "
+                "WHERE a.worker_attempt_id=$1 "
+                "AND a.worker_kind=$2 "
+                "AND a.experiment_id=$3 "
+                "AND a.checkpoint_eval_id IS NOT DISTINCT FROM $4 "
+                "AND a.lifecycle_phase=$5 "
+                "AND a.capacity_class=$5 "
+                "AND a.lifecycle_state IN "
+                "('completed','failed','launch_failed','abandoned') "
+                "AND a.worker_pid IS NOT DISTINCT FROM $6 "
+                "AND a.worker_process_group_id IS NOT DISTINCT FROM $7 "
+                "AND a.worker_process_start_identity IS NOT DISTINCT FROM $8 "
+                "AND a.canonical_executable_path IS NOT DISTINCT FROM $9 "
+                "AND a.command_line IS NOT DISTINCT FROM $10);",
+                *target.worker.workerAttemptId,
+                target.checkpointWorker ? "checkpoint_infer" : "experiment",
+                target.worker.experimentId,
+                target.checkpointEvalId,
+                target.checkpointWorker ? "infer" : target.worker.phase,
+                target.worker.pid > 0
+                    ? std::optional<int>{target.worker.pid}
+                    : std::nullopt,
+                target.worker.processGroupId,
+                target.worker.processStartIdentity,
+                target.worker.executable,
+                target.worker.commandLine)[0][0].as<bool>();
+    }
 
     if (target.authoritativeExactMatch && action == Action::CancelAll)
     {
@@ -431,6 +508,12 @@ void LoadAuthoritativeTargetState(pqxx::transaction_base& transaction,
     else if (!OptionalTextEqual(target.worker.commandLine, rows[0][6]))
         target.authoritativeMismatchDetail =
             "authoritative_worker_command_replaced_since_plan_frozen";
+    else if (!target.worker.workerAttemptId ||
+             rows[0][10].is_null() ||
+             rows[0][10].as<long long>() !=
+                 *target.worker.workerAttemptId)
+        target.authoritativeMismatchDetail =
+            "authoritative_worker_attempt_replaced_since_plan_frozen";
     else if (action == Action::CancelAll &&
              (rows[0][9].is_null() ||
               rows[0][9].as<long long>() != requestId))
@@ -463,8 +546,13 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         "e.current_epoch, e.checkpoint_interval, "
         "e.target_epochs,e.last_checkpoint_stop_decision_epoch,"
         "e.infer_start IS NOT NULL AND e.infer_end IS NOT NULL, "
-        "cp.completed_epoch, cp.model_id,cp.same_epoch_count "
+        "cp.completed_epoch, cp.model_id,cp.same_epoch_count,"
+        "e.active_scheduler_worker_attempt_id,"
+        "a.worker_kind,a.capacity_class,a.lifecycle_state,"
+        "a.launch_attempt_identity "
         "FROM experiment e "
+        "LEFT JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
         "LEFT JOIN LATERAL ("
         "  SELECT round(tm.value)::int AS completed_epoch, m.model_id,"
         "   count(*) OVER (PARTITION BY round(tm.value)::int) AS same_epoch_count "
@@ -518,6 +606,18 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
             target.latestCheckpointModelId = row[16].as<long long>();
         target.latestCheckpointAmbiguous =
             !row[17].is_null() && row[17].as<int>() > 1;
+        if (!row[18].is_null())
+            target.worker.workerAttemptId = row[18].as<long long>();
+        if (!row[19].is_null())
+            target.worker.workerKind = row[19].as<std::string>();
+        if (!row[20].is_null())
+            target.worker.capacityClass = row[20].as<std::string>();
+        if (!row[21].is_null())
+            target.worker.attemptLifecycleState =
+                row[21].as<std::string>();
+        if (!row[22].is_null())
+            target.worker.launchAttemptIdentity =
+                row[22].as<std::string>();
         targets.push_back(std::move(target));
     }
 
@@ -526,8 +626,13 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         "ce.worker_pid,ce.worker_process_group_id,ce.worker_executable,"
         "ce.worker_command_line,ce.worker_process_start_identity,"
         "ce.worker_control_state,ce.worker_global_pause_request_id,"
-        "ce.checkpoint_eval_id,ce.checkpoint_epoch,ce.checkpoint_model_id "
+        "ce.checkpoint_eval_id,ce.checkpoint_epoch,ce.checkpoint_model_id,"
+        "ce.active_scheduler_worker_attempt_id,"
+        "a.worker_kind,a.capacity_class,a.lifecycle_state,"
+        "a.launch_attempt_identity "
         "FROM experiment_checkpoint_eval ce "
+        "LEFT JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=ce.active_scheduler_worker_attempt_id "
         "WHERE ce.status='running' AND ce.phase='infer' "
         "ORDER BY ce.checkpoint_eval_id;");
     for (const auto& row : checkpointWorkers)
@@ -556,6 +661,18 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
             target.cancellationCheckpoint = row[9].as<int>();
         if (!row[10].is_null())
             target.cancellationCheckpointModelId = row[10].as<long long>();
+        if (!row[11].is_null())
+            target.worker.workerAttemptId = row[11].as<long long>();
+        if (!row[12].is_null())
+            target.worker.workerKind = row[12].as<std::string>();
+        if (!row[13].is_null())
+            target.worker.capacityClass = row[13].as<std::string>();
+        if (!row[14].is_null())
+            target.worker.attemptLifecycleState =
+                row[14].as<std::string>();
+        if (!row[15].is_null())
+            target.worker.launchAttemptIdentity =
+                row[15].as<std::string>();
         target.checkpointWorker = true;
         target.workerIdentity =
             "checkpoint_eval:" + std::to_string(*target.checkpointEvalId);
@@ -574,7 +691,7 @@ std::vector<DbTarget> LoadRetryTargets(pqxx::transaction_base& transaction,
         "worker_process_start_identity,worker_executable,worker_command_line,"
         "source_pause_request_id,cancellation_checkpoint_epoch,"
         "cancellation_checkpoint_model_id,inference_action,outcome_status,"
-        "identity_result,signal_result "
+        "identity_result,signal_result,worker_attempt_id "
         "FROM experiment_admin_worker_outcome WHERE request_id=$1 "
         "ORDER BY worker_identity;",
         requestId);
@@ -619,6 +736,15 @@ std::vector<DbTarget> LoadRetryTargets(pqxx::transaction_base& transaction,
         const std::string outcomeStatus = outcome[15].as<std::string>();
         const std::string identityResult = outcome[16].as<std::string>();
         const std::string signalResult = outcome[17].as<std::string>();
+        if (!outcome[18].is_null())
+            target.worker.workerAttemptId =
+                outcome[18].as<long long>();
+        target.worker.workerKind =
+            target.checkpointWorker ? "checkpoint_infer"
+                                    : "experiment";
+        target.worker.capacityClass =
+            target.checkpointWorker ? "infer"
+                                    : target.worker.phase;
         const bool retryableUnresolved =
             identityResult == "stale_pid" ||
             identityResult == "identity_validation_failed" ||
@@ -676,7 +802,8 @@ std::vector<DbTarget> LoadPauseGenerationTargets(
     pqxx::result members = transaction.exec_params(
         "SELECT worker_identity,experiment_id,checkpoint_eval_id,worker_kind,"
         "phase,lifecycle_status,worker_pid,worker_process_group_id,"
-        "worker_process_start_identity,worker_executable,worker_command_line "
+        "worker_process_start_identity,worker_executable,"
+        "worker_command_line,worker_attempt_id "
         "FROM experiment_admin_worker_outcome "
         "WHERE request_id=$1 AND outcome_status='completed' "
         "AND identity_result='validated' "
@@ -718,12 +845,23 @@ std::vector<DbTarget> LoadPauseGenerationTargets(
             target.worker.executable = member[9].as<std::string>();
         if (!member[10].is_null())
             target.worker.commandLine = member[10].as<std::string>();
+        if (!member[11].is_null())
+            target.worker.workerAttemptId =
+                member[11].as<long long>();
+        target.worker.workerKind =
+            target.checkpointWorker ? "checkpoint_infer"
+                                    : "experiment";
+        target.worker.capacityClass =
+            target.checkpointWorker ? "infer"
+                                    : target.worker.phase;
         target.sourcePauseRequestId = pauseRequestId;
         target.frozenReplayTarget = true;
 
         const bool exactCurrentWorker =
             current != currentTargets.end() &&
             current->worker.lifecycleStatus == "running" &&
+            current->worker.workerAttemptId ==
+                target.worker.workerAttemptId &&
             current->worker.pid == target.worker.pid &&
             current->worker.processGroupId == target.worker.processGroupId &&
             current->worker.processStartIdentity ==
@@ -765,8 +903,8 @@ void InsertOutcome(pqxx::transaction_base& transaction,
         "worker_process_group_id,worker_process_start_identity,"
         "worker_executable,worker_command_line,source_pause_request_id,"
         "cancellation_checkpoint_epoch,cancellation_checkpoint_model_id,"
-        "inference_action,outcome_status,detail) "
-        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) "
+        "inference_action,outcome_status,detail,worker_attempt_id) "
+        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) "
         "ON CONFLICT (request_id,worker_identity) DO NOTHING;",
         requestId,
         target.workerIdentity,
@@ -788,7 +926,8 @@ void InsertOutcome(pqxx::transaction_base& transaction,
             : target.latestCheckpointModelId,
         inferenceAction,
         outcomeStatus,
-        detail);
+        detail,
+        target.worker.workerAttemptId);
     RequireAffectedRows(inserted, 1, "insert_frozen_worker_outcome");
 }
 
@@ -1096,13 +1235,18 @@ std::optional<DbTarget> LoadExperimentResumeTarget(
     bool forUpdate)
 {
     std::string sql =
-        "SELECT experiment_id,status,phase,worker_pid,"
-        "worker_process_group_id,worker_executable,worker_command_line,"
-        "worker_process_start_identity,worker_control_state,"
-        "worker_global_pause_request_id "
-        "FROM experiment WHERE experiment_id=$1";
+        "SELECT e.experiment_id,e.status,e.phase,e.worker_pid,"
+        "e.worker_process_group_id,e.worker_executable,"
+        "e.worker_command_line,e.worker_process_start_identity,"
+        "e.worker_control_state,e.worker_global_pause_request_id,"
+        "e.active_scheduler_worker_attempt_id,a.worker_kind,"
+        "a.capacity_class,a.lifecycle_state,a.launch_attempt_identity "
+        "FROM experiment e "
+        "LEFT JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+        "WHERE e.experiment_id=$1";
     if (forUpdate)
-        sql += " FOR UPDATE";
+        sql += " FOR UPDATE OF e";
     pqxx::result rows = transaction.exec_params(sql, experimentId);
     if (rows.empty())
         return std::nullopt;
@@ -1127,6 +1271,18 @@ std::optional<DbTarget> LoadExperimentResumeTarget(
         rows[0][8].as<std::string>() == "paused";
     if (!rows[0][9].is_null())
         target.workerGlobalPauseRequestId = rows[0][9].as<long long>();
+    if (!rows[0][10].is_null())
+        target.worker.workerAttemptId = rows[0][10].as<long long>();
+    if (!rows[0][11].is_null())
+        target.worker.workerKind = rows[0][11].as<std::string>();
+    if (!rows[0][12].is_null())
+        target.worker.capacityClass = rows[0][12].as<std::string>();
+    if (!rows[0][13].is_null())
+        target.worker.attemptLifecycleState =
+            rows[0][13].as<std::string>();
+    if (!rows[0][14].is_null())
+        target.worker.launchAttemptIdentity =
+            rows[0][14].as<std::string>();
     return target;
 }
 
@@ -1198,7 +1354,7 @@ std::optional<DbTarget> LoadSelectiveResumePlan(
         "SELECT worker_identity,experiment_id,phase,lifecycle_status,"
         "worker_pid,worker_process_group_id,worker_process_start_identity,"
         "worker_executable,worker_command_line,source_pause_request_id,"
-        "outcome_status "
+        "worker_attempt_id,outcome_status "
         "FROM experiment_admin_worker_outcome "
         "WHERE request_id=$1 AND worker_kind='experiment';",
         requestId);
@@ -1222,9 +1378,11 @@ std::optional<DbTarget> LoadSelectiveResumePlan(
         target.worker.commandLine = rows[0][8].as<std::string>();
     if (!rows[0][9].is_null())
         target.sourcePauseRequestId = rows[0][9].as<long long>();
+    if (!rows[0][10].is_null())
+        target.worker.workerAttemptId = rows[0][10].as<long long>();
     target.resumeBeforeAction = true;
     target.frozenReplayTarget = true;
-    target.plan = rows[0][10].as<std::string>();
+    target.plan = rows[0][11].as<std::string>();
     return target;
 }
 
@@ -1342,6 +1500,12 @@ SignalOutcome FrozenTargetAuthorizationFailure(
     if (frozen.identity == IdentityResult::ProcessMissing)
     {
         outcome.result = "process_missing";
+        if (target.authoritativeExactTerminalDeparture)
+        {
+            outcome.success = true;
+            outcome.detail =
+                "exact_terminal_attempt_process_departed";
+        }
         return outcome;
     }
     if (frozen.identity == IdentityResult::PermissionDenied)
@@ -1367,23 +1531,182 @@ SignalOutcome FrozenTargetAuthorizationFailure(
     return outcome;
 }
 
+SignalAuthorization ExactAttemptSignalAuthorization(
+    const std::string& connectionString,
+    long long requestId,
+    const std::string& applicationOwner,
+    const std::string& action,
+    ProcessOperations& processes)
+{
+    return [
+        connectionString,
+        requestId,
+        applicationOwner,
+        action,
+        &processes](
+            const ManagedWorker& worker,
+            const ProcessObservation& observation,
+            int signalNumber,
+            int& errorNumber,
+            std::string& rejection) {
+        if (!worker.workerAttemptId)
+        {
+            rejection = "active_worker_attempt_identity_missing";
+            errorNumber = EINVAL;
+            return false;
+        }
+        try
+        {
+            pqxx::connection connection{connectionString};
+            pqxx::work transaction{connection};
+            transaction.exec("SET TRANSACTION READ WRITE;");
+            AcquireCoordinationLock(transaction);
+            if (!OwnsActiveRequest(
+                    transaction,
+                    requestId,
+                    applicationOwner,
+                    action))
+            {
+                rejection =
+                    "administrative_request_ownership_lost_before_signal";
+                errorNumber = EPERM;
+                transaction.commit();
+                return false;
+            }
+
+            EA::SchedulerOwnership::ExactAttemptExpectation expected;
+            expected.workerAttemptId = *worker.workerAttemptId;
+            expected.experimentId = worker.experimentId;
+            expected.checkpointEvalId = worker.checkpointEvalId;
+            expected.workerKind = worker.checkpointEvalId
+                ? "checkpoint_infer"
+                : "experiment";
+            expected.lifecyclePhase = worker.checkpointEvalId
+                ? "infer"
+                : worker.phase;
+            expected.capacityClass = worker.checkpointEvalId
+                ? "infer"
+                : worker.phase;
+            expected.requireSignalable = true;
+            expected.requireCompleteProcessIdentity = true;
+            const auto exact =
+                EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+                    transaction, expected, true);
+            const std::string expectedCommandIdentity =
+                worker.checkpointEvalId
+                    ? "checkpoint_infer:" +
+                          std::to_string(*worker.checkpointEvalId)
+                    : "experiment:" +
+                          std::to_string(worker.experimentId) +
+                          ":" + worker.phase;
+            if (!exact ||
+                exact->commandIdentity != expectedCommandIdentity ||
+                exact->workerPid !=
+                    std::optional<int>{observation.pid} ||
+                exact->processGroupId !=
+                    std::optional<int>{
+                        observation.processGroupId} ||
+                exact->processStartIdentity !=
+                    std::optional<std::string>{
+                        observation.processStartIdentity} ||
+                exact->canonicalExecutablePath !=
+                    std::optional<std::string>{
+                        observation.executable} ||
+                exact->commandLine !=
+                    std::optional<std::string>{
+                        observation.commandLine} ||
+                (exact->ownershipOrigin != "legacy_unverified" &&
+                 !ContainsExactOptionValue(
+                     observation.commandLine,
+                     "--scheduler-worker-attempt-id",
+                     exact->workerAttemptId)))
+            {
+                rejection =
+                    "exact_active_worker_attempt_verification_failed";
+                errorNumber = EINVAL;
+                transaction.commit();
+                return false;
+            }
+
+            const bool signaled = processes.SignalProcessGroup(
+                observation.processGroupId,
+                signalNumber,
+                errorNumber);
+            if (!signaled)
+                rejection = std::strerror(errorNumber);
+            transaction.commit();
+            return signaled;
+        }
+        catch (const std::exception& error)
+        {
+            rejection =
+                std::string{
+                    "exact_attempt_signal_verification_error:"} +
+                error.what();
+            errorNumber = EIO;
+            return false;
+        }
+    };
+}
+
+std::optional<EA::SchedulerOwnership::ExactAttemptSnapshot>
+LockExactTargetForMutation(
+    pqxx::transaction_base& transaction,
+    const DbTarget& target,
+    bool requireCompleteProcessIdentity)
+{
+    if (!target.worker.workerAttemptId)
+        return std::nullopt;
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId =
+        *target.worker.workerAttemptId;
+    expected.experimentId = target.worker.experimentId;
+    expected.checkpointEvalId = target.worker.checkpointEvalId;
+    expected.workerKind = target.checkpointWorker
+        ? "checkpoint_infer"
+        : "experiment";
+    expected.lifecyclePhase = target.checkpointWorker
+        ? "infer"
+        : target.worker.phase;
+    expected.capacityClass = target.checkpointWorker
+        ? "infer"
+        : target.worker.phase;
+    expected.requireCompleteProcessIdentity =
+        requireCompleteProcessIdentity;
+    return EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+        transaction, expected, true);
+}
+
 SignalOutcome ApplyTargetSignal(const DbTarget& target,
                                 Action action,
                                 std::chrono::milliseconds terminationGrace,
-                                ProcessOperations& processes)
+                                ProcessOperations& processes,
+                                const std::string& connectionString,
+                                long long requestId,
+                                const std::string& applicationOwner)
 {
     if (target.frozenReplayTarget &&
         !target.authoritativeExactMatch)
         return FrozenTargetAuthorizationFailure(target, processes);
+    const SignalAuthorization authorize =
+        ExactAttemptSignalAuthorization(
+            connectionString,
+            requestId,
+            applicationOwner,
+            ToString(action),
+            processes);
     if (action == Action::PauseAll)
-        return PauseWorker(target.worker, processes);
+        return PauseWorkerAuthorized(
+            target.worker, processes, authorize);
     if (action == Action::ResumeAll)
-        return ResumeWorker(target.worker, processes);
-    return CancelWorker(
+        return ResumeWorkerAuthorized(
+            target.worker, processes, authorize);
+    return CancelWorkerAuthorized(
         target.worker,
         target.resumeBeforeAction,
         terminationGrace,
-        processes);
+        processes,
+        authorize);
 }
 
 struct SelectiveAccounting
@@ -2234,8 +2557,37 @@ SchedulerWorkerClassificationSummary SummarizeSchedulerWorkers(
     return summary;
 }
 
-SignalOutcome PauseWorker(const ManagedWorker& worker,
-                          ProcessOperations& processes)
+namespace
+{
+
+bool SendAuthorizedSignal(
+    const ManagedWorker& worker,
+    const ProcessObservation& observation,
+    int signalNumber,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize,
+    int& errorNumber,
+    std::string& rejection)
+{
+    if (authorize)
+    {
+        return authorize(
+            worker,
+            observation,
+            signalNumber,
+            errorNumber,
+            rejection);
+    }
+    return processes.SignalProcessGroup(
+        observation.processGroupId,
+        signalNumber,
+        errorNumber);
+}
+
+SignalOutcome PauseWorkerAuthorized(
+    const ManagedWorker& worker,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize)
 {
     SignalOutcome outcome;
     const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
@@ -2257,9 +2609,16 @@ SignalOutcome PauseWorker(const ManagedWorker& worker,
         return outcome;
     }
     int errorNumber = 0;
+    std::string rejection;
     outcome.signals.push_back(SIGSTOP);
-    if (!processes.SignalProcessGroup(
-            validated.observation.processGroupId, SIGSTOP, errorNumber))
+    if (!SendAuthorizedSignal(
+            worker,
+            validated.observation,
+            SIGSTOP,
+            processes,
+            authorize,
+            errorNumber,
+            rejection))
     {
         if (errorNumber == ESRCH)
         {
@@ -2270,8 +2629,12 @@ SignalOutcome PauseWorker(const ManagedWorker& worker,
         }
         outcome.result = errorNumber == EPERM
             ? "permission_failure"
-            : "signaling_failure";
-        outcome.detail = std::strerror(errorNumber);
+            : (errorNumber == EINVAL
+                   ? "identity_validation_failed"
+                   : "signaling_failure");
+        outcome.detail = rejection.empty()
+            ? std::strerror(errorNumber)
+            : rejection;
         return outcome;
     }
     outcome.result = "signaled";
@@ -2279,8 +2642,10 @@ SignalOutcome PauseWorker(const ManagedWorker& worker,
     return outcome;
 }
 
-SignalOutcome ResumeWorker(const ManagedWorker& worker,
-                           ProcessOperations& processes)
+SignalOutcome ResumeWorkerAuthorized(
+    const ManagedWorker& worker,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize)
 {
     SignalOutcome outcome;
     const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
@@ -2302,9 +2667,16 @@ SignalOutcome ResumeWorker(const ManagedWorker& worker,
         return outcome;
     }
     int errorNumber = 0;
+    std::string rejection;
     outcome.signals.push_back(SIGCONT);
-    if (!processes.SignalProcessGroup(
-            validated.observation.processGroupId, SIGCONT, errorNumber))
+    if (!SendAuthorizedSignal(
+            worker,
+            validated.observation,
+            SIGCONT,
+            processes,
+            authorize,
+            errorNumber,
+            rejection))
     {
         if (errorNumber == ESRCH)
         {
@@ -2315,8 +2687,12 @@ SignalOutcome ResumeWorker(const ManagedWorker& worker,
         }
         outcome.result = errorNumber == EPERM
             ? "permission_failure"
-            : "signaling_failure";
-        outcome.detail = std::strerror(errorNumber);
+            : (errorNumber == EINVAL
+                   ? "identity_validation_failed"
+                   : "signaling_failure");
+        outcome.detail = rejection.empty()
+            ? std::strerror(errorNumber)
+            : rejection;
         return outcome;
     }
     outcome.result = "signaled";
@@ -2324,10 +2700,12 @@ SignalOutcome ResumeWorker(const ManagedWorker& worker,
     return outcome;
 }
 
-SignalOutcome CancelWorker(const ManagedWorker& worker,
-                           bool resumeFirst,
-                           std::chrono::milliseconds grace,
-                           ProcessOperations& processes)
+SignalOutcome CancelWorkerAuthorized(
+    const ManagedWorker& worker,
+    bool resumeFirst,
+    std::chrono::milliseconds grace,
+    ProcessOperations& processes,
+    const SignalAuthorization& authorize)
 {
     SignalOutcome outcome;
     ValidatedWorker validated = ValidateManagedWorker(worker, processes);
@@ -2343,11 +2721,18 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
         return outcome;
     }
     int errorNumber = 0;
+    std::string rejection;
     if (resumeFirst)
     {
         outcome.signals.push_back(SIGCONT);
-        if (!processes.SignalProcessGroup(
-                validated.observation.processGroupId, SIGCONT, errorNumber))
+        if (!SendAuthorizedSignal(
+                worker,
+                validated.observation,
+                SIGCONT,
+                processes,
+                authorize,
+                errorNumber,
+                rejection))
         {
             if (errorNumber == ESRCH)
             {
@@ -2358,8 +2743,12 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
             }
             outcome.result = errorNumber == EPERM
                 ? "permission_failure"
-                : "signaling_failure";
-            outcome.detail = std::strerror(errorNumber);
+                : (errorNumber == EINVAL
+                       ? "identity_validation_failed"
+                       : "signaling_failure");
+            outcome.detail = rejection.empty()
+                ? std::strerror(errorNumber)
+                : rejection;
             return outcome;
         }
     }
@@ -2376,8 +2765,15 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
         return outcome;
     }
     outcome.signals.push_back(SIGTERM);
-    if (!processes.SignalProcessGroup(
-            validated.observation.processGroupId, SIGTERM, errorNumber))
+    rejection.clear();
+    if (!SendAuthorizedSignal(
+            worker,
+            validated.observation,
+            SIGTERM,
+            processes,
+            authorize,
+            errorNumber,
+            rejection))
     {
         if (errorNumber == ESRCH)
         {
@@ -2388,8 +2784,12 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
         }
         outcome.result = errorNumber == EPERM
             ? "permission_failure"
-            : "signaling_failure";
-        outcome.detail = std::strerror(errorNumber);
+            : (errorNumber == EINVAL
+                   ? "identity_validation_failed"
+                   : "signaling_failure");
+        outcome.detail = rejection.empty()
+            ? std::strerror(errorNumber)
+            : rejection;
         return outcome;
     }
     if (processes.WaitForProcessGroupExit(
@@ -2416,13 +2816,24 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
         return outcome;
     }
     outcome.signals.push_back(SIGKILL);
-    if (!processes.SignalProcessGroup(
-            beforeKill.observation.processGroupId, SIGKILL, errorNumber))
+    rejection.clear();
+    if (!SendAuthorizedSignal(
+            worker,
+            beforeKill.observation,
+            SIGKILL,
+            processes,
+            authorize,
+            errorNumber,
+            rejection))
     {
         outcome.result = errorNumber == EPERM
             ? "permission_failure"
-            : "signaling_failure";
-        outcome.detail = std::strerror(errorNumber);
+            : (errorNumber == EINVAL
+                   ? "identity_validation_failed"
+                   : "signaling_failure");
+        outcome.detail = rejection.empty()
+            ? std::strerror(errorNumber)
+            : rejection;
         return outcome;
     }
     outcome.result = "escalated";
@@ -2431,6 +2842,35 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
     if (!outcome.success)
         outcome.detail = "process_still_exists_after_sigkill";
     return outcome;
+}
+
+} // namespace
+
+SignalOutcome PauseWorker(const ManagedWorker& worker,
+                          ProcessOperations& processes)
+{
+    return PauseWorkerAuthorized(
+        worker, processes, SignalAuthorization{});
+}
+
+SignalOutcome ResumeWorker(const ManagedWorker& worker,
+                           ProcessOperations& processes)
+{
+    return ResumeWorkerAuthorized(
+        worker, processes, SignalAuthorization{});
+}
+
+SignalOutcome CancelWorker(const ManagedWorker& worker,
+                           bool resumeFirst,
+                           std::chrono::milliseconds grace,
+                           ProcessOperations& processes)
+{
+    return CancelWorkerAuthorized(
+        worker,
+        resumeFirst,
+        grace,
+        processes,
+        SignalAuthorization{});
 }
 
 void AcquireCoordinationLock(pqxx::transaction_base& transaction)
@@ -2489,6 +2929,7 @@ bool CancellationCheckpointTrainAllowed(const ControlSnapshot& snapshot)
 CheckpointStopRecordResult RecordCheckpointStopReached(
     pqxx::work& transaction,
     const std::optional<long long>& experimentId,
+    long long workerAttemptId,
     int epoch,
     long long modelId)
 {
@@ -2496,6 +2937,87 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
     if (!experimentId)
     {
         result.detail = "experiment_id_missing";
+        return result;
+    }
+    if (workerAttemptId <= 0)
+    {
+        result.detail = "worker_attempt_id_missing";
+        return result;
+    }
+
+    AcquireCoordinationLock(transaction);
+
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = workerAttemptId;
+    expected.experimentId = *experimentId;
+    expected.workerKind = "experiment";
+    expected.lifecyclePhase = "train";
+    expected.capacityClass = "train";
+    expected.requireCompleteProcessIdentity = true;
+
+    // A replay deliberately does not require the lifecycle to remain bound to
+    // the old attempt: the atomic transition cleared that binding and a later
+    // phase may already own a replacement attempt.
+    if (const auto terminal =
+            EA::SchedulerOwnership::LockAndVerifyExactTerminalAttempt(
+                transaction,
+                expected,
+                "completed",
+                "checkpoint_stop_completed",
+                true))
+    {
+        const pqxx::result replay = transaction.exec_params(
+            "SELECT cancellation_request_id,cancel_infer_before,status,phase,"
+            "stopped_at_checkpoint_epoch,stopped_at_checkpoint_model_id "
+            "FROM experiment WHERE experiment_id=$1 FOR UPDATE;",
+            *experimentId);
+        const std::string epochEvidence =
+            "checkpoint_epoch=" + std::to_string(epoch);
+        const std::string modelEvidence =
+            "checkpoint_model_id=" + std::to_string(modelId);
+        const std::string attemptEvidence =
+            "worker_attempt_id=" + std::to_string(workerAttemptId);
+        if (replay.size() != 1 ||
+            replay[0][4].is_null() ||
+            replay[0][4].as<int>() != epoch ||
+            replay[0][5].is_null() ||
+            replay[0][5].as<long long>() != modelId ||
+            terminal->diagnostic.find(epochEvidence) == std::string::npos ||
+            terminal->diagnostic.find(modelEvidence) == std::string::npos ||
+            terminal->diagnostic.find(attemptEvidence) == std::string::npos)
+        {
+            result.detail = "checkpoint_stop_terminal_replay_mismatch";
+            return result;
+        }
+        result.recorded = true;
+        result.workerAttemptId = workerAttemptId;
+        result.cancellationRequested = !replay[0][0].is_null();
+        result.inferenceRequested =
+            result.cancellationRequested && replay[0][1].as<bool>();
+        if (result.cancellationRequested)
+            result.cancellationRequestId =
+                replay[0][0].as<long long>();
+        result.detail = result.cancellationRequested
+            ? "cancellation_checkpoint_replay"
+            : "checkpoint_stop_replay";
+        return result;
+    }
+
+    const auto exact =
+        EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            transaction, expected, true);
+    const std::optional<std::string> currentStartIdentity =
+        ReadProcessStartIdentity(static_cast<int>(::getpid()));
+    if (!exact ||
+        exact->workerPid !=
+            std::optional<int>{static_cast<int>(::getpid())} ||
+        exact->processGroupId !=
+            std::optional<int>{static_cast<int>(::getpgrp())} ||
+        exact->processStartIdentity != currentStartIdentity ||
+        exact->commandIdentity !=
+            "experiment:" + std::to_string(*experimentId) + ":train")
+    {
+        result.detail = "exact_active_train_attempt_mismatch";
         return result;
     }
 
@@ -2507,7 +3029,9 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
         "JOIN experiment_global_control c "
         "ON c.active_request_id=r.request_id "
         "WHERE c.singleton AND r.request_id=experiment.cancellation_request_id "
-        "AND r.action='cancel_all') "
+        "AND r.action='cancel_all'),"
+        "active_scheduler_worker_attempt_id,"
+        "last_checkpoint_stop_decision_epoch,stop_after_checkpoint_epoch "
         "FROM experiment WHERE experiment_id=$1 FOR UPDATE;",
         *experimentId);
     if (experiments.empty())
@@ -2516,62 +3040,137 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
         return result;
     }
 
+    if (experiments[0][3].as<std::string>() != "running" ||
+        experiments[0][4].as<std::string>() != "train" ||
+        experiments[0][8].is_null() ||
+        experiments[0][8].as<long long>() != workerAttemptId ||
+        experiments[0][9].is_null() ||
+        experiments[0][9].as<int>() != epoch ||
+        experiments[0][10].is_null() ||
+        experiments[0][10].as<int>() > epoch)
+    {
+        result.detail = "checkpoint_stop_decision_or_lifecycle_mismatch";
+        return result;
+    }
+
+    const std::string modelFailure = CheckpointModelEvidenceFailure(
+        transaction, *experimentId, epoch, modelId);
+    if (!modelFailure.empty())
+    {
+        result.detail = modelFailure;
+        return result;
+    }
+
+    const auto terminalizeExactAttempt =
+        [&](const std::string& nextPhase) {
+        const std::string diagnostic =
+            "checkpoint_stop;checkpoint_epoch=" +
+            std::to_string(epoch) +
+            ";checkpoint_model_id=" + std::to_string(modelId) +
+            ";next_phase=" + nextPhase +
+            ";worker_attempt_id=" + std::to_string(workerAttemptId);
+        const pqxx::result terminalized = transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt a SET "
+            "lifecycle_state='completed',"
+            "completed_at=clock_timestamp(),"
+            "last_observed_at=clock_timestamp(),"
+            "reconciliation_result='checkpoint_stop_completed',"
+            "diagnostic=$1 "
+            "WHERE a.worker_attempt_id=$2 "
+            "AND a.experiment_id=$3 "
+            "AND a.checkpoint_eval_id IS NULL "
+            "AND a.worker_kind='experiment' "
+            "AND a.lifecycle_phase='train' "
+            "AND a.capacity_class='train' "
+            "AND a.scheduler_invocation_id IS NOT DISTINCT FROM $4 "
+            "AND a.scheduler_fencing_token IS NOT DISTINCT FROM $5 "
+            "AND a.worker_pid=$6 "
+            "AND a.worker_process_group_id=$7 "
+            "AND a.worker_process_start_identity=$8 "
+            "AND a.canonical_executable_path=$9 "
+            "AND a.command_line=$10 "
+            "AND a.command_identity=$11 "
+            "AND a.lifecycle_state IN ('spawned','running','observed') "
+            "AND EXISTS ("
+            " SELECT 1 FROM experiment e "
+            " WHERE e.experiment_id=$3 "
+            " AND e.status='running' AND e.phase='train' "
+            " AND e.active_scheduler_worker_attempt_id="
+            "a.worker_attempt_id "
+            " AND e.last_checkpoint_stop_decision_epoch=$12 "
+            " AND e.stop_after_checkpoint_epoch IS NOT NULL "
+            " AND e.stop_after_checkpoint_epoch<=$12"
+            ") "
+            "AND EXISTS ("
+            " SELECT 1 FROM model m JOIN matrix tm "
+            " ON tm.model_id=m.model_id "
+            " WHERE m.model_id=$13 AND m.experiment_id=$3 "
+            " AND tm.param_name='train_config_meta' "
+            " AND tm.row_idx=0 AND tm.col_idx=10 "
+            " AND round(tm.value)::int=$12"
+            ") "
+            "RETURNING a.worker_attempt_id;",
+            diagnostic,
+            workerAttemptId,
+            *experimentId,
+            exact->schedulerInvocationId,
+            exact->schedulerFencingToken,
+            *exact->workerPid,
+            *exact->processGroupId,
+            *exact->processStartIdentity,
+            *exact->canonicalExecutablePath,
+            *exact->commandLine,
+            exact->commandIdentity,
+            epoch,
+            modelId);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            terminalized,
+            "terminalize_exact_checkpoint_stop_train_attempt");
+        result.workerAttemptId = workerAttemptId;
+    };
+
     result.cancellationRequested = !experiments[0][0].is_null();
     if (!result.cancellationRequested)
     {
-        const std::string modelFailure = CheckpointModelEvidenceFailure(
-            transaction, *experimentId, epoch, modelId);
-        if (!modelFailure.empty())
-        {
-            result.detail = modelFailure;
-            return result;
-        }
+        const std::string nextPhase =
+            experiments[0][2].as<bool>() ? "infer" : "analyze";
+        terminalizeExactAttempt(nextPhase);
         pqxx::result updated = transaction.exec_params(
             "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
             "worker_process_group_id=NULL,"
-            "current_operation=CASE "
-            "WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL "
-            "THEN 'infer' ELSE 'analyze' END,"
+            "worker_process_start_identity=NULL,worker_executable=NULL,"
+            "worker_command_line=NULL,worker_control_state='running',"
+            "worker_global_pause_request_id=NULL,"
+            "active_scheduler_worker_attempt_id=NULL,"
+            "current_operation=$4,"
             "stopped_at_checkpoint_epoch=$1,"
             "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
-            "status='pending',"
-            "phase=CASE WHEN infer_start IS NOT NULL AND infer_end IS NOT NULL "
-            "THEN 'infer' ELSE 'analyze' END,exit_code=0,error_message=NULL,"
+            "status='pending',phase=$4,exit_code=0,error_message=NULL,"
             "updated_at=now() WHERE experiment_id=$3 "
-            "AND status='running' AND phase='train';",
+            "AND status='running' AND phase='train' "
+            "AND active_scheduler_worker_attempt_id=$5 "
+            "AND last_checkpoint_stop_decision_epoch=$1 "
+            "AND stop_after_checkpoint_epoch IS NOT NULL "
+            "AND stop_after_checkpoint_epoch<=$1 "
+            "RETURNING experiment_id;",
             epoch,
             modelId,
-            *experimentId);
-        result.recorded = updated.affected_rows() == 1;
-        result.detail = result.recorded
-            ? "checkpoint_stopped"
-            : "experiment_not_running_train";
+            *experimentId,
+            nextPhase,
+            workerAttemptId);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated,
+            "advance_exact_checkpoint_stop_experiment");
+        result.recorded = true;
+        result.detail = "checkpoint_stopped";
         return result;
     }
 
     const long long requestId = experiments[0][0].as<long long>();
-    const std::string lifecycleStatus = experiments[0][3].as<std::string>();
-    const std::string lifecyclePhase = experiments[0][4].as<std::string>();
-    const bool exactReplay =
-        lifecycleStatus == "cancelled" && lifecyclePhase == "train" &&
-        !experiments[0][5].is_null() &&
-        experiments[0][5].as<int>() == epoch &&
-        !experiments[0][6].is_null() &&
-        experiments[0][6].as<long long>() == modelId;
-    const bool runningTrain =
-        lifecycleStatus == "running" && lifecyclePhase == "train";
-    if (!runningTrain && !exactReplay)
-    {
-        result.detail = "experiment_not_running_train";
-        return result;
-    }
     const bool activeCancellation = experiments[0][7].as<bool>();
     if (!activeCancellation)
     {
-        result.recorded = exactReplay;
-        result.detail = exactReplay
-            ? "cancellation_checkpoint_replay"
-            : "cancellation_request_not_active";
+        result.detail = "cancellation_request_not_active";
         return result;
     }
     const auto reconcileUnderPersistedOwner = [&] {
@@ -2589,7 +3188,7 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
     const bool hasInferenceRange = experiments[0][2].as<bool>();
     pqxx::result outcomes = transaction.exec_params(
         "SELECT worker_identity,cancellation_checkpoint_epoch,"
-        "cancellation_checkpoint_model_id,outcome_status "
+        "cancellation_checkpoint_model_id,outcome_status,worker_attempt_id "
         "FROM experiment_admin_worker_outcome "
         "WHERE request_id=$1 AND experiment_id=$2 "
         "AND worker_kind='experiment' ORDER BY worker_identity FOR UPDATE;",
@@ -2616,6 +3215,9 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
             failure = "cancellation_checkpoint_epoch_conflict";
         else if (persistedModelId && *persistedModelId != modelId)
             failure = "cancellation_checkpoint_model_conflict";
+        else if (outcomes[0][4].is_null() ||
+                 outcomes[0][4].as<long long>() != workerAttemptId)
+            failure = "cancellation_worker_attempt_identity_mismatch";
     }
 
     DbTarget target;
@@ -2654,9 +3256,14 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
             requestId);
     }
 
+    terminalizeExactAttempt("cancelled");
     const pqxx::result experimentUpdated = transaction.exec_params(
         "UPDATE experiment SET current_epoch=$1,worker_pid=NULL,"
         "worker_process_group_id=NULL,"
+        "worker_process_start_identity=NULL,worker_executable=NULL,"
+        "worker_command_line=NULL,worker_control_state='running',"
+        "worker_global_pause_request_id=NULL,"
+        "active_scheduler_worker_attempt_id=NULL,"
         "current_operation='train',"
         "stopped_at_checkpoint_epoch=$1,"
         "stopped_at_checkpoint_model_id=$2,last_model_id=$2,"
@@ -2666,14 +3273,17 @@ CheckpointStopRecordResult RecordCheckpointStopReached(
         "error_message='cancelled_at_requested_checkpoint',updated_at=now() "
         "WHERE experiment_id=$3 "
         "AND cancellation_request_id=$4 "
-        "AND ((status='running' AND phase='train') "
-        "OR (status='cancelled' AND phase='train' "
-        "AND stopped_at_checkpoint_epoch=$1 "
-        "AND stopped_at_checkpoint_model_id=$2));",
+        "AND status='running' AND phase='train' "
+        "AND active_scheduler_worker_attempt_id=$5 "
+        "AND last_checkpoint_stop_decision_epoch=$1 "
+        "AND stop_after_checkpoint_epoch IS NOT NULL "
+        "AND stop_after_checkpoint_epoch<=$1 "
+        "RETURNING experiment_id;",
         epoch,
         modelId,
         *experimentId,
-        requestId);
+        requestId,
+        workerAttemptId);
     RequireAffectedRows(
         experimentUpdated, 1, "record_cancellation_checkpoint_stop");
     result.recorded = true;
@@ -3531,7 +4141,15 @@ int RunCommandWithProcessOperationsForTesting(
                 resume =
                     FrozenTargetAuthorizationFailure(target, processes);
             else if (target.resumeBeforeAction)
-                resume = ResumeWorker(target.worker, processes);
+                resume = ResumeWorkerAuthorized(
+                    target.worker,
+                    processes,
+                    ExactAttemptSignalAuthorization(
+                        connectionString,
+                        requestId,
+                        invocationIdentity,
+                        "cancel_all",
+                        processes));
             else
             {
                 const ValidatedWorker validation =
@@ -3575,7 +4193,20 @@ int RunCommandWithProcessOperationsForTesting(
                 invocationIdentity);
             RequireAffectedRows(
                 leaseRefreshed, 1, "refresh_checkpoint_cancellation_lease");
-            if (resume.success)
+            const auto exactCheckpointAttempt =
+                LockExactTargetForMutation(
+                    transaction, target, true);
+            if (!exactCheckpointAttempt)
+            {
+                postSignalPredicateMismatch = true;
+                resume.success = false;
+                resume.identity =
+                    IdentityResult::IdentityValidationFailed;
+                resume.result = "identity_validation_failed";
+                resume.detail =
+                    "exact_active_attempt_changed_during_checkpoint_cancel";
+            }
+            if (resume.success && exactCheckpointAttempt)
             {
                 const pqxx::result resumed = transaction.exec_params(
                     "UPDATE experiment SET worker_control_state='running',"
@@ -3585,7 +4216,8 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_process_start_identity IS NOT DISTINCT FROM $5 "
                     "AND worker_executable IS NOT DISTINCT FROM $6 "
                     "AND worker_command_line IS NOT DISTINCT FROM $7 "
-                    "AND cancellation_request_id=$8;",
+                    "AND cancellation_request_id=$8 "
+                    "AND active_scheduler_worker_attempt_id=$9;",
                     target.worker.experimentId,
                     target.worker.pid,
                     target.worker.phase,
@@ -3593,7 +4225,8 @@ int RunCommandWithProcessOperationsForTesting(
                     target.worker.processStartIdentity,
                     target.worker.executable,
                     target.worker.commandLine,
-                    requestId);
+                    requestId,
+                    target.worker.workerAttemptId);
                 if (resumed.affected_rows() != 1)
                 {
                     postSignalPredicateMismatch = true;
@@ -3605,13 +4238,37 @@ int RunCommandWithProcessOperationsForTesting(
                 }
             }
             if (!resume.success &&
-                resume.identity == IdentityResult::ProcessMissing)
+                resume.identity == IdentityResult::ProcessMissing &&
+                exactCheckpointAttempt)
             {
+                const pqxx::result terminal =
+                    transaction.exec_params(
+                        "UPDATE experiment_scheduler_worker_attempt a SET "
+                        "lifecycle_state='failed',"
+                        "completed_at=clock_timestamp(),"
+                        "last_observed_at=clock_timestamp(),"
+                        "reconciliation_result="
+                        "'cancellation_checkpoint_process_missing',"
+                        "diagnostic='exact_process_absence_observed' "
+                        "WHERE a.worker_attempt_id=$1 "
+                        "AND a.lifecycle_state IN "
+                        "('spawned','running','observed') "
+                        "AND EXISTS (SELECT 1 FROM experiment e "
+                        " WHERE e.experiment_id=$2 "
+                        " AND e.active_scheduler_worker_attempt_id="
+                        "a.worker_attempt_id) "
+                        "RETURNING a.worker_attempt_id;",
+                        *target.worker.workerAttemptId,
+                        target.worker.experimentId);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    terminal,
+                    "checkpoint_cancel_terminalize_missing_attempt");
                 if (target.latestCheckpointModelId)
                 {
                     const pqxx::result requeued = transaction.exec_params(
                         "UPDATE experiment SET status='pending',phase='train',"
                         "worker_pid=NULL,worker_process_group_id=NULL,"
+                        "active_scheduler_worker_attempt_id=NULL,"
                         "worker_control_state='running',last_model_id=$1,"
                         "current_operation='train',"
                         "error_message='cancellation_worker_restart_required',"
@@ -3622,7 +4279,8 @@ int RunCommandWithProcessOperationsForTesting(
                         "AND worker_process_start_identity IS NOT DISTINCT FROM $6 "
                         "AND worker_executable IS NOT DISTINCT FROM $7 "
                         "AND worker_command_line IS NOT DISTINCT FROM $8 "
-                        "AND cancellation_request_id=$9;",
+                        "AND cancellation_request_id=$9 "
+                        "AND active_scheduler_worker_attempt_id=$10;",
                         *target.latestCheckpointModelId,
                         target.worker.experimentId,
                         target.worker.phase,
@@ -3631,7 +4289,8 @@ int RunCommandWithProcessOperationsForTesting(
                         target.worker.processStartIdentity,
                         target.worker.executable,
                         target.worker.commandLine,
-                        requestId);
+                        requestId,
+                        target.worker.workerAttemptId);
                     if (target.authoritativeExactMatch)
                         RequireAffectedRows(
                             requeued,
@@ -3644,6 +4303,7 @@ int RunCommandWithProcessOperationsForTesting(
                         transaction.exec_params(
                         "UPDATE experiment SET status='cancelled',"
                         "worker_pid=NULL,worker_process_group_id=NULL,"
+                        "active_scheduler_worker_attempt_id=NULL,"
                         "completed_at=now(),cancellation_completed_at=now(),"
                         "error_message='cancelled_missing_worker_no_checkpoint',"
                         "updated_at=now() WHERE experiment_id=$1 "
@@ -3652,7 +4312,8 @@ int RunCommandWithProcessOperationsForTesting(
                         "AND worker_process_start_identity IS NOT DISTINCT FROM $5 "
                         "AND worker_executable IS NOT DISTINCT FROM $6 "
                         "AND worker_command_line IS NOT DISTINCT FROM $7 "
-                        "AND cancellation_request_id=$8;",
+                        "AND cancellation_request_id=$8 "
+                        "AND active_scheduler_worker_attempt_id=$9;",
                         target.worker.experimentId,
                         target.worker.phase,
                         target.worker.pid,
@@ -3660,7 +4321,8 @@ int RunCommandWithProcessOperationsForTesting(
                         target.worker.processStartIdentity,
                         target.worker.executable,
                         target.worker.commandLine,
-                        requestId);
+                        requestId,
+                        target.worker.workerAttemptId);
                     if (target.authoritativeExactMatch)
                         RequireAffectedRows(
                             cancelledMissing,
@@ -3719,7 +4381,13 @@ int RunCommandWithProcessOperationsForTesting(
             continue;
 
         SignalOutcome signal = ApplyTargetSignal(
-            target, command.action, command.terminationGrace, processes);
+            target,
+            command.action,
+            command.terminationGrace,
+            processes,
+            connectionString,
+            requestId,
+            invocationIdentity);
         anySignalAttempted =
             anySignalAttempted || !signal.signals.empty();
 
@@ -3748,61 +4416,27 @@ int RunCommandWithProcessOperationsForTesting(
             invocationIdentity);
         RequireAffectedRows(
             leaseRefreshed, 1, "refresh_administrative_request_lease");
-        if (command.action != Action::CancelAll &&
-            signal.identity == IdentityResult::ProcessMissing)
+        const auto exactMutationAttempt =
+            target.authoritativeExactTerminalDeparture
+                ? std::optional<
+                      EA::SchedulerOwnership::ExactAttemptSnapshot>{}
+                : LockExactTargetForMutation(
+                      transaction,
+                      target,
+                      true);
+        if (!exactMutationAttempt &&
+            !target.authoritativeExactTerminalDeparture)
         {
-            pqxx::result departed;
-            if (target.checkpointWorker)
-                departed = transaction.exec_params(
-                    "UPDATE experiment_checkpoint_eval "
-                    "SET worker_pid=NULL,worker_process_group_id=NULL,"
-                    "worker_control_state='running',updated_at=now() "
-                    "WHERE checkpoint_eval_id=$1 AND status='running' "
-                    "AND phase='infer' AND worker_pid=$2 "
-                    "AND worker_process_group_id IS NOT DISTINCT FROM $3 "
-                    "AND worker_process_start_identity IS NOT DISTINCT FROM $4 "
-                    "AND worker_executable IS NOT DISTINCT FROM $5 "
-                    "AND worker_command_line IS NOT DISTINCT FROM $6;",
-                    *target.checkpointEvalId,
-                    target.worker.pid,
-                    target.worker.processGroupId,
-                    target.worker.processStartIdentity,
-                    target.worker.executable,
-                    target.worker.commandLine);
-            else
-                departed = transaction.exec_params(
-                    "UPDATE experiment SET worker_pid=NULL,"
-                    "worker_process_group_id=NULL,"
-                    "worker_control_state='running',updated_at=now() "
-                    "WHERE experiment_id=$1 AND status='running' "
-                    "AND phase=$3 AND worker_pid=$2 "
-                    "AND worker_process_group_id IS NOT DISTINCT FROM $4 "
-                    "AND worker_process_start_identity IS NOT DISTINCT FROM $5 "
-                    "AND worker_executable IS NOT DISTINCT FROM $6 "
-                    "AND worker_command_line IS NOT DISTINCT FROM $7;",
-                    target.worker.experimentId,
-                    target.worker.pid,
-                    target.worker.phase,
-                    target.worker.processGroupId,
-                    target.worker.processStartIdentity,
-                    target.worker.executable,
-                    target.worker.commandLine);
-            if (departed.affected_rows() == 0)
-            {
-                LoadAuthoritativeTargetState(
-                    transaction, requestId, command.action, target);
-                if (target.authoritativeActive)
-                {
-                    postSignalPredicateMismatch = true;
-                    signal.identity =
-                        IdentityResult::IdentityValidationFailed;
-                    signal.result = "identity_validation_failed";
-                    signal.detail =
-                        target.authoritativeMismatchDetail;
-                }
-            }
+            postSignalPredicateMismatch = true;
+            signal.success = false;
+            signal.identity =
+                IdentityResult::IdentityValidationFailed;
+            signal.result = "identity_validation_failed";
+            signal.detail =
+                "exact_active_worker_attempt_changed_after_signal";
         }
-        if (command.action == Action::PauseAll && signal.success)
+        if (command.action == Action::PauseAll &&
+            signal.success && exactMutationAttempt)
         {
             pqxx::result paused;
             if (target.checkpointWorker)
@@ -3815,14 +4449,16 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_process_group_id IS NOT DISTINCT FROM $4 "
                     "AND worker_process_start_identity IS NOT DISTINCT FROM $5 "
                     "AND worker_executable IS NOT DISTINCT FROM $6 "
-                    "AND worker_command_line IS NOT DISTINCT FROM $7;",
+                    "AND worker_command_line IS NOT DISTINCT FROM $7 "
+                    "AND active_scheduler_worker_attempt_id=$8;",
                     *target.checkpointEvalId,
                     target.worker.pid,
                     requestId,
                     target.worker.processGroupId,
                     target.worker.processStartIdentity,
                     target.worker.executable,
-                    target.worker.commandLine);
+                    target.worker.commandLine,
+                    target.worker.workerAttemptId);
             else
                 paused = transaction.exec_params(
                     "UPDATE experiment SET worker_control_state='paused',"
@@ -3832,7 +4468,8 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_process_group_id IS NOT DISTINCT FROM $5 "
                     "AND worker_process_start_identity IS NOT DISTINCT FROM $6 "
                     "AND worker_executable IS NOT DISTINCT FROM $7 "
-                    "AND worker_command_line IS NOT DISTINCT FROM $8;",
+                    "AND worker_command_line IS NOT DISTINCT FROM $8 "
+                    "AND active_scheduler_worker_attempt_id=$9;",
                     target.worker.experimentId,
                     target.worker.pid,
                     requestId,
@@ -3840,7 +4477,8 @@ int RunCommandWithProcessOperationsForTesting(
                     target.worker.processGroupId,
                     target.worker.processStartIdentity,
                     target.worker.executable,
-                    target.worker.commandLine);
+                    target.worker.commandLine,
+                    target.worker.workerAttemptId);
             if (paused.affected_rows() != 1)
             {
                 postSignalPredicateMismatch = true;
@@ -3851,7 +4489,8 @@ int RunCommandWithProcessOperationsForTesting(
                     "worker_state_changed_after_validated_pause_signal";
             }
         }
-        else if (command.action == Action::ResumeAll && signal.success)
+        else if (command.action == Action::ResumeAll &&
+                 signal.success && exactMutationAttempt)
         {
             pqxx::result resumed;
             if (target.checkpointWorker)
@@ -3866,14 +4505,16 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_executable IS NOT DISTINCT FROM $6 "
                     "AND worker_command_line IS NOT DISTINCT FROM $7 "
                     "AND worker_control_state='paused' "
-                    "AND worker_global_pause_request_id=$3;",
+                    "AND worker_global_pause_request_id=$3 "
+                    "AND active_scheduler_worker_attempt_id=$8;",
                     *target.checkpointEvalId,
                     target.worker.pid,
                     target.sourcePauseRequestId,
                     target.worker.processGroupId,
                     target.worker.processStartIdentity,
                     target.worker.executable,
-                    target.worker.commandLine);
+                    target.worker.commandLine,
+                    target.worker.workerAttemptId);
             else
                 resumed = transaction.exec_params(
                     "UPDATE experiment SET worker_control_state='running',"
@@ -3885,7 +4526,8 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_executable IS NOT DISTINCT FROM $7 "
                     "AND worker_command_line IS NOT DISTINCT FROM $8 "
                     "AND worker_control_state='paused' "
-                    "AND worker_global_pause_request_id=$3;",
+                    "AND worker_global_pause_request_id=$3 "
+                    "AND active_scheduler_worker_attempt_id=$9;",
                     target.worker.experimentId,
                     target.worker.pid,
                     target.sourcePauseRequestId,
@@ -3893,7 +4535,8 @@ int RunCommandWithProcessOperationsForTesting(
                     target.worker.processGroupId,
                     target.worker.processStartIdentity,
                     target.worker.executable,
-                    target.worker.commandLine);
+                    target.worker.commandLine,
+                    target.worker.workerAttemptId);
             if (resumed.affected_rows() != 1)
             {
                 postSignalPredicateMismatch = true;
@@ -3905,15 +4548,56 @@ int RunCommandWithProcessOperationsForTesting(
             }
         }
         else if (command.action == Action::CancelAll &&
+                 exactMutationAttempt &&
                  (signal.success ||
                   signal.identity == IdentityResult::ProcessMissing))
         {
+            const pqxx::result attemptTerminal =
+                transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt a SET "
+                    "lifecycle_state='failed',"
+                    "completed_at=clock_timestamp(),"
+                    "last_observed_at=clock_timestamp(),"
+                    "signal_number=$1,"
+                    "reconciliation_result='global_control_cancel',"
+                    "diagnostic=$2 "
+                    "WHERE a.worker_attempt_id=$3 "
+                    "AND a.lifecycle_state IN "
+                    "('spawned','running','observed') "
+                    "AND EXISTS ("
+                    " SELECT 1 FROM experiment e "
+                    " WHERE $4::bigint IS NULL "
+                    " AND e.experiment_id=$5 "
+                    " AND e.active_scheduler_worker_attempt_id="
+                    "a.worker_attempt_id "
+                    " UNION ALL "
+                    " SELECT 1 FROM experiment_checkpoint_eval ce "
+                    " WHERE $4::bigint IS NOT NULL "
+                    " AND ce.checkpoint_eval_id=$4 "
+                    " AND ce.active_scheduler_worker_attempt_id="
+                    "a.worker_attempt_id"
+                    ") RETURNING a.worker_attempt_id;",
+                    signal.signals.empty()
+                        ? std::optional<int>{}
+                        : std::optional<int>{
+                              signal.signals.back()},
+                    signal.identity ==
+                            IdentityResult::ProcessMissing
+                        ? "exact_process_absence_observed"
+                        : "exact_attempt_signaled_by_global_control",
+                    *target.worker.workerAttemptId,
+                    target.checkpointEvalId,
+                    target.worker.experimentId);
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                attemptTerminal,
+                "global_control_terminalize_exact_attempt");
             pqxx::result cancelled;
             if (target.checkpointWorker)
             {
                 cancelled = transaction.exec_params(
                     "UPDATE experiment_checkpoint_eval SET status='failed',"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "active_scheduler_worker_attempt_id=NULL,"
                     "completed_at=now(),updated_at=now(),"
                     "error_message='cancelled_by_global_request' "
                     "WHERE checkpoint_eval_id=$1 AND status='running' "
@@ -3922,14 +4606,16 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_process_start_identity IS NOT DISTINCT FROM $4 "
                     "AND worker_executable IS NOT DISTINCT FROM $5 "
                     "AND worker_command_line IS NOT DISTINCT FROM $6 "
-                    "AND cancellation_request_id=$7;",
+                    "AND cancellation_request_id=$7 "
+                    "AND active_scheduler_worker_attempt_id=$8;",
                     *target.checkpointEvalId,
                     target.worker.pid,
                     target.worker.processGroupId,
                     target.worker.processStartIdentity,
                     target.worker.executable,
                     target.worker.commandLine,
-                    requestId);
+                    requestId,
+                    target.worker.workerAttemptId);
             }
             else
             {
@@ -3942,6 +4628,7 @@ int RunCommandWithProcessOperationsForTesting(
                     "completed_at=COALESCE(completed_at,now()),"
                     "cancellation_completed_at=now(),"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "active_scheduler_worker_attempt_id=NULL,"
                     "current_operation=$10,"
                     "error_message=CASE WHEN $1 THEN "
                     "'cancelled_after_sigkill' ELSE 'cancelled_by_global_request' END,"
@@ -3951,7 +4638,8 @@ int RunCommandWithProcessOperationsForTesting(
                     "AND worker_process_start_identity IS NOT DISTINCT FROM $6 "
                     "AND worker_executable IS NOT DISTINCT FROM $7 "
                     "AND worker_command_line IS NOT DISTINCT FROM $8 "
-                    "AND cancellation_request_id=$9;",
+                    "AND cancellation_request_id=$9 "
+                    "AND active_scheduler_worker_attempt_id=$11;",
                     signal.result == "escalated",
                     target.worker.experimentId,
                     target.worker.phase,
@@ -3961,7 +4649,8 @@ int RunCommandWithProcessOperationsForTesting(
                     target.worker.executable,
                     target.worker.commandLine,
                     requestId,
-                    currentOperation);
+                    currentOperation,
+                    target.worker.workerAttemptId);
             }
             const bool exactLifecycleMutationExpected =
                 !target.frozenReplayTarget ||
@@ -4474,7 +5163,15 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
         signal = target.frozenReplayTarget &&
                          !target.authoritativeExactMatch
             ? FrozenTargetAuthorizationFailure(target, processes)
-            : ResumeWorker(target.worker, processes);
+            : ResumeWorkerAuthorized(
+                  target.worker,
+                  processes,
+                  ExactAttemptSignalAuthorization(
+                      connectionString,
+                      requestId,
+                      invocationIdentity,
+                      "resume_experiment",
+                      processes));
         signalAttempted = !signal.signals.empty();
     }
 
@@ -4505,6 +5202,23 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
 
         if (!alreadyAccounted)
         {
+            const auto exactSelectiveAttempt =
+                target.authoritativeExactTerminalDeparture
+                    ? std::optional<
+                          EA::SchedulerOwnership::ExactAttemptSnapshot>{}
+                    : LockExactTargetForMutation(
+                          transaction, target, true);
+            if (!exactSelectiveAttempt &&
+                !target.authoritativeExactTerminalDeparture)
+            {
+                postSignalPredicateMismatch = true;
+                signal.success = false;
+                signal.identity =
+                    IdentityResult::IdentityValidationFailed;
+                signal.result = "identity_validation_failed";
+                signal.detail =
+                    "exact_active_attempt_changed_after_selective_resume";
+            }
             std::ostringstream signalList;
             for (size_t i = 0; i < signal.signals.size(); ++i)
             {
@@ -4512,7 +5226,7 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
                     signalList << "|";
                 signalList << signal.signals[i];
             }
-            if (signal.success)
+            if (signal.success && exactSelectiveAttempt)
             {
                 const pqxx::result released = transaction.exec_params(
                     "UPDATE experiment SET worker_control_state='running',"
@@ -4523,7 +5237,8 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
                     "AND worker_executable IS NOT DISTINCT FROM $7 "
                     "AND worker_command_line IS NOT DISTINCT FROM $8 "
                     "AND worker_control_state='paused' "
-                    "AND worker_global_pause_request_id=$2;",
+                    "AND worker_global_pause_request_id=$2 "
+                    "AND active_scheduler_worker_attempt_id=$9;",
                     target.worker.experimentId,
                     pauseRequestId,
                     target.worker.phase,
@@ -4531,7 +5246,8 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
                     target.worker.processGroupId,
                     target.worker.processStartIdentity,
                     target.worker.executable,
-                    target.worker.commandLine);
+                    target.worker.commandLine,
+                    target.worker.workerAttemptId);
                 if (released.affected_rows() != 1)
                 {
                     postSignalPredicateMismatch = true;
@@ -4542,47 +5258,8 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
                         "worker_state_changed_after_validated_resume_signal";
                 }
             }
-            else if (signal.identity == IdentityResult::ProcessMissing)
-            {
-                if (target.worker.pid > 0)
-                {
-                    const pqxx::result departed = transaction.exec_params(
-                        "UPDATE experiment SET worker_pid=NULL,"
-                        "worker_process_group_id=NULL,"
-                        "worker_control_state='running',updated_at=now() "
-                        "WHERE experiment_id=$1 AND worker_pid=$2 "
-                        "AND worker_global_pause_request_id=$3;",
-                        target.worker.experimentId,
-                        target.worker.pid,
-                        pauseRequestId);
-                    if (target.authoritativeExactMatch)
-                        RequireAffectedRows(
-                            departed,
-                            1,
-                            "reconcile_missing_selective_resume_worker");
-                    if (departed.affected_rows() == 0)
-                    {
-                        LoadAuthoritativeTargetState(
-                            transaction,
-                            requestId,
-                            Action::ResumeAll,
-                            target);
-                        if (target.authoritativeActive)
-                        {
-                            postSignalPredicateMismatch = true;
-                            signal.identity =
-                                IdentityResult::IdentityValidationFailed;
-                            signal.result =
-                                "identity_validation_failed";
-                            signal.detail =
-                                target.authoritativeMismatchDetail;
-                        }
-                    }
-                }
-            }
             const bool safelyReconciled =
-                signal.success ||
-                signal.identity == IdentityResult::ProcessMissing;
+                signal.success;
             const pqxx::result outcomeUpdated = transaction.exec_params(
                 "UPDATE experiment_admin_worker_outcome SET "
                 "identity_result=$1,signal_result=$2,requested_signal=$3,"

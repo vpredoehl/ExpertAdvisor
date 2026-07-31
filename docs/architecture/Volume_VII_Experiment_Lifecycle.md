@@ -1,8 +1,8 @@
 # Volume VII — Experiment Lifecycle
 
-Status: Foundation outline
-Version: 0.1.1
-Last revised: 2026-07-27
+Status: Exact-attempt lifecycle contract implemented
+Version: 0.2.0
+Last revised: 2026-07-29
 
 ## 1. Purpose
 
@@ -20,6 +20,39 @@ models, checkpoints, continuation decisions, lineage, and terminal outcomes.
 
 Worker computation belongs to Volumes V/VI; scheduler polling and capacity to
 Volume XI; advisory recommendations to Volume VIII.
+
+An executing scheduler phase is also fenced by
+`active_scheduler_worker_attempt_id`. The lifecycle row authorizes the work
+unit; the linked Volume XI attempt authorizes the exact execution. Completion,
+failure, recovery, and cancellation must compare expected phase/status and
+attempt ID. A lifecycle status change alone does not release capacity while
+that durable attempt remains active.
+
+Every destructive lifecycle mutation repeats the exact attempt binding in its
+SQL predicate. A C++ lookup is diagnostic, not authority. Terminalization,
+capacity release, lifecycle identity clearing, checkpoint transition,
+requeueing, adoption, and abandonment must either update the exact linked
+attempt and lifecycle row atomically or affect zero rows and fail closed.
+
+For a stop-at-checkpoint decision, the checkpoint is the successful boundary of
+the train phase. The exact train attempt becomes `completed` with
+`checkpoint_stop_completed`; the same transaction records checkpoint evidence,
+clears the exact active-attempt binding and worker identity mirrors, and writes
+the canonical next operation (`infer` or `analyze`) or the established
+cancellation destination. A replay may recognize that exact terminal attempt,
+but cannot repeat the transition or touch a replacement attempt.
+
+Automatic continuation is scheduler-authoritative mutation. Evaluation
+decision persistence, child creation, source/decision linkage, and final commit
+all carry and revalidate the same invocation/fence context. Expensive
+evaluation may use an immutable snapshot outside locks, but commit must
+revalidate the fence and all source predicates. An ownership loss rolls back
+the candidate transaction and stops the scan with no queued child.
+
+Checkpoint analysis has its own durable `checkpoint_analyze` attempt and uses
+claim/work/finalize. The checkpoint-evaluation row is the lifecycle binding;
+the attempt is the execution/capacity authority. Result persistence and policy
+evaluation occur only in an exact fenced finalize transaction.
 
 ### 2.3 Current implementation status
 
@@ -206,3 +239,5 @@ ADRs before implementation.
 |---|---|---|---|
 | 0.1.0 | 2026-07-15 | Established the experiment-lifecycle outline. | — |
 | 0.1.1 | 2026-07-27 | Defined the sole canonical `current_operation` lifecycle vocabulary. | ADR-0004 |
+| 0.2.0 | 2026-07-29 | Bound lifecycle mutation, continuation, and checkpoint analysis to generation-52 exact attempts and scheduler authority. | ADR-0018 |
+| 0.2.1 | 2026-07-30 | Defined atomic exact-attempt completion and idempotent replay for stop-at-checkpoint transitions. | ADR-0018 |

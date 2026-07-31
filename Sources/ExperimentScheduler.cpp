@@ -2,6 +2,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cerrno>
 #include <ctime>
@@ -15,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <regex>
 #include <signal.h>
 #include <set>
@@ -59,6 +61,9 @@
 #include "Params.hpp"
 #include "RunMetadata.hpp"
 #include "SchedulerChildStatus.hpp"
+#include "SchedulerExecutablePath.hpp"
+#include "SchedulerOwnershipPolicy.hpp"
+#include "SchedulerOwnershipRepository.hpp"
 #include "SupportedSymbols.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
 
@@ -82,6 +87,7 @@ struct SchedulerOptions
     bool generateExperimentReports = false;
     bool autoGenerateReports = false;
     bool schedulerStatus = false;
+    bool completeSchedulerProtocolCutover = false;
     bool backfillExperimentMetadata = false;
     bool backupDatabase = false;
     std::optional<std::string> backupOutputPath;
@@ -313,6 +319,9 @@ struct SchedulerOptions
     bool lstmProfileHotspots = false;
     std::optional<std::string> lstmProfileOutputPath;
     std::string selfPath;
+    std::string invocationCommandLine;
+    EA::SchedulerOwnership::SchedulerAuthorityContext schedulerAuthority;
+    std::optional<long long> schedulerWorkerAttemptId;
 
     std::optional<std::string> symbol;
     std::optional<int> predictionHorizon;
@@ -360,6 +369,23 @@ struct QueueResumeMeta
     std::optional<double> headLrMult;
 };
 
+struct SchedulerLeaseSnapshot
+{
+    std::optional<std::string> ownerInvocationId;
+    long long fencingToken = 0;
+    std::string authorityState = "vacant";
+    std::string acquiredAt;
+    std::string heartbeatAt;
+    std::string expiresAt;
+    std::string transitionReason;
+};
+
+class SchedulerAuthorityLost final : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
+
 struct AutoResumeCandidate
 {
     long long modelId = -1;
@@ -404,6 +430,7 @@ struct RunningExperimentChild
 struct SchedulerOwnedChild
 {
     pid_t pid = -1;
+    std::optional<long long> workerAttemptId;
     long long experimentId = -1;
     std::string phase;
     std::string operation;
@@ -417,7 +444,24 @@ struct SchedulerOwnedChild
     ChildLifecycleDiagnosticState diagnosticState;
 };
 
+struct ReservedWorkerAttempt
+{
+    long long workerAttemptId = -1;
+    std::string launchAttemptIdentity;
+    long long experimentId = -1;
+    std::optional<long long> checkpointEvalId;
+    std::string workerKind;
+    std::string phase;
+    std::string capacityClass;
+    std::string logPath;
+};
+
 std::map<pid_t, SchedulerOwnedChild> gSchedulerOwnedChildren;
+
+volatile sig_atomic_t gSchedulerStopRequested = 0;
+
+constexpr int kSchedulerLeaseSeconds = 90;
+constexpr int kSchedulerLaunchRecoveryGraceSeconds = 10;
 
 struct CheckpointEvalRow
 {
@@ -574,6 +618,8 @@ struct SchedulerStopExperiment
     ExperimentRow experiment;
     std::string status;
     std::string phase;
+    EA::GlobalExperimentControl::ManagedWorker worker;
+    std::optional<long long> activeWorkerAttemptId;
 };
 
 struct SchedulerStopCandidate
@@ -804,6 +850,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
     {
         const std::string arg{argv[i]};
         if (arg == "--schedule-experiments" ||
+            arg == "--complete-scheduler-protocol-cutover" ||
             arg == "--model-info" ||
             arg == "--status" ||
             arg == "--enqueue-experiment" ||
@@ -1558,7 +1605,15 @@ void ValidateCheckpointPolicyConfig(const SchedulerOptions& options)
 SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
 {
     SchedulerOptions options;
-    options.selfPath = argc > 0 ? argv[0] : "./LSTM_Release";
+    options.selfPath = ResolveCanonicalExecutablePath();
+    for (int index = 0; index < argc; ++index)
+    {
+        if (index)
+            options.invocationCommandLine.push_back(' ');
+        options.invocationCommandLine += argv[index] != nullptr
+            ? argv[index]
+            : "";
+    }
 
     for (int i = 1; i < argc; ++i)
     {
@@ -1587,6 +1642,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.generateExperimentReports = true;
         else if (arg == "--scheduler-status")
             options.schedulerStatus = true;
+        else if (arg == "--complete-scheduler-protocol-cutover")
+            options.completeSchedulerProtocolCutover = true;
+        else if (arg == "--scheduler-worker-attempt-id")
+        {
+            if (options.schedulerWorkerAttemptId)
+                throw std::invalid_argument(
+                    "--scheduler-worker-attempt-id specified more than once");
+            options.schedulerWorkerAttemptId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        }
         else if (arg == "--backfill-experiment-metadata")
             options.backfillExperimentMetadata = true;
         else if (arg == "--backup-database")
@@ -2468,6 +2533,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         }
         else if (SplitOptionWithValue(arg, "--scheduler-log-dir", value))
             options.schedulerLogDir = value;
+        else if (SplitOptionWithValue(
+                     arg, "--scheduler-worker-attempt-id", value))
+        {
+            if (options.schedulerWorkerAttemptId)
+                throw std::invalid_argument(
+                    "--scheduler-worker-attempt-id specified more than once");
+            options.schedulerWorkerAttemptId =
+                ParsePositiveLongLong(
+                    "--scheduler-worker-attempt-id", value);
+        }
         else if (SplitOptionWithValue(arg, "--experiment-report-dir", value))
             options.experimentReportDir = value;
         else if (SplitOptionWithValue(arg, "--analyze-experiment", value))
@@ -3104,6 +3179,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.printLeaderboard ? 1 : 0) +
         (options.generateExperimentReports ? 1 : 0) +
         (options.schedulerStatus ? 1 : 0) +
+        (options.completeSchedulerProtocolCutover ? 1 : 0) +
         (options.backfillExperimentMetadata ? 1 : 0) +
         (options.backupDatabase ? 1 : 0) +
         (options.experimentMetadataId.has_value() ? 1 : 0) +
@@ -3873,6 +3949,13 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     if (globalControlCommandCount > 0 && !options.dryRun && !options.yes)
         throw std::invalid_argument(
             "global experiment control writes require --yes");
+    if (options.completeSchedulerProtocolCutover &&
+        (!options.yes || options.dryRun))
+    {
+        throw std::invalid_argument(
+            "--complete-scheduler-protocol-cutover requires --yes "
+            "and does not accept --dry-run");
+    }
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
     if (options.modelInfo && !options.modelInfoModelId.has_value())
@@ -4279,6 +4362,30 @@ bool RequireSchedulerTables(pqxx::work& w)
     if (TableExists(w, "experiment") &&
         !ColumnExists(w, "experiment", "worker_started_at"))
         missing.push_back("experiment.worker_started_at");
+    if (!TableExists(w, "experiment_scheduler_invocation"))
+        missing.push_back("experiment_scheduler_invocation");
+    if (!TableExists(w, "experiment_scheduler_lease"))
+        missing.push_back("experiment_scheduler_lease");
+    if (!TableExists(w, "experiment_scheduler_worker_attempt"))
+        missing.push_back("experiment_scheduler_worker_attempt");
+    if (!TableExists(w, "experiment_scheduler_protocol"))
+        missing.push_back("experiment_scheduler_protocol");
+    if (TableExists(w, "experiment") &&
+        !ColumnExists(
+            w, "experiment", "active_scheduler_worker_attempt_id"))
+    {
+        missing.push_back(
+            "experiment.active_scheduler_worker_attempt_id");
+    }
+    if (TableExists(w, "experiment_checkpoint_eval") &&
+        !ColumnExists(
+            w,
+            "experiment_checkpoint_eval",
+            "active_scheduler_worker_attempt_id"))
+    {
+        missing.push_back(
+            "experiment_checkpoint_eval.active_scheduler_worker_attempt_id");
+    }
 
     if (missing.empty())
         return true;
@@ -4346,12 +4453,691 @@ bool SchedulerLaunchAllowed(
 void SetTransactionReadWrite(pqxx::work& w)
 {
     w.exec("SET TRANSACTION READ WRITE;");
+    EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(w);
 }
 
 void SetTransactionReadOnly(pqxx::work& w)
 {
     w.exec("SET TRANSACTION READ ONLY;");
 }
+
+std::string GenerateSchedulerInvocationNonce()
+{
+    std::array<unsigned char, 24> bytes{};
+    std::random_device random;
+    for (unsigned char& value : bytes)
+        value = static_cast<unsigned char>(random());
+    const auto now = std::chrono::high_resolution_clock::now()
+                         .time_since_epoch()
+                         .count();
+    for (size_t index = 0;
+         index < sizeof(now) && index < bytes.size();
+         ++index)
+    {
+        bytes[index] ^= static_cast<unsigned char>(
+            (static_cast<unsigned long long>(now) >> (index * 8)) &
+            0xffU);
+    }
+
+    std::ostringstream output;
+    output << std::hex << std::setfill('0');
+    for (unsigned char value : bytes)
+        output << std::setw(2) << static_cast<unsigned int>(value);
+    return output.str();
+}
+
+std::string CanonicalizeObservedExecutable(
+    const std::string& executable)
+{
+    if (executable.empty())
+        return {};
+    char* resolved = ::realpath(executable.c_str(), nullptr);
+    if (resolved == nullptr)
+        return {};
+    std::string canonical{resolved};
+    std::free(resolved);
+    return canonical;
+}
+
+SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(
+    int pid,
+    int processGroupId,
+    const std::string& processStartIdentity,
+    const std::string& canonicalExecutable)
+{
+    std::unique_ptr<EA::GlobalExperimentControl::ProcessOperations>
+        processes =
+            EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const EA::GlobalExperimentControl::ProcessObservation observation =
+        processes->Observe(pid);
+    if (observation.inspectionSucceeded && !observation.exists)
+        return SchedulerOwnerProcessEvidence::Missing;
+    if (!observation.inspectionSucceeded)
+        return SchedulerOwnerProcessEvidence::Ambiguous;
+    if (!observation.exists)
+        return SchedulerOwnerProcessEvidence::Ambiguous;
+
+    const std::string observedExecutable =
+        CanonicalizeObservedExecutable(observation.executable);
+    if (observation.pid != pid ||
+        observation.processGroupId != processGroupId ||
+        observation.processStartIdentity != processStartIdentity ||
+        observedExecutable.empty() ||
+        observedExecutable != canonicalExecutable ||
+        observation.commandLine.find("--schedule-experiments") ==
+            std::string::npos)
+    {
+        return SchedulerOwnerProcessEvidence::IdentityMismatch;
+    }
+    return SchedulerOwnerProcessEvidence::Valid;
+}
+
+const char* SchedulerTakeoverDecisionText(
+    SchedulerTakeoverDecision decision)
+{
+    switch (decision)
+    {
+        case SchedulerTakeoverDecision::AcquireVacant:
+            return "vacant";
+        case SchedulerTakeoverDecision::AcquireReleased:
+            return "explicitly_released";
+        case SchedulerTakeoverDecision::TakeOverExpiredDeadOwner:
+            return "expired_and_owner_identity_invalid";
+        case SchedulerTakeoverDecision::RejectValidOwner:
+            return "expired_but_owner_identity_valid";
+        case SchedulerTakeoverDecision::RejectFreshLease:
+            return "owner_lease_valid";
+        case SchedulerTakeoverDecision::RejectAmbiguousOwner:
+            return "owner_identity_ambiguous";
+    }
+    return "unknown";
+}
+
+struct SchedulerProcessAbsenceEvidence
+{
+    bool inspectionSucceeded = false;
+    std::vector<std::pair<int, std::string>> schedulers;
+};
+
+SchedulerProcessAbsenceEvidence
+InspectAllSchedulerDispatchProcesses()
+{
+    SchedulerProcessAbsenceEvidence evidence;
+    FILE* pipe = ::popen("ps -axo pid=,command=", "r");
+    if (pipe == nullptr)
+        return evidence;
+    char buffer[32768] = {};
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        std::istringstream row{buffer};
+        int pid = -1;
+        if (!(row >> pid))
+            continue;
+        std::string command;
+        std::getline(row, command);
+        const size_t first = command.find_first_not_of(" \t");
+        if (first != std::string::npos)
+            command.erase(0, first);
+        if (command.find("--schedule-experiments") !=
+            std::string::npos)
+        {
+            evidence.schedulers.emplace_back(
+                pid, std::move(command));
+        }
+    }
+    evidence.inspectionSucceeded = ::pclose(pipe) == 0;
+    return evidence;
+}
+
+int CompleteSchedulerProtocolCutover(
+    const SchedulerOptions& options)
+{
+    const SchedulerProcessAbsenceEvidence evidence =
+        InspectAllSchedulerDispatchProcesses();
+    if (!evidence.inspectionSucceeded)
+    {
+        std::cerr << "SCHEDULER_PROTOCOL_CUTOVER_REJECTED"
+                  << ",reason=scheduler_process_inspection_failed"
+                  << ",mutations=0"
+                  << std::endl;
+        return 1;
+    }
+    if (!evidence.schedulers.empty())
+    {
+        std::cerr << "SCHEDULER_PROTOCOL_CUTOVER_REJECTED"
+                  << ",reason=scheduler_dispatch_process_present"
+                  << ",scheduler_count="
+                  << evidence.schedulers.size()
+                  << ",scheduler_pids=";
+        for (size_t index = 0;
+             index < evidence.schedulers.size();
+             ++index)
+        {
+            if (index)
+                std::cerr << "|";
+            std::cerr << evidence.schedulers[index].first;
+        }
+        std::cerr << ",mutations=0" << std::endl;
+        return 1;
+    }
+
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    if (!RequireSchedulerTables(transaction))
+        return 2;
+    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
+    pqxx::result protocol = transaction.exec(
+        "SELECT required_generation,cutover_state "
+        "FROM experiment_scheduler_protocol "
+        "WHERE singleton=true FOR UPDATE;");
+    if (protocol.size() != 1 ||
+        protocol[0][0].as<int>() !=
+            EA::SchedulerOwnership::kProtocolGeneration)
+    {
+        transaction.commit();
+        std::cerr << "SCHEDULER_PROTOCOL_CUTOVER_REJECTED"
+                  << ",reason=protocol_generation_mismatch"
+                  << ",mutations=0"
+                  << std::endl;
+        return 1;
+    }
+    if (protocol[0][1].as<std::string>() == "complete")
+    {
+        transaction.commit();
+        std::cout << "SCHEDULER_PROTOCOL_CUTOVER_COMPLETE"
+                  << ",generation="
+                  << EA::SchedulerOwnership::kProtocolGeneration
+                  << ",result=already_complete"
+                  << std::endl;
+        return 0;
+    }
+
+    const std::optional<std::string> startIdentity =
+        EA::GlobalExperimentControl::ReadProcessStartIdentity(
+            static_cast<int>(::getpid()));
+    if (!startIdentity)
+        throw std::runtime_error(
+            "cutover_process_start_identity_unavailable");
+    const std::string actor =
+        "pid:" + std::to_string(::getpid()) +
+        ";start:" + *startIdentity;
+    pqxx::result completed = transaction.exec_params(
+        "UPDATE experiment_scheduler_protocol SET "
+        "cutover_state='complete',"
+        "cutover_completed_at=clock_timestamp(),"
+        "cutover_completed_by=$1,"
+        "cutover_executable_path=$2,"
+        "cutover_process_evidence=$3,"
+        "failure_diagnostic=NULL,updated_at=clock_timestamp() "
+        "WHERE singleton=true AND required_generation=$4 "
+        "AND cutover_state IN ('pending','failed') "
+        "RETURNING required_generation;",
+        actor,
+        options.selfPath,
+        "ps_inspection_complete;active_scheduler_dispatch_processes=0",
+        EA::SchedulerOwnership::kProtocolGeneration);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        completed, "complete_scheduler_protocol_cutover");
+    transaction.commit();
+    std::cout << "SCHEDULER_PROTOCOL_CUTOVER_COMPLETE"
+              << ",generation="
+              << EA::SchedulerOwnership::kProtocolGeneration
+              << ",result=completed"
+              << ",scheduler_processes=0"
+              << ",canonical_executable_path="
+              << options.selfPath
+              << std::endl;
+    return 0;
+}
+
+bool AcquireSchedulerAuthority(SchedulerOptions& options)
+{
+    const int pid = static_cast<int>(::getpid());
+    const int processGroupId = static_cast<int>(::getpgrp());
+    const std::optional<std::string> processStartIdentity =
+        EA::GlobalExperimentControl::ReadProcessStartIdentity(pid);
+    if (!processStartIdentity)
+        throw std::runtime_error(
+            "scheduler_process_start_identity_unavailable");
+
+    options.schedulerAuthority.invocationNonce =
+        GenerateSchedulerInvocationNonce();
+    options.schedulerAuthority.schedulerInvocationId =
+        "scheduler:" + options.schedulerAuthority.invocationNonce;
+    options.schedulerAuthority.canonicalExecutablePath =
+        options.selfPath;
+
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    if (!RequireSchedulerTables(transaction))
+        return false;
+    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
+    pqxx::result protocol = transaction.exec(
+        "SELECT required_generation,cutover_state,"
+        "failure_diagnostic FROM experiment_scheduler_protocol "
+        "WHERE singleton=true FOR UPDATE;");
+    if (protocol.size() != 1 ||
+        protocol[0][0].as<int>() !=
+            EA::SchedulerOwnership::kProtocolGeneration ||
+        protocol[0][1].as<std::string>() != "complete")
+    {
+        transaction.commit();
+        std::cout << "SCHEDULER_PROTOCOL_BARRIER_REJECTED"
+                  << ",required_generation="
+                  << EA::SchedulerOwnership::kProtocolGeneration
+                  << ",database_generation="
+                  << (protocol.size() == 1
+                          ? std::to_string(protocol[0][0].as<int>())
+                          : "NULL")
+                  << ",cutover_state="
+                  << (protocol.size() == 1
+                          ? protocol[0][1].as<std::string>()
+                          : "missing")
+                  << ",reason="
+                  << (protocol.size() == 1 &&
+                              !protocol[0][2].is_null()
+                          ? protocol[0][2].as<std::string>()
+                          : "explicit_safe_cutover_required")
+                  << ",mutations=0"
+                  << std::endl;
+        return false;
+    }
+
+    transaction.exec_params(
+        "INSERT INTO experiment_scheduler_invocation("
+        "scheduler_invocation_id,process_pid,process_group_id,"
+        "process_start_identity,canonical_executable_path,command_line,"
+        "invocation_nonce,status,protocol_generation) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,'starting',$8);",
+        options.schedulerAuthority.schedulerInvocationId,
+        pid,
+        processGroupId,
+        *processStartIdentity,
+        options.selfPath,
+        options.invocationCommandLine,
+        options.schedulerAuthority.invocationNonce,
+        EA::SchedulerOwnership::kProtocolGeneration);
+
+    pqxx::result leaseRows = transaction.exec(
+        "SELECT l.owner_scheduler_invocation_id,l.fencing_token,"
+        "l.authority_state,(l.expires_at <= clock_timestamp()) AS expired,"
+        "i.process_pid,i.process_group_id,i.process_start_identity,"
+        "i.canonical_executable_path "
+        "FROM experiment_scheduler_lease l "
+        "LEFT JOIN experiment_scheduler_invocation i "
+        "ON i.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        "WHERE l.singleton=true FOR UPDATE OF l;");
+    if (leaseRows.size() != 1)
+        throw std::runtime_error("scheduler_lease_singleton_missing");
+
+    const pqxx::row lease = leaseRows[0];
+    const bool hasOwner = !lease[0].is_null();
+    const std::string authorityState = lease[2].as<std::string>();
+    const bool explicitlyReleased =
+        authorityState == "released" ||
+        authorityState == "vacant";
+    const bool leaseExpired =
+        lease[3].is_null() || lease[3].as<bool>();
+
+    SchedulerOwnerProcessEvidence ownerEvidence =
+        SchedulerOwnerProcessEvidence::Ambiguous;
+    if (!hasOwner)
+        ownerEvidence = SchedulerOwnerProcessEvidence::Missing;
+    else if (!explicitlyReleased)
+    {
+        if (lease[4].is_null() || lease[5].is_null() ||
+            lease[6].is_null() || lease[7].is_null())
+        {
+            ownerEvidence =
+                SchedulerOwnerProcessEvidence::Ambiguous;
+        }
+        else
+        {
+            ownerEvidence = InspectSchedulerOwnerProcess(
+                lease[4].as<int>(),
+                lease[5].as<int>(),
+                lease[6].as<std::string>(),
+                lease[7].as<std::string>());
+        }
+    }
+
+    const SchedulerTakeoverDecision decision =
+        DecideSchedulerTakeover(
+            hasOwner,
+            explicitlyReleased,
+            leaseExpired,
+            ownerEvidence);
+    const bool acquired =
+        decision == SchedulerTakeoverDecision::AcquireVacant ||
+        decision == SchedulerTakeoverDecision::AcquireReleased ||
+        decision ==
+            SchedulerTakeoverDecision::TakeOverExpiredDeadOwner;
+    if (!acquired)
+    {
+        transaction.exec_params(
+            "UPDATE experiment_scheduler_invocation SET "
+            "status='rejected',ended_at=clock_timestamp(),"
+            "terminal_reason=$1 "
+            "WHERE scheduler_invocation_id=$2 AND status='starting';",
+            SchedulerTakeoverDecisionText(decision),
+            options.schedulerAuthority.schedulerInvocationId);
+        transaction.commit();
+        std::cout << "SCHEDULER_OWNERSHIP_REJECTED"
+                  << ",scheduler_invocation_id="
+                  << options.schedulerAuthority.schedulerInvocationId
+                  << ",lease_owner="
+                  << (hasOwner ? lease[0].as<std::string>() : "NULL")
+                  << ",fencing_token=" << lease[1].as<long long>()
+                  << ",reason="
+                  << SchedulerTakeoverDecisionText(decision)
+                  << ",mutations=0"
+                  << std::endl;
+        return false;
+    }
+
+    if (hasOwner && lease[0].as<std::string>() !=
+                        options.schedulerAuthority.schedulerInvocationId)
+    {
+        transaction.exec_params(
+            "UPDATE experiment_scheduler_invocation SET "
+            "status=CASE WHEN status='released' THEN status ELSE 'crashed' END,"
+            "ended_at=COALESCE(ended_at,clock_timestamp()),"
+            "terminal_reason=COALESCE(terminal_reason,$1) "
+            "WHERE scheduler_invocation_id=$2;",
+            SchedulerTakeoverDecisionText(decision),
+            lease[0].as<std::string>());
+    }
+
+    const long long fencingToken =
+        lease[1].as<long long>() + 1;
+    pqxx::result updated = transaction.exec_params(
+        "UPDATE experiment_scheduler_lease SET "
+        "owner_scheduler_invocation_id=$1,fencing_token=$2,"
+        "authority_state='active',acquired_at=clock_timestamp(),"
+        "heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp()+make_interval(secs=>$3),"
+        "released_at=NULL,transition_reason=$4 "
+        "WHERE singleton=true RETURNING fencing_token;",
+        options.schedulerAuthority.schedulerInvocationId,
+        fencingToken,
+        kSchedulerLeaseSeconds,
+        SchedulerTakeoverDecisionText(decision));
+    if (updated.size() != 1)
+        throw std::runtime_error("scheduler_lease_acquire_failed");
+    transaction.exec_params(
+        "UPDATE experiment_scheduler_invocation SET "
+        "status='owner',ownership_acquired_at=clock_timestamp(),"
+        "last_heartbeat_at=clock_timestamp() "
+        "WHERE scheduler_invocation_id=$1 AND status='starting';",
+        options.schedulerAuthority.schedulerInvocationId);
+    transaction.commit();
+
+    options.schedulerAuthority.fencingToken = fencingToken;
+    options.schedulerAuthority.held = true;
+    std::cout << "SCHEDULER_OWNERSHIP_ACQUIRED"
+              << ",scheduler_invocation_id="
+              << options.schedulerAuthority.schedulerInvocationId
+              << ",fencing_token=" << fencingToken
+              << ",lease_seconds=" << kSchedulerLeaseSeconds
+              << ",reason=" << SchedulerTakeoverDecisionText(decision)
+              << ",canonical_executable_path=" << options.selfPath
+              << std::endl;
+    return true;
+}
+
+void RequireAndRefreshSchedulerAuthority(
+    pqxx::work& transaction,
+    const SchedulerOptions& options)
+{
+    if (!options.schedulerAuthority.Complete())
+    {
+        throw SchedulerAuthorityLost(
+            "scheduler_authority_not_held");
+    }
+
+    // Global advisory -> protocol -> lease is the mandatory prefix of the
+    // scheduler lock order. The advisory lock is transaction-reentrant.
+    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
+    pqxx::result protocol = transaction.exec(
+        "SELECT required_generation,cutover_state "
+        "FROM experiment_scheduler_protocol "
+        "WHERE singleton=true FOR UPDATE;");
+    if (protocol.size() != 1 ||
+        protocol[0][0].as<int>() !=
+            EA::SchedulerOwnership::kProtocolGeneration ||
+        protocol[0][1].as<std::string>() != "complete")
+    {
+        throw SchedulerAuthorityLost(
+            "scheduler_protocol_cutover_not_complete");
+    }
+
+    pqxx::result rows = transaction.exec(
+        "SELECT authority_state,owner_scheduler_invocation_id,"
+        "fencing_token FROM experiment_scheduler_lease "
+        "WHERE singleton=true FOR UPDATE;");
+    if (rows.size() != 1 ||
+        rows[0][0].as<std::string>() != "active" ||
+        rows[0][1].is_null() ||
+        rows[0][1].as<std::string>() !=
+            options.schedulerAuthority.schedulerInvocationId ||
+        rows[0][2].as<long long>() !=
+            options.schedulerAuthority.fencingToken)
+    {
+        throw SchedulerAuthorityLost(
+            "scheduler_lease_owner_or_fence_mismatch");
+    }
+
+    pqxx::result refreshed = transaction.exec_params(
+        "UPDATE experiment_scheduler_lease SET "
+        "heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp()+make_interval(secs=>$1) "
+        "WHERE singleton=true AND authority_state='active' "
+        "AND owner_scheduler_invocation_id=$2 "
+        "AND fencing_token=$3 RETURNING fencing_token;",
+        kSchedulerLeaseSeconds,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken);
+    if (refreshed.size() != 1)
+        throw SchedulerAuthorityLost(
+            "scheduler_lease_refresh_rejected");
+    transaction.exec_params(
+        "UPDATE experiment_scheduler_invocation SET "
+        "last_heartbeat_at=clock_timestamp() "
+        "WHERE scheduler_invocation_id=$1 AND status='owner';",
+        options.schedulerAuthority.schedulerInvocationId);
+}
+
+bool SchedulerAuthorityTestFailpointEnabled(
+    const std::string& boundary)
+{
+    const char* enabled =
+        std::getenv("EA_SCHEDULER_OWNERSHIP_TEST_ENABLE");
+    const char* selected =
+        std::getenv("EA_SCHEDULER_OWNERSHIP_TEST_BOUNDARY");
+    const std::string database =
+        GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
+    return enabled && std::string{enabled} == "1" &&
+           selected && std::string{selected} == boundary &&
+           (database.rfind("ea_scheduler_", 0) == 0 ||
+            database.rfind("ea_global_control_test_", 0) == 0);
+}
+
+void InjectSchedulerAuthorityLossForTest(
+    pqxx::work& transaction,
+    const SchedulerOptions& options,
+    const std::string& boundary)
+{
+    if (!SchedulerAuthorityTestFailpointEnabled(boundary))
+        return;
+    const char* foreign =
+        std::getenv(
+            "EA_SCHEDULER_OWNERSHIP_TEST_FOREIGN_INVOCATION_ID");
+    if (!foreign || !*foreign)
+        throw std::runtime_error(
+            "scheduler_authority_test_foreign_invocation_missing");
+    const pqxx::result displaced = transaction.exec_params(
+        "UPDATE experiment_scheduler_lease SET "
+        "owner_scheduler_invocation_id=$1,"
+        "fencing_token=fencing_token+1,"
+        "authority_state='active',"
+        "heartbeat_at=clock_timestamp(),"
+        "expires_at=clock_timestamp()+interval '90 seconds',"
+        "transition_reason=$2 "
+        "WHERE singleton=true "
+        "AND owner_scheduler_invocation_id=$3 "
+        "AND fencing_token=$4 "
+        "RETURNING fencing_token;",
+        std::string{foreign},
+        "test_failpoint:" + boundary,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        displaced,
+        "inject_scheduler_authority_loss_" + boundary);
+}
+
+void PersistSchedulerAuthorityLossForTest(
+    const SchedulerOptions& options,
+    const std::string& boundary)
+{
+    if (!SchedulerAuthorityTestFailpointEnabled(boundary))
+        return;
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    InjectSchedulerAuthorityLossForTest(
+        transaction, options, boundary);
+    transaction.commit();
+}
+
+bool RefreshSchedulerAuthority(const SchedulerOptions& options)
+{
+    try
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        transaction.commit();
+        return true;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "SCHEDULER_OWNERSHIP_LOST"
+                  << ",scheduler_invocation_id="
+                  << options.schedulerAuthority.schedulerInvocationId
+                  << ",fencing_token="
+                  << options.schedulerAuthority.fencingToken
+                  << ",reason=" << error.what()
+                  << std::endl;
+        return false;
+    }
+}
+
+void ReleaseSchedulerAuthority(
+    const SchedulerOptions& options,
+    const std::string& reason)
+{
+    if (!options.schedulerAuthority.held)
+        return;
+    try
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        pqxx::result released = transaction.exec_params(
+            "UPDATE experiment_scheduler_lease SET "
+            "authority_state='released',heartbeat_at=clock_timestamp(),"
+            "expires_at=clock_timestamp(),released_at=clock_timestamp(),"
+            "transition_reason=$1 "
+            "WHERE singleton=true AND authority_state='active' "
+            "AND owner_scheduler_invocation_id=$2 "
+            "AND fencing_token=$3 RETURNING fencing_token;",
+            reason,
+            options.schedulerAuthority.schedulerInvocationId,
+            options.schedulerAuthority.fencingToken);
+        if (released.size() == 1)
+        {
+            transaction.exec_params(
+                "UPDATE experiment_scheduler_invocation SET "
+                "status='released',ownership_released_at=clock_timestamp(),"
+                "ended_at=clock_timestamp(),terminal_reason=$1 "
+                "WHERE scheduler_invocation_id=$2 AND status='owner';",
+                reason,
+                options.schedulerAuthority.schedulerInvocationId);
+        }
+        transaction.commit();
+        std::cout << "SCHEDULER_OWNERSHIP_RELEASED"
+                  << ",scheduler_invocation_id="
+                  << options.schedulerAuthority.schedulerInvocationId
+                  << ",fencing_token="
+                  << options.schedulerAuthority.fencingToken
+                  << ",released=" << (released.size() == 1 ? 1 : 0)
+                  << ",reason=" << reason
+                  << std::endl;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "SCHEDULER_OWNERSHIP_RELEASE_FAILED"
+                  << ",scheduler_invocation_id="
+                  << options.schedulerAuthority.schedulerInvocationId
+                  << ",fencing_token="
+                  << options.schedulerAuthority.fencingToken
+                  << ",reason=" << error.what()
+                  << std::endl;
+    }
+}
+
+void SchedulerStopSignalHandler(int)
+{
+    gSchedulerStopRequested = 1;
+}
+
+void InstallSchedulerSignalHandlers()
+{
+    struct sigaction action {};
+    action.sa_handler = SchedulerStopSignalHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    if (::sigaction(SIGINT, &action, nullptr) != 0 ||
+        ::sigaction(SIGTERM, &action, nullptr) != 0)
+    {
+        throw std::runtime_error(
+            "scheduler_signal_handler_install_failed");
+    }
+
+    struct sigaction pipeAction {};
+    pipeAction.sa_handler = SIG_IGN;
+    sigemptyset(&pipeAction.sa_mask);
+    pipeAction.sa_flags = 0;
+    if (::sigaction(SIGPIPE, &pipeAction, nullptr) != 0)
+        throw std::runtime_error(
+            "scheduler_sigpipe_handler_install_failed");
+}
+
+class SchedulerAuthorityReleaseGuard
+{
+public:
+    explicit SchedulerAuthorityReleaseGuard(
+        const SchedulerOptions& options)
+        : options_(options)
+    {
+    }
+
+    ~SchedulerAuthorityReleaseGuard()
+    {
+        ReleaseSchedulerAuthority(
+            options_,
+            gSchedulerStopRequested != 0
+                ? "graceful_signal_shutdown"
+                : "scheduler_exit");
+    }
+
+private:
+    const SchedulerOptions& options_;
+};
 
 void PrintModelSymbolMismatch(const std::string& runtimeSymbol,
                                      const std::string& modelSymbol)
@@ -5259,8 +6045,17 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
 }
 
 int RecoverOrphanedRunningExperiments(pqxx::work& w,
+                                      const SchedulerOptions& options,
                                       SchedulerEventLogState* logState,
                                       bool verbose);
+
+void AdvanceCheckpointEvalToAnalyze(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    long long inferenceResultId,
+    bool hasInferCompletedAt,
+    const std::optional<long long>&
+        workerAttemptId = std::nullopt);
 
 QueueSnapshot LoadQueueSnapshot(pqxx::work& w)
 {
@@ -6319,7 +7114,9 @@ void PrintPhaseSchedulingStats(const PhaseSchedulingStats& stats,
 int FailInvalidSchedulerPhases(pqxx::work& w)
 {
     pqxx::result rows = w.exec(
-        "SELECT experiment_id, phase FROM experiment "
+        "SELECT experiment_id,phase,status,"
+        "active_scheduler_worker_attempt_id "
+        "FROM experiment "
         "WHERE status IN ('pending', 'running') "
         "AND phase NOT IN ('train', 'infer', 'analyze', 'done') "
         "ORDER BY updated_at ASC, experiment_id ASC;");
@@ -6328,16 +7125,31 @@ int FailInvalidSchedulerPhases(pqxx::work& w)
     {
         const long long experimentId = row[0].as<long long>();
         const std::string phase = row[1].as<std::string>();
-        w.exec_params(
+        if (row[2].as<std::string>() == "running" ||
+            !row[3].is_null())
+        {
+            std::cout << "EXPERIMENT_INVALID_PHASE_DEFERRED"
+                      << ",experiment_id=" << experimentId
+                      << ",phase=" << phase
+                      << ",reason=exact_active_attempt_required"
+                      << std::endl;
+            continue;
+        }
+        pqxx::result failed = w.exec_params(
             "UPDATE experiment "
             "SET status = 'failed', "
             "exit_code = -1, "
             "error_message = $1, "
             "completed_at = now(), "
             "updated_at = now() "
-            "WHERE experiment_id = $2;",
+            "WHERE experiment_id = $2 "
+            "AND status='pending' "
+            "AND active_scheduler_worker_attempt_id IS NULL "
+            "RETURNING experiment_id;",
             "unknown_scheduler_phase:" + phase,
             experimentId);
+        if (failed.size() != 1)
+            continue;
         std::cout << "EXPERIMENT_FAILED"
                   << ",experiment_id=" << experimentId
                   << ",phase=" << phase
@@ -6475,6 +7287,19 @@ std::string CommandForDisplay(const std::vector<std::string>& argv)
     return oss.str();
 }
 
+std::string CommandForProcessObservation(
+    const std::vector<std::string>& argv)
+{
+    std::ostringstream command;
+    for (size_t index = 0; index < argv.size(); ++index)
+    {
+        if (index != 0)
+            command << ' ';
+        command << argv[index];
+    }
+    return command.str();
+}
+
 void AddCliFlag(std::vector<std::string>& argv, const std::string& optionName)
 {
     argv.push_back(optionName);
@@ -6533,6 +7358,257 @@ int SchedulerChildLaunchErrorNumber(const std::exception& error)
     return launchError != nullptr ? launchError->ErrorNumber() : EIO;
 }
 
+std::string RequireProcessStartIdentity(pid_t pid);
+
+int CountGlobalWorkerCapacity(
+    pqxx::work& transaction,
+    const std::string& capacityClass)
+{
+    return transaction.exec_params(
+        "SELECT count(*) FROM experiment_scheduler_worker_attempt "
+        "WHERE capacity_class=$1 AND lifecycle_state IN "
+        "('reserved','spawned','running','observed',"
+        "'identity_ambiguous');",
+        capacityClass).one_row()[0].as<int>();
+}
+
+std::string GenerateWorkerLaunchIdentity(
+    const SchedulerOptions& options,
+    const std::string& commandIdentity)
+{
+    return options.schedulerAuthority.schedulerInvocationId + ":worker:" +
+           GenerateSchedulerInvocationNonce() + ":" +
+           commandIdentity;
+}
+
+std::optional<ReservedWorkerAttempt>
+ReserveExperimentWorkerAttempt(
+    const SchedulerOptions& options,
+    const ExperimentRow& experiment,
+    const std::string& phase,
+    const std::string& logPath,
+    int maximumCapacity,
+    bool cancellationOnly = false)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    if (!SchedulerLaunchAllowed(
+            transaction,
+            phase,
+            false,
+            cancellationOnly))
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+
+    const int used =
+        CountGlobalWorkerCapacity(transaction, phase);
+    if (used >= maximumCapacity)
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+
+    pqxx::result lifecycle = transaction.exec_params(
+        "SELECT status,phase,active_scheduler_worker_attempt_id,"
+        "cancellation_request_id, cancel_after_checkpoint_epoch "
+        "FROM experiment WHERE experiment_id=$1;",
+        experiment.experimentId);
+    if (lifecycle.size() != 1 ||
+        lifecycle[0][0].as<std::string>() != "pending" ||
+        lifecycle[0][1].as<std::string>() != phase ||
+        !lifecycle[0][2].is_null())
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+    if (cancellationOnly &&
+        (lifecycle[0][3].is_null() ||
+         lifecycle[0][4].is_null()))
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+
+    ReservedWorkerAttempt attempt;
+    attempt.launchAttemptIdentity =
+        GenerateWorkerLaunchIdentity(
+            options,
+            "experiment:" +
+                std::to_string(experiment.experimentId) + ":" +
+                phase);
+    attempt.experimentId = experiment.experimentId;
+    attempt.workerKind = "experiment";
+    attempt.phase = phase;
+    attempt.capacityClass = phase;
+    attempt.logPath = logPath;
+
+    pqxx::result inserted = transaction.exec_params(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,worker_kind,"
+        "lifecycle_phase,capacity_class,ownership_origin,"
+        "lifecycle_state,canonical_executable_path,"
+        "command_identity,log_path) "
+        "VALUES($1,$2,$3,$4,'experiment',$5,$5,"
+        "'scheduler_launch','reserved',$6,$7,$8) "
+        "RETURNING worker_attempt_id;",
+        attempt.launchAttemptIdentity,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        experiment.experimentId,
+        phase,
+        options.selfPath,
+        "experiment:" +
+            std::to_string(experiment.experimentId) + ":" + phase,
+        logPath);
+    if (inserted.size() != 1)
+        throw std::runtime_error(
+            "worker_attempt_reservation_insert_failed");
+    attempt.workerAttemptId =
+        inserted[0][0].as<long long>();
+
+    const std::string currentOperation =
+        EA::ExperimentLifecycle::
+            RequireCanonicalCurrentOperationForPhase(phase);
+    const std::string logColumn =
+        phase == "train"
+            ? "train_log_path"
+            : (phase == "infer"
+                   ? "infer_log_path"
+                   : "analysis_log_path");
+    const std::string claimSql =
+        std::string{
+        "UPDATE experiment SET status='running',"
+        "started_at=COALESCE(started_at,clock_timestamp()),"
+        "worker_started_at=clock_timestamp(),worker_pid=NULL,"
+        "worker_process_group_id=NULL,"
+        "worker_process_start_identity=NULL,"
+        "worker_executable=$1,current_operation=$2,"
+        "active_scheduler_worker_attempt_id=$3,"} +
+        logColumn + "=$4,updated_at=clock_timestamp() "
+        "WHERE experiment_id=$5 AND status='pending' AND phase=$6 "
+        "AND active_scheduler_worker_attempt_id IS NULL "
+        "RETURNING experiment_id;";
+    pqxx::result claimed = transaction.exec_params(
+        claimSql,
+        options.selfPath,
+        currentOperation,
+        attempt.workerAttemptId,
+        logPath,
+        experiment.experimentId,
+        phase);
+    if (claimed.size() != 1)
+        throw std::runtime_error(
+            "worker_attempt_lifecycle_claim_failed");
+    transaction.commit();
+    return attempt;
+}
+
+std::optional<ReservedWorkerAttempt>
+ReserveCheckpointWorkerAttempt(
+    const SchedulerOptions& options,
+    const CheckpointEvalRow& eval,
+    const std::string& logPath,
+    int maximumCapacity)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    if (!SchedulerLaunchAllowed(
+            transaction, "checkpoint_infer", true, false))
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+    if (CountGlobalWorkerCapacity(transaction, "infer") >=
+        maximumCapacity)
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+
+    pqxx::result lifecycle = transaction.exec_params(
+        "SELECT status,phase,active_scheduler_worker_attempt_id "
+        "FROM experiment_checkpoint_eval "
+        "WHERE checkpoint_eval_id=$1;",
+        eval.checkpointEvalId);
+    if (lifecycle.size() != 1 ||
+        lifecycle[0][0].as<std::string>() != "pending" ||
+        lifecycle[0][1].as<std::string>() != "infer" ||
+        !lifecycle[0][2].is_null())
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+
+    ReservedWorkerAttempt attempt;
+    attempt.launchAttemptIdentity =
+        GenerateWorkerLaunchIdentity(
+            options,
+            "checkpoint_infer:" +
+                std::to_string(eval.checkpointEvalId));
+    attempt.experimentId = eval.experiment.experimentId;
+    attempt.checkpointEvalId = eval.checkpointEvalId;
+    attempt.workerKind = "checkpoint_infer";
+    attempt.phase = "infer";
+    attempt.capacityClass = "infer";
+    attempt.logPath = logPath;
+    pqxx::result inserted = transaction.exec_params(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
+        "worker_kind,lifecycle_phase,capacity_class,"
+        "ownership_origin,lifecycle_state,"
+        "canonical_executable_path,command_identity,log_path) "
+        "VALUES($1,$2,$3,$4,$5,'checkpoint_infer','infer','infer',"
+        "'scheduler_launch','reserved',$6,$7,$8) "
+        "RETURNING worker_attempt_id;",
+        attempt.launchAttemptIdentity,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        eval.experiment.experimentId,
+        eval.checkpointEvalId,
+        options.selfPath,
+        "checkpoint_infer:" +
+            std::to_string(eval.checkpointEvalId),
+        logPath);
+    if (inserted.size() != 1)
+        throw std::runtime_error(
+            "checkpoint_worker_attempt_reservation_insert_failed");
+    attempt.workerAttemptId =
+        inserted[0][0].as<long long>();
+
+    pqxx::result claimed = transaction.exec_params(
+        "UPDATE experiment_checkpoint_eval SET "
+        "status='running',phase='infer',worker_pid=NULL,"
+        "worker_process_group_id=NULL,"
+        "worker_process_start_identity=NULL,worker_executable=$1,"
+        "worker_control_state='running',infer_log_path=$2,"
+        "active_scheduler_worker_attempt_id=$3,"
+        "started_at=COALESCE(started_at,clock_timestamp()),"
+        "infer_started_at=COALESCE(infer_started_at,"
+        "clock_timestamp()),updated_at=clock_timestamp(),"
+        "error_message=NULL "
+        "WHERE checkpoint_eval_id=$4 AND status='pending' "
+        "AND phase='infer' "
+        "AND active_scheduler_worker_attempt_id IS NULL "
+        "RETURNING checkpoint_eval_id;",
+        options.selfPath,
+        logPath,
+        attempt.workerAttemptId,
+        eval.checkpointEvalId);
+    if (claimed.size() != 1)
+        throw std::runtime_error(
+            "checkpoint_worker_attempt_lifecycle_claim_failed");
+    transaction.commit();
+    return attempt;
+}
+
 [[noreturn]] void ThrowSchedulerChildLaunchError(
     long long experimentId,
     const std::string& phase,
@@ -6562,7 +7638,11 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
         ThrowSchedulerChildLaunchError(
             experimentId, phase, "", EINVAL, "empty child argv");
 
-    const std::string commandLine = CommandForDisplay(argv);
+    // proc_pidpath supplies the executable identity while `ps ... command=`
+    // supplies this argument identity. Persist the observation form, not a
+    // shell-escaped display command: the executable path may contain spaces.
+    const std::string commandLine =
+        CommandForProcessObservation(argv);
     const double launchStartedEpoch =
         std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -6584,7 +7664,17 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
     for (const auto& arg : argv)
         childArgv.push_back(const_cast<char*>(arg.c_str()));
     childArgv.push_back(nullptr);
-    const bool execWithPath = argv[0].find('/') != std::string::npos;
+    if (argv[0].empty() || argv[0].front() != '/' ||
+        ::access(argv[0].c_str(), X_OK) != 0)
+    {
+        ::close(fd);
+        ThrowSchedulerChildLaunchError(
+            experimentId,
+            phase,
+            commandLine,
+            EINVAL,
+            "canonical absolute executable path required");
+    }
     const char* const phaseData = phase.data();
     const size_t phaseLength = phase.size();
 
@@ -6615,10 +7705,7 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
         ::dup2(fd, STDERR_FILENO);
         ::close(fd);
 
-        if (execWithPath)
-            ::execv(argv[0].c_str(), childArgv.data());
-        else
-            ::execvp(argv[0].c_str(), childArgv.data());
+        ::execv(argv[0].c_str(), childArgv.data());
         const int childErrno = errno;
         WriteSchedulerChildExecFailureDiagnostic(
             STDERR_FILENO, experimentId, phaseData, phaseLength, childErrno);
@@ -6646,6 +7733,486 @@ pid_t LaunchChildProcess(const std::vector<std::string>& argv,
               << ",operation=" << phase
               << ",command_line=" << commandLine
               << ",log_path=" << logPath
+              << std::endl;
+    return pid;
+}
+
+void MarkReservedWorkerAttemptLaunchFailed(
+    const SchedulerOptions& options,
+    const ReservedWorkerAttempt& attempt,
+    const std::string& diagnostic,
+    int exitCode = 127)
+{
+    try
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        pqxx::result terminal = transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt a SET "
+            "lifecycle_state='launch_failed',"
+            "completed_at=clock_timestamp(),exit_code=$1,"
+            "reconciliation_result='launch_failed',diagnostic=$2 "
+            "WHERE a.worker_attempt_id=$3 "
+            "AND a.scheduler_invocation_id=$4 "
+            "AND a.scheduler_fencing_token=$5 "
+            "AND a.lifecycle_state IN ('reserved','spawned') "
+            "AND EXISTS ("
+            " SELECT 1 FROM experiment e "
+            " WHERE $6::bigint IS NULL "
+            " AND e.experiment_id=$7 "
+            " AND e.status='running' AND e.phase=$8 "
+            " AND e.active_scheduler_worker_attempt_id="
+            "a.worker_attempt_id "
+            " UNION ALL "
+            " SELECT 1 FROM experiment_checkpoint_eval ce "
+            " WHERE $6::bigint IS NOT NULL "
+            " AND ce.checkpoint_eval_id=$6 "
+            " AND ce.status='running' AND ce.phase='infer' "
+            " AND ce.active_scheduler_worker_attempt_id="
+            "a.worker_attempt_id"
+            ") RETURNING a.worker_attempt_id;",
+            exitCode,
+            diagnostic,
+            attempt.workerAttemptId,
+            options.schedulerAuthority.schedulerInvocationId,
+            options.schedulerAuthority.fencingToken,
+            attempt.checkpointEvalId,
+            attempt.experimentId,
+            attempt.phase);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            terminal,
+            "terminalize_exact_launch_failure_attempt");
+        pqxx::result lifecycle;
+        if (attempt.checkpointEvalId)
+        {
+            lifecycle = transaction.exec_params(
+                "UPDATE experiment_checkpoint_eval SET "
+                "status='failed',worker_pid=NULL,"
+                "worker_process_group_id=NULL,"
+                "completed_at=clock_timestamp(),error_message=$1,"
+                "updated_at=clock_timestamp(),"
+                "active_scheduler_worker_attempt_id=NULL "
+                "WHERE checkpoint_eval_id=$2 "
+                "AND active_scheduler_worker_attempt_id=$3 "
+                "AND status='running' AND phase='infer' "
+                "RETURNING checkpoint_eval_id;",
+                diagnostic,
+                *attempt.checkpointEvalId,
+                attempt.workerAttemptId);
+        }
+        else
+        {
+            lifecycle = transaction.exec_params(
+                "UPDATE experiment SET status='failed',"
+                "worker_pid=NULL,worker_process_group_id=NULL,"
+                "completed_at=clock_timestamp(),exit_code=$1,"
+                "error_message=$2,updated_at=clock_timestamp(),"
+                "active_scheduler_worker_attempt_id=NULL "
+                "WHERE experiment_id=$3 "
+                "AND active_scheduler_worker_attempt_id=$4 "
+                "AND status='running' AND phase=$5 "
+                "RETURNING experiment_id;",
+                exitCode,
+                diagnostic,
+                attempt.experimentId,
+                attempt.workerAttemptId,
+                attempt.phase);
+        }
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            lifecycle,
+            "clear_exact_launch_failure_binding");
+        transaction.commit();
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "SCHEDULER_LAUNCH_FAILURE_PERSIST_FAILED"
+                  << ",worker_attempt_id="
+                  << attempt.workerAttemptId
+                  << ",error=" << error.what()
+                  << std::endl;
+    }
+}
+
+void PersistSpawnedWorkerAttempt(
+    const SchedulerOptions& options,
+    const ReservedWorkerAttempt& attempt,
+    pid_t pid,
+    const std::string& processStartIdentity,
+    const std::string& commandLine,
+    bool requireSchedulerAuthority = true)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    if (requireSchedulerAuthority)
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+    pqxx::result spawned = transaction.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt SET "
+        "lifecycle_state='spawned',worker_pid=$1,"
+        "worker_process_group_id=$1,"
+        "worker_process_start_identity=$2,"
+        "canonical_executable_path=$3,command_line=$4,"
+        "spawned_at=COALESCE(spawned_at,clock_timestamp()),"
+        "last_observed_at=clock_timestamp() "
+        "WHERE worker_attempt_id=$5 AND scheduler_invocation_id=$6 "
+        "AND scheduler_fencing_token=$7 "
+        "AND (lifecycle_state='reserved' OR ("
+        " lifecycle_state='spawned' AND worker_pid=$1 "
+        " AND worker_process_group_id=$1 "
+        " AND worker_process_start_identity=$2 "
+        " AND canonical_executable_path=$3 "
+        " AND command_line=$4)) "
+        "RETURNING worker_attempt_id;",
+        static_cast<int>(pid),
+        processStartIdentity,
+        options.selfPath,
+        commandLine,
+        attempt.workerAttemptId,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken);
+    if (spawned.size() != 1)
+    {
+        if (requireSchedulerAuthority)
+            throw SchedulerAuthorityLost(
+                "worker_attempt_spawn_persistence_fence_rejected");
+        throw std::runtime_error(
+            "child_spawn_evidence_persistence_fence_rejected");
+    }
+
+    pqxx::result lifecycle;
+    if (attempt.checkpointEvalId)
+    {
+        lifecycle = transaction.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "worker_pid=$1,worker_process_group_id=$1,"
+            "worker_process_start_identity=$2,worker_executable=$3,"
+            "worker_command_line=$4,updated_at=clock_timestamp() "
+            "WHERE checkpoint_eval_id=$5 AND status='running' "
+            "AND phase='infer' "
+            "AND active_scheduler_worker_attempt_id=$6 "
+            "RETURNING checkpoint_eval_id;",
+            static_cast<int>(pid),
+            processStartIdentity,
+            options.selfPath,
+            commandLine,
+            *attempt.checkpointEvalId,
+            attempt.workerAttemptId);
+    }
+    else
+    {
+        lifecycle = transaction.exec_params(
+            "UPDATE experiment SET worker_pid=$1,"
+            "worker_process_group_id=$1,"
+            "worker_process_start_identity=$2,worker_executable=$3,"
+            "worker_command_line=$4,updated_at=clock_timestamp() "
+            "WHERE experiment_id=$5 AND status='running' "
+            "AND phase=$6 "
+            "AND active_scheduler_worker_attempt_id=$7 "
+            "RETURNING experiment_id;",
+            static_cast<int>(pid),
+            processStartIdentity,
+            options.selfPath,
+            commandLine,
+            attempt.experimentId,
+            attempt.phase,
+            attempt.workerAttemptId);
+    }
+    if (lifecycle.size() != 1)
+        throw std::runtime_error(
+            "worker_attempt_spawn_lifecycle_predicate_rejected");
+    transaction.commit();
+}
+
+pid_t LaunchReservedChildProcess(
+    const SchedulerOptions& options,
+    const ReservedWorkerAttempt& attempt,
+    std::vector<std::string> argv,
+    const std::optional<long long>& expectedModelId = std::nullopt)
+{
+    if (argv.empty() || argv.front() != options.selfPath ||
+        argv.front().empty() || argv.front().front() != '/')
+    {
+        MarkReservedWorkerAttemptLaunchFailed(
+            options,
+            attempt,
+            "canonical_executable_path_required",
+            127);
+        ThrowSchedulerChildLaunchError(
+            attempt.experimentId,
+            attempt.phase,
+            CommandForDisplay(argv),
+            EINVAL,
+            "canonical executable path required");
+    }
+    AddCliOption(
+        argv,
+        "--scheduler-worker-attempt-id",
+        std::to_string(attempt.workerAttemptId));
+    const std::string commandLine =
+        CommandForProcessObservation(argv);
+
+    const int fd = ::open(
+        attempt.logPath.c_str(),
+        O_WRONLY | O_CREAT | O_TRUNC,
+        0644);
+    if (fd < 0)
+    {
+        const int errorNumber = errno;
+        MarkReservedWorkerAttemptLaunchFailed(
+            options,
+            attempt,
+            SchedulerLaunchFailureError(errorNumber),
+            127);
+        ThrowSchedulerChildLaunchError(
+            attempt.experimentId,
+            attempt.phase,
+            commandLine,
+            errorNumber,
+            "failed to open scheduler child log");
+    }
+
+    int gate[2] = {-1, -1};
+    if (::pipe(gate) != 0)
+    {
+        const int errorNumber = errno;
+        ::close(fd);
+        MarkReservedWorkerAttemptLaunchFailed(
+            options,
+            attempt,
+            SchedulerLaunchFailureError(errorNumber),
+            127);
+        ThrowSchedulerChildLaunchError(
+            attempt.experimentId,
+            attempt.phase,
+            commandLine,
+            errorNumber,
+            "failed to create scheduler child launch gate");
+    }
+    (void)::fcntl(gate[0], F_SETFD, FD_CLOEXEC);
+    (void)::fcntl(gate[1], F_SETFD, FD_CLOEXEC);
+
+    std::vector<char*> childArgv;
+    childArgv.reserve(argv.size() + 1);
+    for (const auto& argument : argv)
+        childArgv.push_back(const_cast<char*>(argument.c_str()));
+    childArgv.push_back(nullptr);
+    const char* phaseData = attempt.phase.data();
+    const size_t phaseLength = attempt.phase.size();
+
+    const pid_t pid = ::fork();
+    if (pid < 0)
+    {
+        const int errorNumber = errno;
+        ::close(gate[0]);
+        ::close(gate[1]);
+        ::close(fd);
+        MarkReservedWorkerAttemptLaunchFailed(
+            options,
+            attempt,
+            SchedulerLaunchFailureError(errorNumber),
+            127);
+        ThrowSchedulerChildLaunchError(
+            attempt.experimentId,
+            attempt.phase,
+            commandLine,
+            errorNumber,
+            "fork failed");
+    }
+
+    if (pid == 0)
+    {
+        ::close(gate[1]);
+        if (::setsid() < 0)
+        {
+            const int childError = errno;
+            ::dup2(fd, STDOUT_FILENO);
+            ::dup2(fd, STDERR_FILENO);
+            ::close(fd);
+            WriteSchedulerChildExecFailureDiagnostic(
+                STDERR_FILENO,
+                attempt.experimentId,
+                phaseData,
+                phaseLength,
+                childError);
+            _exit(127);
+        }
+        ::signal(SIGHUP, SIG_IGN);
+        ::dup2(fd, STDOUT_FILENO);
+        ::dup2(fd, STDERR_FILENO);
+        ::close(fd);
+
+        try
+        {
+            const std::string childProcessStartIdentity =
+                RequireProcessStartIdentity(::getpid());
+            // The child may persist only the exact already-reserved attempt.
+            // It cannot refresh the scheduler lease or claim/launch work.
+            PersistSpawnedWorkerAttempt(
+                options,
+                attempt,
+                ::getpid(),
+                childProcessStartIdentity,
+                commandLine,
+                false);
+        }
+        catch (...)
+        {
+            WriteSchedulerChildExecFailureDiagnostic(
+                STDERR_FILENO,
+                attempt.experimentId,
+                phaseData,
+                phaseLength,
+                EIO);
+            _exit(126);
+        }
+
+        char permission = '\0';
+        const ssize_t readResult =
+            ::read(gate[0], &permission, 1);
+        ::close(gate[0]);
+        if (readResult != 1 || permission != 'G')
+        {
+            WriteSchedulerChildExecFailureDiagnostic(
+                STDERR_FILENO,
+                attempt.experimentId,
+                phaseData,
+                phaseLength,
+                ECANCELED);
+            _exit(126);
+        }
+
+        ::signal(SIGPIPE, SIG_DFL);
+        ::execv(argv.front().c_str(), childArgv.data());
+        const int childError = errno;
+        WriteSchedulerChildExecFailureDiagnostic(
+            STDERR_FILENO,
+            attempt.experimentId,
+            phaseData,
+            phaseLength,
+            childError);
+        _exit(127);
+    }
+
+    ::close(gate[0]);
+    ::close(fd);
+    if (SchedulerAuthorityTestFailpointEnabled(
+            "scheduler_parent_crash_after_child_registration"))
+    {
+        bool childRegistered = false;
+        for (int observation = 0; observation < 500; ++observation)
+        {
+            pqxx::connection testConnection{
+                LstmDbConnectionString()};
+            pqxx::read_transaction testTransaction{
+                testConnection};
+            const pqxx::result registered =
+                testTransaction.exec_params(
+                    "SELECT 1 FROM "
+                    "experiment_scheduler_worker_attempt "
+                    "WHERE worker_attempt_id=$1 "
+                    "AND lifecycle_state='spawned' "
+                    "AND worker_pid=$2 "
+                    "AND worker_process_group_id=$2 "
+                    "AND worker_process_start_identity IS NOT NULL "
+                    "AND canonical_executable_path=$3 "
+                    "AND command_line=$4;",
+                    attempt.workerAttemptId,
+                    static_cast<int>(pid),
+                    options.selfPath,
+                    commandLine);
+            if (registered.size() == 1)
+            {
+                childRegistered = true;
+                break;
+            }
+            ::usleep(10000);
+        }
+        if (!childRegistered)
+            throw std::runtime_error(
+                "test_child_self_registration_not_observed");
+        std::cout
+            << "SCHEDULER_TEST_PARENT_CRASH_AFTER_CHILD_REGISTRATION"
+            << ",worker_attempt_id=" << attempt.workerAttemptId
+            << ",worker_pid=" << pid
+            << std::endl;
+        std::cout.flush();
+        std::cerr.flush();
+        ::_exit(87);
+    }
+    try
+    {
+        pid_t processGroupId = -1;
+        for (int attemptNumber = 0;
+             attemptNumber < 1000;
+             ++attemptNumber)
+        {
+            processGroupId = ::getpgid(pid);
+            if (processGroupId == pid)
+                break;
+            if (processGroupId < 0 && errno == ESRCH)
+                break;
+            ::usleep(1000);
+        }
+        if (processGroupId < 0 || processGroupId != pid)
+            throw std::runtime_error(
+                "scheduler_child_process_group_identity_mismatch");
+        const std::string processStartIdentity =
+            RequireProcessStartIdentity(pid);
+        PersistSpawnedWorkerAttempt(
+            options,
+            attempt,
+            pid,
+            processStartIdentity,
+            commandLine);
+        const char permission = 'G';
+        if (::write(gate[1], &permission, 1) != 1)
+            throw std::runtime_error(
+                "scheduler_child_launch_gate_write_failed");
+        ::close(gate[1]);
+    }
+    catch (const std::exception& error)
+    {
+        ::close(gate[1]);
+        (void)::waitpid(pid, nullptr, 0);
+        MarkReservedWorkerAttemptLaunchFailed(
+            options,
+            attempt,
+            std::string{"spawn_persistence_failed:"} + error.what(),
+            126);
+        throw;
+    }
+
+    SchedulerOwnedChild child;
+    child.pid = pid;
+    child.workerAttemptId = attempt.workerAttemptId;
+    child.experimentId = attempt.experimentId;
+    child.phase =
+        attempt.workerKind == "checkpoint_infer"
+            ? "checkpoint_infer"
+            : attempt.phase;
+    child.operation = attempt.phase;
+    child.commandLine = commandLine;
+    child.expectedModelId = expectedModelId;
+    child.checkpointEvalId = attempt.checkpointEvalId;
+    child.logPath = attempt.logPath;
+    child.launchedAt = EA::RunMetadata::CurrentUtcTimestamp();
+    child.launchedEpoch =
+        std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    gSchedulerOwnedChildren.emplace(pid, std::move(child));
+    std::cout << "SCHEDULER_CHILD_LAUNCHED"
+              << ",worker_attempt_id=" << attempt.workerAttemptId
+              << ",launch_attempt_identity="
+              << attempt.launchAttemptIdentity
+              << ",experiment_id=" << attempt.experimentId
+              << ",worker_pid=" << pid
+              << ",phase=" << attempt.phase
+              << ",worker_kind=" << attempt.workerKind
+              << ",command_line=" << commandLine
+              << ",log_path=" << attempt.logPath
               << std::endl;
     return pid;
 }
@@ -7005,93 +8572,6 @@ std::string ReadFileIfExists(const std::string& path)
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
-}
-
-int CountCompletedTrainingEpochsFromLog(const std::string& logText)
-{
-    if (logText.empty())
-        return 0;
-    const std::regex epochDoneRegex{R"(\bEPOCH_3CLASS_ACCURACY\b)"};
-    const int epochsCompletedInThisProcess =
-        static_cast<int>(std::distance(std::sregex_iterator(logText.begin(), logText.end(), epochDoneRegex),
-                                       std::sregex_iterator()));
-
-    int resumedFromEpoch = 0;
-    const std::regex resumeRegex{R"(RESUME_COMPLETED_EPOCH=([0-9]+))"};
-    for (std::sregex_iterator it{logText.begin(), logText.end(), resumeRegex}, end; it != end; ++it)
-        resumedFromEpoch = std::stoi((*it)[1].str());
-
-    int checkpointEpoch = 0;
-    const std::regex checkpointRegex{R"(CHECKPOINT_SAVE_DONE[^[:cntrl:]]*epoch=([0-9]+))"};
-    for (std::sregex_iterator it{logText.begin(), logText.end(), checkpointRegex}, end; it != end; ++it)
-        checkpointEpoch = std::stoi((*it)[1].str());
-
-    return std::max(checkpointEpoch, resumedFromEpoch + epochsCompletedInThisProcess);
-}
-
-void BackfillRunningTrainingProgressFromLogs(pqxx::work& w,
-                                             const std::optional<long long>& experimentId)
-{
-    std::ostringstream sql;
-    sql << "SELECT experiment_id, train_log_path, current_epoch "
-        << "FROM experiment "
-        << "WHERE status = 'running' "
-        << "AND phase = 'train' "
-        << "AND train_log_path IS NOT NULL ";
-    if (experimentId.has_value())
-        sql << "AND experiment_id = " << *experimentId << " ";
-    sql << "ORDER BY experiment_id ASC;";
-
-    pqxx::result rows = w.exec(sql.str());
-    for (const auto& row : rows)
-    {
-        const long long id = row[0].as<long long>();
-        const std::string logPath = row[1].as<std::string>();
-        const std::optional<int> currentEpoch =
-            row[2].is_null() ? std::optional<int>{} : std::optional<int>{row[2].as<int>()};
-        const int completedEpochs = CountCompletedTrainingEpochsFromLog(ReadFileIfExists(logPath));
-        if (completedEpochs <= 0)
-            continue;
-        if (currentEpoch.has_value() && *currentEpoch >= completedEpochs)
-            continue;
-
-        w.exec_params(
-            "UPDATE experiment "
-            "SET current_epoch = $1, current_operation = 'train', updated_at = now() "
-            "WHERE experiment_id = $2 "
-            "AND status = 'running' "
-            "AND phase = 'train' "
-            "AND (current_epoch IS NULL OR current_epoch < $1);",
-            completedEpochs,
-            id);
-    }
-}
-
-void PersistDiscoveredRunningTrainingMetadata(const std::vector<SchedulerStatusJob>& jobs)
-{
-    pqxx::connection c{LstmDbConnectionString()};
-    pqxx::work w{c};
-    SetTransactionReadWrite(w);
-    for (const auto& job : jobs)
-    {
-        if (job.status != "running" || job.phase != "train")
-            continue;
-        if (!job.pid.has_value() && !job.currentEpoch.has_value())
-            continue;
-
-        std::ostringstream sql;
-        sql << "UPDATE experiment SET current_operation = 'train'";
-        if (job.pid.has_value())
-            sql << ", worker_pid = " << *job.pid;
-        if (job.currentEpoch.has_value())
-            sql << ", current_epoch = GREATEST(COALESCE(current_epoch, 0), " << *job.currentEpoch << ")";
-        sql << ", updated_at = now() "
-            << "WHERE experiment_id = " << job.experimentId << " "
-            << "AND status = 'running' "
-            << "AND phase = 'train';";
-        w.exec(sql.str());
-    }
-    w.commit();
 }
 
 void WriteTextFile(const std::string& path, const std::string& text)
@@ -10767,6 +12247,10 @@ int RunEvaluateContinuationCommand(const SchedulerOptions& options)
         w.commit();
         return 0;
     }
+    catch (const SchedulerAuthorityLost&)
+    {
+        throw;
+    }
     catch (const std::exception& e)
     {
         std::cerr << "CONTINUATION_POLICY_ERROR"
@@ -10901,6 +12385,15 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
         pqxx::connection connection{LstmDbConnectionString()};
         pqxx::work w{connection};
         SetTransactionReadWrite(w);
+        if (options.schedulerAuthority.held)
+        {
+            RequireAndRefreshSchedulerAuthority(w, options);
+            InjectSchedulerAuthorityLossForTest(
+                w,
+                options,
+                "continuation_before_evaluation_mutation");
+            RequireAndRefreshSchedulerAuthority(w, options);
+        }
         if (!SchedulerLaunchAllowed(w, "continuation_queue"))
         {
             w.commit();
@@ -10912,6 +12405,14 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
             w,
             sourceExperimentId,
             &config);
+        if (options.schedulerAuthority.held)
+        {
+            InjectSchedulerAuthorityLossForTest(
+                w,
+                options,
+                "continuation_after_evaluation_before_queue");
+            RequireAndRefreshSchedulerAuthority(w, options);
+        }
         PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUE_REQUESTED", config, evaluation);
 
         if (evaluation.alreadyQueued || evaluation.queuedExperimentId.has_value())
@@ -10978,6 +12479,7 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
 
         SchedulerOptions child;
         child.selfPath = options.selfPath;
+        child.schedulerAuthority = options.schedulerAuthority;
         child.queueExperiment = true;
         child.resumeModelId = evaluation.selected.modelId;
         child.targetEpochs = config.targetEpochs;
@@ -10994,6 +12496,14 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
                 evaluation.selected.completedEpoch);
         EnsureRequiredQueueOptions(child);
 
+        if (options.schedulerAuthority.held)
+        {
+            InjectSchedulerAuthorityLossForTest(
+                w,
+                options,
+                "continuation_before_child_creation");
+            RequireAndRefreshSchedulerAuthority(w, options);
+        }
         const long long childExperimentId = InsertExperimentRecord(
             w,
             child,
@@ -11037,7 +12547,7 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
             evaluation.decisionId);
         if (decisionUpdated.size() != 1)
             throw std::runtime_error("continuation decision was queued concurrently");
-        w.exec_params(
+        pqxx::result sourceUpdated = w.exec_params(
             "UPDATE experiment SET "
             "continuation_policy_last_decision = 'continuation_queued', "
             "continuation_policy_last_decision_at = now(), "
@@ -11045,14 +12555,27 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
             "continuation_policy_selected_model_id = $1, "
             "continuation_policy_queued_experiment_id = $2, "
             "updated_at = now() "
-            "WHERE experiment_id = $3;",
+            "WHERE experiment_id = $3 "
+            "AND continuation_policy_queued_experiment_id IS NULL "
+            "RETURNING experiment_id;",
             evaluation.selected.modelId,
             childExperimentId,
             sourceExperimentId);
+        if (sourceUpdated.size() != 1)
+            throw std::runtime_error(
+                "continuation source lifecycle changed before queue commit");
 
         evaluation.decision = "continuation_queued";
         evaluation.reason = "continuation_experiment_created";
         evaluation.queuedExperimentId = childExperimentId;
+        if (options.schedulerAuthority.held)
+        {
+            InjectSchedulerAuthorityLossForTest(
+                w,
+                options,
+                "continuation_before_final_commit");
+            RequireAndRefreshSchedulerAuthority(w, options);
+        }
         w.commit();
         PrintContinuationPolicyLog("CONTINUATION_POLICY_QUEUED", config, evaluation);
         std::cout << "CONTINUATION_POLICY_CHILD_INITIALIZED"
@@ -11095,6 +12618,10 @@ int RunQueueContinuationCommand(const SchedulerOptions& options)
                           : childPolicy.progressionDiagnostic)
                   << std::endl;
         return 0;
+    }
+    catch (const SchedulerAuthorityLost&)
+    {
+        throw;
     }
     catch (const std::exception& e)
     {
@@ -11559,6 +13086,8 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
     {
         pqxx::connection gateConnection{LstmDbConnectionString()};
         pqxx::work gate{gateConnection};
+        SetTransactionReadWrite(gate);
+        RequireAndRefreshSchedulerAuthority(gate, options);
         if (!SchedulerLaunchAllowed(gate, "continuation_automation"))
         {
             gate.commit();
@@ -11597,6 +13126,9 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
     eligible.reserve(candidateIds.size());
     for (const long long sourceExperimentId : candidateIds)
     {
+        if (!RefreshSchedulerAuthority(options))
+            throw SchedulerAuthorityLost(
+                "continuation_scan_ownership_lost");
         std::cout << "CONTINUATION_AUTO_SCAN_CANDIDATE"
                   << ",source_experiment_id=" << sourceExperimentId
                   << ",dry_run=" << (dryRun ? "1" : "0")
@@ -11627,7 +13159,15 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
             if (dryRun)
                 SetTransactionReadOnly(w);
             else
+            {
                 SetTransactionReadWrite(w);
+                RequireAndRefreshSchedulerAuthority(w, options);
+                InjectSchedulerAuthorityLossForTest(
+                    w,
+                    options,
+                    "continuation_before_evaluation_mutation");
+                RequireAndRefreshSchedulerAuthority(w, options);
+            }
 
             ContinuationAutoCandidate candidate;
             candidate.sourceExperimentId = sourceExperimentId;
@@ -11636,6 +13176,8 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
                 sourceExperimentId,
                 &candidate.config,
                 !dryRun);
+            if (!dryRun)
+                RequireAndRefreshSchedulerAuthority(w, options);
             w.commit();
             ++counts.evaluated;
             PrintContinuationAutoEvaluationLog(
@@ -11683,6 +13225,10 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
                     dryRun);
             }
         }
+        catch (const SchedulerAuthorityLost&)
+        {
+            throw;
+        }
         catch (const std::exception& e)
         {
             ++counts.errors;
@@ -11721,6 +13267,8 @@ ContinuationAutoScanCounts RunAutomaticContinuationScan(
 
             SchedulerOptions queueOptions;
             queueOptions.selfPath = options.selfPath;
+            queueOptions.schedulerAuthority =
+                options.schedulerAuthority;
             queueOptions.queueContinuationExperimentId = candidate.sourceExperimentId;
             const int queueResult = RunQueueContinuationCommand(queueOptions);
             if (queueResult == 0)
@@ -11811,70 +13359,195 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
         "analyze",
         experimentId);
 
-    pqxx::connection c{LstmDbConnectionString()};
-    pqxx::work w{c};
-    SetTransactionReadWrite(w);
-    if (!RequireSchedulerTables(w))
-        return 1;
-
-    pqxx::result rows = w.exec_params(
-        "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
-        "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
-        "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
-        "FROM experiment WHERE experiment_id = $1;",
-        experimentId);
-    if (rows.empty())
+    if (!options.schedulerWorkerAttemptId)
     {
         std::cerr << "EXPERIMENT_ANALYSIS_FAILED"
                   << ",experiment_id=" << experimentId
-                  << ",reason=not_found"
+                  << ",reason=exact_worker_attempt_required"
                   << std::endl;
         return 1;
     }
 
-    ExperimentRow experiment = RowToExperiment(rows[0]);
-    if (!experiment.lastModelId.has_value())
+    const long long workerAttemptId =
+        *options.schedulerWorkerAttemptId;
+    ExperimentRow experiment;
+    ParsedMetrics metrics;
+    bool usedStructuredInferenceMetrics = false;
+    std::optional<double> leaderScore;
+    std::string workError;
     {
-        MarkAnalyzeFailed(w, experiment.experimentId, "analyze_missing_last_model_id");
-        w.commit();
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadOnly(transaction);
+        if (!RequireSchedulerTables(transaction))
+            return 1;
+
+        pqxx::result rows = transaction.exec_params(
+            "SELECT experiment_id,symbol,prediction_horizon,"
+            "c_next_threshold,core_lr_mult,head_lr_mult,"
+            "target_epochs,checkpoint_interval,train_start::text,"
+            "train_end::text,infer_start::text,infer_end::text,"
+            "last_model_id,resume_model_id,train_log_path,"
+            "infer_log_path,analysis_log_path "
+            "FROM experiment WHERE experiment_id=$1 "
+            "AND status='running' AND phase='analyze' "
+            "AND active_scheduler_worker_attempt_id=$2;",
+            experimentId,
+            workerAttemptId);
+        if (rows.size() != 1)
+        {
+            std::cerr << "EXPERIMENT_ANALYSIS_FAILED"
+                      << ",experiment_id=" << experimentId
+                      << ",worker_attempt_id=" << workerAttemptId
+                      << ",reason=exact_active_attempt_not_bound"
+                      << std::endl;
+            return 1;
+        }
+
+        experiment = RowToExperiment(rows[0]);
+        if (!experiment.lastModelId)
+        {
+            workError = "analyze_missing_last_model_id";
+        }
+        else
+        {
+            const long long modelId = *experiment.lastModelId;
+            std::cout << "SCHEDULER_ANALYZE_STARTED"
+                      << ",experiment_id="
+                      << experiment.experimentId
+                      << ",worker_attempt_id="
+                      << workerAttemptId
+                      << ",model_id=" << modelId
+                      << std::endl;
+            std::cout << "EXPERIMENT_ANALYSIS_STARTED"
+                      << ",experiment_id="
+                      << experiment.experimentId
+                      << ",worker_attempt_id="
+                      << workerAttemptId
+                      << ",model_id=" << modelId
+                      << std::endl;
+
+            metrics = ParseMetricsFromLogs(experiment);
+            metrics.modelId = modelId;
+            ApplyPersistedSymbolToAnalysisExperiment(
+                transaction, experiment, metrics);
+            usedStructuredInferenceMetrics =
+                ApplyStructuredInferenceMetrics(
+                    transaction, experiment, metrics);
+            if (usedStructuredInferenceMetrics)
+            {
+                std::cout
+                    << "SCHEDULER_ANALYZE_USING_EXISTING_INFERENCE"
+                    << ",model_id=" << modelId
+                    << std::endl;
+            }
+            leaderScore = ComputeLeaderScore(metrics);
+        }
+        transaction.commit();
+    }
+
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        EA::SchedulerOwnership::ExactAttemptExpectation expected;
+        expected.workerAttemptId = workerAttemptId;
+        expected.experimentId = experimentId;
+        expected.workerKind = "experiment";
+        expected.lifecyclePhase = "analyze";
+        expected.capacityClass = "analyze";
+        expected.requireCompleteProcessIdentity = true;
+        const auto exact =
+            EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+                transaction, expected, true);
+        if (!exact)
+        {
+            transaction.abort();
+            std::cerr
+                << "SCHEDULER_ANALYZE_STALE_FINALIZER_REJECTED"
+                << ",experiment_id=" << experimentId
+                << ",worker_attempt_id=" << workerAttemptId
+                << ",reason=exact_active_attempt_changed"
+                << std::endl;
+            return 1;
+        }
+
+        if (workError.empty())
+        {
+            pqxx::result source = transaction.exec_params(
+                "SELECT last_model_id FROM experiment "
+                "WHERE experiment_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "AND status='running' AND phase='analyze' "
+                "AND last_model_id=$3;",
+                experimentId,
+                workerAttemptId,
+                *experiment.lastModelId);
+            if (source.size() != 1)
+                workError =
+                    "analyze_source_changed_before_finalize";
+        }
+        if (workError.empty())
+        {
+            UpsertAnalysisResult(
+                transaction,
+                experiment,
+                metrics,
+                leaderScore);
+            pqxx::result completed = transaction.exec_params(
+                "UPDATE experiment SET status='completed',"
+                "phase='done',worker_pid=NULL,"
+                "completed_at=COALESCE(completed_at,clock_timestamp()),"
+                "updated_at=clock_timestamp() "
+                "WHERE experiment_id=$1 "
+                "AND status='running' AND phase='analyze' "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "AND last_model_id=$3 "
+                "RETURNING experiment_id;",
+                experimentId,
+                workerAttemptId,
+                *experiment.lastModelId);
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                completed,
+                "complete_final_analysis_exact_attempt");
+        }
+        else
+        {
+            pqxx::result failed = transaction.exec_params(
+                "UPDATE experiment SET status='failed',"
+                "exit_code=-1,error_message=$1,worker_pid=NULL,"
+                "completed_at=clock_timestamp(),"
+                "updated_at=clock_timestamp() "
+                "WHERE experiment_id=$2 "
+                "AND status='running' AND phase='analyze' "
+                "AND active_scheduler_worker_attempt_id=$3 "
+                "RETURNING experiment_id;",
+                workError,
+                experimentId,
+                workerAttemptId);
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                failed,
+                "fail_final_analysis_exact_attempt");
+        }
+        transaction.commit();
+    }
+
+    if (!workError.empty())
+    {
         std::cerr << "SCHEDULER_ANALYZE_FAILED"
                   << ",experiment_id=" << experiment.experimentId
-                  << ",model_id=none"
-                  << ",error=analyze_missing_last_model_id"
+                  << ",worker_attempt_id=" << workerAttemptId
+                  << ",model_id="
+                  << (experiment.lastModelId
+                          ? std::to_string(
+                                *experiment.lastModelId)
+                          : "none")
+                  << ",error=" << workError
                   << std::endl;
         return 1;
     }
 
     const long long modelId = *experiment.lastModelId;
-    std::cout << "SCHEDULER_ANALYZE_STARTED"
-              << ",experiment_id=" << experiment.experimentId
-              << ",model_id=" << modelId
-              << std::endl;
-    std::cout << "EXPERIMENT_ANALYSIS_STARTED"
-              << ",experiment_id=" << experiment.experimentId
-              << ",model_id=" << modelId
-              << std::endl;
-
-    ParsedMetrics metrics = ParseMetricsFromLogs(experiment);
-    metrics.modelId = modelId;
-    ApplyPersistedSymbolToAnalysisExperiment(w, experiment, metrics);
-    const bool usedStructuredInferenceMetrics = ApplyStructuredInferenceMetrics(w, experiment, metrics);
-    if (usedStructuredInferenceMetrics)
-    {
-        std::cout << "SCHEDULER_ANALYZE_USING_EXISTING_INFERENCE"
-                  << ",model_id=" << modelId
-                  << std::endl;
-    }
-    const std::optional<double> leaderScore = ComputeLeaderScore(metrics);
-    UpsertAnalysisResult(w, experiment, metrics, leaderScore);
-    w.exec_params(
-        "UPDATE experiment "
-        "SET status = 'completed', phase = 'done', worker_pid = NULL, completed_at = COALESCE(completed_at, now()), updated_at = now() "
-        "WHERE experiment_id = $1;",
-        experiment.experimentId);
-    w.commit();
-
     std::cout << "SCHEDULER_PHASE_TRANSITION"
               << ",experiment_id=" << experiment.experimentId
               << ",from_phase=analyze"
@@ -11935,7 +13608,7 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
     return 0;
 }
 
-int AnalyzeCompletedExperiments()
+[[maybe_unused]] int AnalyzeCompletedExperiments()
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
@@ -12098,15 +13771,24 @@ void MarkExperimentPendingPhase(pqxx::work& w,
                                        const ExperimentRow& experiment,
                                        const std::string& fromPhase,
                                        const std::string& toPhase,
-                                       const std::optional<int>& exitCode = std::nullopt)
+                                       const std::optional<int>& exitCode = std::nullopt,
+                                       const std::optional<long long>&
+                                           workerAttemptId = std::nullopt)
 {
     std::ostringstream sql;
     sql << "UPDATE experiment "
         << "SET status = 'pending', phase = " << w.quote(toPhase)
         << ", exit_code = " << (exitCode.has_value() ? std::to_string(*exitCode) : "NULL")
         << ", error_message = NULL, worker_pid = NULL, updated_at = now() "
-        << "WHERE experiment_id = " << experiment.experimentId << ";";
-    w.exec(sql.str());
+        << "WHERE experiment_id = " << experiment.experimentId;
+    if (workerAttemptId)
+        sql << " AND active_scheduler_worker_attempt_id = "
+            << *workerAttemptId;
+    sql << " RETURNING experiment_id;";
+    pqxx::result updated = w.exec(sql.str());
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated, "mark_experiment_pending_phase");
     LogPhaseTransition(experiment.experimentId, fromPhase, toPhase);
     std::cout << "EXPERIMENT_PHASE_CHANGED"
               << ",experiment_id=" << experiment.experimentId
@@ -12117,13 +13799,22 @@ void MarkExperimentPendingPhase(pqxx::work& w,
 
 void MarkExperimentDone(pqxx::work& w,
                                const ExperimentRow& experiment,
-                               const std::string& fromPhase)
+                               const std::string& fromPhase,
+                               const std::optional<long long>&
+                                   workerAttemptId = std::nullopt)
 {
-    w.exec_params(
+    pqxx::result updated = w.exec_params(
         "UPDATE experiment "
         "SET status = 'completed', phase = 'done', worker_pid = NULL, completed_at = COALESCE(completed_at, now()), updated_at = now() "
-        "WHERE experiment_id = $1;",
-        experiment.experimentId);
+        "WHERE experiment_id = $1 "
+        "AND ($2::bigint IS NULL OR "
+        "active_scheduler_worker_attempt_id=$2) "
+        "RETURNING experiment_id;",
+        experiment.experimentId,
+        workerAttemptId);
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated, "mark_experiment_done");
     LogPhaseTransition(experiment.experimentId, fromPhase, "done");
     std::cout << "SCHEDULER_PIPELINE_DONE"
               << ",experiment_id=" << experiment.experimentId
@@ -12134,37 +13825,58 @@ void MarkExperimentDone(pqxx::work& w,
 void MarkExperimentFailed(pqxx::work& w,
                                  const ExperimentRow& experiment,
                                  const std::string& errorMessage,
-                                 int exitCode = -1)
+                                 int exitCode = -1,
+                                 const std::optional<long long>&
+                                     workerAttemptId = std::nullopt)
 {
-    w.exec_params(
+    pqxx::result updated = w.exec_params(
         "UPDATE experiment "
         "SET status = 'failed', exit_code = $1, error_message = $2, worker_pid = NULL, completed_at = now(), updated_at = now() "
-        "WHERE experiment_id = $3;",
+        "WHERE experiment_id = $3 "
+        "AND ($4::bigint IS NULL OR "
+        "active_scheduler_worker_attempt_id=$4) "
+        "RETURNING experiment_id;",
         exitCode,
         errorMessage,
-        experiment.experimentId);
+        experiment.experimentId,
+        workerAttemptId);
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated, "mark_experiment_failed");
 }
 
 void UpdateInferLogPath(pqxx::work& w,
                                const ExperimentRow& experiment,
-                               const std::string& inferLogPath)
+                               const std::string& inferLogPath,
+                               const std::optional<long long>&
+                                   workerAttemptId = std::nullopt)
 {
-    w.exec_params(
+    pqxx::result updated = w.exec_params(
         "UPDATE experiment "
         "SET infer_log_path = $1, updated_at = now() "
-        "WHERE experiment_id = $2;",
+        "WHERE experiment_id = $2 "
+        "AND ($3::bigint IS NULL OR "
+        "active_scheduler_worker_attempt_id=$3) "
+        "RETURNING experiment_id;",
         inferLogPath,
-        experiment.experimentId);
+        experiment.experimentId,
+        workerAttemptId);
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated, "update_exact_attempt_infer_log_path");
 }
 
 void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
                                                   const ExperimentRow& experiment,
                                                   const std::string& sourceMarker,
                                                   const std::string& reason,
-                                                  const std::optional<std::string>& recoveredLogPath = std::nullopt)
+                                                  const std::optional<std::string>& recoveredLogPath = std::nullopt,
+                                                  const std::optional<long long>&
+                                                      workerAttemptId = std::nullopt)
 {
     if (recoveredLogPath.has_value())
-        UpdateInferLogPath(w, experiment, *recoveredLogPath);
+        UpdateInferLogPath(
+            w, experiment, *recoveredLogPath, workerAttemptId);
 
     std::cout << sourceMarker
               << ",experiment_id=" << experiment.experimentId
@@ -12177,7 +13889,13 @@ void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
         std::cout << ",infer_log_path=" << *experiment.inferLogPath;
     std::cout << std::endl;
 
-    MarkExperimentPendingPhase(w, experiment, "infer", "analyze", 0);
+    MarkExperimentPendingPhase(
+        w,
+        experiment,
+        "infer",
+        "analyze",
+        0,
+        workerAttemptId);
     std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
               << ",experiment_id=" << experiment.experimentId
               << ",model_id=" << (experiment.lastModelId.has_value() ? std::to_string(*experiment.lastModelId) : "none")
@@ -12188,17 +13906,26 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
                                                const ExperimentRow& experiment,
                                                long long modelId,
                                                int exitCode,
-                                               const std::string& fromPhase)
+                                               const std::string& fromPhase,
+                                               const std::optional<long long>&
+                                                   workerAttemptId = std::nullopt)
 {
     ExperimentRow updatedExperiment = experiment;
     updatedExperiment.lastModelId = modelId;
-    w.exec_params(
+    pqxx::result modelUpdated = w.exec_params(
         "UPDATE experiment "
         "SET last_model_id = $1, exit_code = $2, error_message = NULL, updated_at = now() "
-        "WHERE experiment_id = $3;",
+        "WHERE experiment_id = $3 "
+        "AND ($4::bigint IS NULL OR "
+        "active_scheduler_worker_attempt_id=$4) "
+        "RETURNING experiment_id;",
         modelId,
         exitCode,
-        experiment.experimentId);
+        experiment.experimentId,
+        workerAttemptId);
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            modelUpdated, "transition_train_model_exact_attempt");
     std::cout << "EXPERIMENT_LAST_MODEL_ID"
               << ",experiment_id=" << experiment.experimentId
               << ",model_id=" << modelId
@@ -12210,7 +13937,8 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
                   << ",experiment_id=" << experiment.experimentId
                   << ",model_id=" << modelId
                   << std::endl;
-        MarkExperimentDone(w, updatedExperiment, fromPhase);
+        MarkExperimentDone(
+            w, updatedExperiment, fromPhase, workerAttemptId);
     }
     else if (HasCompletedInferenceResult(w, updatedExperiment))
     {
@@ -12218,7 +13946,13 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
                   << ",experiment_id=" << experiment.experimentId
                   << ",model_id=" << modelId
                   << std::endl;
-        MarkExperimentPendingPhase(w, updatedExperiment, fromPhase, "analyze", exitCode);
+        MarkExperimentPendingPhase(
+            w,
+            updatedExperiment,
+            fromPhase,
+            "analyze",
+            exitCode,
+            workerAttemptId);
         std::cout << "SCHEDULER_ENQUEUE_ANALYZE"
                   << ",experiment_id=" << experiment.experimentId
                   << ",model_id=" << modelId
@@ -12226,7 +13960,13 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
     }
     else if (updatedExperiment.inferStart.has_value() && updatedExperiment.inferEnd.has_value())
     {
-        MarkExperimentPendingPhase(w, updatedExperiment, fromPhase, "infer", exitCode);
+        MarkExperimentPendingPhase(
+            w,
+            updatedExperiment,
+            fromPhase,
+            "infer",
+            exitCode,
+            workerAttemptId);
         std::cout << "SCHEDULER_ENQUEUE_INFER"
                   << ",experiment_id=" << experiment.experimentId
                   << ",model_id=" << modelId
@@ -12234,7 +13974,12 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
     }
     else
     {
-        MarkExperimentFailed(w, updatedExperiment, "train_completed_missing_inference_range", exitCode);
+        MarkExperimentFailed(
+            w,
+            updatedExperiment,
+            "train_completed_missing_inference_range",
+            exitCode,
+            workerAttemptId);
         return false;
     }
     return true;
@@ -12367,9 +14112,10 @@ void LogRunningExperimentPresent(const ExperimentRow& experiment,
     }
 }
 
-int RecoverOrphanedRunningExperiments(pqxx::work& w,
-                                      SchedulerEventLogState* logState,
-                                      bool verbose)
+[[maybe_unused]] int RecoverOrphanedRunningExperimentsLegacy(
+    pqxx::work& w,
+    SchedulerEventLogState* logState,
+    bool verbose)
 {
     int recoveredOrFailed = 0;
     const std::vector<RunningExperimentState> runningExperiments = LoadRunningExperiments(w);
@@ -12692,6 +14438,973 @@ int RecoverOrphanedRunningExperiments(pqxx::work& w,
     return recoveredOrFailed;
 }
 
+bool CommandHasExactOptionValue(
+    const std::string& command,
+    const std::string& option,
+    long long expectedValue)
+{
+    const std::string expected = std::to_string(expectedValue);
+    size_t position = 0;
+    while ((position = command.find(option, position)) !=
+           std::string::npos)
+    {
+        const bool tokenStart =
+            position == 0 ||
+            std::isspace(
+                static_cast<unsigned char>(command[position - 1]));
+        size_t valueStart = position + option.size();
+        if (tokenStart && valueStart < command.size() &&
+            command[valueStart] == '=')
+        {
+            ++valueStart;
+        }
+        else if (
+            tokenStart && valueStart < command.size() &&
+            std::isspace(
+                static_cast<unsigned char>(command[valueStart])))
+        {
+            while (
+                valueStart < command.size() &&
+                std::isspace(
+                    static_cast<unsigned char>(
+                        command[valueStart])))
+                ++valueStart;
+        }
+        else
+        {
+            position += option.size();
+            continue;
+        }
+        const size_t valueEnd = valueStart + expected.size();
+        if (command.compare(
+                valueStart, expected.size(), expected) == 0 &&
+            (valueEnd == command.size() ||
+             std::isspace(
+                 static_cast<unsigned char>(
+                     command[valueEnd]))))
+            return true;
+        position += option.size();
+    }
+    return false;
+}
+
+bool CommandHasExactToken(
+    const std::string& command,
+    const std::string& token)
+{
+    size_t position = 0;
+    while ((position = command.find(token, position)) !=
+           std::string::npos)
+    {
+        const bool starts =
+            position == 0 ||
+            std::isspace(
+                static_cast<unsigned char>(command[position - 1]));
+        const size_t end = position + token.size();
+        if (starts &&
+            (end == command.size() ||
+             std::isspace(
+                 static_cast<unsigned char>(command[end]))))
+            return true;
+        position += token.size();
+    }
+    return false;
+}
+
+struct LegacyNoPidProcessSearch
+{
+    bool inspectionSucceeded = false;
+    bool matchingCommandObserved = false;
+    bool inspectionDenied = false;
+    std::optional<int> matchingPid;
+};
+
+LegacyNoPidProcessSearch SearchForLegacyNoPidProcess(
+    long long experimentId,
+    const std::optional<long long>& checkpointEvalId,
+    const std::string& phase)
+{
+    LegacyNoPidProcessSearch result;
+    FILE* pipe = ::popen("ps -axo pid=,command=", "r");
+    if (pipe == nullptr)
+        return result;
+    char buffer[32768] = {};
+    std::unique_ptr<
+        EA::GlobalExperimentControl::ProcessOperations>
+        processes =
+            EA::GlobalExperimentControl::
+                CreateNativeProcessOperations();
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        std::istringstream row{buffer};
+        int pid = -1;
+        if (!(row >> pid))
+            continue;
+        std::string command;
+        std::getline(row, command);
+        const bool commandMatches =
+            checkpointEvalId
+                ? CommandHasExactOptionValue(
+                      command,
+                      "--scheduler-checkpoint-eval-id",
+                      *checkpointEvalId)
+                : (CommandHasExactOptionValue(
+                       command,
+                       "--scheduler-experiment-id",
+                       experimentId) &&
+                   ((phase == "train" &&
+                     CommandHasExactToken(command, "--train")) ||
+                    (phase == "infer" &&
+                     CommandHasExactToken(command, "--infer")) ||
+                    (phase == "analyze" &&
+                     CommandHasExactOptionValue(
+                         command,
+                         "--analyze-experiment",
+                         experimentId))));
+        if (!commandMatches)
+            continue;
+        result.matchingCommandObserved = true;
+        result.matchingPid = pid;
+        const auto observation = processes->Observe(pid);
+        if (observation.permissionDenied ||
+            (!observation.inspectionSucceeded &&
+             observation.exists))
+            result.inspectionDenied = true;
+        break;
+    }
+    result.inspectionSucceeded = ::pclose(pipe) == 0;
+    return result;
+}
+
+int RecoverOrphanedRunningExperiments(
+    pqxx::work& transaction,
+    const SchedulerOptions& options,
+    SchedulerEventLogState* logState,
+    bool verbose)
+{
+    (void)logState;
+    (void)verbose;
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    pqxx::result attempts = transaction.exec(
+        "SELECT worker_attempt_id,lifecycle_state,ownership_origin,"
+        "worker_pid,worker_process_group_id,"
+        "worker_process_start_identity,canonical_executable_path,"
+        "command_line,experiment_id,checkpoint_eval_id,"
+        "lifecycle_phase,worker_kind,"
+        "extract(epoch from reserved_at)::double precision,"
+        "(reserved_at <= clock_timestamp()-make_interval(secs=>"
+        + std::to_string(kSchedulerLaunchRecoveryGraceSeconds) +
+        ")) AS recovery_ready,"
+        "scheduler_invocation_id,scheduler_fencing_token,"
+        "capacity_class,command_identity "
+        "FROM experiment_scheduler_worker_attempt "
+        "WHERE lifecycle_state IN "
+        "('reserved','spawned','running','observed',"
+        "'identity_ambiguous') "
+        "ORDER BY worker_attempt_id FOR UPDATE;");
+    const pqxx::row protocol = transaction.exec(
+        "SELECT cutover_state,"
+        "cutover_completed_at IS NOT NULL AND "
+        "cutover_completed_at + "
+        "make_interval(secs=>legacy_no_pid_grace_seconds) "
+        "<= clock_timestamp() AS legacy_grace_elapsed "
+        "FROM experiment_scheduler_protocol "
+        "WHERE singleton=true;").one_row();
+    const bool cutoverComplete =
+        protocol[0].as<std::string>() == "complete";
+    const bool legacyGraceElapsed =
+        protocol[1].as<bool>();
+    const SchedulerProcessAbsenceEvidence schedulerProcesses =
+        InspectAllSchedulerDispatchProcesses();
+    const bool foreignSchedulerObserved =
+        !schedulerProcesses.inspectionSucceeded ||
+        std::any_of(
+            schedulerProcesses.schedulers.begin(),
+            schedulerProcesses.schedulers.end(),
+            [](const auto& scheduler) {
+                return scheduler.first !=
+                       static_cast<int>(::getpid());
+            });
+
+    std::unique_ptr<EA::GlobalExperimentControl::ProcessOperations>
+        processes =
+            EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    int reconciled = 0;
+    for (const pqxx::row& row : attempts)
+    {
+        const long long attemptId = row[0].as<long long>();
+        const std::string state = row[1].as<std::string>();
+        const std::string origin = row[2].as<std::string>();
+        const long long experimentId = row[8].as<long long>();
+        const std::optional<long long> checkpointEvalId =
+            row[9].is_null()
+                ? std::nullopt
+                : std::optional<long long>{
+                      row[9].as<long long>()};
+        const std::string phase = row[10].as<std::string>();
+        const std::string workerKind =
+            row[11].as<std::string>();
+        const double attemptStartedEpoch = row[12].as<double>();
+        const bool recoveryReady = row[13].as<bool>();
+        const std::optional<std::string> attemptSchedulerInvocation =
+            row[14].is_null()
+                ? std::nullopt
+                : std::optional<std::string>{
+                      row[14].as<std::string>()};
+        const std::optional<long long> attemptFence =
+            row[15].is_null()
+                ? std::nullopt
+                : std::optional<long long>{
+                      row[15].as<long long>()};
+
+        if (workerKind == "checkpoint_analyze")
+        {
+            const bool currentInProcessAttempt =
+                attemptSchedulerInvocation ==
+                    std::optional<std::string>{
+                        options.schedulerAuthority
+                            .schedulerInvocationId} &&
+                attemptFence ==
+                    std::optional<long long>{
+                        options.schedulerAuthority.fencingToken};
+            if (currentInProcessAttempt)
+                continue;
+            pqxx::result abandoned = transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt a SET "
+                "lifecycle_state='abandoned',"
+                "completed_at=clock_timestamp(),"
+                "last_observed_at=clock_timestamp(),"
+                "observed_by_scheduler_invocation_id=$1,"
+                "reconciled_at=clock_timestamp(),"
+                "reconciled_by_scheduler_invocation_id=$1,"
+                "reconciliation_result="
+                "'checkpoint_analysis_owner_lost',"
+                "diagnostic='stale_in_process_analysis_requeued' "
+                "WHERE a.worker_attempt_id=$2 "
+                "AND a.worker_kind='checkpoint_analyze' "
+                "AND a.lifecycle_state IN ('reserved','running') "
+                "AND EXISTS (SELECT 1 "
+                " FROM experiment_checkpoint_eval ce "
+                " WHERE ce.checkpoint_eval_id=$3 "
+                " AND ce.status='running' AND ce.phase='analyze' "
+                " AND ce.active_scheduler_worker_attempt_id="
+                "a.worker_attempt_id) "
+                "RETURNING a.worker_attempt_id;",
+                options.schedulerAuthority.schedulerInvocationId,
+                attemptId,
+                checkpointEvalId);
+            if (abandoned.size() == 1)
+            {
+                pqxx::result requeued = transaction.exec_params(
+                    "UPDATE experiment_checkpoint_eval SET "
+                    "status='pending',phase='analyze',"
+                    "active_scheduler_worker_attempt_id=NULL,"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "error_message="
+                    "'checkpoint_analysis_owner_lost_retryable',"
+                    "updated_at=clock_timestamp() "
+                    "WHERE checkpoint_eval_id=$1 "
+                    "AND status='running' AND phase='analyze' "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "RETURNING checkpoint_eval_id;",
+                    *checkpointEvalId,
+                    attemptId);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    requeued,
+                    "requeue_stale_checkpoint_analysis_attempt");
+                ++reconciled;
+            }
+            continue;
+        }
+
+        if (row[3].is_null())
+        {
+            if (origin == "legacy_unverified")
+            {
+                bool lifecycleMatches = false;
+                if (checkpointEvalId)
+                {
+                    lifecycleMatches =
+                        transaction.exec_params(
+                            "SELECT 1 FROM "
+                            "experiment_checkpoint_eval "
+                            "WHERE checkpoint_eval_id=$1 "
+                            "AND status='running' AND phase=$2 "
+                            "AND active_scheduler_worker_attempt_id=$3 "
+                            "FOR UPDATE;",
+                            *checkpointEvalId,
+                            phase,
+                            attemptId).size() == 1;
+                }
+                else
+                {
+                    lifecycleMatches =
+                        transaction.exec_params(
+                            "SELECT 1 FROM experiment "
+                            "WHERE experiment_id=$1 "
+                            "AND status='running' AND phase=$2 "
+                            "AND active_scheduler_worker_attempt_id=$3 "
+                            "FOR UPDATE;",
+                            experimentId,
+                            phase,
+                            attemptId).size() == 1;
+                }
+                const LegacyNoPidProcessSearch processSearch =
+                    SearchForLegacyNoPidProcess(
+                        experimentId,
+                        checkpointEvalId,
+                        phase);
+                const bool safeEnvironment =
+                    cutoverComplete &&
+                    legacyGraceElapsed &&
+                    !foreignSchedulerObserved &&
+                    processSearch.inspectionSucceeded &&
+                    !processSearch.matchingCommandObserved &&
+                    !processSearch.inspectionDenied;
+                if (safeEnvironment && !lifecycleMatches)
+                {
+                    pqxx::result detached =
+                        transaction.exec_params(
+                            "UPDATE "
+                            "experiment_scheduler_worker_attempt a SET "
+                            "lifecycle_state='abandoned',"
+                            "completed_at=clock_timestamp(),"
+                            "last_observed_at=clock_timestamp(),"
+                            "observed_by_scheduler_invocation_id=$1,"
+                            "reconciled_at=clock_timestamp(),"
+                            "reconciled_by_scheduler_invocation_id=$1,"
+                            "reconciliation_result="
+                            "'legacy_no_pid_lifecycle_detached',"
+                            "diagnostic="
+                            "'exact_lifecycle_binding_absent_after_cutover' "
+                            "WHERE a.worker_attempt_id=$2 "
+                            "AND a.ownership_origin="
+                            "'legacy_unverified' "
+                            "AND a.worker_pid IS NULL "
+                            "AND a.lifecycle_state="
+                            "'identity_ambiguous' "
+                            "AND NOT EXISTS (SELECT 1 "
+                            " FROM experiment e "
+                            " WHERE e.active_scheduler_worker_attempt_id="
+                            "a.worker_attempt_id) "
+                            "AND NOT EXISTS (SELECT 1 "
+                            " FROM experiment_checkpoint_eval ce "
+                            " WHERE ce.active_scheduler_worker_attempt_id="
+                            "a.worker_attempt_id) "
+                            "RETURNING a.worker_attempt_id;",
+                            options.schedulerAuthority
+                                .schedulerInvocationId,
+                            attemptId);
+                    if (detached.size() == 1)
+                    {
+                        ++reconciled;
+                        continue;
+                    }
+                }
+                const bool safeToReconcile =
+                    lifecycleMatches && safeEnvironment;
+                if (!safeToReconcile)
+                {
+                    std::string diagnostic =
+                        !lifecycleMatches
+                            ? "legacy_no_pid_lifecycle_no_longer_bound"
+                        : !cutoverComplete
+                            ? "legacy_no_pid_cutover_incomplete"
+                        : !legacyGraceElapsed
+                            ? "legacy_no_pid_grace_not_elapsed"
+                        : foreignSchedulerObserved
+                            ? "legacy_no_pid_scheduler_process_present"
+                        : !processSearch.inspectionSucceeded
+                            ? "legacy_no_pid_process_search_failed"
+                        : processSearch.inspectionDenied
+                            ? "legacy_no_pid_process_inspection_denied"
+                            : "legacy_no_pid_matching_process_observed";
+                    transaction.exec_params(
+                        "UPDATE "
+                        "experiment_scheduler_worker_attempt SET "
+                        "lifecycle_state='identity_ambiguous',"
+                        "last_observed_at=clock_timestamp(),"
+                        "observed_by_scheduler_invocation_id=$1,"
+                        "reconciliation_result="
+                        "'legacy_no_pid_unresolved',"
+                        "diagnostic=$2 "
+                        "WHERE worker_attempt_id=$3 "
+                        "AND ownership_origin='legacy_unverified' "
+                        "AND worker_pid IS NULL "
+                        "AND lifecycle_state='identity_ambiguous';",
+                        options.schedulerAuthority
+                            .schedulerInvocationId,
+                        diagnostic,
+                        attemptId);
+                    continue;
+                }
+
+                pqxx::result terminal =
+                    transaction.exec_params(
+                        "UPDATE "
+                        "experiment_scheduler_worker_attempt a SET "
+                        "lifecycle_state='abandoned',"
+                        "completed_at=clock_timestamp(),"
+                        "last_observed_at=clock_timestamp(),"
+                        "observed_by_scheduler_invocation_id=$1,"
+                        "reconciled_at=clock_timestamp(),"
+                        "reconciled_by_scheduler_invocation_id=$1,"
+                        "reconciliation_result="
+                        "'legacy_no_pid_proven_absent_after_cutover',"
+                        "diagnostic="
+                        "'bounded_legacy_no_pid_reconciliation' "
+                        "WHERE a.worker_attempt_id=$2 "
+                        "AND a.ownership_origin='legacy_unverified' "
+                        "AND a.worker_pid IS NULL "
+                        "AND a.lifecycle_state='identity_ambiguous' "
+                        "AND EXISTS ("
+                        " SELECT 1 FROM "
+                        "experiment_scheduler_protocol p "
+                        " WHERE p.singleton "
+                        " AND p.required_generation=$3 "
+                        " AND p.cutover_state='complete' "
+                        " AND p.cutover_completed_at + "
+                        "make_interval(secs=>"
+                        "p.legacy_no_pid_grace_seconds) "
+                        "<=clock_timestamp()) "
+                        "AND EXISTS ("
+                        " SELECT 1 FROM experiment e "
+                        " WHERE $4::bigint IS NULL "
+                        " AND e.experiment_id=$5 "
+                        " AND e.status='running' AND e.phase=$6 "
+                        " AND e.active_scheduler_worker_attempt_id="
+                        "a.worker_attempt_id "
+                        " UNION ALL "
+                        " SELECT 1 FROM "
+                        "experiment_checkpoint_eval ce "
+                        " WHERE $4::bigint IS NOT NULL "
+                        " AND ce.checkpoint_eval_id=$4 "
+                        " AND ce.status='running' AND ce.phase=$6 "
+                        " AND ce.active_scheduler_worker_attempt_id="
+                        "a.worker_attempt_id"
+                        ") RETURNING a.worker_attempt_id;",
+                        options.schedulerAuthority
+                            .schedulerInvocationId,
+                        attemptId,
+                        EA::SchedulerOwnership::
+                            kProtocolGeneration,
+                        checkpointEvalId,
+                        experimentId,
+                        phase);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    terminal,
+                    "terminalize_legacy_no_pid_attempt");
+                pqxx::result lifecycle;
+                if (checkpointEvalId)
+                {
+                    lifecycle = transaction.exec_params(
+                        "UPDATE experiment_checkpoint_eval SET "
+                        "status='failed',completed_at=clock_timestamp(),"
+                        "error_message="
+                        "'legacy_no_pid_proven_absent_after_cutover',"
+                        "active_scheduler_worker_attempt_id=NULL,"
+                        "updated_at=clock_timestamp() "
+                        "WHERE checkpoint_eval_id=$1 "
+                        "AND status='running' AND phase=$2 "
+                        "AND active_scheduler_worker_attempt_id=$3 "
+                        "RETURNING checkpoint_eval_id;",
+                        *checkpointEvalId,
+                        phase,
+                        attemptId);
+                }
+                else
+                {
+                    lifecycle = transaction.exec_params(
+                        "UPDATE experiment SET status='failed',"
+                        "completed_at=clock_timestamp(),exit_code=-1,"
+                        "error_message="
+                        "'legacy_no_pid_proven_absent_after_cutover',"
+                        "active_scheduler_worker_attempt_id=NULL,"
+                        "updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$1 "
+                        "AND status='running' AND phase=$2 "
+                        "AND active_scheduler_worker_attempt_id=$3 "
+                        "RETURNING experiment_id;",
+                        experimentId,
+                        phase,
+                        attemptId);
+                }
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    lifecycle,
+                    "clear_legacy_no_pid_lifecycle_binding");
+                std::cout
+                    << "SCHEDULER_LEGACY_NO_PID_RECONCILED"
+                    << ",worker_attempt_id=" << attemptId
+                    << ",experiment_id=" << experimentId
+                    << ",checkpoint_eval_id="
+                    << (checkpointEvalId
+                            ? std::to_string(
+                                  *checkpointEvalId)
+                            : "NULL")
+                    << ",result=proven_absent_after_cutover"
+                    << std::endl;
+                ++reconciled;
+                continue;
+            }
+            if (!recoveryReady)
+            {
+                transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='identity_ambiguous',"
+                    "last_observed_at=clock_timestamp(),"
+                    "observed_by_scheduler_invocation_id=$1,"
+                    "diagnostic="
+                    "'launch_reservation_within_recovery_grace' "
+                    "WHERE worker_attempt_id=$2 "
+                    "AND lifecycle_state IN "
+                    "('reserved','identity_ambiguous');",
+                    options.schedulerAuthority
+                        .schedulerInvocationId,
+                    attemptId);
+                continue;
+            }
+
+            pqxx::result terminal = transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt a SET "
+                "lifecycle_state='launch_failed',"
+                "completed_at=clock_timestamp(),exit_code=126,"
+                "reconciliation_result='never_spawned',"
+                "diagnostic='interrupted_launch_never_spawned' "
+                "WHERE a.worker_attempt_id=$1 "
+                "AND a.lifecycle_state='reserved' "
+                "AND EXISTS ("
+                " SELECT 1 FROM experiment e "
+                " WHERE $2::bigint IS NULL "
+                " AND e.experiment_id=$3 "
+                " AND e.status='running' AND e.phase=$4 "
+                " AND e.active_scheduler_worker_attempt_id="
+                "a.worker_attempt_id "
+                " UNION ALL "
+                " SELECT 1 FROM experiment_checkpoint_eval ce "
+                " WHERE $2::bigint IS NOT NULL "
+                " AND ce.checkpoint_eval_id=$2 "
+                " AND ce.status='running' AND ce.phase='infer' "
+                " AND ce.active_scheduler_worker_attempt_id="
+                "a.worker_attempt_id"
+                ") RETURNING a.worker_attempt_id;",
+                attemptId,
+                checkpointEvalId,
+                experimentId,
+                phase);
+            if (terminal.empty())
+                continue;
+            if (checkpointEvalId)
+            {
+                pqxx::result lifecycle = transaction.exec_params(
+                    "UPDATE experiment_checkpoint_eval SET "
+                    "status='failed',completed_at=clock_timestamp(),"
+                    "error_message='interrupted_launch_never_spawned',"
+                    "active_scheduler_worker_attempt_id=NULL,"
+                    "updated_at=clock_timestamp() "
+                    "WHERE checkpoint_eval_id=$1 "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "AND status='running' AND phase='infer' "
+                    "RETURNING checkpoint_eval_id;",
+                    *checkpointEvalId,
+                    attemptId);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    lifecycle,
+                    "fail_never_spawned_checkpoint_attempt");
+            }
+            else
+            {
+                pqxx::result lifecycle = transaction.exec_params(
+                    "UPDATE experiment SET status='failed',"
+                    "completed_at=clock_timestamp(),exit_code=126,"
+                    "error_message='interrupted_launch_never_spawned',"
+                    "active_scheduler_worker_attempt_id=NULL,"
+                    "updated_at=clock_timestamp() "
+                    "WHERE experiment_id=$1 "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "AND status='running' AND phase=$3 "
+                    "RETURNING experiment_id;",
+                    experimentId,
+                    attemptId,
+                    phase);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    lifecycle,
+                    "fail_never_spawned_experiment_attempt");
+            }
+            std::cout << "SCHEDULER_INTERRUPTED_LAUNCH_RECONCILED"
+                      << ",worker_attempt_id=" << attemptId
+                      << ",result=never_spawned"
+                      << std::endl;
+            ++reconciled;
+            continue;
+        }
+
+        const int pid = row[3].as<int>();
+        const EA::GlobalExperimentControl::ProcessObservation
+            observation = processes->Observe(pid);
+        if (!observation.inspectionSucceeded)
+        {
+            transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt SET "
+                "lifecycle_state='identity_ambiguous',"
+                "last_observed_at=clock_timestamp(),"
+                "observed_by_scheduler_invocation_id=$1,"
+                "diagnostic='process_identity_inspection_failed' "
+                "WHERE worker_attempt_id=$2;",
+                options.schedulerAuthority.schedulerInvocationId,
+                attemptId);
+            continue;
+        }
+
+        if (observation.exists)
+        {
+            bool identityMatches =
+                !row[4].is_null() &&
+                !row[5].is_null() &&
+                !row[6].is_null() &&
+                observation.pid == pid &&
+                observation.processGroupId == row[4].as<int>() &&
+                observation.processStartIdentity ==
+                    row[5].as<std::string>() &&
+                CanonicalizeObservedExecutable(
+                    observation.executable) ==
+                    row[6].as<std::string>();
+            if (origin != "legacy_unverified")
+            {
+                identityMatches =
+                    identityMatches &&
+                    CommandHasExactOptionValue(
+                        observation.commandLine,
+                        "--scheduler-worker-attempt-id",
+                        attemptId);
+            }
+            if (workerKind == "checkpoint_infer")
+            {
+                identityMatches =
+                    identityMatches && checkpointEvalId &&
+                    CommandHasExactToken(
+                        observation.commandLine, "--infer") &&
+                    CommandHasExactOptionValue(
+                        observation.commandLine,
+                        "--scheduler-checkpoint-eval-id",
+                        *checkpointEvalId);
+            }
+            else if (phase == "train")
+            {
+                identityMatches =
+                    identityMatches &&
+                    CommandHasExactToken(
+                        observation.commandLine, "--train") &&
+                    CommandHasExactOptionValue(
+                        observation.commandLine,
+                        "--scheduler-experiment-id",
+                        experimentId);
+            }
+            else if (phase == "infer")
+            {
+                identityMatches =
+                    identityMatches &&
+                    CommandHasExactToken(
+                        observation.commandLine, "--infer") &&
+                    CommandHasExactOptionValue(
+                        observation.commandLine,
+                        "--scheduler-experiment-id",
+                        experimentId);
+            }
+            else if (phase == "analyze")
+            {
+                identityMatches =
+                    identityMatches &&
+                    CommandHasExactOptionValue(
+                        observation.commandLine,
+                        "--analyze-experiment",
+                        experimentId);
+            }
+
+            transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt SET "
+                "lifecycle_state=$1,last_observed_at=clock_timestamp(),"
+                "observed_by_scheduler_invocation_id=$2,"
+                "reconciliation_result=$3,diagnostic=$4 "
+                "WHERE worker_attempt_id=$5;",
+                identityMatches ? "observed"
+                                : "identity_ambiguous",
+                options.schedulerAuthority.schedulerInvocationId,
+                identityMatches ? "valid_process_observed"
+                                : "identity_mismatch",
+                identityMatches
+                    ? "live_worker_observed_without_relaunch"
+                    : "pid_reuse_or_worker_identity_mismatch",
+                attemptId);
+            std::cout
+                << (identityMatches
+                        ? "SCHEDULER_PRIOR_WORKER_OBSERVED"
+                        : "SCHEDULER_WORKER_IDENTITY_AMBIGUOUS")
+                << ",worker_attempt_id=" << attemptId
+                << ",experiment_id=" << experimentId
+                << ",pid=" << pid
+                << ",capacity_consumed=1"
+                << std::endl;
+            continue;
+        }
+
+        // A missing process is destructive evidence only when the exact
+        // durable attempt still owns the lifecycle row.
+        bool lifecycleMatches = false;
+        if (checkpointEvalId)
+        {
+            pqxx::result lifecycle = transaction.exec_params(
+                "SELECT 1 FROM experiment_checkpoint_eval "
+                "WHERE checkpoint_eval_id=$1 AND status='running' "
+                "AND phase='infer' "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "FOR UPDATE;",
+                *checkpointEvalId,
+                attemptId);
+            lifecycleMatches = lifecycle.size() == 1;
+        }
+        else
+        {
+            pqxx::result lifecycle = transaction.exec_params(
+                "SELECT 1 FROM experiment "
+                "WHERE experiment_id=$1 AND status='running' "
+                "AND phase=$2 "
+                "AND active_scheduler_worker_attempt_id=$3 "
+                "FOR UPDATE;",
+                experimentId,
+                phase,
+                attemptId);
+            lifecycleMatches = lifecycle.size() == 1;
+        }
+        if (!lifecycleMatches)
+        {
+            transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt a SET "
+                "lifecycle_state='failed',"
+                "completed_at=clock_timestamp(),"
+                "reconciliation_result='lifecycle_predicate_changed',"
+                "diagnostic='process_missing_lifecycle_no_longer_owned' "
+                "WHERE a.worker_attempt_id=$1 "
+                "AND a.lifecycle_state IN "
+                "('reserved','spawned','running','observed',"
+                "'identity_ambiguous') "
+                "AND NOT EXISTS (SELECT 1 FROM experiment e "
+                " WHERE e.active_scheduler_worker_attempt_id="
+                "a.worker_attempt_id) "
+                "AND NOT EXISTS (SELECT 1 "
+                " FROM experiment_checkpoint_eval ce "
+                " WHERE ce.active_scheduler_worker_attempt_id="
+                "a.worker_attempt_id);",
+                attemptId);
+            ++reconciled;
+            continue;
+        }
+
+        bool completedEvidence = false;
+        if (checkpointEvalId)
+        {
+            std::vector<CheckpointEvalRow> evaluations =
+                LoadCheckpointEvalRows(
+                    transaction, "running", "infer");
+            const auto evaluation = std::find_if(
+                evaluations.begin(),
+                evaluations.end(),
+                [&](const CheckpointEvalRow& value) {
+                    return value.checkpointEvalId ==
+                           *checkpointEvalId;
+                });
+            if (evaluation != evaluations.end())
+            {
+                const auto resultId =
+                    FindCompletedCheckpointInferenceResultIdForAttempt(
+                        transaction,
+                        *evaluation,
+                        attemptStartedEpoch);
+                if (resultId)
+                {
+                    AdvanceCheckpointEvalToAnalyze(
+                        transaction,
+                        *evaluation,
+                        *resultId,
+                        ColumnExists(
+                            transaction,
+                            "experiment_checkpoint_eval",
+                            "infer_completed_at"),
+                        attemptId);
+                    completedEvidence = true;
+                }
+            }
+            if (!completedEvidence)
+            {
+                transaction.exec_params(
+                    "UPDATE experiment_checkpoint_eval SET "
+                    "status='failed',worker_pid=NULL,"
+                    "worker_process_group_id=NULL,"
+                    "completed_at=clock_timestamp(),"
+                    "error_message='worker_process_missing_no_result',"
+                    "updated_at=clock_timestamp() "
+                    "WHERE checkpoint_eval_id=$1 "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "AND status='running' AND phase='infer';",
+                    *checkpointEvalId,
+                    attemptId);
+            }
+        }
+        else
+        {
+            pqxx::result experimentRows = transaction.exec_params(
+                "SELECT experiment_id,symbol,prediction_horizon,"
+                "c_next_threshold,core_lr_mult,head_lr_mult,"
+                "target_epochs,checkpoint_interval,"
+                "train_start::text,train_end::text,"
+                "infer_start::text,infer_end::text,last_model_id,"
+                "resume_model_id,train_log_path,infer_log_path,"
+                "analysis_log_path "
+                "FROM experiment WHERE experiment_id=$1;",
+                experimentId);
+            if (experimentRows.size() == 1)
+            {
+                ExperimentRow experiment =
+                    RowToExperiment(experimentRows[0]);
+                if (phase == "infer" &&
+                    HasCompletedInferenceResultForAttempt(
+                        transaction,
+                        experiment,
+                        attemptStartedEpoch))
+                {
+                    TransitionRecoveredInferenceToAnalyze(
+                        transaction,
+                        experiment,
+                        "SCHEDULER_WORKER_RESULT_RECOVERED",
+                        "completed_inference_result",
+                        std::nullopt,
+                        attemptId);
+                    completedEvidence = true;
+                }
+                else if (
+                    phase == "analyze" &&
+                    HasCompletedAnalysisResultForAttempt(
+                        transaction,
+                        experiment,
+                        attemptStartedEpoch))
+                {
+                    MarkExperimentDone(
+                        transaction,
+                        experiment,
+                        "analyze",
+                        attemptId);
+                    completedEvidence = true;
+                }
+                else if (phase == "train")
+                {
+                    const auto modelId =
+                        FindLatestModelForExperimentSince(
+                            transaction,
+                            experimentId,
+                            attemptStartedEpoch);
+                    if (modelId)
+                    {
+                        completedEvidence =
+                            TransitionAfterTrainModelAvailable(
+                                transaction,
+                                experiment,
+                                *modelId,
+                                0,
+                                "train",
+                                attemptId);
+                    }
+                }
+            }
+            if (!completedEvidence)
+            {
+                transaction.exec_params(
+                    "UPDATE experiment SET status='failed',"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "completed_at=clock_timestamp(),exit_code=-1,"
+                    "error_message='worker_process_missing_no_result',"
+                    "updated_at=clock_timestamp() "
+                    "WHERE experiment_id=$1 "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "AND status='running' AND phase=$3;",
+                    experimentId,
+                    attemptId,
+                    phase);
+            }
+        }
+
+        pqxx::result terminal = transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt a SET "
+            "lifecycle_state=$1,completed_at=clock_timestamp(),"
+            "last_observed_at=clock_timestamp(),"
+            "observed_by_scheduler_invocation_id=$2,"
+            "reconciliation_result=$3,diagnostic=$4 "
+            "WHERE a.worker_attempt_id=$5 "
+            "AND a.lifecycle_state IN "
+            "('spawned','running','observed',"
+            "'identity_ambiguous') "
+            "AND EXISTS ("
+            " SELECT 1 FROM experiment e "
+            " WHERE $6::bigint IS NULL "
+            " AND e.experiment_id=$7 "
+            " AND e.active_scheduler_worker_attempt_id="
+            "a.worker_attempt_id "
+            " UNION ALL "
+            " SELECT 1 FROM experiment_checkpoint_eval ce "
+            " WHERE $6::bigint IS NOT NULL "
+            " AND ce.checkpoint_eval_id=$6 "
+            " AND ce.active_scheduler_worker_attempt_id="
+            "a.worker_attempt_id"
+            ") RETURNING a.worker_attempt_id;",
+            completedEvidence ? "completed" : "failed",
+            options.schedulerAuthority.schedulerInvocationId,
+            completedEvidence
+                ? "process_missing_result_recovered"
+                : "process_missing_no_result",
+            "exact_process_identity_absent",
+            attemptId,
+            checkpointEvalId,
+            experimentId);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            terminal,
+            "terminalize_reconciled_exact_attempt");
+        pqxx::result cleared;
+        if (checkpointEvalId)
+        {
+            cleared = transaction.exec_params(
+                "UPDATE experiment_checkpoint_eval SET "
+                "active_scheduler_worker_attempt_id=NULL "
+                "WHERE checkpoint_eval_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "RETURNING checkpoint_eval_id;",
+                *checkpointEvalId,
+                attemptId);
+        }
+        else
+        {
+            cleared = transaction.exec_params(
+                "UPDATE experiment SET "
+                "active_scheduler_worker_attempt_id=NULL "
+                "WHERE experiment_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "RETURNING experiment_id;",
+                experimentId,
+                attemptId);
+        }
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            cleared,
+            "clear_reconciled_exact_attempt_binding");
+        std::cout << "SCHEDULER_WORKER_RECONCILED"
+                  << ",worker_attempt_id=" << attemptId
+                  << ",experiment_id=" << experimentId
+                  << ",result="
+                  << (completedEvidence
+                          ? "completed_evidence"
+                          : "failed_no_result")
+                  << std::endl;
+        ++reconciled;
+    }
+    return reconciled;
+}
+
 [[maybe_unused]] void CompleteInferPhase(pqxx::work& w,
                                const ExperimentRow& experiment,
                                int exitCode,
@@ -12782,14 +15495,19 @@ void PersistObservedExitFields(pqxx::work& w,
                                const std::string& error,
                                bool preserveSuccessState)
 {
-    w.exec_params(
+    pqxx::result updated = w.exec_params(
         "UPDATE experiment SET exit_code = $1, error_message = $2, worker_pid = NULL, updated_at = now() "
         "WHERE experiment_id = $3 AND (worker_pid = $4 OR worker_pid IS NULL) "
-        "AND status <> 'running';",
+        "AND status <> 'running' "
+        "AND active_scheduler_worker_attempt_id=$5 "
+        "RETURNING experiment_id;",
         exitCode,
         preserveSuccessState && exitCode == 0 ? std::optional<std::string>{} : std::optional<std::string>{error},
         child.experimentId,
-        static_cast<int>(child.pid));
+        static_cast<int>(child.pid),
+        child.workerAttemptId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        updated, "persist_observed_exit_fields");
 }
 
 void PersistObservedExperimentChild(pqxx::work& w,
@@ -12807,8 +15525,10 @@ void PersistObservedExperimentChild(pqxx::work& w,
         "r.cancellation_mode,e.cancel_after_checkpoint_epoch "
         "FROM experiment e LEFT JOIN experiment_admin_request r "
         "ON r.request_id=e.cancellation_request_id "
-        "WHERE e.experiment_id = $1;",
-        child.experimentId);
+        "WHERE e.experiment_id = $1 "
+        "AND e.active_scheduler_worker_attempt_id=$2;",
+        child.experimentId,
+        child.workerAttemptId);
     if (rows.empty())
         return;
 
@@ -12861,10 +15581,13 @@ void PersistObservedExperimentChild(pqxx::work& w,
                     "worker_control_state='running',last_model_id=$1,"
                     "current_operation='train',"
                     "error_message=$2,updated_at=now() "
-                    "WHERE experiment_id=$3 AND status='running';",
+                    "WHERE experiment_id=$3 AND status='running' "
+                    "AND phase='train' "
+                    "AND active_scheduler_worker_attempt_id=$4;",
                     *restartModel,
                     error,
-                    child.experimentId);
+                    child.experimentId,
+                    child.workerAttemptId);
             else
             {
                 w.exec_params(
@@ -12873,8 +15596,10 @@ void PersistObservedExperimentChild(pqxx::work& w,
                     "completed_at=now(),cancellation_completed_at=now(),"
                     "error_message='cancelled_missing_worker_no_checkpoint',"
                     "updated_at=now() WHERE experiment_id=$1 "
-                    "AND status='running';",
-                    child.experimentId);
+                    "AND status='running' AND phase='train' "
+                    "AND active_scheduler_worker_attempt_id=$2;",
+                    child.experimentId,
+                    child.workerAttemptId);
                 w.exec_params(
                     "UPDATE experiment_admin_worker_outcome SET "
                     "outcome_status='partial',"
@@ -12894,9 +15619,13 @@ void PersistObservedExperimentChild(pqxx::work& w,
                 "completed_at=COALESCE(completed_at,now()),"
                 "cancellation_completed_at=now(),exit_code=$1,"
                 "error_message='cancelled_by_global_request',updated_at=now() "
-                "WHERE experiment_id=$2 AND status='running';",
+                "WHERE experiment_id=$2 AND status='running' "
+                "AND phase=$3 "
+                "AND active_scheduler_worker_attempt_id=$4;",
                 exitCode,
-                child.experimentId);
+                child.experimentId,
+                child.phase,
+                child.workerAttemptId);
         }
         return;
     }
@@ -12905,7 +15634,8 @@ void PersistObservedExperimentChild(pqxx::work& w,
         HasCompletedAnalysisResultForAttempt(
             w, experiment, child.launchedEpoch))
     {
-        MarkExperimentDone(w, experiment, "analyze");
+        MarkExperimentDone(
+            w, experiment, "analyze", child.workerAttemptId);
         PersistObservedExitFields(w, child, exitCode, error, true);
         return;
     }
@@ -12916,7 +15646,12 @@ void PersistObservedExperimentChild(pqxx::work& w,
                 w, experiment, child.launchedEpoch))
         {
             TransitionRecoveredInferenceToAnalyze(
-                w, experiment, "SCHEDULER_CHILD_RESULT_PERSISTED", "completed_inference_eval_result");
+                w,
+                experiment,
+                "SCHEDULER_CHILD_RESULT_PERSISTED",
+                "completed_inference_eval_result",
+                std::nullopt,
+                child.workerAttemptId);
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
@@ -12924,7 +15659,12 @@ void PersistObservedExperimentChild(pqxx::work& w,
                 experiment, child.launchedEpoch))
         {
             TransitionRecoveredInferenceToAnalyze(
-                w, experiment, "SCHEDULER_CHILD_RESULT_PERSISTED", "valid_infer_log_path");
+                w,
+                experiment,
+                "SCHEDULER_CHILD_RESULT_PERSISTED",
+                "valid_infer_log_path",
+                std::nullopt,
+                child.workerAttemptId);
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
@@ -12934,7 +15674,12 @@ void PersistObservedExperimentChild(pqxx::work& w,
             discoveredLog.has_value())
         {
             TransitionRecoveredInferenceToAnalyze(
-                w, experiment, "SCHEDULER_CHILD_RESULT_PERSISTED", "discovered_valid_infer_log", discoveredLog);
+                w,
+                experiment,
+                "SCHEDULER_CHILD_RESULT_PERSISTED",
+                "discovered_valid_infer_log",
+                discoveredLog,
+                child.workerAttemptId);
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
@@ -12950,19 +15695,28 @@ void PersistObservedExperimentChild(pqxx::work& w,
             modelId.has_value() &&
             (!child.expectedModelId.has_value() || *modelId != *child.expectedModelId))
         {
-            (void)TransitionAfterTrainModelAvailable(w, experiment, *modelId, exitCode, "train");
+            (void)TransitionAfterTrainModelAvailable(
+                w,
+                experiment,
+                *modelId,
+                exitCode,
+                "train",
+                child.workerAttemptId);
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
     }
 
-    MarkExperimentFailed(w, experiment, error, exitCode);
+    MarkExperimentFailed(
+        w, experiment, error, exitCode, child.workerAttemptId);
 }
 
 void AdvanceCheckpointEvalToAnalyze(pqxx::work& w,
                                     const CheckpointEvalRow& eval,
                                     long long inferenceResultId,
-                                    bool hasInferCompletedAt);
+                                    bool hasInferCompletedAt,
+                                    const std::optional<long long>&
+                                        workerAttemptId);
 
 void PersistObservedCheckpointChild(pqxx::work& w,
                                     const SchedulerOwnedChild& child,
@@ -12987,8 +15741,10 @@ void PersistObservedCheckpointChild(pqxx::work& w,
             ColumnExists(w, "experiment_checkpoint_eval", "infer_completed_at");
         pqxx::result cancellation = w.exec_params(
             "SELECT cancellation_request_id FROM experiment_checkpoint_eval "
-            "WHERE checkpoint_eval_id=$1;",
-            *child.checkpointEvalId);
+            "WHERE checkpoint_eval_id=$1 "
+            "AND active_scheduler_worker_attempt_id=$2;",
+            *child.checkpointEvalId,
+            child.workerAttemptId);
         if (!cancellation.empty() && !cancellation[0][0].is_null())
         {
             std::ostringstream sql;
@@ -12997,30 +15753,46 @@ void PersistObservedCheckpointChild(pqxx::work& w,
                 << "updated_at=now(),error_message=NULL";
             if (hasInferCompletedAt)
                 sql << ",infer_completed_at=now()";
-            sql << " WHERE checkpoint_eval_id=$1;";
-            w.exec_params(sql.str(), *child.checkpointEvalId);
+            sql << " WHERE checkpoint_eval_id=$1 "
+                << "AND active_scheduler_worker_attempt_id=$2 "
+                << "RETURNING checkpoint_eval_id;";
+            pqxx::result completed = w.exec_params(
+                sql.str(),
+                *child.checkpointEvalId,
+                child.workerAttemptId);
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                completed,
+                "complete_cancellation_checkpoint_exact_attempt");
         }
         else
         {
             AdvanceCheckpointEvalToAnalyze(
-                w, eval, *resultId, hasInferCompletedAt);
+                w,
+                eval,
+                *resultId,
+                hasInferCompletedAt,
+                child.workerAttemptId);
         }
         if (exitCode != 0)
         {
             w.exec_params(
                 "UPDATE experiment_checkpoint_eval SET error_message = $1, updated_at = now() "
-                "WHERE checkpoint_eval_id = $2;",
+                "WHERE checkpoint_eval_id = $2 "
+                "AND active_scheduler_worker_attempt_id=$3;",
                 error,
-                *child.checkpointEvalId);
+                *child.checkpointEvalId,
+                child.workerAttemptId);
         }
         return;
     }
     w.exec_params(
         "UPDATE experiment_checkpoint_eval SET status = 'failed', worker_pid = NULL, completed_at = now(), "
         "updated_at = now(), error_message = $1 WHERE checkpoint_eval_id = $2 "
-        "AND status = 'running' AND phase = 'infer';",
+        "AND status = 'running' AND phase = 'infer' "
+        "AND active_scheduler_worker_attempt_id=$3;",
         error,
-        *child.checkpointEvalId);
+        *child.checkpointEvalId,
+        child.workerAttemptId);
 }
 
 void PersistUnexpectedChildStatus(pqxx::work& w,
@@ -13035,22 +15807,349 @@ void PersistUnexpectedChildStatus(pqxx::work& w,
         w.exec_params(
             "UPDATE experiment_checkpoint_eval SET status = 'failed', worker_pid = NULL, "
             "completed_at = now(), updated_at = now(), error_message = $1 "
-            "WHERE checkpoint_eval_id = $2 AND status = 'running';",
+            "WHERE checkpoint_eval_id = $2 AND status = 'running' "
+            "AND phase='infer' "
+            "AND active_scheduler_worker_attempt_id=$3;",
             error,
-            *child.checkpointEvalId);
+            *child.checkpointEvalId,
+            child.workerAttemptId);
         return;
     }
     w.exec_params(
         "UPDATE experiment SET status = 'failed', exit_code = -1, error_message = $1, "
         "worker_pid = NULL, completed_at = now(), updated_at = now() "
         "WHERE experiment_id = $2 AND status = 'running' "
-        "AND (worker_pid = $3 OR worker_pid IS NULL);",
+        "AND phase=$4 "
+        "AND (worker_pid = $3 OR worker_pid IS NULL) "
+        "AND active_scheduler_worker_attempt_id=$5;",
         error,
         child.experimentId,
-        static_cast<int>(child.pid));
+        static_cast<int>(child.pid),
+        child.phase,
+        child.workerAttemptId);
 }
 
-void ReapSchedulerOwnedChildren(pqxx::work& w)
+void FinalizeObservedWorkerAttempt(
+    pqxx::work& transaction,
+    const SchedulerOwnedChild& child,
+    const SchedulerOptions& options,
+    int exitCode,
+    const std::optional<int>& signalNumber,
+    const std::string& diagnostic)
+{
+    if (!child.workerAttemptId)
+        return;
+    bool lifecycleFailed = true;
+    if (child.checkpointEvalId)
+    {
+        pqxx::result lifecycle = transaction.exec_params(
+            "SELECT status FROM experiment_checkpoint_eval "
+            "WHERE checkpoint_eval_id=$1;",
+            *child.checkpointEvalId);
+        lifecycleFailed =
+            lifecycle.size() != 1 ||
+            lifecycle[0][0].as<std::string>() == "failed";
+    }
+    else
+    {
+        pqxx::result lifecycle = transaction.exec_params(
+            "SELECT status FROM experiment WHERE experiment_id=$1;",
+            child.experimentId);
+        lifecycleFailed =
+            lifecycle.size() != 1 ||
+            lifecycle[0][0].as<std::string>() == "failed";
+    }
+    pqxx::result terminal = transaction.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt a SET "
+        "lifecycle_state=$1,completed_at=clock_timestamp(),"
+        "last_observed_at=clock_timestamp(),exit_code=$2,"
+        "signal_number=$3,reconciliation_result='parent_observed_exit',"
+        "diagnostic=$4 "
+        "WHERE a.worker_attempt_id=$5 "
+        "AND a.scheduler_invocation_id=$6 "
+        "AND a.scheduler_fencing_token=$7 "
+        "AND a.worker_pid=$8 "
+        "AND a.lifecycle_state IN "
+        "('spawned','running','observed') "
+        "AND EXISTS ("
+        " SELECT 1 FROM experiment e "
+        " WHERE $9::bigint IS NULL "
+        " AND e.experiment_id=$10 "
+        " AND e.active_scheduler_worker_attempt_id="
+        "a.worker_attempt_id "
+        " UNION ALL "
+        " SELECT 1 FROM experiment_checkpoint_eval ce "
+        " WHERE $9::bigint IS NOT NULL "
+        " AND ce.checkpoint_eval_id=$9 "
+        " AND ce.active_scheduler_worker_attempt_id="
+        "a.worker_attempt_id"
+        ") RETURNING a.worker_attempt_id;",
+        lifecycleFailed ? "failed" : "completed",
+        exitCode,
+        signalNumber,
+        diagnostic,
+        *child.workerAttemptId,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        static_cast<int>(child.pid),
+        child.checkpointEvalId,
+        child.experimentId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        terminal, "finalize_reaped_exact_worker_attempt");
+    pqxx::result lifecycleCleared;
+    if (child.checkpointEvalId)
+    {
+        lifecycleCleared = transaction.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "active_scheduler_worker_attempt_id=NULL "
+            "WHERE checkpoint_eval_id=$1 "
+            "AND active_scheduler_worker_attempt_id=$2 "
+            "RETURNING checkpoint_eval_id;",
+            *child.checkpointEvalId,
+            *child.workerAttemptId);
+    }
+    else
+    {
+        lifecycleCleared = transaction.exec_params(
+            "UPDATE experiment SET "
+            "active_scheduler_worker_attempt_id=NULL "
+            "WHERE experiment_id=$1 "
+            "AND active_scheduler_worker_attempt_id=$2 "
+            "RETURNING experiment_id;",
+            child.experimentId,
+            *child.workerAttemptId);
+    }
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        lifecycleCleared,
+        "clear_reaped_exact_worker_attempt_binding");
+}
+
+bool ObserveTerminalCheckpointStopAttempt(
+    pqxx::work& transaction,
+    const SchedulerOwnedChild& child,
+    const SchedulerOptions& options,
+    const ObservedChildStatus& observed)
+{
+    if (!child.workerAttemptId ||
+        child.checkpointEvalId ||
+        child.phase != "train" ||
+        (observed.kind != ChildStatusKind::Exited &&
+         observed.kind != ChildStatusKind::Signaled))
+    {
+        return false;
+    }
+
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = *child.workerAttemptId;
+    expected.experimentId = child.experimentId;
+    expected.workerKind = "experiment";
+    expected.lifecyclePhase = "train";
+    expected.capacityClass = "train";
+    expected.schedulerInvocationId =
+        options.schedulerAuthority.schedulerInvocationId;
+    expected.schedulerFencingToken =
+        options.schedulerAuthority.fencingToken;
+    expected.requireCompleteProcessIdentity = true;
+    const auto terminal =
+        EA::SchedulerOwnership::LockAndVerifyExactTerminalAttempt(
+            transaction,
+            expected,
+            "completed",
+            "checkpoint_stop_completed",
+            true);
+    if (!terminal ||
+        terminal->workerPid !=
+            std::optional<int>{static_cast<int>(child.pid)})
+    {
+        return false;
+    }
+
+    const int exitCode =
+        observed.kind == ChildStatusKind::Exited
+            ? observed.exitCode
+            : 128 + observed.signalNumber;
+    const std::optional<int> signalNumber =
+        observed.kind == ChildStatusKind::Signaled
+            ? std::optional<int>{observed.signalNumber}
+            : std::nullopt;
+    const pqxx::result updated = transaction.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt a SET "
+        "last_observed_at=clock_timestamp(),"
+        "observed_by_scheduler_invocation_id=$1,"
+        "exit_code=COALESCE(exit_code,$2),"
+        "signal_number=COALESCE(signal_number,$3) "
+        "WHERE a.worker_attempt_id=$4 "
+        "AND a.scheduler_invocation_id=$1 "
+        "AND a.scheduler_fencing_token=$5 "
+        "AND a.experiment_id=$6 "
+        "AND a.checkpoint_eval_id IS NULL "
+        "AND a.worker_kind='experiment' "
+        "AND a.lifecycle_phase='train' "
+        "AND a.capacity_class='train' "
+        "AND a.worker_pid=$7 "
+        "AND a.lifecycle_state='completed' "
+        "AND a.reconciliation_result='checkpoint_stop_completed' "
+        "AND (a.exit_code IS NULL OR a.exit_code=$2) "
+        "AND (a.signal_number IS NULL "
+        "OR a.signal_number IS NOT DISTINCT FROM $3) "
+        "RETURNING a.worker_attempt_id;",
+        options.schedulerAuthority.schedulerInvocationId,
+        exitCode,
+        signalNumber,
+        *child.workerAttemptId,
+        options.schedulerAuthority.fencingToken,
+        child.experimentId,
+        static_cast<int>(child.pid));
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        updated,
+        "observe_terminal_checkpoint_stop_attempt_exit");
+    std::cout << "SCHEDULER_CHECKPOINT_STOP_EXIT_OBSERVED"
+              << ",experiment_id=" << child.experimentId
+              << ",worker_attempt_id=" << *child.workerAttemptId
+              << ",pid=" << child.pid
+              << ",exit_code=" << exitCode
+              << ",lifecycle_rows_affected=0"
+              << std::endl;
+    return true;
+}
+
+void InjectStaleReaperReplacementForTest(
+    pqxx::work& transaction,
+    const SchedulerOwnedChild& child,
+    const SchedulerOptions& options)
+{
+    constexpr const char* boundary =
+        "stale_reaper_before_exact_verification";
+    if (!SchedulerAuthorityTestFailpointEnabled(boundary) ||
+        !child.workerAttemptId)
+    {
+        return;
+    }
+
+    const char* replacementPidText = std::getenv(
+        "EA_SCHEDULER_OWNERSHIP_TEST_REPLACEMENT_PID");
+    if (!replacementPidText || !*replacementPidText)
+        throw std::runtime_error(
+            "stale_reaper_test_replacement_pid_missing");
+    const int replacementPid = std::stoi(replacementPidText);
+    std::unique_ptr<
+        EA::GlobalExperimentControl::ProcessOperations> processes =
+        EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const auto replacementProcess =
+        processes->Observe(replacementPid);
+    const std::string replacementExecutable =
+        CanonicalizeObservedExecutable(
+            replacementProcess.executable);
+    if (!replacementProcess.inspectionSucceeded ||
+        !replacementProcess.exists ||
+        replacementProcess.pid != replacementPid ||
+        replacementProcess.processGroupId <= 0 ||
+        replacementProcess.processStartIdentity.empty() ||
+        replacementExecutable.empty() ||
+        replacementProcess.commandLine.empty())
+    {
+        throw std::runtime_error(
+            "stale_reaper_test_replacement_identity_incomplete");
+    }
+
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    pqxx::result retired = transaction.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt a SET "
+        "lifecycle_state='abandoned',"
+        "completed_at=clock_timestamp(),"
+        "reconciliation_result='test_stale_reaper_replaced',"
+        "diagnostic=$1 "
+        "WHERE a.worker_attempt_id=$2 "
+        "AND a.scheduler_invocation_id=$3 "
+        "AND a.scheduler_fencing_token=$4 "
+        "AND a.lifecycle_state IN ('spawned','running','observed') "
+        "AND EXISTS ("
+        " SELECT 1 FROM experiment e "
+        " WHERE $5::bigint IS NULL "
+        " AND e.experiment_id=$6 "
+        " AND e.active_scheduler_worker_attempt_id="
+        "a.worker_attempt_id "
+        " UNION ALL "
+        " SELECT 1 FROM experiment_checkpoint_eval ce "
+        " WHERE $5::bigint IS NOT NULL "
+        " AND ce.checkpoint_eval_id=$5 "
+        " AND ce.active_scheduler_worker_attempt_id="
+        "a.worker_attempt_id"
+        ") RETURNING a.worker_attempt_id;",
+        boundary,
+        *child.workerAttemptId,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        child.checkpointEvalId,
+        child.experimentId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        retired, "test_retire_stale_reaper_attempt");
+
+    pqxx::result replacement = transaction.exec_params(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
+        "worker_kind,lifecycle_phase,capacity_class,"
+        "ownership_origin,lifecycle_state,worker_pid,"
+        "worker_process_group_id,worker_process_start_identity,"
+        "canonical_executable_path,command_line,command_identity,"
+        "reserved_at,spawned_at,last_observed_at,diagnostic"
+        ") SELECT "
+        "'test-stale-reaper-replacement-' || "
+        "worker_attempt_id::text,"
+        "$1,$2,experiment_id,checkpoint_eval_id,worker_kind,"
+        "lifecycle_phase,capacity_class,ownership_origin,'spawned',"
+        "$4,$5,$6,$7,$8,command_identity,clock_timestamp(),"
+        "clock_timestamp(),clock_timestamp(),$3 "
+        "FROM experiment_scheduler_worker_attempt "
+        "WHERE worker_attempt_id=$9 "
+        "RETURNING worker_attempt_id;",
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        boundary,
+        replacementPid,
+        replacementProcess.processGroupId,
+        replacementProcess.processStartIdentity,
+        replacementExecutable,
+        replacementProcess.commandLine,
+        *child.workerAttemptId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        replacement, "test_create_stale_reaper_replacement");
+    const long long replacementAttemptId =
+        replacement[0][0].as<long long>();
+
+    pqxx::result rebound;
+    if (child.checkpointEvalId)
+    {
+        rebound = transaction.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "active_scheduler_worker_attempt_id=$1 "
+            "WHERE checkpoint_eval_id=$2 "
+            "AND active_scheduler_worker_attempt_id=$3 "
+            "RETURNING checkpoint_eval_id;",
+            replacementAttemptId,
+            *child.checkpointEvalId,
+            *child.workerAttemptId);
+    }
+    else
+    {
+        rebound = transaction.exec_params(
+            "UPDATE experiment SET "
+            "active_scheduler_worker_attempt_id=$1 "
+            "WHERE experiment_id=$2 "
+            "AND active_scheduler_worker_attempt_id=$3 "
+            "RETURNING experiment_id;",
+            replacementAttemptId,
+            child.experimentId,
+            *child.workerAttemptId);
+    }
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        rebound, "test_bind_stale_reaper_replacement");
+}
+
+void ReapSchedulerOwnedChildren(
+    pqxx::work& w,
+    const SchedulerOptions& options)
 {
     for (auto it = gSchedulerOwnedChildren.begin(); it != gSchedulerOwnedChildren.end();)
     {
@@ -13083,6 +16182,66 @@ void ReapSchedulerOwnedChildren(pqxx::work& w)
         }
 
         const ObservedChildStatus& observed = *child.observedStatus;
+        if (!child.workerAttemptId)
+        {
+            std::cout << "SCHEDULER_STALE_CHILD_REAP_REJECTED"
+                      << ",experiment_id=" << child.experimentId
+                      << ",pid=" << child.pid
+                      << ",reason=worker_attempt_id_missing"
+                      << std::endl;
+            it = gSchedulerOwnedChildren.erase(it);
+            continue;
+        }
+        if (ObserveTerminalCheckpointStopAttempt(
+                w, child, options, observed))
+        {
+            it = gSchedulerOwnedChildren.erase(it);
+            continue;
+        }
+        InjectStaleReaperReplacementForTest(
+            w, child, options);
+        EA::SchedulerOwnership::ExactAttemptExpectation expected;
+        expected.workerAttemptId = *child.workerAttemptId;
+        expected.experimentId = child.experimentId;
+        expected.checkpointEvalId = child.checkpointEvalId;
+        expected.workerKind = child.checkpointEvalId
+            ? "checkpoint_infer"
+            : "experiment";
+        expected.lifecyclePhase = child.checkpointEvalId
+            ? "infer"
+            : child.phase;
+        expected.capacityClass = child.checkpointEvalId
+            ? "infer"
+            : child.phase;
+        expected.schedulerInvocationId =
+            options.schedulerAuthority.schedulerInvocationId;
+        expected.schedulerFencingToken =
+            options.schedulerAuthority.fencingToken;
+        expected.requireCompleteProcessIdentity = true;
+        expected.allowTerminalLifecycle = true;
+        const auto exact =
+            EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+                w, expected, true);
+        if (!exact ||
+            exact->workerPid !=
+                std::optional<int>{
+                    static_cast<int>(child.pid)})
+        {
+            std::cout << "SCHEDULER_STALE_CHILD_REAP_REJECTED"
+                      << ",experiment_id=" << child.experimentId
+                      << ",worker_attempt_id="
+                      << *child.workerAttemptId
+                      << ",pid=" << child.pid
+                      << ",reason=exact_active_attempt_changed"
+                      << std::endl;
+            if (SchedulerAuthorityTestFailpointEnabled(
+                    "stale_reaper_before_exact_verification"))
+            {
+                gSchedulerStopRequested = 1;
+            }
+            it = gSchedulerOwnedChildren.erase(it);
+            continue;
+        }
         int exitCode = observed.exitCode;
         std::optional<int> signalNumber;
         const bool coreDumped = observed.coreDumped;
@@ -13130,6 +16289,13 @@ void ReapSchedulerOwnedChildren(pqxx::work& w)
                       << ",raw_status=" << observed.rawStatus
                       << std::endl;
             PersistUnexpectedChildStatus(w, child, observed.rawStatus);
+            FinalizeObservedWorkerAttempt(
+                w,
+                child,
+                options,
+                -1,
+                std::nullopt,
+                "unexpected_wait_status");
             it = gSchedulerOwnedChildren.erase(it);
             continue;
         }
@@ -13138,6 +16304,15 @@ void ReapSchedulerOwnedChildren(pqxx::work& w)
             PersistObservedCheckpointChild(w, child, exitCode, signalNumber, coreDumped);
         else
             PersistObservedExperimentChild(w, child, exitCode, signalNumber, coreDumped);
+        FinalizeObservedWorkerAttempt(
+            w,
+            child,
+            options,
+            exitCode,
+            signalNumber,
+            observed.kind == ChildStatusKind::Exited
+                ? "child_exited"
+                : "child_signaled");
         it = gSchedulerOwnedChildren.erase(it);
     }
 }
@@ -13158,7 +16333,7 @@ void FinishSchedulerPollLogging(SchedulerEventLogState* logState)
     logState->previousRunningPresentKeys = logState->currentRunningPresentKeys;
 }
 
-int RunTrainJobs(const SchedulerOptions& options,
+[[maybe_unused]] int RunTrainJobsLegacy(const SchedulerOptions& options,
                  const QueueSnapshot& snapshot,
                  SchedulerEventLogState* logState,
                  bool cancellationOnly = false)
@@ -13167,6 +16342,7 @@ int RunTrainJobs(const SchedulerOptions& options,
     pqxx::work w{c};
     if (!options.dryRun)
         SetTransactionReadWrite(w);
+    RequireAndRefreshSchedulerAuthority(w, options);
     if (!RequireSchedulerTables(w))
         return 1;
     if (!SchedulerLaunchAllowed(w, "train", false, cancellationOnly))
@@ -13330,7 +16506,7 @@ int RunTrainJobs(const SchedulerOptions& options,
 
 int CountRows(pqxx::work& w, const std::string& sql);
 
-int RunInferJobs(const SchedulerOptions& options,
+[[maybe_unused]] int RunInferJobsLegacy(const SchedulerOptions& options,
                  const QueueSnapshot& snapshot,
                  SchedulerEventLogState* logState)
 {
@@ -13338,6 +16514,7 @@ int RunInferJobs(const SchedulerOptions& options,
     pqxx::work w{c};
     if (!options.dryRun)
         SetTransactionReadWrite(w);
+    RequireAndRefreshSchedulerAuthority(w, options);
     if (!RequireSchedulerTables(w))
         return 1;
     if (!SchedulerLaunchAllowed(w, "infer"))
@@ -13550,7 +16727,7 @@ int RunInferJobs(const SchedulerOptions& options,
     return rc;
 }
 
-int RunAnalyzeJobs(const SchedulerOptions& options,
+[[maybe_unused]] int RunAnalyzeJobsLegacy(const SchedulerOptions& options,
                    const QueueSnapshot& snapshot,
                    SchedulerEventLogState* logState)
 {
@@ -13558,6 +16735,7 @@ int RunAnalyzeJobs(const SchedulerOptions& options,
     pqxx::work w{c};
     if (!options.dryRun)
         SetTransactionReadWrite(w);
+    RequireAndRefreshSchedulerAuthority(w, options);
     if (!RequireSchedulerTables(w))
         return 1;
     if (!SchedulerLaunchAllowed(w, "analyze"))
@@ -13764,7 +16942,9 @@ void LogCheckpointEvalInferenceResultFound(const CheckpointEvalRow& eval,
 void AdvanceCheckpointEvalToAnalyze(pqxx::work& w,
                                     const CheckpointEvalRow& eval,
                                     long long inferenceResultId,
-                                    bool hasInferCompletedAt)
+                                    bool hasInferCompletedAt,
+                                    const std::optional<long long>&
+                                        workerAttemptId)
 {
     LogCheckpointEvalInferenceResultFound(eval, inferenceResultId);
     std::ostringstream sql;
@@ -13773,8 +16953,15 @@ void AdvanceCheckpointEvalToAnalyze(pqxx::work& w,
         << "completed_at = NULL, error_message = NULL, updated_at = now()";
     if (hasInferCompletedAt)
         sql << ", infer_completed_at = COALESCE(infer_completed_at, now())";
-    sql << " WHERE checkpoint_eval_id = $1;";
-    w.exec_params(sql.str(), eval.checkpointEvalId);
+    sql << " WHERE checkpoint_eval_id = $1 "
+        << "AND ($2::bigint IS NULL OR "
+        << "active_scheduler_worker_attempt_id=$2) "
+        << "RETURNING checkpoint_eval_id;";
+    pqxx::result updated = w.exec_params(
+        sql.str(), eval.checkpointEvalId, workerAttemptId);
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated, "advance_checkpoint_exact_attempt_to_analyze");
 
     std::cout << "CHECKPOINT_EVAL_ADVANCED_TO_ANALYZE"
               << ",checkpoint_eval_id=" << eval.checkpointEvalId
@@ -13803,12 +16990,14 @@ void LogCheckpointEvalInferenceResultMissing(const CheckpointEvalRow& eval,
               << std::endl;
 }
 
-int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
+[[maybe_unused]] int RunCheckpointEvalInferJobsLegacy(
+    const SchedulerOptions& options)
 {
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
     if (!options.dryRun)
         SetTransactionReadWrite(w);
+    RequireAndRefreshSchedulerAuthority(w, options);
     if (!CheckpointEvalTableExists(w))
         return 0;
     const auto control = LoadLockedGlobalControl(w);
@@ -14058,117 +17247,894 @@ int RunCheckpointEvalInferJobs(const SchedulerOptions& options)
     return rc;
 }
 
-int RunCheckpointEvalAnalyzeJobs(const SchedulerOptions& options)
+struct ClaimedCheckpointAnalysis
 {
-    pqxx::connection c{LstmDbConnectionString()};
-    pqxx::work w{c};
-    SetTransactionReadWrite(w);
-    if (!CheckpointEvalTableExists(w))
-        return 0;
-    if (!SchedulerLaunchAllowed(w, "checkpoint_analyze"))
-    {
-        w.commit();
-        return 0;
-    }
-    const bool hasAnalyzeStartedAt = ColumnExists(w, "experiment_checkpoint_eval", "analyze_started_at");
-    const bool hasAnalyzeCompletedAt = ColumnExists(w, "experiment_checkpoint_eval", "analyze_completed_at");
-    const bool hasAnalysisId = ColumnExists(w, "experiment_checkpoint_eval", "analysis_id");
+    CheckpointEvalRow evaluation;
+    long long workerAttemptId = -1;
+    std::string launchAttemptIdentity;
+};
 
-    const int pendingFinalAnalyze = CountRows(w, "SELECT count(*) FROM experiment WHERE status = 'pending' AND phase = 'analyze';");
-    const int runningFinalAnalyze = CountRows(w, "SELECT count(*) FROM experiment WHERE status = 'running' AND phase = 'analyze';");
-    if (pendingFinalAnalyze > 0 || runningFinalAnalyze >= options.maxAnalyzeProcs)
+struct CheckpointAnalysisWorkResult
+{
+    bool success = false;
+    std::string error;
+    long long inferenceResultId = -1;
+    ParsedMetrics metrics;
+    std::optional<double> leaderScore;
+};
+
+std::optional<ClaimedCheckpointAnalysis>
+ClaimCheckpointAnalysis(
+    const SchedulerOptions& options)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    if (!CheckpointEvalTableExists(transaction) ||
+        !SchedulerLaunchAllowed(
+            transaction, "checkpoint_analyze"))
     {
-        w.commit();
-        return 0;
+        transaction.commit();
+        return std::nullopt;
+    }
+    if (CountGlobalWorkerCapacity(
+            transaction, "analyze") >=
+        options.maxAnalyzeProcs)
+    {
+        transaction.commit();
+        return std::nullopt;
+    }
+    const int pendingFinalAnalyze = CountRows(
+        transaction,
+        "SELECT count(*) FROM experiment "
+        "WHERE status='pending' AND phase='analyze';");
+    if (pendingFinalAnalyze > 0)
+    {
+        transaction.commit();
+        return std::nullopt;
     }
 
-    int freeSlots = std::max(0, options.maxAnalyzeProcs - runningFinalAnalyze);
-    int rc = 0;
-    bool reportsNeeded = false;
-    for (auto eval : LoadCheckpointEvalRows(w, "pending", "analyze"))
+    std::vector<CheckpointEvalRow> pending =
+        LoadCheckpointEvalRows(
+            transaction, "pending", "analyze");
+    if (pending.empty())
     {
-        if (freeSlots <= 0)
-            break;
-        LogWorkerStarted(
-            "CHECKPOINT_ANALYSIS_WORKER_STARTED",
-            "checkpoint_analyze",
-            eval.experiment.experimentId,
-            eval.checkpointModelId,
-            eval.checkpointEvalId);
-        std::cout << "CHECKPOINT_EVAL_ANALYSIS_STARTED"
-                  << " experiment_id=" << eval.experiment.experimentId
-                  << " epoch=" << eval.checkpointEpoch
-                  << " model_id=" << eval.checkpointModelId
-                  << std::endl;
-        {
-            std::ostringstream sql;
-            sql << "UPDATE experiment_checkpoint_eval "
-                << "SET status = 'running', phase = 'analyze', updated_at = now(), error_message = NULL";
-            if (hasAnalyzeStartedAt)
-                sql << ", analyze_started_at = COALESCE(analyze_started_at, now())";
-            sql << " WHERE checkpoint_eval_id = $1;";
-            w.exec_params(sql.str(), eval.checkpointEvalId);
-        }
+        transaction.commit();
+        return std::nullopt;
+    }
+    ClaimedCheckpointAnalysis claim;
+    claim.evaluation = pending.front();
+    claim.launchAttemptIdentity =
+        GenerateWorkerLaunchIdentity(
+            options,
+            "checkpoint_analyze:" +
+                std::to_string(
+                    claim.evaluation.checkpointEvalId));
+    pqxx::result inserted = transaction.exec_params(
+        "INSERT INTO experiment_scheduler_worker_attempt("
+        "launch_attempt_identity,scheduler_invocation_id,"
+        "scheduler_fencing_token,experiment_id,checkpoint_eval_id,"
+        "worker_kind,lifecycle_phase,capacity_class,"
+        "ownership_origin,lifecycle_state,"
+        "canonical_executable_path,command_line,"
+        "command_identity) "
+        "VALUES($1,$2,$3,$4,$5,'checkpoint_analyze',"
+        "'analyze','analyze','scheduler_in_process','running',"
+        "$6,$7,$8) RETURNING worker_attempt_id;",
+        claim.launchAttemptIdentity,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        claim.evaluation.experiment.experimentId,
+        claim.evaluation.checkpointEvalId,
+        options.selfPath,
+        options.invocationCommandLine,
+        "checkpoint_analyze:" +
+            std::to_string(
+                claim.evaluation.checkpointEvalId));
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        inserted, "reserve_checkpoint_analysis_attempt");
+    claim.workerAttemptId =
+        inserted[0][0].as<long long>();
+
+    std::ostringstream claimSql;
+    claimSql
+        << "UPDATE experiment_checkpoint_eval SET "
+        << "status='running',phase='analyze',"
+        << "active_scheduler_worker_attempt_id=$1,"
+        << "worker_pid=NULL,worker_process_group_id=NULL,"
+        << "worker_process_start_identity=NULL,"
+        << "worker_executable=$2,worker_command_line=$3,"
+        << "updated_at=clock_timestamp(),error_message=NULL";
+    if (ColumnExists(
+            transaction,
+            "experiment_checkpoint_eval",
+            "analyze_started_at"))
+    {
+        claimSql
+            << ",analyze_started_at="
+            << "COALESCE(analyze_started_at,clock_timestamp())";
+    }
+    claimSql
+        << " WHERE checkpoint_eval_id=$4 "
+        << "AND status='pending' AND phase='analyze' "
+        << "AND active_scheduler_worker_attempt_id IS NULL "
+        << "RETURNING checkpoint_eval_id;";
+    pqxx::result lifecycle = transaction.exec_params(
+        claimSql.str(),
+        claim.workerAttemptId,
+        options.selfPath,
+        options.invocationCommandLine,
+        claim.evaluation.checkpointEvalId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        lifecycle, "claim_checkpoint_analysis_lifecycle");
+    RequireAndRefreshSchedulerAuthority(
+        transaction, options);
+    transaction.commit();
+    std::cout << "CHECKPOINT_ANALYSIS_CLAIMED"
+              << ",checkpoint_eval_id="
+              << claim.evaluation.checkpointEvalId
+              << ",worker_attempt_id="
+              << claim.workerAttemptId
+              << ",capacity_class=analyze"
+              << std::endl;
+    return claim;
+}
+
+CheckpointAnalysisWorkResult ExecuteCheckpointAnalysisWork(
+    const ClaimedCheckpointAnalysis& claim)
+{
+    CheckpointAnalysisWorkResult result;
+    try
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadOnly(transaction);
+        std::vector<CheckpointEvalRow> running =
+            LoadCheckpointEvalRows(
+                transaction, "running", "analyze");
+        const auto current = std::find_if(
+            running.begin(),
+            running.end(),
+            [&](const CheckpointEvalRow& candidate) {
+                return candidate.checkpointEvalId ==
+                       claim.evaluation.checkpointEvalId;
+            });
+        if (current == running.end())
+            throw std::runtime_error(
+                "checkpoint_analysis_claim_no_longer_active");
         const std::optional<long long> inferenceResultId =
-            FindCompletedCheckpointInferenceResultId(w, eval);
-        if (!inferenceResultId.has_value())
+            FindCompletedCheckpointInferenceResultId(
+                transaction, *current);
+        if (!inferenceResultId)
+            throw std::runtime_error(
+                "missing_completed_checkpoint_inference");
+        result.inferenceResultId = *inferenceResultId;
+        result.metrics.modelId =
+            current->checkpointModelId;
+        ExperimentRow analysisExperiment =
+            current->experiment;
+        ApplyPersistedSymbolToAnalysisExperiment(
+            transaction,
+            analysisExperiment,
+            result.metrics);
+        if (!ApplyStructuredCheckpointInferenceMetrics(
+                transaction, *current, result.metrics))
         {
-            LogCheckpointEvalInferenceResultMissing(eval, "missing_completed_checkpoint_inference");
-            std::ostringstream sql;
-            sql << "UPDATE experiment_checkpoint_eval "
-                << "SET status = 'failed', completed_at = now(), updated_at = now(), error_message = 'missing_completed_inference'";
-            if (hasAnalyzeCompletedAt)
-                sql << ", analyze_completed_at = now()";
-            sql << " WHERE checkpoint_eval_id = $1;";
-            w.exec_params(sql.str(), eval.checkpointEvalId);
-            std::cout << "CHECKPOINT_EVAL_FAILED"
-                      << " experiment_id=" << eval.experiment.experimentId
-                      << " phase=analyze"
-                      << " epoch=" << eval.checkpointEpoch
-                      << " model_id=" << eval.checkpointModelId
-                      << " error=missing_completed_inference"
+            throw std::runtime_error(
+                "checkpoint_inference_result_disappeared");
+        }
+        result.leaderScore =
+            ComputeLeaderScore(result.metrics);
+        transaction.commit();
+        result.success = true;
+    }
+    catch (const std::exception& error)
+    {
+        result.error = error.what();
+    }
+    return result;
+}
+
+bool FinalizeCheckpointAnalysis(
+    const SchedulerOptions& options,
+    const ClaimedCheckpointAnalysis& claim,
+    const CheckpointAnalysisWorkResult& work)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = claim.workerAttemptId;
+    expected.experimentId =
+        claim.evaluation.experiment.experimentId;
+    expected.checkpointEvalId =
+        claim.evaluation.checkpointEvalId;
+    expected.workerKind = "checkpoint_analyze";
+    expected.lifecyclePhase = "analyze";
+    expected.capacityClass = "analyze";
+    expected.schedulerInvocationId =
+        options.schedulerAuthority.schedulerInvocationId;
+    expected.schedulerFencingToken =
+        options.schedulerAuthority.fencingToken;
+    const auto exact =
+        EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            transaction, expected, true);
+    if (!exact)
+        throw SchedulerAuthorityLost(
+            "checkpoint_analysis_exact_attempt_replaced");
+
+    const std::optional<long long> currentInferenceResult =
+        FindCompletedCheckpointInferenceResultId(
+            transaction, claim.evaluation);
+    const bool success =
+        work.success && currentInferenceResult &&
+        *currentInferenceResult == work.inferenceResultId;
+    if (success)
+    {
+        AnalysisScopeOptions scope;
+        scope.scope = "checkpoint";
+        scope.checkpointEvalId =
+            claim.evaluation.checkpointEvalId;
+        scope.checkpointEpoch =
+            claim.evaluation.checkpointEpoch;
+        scope.parentExperimentId =
+            claim.evaluation.experiment.experimentId;
+        UpsertAnalysisResult(
+            transaction,
+            claim.evaluation.experiment,
+            work.metrics,
+            work.leaderScore,
+            scope);
+        const std::optional<long long> analysisId =
+            FindCheckpointAnalysisResultId(
+                transaction,
+                claim.evaluation.checkpointEvalId);
+        std::ostringstream lifecycleSql;
+        lifecycleSql
+            << "UPDATE experiment_checkpoint_eval SET "
+            << "status='completed',phase='done',"
+            << "completed_at=clock_timestamp(),"
+            << "updated_at=clock_timestamp(),error_message=NULL";
+        if (ColumnExists(
+                transaction,
+                "experiment_checkpoint_eval",
+                "analyze_completed_at"))
+            lifecycleSql
+                << ",analyze_completed_at=clock_timestamp()";
+        lifecycleSql << ",analysis_id=$1";
+        lifecycleSql
+            << " WHERE checkpoint_eval_id=$2 "
+            << "AND status='running' AND phase='analyze' "
+            << "AND active_scheduler_worker_attempt_id=$3 "
+            << "RETURNING checkpoint_eval_id;";
+        pqxx::result lifecycle = transaction.exec_params(
+            lifecycleSql.str(),
+            analysisId,
+            claim.evaluation.checkpointEvalId,
+            claim.workerAttemptId);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            lifecycle,
+            "complete_checkpoint_analysis_exact_attempt");
+        (void)EvaluateCheckpointPolicyAfterAnalysis(
+            transaction, claim.evaluation);
+    }
+
+    const std::string failure =
+        work.error.empty()
+            ? "checkpoint_analysis_source_changed_before_finalize"
+            : work.error;
+    pqxx::result terminal = transaction.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt a SET "
+        "lifecycle_state=$1,completed_at=clock_timestamp(),"
+        "last_observed_at=clock_timestamp(),"
+        "reconciliation_result=$2,diagnostic=$3 "
+        "WHERE a.worker_attempt_id=$4 "
+        "AND a.scheduler_invocation_id=$5 "
+        "AND a.scheduler_fencing_token=$6 "
+        "AND a.worker_kind='checkpoint_analyze' "
+        "AND a.lifecycle_state='running' "
+        "AND EXISTS (SELECT 1 "
+        " FROM experiment_checkpoint_eval ce "
+        " WHERE ce.checkpoint_eval_id=$7 "
+        " AND ce.active_scheduler_worker_attempt_id="
+        "a.worker_attempt_id) "
+        "RETURNING a.worker_attempt_id;",
+        success ? "completed" : "failed",
+        success ? "checkpoint_analysis_completed"
+                : "checkpoint_analysis_failed",
+        success ? "result_persisted_exactly_once"
+                : failure,
+        claim.workerAttemptId,
+        options.schedulerAuthority.schedulerInvocationId,
+        options.schedulerAuthority.fencingToken,
+        claim.evaluation.checkpointEvalId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        terminal,
+        "terminalize_checkpoint_analysis_exact_attempt");
+
+    pqxx::result cleared;
+    if (success)
+    {
+        cleared = transaction.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "active_scheduler_worker_attempt_id=NULL "
+            "WHERE checkpoint_eval_id=$1 "
+            "AND active_scheduler_worker_attempt_id=$2 "
+            "AND status='completed' AND phase='done' "
+            "RETURNING checkpoint_eval_id;",
+            claim.evaluation.checkpointEvalId,
+            claim.workerAttemptId);
+    }
+    else
+    {
+        cleared = transaction.exec_params(
+            "UPDATE experiment_checkpoint_eval SET "
+            "status='failed',completed_at=clock_timestamp(),"
+            "error_message=$1,"
+            "active_scheduler_worker_attempt_id=NULL,"
+            "updated_at=clock_timestamp() "
+            "WHERE checkpoint_eval_id=$2 "
+            "AND active_scheduler_worker_attempt_id=$3 "
+            "AND status='running' AND phase='analyze' "
+            "RETURNING checkpoint_eval_id;",
+            failure,
+            claim.evaluation.checkpointEvalId,
+            claim.workerAttemptId);
+    }
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        cleared,
+        "clear_checkpoint_analysis_exact_attempt_binding");
+    RequireAndRefreshSchedulerAuthority(
+        transaction, options);
+    transaction.commit();
+    return success;
+}
+
+int RunCheckpointEvalAnalyzeJobsLegacy(
+    const SchedulerOptions& options)
+{
+    const std::optional<ClaimedCheckpointAnalysis> claim =
+        ClaimCheckpointAnalysis(options);
+    if (!claim)
+        return 0;
+    LogWorkerStarted(
+        "CHECKPOINT_ANALYSIS_WORKER_STARTED",
+        "checkpoint_analyze",
+        claim->evaluation.experiment.experimentId,
+        claim->evaluation.checkpointModelId,
+        claim->evaluation.checkpointEvalId);
+    if (SchedulerAuthorityTestFailpointEnabled(
+            "checkpoint_analysis_crash_after_claim"))
+    {
+        std::cout
+            << "CHECKPOINT_ANALYSIS_TEST_CRASH_AFTER_CLAIM"
+            << ",checkpoint_eval_id="
+            << claim->evaluation.checkpointEvalId
+            << ",worker_attempt_id="
+            << claim->workerAttemptId
+            << std::endl;
+        std::cout.flush();
+        std::cerr.flush();
+        ::_exit(86);
+    }
+    PersistSchedulerAuthorityLossForTest(
+        options,
+        "checkpoint_analysis_lease_loss_during_work");
+    const CheckpointAnalysisWorkResult work =
+        ExecuteCheckpointAnalysisWork(*claim);
+    PersistSchedulerAuthorityLossForTest(
+        options,
+        "checkpoint_analysis_lease_loss_before_finalize");
+    const bool completed =
+        FinalizeCheckpointAnalysis(
+            options, *claim, work);
+    if (completed)
+        TryGenerateExperimentReports(options);
+    return completed ? 0 : 1;
+}
+
+int GlobalCapacityUsed(
+    const SchedulerOptions& options,
+    const std::string& capacityClass)
+{
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    const int used =
+        CountGlobalWorkerCapacity(transaction, capacityClass);
+    transaction.commit();
+    return used;
+}
+
+int RunTrainJobs(
+    const SchedulerOptions& options,
+    const QueueSnapshot&,
+    SchedulerEventLogState* logState,
+    bool cancellationOnly = false)
+{
+    std::vector<ExperimentRow> jobs;
+    int initialUsed = 0;
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        if (!SchedulerLaunchAllowed(
+                transaction,
+                "train",
+                false,
+                cancellationOnly))
+        {
+            transaction.commit();
+            return 0;
+        }
+        jobs = LoadPendingExperiments(
+            transaction, "train", cancellationOnly);
+        initialUsed =
+            CountGlobalWorkerCapacity(transaction, "train");
+        transaction.commit();
+    }
+
+    PhaseSchedulingStats stats;
+    stats.phase = "train";
+    stats.examined = static_cast<int>(jobs.size());
+    stats.freeSlots =
+        std::max(0, options.maxTrainProcs - initialUsed);
+    EnsureLogDir(options.schedulerLogDir);
+    int rc = 0;
+
+    for (const ExperimentRow& job : jobs)
+    {
+        if (options.dryRun)
+        {
+            if (stats.launched >= stats.freeSlots)
+            {
+                ++stats.skipped;
+                continue;
+            }
+            const std::vector<std::string> command =
+                BuildTrainCommand(options, job);
+            std::cout << "EXPERIMENT_CHILD_COMMAND"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=train,dry_run=1,argv="
+                      << CommandForDisplay(command)
                       << std::endl;
-            rc = 1;
+            ++stats.launched;
             continue;
         }
 
-        ParsedMetrics metrics;
-        metrics.modelId = eval.checkpointModelId;
-        ApplyPersistedSymbolToAnalysisExperiment(w, eval.experiment, metrics);
-        if (!ApplyStructuredCheckpointInferenceMetrics(w, eval, metrics))
-            throw std::runtime_error("checkpoint inference result disappeared during analysis");
-        const std::optional<double> leaderScore = ComputeLeaderScore(metrics);
-        AnalysisScopeOptions analysisScope;
-        analysisScope.scope = "checkpoint";
-        analysisScope.checkpointEvalId = eval.checkpointEvalId;
-        analysisScope.checkpointEpoch = eval.checkpointEpoch;
-        analysisScope.parentExperimentId = eval.experiment.experimentId;
-        UpsertAnalysisResult(w, eval.experiment, metrics, leaderScore, analysisScope);
-        const std::optional<long long> analysisId = FindCheckpointAnalysisResultId(w, eval.checkpointEvalId);
+        const std::optional<long long> resumeFrom =
+            job.resumeModelId ? job.resumeModelId : job.lastModelId;
+        if (resumeFrom)
         {
-            std::ostringstream sql;
-            sql << "UPDATE experiment_checkpoint_eval "
-                << "SET status = 'completed', phase = 'done', completed_at = now(), updated_at = now(), error_message = NULL";
-            if (hasAnalyzeCompletedAt)
-                sql << ", analyze_completed_at = now()";
-            if (hasAnalysisId)
-                sql << ", analysis_id = " << (analysisId.has_value() ? std::to_string(*analysisId) : "NULL");
-            sql << " WHERE checkpoint_eval_id = $1;";
-            w.exec_params(sql.str(), eval.checkpointEvalId);
+            pqxx::connection connection{LstmDbConnectionString()};
+            pqxx::work transaction{connection};
+            SetTransactionReadWrite(transaction);
+            RequireAndRefreshSchedulerAuthority(
+                transaction, options);
+            if (!ModelExists(transaction, *resumeFrom))
+            {
+                transaction.exec_params(
+                    "UPDATE experiment SET status='failed',"
+                    "completed_at=clock_timestamp(),exit_code=-1,"
+                    "error_message='train_model_not_found',"
+                    "updated_at=clock_timestamp() "
+                    "WHERE experiment_id=$1 AND status='pending' "
+                    "AND phase='train' "
+                    "AND active_scheduler_worker_attempt_id IS NULL;",
+                    job.experimentId);
+                transaction.commit();
+                ++stats.skipped;
+                rc = 1;
+                continue;
+            }
+            transaction.commit();
         }
-        (void)EvaluateCheckpointPolicyAfterAnalysis(w, eval);
-        std::cout << "CHECKPOINT_EVAL_ANALYSIS_COMPLETED"
-                  << " experiment_id=" << eval.experiment.experimentId
-                  << " epoch=" << eval.checkpointEpoch
-                  << " model_id=" << eval.checkpointModelId
+
+        const std::string logPath =
+            LogPathFor(options, job, "train");
+        const auto attempt = ReserveExperimentWorkerAttempt(
+            options,
+            job,
+            "train",
+            logPath,
+            options.maxTrainProcs,
+            cancellationOnly);
+        if (!attempt)
+        {
+            ++stats.skipped;
+            const int used =
+                GlobalCapacityUsed(options, "train");
+            LogSkip(
+                "train",
+                job.experimentId,
+                used >= options.maxTrainProcs
+                    ? "global_train_slots_full"
+                    : "claim_changed",
+                logState,
+                options.schedulerVerbose);
+            if (used >= options.maxTrainProcs)
+                break;
+            continue;
+        }
+
+        std::vector<std::string> command =
+            BuildTrainCommand(options, job);
+        std::cout << "EXPERIMENT_STARTED"
+                  << ",experiment_id=" << job.experimentId
+                  << ",phase=train,worker_attempt_id="
+                  << attempt->workerAttemptId
                   << std::endl;
-        reportsNeeded = true;
-        --freeSlots;
+        try
+        {
+            PrintSchedulerExec(command);
+            (void)LaunchReservedChildProcess(
+                options, *attempt, std::move(command), resumeFrom);
+            ++stats.launched;
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "EXPERIMENT_FAILED"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=train,worker_attempt_id="
+                      << attempt->workerAttemptId
+                      << ",error=" << error.what()
+                      << std::endl;
+            rc = 1;
+        }
     }
-    w.commit();
-    if (reportsNeeded)
-        TryGenerateExperimentReports(options);
+    PrintPhaseSchedulingStats(
+        stats, logState, options.schedulerVerbose);
     return rc;
+}
+
+int RunInferJobs(
+    const SchedulerOptions& options,
+    const QueueSnapshot&,
+    SchedulerEventLogState* logState)
+{
+    std::vector<ExperimentRow> jobs;
+    int initialUsed = 0;
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        if (!SchedulerLaunchAllowed(transaction, "infer"))
+        {
+            transaction.commit();
+            return 0;
+        }
+        jobs = LoadPendingExperiments(transaction, "infer");
+        initialUsed =
+            CountGlobalWorkerCapacity(transaction, "infer");
+        transaction.commit();
+    }
+
+    PhaseSchedulingStats stats;
+    stats.phase = "infer";
+    stats.examined = static_cast<int>(jobs.size());
+    stats.freeSlots =
+        std::max(0, options.maxInferProcs - initialUsed);
+    EnsureLogDir(options.schedulerLogDir);
+    int rc = 0;
+
+    for (const ExperimentRow& job : jobs)
+    {
+        bool eligible = true;
+        {
+            pqxx::connection connection{LstmDbConnectionString()};
+            pqxx::work transaction{connection};
+            SetTransactionReadWrite(transaction);
+            RequireAndRefreshSchedulerAuthority(
+                transaction, options);
+            if (!job.lastModelId ||
+                !ModelExists(transaction, *job.lastModelId))
+            {
+                if (!options.dryRun)
+                {
+                    transaction.exec_params(
+                        "UPDATE experiment SET status='failed',"
+                        "completed_at=clock_timestamp(),exit_code=-1,"
+                        "error_message=$1,updated_at=clock_timestamp() "
+                        "WHERE experiment_id=$2 AND status='pending' "
+                        "AND phase='infer' "
+                        "AND active_scheduler_worker_attempt_id IS NULL;",
+                        job.lastModelId
+                            ? "infer_model_not_found"
+                            : "infer_missing_last_model_id",
+                        job.experimentId);
+                }
+                eligible = false;
+            }
+            else if (HasCompletedInferenceResult(transaction, job))
+            {
+                if (!options.dryRun)
+                {
+                    if (HasCompletedAnalysisResult(
+                            transaction, job))
+                        MarkExperimentDone(transaction, job, "infer");
+                    else
+                        MarkExperimentPendingPhase(
+                            transaction, job, "infer", "analyze");
+                }
+                eligible = false;
+            }
+            transaction.commit();
+        }
+        if (!eligible)
+        {
+            ++stats.skipped;
+            continue;
+        }
+
+        if (options.dryRun)
+        {
+            if (stats.launched >= stats.freeSlots)
+            {
+                ++stats.skipped;
+                continue;
+            }
+            std::cout << "EXPERIMENT_CHILD_COMMAND"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=infer,dry_run=1,argv="
+                      << CommandForDisplay(
+                             BuildInferCommand(options, job))
+                      << std::endl;
+            ++stats.launched;
+            continue;
+        }
+
+        const std::string logPath =
+            LogPathFor(options, job, "infer");
+        const auto attempt = ReserveExperimentWorkerAttempt(
+            options,
+            job,
+            "infer",
+            logPath,
+            options.maxInferProcs);
+        if (!attempt)
+        {
+            ++stats.skipped;
+            const int used =
+                GlobalCapacityUsed(options, "infer");
+            LogSkip(
+                "infer",
+                job.experimentId,
+                used >= options.maxInferProcs
+                    ? "global_infer_slots_full"
+                    : "claim_changed",
+                logState,
+                options.schedulerVerbose);
+            if (used >= options.maxInferProcs)
+                break;
+            continue;
+        }
+
+        try
+        {
+            std::vector<std::string> command =
+                BuildInferCommand(options, job);
+            PrintSchedulerExec(command);
+            (void)LaunchReservedChildProcess(
+                options,
+                *attempt,
+                std::move(command),
+                job.lastModelId);
+            ++stats.launched;
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "EXPERIMENT_FAILED"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=infer,worker_attempt_id="
+                      << attempt->workerAttemptId
+                      << ",error=" << error.what()
+                      << std::endl;
+            rc = 1;
+        }
+    }
+    PrintPhaseSchedulingStats(
+        stats, logState, options.schedulerVerbose);
+    return rc;
+}
+
+int RunAnalyzeJobs(
+    const SchedulerOptions& options,
+    const QueueSnapshot&,
+    SchedulerEventLogState* logState)
+{
+    std::vector<ExperimentRow> jobs;
+    int initialUsed = 0;
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        if (!SchedulerLaunchAllowed(transaction, "analyze"))
+        {
+            transaction.commit();
+            return 0;
+        }
+        jobs = LoadPendingExperiments(transaction, "analyze");
+        initialUsed =
+            CountGlobalWorkerCapacity(transaction, "analyze");
+        transaction.commit();
+    }
+
+    PhaseSchedulingStats stats;
+    stats.phase = "analyze";
+    stats.examined = static_cast<int>(jobs.size());
+    stats.freeSlots =
+        std::max(0, options.maxAnalyzeProcs - initialUsed);
+    EnsureLogDir(options.schedulerLogDir);
+    int rc = 0;
+    for (const ExperimentRow& job : jobs)
+    {
+        if (!job.lastModelId)
+        {
+            ++stats.skipped;
+            continue;
+        }
+        if (options.dryRun)
+        {
+            if (stats.launched >= stats.freeSlots)
+            {
+                ++stats.skipped;
+                continue;
+            }
+            std::cout << "EXPERIMENT_CHILD_COMMAND"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=analyze,dry_run=1,argv="
+                      << CommandForDisplay(
+                             BuildAnalyzeCommand(options, job))
+                      << std::endl;
+            ++stats.launched;
+            continue;
+        }
+
+        const std::string logPath =
+            LogPathFor(options, job, "analysis");
+        const auto attempt = ReserveExperimentWorkerAttempt(
+            options,
+            job,
+            "analyze",
+            logPath,
+            options.maxAnalyzeProcs);
+        if (!attempt)
+        {
+            ++stats.skipped;
+            const int used =
+                GlobalCapacityUsed(options, "analyze");
+            if (used >= options.maxAnalyzeProcs)
+                break;
+            continue;
+        }
+        try
+        {
+            std::vector<std::string> command =
+                BuildAnalyzeCommand(options, job);
+            PrintSchedulerExec(command);
+            (void)LaunchReservedChildProcess(
+                options,
+                *attempt,
+                std::move(command),
+                job.lastModelId);
+            ++stats.launched;
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "EXPERIMENT_FAILED"
+                      << ",experiment_id=" << job.experimentId
+                      << ",phase=analyze,worker_attempt_id="
+                      << attempt->workerAttemptId
+                      << ",error=" << error.what()
+                      << std::endl;
+            rc = 1;
+        }
+    }
+    PrintPhaseSchedulingStats(
+        stats, logState, options.schedulerVerbose);
+    return rc;
+}
+
+int RunCheckpointEvalInferJobs(
+    const SchedulerOptions& options)
+{
+    std::vector<CheckpointEvalRow> jobs;
+    std::optional<long long> activeRequestId;
+    bool cancellationInference = false;
+    {
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        RequireAndRefreshSchedulerAuthority(transaction, options);
+        const auto control = LoadLockedGlobalControl(transaction);
+        if (!control)
+            return 1;
+        const bool normal =
+            EA::GlobalExperimentControl::NormalSchedulingAllowed(
+                *control);
+        cancellationInference =
+            EA::GlobalExperimentControl::CancellationInferenceAllowed(
+                *control);
+        activeRequestId = control->activeRequestId;
+        if (!normal && !cancellationInference)
+        {
+            transaction.commit();
+            return 0;
+        }
+        if (CountRows(
+                transaction,
+                "SELECT count(*) FROM experiment "
+                "WHERE status='pending' AND phase='infer';") == 0)
+        {
+            jobs = LoadCheckpointEvalRows(
+                transaction, "pending", "infer");
+        }
+        transaction.commit();
+    }
+
+    EnsureLogDir(options.schedulerLogDir);
+    int rc = 0;
+    for (const CheckpointEvalRow& eval : jobs)
+    {
+        if (cancellationInference &&
+            eval.cancellationRequestId != activeRequestId)
+            continue;
+        if (!eval.experiment.inferStart ||
+            !eval.experiment.inferEnd)
+            continue;
+        if (options.dryRun)
+            continue;
+
+        const std::string logPath =
+            CheckpointEvalLogPathFor(options, eval, "infer");
+        const auto attempt = ReserveCheckpointWorkerAttempt(
+            options,
+            eval,
+            logPath,
+            options.maxInferProcs);
+        if (!attempt)
+        {
+            if (GlobalCapacityUsed(options, "infer") >=
+                options.maxInferProcs)
+                break;
+            continue;
+        }
+        try
+        {
+            std::vector<std::string> command =
+                BuildCheckpointEvalInferCommand(options, eval);
+            PrintSchedulerExec(command);
+            (void)LaunchReservedChildProcess(
+                options,
+                *attempt,
+                std::move(command),
+                eval.checkpointModelId);
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "CHECKPOINT_EVAL_FAILED"
+                      << ",checkpoint_eval_id="
+                      << eval.checkpointEvalId
+                      << ",worker_attempt_id="
+                      << attempt->workerAttemptId
+                      << ",error=" << error.what()
+                      << std::endl;
+            rc = 1;
+        }
+    }
+    return rc;
+}
+
+int RunCheckpointEvalAnalyzeJobs(
+    const SchedulerOptions& options)
+{
+    return RunCheckpointEvalAnalyzeJobsLegacy(options);
 }
 
 std::string SchedulerCancellationReconciliationOwner(
@@ -14196,6 +18162,7 @@ int RunSchedulerOnce(const SchedulerOptions& options,
         pqxx::work w{c};
         if (!options.dryRun)
             SetTransactionReadWrite(w);
+        RequireAndRefreshSchedulerAuthority(w, options);
         if (!RequireSchedulerTables(w))
             return 1;
         const auto control = LoadLockedGlobalControl(w);
@@ -14215,8 +18182,9 @@ int RunSchedulerOnce(const SchedulerOptions& options,
                 SchedulerCancellationReconciliationOwner(options),
                 true);
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
-            ReapSchedulerOwnedChildren(w);
-            RecoverOrphanedRunningExperiments(w, logState, options.schedulerVerbose);
+            ReapSchedulerOwnedChildren(w, options);
+            RecoverOrphanedRunningExperiments(
+                w, options, logState, options.schedulerVerbose);
             if (normalSchedulingAllowed)
             {
                 EnqueueCheckpointEvalRows(w);
@@ -14247,8 +18215,13 @@ int RunSchedulerOnce(const SchedulerOptions& options,
     return rc;
 }
 
-int RunScheduler(const SchedulerOptions& options)
+int RunScheduler(SchedulerOptions options)
 {
+    InstallSchedulerSignalHandlers();
+    if (!AcquireSchedulerAuthority(options))
+        return 3;
+    SchedulerAuthorityReleaseGuard authorityGuard{options};
+
     int recoveryCount = 0;
     std::string initialGlobalState = "unknown";
     SchedulerEventLogState logState;
@@ -14256,6 +18229,7 @@ int RunScheduler(const SchedulerOptions& options)
         pqxx::connection c{LstmDbConnectionString()};
         pqxx::work w{c};
         SetTransactionReadWrite(w);
+        RequireAndRefreshSchedulerAuthority(w, options);
         if (!RequireSchedulerTables(w))
             return 1;
         const auto control = LoadLockedGlobalControl(w);
@@ -14270,7 +18244,8 @@ int RunScheduler(const SchedulerOptions& options)
                 true);
             EA::RunMetadata::BackfillMissingExperimentRunMetadata(w, options.selfPath, "scheduler_start");
             BeginSchedulerPollLogging(&logState);
-            recoveryCount = RecoverOrphanedRunningExperiments(w, &logState, options.schedulerVerbose);
+            recoveryCount = RecoverOrphanedRunningExperiments(
+                w, options, &logState, options.schedulerVerbose);
             FinishSchedulerPollLogging(&logState);
             if (FailInvalidSchedulerPhases(w) != 0)
             {
@@ -14312,27 +18287,88 @@ int RunScheduler(const SchedulerOptions& options)
     }
 
     int rc = 0;
+    bool ownershipLost = false;
     ContinuationAutoScanState continuationScanState;
     do
     {
-        rc |= RunSchedulerOnce(options, &logState);
+        if (gSchedulerStopRequested != 0)
+            break;
+        if (!RefreshSchedulerAuthority(options))
+        {
+            ownershipLost = true;
+            rc = 4;
+            break;
+        }
+        try
+        {
+            rc |= RunSchedulerOnce(options, &logState);
+        }
+        catch (const SchedulerAuthorityLost& error)
+        {
+            std::cerr << "SCHEDULER_OWNERSHIP_LOST"
+                      << ",scheduler_invocation_id="
+                      << options.schedulerAuthority.schedulerInvocationId
+                      << ",fencing_token="
+                      << options.schedulerAuthority.fencingToken
+                      << ",reason=" << error.what()
+                      << std::endl;
+            ownershipLost = true;
+            rc = 4;
+            break;
+        }
         if (options.autoEvaluateContinuations &&
             std::chrono::steady_clock::now() >= continuationScanState.nextScan)
         {
-            continuationScanState.lastCounts = RunAutomaticContinuationScan(options);
-            continuationScanState.hasRun = true;
-            continuationScanState.lastScanAt = EA::RunMetadata::CurrentUtcTimestamp();
-            continuationScanState.nextScan =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(options.continuationScanSeconds);
+            try
+            {
+                continuationScanState.lastCounts =
+                    RunAutomaticContinuationScan(options);
+                continuationScanState.hasRun = true;
+                continuationScanState.lastScanAt =
+                    EA::RunMetadata::CurrentUtcTimestamp();
+                continuationScanState.nextScan =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::seconds(options.continuationScanSeconds);
+            }
+            catch (const SchedulerAuthorityLost& error)
+            {
+                std::cerr << "SCHEDULER_OWNERSHIP_LOST"
+                          << ",scheduler_invocation_id="
+                          << options.schedulerAuthority.schedulerInvocationId
+                          << ",fencing_token="
+                          << options.schedulerAuthority.fencingToken
+                          << ",reason=" << error.what()
+                          << std::endl;
+                ownershipLost = true;
+                rc = 4;
+                break;
+            }
         }
         if (options.schedulerOnce)
             break;
-        ::sleep(static_cast<unsigned int>(options.schedulerPollSeconds));
+        for (int elapsed = 0;
+             elapsed < options.schedulerPollSeconds &&
+             gSchedulerStopRequested == 0;
+             ++elapsed)
+        {
+            ::sleep(1);
+            if ((elapsed + 1) % (kSchedulerLeaseSeconds / 3) == 0 &&
+                !RefreshSchedulerAuthority(options))
+            {
+                ownershipLost = true;
+                rc = 4;
+                break;
+            }
+        }
+        if (ownershipLost)
+            break;
     } while (true);
 
     std::cout << "SCHEDULER_STOP"
               << ",exit_code=" << rc
+              << ",ownership_lost=" << (ownershipLost ? 1 : 0)
+              << ",shutdown_requested="
+              << (gSchedulerStopRequested != 0 ? 1 : 0)
               << std::endl;
     return rc;
 }
@@ -14852,89 +18888,6 @@ bool CommandContainsOptionValue(const std::string& command,
            command.find(option + " " + valueText) != std::string::npos;
 }
 
-bool ProcessStillExists(pid_t pid)
-{
-    if (pid <= 0)
-        return false;
-    if (::kill(pid, 0) == 0)
-        return true;
-    return errno == EPERM;
-}
-
-bool WaitForProcessExit(pid_t pid, int attempts = 30, useconds_t sleepMicros = 100000)
-{
-    for (int i = 0; i < attempts; ++i)
-    {
-        if (!ProcessStillExists(pid))
-            return true;
-        ::usleep(sleepMicros);
-    }
-    return !ProcessStillExists(pid);
-}
-
-bool IsSchedulerWorkerCommand(const std::string& command, const std::string& phase)
-{
-    const bool isLstm = command.find("LSTM_Release") != std::string::npos ||
-                        command.find("/LSTM ") != std::string::npos ||
-                        command.find(" LSTM ") != std::string::npos;
-    if (!isLstm)
-        return false;
-    if (command.find("--schedule-experiments") != std::string::npos ||
-        command.find("--scheduler-status") != std::string::npos)
-    {
-        return false;
-    }
-    if (phase == "train")
-        return command.find("--train") != std::string::npos;
-    if (phase == "infer")
-        return command.find("--infer") != std::string::npos &&
-               command.find("--infer-all") == std::string::npos;
-    if (phase == "analyze")
-        return command.find("--analyze-experiment") != std::string::npos;
-    return false;
-}
-
-bool CommandMatchesStopExperiment(const std::string& command,
-                                         const SchedulerStopExperiment& stopExperiment)
-{
-    const ExperimentRow& experiment = stopExperiment.experiment;
-    if (!IsSchedulerWorkerCommand(command, stopExperiment.phase))
-        return false;
-
-    if (const auto commandExperimentId = ExtractExperimentIdFromCommand(command);
-        commandExperimentId.has_value() && *commandExperimentId == experiment.experimentId)
-    {
-        return true;
-    }
-
-    if (stopExperiment.phase == "train")
-    {
-        if (command.find(BaseModelName(experiment)) != std::string::npos)
-            return true;
-        const std::optional<long long> resumeFrom =
-            experiment.resumeModelId.has_value() ? experiment.resumeModelId : experiment.lastModelId;
-        return resumeFrom.has_value() &&
-               CommandContainsOptionValue(command, "--resume-model-id", *resumeFrom);
-    }
-
-    if (stopExperiment.phase == "infer")
-    {
-        if (!experiment.lastModelId.has_value() ||
-            !CommandContainsOptionValue(command, "--model", *experiment.lastModelId))
-        {
-            return false;
-        }
-        const bool datesMatch =
-            !experiment.inferStart.has_value() ||
-            !experiment.inferEnd.has_value() ||
-            (command.find(experiment.inferStart->substr(0, 10)) != std::string::npos &&
-             command.find(experiment.inferEnd->substr(0, 10)) != std::string::npos);
-        return datesMatch;
-    }
-
-    return false;
-}
-
 std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
                                                                  long long experimentId,
                                                                  bool forUpdate)
@@ -14944,7 +18897,10 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
         << "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         << "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         << "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        << "status, phase "
+        << "status, phase,worker_pid,worker_process_group_id,"
+        << "worker_executable,worker_command_line,"
+        << "worker_process_start_identity,"
+        << "active_scheduler_worker_attempt_id "
         << "FROM experiment WHERE experiment_id = " << experimentId;
     if (forUpdate)
         sql << " FOR UPDATE";
@@ -14958,6 +18914,23 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
     result.experiment = RowToExperiment(rows[0]);
     result.status = rows[0][17].as<std::string>();
     result.phase = rows[0][18].as<std::string>();
+    result.worker.experimentId = result.experiment.experimentId;
+    result.worker.phase = result.phase;
+    result.worker.lifecycleStatus = result.status;
+    if (!rows[0][19].is_null())
+        result.worker.pid = rows[0][19].as<int>();
+    if (!rows[0][20].is_null())
+        result.worker.processGroupId = rows[0][20].as<int>();
+    result.worker.executable = OptionalStringCell(rows[0], 21);
+    result.worker.commandLine = OptionalStringCell(rows[0], 22);
+    result.worker.processStartIdentity =
+        OptionalStringCell(rows[0], 23);
+    result.activeWorkerAttemptId =
+        OptionalLongLongCell(rows[0], 24);
+    result.worker.workerAttemptId =
+        result.activeWorkerAttemptId;
+    result.worker.workerKind = "experiment";
+    result.worker.capacityClass = result.phase;
     return result;
 }
 
@@ -14968,7 +18941,10 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "status, phase "
+        "status, phase,worker_pid,worker_process_group_id,"
+        "worker_executable,worker_command_line,"
+        "worker_process_start_identity,"
+        "active_scheduler_worker_attempt_id "
         "FROM experiment "
         "WHERE status = 'running' AND phase IN ('train', 'infer', 'analyze') "
         "ORDER BY updated_at ASC, experiment_id ASC;");
@@ -14981,6 +18957,24 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
         item.experiment = RowToExperiment(row);
         item.status = row[17].as<std::string>();
         item.phase = row[18].as<std::string>();
+        item.worker.experimentId =
+            item.experiment.experimentId;
+        item.worker.phase = item.phase;
+        item.worker.lifecycleStatus = item.status;
+        if (!row[19].is_null())
+            item.worker.pid = row[19].as<int>();
+        if (!row[20].is_null())
+            item.worker.processGroupId = row[20].as<int>();
+        item.worker.executable = OptionalStringCell(row, 21);
+        item.worker.commandLine = OptionalStringCell(row, 22);
+        item.worker.processStartIdentity =
+            OptionalStringCell(row, 23);
+        item.activeWorkerAttemptId =
+            OptionalLongLongCell(row, 24);
+        item.worker.workerAttemptId =
+            item.activeWorkerAttemptId;
+        item.worker.workerKind = "experiment";
+        item.worker.capacityClass = item.phase;
         experiments.push_back(item);
     }
     return experiments;
@@ -14989,6 +18983,7 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
 SchedulerStopCandidate BuildStopCandidate(const SchedulerStopExperiment& experiment,
                                                  const SchedulerStatusProcessSnapshot& processes)
 {
+    (void)processes;
     SchedulerStopCandidate candidate;
     candidate.experiment = experiment;
 
@@ -15004,33 +18999,27 @@ SchedulerStopCandidate BuildStopCandidate(const SchedulerStopExperiment& experim
         candidate.rejectionReason = "invalid_running_phase";
         return candidate;
     }
-    if (!processes.processDetectionAvailable)
+    if (!experiment.activeWorkerAttemptId.has_value())
     {
-        candidate.rejectionReason = "process_detection_unavailable";
+        candidate.rejectionReason =
+            "active_worker_attempt_identity_missing";
         return candidate;
     }
 
-    std::vector<int> matchedPids;
-    for (const auto& process : processes.processes)
+    std::unique_ptr<EA::GlobalExperimentControl::ProcessOperations>
+        processOperations =
+            EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const EA::GlobalExperimentControl::ValidatedWorker validated =
+        EA::GlobalExperimentControl::ValidateManagedWorker(
+            experiment.worker, *processOperations);
+    if (validated.identity !=
+        EA::GlobalExperimentControl::IdentityResult::Validated)
     {
-        if (CommandMatchesStopExperiment(process.command, experiment))
-            matchedPids.push_back(process.pid);
-    }
-
-    std::sort(matchedPids.begin(), matchedPids.end());
-    matchedPids.erase(std::unique(matchedPids.begin(), matchedPids.end()), matchedPids.end());
-    if (matchedPids.empty())
-    {
-        candidate.rejectionReason = "pid_not_found";
+        candidate.rejectionReason =
+            "worker_identity_not_validated:" + validated.detail;
         return candidate;
     }
-    if (matchedPids.size() > 1)
-    {
-        candidate.rejectionReason = "ambiguous_pid_match";
-        return candidate;
-    }
-
-    candidate.pid = matchedPids.front();
+    candidate.pid = validated.observation.pid;
     return candidate;
 }
 
@@ -15077,41 +19066,63 @@ bool SignalProcessForStop(const SchedulerStopCandidate& candidate,
     }
 
     const pid_t pid = static_cast<pid_t>(*candidate.pid);
-    const long long experimentId = candidate.experiment.experiment.experimentId;
-    if (!ProcessStillExists(pid))
-        return true;
+    const long long experimentId =
+        candidate.experiment.experiment.experimentId;
+    std::unique_ptr<EA::GlobalExperimentControl::ProcessOperations>
+        processes =
+            EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const EA::GlobalExperimentControl::ValidatedWorker validated =
+        EA::GlobalExperimentControl::ValidateManagedWorker(
+            candidate.experiment.worker, *processes);
+    if (validated.identity !=
+        EA::GlobalExperimentControl::IdentityResult::Validated)
+    {
+        errorMessage =
+            "worker_identity_not_validated:" + validated.detail;
+        return false;
+    }
 
     std::cout << "SCHEDULER_STOP_SIGNAL"
               << ",experiment_id=" << experimentId
               << ",pid=" << pid
               << ",signal=SIGTERM"
               << std::endl;
-    if (::kill(pid, SIGTERM) != 0 && errno != ESRCH)
+    if (force)
     {
-        errorMessage = "sigterm_failed";
-        return false;
-    }
-    if (WaitForProcessExit(pid))
+        const EA::GlobalExperimentControl::SignalOutcome outcome =
+            EA::GlobalExperimentControl::CancelWorker(
+                candidate.experiment.worker,
+                false,
+                std::chrono::seconds(3),
+                *processes);
+        usedSigkill =
+            std::find(
+                outcome.signals.begin(),
+                outcome.signals.end(),
+                SIGKILL) != outcome.signals.end();
+        if (!outcome.success)
+        {
+            errorMessage =
+                outcome.result + ":" + outcome.detail;
+            return false;
+        }
         return true;
-
-    if (!force)
-    {
-        errorMessage = "process_still_running";
-        return false;
     }
 
-    std::cout << "SCHEDULER_STOP_SIGNAL"
-              << ",experiment_id=" << experimentId
-              << ",pid=" << pid
-              << ",signal=SIGKILL"
-              << std::endl;
-    usedSigkill = true;
-    if (::kill(pid, SIGKILL) != 0 && errno != ESRCH)
+    int errorNumber = 0;
+    if (!processes->SignalProcessGroup(
+            validated.observation.processGroupId,
+            SIGTERM,
+            errorNumber))
     {
-        errorMessage = "sigkill_failed";
+        errorMessage =
+            "sigterm_failed:" +
+            std::string{std::strerror(errorNumber)};
         return false;
     }
-    if (WaitForProcessExit(pid))
+    if (processes->WaitForProcessGroupExit(
+            validated.observation.processGroupId,
+            std::chrono::seconds(3)))
         return true;
 
     errorMessage = "process_still_running";
@@ -15119,18 +19130,67 @@ bool SignalProcessForStop(const SchedulerStopCandidate& candidate,
 }
 
 void MarkExperimentStopped(pqxx::work& w,
-                                  long long experimentId,
+                                  const SchedulerStopExperiment& stopped,
                                   const std::string& errorMessage,
                                   int exitCode)
 {
-    w.exec_params(
-        "UPDATE experiment "
-        "SET status = 'cancelled', completed_at = now(), updated_at = now(), "
-        "exit_code = $1, error_message = $2 "
-        "WHERE experiment_id = $3;",
+    const long long experimentId =
+        stopped.experiment.experimentId;
+    const long long workerAttemptId =
+        *stopped.activeWorkerAttemptId;
+    pqxx::result attempt = w.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt a SET "
+        "lifecycle_state='failed',completed_at=clock_timestamp(),"
+        "exit_code=$1,reconciliation_result='operator_stop',"
+        "diagnostic=$2,last_observed_at=clock_timestamp() "
+        "WHERE a.worker_attempt_id=$3 "
+        "AND a.worker_kind='experiment' "
+        "AND a.experiment_id=$4 "
+        "AND a.lifecycle_phase=$5 "
+        "AND a.lifecycle_state IN "
+        "('spawned','running','observed') "
+        "AND EXISTS (SELECT 1 FROM experiment e "
+        " WHERE e.experiment_id=$4 "
+        " AND e.status='running' AND e.phase=$5 "
+        " AND e.active_scheduler_worker_attempt_id="
+        "a.worker_attempt_id) "
+        "RETURNING a.worker_attempt_id;",
         exitCode,
         errorMessage,
-        experimentId);
+        workerAttemptId,
+        experimentId,
+        stopped.phase);
+    if (attempt.size() != 1)
+        throw std::runtime_error(
+            "operator_stop_worker_attempt_predicate_rejected");
+    pqxx::result lifecycle = w.exec_params(
+        "UPDATE experiment "
+        "SET status = 'cancelled', completed_at = now(), updated_at = now(), "
+        "exit_code = $1, error_message = $2,"
+        "active_scheduler_worker_attempt_id=NULL,"
+        "worker_pid=NULL,worker_process_group_id=NULL "
+        "WHERE experiment_id = $3 "
+        "AND active_scheduler_worker_attempt_id=$4 "
+        "AND status='running' AND phase=$5 "
+        "AND worker_pid=$6 "
+        "AND worker_process_group_id IS NOT DISTINCT FROM $7 "
+        "AND worker_process_start_identity IS NOT DISTINCT FROM $8 "
+        "AND worker_executable IS NOT DISTINCT FROM $9 "
+        "AND worker_command_line IS NOT DISTINCT FROM $10 "
+        "RETURNING experiment_id;",
+        exitCode,
+        errorMessage,
+        experimentId,
+        workerAttemptId,
+        stopped.phase,
+        stopped.worker.pid,
+        stopped.worker.processGroupId,
+        stopped.worker.processStartIdentity,
+        stopped.worker.executable,
+        stopped.worker.commandLine);
+    if (lifecycle.size() != 1)
+        throw std::runtime_error(
+            "operator_stop_lifecycle_predicate_rejected");
 }
 
 bool ApplyStopCandidate(const SchedulerStopCandidate& originalCandidate,
@@ -15146,8 +19206,37 @@ bool ApplyStopCandidate(const SchedulerStopCandidate& originalCandidate,
         return false;
     }
 
-    const long long experimentId = originalCandidate.experiment.experiment.experimentId;
-    const std::optional<SchedulerStopExperiment> locked = LoadStopExperiment(w, experimentId, true);
+    const long long experimentId =
+        originalCandidate.experiment.experiment.experimentId;
+    if (!originalCandidate.experiment.activeWorkerAttemptId)
+    {
+        failureReason = "active_worker_attempt_identity_missing";
+        w.commit();
+        return false;
+    }
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId =
+        *originalCandidate.experiment.activeWorkerAttemptId;
+    expected.experimentId = experimentId;
+    expected.workerKind = "experiment";
+    expected.lifecyclePhase =
+        originalCandidate.experiment.phase;
+    expected.capacityClass =
+        originalCandidate.experiment.phase;
+    expected.requireSignalable = true;
+    expected.requireCompleteProcessIdentity = true;
+    const auto exact =
+        EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            w, expected, true);
+    if (!exact)
+    {
+        failureReason =
+            "exact_active_worker_attempt_verification_failed";
+        w.commit();
+        return false;
+    }
+    const std::optional<SchedulerStopExperiment> locked =
+        LoadStopExperiment(w, experimentId, false);
     if (!locked.has_value())
     {
         failureReason = "experiment_not_found";
@@ -15179,7 +19268,11 @@ bool ApplyStopCandidate(const SchedulerStopCandidate& originalCandidate,
     }
 
     const std::string message = options.force ? "force_stopped_by_user" : "stopped_by_user";
-    MarkExperimentStopped(w, experimentId, message, usedSigkill ? 137 : 143);
+    MarkExperimentStopped(
+        w,
+        *locked,
+        message,
+        usedSigkill ? 137 : 143);
     std::cout << "SCHEDULER_STOP_APPLIED"
               << ",experiment_id=" << experimentId
               << ",new_status=cancelled"
@@ -16781,10 +20874,9 @@ int PrintCompactExperimentStatus(const SchedulerOptions& options)
     const SchedulerStatusProcessSnapshot processes = LoadSchedulerStatusProcessSnapshot();
     pqxx::connection c{LstmDbConnectionString()};
     pqxx::work w{c};
-    SetTransactionReadWrite(w);
+    SetTransactionReadOnly(w);
     if (!RequireSchedulerTables(w))
         return 1;
-    BackfillRunningTrainingProgressFromLogs(w, options.statusExperimentId);
 
     std::vector<SchedulerStatusJob> jobs;
     if (options.statusExperimentId.has_value())
@@ -16811,7 +20903,6 @@ int PrintCompactExperimentStatus(const SchedulerOptions& options)
     w.commit();
 
     EnrichSchedulerStatusJobs(jobs, processes);
-    PersistDiscoveredRunningTrainingMetadata(jobs);
 
     if (!options.statusExperimentId.has_value() && jobs.empty())
     {
@@ -17259,8 +21350,6 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         "missing_count,rejected_count,failed_count "
         "FROM experiment_admin_request "
         "ORDER BY request_id DESC LIMIT 1;");
-    BackfillRunningTrainingProgressFromLogs(w, std::nullopt);
-
     const QueueSnapshot queueSnapshot = LoadQueueSnapshot(w);
     const SchedulerStatusCounts counts = LoadSchedulerStatusCounts(w);
     const SchedulerIntelligenceSnapshot intelligence = LoadSchedulerIntelligenceSnapshot(w, queueSnapshot);
@@ -17274,6 +21363,85 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     const auto authoritativeWorkers = LoadAuthoritativeSchedulerWorkers(w);
     std::vector<SchedulerCheckpointStatusJob> activeCheckpointInfer =
         LoadActiveCheckpointStatusJobs(w);
+    pqxx::result schedulerLease = w.exec(
+        "SELECT l.authority_state,"
+        "COALESCE(l.owner_scheduler_invocation_id,'NULL'),"
+        "l.fencing_token,COALESCE(l.acquired_at::text,'NULL'),"
+        "COALESCE(l.heartbeat_at::text,'NULL'),"
+        "COALESCE(l.expires_at::text,'NULL'),l.transition_reason,"
+        "(l.expires_at IS NOT NULL "
+        " AND l.expires_at<=clock_timestamp()) AS expired,"
+        "COALESCE(i.canonical_executable_path,'NULL') "
+        "FROM experiment_scheduler_lease l "
+        "LEFT JOIN experiment_scheduler_invocation i "
+        "ON i.scheduler_invocation_id="
+        "l.owner_scheduler_invocation_id "
+        "WHERE l.singleton=true;");
+    pqxx::result schedulerProtocol = w.exec(
+        "SELECT required_generation,cutover_state,"
+        "COALESCE(cutover_completed_at::text,'NULL'),"
+        "COALESCE(cutover_completed_by,'NULL'),"
+        "COALESCE(cutover_process_evidence,'NULL'),"
+        "legacy_no_pid_grace_seconds,"
+        "COALESCE(failure_diagnostic,'NULL') "
+        "FROM experiment_scheduler_protocol "
+        "WHERE singleton=true;");
+    pqxx::result durableWorkerCounts = w.exec(
+        "SELECT capacity_class,"
+        "count(*) FILTER (WHERE lifecycle_state IN "
+        " ('reserved','spawned','running','observed',"
+        "  'identity_ambiguous')) AS consuming,"
+        "count(*) FILTER (WHERE lifecycle_state='reserved') "
+        " AS reservations,"
+        "count(*) FILTER (WHERE lifecycle_state='identity_ambiguous') "
+        " AS identity_mismatches,"
+        "count(*) FILTER (WHERE lifecycle_state='observed') "
+        " AS observed,"
+        "count(*) FILTER (WHERE worker_kind='checkpoint_infer' "
+        " AND lifecycle_state IN "
+        " ('reserved','spawned','running','observed',"
+        "  'identity_ambiguous')) AS checkpoint_workers "
+        "FROM experiment_scheduler_worker_attempt "
+        "GROUP BY capacity_class ORDER BY capacity_class;");
+    pqxx::result attemptOwnershipCounts = w.exec(
+        "SELECT "
+        "count(*) FILTER (WHERE a.lifecycle_state IN "
+        " ('reserved','spawned','running','observed',"
+        "  'identity_ambiguous') "
+        " AND a.scheduler_invocation_id="
+        "     l.owner_scheduler_invocation_id) AS current_owner,"
+        "count(*) FILTER (WHERE a.lifecycle_state IN "
+        " ('reserved','spawned','running','observed',"
+        "  'identity_ambiguous') "
+        " AND a.scheduler_invocation_id IS DISTINCT FROM "
+        "     l.owner_scheduler_invocation_id) AS prior_or_legacy,"
+        "count(*) FILTER (WHERE a.lifecycle_state='reserved') "
+        " AS unresolved_launches,"
+        "count(*) FILTER (WHERE a.lifecycle_state="
+        " 'identity_ambiguous') AS orphan_candidates "
+        "FROM experiment_scheduler_worker_attempt a "
+        "CROSS JOIN experiment_scheduler_lease l "
+        "WHERE l.singleton=true;");
+    pqxx::result activeAttemptRows = w.exec(
+        "SELECT a.worker_attempt_id,a.worker_kind,"
+        "a.lifecycle_phase,a.capacity_class,a.lifecycle_state,"
+        "COALESCE(a.scheduler_invocation_id,'legacy'),"
+        "a.experiment_id,a.checkpoint_eval_id,a.worker_pid,"
+        "COALESCE(a.observed_by_scheduler_invocation_id,'NULL'),"
+        "COALESCE(a.reconciliation_result,'NULL'),"
+        "COALESCE(a.diagnostic,'NULL') "
+        "FROM experiment_scheduler_worker_attempt a "
+        "WHERE a.lifecycle_state IN "
+        "('reserved','spawned','running','observed',"
+        "'identity_ambiguous') "
+        "ORDER BY a.worker_attempt_id;");
+    pqxx::result unresolvedLegacyNoPid = w.exec(
+        "SELECT capacity_class,count(*) "
+        "FROM experiment_scheduler_worker_attempt "
+        "WHERE ownership_origin='legacy_unverified' "
+        "AND lifecycle_state='identity_ambiguous' "
+        "AND worker_pid IS NULL "
+        "GROUP BY capacity_class ORDER BY capacity_class;");
     w.commit();
 
     EnrichSchedulerStatusJobs(runningTrain, processes);
@@ -17284,7 +21452,6 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     EnrichSchedulerStatusJobs(completed, processes);
     EnrichSchedulerStatusJobs(failed, processes);
     EnrichCheckpointStatusJobs(activeCheckpointInfer, processes);
-    PersistDiscoveredRunningTrainingMetadata(runningTrain);
     auto processOperations =
         EA::GlobalExperimentControl::CreateNativeProcessOperations();
     const SchedulerWorkerAccounting workerAccounting =
@@ -17301,6 +21468,44 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
     };
 
     std::cout << "Scheduler Status\n";
+    if (schedulerLease.size() == 1)
+    {
+        std::cout << "Scheduler authority: "
+                  << schedulerLease[0][0].as<std::string>()
+                  << " owner=" << schedulerLease[0][1].as<std::string>()
+                  << " fence=" << schedulerLease[0][2].as<long long>()
+                  << " acquired=" << schedulerLease[0][3].as<std::string>()
+                  << " heartbeat=" << schedulerLease[0][4].as<std::string>()
+                  << " expires=" << schedulerLease[0][5].as<std::string>()
+                  << " expired="
+                  << (schedulerLease[0][7].as<bool>() ? 1 : 0)
+                  << "\n";
+    }
+    if (schedulerProtocol.size() == 1)
+    {
+        std::cout << "Scheduler protocol: generation="
+                  << schedulerProtocol[0][0].as<int>()
+                  << " cutover_state="
+                  << schedulerProtocol[0][1].as<std::string>()
+                  << " completed_at="
+                  << schedulerProtocol[0][2].as<std::string>()
+                  << " legacy_no_pid_grace_seconds="
+                  << schedulerProtocol[0][5].as<int>()
+                  << "\n";
+    }
+    std::cout << "Canonical executable: " << options.selfPath << "\n";
+    if (attemptOwnershipCounts.size() == 1)
+    {
+        std::cout << "Durable workers: current_owner="
+                  << attemptOwnershipCounts[0][0].as<long long>()
+                  << " prior_or_legacy="
+                  << attemptOwnershipCounts[0][1].as<long long>()
+                  << " unresolved_launches="
+                  << attemptOwnershipCounts[0][2].as<long long>()
+                  << " orphan_candidates="
+                  << attemptOwnershipCounts[0][3].as<long long>()
+                  << "\n";
+    }
     std::cout << "Global experiment execution: "
               << globalControl->desiredState
               << " active_request_id="
@@ -17425,6 +21630,121 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
 
     if (SchedulerStatusShouldEmitMachineRecords(options))
     {
+        if (schedulerLease.size() == 1)
+        {
+            std::cout << "\nSCHEDULER_STATUS_OWNERSHIP"
+                      << ",authority_state="
+                      << schedulerLease[0][0].as<std::string>()
+                      << ",owner_scheduler_invocation_id="
+                      << schedulerLease[0][1].as<std::string>()
+                      << ",fencing_token="
+                      << schedulerLease[0][2].as<long long>()
+                      << ",acquired_at="
+                      << schedulerLease[0][3].as<std::string>()
+                      << ",heartbeat_at="
+                      << schedulerLease[0][4].as<std::string>()
+                      << ",expires_at="
+                      << schedulerLease[0][5].as<std::string>()
+                      << ",transition_reason="
+                      << schedulerLease[0][6].as<std::string>()
+                      << ",expired="
+                      << (schedulerLease[0][7].as<bool>() ? 1 : 0)
+                      << ",canonical_executable_path="
+                      << schedulerLease[0][8].as<std::string>()
+                      << std::endl;
+        }
+        if (schedulerProtocol.size() == 1)
+        {
+            std::cout
+                << "SCHEDULER_STATUS_PROTOCOL"
+                << ",required_generation="
+                << schedulerProtocol[0][0].as<int>()
+                << ",cutover_state="
+                << schedulerProtocol[0][1].as<std::string>()
+                << ",cutover_completed_at="
+                << schedulerProtocol[0][2].as<std::string>()
+                << ",cutover_completed_by="
+                << schedulerProtocol[0][3].as<std::string>()
+                << ",cutover_process_evidence="
+                << schedulerProtocol[0][4].as<std::string>()
+                << ",legacy_no_pid_grace_seconds="
+                << schedulerProtocol[0][5].as<int>()
+                << ",failure_diagnostic="
+                << schedulerProtocol[0][6].as<std::string>()
+                << std::endl;
+        }
+        for (const pqxx::row& legacy :
+             unresolvedLegacyNoPid)
+        {
+            std::cout
+                << "SCHEDULER_STATUS_LEGACY_NO_PID"
+                << ",capacity_class="
+                << legacy[0].as<std::string>()
+                << ",unresolved="
+                << legacy[1].as<long long>()
+                << ",capacity_consumed="
+                << legacy[1].as<long long>()
+                << std::endl;
+        }
+        for (const pqxx::row& capacity : durableWorkerCounts)
+        {
+            std::cout << "SCHEDULER_STATUS_GLOBAL_CAPACITY"
+                      << ",capacity_class="
+                      << capacity[0].as<std::string>()
+                      << ",consuming=" << capacity[1].as<long long>()
+                      << ",reservations=" << capacity[2].as<long long>()
+                      << ",identity_mismatches="
+                      << capacity[3].as<long long>()
+                      << ",observed_prior_workers="
+                      << capacity[4].as<long long>()
+                      << ",checkpoint_workers="
+                      << capacity[5].as<long long>()
+                      << std::endl;
+        }
+        if (attemptOwnershipCounts.size() == 1)
+        {
+            std::cout << "SCHEDULER_STATUS_WORKER_OWNERSHIP"
+                      << ",current_owner="
+                      << attemptOwnershipCounts[0][0].as<long long>()
+                      << ",prior_or_legacy="
+                      << attemptOwnershipCounts[0][1].as<long long>()
+                      << ",unresolved_launches="
+                      << attemptOwnershipCounts[0][2].as<long long>()
+                      << ",orphan_candidates="
+                      << attemptOwnershipCounts[0][3].as<long long>()
+                      << std::endl;
+        }
+        for (const pqxx::row& attempt : activeAttemptRows)
+        {
+            std::cout << "SCHEDULER_STATUS_WORKER_ATTEMPT"
+                      << ",worker_attempt_id="
+                      << attempt[0].as<long long>()
+                      << ",worker_kind="
+                      << attempt[1].as<std::string>()
+                      << ",phase=" << attempt[2].as<std::string>()
+                      << ",capacity_class="
+                      << attempt[3].as<std::string>()
+                      << ",state=" << attempt[4].as<std::string>()
+                      << ",launch_scheduler_invocation_id="
+                      << attempt[5].as<std::string>()
+                      << ",experiment_id="
+                      << attempt[6].as<long long>()
+                      << ",checkpoint_eval_id="
+                      << (attempt[7].is_null()
+                              ? "NULL"
+                              : attempt[7].c_str())
+                      << ",pid="
+                      << (attempt[8].is_null()
+                              ? "NULL"
+                              : attempt[8].c_str())
+                      << ",observed_by="
+                      << attempt[9].as<std::string>()
+                      << ",reconciliation_result="
+                      << attempt[10].as<std::string>()
+                      << ",diagnostic="
+                      << attempt[11].as<std::string>()
+                      << std::endl;
+        }
         std::cout << "\nSCHEDULER_STATUS"
                   << ",running=" << (schedulerRunning ? "1" : "0")
                   << ",global_desired_state=" << globalControl->desiredState
@@ -18475,6 +22795,136 @@ bool IsExperimentSchedulerCommand(int argc, const char* argv[])
     return IsExperimentSchedulerCommandImpl(argc, argv);
 }
 
+bool RegisterSchedulerWorkerAttempt(
+    long long workerAttemptId,
+    const std::optional<long long>& expectedExperimentId,
+    const std::optional<long long>& expectedCheckpointEvalId,
+    const std::string& expectedWorkerKind,
+    const std::string& expectedLifecyclePhase)
+{
+    if (workerAttemptId <= 0 ||
+        (!expectedExperimentId && !expectedCheckpointEvalId) ||
+        expectedWorkerKind.empty() ||
+        expectedLifecyclePhase.empty())
+        return false;
+    try
+    {
+        const int pid = static_cast<int>(::getpid());
+        const int processGroupId = static_cast<int>(::getpgrp());
+        const std::optional<std::string> processStartIdentity =
+            EA::GlobalExperimentControl::ReadProcessStartIdentity(pid);
+        if (!processStartIdentity)
+            throw std::runtime_error(
+                "worker_process_start_identity_unavailable");
+        const std::string executable =
+            ResolveCanonicalExecutablePath();
+
+        pqxx::connection connection{LstmDbConnectionString()};
+        pqxx::work transaction{connection};
+        SetTransactionReadWrite(transaction);
+        pqxx::result identity = transaction.exec_params(
+            "SELECT experiment_id FROM "
+            "experiment_scheduler_worker_attempt "
+            "WHERE worker_attempt_id=$1;",
+            workerAttemptId);
+        if (identity.size() != 1)
+            throw std::runtime_error(
+                "worker_attempt_identity_missing");
+        const long long experimentId =
+            identity[0][0].as<long long>();
+        if (expectedExperimentId &&
+            *expectedExperimentId != experimentId)
+        {
+            throw std::runtime_error(
+                "worker_attempt_experiment_identity_mismatch");
+        }
+        EA::SchedulerOwnership::ExactAttemptExpectation expected;
+        expected.workerAttemptId = workerAttemptId;
+        expected.experimentId = experimentId;
+        expected.checkpointEvalId = expectedCheckpointEvalId;
+        expected.workerKind = expectedWorkerKind;
+        expected.lifecyclePhase = expectedLifecyclePhase;
+        expected.capacityClass =
+            expectedWorkerKind == "checkpoint_infer"
+                ? "infer"
+                : expectedLifecyclePhase;
+        expected.requireCompleteProcessIdentity = true;
+        const auto exact =
+            EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+                transaction, expected, true);
+        if (!exact ||
+            exact->workerPid != std::optional<int>{pid} ||
+            exact->processGroupId !=
+                std::optional<int>{processGroupId} ||
+            exact->processStartIdentity != processStartIdentity ||
+            exact->canonicalExecutablePath !=
+                std::optional<std::string>{executable})
+        {
+            throw std::runtime_error(
+                "worker_attempt_exact_active_identity_mismatch");
+        }
+        pqxx::result registered = transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt SET "
+            "lifecycle_state='running',"
+            "registered_at=COALESCE(registered_at,clock_timestamp()),"
+            "last_observed_at=clock_timestamp() "
+            "WHERE worker_attempt_id=$1 AND worker_pid=$2 "
+            "AND worker_process_group_id=$3 "
+            "AND worker_process_start_identity=$4 "
+            "AND canonical_executable_path=$5 "
+            "AND experiment_id=$6 "
+            "AND checkpoint_eval_id IS NOT DISTINCT FROM $7 "
+            "AND worker_kind=$8 AND lifecycle_phase=$9 "
+            "AND lifecycle_state IN ('spawned','running') "
+            "RETURNING experiment_id,checkpoint_eval_id,worker_kind,"
+            "lifecycle_phase;",
+            workerAttemptId,
+            pid,
+            processGroupId,
+            *processStartIdentity,
+            executable,
+            experimentId,
+            expectedCheckpointEvalId,
+            expectedWorkerKind,
+            expectedLifecyclePhase);
+        if (registered.size() != 1)
+        {
+            transaction.abort();
+            std::cerr << "SCHEDULER_WORKER_REGISTRATION_REJECTED"
+                      << ",worker_attempt_id=" << workerAttemptId
+                      << ",pid=" << pid
+                      << ",reason=durable_identity_mismatch"
+                      << std::endl;
+            return false;
+        }
+        transaction.commit();
+        std::cout << "SCHEDULER_WORKER_REGISTERED"
+                  << ",worker_attempt_id=" << workerAttemptId
+                  << ",experiment_id="
+                  << registered[0][0].as<long long>()
+                  << ",checkpoint_eval_id="
+                  << (registered[0][1].is_null()
+                          ? "NULL"
+                          : registered[0][1].c_str())
+                  << ",worker_kind="
+                  << registered[0][2].as<std::string>()
+                  << ",phase="
+                  << registered[0][3].as<std::string>()
+                  << ",pid=" << pid
+                  << std::endl;
+        return true;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "SCHEDULER_WORKER_REGISTRATION_FAILED"
+                  << ",worker_attempt_id=" << workerAttemptId
+                  << ",pid=" << static_cast<int>(::getpid())
+                  << ",error=" << error.what()
+                  << std::endl;
+        return false;
+    }
+}
+
 int RunExperimentSchedulerCli(int argc, const char* argv[])
 {
     SchedulerOptions options;
@@ -18494,6 +22944,16 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
 
     try
     {
+        if (options.schedulerWorkerAttemptId &&
+            !RegisterSchedulerWorkerAttempt(
+                *options.schedulerWorkerAttemptId,
+                options.analyzeExperimentId,
+                std::nullopt,
+                "experiment",
+                "analyze"))
+        {
+            return 125;
+        }
         if (options.help)
         {
             PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
@@ -18542,6 +23002,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         }
         if (options.scheduleExperiments)
             return RunScheduler(options);
+        if (options.completeSchedulerProtocolCutover)
+            return CompleteSchedulerProtocolCutover(options);
         if (options.stopExperimentId.has_value() || options.stopAllExperiments)
             return RunStopExperimentCommand(options);
         if (options.retryCheckpointEvalId.has_value())
@@ -18660,9 +23122,29 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.requeueInferenceExperimentId.has_value())
             return RunSchedulerControlCommand(options);
         if (options.analyzeExperimentId.has_value())
+        {
+            if (!options.schedulerWorkerAttemptId)
+            {
+                std::cerr
+                    << "DIRECT_CLI_MANAGED_WORK_REJECTED"
+                    << ",operation=analyze"
+                    << ",experiment_id="
+                    << *options.analyzeExperimentId
+                    << ",reason=exact_worker_attempt_required"
+                    << std::endl;
+                return 1;
+            }
             return AnalyzeExperimentById(*options.analyzeExperimentId, options);
+        }
         if (options.analyzeCompletedExperiments)
-            return AnalyzeCompletedExperiments();
+        {
+            std::cerr
+                << "DIRECT_CLI_MANAGED_WORK_REJECTED"
+                << ",operation=bulk_analyze"
+                << ",reason=scheduler_owned_analysis_only"
+                << std::endl;
+            return 1;
+        }
         if (options.printLeaderboard)
             return PrintLeaderboard(options);
     }

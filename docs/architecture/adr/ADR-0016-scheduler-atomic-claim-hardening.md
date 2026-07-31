@@ -58,6 +58,18 @@ ADR acceptance alone does not enable production dispatch. Enablement requires
 implementation, multi-connection verification, independent review, and an
 explicit default-off configuration/privilege decision.
 
+Implementation note (2026-07-27): migration 051 and scheduler version 0.3.0
+implement this decision with a fenced lease, invocation history, globally
+capacity-accounted attempts, lifecycle attempt fences, and gated canonical
+launch. Independent verification and any Campaign Operations enablement remain
+separate.
+
+Correction note (2026-07-29): migration 052 and scheduler version 0.4.0 apply
+the same attempt authority to continuation mutation, signals, parent reaping,
+reconciliation, capacity release, and in-process checkpoint analysis. They
+also establish one global lock order and a technical mixed-version cutover
+barrier. ADR-0018 records the coordinated correction.
+
 ## 3. Rationale and decision drivers
 
 - Satisfy the already accepted ADR-0004 claim invariant.
@@ -162,3 +174,5 @@ new capacity policy.
 | Date | Change |
 |---|---|
 | 2026-07-24 | Accepted scheduler-owned atomic claim/attempt hardening and the production-dispatch gate. |
+| 2026-07-27 | Recorded migration 051 and scheduler 0.3.0 implementation; independent verification remains separate. |
+| 2026-07-29 | Recorded generation-52 exact-attempt correction and delegated its detailed recovery/cutover rules to ADR-0018. |

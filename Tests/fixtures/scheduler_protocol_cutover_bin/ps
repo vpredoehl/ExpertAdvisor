@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+case "${EA_SCHEDULER_PROTOCOL_TEST_PS_MODE:-safe}" in
+    safe)
+        printf '%s\n' '41001 /usr/bin/unrelated-test-process'
+        ;;
+    old_scheduler)
+        printf '%s\n' \
+            '41002 /tmp/pre-051/LSTM_Release --schedule-experiments'
+        ;;
+    corrected_scheduler)
+        printf '%s\n' \
+            '41003 /tmp/generation-52/LSTM_Release --schedule-experiments'
+        ;;
+    inspection_failure)
+        exit 1
+        ;;
+    *)
+        exit 2
+        ;;
+esac

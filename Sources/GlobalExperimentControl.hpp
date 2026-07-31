@@ -66,6 +66,11 @@ struct ProcessObservation
 
 struct ManagedWorker
 {
+    std::optional<long long> workerAttemptId;
+    std::string workerKind;
+    std::string capacityClass;
+    std::string attemptLifecycleState;
+    std::string launchAttemptIdentity;
     long long experimentId = -1;
     std::optional<long long> checkpointEvalId;
     std::string phase;
@@ -210,6 +215,7 @@ struct CheckpointStopRecordResult
     bool cancellationRequested = false;
     bool inferenceRequested = false;
     std::optional<long long> cancellationRequestId;
+    std::optional<long long> workerAttemptId;
     std::string detail;
 };
 
@@ -219,6 +225,7 @@ struct CheckpointStopRecordResult
 CheckpointStopRecordResult RecordCheckpointStopReached(
     pqxx::work& transaction,
     const std::optional<long long>& experimentId,
+    long long workerAttemptId,
     int epoch,
     long long modelId);
 

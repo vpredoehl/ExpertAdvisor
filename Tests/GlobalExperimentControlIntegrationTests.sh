@@ -195,7 +195,9 @@ CREATE TABLE experiment_checkpoint_eval (
     status text NOT NULL DEFAULT 'pending',
     phase text NOT NULL DEFAULT 'infer',
     worker_pid integer,
+    infer_log_path text,
     started_at timestamptz,
+    infer_started_at timestamptz,
     completed_at timestamptz,
     error_message text,
     updated_at timestamptz NOT NULL DEFAULT now(),
@@ -375,6 +377,31 @@ test "$(psql -v ON_ERROR_STOP=1 -Atq -d "${test_db}" -c \
 psql --single-transaction -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/050_experiment_current_operation_canonicalization.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/051_scheduler_ownership_and_worker_attempts.sql"
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+UPDATE experiment_scheduler_protocol
+SET cutover_state='complete',
+    cutover_completed_at=clock_timestamp(),
+    cutover_completed_by='global_control_integration_test',
+    cutover_executable_path='/tmp/LSTM_Release',
+    cutover_process_evidence='isolated_disposable_database',
+    updated_at=clock_timestamp()
+WHERE singleton AND cutover_state='pending';
+UPDATE experiment_scheduler_worker_attempt
+SET lifecycle_state='observed',
+    last_observed_at=clock_timestamp(),
+    reconciliation_result='mock_process_fixture_exact_identity_verified'
+WHERE ownership_origin='legacy_unverified'
+  AND lifecycle_state='identity_ambiguous'
+  AND worker_pid IS NOT NULL
+  AND worker_process_group_id IS NOT NULL
+  AND worker_process_start_identity IS NOT NULL
+  AND canonical_executable_path IS NOT NULL
+  AND command_line IS NOT NULL;
+SQL
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/GlobalExperimentControlMigrationTests.sql"
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -c "GRANT SELECT ON model,matrix,experiment_analysis_result TO pqxx;"
@@ -454,6 +481,9 @@ CREATE TABLE experiment_checkpoint_eval (
     status text NOT NULL DEFAULT 'pending',
     phase text NOT NULL DEFAULT 'infer',
     worker_pid integer,
+    infer_log_path text,
+    started_at timestamptz,
+    infer_started_at timestamptz,
     completed_at timestamptz,
     error_message text,
     updated_at timestamptz NOT NULL DEFAULT now()
@@ -852,7 +882,9 @@ test "${migration_fixture_pgid}" = "${migration_fixture_pid}"
 test -n "${migration_fixture_start_identity}"
 test -n "${migration_fixture_executable}"
 test "${migration_fixture_command}" != ""
-migration_fixture_persisted_executable="${migration_fixture_command%% *}"
+# Executable identity is the canonical proc_pidpath/realpath result.  The
+# argv[0] command token may be a symlink and is diagnostic only.
+migration_fixture_persisted_executable="${migration_fixture_executable}"
 test -n "${migration_fixture_persisted_executable}"
 kill -STOP -- "-${migration_fixture_pgid}"
 for _ in {1..100}; do
@@ -901,6 +933,28 @@ UPDATE experiment_global_control SET desired_state='paused',
 SQL
 apply_047_schema gp_mig_selective
 assert_047_schema gp_mig_selective
+schema_psql gp_mig_selective \
+    -f "${repo_root}/Database/migrations/051_scheduler_ownership_and_worker_attempts.sql"
+schema_psql gp_mig_selective \
+    -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
+schema_psql gp_mig_selective <<'SQL'
+UPDATE experiment_scheduler_protocol
+SET cutover_state='complete',
+    cutover_completed_at=clock_timestamp(),
+    cutover_completed_by='global_control_migration_test',
+    cutover_executable_path='/tmp/LSTM_Release',
+    cutover_process_evidence=
+        'isolated_schema;fixture_process_exactly_inspected',
+    updated_at=clock_timestamp()
+WHERE singleton AND cutover_state='pending';
+UPDATE experiment_scheduler_worker_attempt
+SET lifecycle_state='observed',
+    last_observed_at=clock_timestamp(),
+    reconciliation_result='test_fixture_exact_identity_verified'
+WHERE experiment_id=990010
+  AND ownership_origin='legacy_unverified'
+  AND lifecycle_state='identity_ambiguous';
+SQL
 migration_pause_request="$(
     schema_scalar gp_mig_selective \
         "SELECT request_id FROM experiment_admin_request
@@ -1077,13 +1131,37 @@ test "$(scalar "SELECT status FROM experiment WHERE experiment_id=1")" = cancell
 psql -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment (
     status,phase,worker_pid,worker_process_group_id,
-    worker_executable,worker_command_line,infer_start,infer_end,
+    worker_executable,worker_command_line,worker_process_start_identity,
+    infer_start,infer_end,
     current_operation,worker_started_at
 ) VALUES (
-    'running','train',999999,999999,'LSTM_Release',
+    'running','train',999999,999999,'/missing/LSTM_Release',
     'LSTM_Release --train --scheduler-experiment-id=2',
+    'missing-process-start-2',
     '2020-01-01','2020-02-01','train',now()
 );
+BEGIN;
+SELECT set_config(
+    'expertadvisor.scheduler_protocol_generation','52',true);
+WITH attempt AS (
+    INSERT INTO experiment_scheduler_worker_attempt (
+        launch_attempt_identity,experiment_id,worker_kind,lifecycle_phase,
+        capacity_class,ownership_origin,lifecycle_state,worker_pid,
+        worker_process_group_id,worker_process_start_identity,
+        canonical_executable_path,command_line,command_identity,
+        reserved_at,spawned_at,registered_at
+    ) VALUES (
+        'test:missing-process:2',2,'experiment','train','train',
+        'legacy_unverified','observed',999999,999999,
+        'missing-process-start-2','/missing/LSTM_Release',
+        'LSTM_Release --train --scheduler-experiment-id=2',
+        'experiment:2:train',now(),now(),now()
+    ) RETURNING worker_attempt_id
+)
+UPDATE experiment SET active_scheduler_worker_attempt_id=
+    (SELECT worker_attempt_id FROM attempt)
+WHERE experiment_id=2;
+COMMIT;
 SQL
 set +e
 no_checkpoint="$(
@@ -1100,13 +1178,37 @@ test "$(scalar "SELECT status FROM experiment WHERE experiment_id=2")" = cancell
 psql -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment (
     status,phase,worker_pid,worker_process_group_id,
-    worker_executable,worker_command_line,current_epoch,
+    worker_executable,worker_command_line,worker_process_start_identity,
+    current_epoch,
     infer_start,infer_end,current_operation,worker_started_at
 ) VALUES (
-    'running','train',999998,999998,'LSTM_Release',
-    'LSTM_Release --train --scheduler-experiment-id=3',21,
+    'running','train',999998,999998,'/missing/LSTM_Release',
+    'LSTM_Release --train --scheduler-experiment-id=3',
+    'missing-process-start-3',21,
     '2020-01-01','2020-02-01','train',now()
 );
+BEGIN;
+SELECT set_config(
+    'expertadvisor.scheduler_protocol_generation','52',true);
+WITH attempt AS (
+    INSERT INTO experiment_scheduler_worker_attempt (
+        launch_attempt_identity,experiment_id,worker_kind,lifecycle_phase,
+        capacity_class,ownership_origin,lifecycle_state,worker_pid,
+        worker_process_group_id,worker_process_start_identity,
+        canonical_executable_path,command_line,command_identity,
+        reserved_at,spawned_at,registered_at
+    ) VALUES (
+        'test:missing-process:3',3,'experiment','train','train',
+        'legacy_unverified','observed',999998,999998,
+        'missing-process-start-3','/missing/LSTM_Release',
+        'LSTM_Release --train --scheduler-experiment-id=3',
+        'experiment:3:train',now(),now(),now()
+    ) RETURNING worker_attempt_id
+)
+UPDATE experiment SET active_scheduler_worker_attempt_id=
+    (SELECT worker_attempt_id FROM attempt)
+WHERE experiment_id=3;
+COMMIT;
 INSERT INTO model(experiment_id,comment)
 VALUES (3,'periodic training checkpoint');
 UPDATE experiment SET last_model_id=currval('model_model_id_seq')
@@ -1328,6 +1430,35 @@ test "${scheduler_fixture_identity_captured}" = true
 test -s "${test_tmp}/scheduler_fixture.ready"
 kill -0 "${scheduler_fixture_pid}"
 
+# The restart fixture represents a pre-existing scheduler worker.  Under the
+# durable accounting contract it must have an exact active attempt; local
+# process discovery is intentionally not an ownership source.
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -v fixture_pid="${scheduler_fixture_pid}" \
+    -v fixture_pgid="${scheduler_fixture_pgid}" \
+    -v fixture_start="${scheduler_fixture_start_identity}" \
+    -v fixture_executable="${scheduler_fixture_executable}" \
+    -v fixture_command="${test_tmp}/LSTM_Release --managed-test-worker --self-session --train --scheduler-experiment-id=800002 --ready-fd=9" <<'SQL'
+WITH attempt AS (
+    INSERT INTO experiment_scheduler_worker_attempt (
+        launch_attempt_identity,experiment_id,worker_kind,lifecycle_phase,
+        capacity_class,ownership_origin,lifecycle_state,worker_pid,
+        worker_process_group_id,worker_process_start_identity,
+        canonical_executable_path,command_line,command_identity,
+        reserved_at,spawned_at,registered_at
+    ) VALUES (
+        'legacy:global-control-restart:800002',800002,'experiment','train',
+        'train','legacy_unverified','identity_ambiguous',:fixture_pid,
+        :fixture_pgid,:'fixture_start',:'fixture_executable',
+        :'fixture_command','experiment:800002:train',
+        clock_timestamp(),clock_timestamp(),clock_timestamp()
+    ) RETURNING worker_attempt_id
+)
+UPDATE experiment SET active_scheduler_worker_attempt_id=
+    (SELECT worker_attempt_id FROM attempt)
+WHERE experiment_id=800002;
+SQL
+
 restart_request_count="$(
     scalar "SELECT count(*) FROM experiment_admin_request"
 )"
@@ -1341,9 +1472,7 @@ run_control --schedule-experiments --scheduler-once --dry-run \
     >"${test_tmp}/scheduler_active_cancellation_restart.out"
 grep -q 'SCHEDULER_START.*global_desired_state=running' \
     "${test_tmp}/scheduler_active_cancellation_restart.out"
-grep -q 'SCHEDULER_QUEUE_PHASE,phase=train,examined=1,skipped=1,launched=0,free_slots=1' \
-    "${test_tmp}/scheduler_active_cancellation_restart.out"
-grep -q 'SCHEDULER_SKIP_TRAIN,experiment_id=800002,reason=already_running' \
+grep -q 'SCHEDULER_QUEUE_PHASE,phase=train,examined=1,skipped=1,launched=0,free_slots=0' \
     "${test_tmp}/scheduler_active_cancellation_restart.out"
 ! grep -q 'experiment_id=800001' \
     "${test_tmp}/scheduler_active_cancellation_restart.out"
@@ -1403,6 +1532,10 @@ UPDATE experiment_global_control SET active_request_id=NULL WHERE singleton;
 DELETE FROM experiment_admin_worker_outcome
 WHERE request_id=${restart_cancel_request_id};
 DELETE FROM matrix WHERE model_id=${restart_model_id};
+UPDATE experiment SET active_scheduler_worker_attempt_id=NULL
+WHERE experiment_id=800002;
+DELETE FROM experiment_scheduler_worker_attempt
+WHERE experiment_id=800002;
 DELETE FROM experiment WHERE experiment_id IN (800001,800002,800003);
 DELETE FROM model WHERE model_id=${restart_model_id};
 DELETE FROM experiment_admin_request

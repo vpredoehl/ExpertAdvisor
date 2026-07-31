@@ -86,6 +86,7 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0015](ADR-0015-cancellation-reconciliation-and-recovery.md) | Accepted | Cancellation intent/settlement, detection-only reconciliation, and bounded recovery preserve owning-service authority. |
 | [ADR-0016](ADR-0016-scheduler-atomic-claim-hardening.md) | Accepted | Scheduler-owned atomic claim hardening gates production campaign dispatch. |
 | [ADR-0017](ADR-0017-campaign-privileges-and-audit.md) | Accepted | Separate least-privilege capabilities, invoker-rights Phase 5 invocation, and append-only audit prevent authority overlap. |
+| [ADR-0018](ADR-0018-scheduler-generation-52-exact-attempt-authority.md) | Accepted | Generation-52 binds scheduler mutation, signaling, finalization, analysis, and cutover to one exact-attempt authority. |
 
 ## 8. Revision history
 
@@ -98,3 +99,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.4.0 | 2026-07-21 | Added ADR-0008 for exact append-only Phase 6C administrative review without action authority. |
 | 1.5.0 | 2026-07-22 | Proposed ADR-0009 for exact append-only Phase 6D governance ratification with mandatory separation of duties and no Phase 6E authority. |
 | 1.6.0 | 2026-07-24 | Accepted ADR-0009 and ADR-0010 through ADR-0017 to close Phase 6D and Campaign Operations architectural authority. |
+| 1.7.0 | 2026-07-29 | Added ADR-0018 for generation-52 exact-attempt scheduler authority and technical cutover. |

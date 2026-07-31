@@ -21,6 +21,7 @@
 #include <vector>
 #include <stdexcept>
 #include <sstream>
+#include <signal.h>
 #include <unistd.h>
 #include <pqxx/pqxx>
 
@@ -3138,7 +3139,18 @@ std::string ForexDbConnectionString()
 
 std::string LstmDbConnectionString()
 {
-    return "hostaddr=127.0.0.1  user=pqxx dbname=" + dbModelName;
+    const char* host = std::getenv("LSTM_DB_HOST");
+    const char* database = std::getenv("LSTM_DB_NAME");
+    return "hostaddr=" +
+           std::string{
+               host != nullptr && *host != '\0'
+                   ? host
+                   : "127.0.0.1"} +
+           " gssencmode=disable user=pqxx dbname=" +
+           std::string{
+               database != nullptr && *database != '\0'
+                   ? database
+                   : dbModelName};
 }
 
 std::optional<long long> ResolveSchedulerExperimentIdForCurrentProcess()
@@ -3678,10 +3690,11 @@ std::optional<CheckpointStopConfig> LoadCheckpointStopConfig(const std::optional
 }
 
 bool RecordCheckpointStopReached(const std::optional<long long>& experimentId,
+                                 const std::optional<long long>& workerAttemptId,
                                  int epoch,
                                  long long modelId)
 {
-    if (!experimentId.has_value())
+    if (!experimentId.has_value() || !workerAttemptId.has_value())
         return false;
 
     try
@@ -3704,7 +3717,7 @@ bool RecordCheckpointStopReached(const std::optional<long long>& experimentId,
 
         const EA::GlobalExperimentControl::CheckpointStopRecordResult result =
             EA::GlobalExperimentControl::RecordCheckpointStopReached(
-                w, experimentId, epoch, modelId);
+                w, experimentId, *workerAttemptId, epoch, modelId);
         w.commit();
         if (!result.recorded)
         {
@@ -3773,6 +3786,7 @@ struct LaunchArgs
     std::optional<int> checkpointEvery;
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> schedulerCheckpointEvalId;
+    std::optional<long long> schedulerWorkerAttemptId;
     std::optional<long long> inferStartAfterModelId;
     std::optional<RuntimeLogLevel> logLevel;
     std::optional<std::string> lstmProfileOutputPath;
@@ -3998,6 +4012,17 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--scheduler-checkpoint-eval-id requires a checkpoint_eval_id value");
             parsed.schedulerCheckpointEvalId = ParseModelIdArg(argv[++i]);
         }
+        else if (arg == "--scheduler-worker-attempt-id")
+        {
+            if (parsed.schedulerWorkerAttemptId.has_value())
+                throw std::invalid_argument(
+                    "--scheduler-worker-attempt-id specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument(
+                    "--scheduler-worker-attempt-id requires an attempt_id value");
+            parsed.schedulerWorkerAttemptId =
+                ParseModelIdArg(argv[++i]);
+        }
         else if (arg == "--log-level")
         {
             if (parsed.logLevel.has_value())
@@ -4105,6 +4130,15 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.schedulerCheckpointEvalId.has_value())
                     throw std::invalid_argument("--scheduler-checkpoint-eval-id specified more than once");
                 parsed.schedulerCheckpointEvalId = ParseModelIdArg(value);
+            }
+            else if (SplitOptionWithValue(
+                         arg, "--scheduler-worker-attempt-id", value))
+            {
+                if (parsed.schedulerWorkerAttemptId.has_value())
+                    throw std::invalid_argument(
+                        "--scheduler-worker-attempt-id specified more than once");
+                parsed.schedulerWorkerAttemptId =
+                    ParseModelIdArg(value);
             }
             else if (SplitOptionWithValue(arg, "--log-level", value))
             {
@@ -6766,6 +6800,86 @@ extern "C" bool LstmRuntimeDiagnosticLoggingEnabled()
     return LogDiagnostic();
 }
 
+std::optional<int> RunCheckpointStopOwnershipTestBoundary(
+    const LaunchArgs& launchArgs)
+{
+    const char* enabled =
+        std::getenv("EA_SCHEDULER_OWNERSHIP_TEST_ENABLE");
+    const char* boundary =
+        std::getenv("EA_SCHEDULER_OWNERSHIP_TEST_BOUNDARY");
+    const char* database = std::getenv("LSTM_DB_NAME");
+    if (!enabled || std::string{enabled} != "1" ||
+        !boundary ||
+        std::string{boundary} !=
+            "checkpoint_stop_after_transition_before_exit" ||
+        !database ||
+        std::string{database}.rfind(
+            "ea_scheduler_process_test_", 0) != 0)
+    {
+        return std::nullopt;
+    }
+    if (!launchArgs.schedulerExperimentId ||
+        !launchArgs.schedulerWorkerAttemptId ||
+        !launchArgs.inferenceMode)
+    {
+        return 91;
+    }
+
+    if (*launchArgs.inferenceMode)
+    {
+        std::cout << "SCHEDULER_TEST_CHECKPOINT_NEXT_PHASE_HELD"
+                  << ",experiment_id="
+                  << *launchArgs.schedulerExperimentId
+                  << ",worker_attempt_id="
+                  << *launchArgs.schedulerWorkerAttemptId
+                  << ",phase=infer"
+                  << std::endl;
+        std::cout.flush();
+        if (::kill(::getpid(), SIGSTOP) != 0)
+            return 92;
+        return 0;
+    }
+
+    const char* modelText =
+        std::getenv(
+            "EA_SCHEDULER_OWNERSHIP_TEST_CHECKPOINT_MODEL_ID");
+    if (!modelText || !*modelText ||
+        !launchArgs.checkpointEvery ||
+        !launchArgs.epochs)
+    {
+        return 93;
+    }
+    const long long modelId = ParseModelIdArg(modelText);
+    const int checkpointEpoch = *launchArgs.checkpointEvery;
+    const std::optional<CheckpointStopConfig> stop =
+        LoadCheckpointStopConfig(
+            launchArgs.schedulerExperimentId,
+            checkpointEpoch,
+            *launchArgs.epochs,
+            launchArgs.checkpointEvery);
+    if (!stop ||
+        !RecordCheckpointStopReached(
+            launchArgs.schedulerExperimentId,
+            launchArgs.schedulerWorkerAttemptId,
+            checkpointEpoch,
+            modelId))
+    {
+        return 94;
+    }
+    std::cout << "SCHEDULER_TEST_CHECKPOINT_TRAIN_ATTEMPT_TERMINAL"
+              << ",experiment_id="
+              << *launchArgs.schedulerExperimentId
+              << ",worker_attempt_id="
+              << *launchArgs.schedulerWorkerAttemptId
+              << ",checkpoint_epoch=" << checkpointEpoch
+              << ",checkpoint_model_id=" << modelId
+              << std::endl;
+    std::cout.flush();
+    if (::kill(::getpid(), SIGSTOP) != 0)
+        return 95;
+    return 0;
+}
+
 int main(int argc, const char * argv[])
 {
     if (argc >= 4 && std::string(argv[1]) == "--baseline-3class")
@@ -6783,6 +6897,37 @@ int main(int argc, const char * argv[])
     try
     {
         launchArgs = ParseLaunchArgs(argc, argv);
+        if ((launchArgs.schedulerExperimentId.has_value() ||
+             launchArgs.schedulerCheckpointEvalId.has_value()) &&
+            !launchArgs.schedulerWorkerAttemptId.has_value())
+        {
+            throw std::invalid_argument(
+                "direct CLI execution of scheduler-managed work is "
+                "prohibited; an exact --scheduler-worker-attempt-id "
+                "is required");
+        }
+        if (launchArgs.schedulerWorkerAttemptId.has_value() &&
+            !EA::ExperimentScheduler::RegisterSchedulerWorkerAttempt(
+                *launchArgs.schedulerWorkerAttemptId,
+                launchArgs.schedulerExperimentId,
+                launchArgs.schedulerCheckpointEvalId,
+                launchArgs.schedulerCheckpointEvalId.has_value()
+                    ? "checkpoint_infer"
+                    : "experiment",
+                launchArgs.schedulerCheckpointEvalId.has_value()
+                    ? "infer"
+                    : ((launchArgs.inferenceMode.has_value() &&
+                        *launchArgs.inferenceMode)
+                           ? "infer"
+                           : "train")))
+        {
+            return 125;
+        }
+        if (const std::optional<int> testBoundary =
+                RunCheckpointStopOwnershipTestBoundary(launchArgs))
+        {
+            return *testBoundary;
+        }
         if (launchArgs.logLevel.has_value())
             gRuntimeLogLevel = *launchArgs.logLevel;
         if (launchArgs.schedulerCheckpointEvalId.has_value())
@@ -7289,6 +7434,7 @@ int main(int argc, const char * argv[])
                         if (checkpointStopConfig.has_value() &&
                             RecordCheckpointStopReached(
                                 launchArgs.schedulerExperimentId,
+                                launchArgs.schedulerWorkerAttemptId,
                                 static_cast<int>(e + 1),
                                 *checkpointModelId))
                         {

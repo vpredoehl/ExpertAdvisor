@@ -45,6 +45,10 @@ Experiment scheduling tables are created by:
 - `050_experiment_current_operation_canonicalization.sql`: reconciles legacy
   operation/control labels and enforces the sole persisted
   `current_operation` values `train`, `infer`, and `analyze`
+- `051_scheduler_ownership_and_worker_attempts.sql`: immutable scheduler
+  invocations, fenced singleton ownership, durable global worker
+  attempts/capacity, exact lifecycle attempt links, and conservative
+  `legacy_unverified` reservations for existing active rows
 
 Recommendation conversion and campaign-approval history is created by:
 
@@ -247,6 +251,41 @@ pre-050 scheduler, worker, and administrative executable has exited; remove it
 later with a reviewed migration while retaining the constraint. See
 ``docs/GlobalExperimentControls.rst`` for locking, process validation,
 checkpoint cancellation, inference, restart, dry-run, and audit semantics.
+
+Migration 051 is the durable lease/attempt foundation and must precede 052.
+It does not by itself authorize corrected scheduler startup: a pre-051 binary
+cannot honor the lease. Migration 051 does not assert ambiguous legacy rows
+are live; it conservatively reserves their capacity until exact reconciliation.
+
+Migration 052 is the technical scheduler-protocol cutover and exact-attempt
+hardening migration. It is additive to 051 and must not be replaced by editing
+an already applied 051 contract. It adds protocol generation/cutover state,
+durable `checkpoint_analyze` attempts, exact administrative outcome attempt
+identity, active-attempt shape triggers, and supporting indexes/constraints.
+The migration is transactional and replay-idempotent.
+
+After applying 052, corrected scheduler startup is rejected without mutation
+until this explicit command succeeds:
+
+```bash
+./DerivedData/ExpertAdvisor/Build/Products/Release/LSTM_Release \
+  --complete-scheduler-protocol-cutover --yes
+```
+
+The command performs process inspection and records positive evidence that no
+old or corrected scheduler dispatch process is alive. Inspection failure,
+partial/failed cutover, stale metadata without positive process absence, or a
+live scheduler fails closed. Replaying an already completed cutover is
+idempotent. Do not use `UPDATE` to manufacture a completed cutover.
+
+Deployment order is: install the generation-52 binary at a new path; stop and
+verify old scheduler dispatch processes without stopping validated workers;
+take a backup; apply 051 then 052; run the cutover command; start exactly one
+generation-52 scheduler; inspect ownership, capacity, analyze attempts, and
+unresolved legacy no-PID status. Do not roll back only the executable after
+cutover. Legacy no-PID attempts remain capacity-consuming through the bounded
+grace period and are released only by exact, audited reconciliation after
+cutover evidence proves old dispatch authority absent.
 
 ## Database Backups
 
