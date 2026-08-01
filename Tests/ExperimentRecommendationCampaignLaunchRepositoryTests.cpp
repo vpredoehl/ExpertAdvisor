@@ -5,10 +5,13 @@
 #include "../Sources/ExperimentRecommendationConversionExecutionRepository.hpp"
 #include "../Sources/ExperimentRecommendationConversionProposalReviewRepository.hpp"
 #include "../Sources/CampaignOperationsDispatchService.hpp"
+#include "../Sources/CampaignOperationsControlService.hpp"
+#include "../Sources/CampaignOperationsCompletionService.hpp"
 #include "../Sources/CampaignOperationsRepository.hpp"
 #include "../Sources/CampaignOperationsService.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <barrier>
 #include <cassert>
 #include <cerrno>
@@ -952,7 +955,9 @@ CREATE TABLE experiment_recommendation_campaign_follow_up_ratification_event(
             for (const char* migration : {
                      "Database/migrations/045_campaign_operations_foundation.sql",
                      "Database/migrations/047_campaign_operations_budget_request_acceptance.sql",
-                     "Database/migrations/048_campaign_operations_durable_dispatch_handoff.sql"})
+                     "Database/migrations/048_campaign_operations_durable_dispatch_handoff.sql",
+                     "Database/migrations/053_campaign_operations_controls_cancellation_reconciliation.sql",
+                     "Database/migrations/054_campaign_operations_completion_and_audit.sql"})
             {
                 const std::string sql = ReadFile(migration);
                 setup.exec(sql);
@@ -1673,6 +1678,552 @@ END $$;
             "SELECT count(*) FROM campaign_operations_dispatch_attempt "
             "WHERE operational_request_id=" +
             std::to_string(phase3Request.request.requestId.value())) == 1);
+
+        currentStage =
+            "campaign_operations_phase4_completed_bound_cancellation";
+        const std::vector<CampaignProposal> phase4CompletedProposals{
+            CreateApprovedProposal(runtime, 1.375, 250),
+            CreateApprovedProposal(runtime, 1.376, 251)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 250, phase4CompletedProposals);
+            fixture.commit();
+        }
+        const auto phase4CompletedRequest =
+            CreatePhase3Request(owner, schema, 250);
+        const auto phase4CompletedDispatch =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString,
+                phase4CompletedRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase4.dispatcher@example.test"),
+                phase3Gate);
+        assert(phase4CompletedDispatch.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        {
+            pqxx::work completed{owner};
+            SetSearchPath(completed, schema);
+            completed.exec(
+                "UPDATE experiment SET status='completed',phase='done',"
+                "completed_at=transaction_timestamp(),"
+                "updated_at=transaction_timestamp() "
+                "WHERE experiment_id IN ("
+                "SELECT experiment_id FROM "
+                "campaign_operations_request_binding "
+                "WHERE operational_request_id=$1);",
+                pqxx::params{
+                    phase4CompletedRequest.request.requestId.value()});
+            completed.commit();
+        }
+        EA::CampaignOperations::CampaignCancellationCommandRequest
+            completedCancellation;
+        completedCancellation.campaignId =
+            phase4CompletedRequest.request.request.logicalOperation
+                .campaignId.value();
+        completedCancellation.requestId =
+            phase4CompletedRequest.request.requestId.value();
+        completedCancellation.expectedRequestVersion = 3;
+        completedCancellation.operationKey =
+            "phase4-completed-bound-cancellation";
+        completedCancellation.actorIdentity =
+            "phase4.operator@example.test";
+        completedCancellation.reason =
+            "Record that all bound lifecycle work is already terminal.";
+        const auto completedCancellationResult =
+            EA::CampaignOperations::CancelCampaign(
+                phase3ConnectionString, completedCancellation);
+        assert(completedCancellationResult.progress ==
+            EA::CampaignOperations::CancellationProgress::settled);
+        assert(completedCancellationResult.settlement);
+        assert(completedCancellationResult.settlement->settlement
+                   .disposition ==
+            EA::CampaignOperations::CancellationSettlementDisposition::
+                alreadyTerminal);
+        const auto completedCancellationReplay =
+            EA::CampaignOperations::CancelCampaign(
+                phase3ConnectionString, completedCancellation);
+        assert(completedCancellationReplay.replay ==
+            EA::CampaignOperations::ControlReplayDisposition::
+                existingIdentical);
+        assert(completedCancellationReplay.settlement);
+        assert(completedCancellationReplay.settlement
+                   ->cancellationSettlementId ==
+            completedCancellationResult.settlement
+                ->cancellationSettlementId);
+        assert(Text(owner, schema,
+            "SELECT request_state||':'||state_version::text "
+            "FROM campaign_operations_operational_request "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                phase4CompletedRequest.request.requestId.value())) ==
+            "bound:3");
+        assert(Text(owner, schema,
+            "SELECT reservation_state||':'||state_version::text "
+            "FROM campaign_operations_reservation "
+            "WHERE reservation_id=" +
+            std::to_string(
+                phase4CompletedRequest.reservation.reservationId.value())) ==
+            "committed:2");
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM experiment_lifecycle_cancellation_event "
+            "WHERE cancellation_request_id=("
+            "SELECT cancellation_request_id FROM "
+            "campaign_operations_cancellation_request "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                phase4CompletedRequest.request.requestId.value()) +
+            ") AND disposition='already_terminal'") == 2);
+
+        currentStage =
+            "campaign_operations_phase_g_lifecycle_cancellation_gate";
+        const EA::CampaignOperations::CompleteIfSettledRequest
+            completedCampaignCompletionRequest{
+                completedCancellation.campaignId,
+                "phase-g-lifecycle-cancellation-gate",
+                "phase5.completer@example.test",
+                "Serialize completion with lifecycle cancellation evidence."};
+        std::atomic<bool> completionBoundaryHeld{false};
+        std::atomic<bool> releaseCompletionBoundary{false};
+        std::atomic<bool> lifecycleInsertStarted{false};
+        std::atomic<int> lifecycleInsertBackendPid{0};
+        std::atomic<bool> lifecycleInsertDenied{false};
+        std::string lifecycleInsertSqlState;
+        std::optional<EA::CampaignOperations::CompleteIfSettledResult>
+            completedCampaignCompletion;
+        std::exception_ptr completionBoundaryError;
+        std::exception_ptr lifecycleInsertError;
+        std::thread completionBoundaryThread([&]
+        {
+            try
+            {
+                completedCampaignCompletion.emplace(
+                    EA::CampaignOperations::CompleteCampaignIfSettled(
+                        [&phase3ConnectionString]
+                        {
+                            return std::make_unique<pqxx::connection>(
+                                phase3ConnectionString);
+                        }, completedCampaignCompletionRequest,
+                        [&](EA::CampaignOperations::
+                                CompletionTestInjectionPoint point)
+                        {
+                            if (point != EA::CampaignOperations::
+                                    CompletionTestInjectionPoint::
+                                        afterLocksBeforeEvidence)
+                                return;
+                            completionBoundaryHeld.store(
+                                true, std::memory_order_release);
+                            while (!releaseCompletionBoundary.load(
+                                std::memory_order_acquire))
+                                std::this_thread::yield();
+                        }));
+            }
+            catch (...)
+            {
+                completionBoundaryError = std::current_exception();
+            }
+        });
+        while (!completionBoundaryHeld.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        std::thread lifecycleInsertThread([&]
+        {
+            try
+            {
+                pqxx::connection connection{phase3ConnectionString};
+                lifecycleInsertBackendPid.store(
+                    connection.backendpid(), std::memory_order_release);
+                pqxx::work transaction{connection};
+                transaction.exec(
+                    "SET LOCAL lock_timeout='30s'; "
+                    "SET LOCAL statement_timeout='60s';");
+                lifecycleInsertStarted.store(true, std::memory_order_release);
+                transaction.exec(
+                    "SELECT apply_experiment_lifecycle_cancellation("
+                    "event.cancellation_request_id,"
+                    "event.downstream_control_owner_id,event.experiment_id,"
+                    "event.expected_status,event.expected_phase,"
+                    "event.actor_identity,"
+                    "event.event_identity_canonical || '.changed',"
+                    "event.event_identity_hash) FROM "
+                    "experiment_lifecycle_cancellation_event event "
+                    "JOIN campaign_operations_cancellation_request cancellation "
+                    "USING(cancellation_request_id) "
+                    "WHERE cancellation.operational_campaign_id=$1 LIMIT 1;",
+                    pqxx::params{completedCancellation.campaignId});
+                transaction.commit();
+            }
+            catch (const pqxx::sql_error& error)
+            {
+                lifecycleInsertSqlState = error.sqlstate();
+                lifecycleInsertDenied.store(
+                    error.sqlstate() == "23514", std::memory_order_release);
+            }
+            catch (...)
+            {
+                lifecycleInsertError = std::current_exception();
+            }
+        });
+        while (!lifecycleInsertStarted.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        bool lifecycleInsertObservedWaitingOnLock = false;
+        for (int observation = 0;
+             observation < 500 && !lifecycleInsertObservedWaitingOnLock;
+             ++observation)
+        {
+            pqxx::read_transaction observer{owner};
+            SetSearchPath(observer, schema);
+            lifecycleInsertObservedWaitingOnLock = observer.exec(
+                "SELECT cardinality(pg_blocking_pids($1)) > 0;",
+                pqxx::params{lifecycleInsertBackendPid.load(
+                    std::memory_order_acquire)})
+                .one_row()[0].as<bool>();
+            if (!lifecycleInsertObservedWaitingOnLock)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        releaseCompletionBoundary.store(true, std::memory_order_release);
+        completionBoundaryThread.join();
+        lifecycleInsertThread.join();
+        assert(lifecycleInsertObservedWaitingOnLock);
+        if (completionBoundaryError)
+            std::rethrow_exception(completionBoundaryError);
+        if (lifecycleInsertError)
+            std::rethrow_exception(lifecycleInsertError);
+        assert(completedCampaignCompletion);
+        assert(completedCampaignCompletion->disposition ==
+            EA::CampaignOperations::CompletionAttemptDisposition::recorded);
+        if (!lifecycleInsertDenied.load(std::memory_order_acquire))
+            throw std::runtime_error(
+                "lifecycle_completion_gate_sqlstate=" +
+                lifecycleInsertSqlState);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_completion_event "
+            "WHERE operational_campaign_id=" +
+            std::to_string(completedCancellation.campaignId)) == 1);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "campaign_operations_completion_audit_reference_event "
+            "WHERE operational_campaign_id=" +
+            std::to_string(completedCancellation.campaignId)) == 1);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM experiment_lifecycle_cancellation_event "
+            "WHERE cancellation_request_id=" +
+            std::to_string(completedCancellationResult.request
+                .cancellationRequestId.value())) == 2);
+        bool newLifecycleInsertDenied = false;
+        try
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::work transaction{connection};
+            transaction.exec(
+                "INSERT INTO experiment_lifecycle_cancellation_event "
+                "SELECT event.* FROM "
+                "experiment_lifecycle_cancellation_event event "
+                "JOIN campaign_operations_cancellation_request cancellation "
+                "USING(cancellation_request_id) "
+                "WHERE cancellation.operational_campaign_id=$1 LIMIT 1;",
+                pqxx::params{completedCancellation.campaignId});
+            transaction.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            newLifecycleInsertDenied = error.sqlstate() == "23514";
+        }
+        assert(newLifecycleInsertDenied);
+
+        std::vector<std::pair<
+            EA::CampaignOperations::DownstreamControlOwnerId, long long>>
+            completedOwners;
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::read_transaction transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE campaign_operations_cancellation_coordinator;");
+            completedOwners =
+                EA::CampaignOperations::LoadDownstreamControlOwners(
+                    transaction, phase4CompletedRequest.request.requestId);
+        }
+        assert(completedOwners.size() == 2);
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::work transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE experiment_lifecycle_cancellation;");
+            const auto exactReplay = EA::CampaignOperations::
+                ApplyLifecycleCancellationInTransaction(transaction,
+                    completedCancellationResult.request,
+                    completedOwners.front().first,
+                    completedOwners.front().second);
+            transaction.commit();
+            assert(exactReplay.lifecycleCancellationEventId > 0);
+        }
+        bool changedLifecycleReplayDenied = false;
+        try
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::work transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE experiment_lifecycle_cancellation;");
+            transaction.exec(
+                "SELECT apply_experiment_lifecycle_cancellation("
+                "event.cancellation_request_id,"
+                "event.downstream_control_owner_id,event.experiment_id,"
+                "event.expected_status,event.expected_phase,"
+                "event.actor_identity,event.event_identity_canonical||"
+                "';changed=true',event.event_identity_hash) "
+                "FROM experiment_lifecycle_cancellation_event event "
+                "WHERE event.cancellation_request_id=$1 LIMIT 1;",
+                pqxx::params{completedCancellationResult.request
+                    .cancellationRequestId.value()});
+            transaction.commit();
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            changedLifecycleReplayDenied = error.sqlstate() == "23514";
+        }
+        assert(changedLifecycleReplayDenied);
+
+        currentStage =
+            "campaign_operations_phase4_interrupted_bound_cancellation";
+        const std::vector<CampaignProposal> phase4InterruptedProposals{
+            CreateApprovedProposal(runtime, 1.377, 252),
+            CreateApprovedProposal(runtime, 1.378, 253)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(
+                fixture, 252, phase4InterruptedProposals);
+            fixture.commit();
+        }
+        const auto phase4InterruptedRequest =
+            CreatePhase3Request(owner, schema, 252);
+        assert(EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                   phase3ConnectionString,
+                   phase4InterruptedRequest.request.requestId, 1,
+                   EA::CampaignOperations::ActorIdentity(
+                       "phase4.dispatcher@example.test"),
+                   phase3Gate)
+                   .classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        EA::CampaignOperations::CampaignCancellationCommandRequest
+            interruptedCancellation;
+        interruptedCancellation.campaignId =
+            phase4InterruptedRequest.request.request.logicalOperation
+                .campaignId.value();
+        interruptedCancellation.requestId =
+            phase4InterruptedRequest.request.requestId.value();
+        interruptedCancellation.expectedRequestVersion = 3;
+        interruptedCancellation.operationKey =
+            "phase4-interrupted-bound-cancellation";
+        interruptedCancellation.actorIdentity =
+            "phase4.operator@example.test";
+        interruptedCancellation.reason =
+            "Resume cancellation after one lifecycle member commits.";
+        EA::CampaignOperations::PersistedCampaignCancellationRequest
+            interruptedIntent = [&]
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::work transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE "
+                "campaign_operations_cancellation_coordinator;");
+            const auto campaign =
+                EA::CampaignOperations::FindOperationalCampaign(
+                    transaction,
+                    phase4InterruptedRequest.request.request.logicalOperation
+                        .campaignId);
+            assert(campaign);
+            const auto request =
+                EA::CampaignOperations::BuildCampaignCancellationRequest(
+                    campaign->campaignId,
+                    campaign->campaign.identity.canonicalText(),
+                    phase4InterruptedRequest.request.requestId,
+                    phase4InterruptedRequest.request.request.identity
+                        .canonicalText(),
+                    EA::CampaignOperations::RequestState::bound, 3,
+                    interruptedCancellation.operationKey,
+                    EA::CampaignOperations::ActorIdentity(
+                        interruptedCancellation.actorIdentity),
+                    EA::CampaignOperations::Reason(
+                        interruptedCancellation.reason));
+            auto persisted =
+                EA::CampaignOperations::PersistCampaignCancellationRequest(
+                    transaction, request);
+            transaction.commit();
+            return persisted;
+        }();
+        EA::CampaignOperations::ReconciliationObserveRequest
+            interruptedCancellationObservation;
+        interruptedCancellationObservation.runKey =
+            "phase4-interrupted-bound-cancellation-observation";
+        interruptedCancellationObservation.afterRequestId =
+            phase4InterruptedRequest.request.requestId.value() - 1;
+        interruptedCancellationObservation.limit = 1;
+        const auto interruptedObservationResult =
+            EA::CampaignOperations::ObserveAndRecoverCampaignOperations(
+                phase3ConnectionString,
+                interruptedCancellationObservation);
+        assert(interruptedObservationResult.selectedCount == 1);
+        assert(interruptedObservationResult.observationCount == 1);
+        std::vector<std::pair<
+            EA::CampaignOperations::DownstreamControlOwnerId, long long>>
+            interruptedOwners;
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::read_transaction transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE "
+                "campaign_operations_cancellation_coordinator;");
+            interruptedOwners =
+                EA::CampaignOperations::LoadDownstreamControlOwners(
+                    transaction,
+                    phase4InterruptedRequest.request.requestId);
+        }
+        assert(interruptedOwners.size() == 2);
+        {
+            pqxx::connection connection{phase3ConnectionString};
+            pqxx::work transaction{connection};
+            transaction.exec(
+                "SET LOCAL ROLE experiment_lifecycle_cancellation;");
+            (void)EA::CampaignOperations::
+                ApplyLifecycleCancellationInTransaction(
+                    transaction, interruptedIntent,
+                    interruptedOwners.front().first,
+                    interruptedOwners.front().second);
+            transaction.commit();
+        }
+        const auto interruptedResult =
+            EA::CampaignOperations::CancelCampaign(
+                phase3ConnectionString, interruptedCancellation);
+        assert(interruptedResult.replay ==
+            EA::CampaignOperations::ControlReplayDisposition::
+                existingIdentical);
+        assert(interruptedResult.progress ==
+            EA::CampaignOperations::CancellationProgress::settled);
+        assert(interruptedResult.settlement);
+        assert(interruptedResult.settlement->settlement.disposition ==
+            EA::CampaignOperations::CancellationSettlementDisposition::
+                lifecycleRequestAccepted);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM experiment_lifecycle_cancellation_event "
+            "WHERE cancellation_request_id=" +
+            std::to_string(
+                interruptedIntent.cancellationRequestId.value())) == 2);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM experiment "
+            "WHERE status='cancelled' AND experiment_id IN ("
+            "SELECT experiment_id FROM "
+            "campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                phase4InterruptedRequest.request.requestId.value()) +
+            ")") == 2);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM "
+            "campaign_operations_reconciliation_observation observation "
+            "LEFT JOIN campaign_operations_reconciliation_resolution resolution "
+            "USING(reconciliation_observation_id) "
+            "WHERE observation.operational_request_id=" +
+            std::to_string(
+                phase4InterruptedRequest.request.requestId.value()) +
+            " AND observation.reason_code="
+            "'cancellation_settlement_pending' "
+            "AND resolution.reconciliation_resolution_id IS NULL") == 0);
+        assert(Text(owner, schema,
+            "SELECT resolution.owning_capability||':'||"
+            "resolution.resolution_disposition||':'||"
+            "(resolution.transition_identity_hash="
+            "settlement.settlement_identity_hash)::text "
+            "FROM campaign_operations_reconciliation_observation observation "
+            "JOIN campaign_operations_reconciliation_resolution resolution "
+            "USING(reconciliation_observation_id) "
+            "JOIN campaign_operations_cancellation_request cancellation "
+            "ON cancellation.operational_request_id="
+            "observation.operational_request_id "
+            "JOIN campaign_operations_cancellation_settlement settlement "
+            "USING(cancellation_request_id) "
+            "WHERE observation.operational_request_id=" +
+            std::to_string(
+                phase4InterruptedRequest.request.requestId.value())) ==
+            "campaign_operations_cancellation_coordinator:"
+            "cancellation_settled:true");
+
+        currentStage =
+            "campaign_operations_phase4_running_cancellation_refusal";
+        const std::vector<CampaignProposal> phase4RunningProposals{
+            CreateApprovedProposal(runtime, 1.379, 254)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 254, phase4RunningProposals);
+            fixture.commit();
+        }
+        const auto phase4RunningRequest =
+            CreatePhase3Request(owner, schema, 254);
+        assert(EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                   phase3ConnectionString,
+                   phase4RunningRequest.request.requestId, 1,
+                   EA::CampaignOperations::ActorIdentity(
+                       "phase4.dispatcher@example.test"),
+                   phase3Gate)
+                   .classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        {
+            pqxx::work running{owner};
+            SetSearchPath(running, schema);
+            running.exec(
+                "UPDATE experiment SET status='running',phase='train',"
+                "updated_at=transaction_timestamp() "
+                "WHERE experiment_id IN ("
+                "SELECT experiment_id FROM "
+                "campaign_operations_request_binding "
+                "WHERE operational_request_id=$1);",
+                pqxx::params{
+                    phase4RunningRequest.request.requestId.value()});
+            running.commit();
+        }
+        EA::CampaignOperations::CampaignCancellationCommandRequest
+            runningCancellation;
+        runningCancellation.campaignId =
+            phase4RunningRequest.request.request.logicalOperation
+                .campaignId.value();
+        runningCancellation.requestId =
+            phase4RunningRequest.request.requestId.value();
+        runningCancellation.expectedRequestVersion = 3;
+        runningCancellation.operationKey =
+            "phase4-running-cancellation-refusal";
+        runningCancellation.actorIdentity =
+            "phase4.operator@example.test";
+        runningCancellation.reason =
+            "Record lifecycle refusal without signaling running work.";
+        const auto runningCancellationResult =
+            EA::CampaignOperations::CancelCampaign(
+                phase3ConnectionString, runningCancellation);
+        assert(runningCancellationResult.progress ==
+            EA::CampaignOperations::CancellationProgress::settled);
+        assert(runningCancellationResult.settlement);
+        assert(runningCancellationResult.settlement->settlement.disposition ==
+            EA::CampaignOperations::CancellationSettlementDisposition::
+                runningCancellationNotSupported);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM experiment "
+            "WHERE status='running' AND experiment_id IN ("
+            "SELECT experiment_id FROM "
+            "campaign_operations_request_binding "
+            "WHERE operational_request_id=" +
+            std::to_string(
+                phase4RunningRequest.request.requestId.value()) +
+            ")") == 1);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM experiment_lifecycle_cancellation_event "
+            "WHERE cancellation_request_id=" +
+            std::to_string(runningCancellationResult.request
+                .cancellationRequestId.value()) +
+            " AND disposition='running_not_supported'") == 1);
+
         {
             pqxx::work progress{owner};
             SetSearchPath(progress, schema);
@@ -3522,6 +4073,103 @@ END $$;
                     "binding") != std::string::npos;
         }
         assert(arbitraryExperimentInsertDenied);
+
+        currentStage =
+            "campaign_operations_phase_g_post_completion_lifecycle_display";
+        const std::vector<CampaignProposal> phaseGProposals{
+            CreateApprovedProposal(runtime, 7.70, 770)};
+        {
+            pqxx::work fixture{owner};
+            SetSearchPath(fixture, schema);
+            InsertMaterialization(fixture, 990, phaseGProposals);
+            fixture.commit();
+        }
+        const auto phaseGRequest = CreatePhase3Request(owner, schema, 990);
+        const auto phaseGDispatch =
+            EA::CampaignOperations::DispatchOneRequestForIsolatedTest(
+                phase3ConnectionString, phaseGRequest.request.requestId, 1,
+                EA::CampaignOperations::ActorIdentity(
+                    "phase5.phase-g.dispatcher@example.test"),
+                phase3Gate);
+        assert(phaseGDispatch.classification ==
+            EA::CampaignOperations::DispatchResultClassification::
+                createdAndBound);
+        const long long phaseGExperimentId = Scalar(owner, schema,
+            "SELECT experiment_id FROM "
+            "campaign_operations_request_binding WHERE "
+            "operational_request_id=" +
+            std::to_string(phaseGRequest.request.requestId.value()));
+        {
+            pqxx::work lifecycle{owner};
+            SetSearchPath(lifecycle, schema);
+            lifecycle.exec(
+                "UPDATE experiment SET status='completed',phase='train',"
+                "updated_at=transaction_timestamp() WHERE experiment_id=$1;",
+                pqxx::params{phaseGExperimentId});
+            lifecycle.commit();
+        }
+        pqxx::connection phaseGCompletionConnection{
+            phase3ConnectionString};
+        const EA::CampaignOperations::CompleteIfSettledRequest
+            phaseGCompletionRequest{
+                phaseGRequest.request.request.logicalOperation.campaignId.
+                    value(),
+                "phase-g-bound-completion",
+                "phase5.completer@example.test",
+                "Record exact all-downstream-completed evidence."};
+        const auto phaseGCompletion =
+            EA::CampaignOperations::CompleteCampaignIfSettled(
+                phaseGCompletionConnection, phaseGCompletionRequest);
+        assert(phaseGCompletion.disposition ==
+            EA::CampaignOperations::CompletionAttemptDisposition::recorded);
+        assert(phaseGCompletion.completion);
+        assert(phaseGCompletion.completion->event.classification ==
+            EA::CampaignOperations::CompletionClassification::
+                allDownstreamCompleted);
+        const auto recordedCompletionId =
+            phaseGCompletion.completion->completionEventId;
+        const auto recordedCompletionHash =
+            phaseGCompletion.completion->event.identity.hash();
+        {
+            pqxx::work lifecycle{owner};
+            SetSearchPath(lifecycle, schema);
+            lifecycle.exec(
+                "UPDATE experiment SET status='pending',phase='train',"
+                "updated_at=transaction_timestamp() WHERE experiment_id=$1;",
+                pqxx::params{phaseGExperimentId});
+            lifecycle.commit();
+        }
+        const auto phaseGStatus =
+            EA::CampaignOperations::LoadCampaignCompletionStatus(
+                phaseGCompletionConnection,
+                phaseGRequest.request.request.logicalOperation.campaignId);
+        assert(phaseGStatus.completionRecorded);
+        assert(phaseGStatus.postCompletionLifecycleChanged);
+        assert(phaseGStatus.currentOperationalState ==
+            EA::CampaignOperations::AdministrativeCampaignState::
+                reconciliationRequired);
+        assert(phaseGStatus.completion);
+        assert(phaseGStatus.completion->completionEventId ==
+            recordedCompletionId);
+        assert(phaseGStatus.completion->event.identity.hash() ==
+            recordedCompletionHash);
+        const auto changedLifecycleReplay =
+            EA::CampaignOperations::CompleteCampaignIfSettled(
+                phaseGCompletionConnection, phaseGCompletionRequest);
+        assert(changedLifecycleReplay.disposition ==
+            EA::CampaignOperations::CompletionAttemptDisposition::
+                conflictingReplay);
+        assert(changedLifecycleReplay.completion);
+        assert(changedLifecycleReplay.completion->completionEventId ==
+            recordedCompletionId);
+        assert(changedLifecycleReplay.completion->event.identity.hash() ==
+            recordedCompletionHash);
+        assert(Scalar(owner, schema,
+            "SELECT count(*) FROM campaign_operations_completion_event "
+            "WHERE operational_campaign_id=" +
+            std::to_string(
+                phaseGRequest.request.request.logicalOperation.campaignId.
+                    value())) == 1);
 
         bool updateDenied = false;
         try

@@ -57,6 +57,9 @@ Cancellation intent and settlement are separate immutable facts.
   forging privilege.
 - Every observation has a stable reason, exact point-in-time evidence,
   expected version, recommended owning service/action, and canonical identity.
+- Every selected observation belongs to one durable cursor identity. Cursor
+  and membership commit atomically; replay loads by cursor identity and never
+  infers members from a run key, ID range, or current state.
 - An observation is resolved only by an immutable resolution referencing exact
   evidence produced by the owning service or separately accepted repair
   authority.
@@ -117,7 +120,10 @@ ADR and does not alter this detection/delegation boundary silently.
   releasing Campaign Operations locks.
 - Exact retry returns the same request, transition, settlement, observation, or
   resolution; changed payload conflicts.
-- Serialization/deadlock retry replays the whole canonical operation.
+- Serialization/deadlock retry recreates all transaction-derived state for the
+  whole canonical operation and publishes identifiers only after commit.
+- Concurrent unbound cancellation replay rechecks settlement after taking the
+  cancellation locks and converges on the exact durable settlement.
 - Reconciliation observations never become authorization or completion
   evidence until an owning resolution edge exists.
 

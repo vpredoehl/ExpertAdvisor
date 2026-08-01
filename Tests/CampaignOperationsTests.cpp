@@ -1,4 +1,6 @@
 #include "../Sources/CampaignOperations.hpp"
+#include "../Sources/CampaignOperationsCompletion.hpp"
+#include "../Sources/CampaignOperationsControl.hpp"
 #include "../Sources/CampaignOperationsDispatch.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
@@ -420,11 +422,180 @@ int main()
         CompletionClassification::terminalPartialCompletion);
     assert(ClassifyCompletion({3, 0, 0, 3, true, false, true}) ==
         CompletionClassification::operationalRequestFailed);
+    // Exhaustive precedence pairs: failed evidence dominates every mixed
+    // terminal alternative, while completed plus cancelled/never-dispatched
+    // remains a successful partial operational completion.
+    assert(ClassifyCompletion({2, 1, 1, 0, false, true, true}) ==
+        CompletionClassification::mixedTerminalOutcomes);
+    assert(ClassifyCompletion({2, 0, 1, 1, false, true, true}) ==
+        CompletionClassification::mixedTerminalOutcomes);
+    assert(ClassifyCompletion({3, 0, 1, 2, false, true, true}) ==
+        CompletionClassification::mixedTerminalOutcomes);
+    assert(ClassifyCompletion({2, 1, 0, 1, false, true, true}) ==
+        CompletionClassification::terminalPartialCompletion);
+    assert(ClassifyCompletion({3, 1, 0, 2, false, true, true}) ==
+        CompletionClassification::terminalPartialCompletion);
+    assert(ClassifyCompletion({2, 0, 0, 2, false, false, true}) ==
+        CompletionClassification::allScopeCancelled);
+    assert(ClassifyCompletion({2, 0, 0, 2, true, false, true}) ==
+        CompletionClassification::operationalRequestFailed);
+    AssertError([]
+    {
+        (void)ClassifyCompletion({2, 0, 0, 2, true, true, true});
+    }, ErrorCode::invalidCompletionEvidence,
+        "campaign_operations_completion_evidence_invalid");
+    AssertError([]
+    {
+        (void)ClassifyCompletion({2, 1, 1, 0, false, true, false});
+    }, ErrorCode::invalidCompletionEvidence,
+        "campaign_operations_completion_evidence_invalid");
     AssertError([]
     {
         (void)ClassifyCompletion({3, 3, 0, 0, false, true, false});
     }, ErrorCode::invalidCompletionEvidence,
         "campaign_operations_completion_evidence_invalid");
+    const auto evidenceIdentity = [](const std::string& text)
+    {
+        return CanonicalIdentity::Create(
+            kCampaignOperationsCompletionContractVersion, text);
+    };
+    const auto completion = BuildCompletionEvent(
+        OperationalCampaignId(7), campaign.identity.canonicalText(),
+        "complete-all-cancelled",
+        AdministrativeCampaignState::terminalCancelled,
+        CompletionClassification::allScopeCancelled,
+        BudgetLedgerEntryId(23), 1, 3, 3, 0, 3, 0, 3,
+        3, 0, 0, 3, 1, 1, 0, 0, 1, 1, 0,
+        evidenceIdentity("authorization-evidence"),
+        evidenceIdentity("budget-evidence"),
+        evidenceIdentity("reservation-evidence"),
+        evidenceIdentity("request-evidence"),
+        evidenceIdentity("binding-evidence"),
+        evidenceIdentity("lifecycle-evidence"),
+        evidenceIdentity("cancellation-evidence"),
+        evidenceIdentity("reconciliation-evidence"),
+        ActorIdentity("completion.operator@example.test"),
+        Reason("Record exact settled operational evidence."));
+    ValidateCompletionEvent(completion);
+    assert(completion.identity.canonicalText().rfind(
+        "campaign_operations_completion_v1;", 0) == 0);
+    const auto changedCompletion = BuildCompletionEvent(
+        OperationalCampaignId(7), campaign.identity.canonicalText(),
+        "different-replay",
+        AdministrativeCampaignState::terminalCancelled,
+        CompletionClassification::allScopeCancelled,
+        BudgetLedgerEntryId(23), 1, 3, 3, 0, 3, 0, 3,
+        3, 0, 0, 3, 1, 1, 0, 0, 1, 1, 0,
+        evidenceIdentity("authorization-evidence"),
+        evidenceIdentity("budget-evidence"),
+        evidenceIdentity("reservation-evidence"),
+        evidenceIdentity("request-evidence"),
+        evidenceIdentity("binding-evidence"),
+        evidenceIdentity("lifecycle-evidence"),
+        evidenceIdentity("cancellation-evidence"),
+        evidenceIdentity("reconciliation-evidence"),
+        ActorIdentity("completion.operator@example.test"),
+        Reason("Record exact settled operational evidence."));
+    assert(completion.identity != changedCompletion.identity);
+    const auto changedEvidenceCompletion = BuildCompletionEvent(
+        OperationalCampaignId(7), campaign.identity.canonicalText(),
+        "complete-all-cancelled",
+        AdministrativeCampaignState::terminalCancelled,
+        CompletionClassification::allScopeCancelled,
+        BudgetLedgerEntryId(23), 1, 3, 3, 0, 3, 0, 3,
+        3, 0, 0, 3, 1, 1, 0, 0, 1, 1, 0,
+        evidenceIdentity("authorization-evidence"),
+        evidenceIdentity("budget-evidence"),
+        evidenceIdentity("reservation-evidence"),
+        evidenceIdentity("changed-request-evidence"),
+        evidenceIdentity("binding-evidence"),
+        evidenceIdentity("lifecycle-evidence"),
+        evidenceIdentity("cancellation-evidence"),
+        evidenceIdentity("reconciliation-evidence"),
+        ActorIdentity("completion.operator@example.test"),
+        Reason("Record exact settled operational evidence."));
+    assert(completion.identity != changedEvidenceCompletion.identity);
+    assert(completion.requestEvidence.canonicalText() !=
+        changedEvidenceCompletion.requestEvidence.canonicalText());
+    const auto rebuildCompletion = [&](const std::string& operationKey,
+                                       CanonicalIdentity cancellationEvidence,
+                                       CanonicalIdentity reconciliationEvidence,
+                                       ActorIdentity actor, Reason reason)
+    {
+        return BuildCompletionEvent(completion.campaignId,
+            completion.campaignCanonicalText, operationKey,
+            completion.terminalState, completion.classification,
+            completion.budgetLedgerEntryId, completion.budgetLedgerVersion,
+            completion.budgetResultingTotal, completion.budgetEverReserved,
+            completion.budgetCommitted, completion.budgetReleasedOrExpired,
+            completion.budgetHeld, completion.budgetUnallocated,
+            completion.scopeMemberCount, completion.completedMemberCount,
+            completion.failedMemberCount,
+            completion.cancelledOrNeverDispatchedMemberCount,
+            completion.reservationCount, completion.requestCount,
+            completion.bindingCount, completion.controlOwnerCount,
+            completion.cancellationRequestCount,
+            completion.cancellationSettlementCount,
+            completion.unresolvedBlockingObservationCount,
+            completion.authorizationEvidence, completion.budgetEvidence,
+            completion.reservationEvidence, completion.requestEvidence,
+            completion.bindingEvidence, completion.lifecycleEvidence,
+            std::move(cancellationEvidence),
+            std::move(reconciliationEvidence), std::move(actor),
+            std::move(reason));
+    };
+    assert(rebuildCompletion(completion.operationKey,
+               evidenceIdentity("changed-cancellation-evidence"),
+               completion.reconciliationEvidence, completion.actor,
+               completion.reason).identity != completion.identity);
+    assert(rebuildCompletion(completion.operationKey,
+               completion.cancellationEvidence,
+               evidenceIdentity("changed-reconciliation-evidence"),
+               completion.actor, completion.reason).identity !=
+        completion.identity);
+    assert(rebuildCompletion("changed-operation-key",
+               completion.cancellationEvidence,
+               completion.reconciliationEvidence, completion.actor,
+               completion.reason).identity != completion.identity);
+    assert(rebuildCompletion(completion.operationKey,
+               completion.cancellationEvidence,
+               completion.reconciliationEvidence,
+               ActorIdentity("changed.completer@example.test"),
+               completion.reason).identity != completion.identity);
+    assert(rebuildCompletion(completion.operationKey,
+               completion.cancellationEvidence,
+               completion.reconciliationEvidence, completion.actor,
+               Reason("Changed completion reason.")).identity !=
+        completion.identity);
+    const auto canonicalLeft = evidenceIdentity("canonical-left");
+    const auto canonicalRight = evidenceIdentity("canonical-right");
+    AssertError([&]
+    {
+        (void)CanonicalIdentity::Hydrate(
+            kCampaignOperationsCompletionContractVersion,
+            canonicalLeft.canonicalText(), canonicalRight.hash());
+    }, ErrorCode::invalidCanonicalHash,
+        "campaign_operations_identity_invalid");
+    AssertError([&]
+    {
+        (void)BuildCompletionEvent(
+            OperationalCampaignId(7), campaign.identity.canonicalText(),
+            "paused-is-not-complete", AdministrativeCampaignState::paused,
+            CompletionClassification::allScopeCancelled,
+            BudgetLedgerEntryId(23), 1, 3, 3, 0, 3, 0, 3,
+            3, 0, 0, 3, 1, 1, 0, 0, 1, 1, 0,
+            evidenceIdentity("authorization-evidence"),
+            evidenceIdentity("budget-evidence"),
+            evidenceIdentity("reservation-evidence"),
+            evidenceIdentity("request-evidence"),
+            evidenceIdentity("binding-evidence"),
+            evidenceIdentity("lifecycle-evidence"),
+            evidenceIdentity("cancellation-evidence"),
+            evidenceIdentity("reconciliation-evidence"),
+            ActorIdentity("completion.operator@example.test"),
+            Reason("Pause cannot masquerade as completion."));
+    }, ErrorCode::invalidCompletionEvidence,
+        "campaign_operations_completion_event_invalid");
 
     const LeaseTokenDigest leaseDigest = LeaseTokenDigest::Derive(
         "0123456789abcdef0123456789abcdef");
@@ -495,6 +666,152 @@ int main()
     assert(owner.identity.hash() == "fnv1a64:337c848f545dad02");
     assert(commitment.identity.hash() == "fnv1a64:dd92c2c4cd231c39");
     assert(outcome.identity.hash() == "fnv1a64:b9275d5d0e0f49f8");
+
+    const auto pause = BuildCampaignControlEvent(
+        OperationalCampaignId(17), "campaign-canonical", std::nullopt,
+        std::nullopt, 1, ControlEventKind::pause,
+        ActorIdentity("phase4.operator@example.test"),
+        Reason("Pause future campaign operations."));
+    const auto pauseReplay = BuildCampaignControlEvent(
+        OperationalCampaignId(17), "campaign-canonical", std::nullopt,
+        std::nullopt, 1, ControlEventKind::pause,
+        ActorIdentity("phase4.operator@example.test"),
+        Reason("Pause future campaign operations."));
+    assert(pause == pauseReplay);
+    assert(pause.identity.canonicalText().rfind(
+        "campaign_operations_control_event_v1;", 0) == 0);
+    const auto resume = BuildCampaignControlEvent(
+        OperationalCampaignId(17), "campaign-canonical",
+        ControlEventId(71), pause.identity.canonicalText(), 2,
+        ControlEventKind::resume,
+        ActorIdentity("phase4.operator@example.test"),
+        Reason("Resume future campaign operations."));
+    assert(resume.identity != pause.identity);
+    AssertError([&]
+    {
+        (void)BuildCampaignControlEvent(
+            OperationalCampaignId(17), "campaign-canonical",
+            std::nullopt, std::nullopt, 1, ControlEventKind::resume,
+            ActorIdentity("phase4.operator@example.test"),
+            Reason("A control chain cannot begin with resume."));
+    }, ErrorCode::invalidControlEvent,
+        "campaign_operations_control_chain_invalid");
+
+    const auto cancellation = BuildCampaignCancellationRequest(
+        OperationalCampaignId(17), "campaign-canonical",
+        OperationalRequestId(31), request.identity.canonicalText(),
+        RequestState::dispatching, 2, "operator-cancel-31",
+        ActorIdentity("phase4.operator@example.test"),
+        Reason("Stop future work and coordinate cancellation."));
+    assert(cancellation.identity.canonicalText().rfind(
+        "campaign_operations_cancellation_request_v1;", 0) == 0);
+    assert(BuildCampaignCancellationRequest(
+        OperationalCampaignId(17), "campaign-canonical",
+        OperationalRequestId(31), request.identity.canonicalText(),
+        RequestState::dispatching, 2, "operator-cancel-31",
+        ActorIdentity("phase4.operator@example.test"),
+        Reason("Stop future work and coordinate cancellation.")) ==
+        cancellation);
+    AssertError([&]
+    {
+        (void)BuildCampaignCancellationRequest(
+            OperationalCampaignId(17), "campaign-canonical",
+            OperationalRequestId(31), std::nullopt,
+            RequestState::ready, 1, "operator-cancel-31",
+            ActorIdentity("phase4.operator@example.test"),
+            Reason("Incomplete target evidence must fail."));
+    }, ErrorCode::invalidCancellationRequest,
+        "campaign_operations_cancellation_target_shape_invalid");
+
+    const auto unboundSettlement =
+        BuildCampaignCancellationSettlement(
+            CancellationRequestId(81),
+            cancellation.identity.canonicalText(),
+            CancellationSettlementDisposition::unboundCancelled,
+            ReservationEventId(91), "reservation-release-canonical", 3,
+            std::nullopt, std::nullopt);
+    assert(unboundSettlement.identity.canonicalText().rfind(
+        "campaign_operations_cancellation_settlement_v1;", 0) == 0);
+    const auto lifecycleSettlement =
+        BuildCampaignCancellationSettlement(
+            CancellationRequestId(82),
+            cancellation.identity.canonicalText(),
+            CancellationSettlementDisposition::alreadyTerminal,
+            std::nullopt, std::nullopt, std::nullopt,
+            "lifecycle-evidence-canonical",
+            "fnv1a64:0000000000000001");
+    assert(lifecycleSettlement.disposition ==
+        CancellationSettlementDisposition::alreadyTerminal);
+    AssertError([&]
+    {
+        (void)BuildCampaignCancellationSettlement(
+            CancellationRequestId(82),
+            cancellation.identity.canonicalText(),
+            CancellationSettlementDisposition::unboundCancelled,
+            std::nullopt, std::nullopt, 3, std::nullopt, std::nullopt);
+    }, ErrorCode::invalidCancellationSettlement,
+        "campaign_operations_cancellation_settlement_evidence_invalid");
+
+    const auto observation = BuildReconciliationObservation(
+        "restart-run-1", OperationalCampaignId(17),
+        OperationalRequestId(31), request.identity.canonicalText(),
+        RequestState::dispatching, 2,
+        ReconciliationReason::
+            dispatchLeaseExpiredNoDownstreamEvidence,
+        "lease-expired-no-downstream-evidence",
+        "campaign_operations_dispatch_recovery",
+        "clear_stale_dispatch_lease",
+        "dispatch_lease_expired_no_downstream_evidence");
+    assert(observation.identity.canonicalText().rfind(
+        "campaign_operations_reconciliation_observation_v1;", 0) == 0);
+    assert(BuildReconciliationObservation(
+        "restart-run-1", OperationalCampaignId(17),
+        OperationalRequestId(31), request.identity.canonicalText(),
+        RequestState::dispatching, 2,
+        ReconciliationReason::
+            dispatchLeaseExpiredNoDownstreamEvidence,
+        "lease-expired-no-downstream-evidence",
+        "campaign_operations_dispatch_recovery",
+        "clear_stale_dispatch_lease",
+        "dispatch_lease_expired_no_downstream_evidence") ==
+        observation);
+    AssertError([&]
+    {
+        (void)BuildReconciliationObservation(
+            "restart-run-1", OperationalCampaignId(17),
+            OperationalRequestId(31), request.identity.canonicalText(),
+            RequestState::dispatching, 2,
+            ReconciliationReason::
+                dispatchLeaseExpiredNoDownstreamEvidence,
+            "lease-expired-no-downstream-evidence",
+            "campaign_operations_dispatch_recovery",
+            "clear_stale_dispatch_lease", "Uppercase_Diagnostic");
+    }, ErrorCode::invalidReconciliationObservation,
+        "campaign_operations_reconciliation_diagnostic_invalid");
+    const auto resolution = BuildReconciliationResolution(
+        ReconciliationObservationId(101),
+        observation.identity.canonicalText(),
+        "campaign_operations_dispatch_recovery",
+        kCampaignOperationsRecoveryRole,
+        "dispatch-recovery-transition",
+        CanonicalIdentity::Create(
+            1, "dispatch-recovery-transition").hash(),
+        "request_returned_ready");
+    assert(resolution.identity.canonicalText().rfind(
+        "campaign_operations_reconciliation_resolution_v1;", 0) == 0);
+    AssertError([&]
+    {
+        (void)BuildReconciliationResolution(
+            ReconciliationObservationId(101),
+            observation.identity.canonicalText(),
+            "campaign_operations_dispatch_recovery",
+            kCampaignOperationsReconcilerRole,
+            "dispatch-recovery-transition",
+            CanonicalIdentity::Create(
+                1, "dispatch-recovery-transition").hash(),
+            "request_returned_ready");
+    }, ErrorCode::invalidReconciliationResolution,
+        "campaign_operations_reconciliation_resolution_owner_invalid");
 
     return 0;
 }

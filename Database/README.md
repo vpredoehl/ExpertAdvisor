@@ -236,6 +236,68 @@ They receive no update, delete, truncate, dispatch, scheduler, worker, or
 experiment-lifecycle privilege. Assigning either capability to a deployment
 principal is a separate reviewed administrator action.
 
+Campaign Operations Phase 3 migration 048 adds durable lease acquisition,
+immutable dispatch attempt/outcome evidence, complete ordered bindings,
+permanent V1 control ownership, and atomic held-to-committed/bound Phase 5
+handoff. Its dispatcher and transaction-bound Phase 5 roles are separate
+NOLOGIN capabilities. Production dispatch remains constrained false.
+
+Migrations 049 through 052 remain the authoritative global-control and
+scheduler-hardening history: global selective resume, canonical
+``current_operation`` values, scheduler ownership/worker attempts, and
+generation-52 protocol/exact-attempt hardening. They are prerequisites for the
+integrated Phase F migration and are neither renumbered nor absorbed into
+Campaign Operations authority.
+
+Campaign Operations Phase 4 migration 053 implements architectural Phase F.
+It adds append-only pause/resume controls, cancellation intent, lifecycle
+cancellation evidence, cancellation settlement, reconciliation observations,
+resolutions and cursors, and cause-specific control audit. Each observation is
+linked to one durable cursor identity; cursor and exact membership commit
+atomically under a deferred database completeness constraint, and replay loads
+by identity rather than run-key/request ranges. PostgreSQL admits only one
+cancellation owner for each request (or campaign-only target), formats
+reconciliation timestamps as fixed UTC microseconds, and creates resolutions
+only through capability-specific functions that validate and store typed
+causal settlement or dispatch-outcome references.
+Pause gates request
+acceptance and every Phase 3 selection/acquisition/handoff check without
+signaling a scheduler or worker. Unbound cancellation atomically releases held
+units and cancels the request; bound cancellation delegates through a narrow
+lifecycle capability and never releases committed units. Expired dispatch
+leases return to ``ready`` only after PostgreSQL time and exact absence of
+binding, downstream execution, and current-attempt outcome are revalidated.
+Reconciliation observation and recovery transactions use bounded
+whole-transaction retries; an uncertain commit is resolved by exact durable
+cursor or resolution lookup before any retry.
+All new capability roles are NOLOGIN and are not granted to ``pqxx``.
+If an earlier staged form of migration 053 already contains observations
+without durable cursor membership, the corrected migration aborts atomically
+instead of guessing membership from the superseded run-key/request-range
+scheme. No production Phase 4 contract was released with that representation;
+preserve such staged evidence for review rather than rewriting it.
+Campaign Operations Phase 5 migration 054 implements architectural Phase G.
+It adds one unique immutable completion event per campaign, a matching
+same-transaction audit reference, exhaustive fail-closed evidence/blocker and
+classification functions, completion gates, and a rebuildable read-only
+status view. Completion binds exact budget, reservation, request, binding,
+lifecycle, cancellation, and reconciliation evidence without changing any
+owning row. Update/delete triggers protect completion history and there is no
+force, reopen, supersede, override, or physical archival path.
+
+Apply 054 only after 053. It is replay-idempotent and additive; it does not
+rewrite existing Campaign Operations, recommendation, lifecycle, scheduler,
+worker-attempt, budget, cancellation, or reconciliation history. The new
+``campaign_operations_completion_writer`` role is NOLOGIN and is not granted
+to ``pqxx``. It has column-scoped insert rights and the narrow reads/lock
+functions required by complete-if-settled, but no lifecycle, scheduler,
+worker, cancellation-settlement, reconciliation-resolution, update, or delete
+authority. The function owner receives read access only to
+``experiment_id``, ``status``, ``phase``, and ``updated_at`` for lifecycle
+evidence. Assigning the completion capability to a production service
+principal remains a separate reviewed administrator action. Architectural
+Phase H production enablement is not part of migration 054.
+
 The scheduler and analyzer expect these migrations to be applied before running
 `--schedule-experiments`, `--enqueue-experiment`, or leaderboard commands.
 Migration 046 is additionally required before starting the scheduler or using

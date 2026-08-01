@@ -93,10 +93,10 @@ expect_invalid "campaign_operations_budget_value_invalid" \
     --campaign-operations-expected-budget-version 1 \
     --campaign-operations-actor operator \
     --campaign-operations-reason reason --yes
-expect_invalid "Campaign Operations metadata requires a budget mutation or request acceptance command" \
+expect_invalid "Campaign Operations metadata requires a budget mutation or request acceptance or control command" \
     --campaign-operations-budget-status 1 \
     --campaign-operations-actor operator
-expect_invalid "Campaign Operations metadata requires a budget mutation or request acceptance command" \
+expect_invalid "Campaign Operations metadata requires a budget mutation or request acceptance or control command" \
     --campaign-operations-request-status 1 \
     --campaign-operations-reason reason
 

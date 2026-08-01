@@ -802,6 +802,55 @@ RequestState RequestStateFromText(const std::string& text)
     return InvalidEnumText<RequestState>();
 }
 
+ControlEventKind ControlEventKindFromText(const std::string& text)
+{
+    if (text == "pause") return ControlEventKind::pause;
+    if (text == "resume") return ControlEventKind::resume;
+    return InvalidEnumText<ControlEventKind>();
+}
+
+CancellationSettlementDisposition
+CancellationSettlementDispositionFromText(const std::string& text)
+{
+    if (text == "unbound_cancelled")
+        return CancellationSettlementDisposition::unboundCancelled;
+    if (text == "lifecycle_request_accepted")
+        return CancellationSettlementDisposition::lifecycleRequestAccepted;
+    if (text == "already_terminal")
+        return CancellationSettlementDisposition::alreadyTerminal;
+    if (text == "running_cancellation_not_supported")
+        return CancellationSettlementDisposition::
+            runningCancellationNotSupported;
+    if (text == "inconsistent")
+        return CancellationSettlementDisposition::inconsistent;
+    return InvalidEnumText<CancellationSettlementDisposition>();
+}
+
+ReconciliationReason ReconciliationReasonFromText(
+    const std::string& text)
+{
+    constexpr std::array<ReconciliationReason, 16> values{
+        ReconciliationReason::readyRequestNotDispatched,
+        ReconciliationReason::dispatchLeaseExpiredNoDownstreamEvidence,
+        ReconciliationReason::dispatchOutcomeUnknown,
+        ReconciliationReason::bindingProjectionMissing,
+        ReconciliationReason::reservationProjectionMissingCommit,
+        ReconciliationReason::heldReservationTerminalUnboundRequest,
+        ReconciliationReason::reservationExpiredNoDownstreamEvidence,
+        ReconciliationReason::cancellationSettlementPending,
+        ReconciliationReason::terminalLifecycleCompletionReady,
+        ReconciliationReason::progressedUnboundEvidence,
+        ReconciliationReason::partialDownstreamEvidence,
+        ReconciliationReason::bindingCardinalityMismatch,
+        ReconciliationReason::controlOwnerConflict,
+        ReconciliationReason::budgetAccountingMismatch,
+        ReconciliationReason::postCompletionLifecycleChanged,
+        ReconciliationReason::causalityAmbiguous};
+    for (const auto value : values)
+        if (text == ToText(value)) return value;
+    return InvalidEnumText<ReconciliationReason>();
+}
+
 OperationalCampaign::OperationalCampaign(CanonicalIdentity identityValue,
     long long materializationIdValue, int materializationContractVersionValue,
     std::string materializationCanonicalTextValue,

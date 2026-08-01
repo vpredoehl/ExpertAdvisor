@@ -36,6 +36,11 @@ enum class ErrorCode
     invalidReservation,
     invalidReservationEvent,
     invalidOperationalRequest,
+    invalidControlEvent,
+    invalidCancellationRequest,
+    invalidCancellationSettlement,
+    invalidReconciliationObservation,
+    invalidReconciliationResolution,
     invalidBudgetAccounting,
     invalidCompletionEvidence,
     invalidEnumText,
@@ -410,6 +415,11 @@ BudgetUnit BudgetUnitFromText(const std::string& text);
 ReservationState ReservationStateFromText(const std::string& text);
 ReservationEventKind ReservationEventKindFromText(const std::string& text);
 RequestState RequestStateFromText(const std::string& text);
+ControlEventKind ControlEventKindFromText(const std::string& text);
+CancellationSettlementDisposition
+CancellationSettlementDispositionFromText(const std::string& text);
+ReconciliationReason ReconciliationReasonFromText(
+    const std::string& text);
 
 struct OperationalCampaign final
 {

@@ -154,9 +154,17 @@ ADR-0017. Its traceability matrix identifies the exact ADR authority for each
 major feature. Review prompts, transcripts, and earlier candidate outputs
 remain historical evidence only.
 
+Implemented Campaign Operations increments:
+
+- [Phase 3 durable dispatch](CampaignOperations_Phase3_Durable_Dispatch.md)
+- [Phase 4 controls, cancellation, and reconciliation](CampaignOperations_Phase4_Controls_Cancellation_Reconciliation.md)
+- [Phase 5 operational completion and audit](CampaignOperations_Phase5_Operational_Completion_Audit.md)
+
 ## 9. Revision history
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-07-15 | Established the permanent architecture hierarchy, governance workflow, and implementation-prompt relationship. |
 | 1.1.0 | 2026-07-24 | Accepted the bounded Campaign Operations refinement, its ADR authority chain, and scheduler production-dispatch gate. |
+| 1.2.0 | 2026-07-25 | Recorded implemented Campaign Operations Phase E durable dispatch and Phase F controls, cancellation, and reconciliation references. |
+| 1.3.0 | 2026-07-31 | Recorded Campaign Operations Phase 5 implementation of architectural Phase G immutable completion and audit/status views. |

@@ -42,8 +42,8 @@ the stable ``transient_database_retry_exhausted`` failure classification with
 ``dispatch_retry_exhausted_<SQLSTATE>``; other SQLSTATE values are not
 reclassified as replay or retryable conflicts. Partial, paused-only,
 progressed, or ambiguous evidence is recorded fail-closed and is not repaired
-by Phase 3. Phase F cancellation, release, expiry settlement, reconciliation
-observation, and repair remain unimplemented.
+by Phase 3 itself. Campaign Operations Phase 4 implements the separate Phase F
+control, cancellation, and bounded reconciliation authority.
 
 Existing pending work is adopted only when all materialized members already
 have exact ``pending/train`` Phase 5 evidence and a separately active
