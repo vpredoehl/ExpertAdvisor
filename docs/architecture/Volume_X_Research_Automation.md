@@ -1,14 +1,14 @@
 # Volume X — Research Automation
 
-Status: Authoritative through Campaign Operations Phase 5; broader automation reserved
-Version: 1.5.0
+Status: Authoritative through Campaign Operations Phase H; implemented through Phase 5
+Version: 1.6.0
 Last revised: 2026-07-31
 
 ## 1. Purpose
 
 Define controlled research orchestration while preserving explicit scope,
 authorization, budgets, audit, lifecycle ownership, scheduler ownership, and
-human authority. ADR-0010 through ADR-0017 and the
+human authority. ADR-0010 through ADR-0019 and the
 [Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 are the authoritative V1 refinement of this volume.
 
@@ -53,7 +53,12 @@ Campaign Operations Phase 5 implements architectural Phase G as migration 054:
 one immutable complete-if-settled event, disjoint terminal classification,
 logical archival, exact blockers, and read-only audit/status. It changes no
 lifecycle or scientific result and adds no scheduler or worker authority.
-Architectural Phase H production enablement remains separate.
+Architectural Phase H runtime remains unimplemented. ADR-0019 and the
+normative Phase H architecture accept durable, default-off production
+admission plus a Campaign Operations-owned Manager. H1–H3 must deliver exact
+enable/disable evidence, first request admission, Attempt V2, caller-keyed
+exact dispatch, and bounded sequential run-once processing incrementally. H4
+continuous operation remains excluded.
 Broader autonomous research remains reserved;
 existing recommendation and continuation capabilities MUST NOT be composed
 into it informally.
@@ -67,6 +72,11 @@ budget accounting, reservations, requests, bindings, campaign controls,
 reconciliation observations, completion, and audit. It does not own proposal
 or materialization truth, experiment lifecycle transitions, scheduler
 execution, workers, or scientific interpretation.
+
+Under ADR-0019 Campaign Operations also owns the production-enable chain,
+request production admission, Attempt V2, readiness/status, and the bounded
+Campaign Manager. These facts add no scheduler, worker, process, scientific,
+request-acceptance, or completion authority.
 
 ### 3.2 Dependencies
 
@@ -90,12 +100,21 @@ read-model services and repositories. The accepted Phase 5 transaction
 primitive is the lifecycle adapter; there is no scheduler adapter or campaign
 scheduler work class.
 
+Phase H adds production-admission repositories/services and a bounded
+run-once Manager. One internal Phase E engine is shared by isolated-test,
+exact production, and Manager adapters; production cannot reach test hooks.
+
 ### 4.2 Control flow
 
 Exact Phase 4D materialization → operational campaign → explicit grant →
 budget → held reservation and accepted request → accepted Phase 5 lifecycle
 handoff and immutable binding → ordinary pending experiment → scheduler claim
 and execution → lifecycle evidence → reconciliation → operational completion.
+
+For production, an exact effective global enable event and immutable request
+admission/Attempt V2 precede the same Phase E handoff. The Manager selects
+optimistically, processes sequentially, and stops at that handoff boundary.
+The scheduler continues to discover ordinary pending work independently.
 
 ### 4.3 Ownership boundaries
 
@@ -136,7 +155,7 @@ repeatable snapshots where cross-row consistency matters.
 ### 6.2 Write paths
 
 Each accepted mutation uses the exact transaction and global lock order in
-ADR-0010 through ADR-0017. Reservation and request acceptance are atomic;
+ADR-0010 through ADR-0019. Reservation and request acceptance are atomic;
 accepted Phase 5 handoff, complete bindings, and budget commitment are atomic.
 External lifecycle cancellation is a separately committed, explicitly
 reconciled call.
@@ -167,6 +186,13 @@ later one. Reconciliation batch persistence therefore locks every selected
 campaign in ascending ID order before every selected request in ascending ID
 order. Cursor and exact observation membership commit in that same
 transaction.
+
+Phase H prepends exact scheduler protocol evidence (shared for mutation) and
+the global production-enable domain. Acquisition and handoff hold both through
+commit before authorization → budget → campaign/completion → ascending
+reservations → ascending requests → existing Phase 5/lifecycle locks.
+Candidate selection is read-only; request-first `FOR UPDATE SKIP LOCKED` is
+prohibited.
 
 ### 7.3 Winner, loser, and retry outcomes
 
@@ -240,6 +266,10 @@ by their volumes.
 Automation defaults disabled and cannot run from documentation or mere schema
 presence.
 
+Production additionally requires one exact effective enable event and reviewed
+LOGIN-role membership. Rollback is disable first, stop the Manager, then revoke
+roles; persisted evidence is retained.
+
 ### 10.2 Permissions and destructive operations
 
 Least-privilege roles, explicit grants and budgets, campaign controls,
@@ -267,7 +297,8 @@ experimentation.
 
 ### 11.3 Required decisions
 
-ADR-0010 through ADR-0017 close V1 Campaign Operations authority. Physical
+ADR-0010 through ADR-0019 close Phase H authority through bounded run-once.
+Continuous Manager operation requires separate H4 acceptance. Physical
 retention/deletion, partial-member dispatch, new executable origins, adaptive
 budgets, autonomous selection, running-worker stop authority, and new
 scheduler work classes each require a later accepted owning-domain ADR.
@@ -279,7 +310,9 @@ scheduler work classes each require a later accepted owning-domain ADR.
 - [Volume VIII](Volume_VIII_Recommendation_Engine.md)
 - [Volume XI](Volume_XI_Scheduler.md)
 - [Accepted Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
-- [ADR-0010 through ADR-0017](adr/README.md)
+- [ADR-0010 through ADR-0019](adr/README.md)
+- [ADR-0019](adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md)
+- [Normative Phase H architecture](CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md)
 
 ## 13. Revision history
 
@@ -292,3 +325,4 @@ scheduler work classes each require a later accepted owning-domain ADR.
 | 1.3.0 | 2026-07-25 | Implemented architectural Phase F controls, cancellation coordination, deterministic observations, and bounded expired-lease recovery without scheduler or worker authority. | ADR-0010–ADR-0017 |
 | 1.4.0 | 2026-07-30 | Integrated Phase F as migration 053 on the unchanged generation-52 scheduler baseline and reserved unimplemented Phase G for migration 054. | ADR-0010–ADR-0018 |
 | 1.5.0 | 2026-07-31 | Implemented Campaign Operations Phase 5 / architectural Phase G immutable operational completion, logical archival, and audit/status without lifecycle, scientific, scheduler, or worker authority. | ADR-0014, ADR-0015, ADR-0017 |
+| 1.6.0 | 2026-07-31 | Accepted default-off Phase H production admission and a bounded run-once Campaign Manager while excluding continuous, scheduler, process, scientific, and automatic request/completion authority. | ADR-0019 |

@@ -1,7 +1,7 @@
 # Volume XII — Database
 
-Status: Aligned through scheduler generation 52 and Campaign Operations Phase 5
-Version: 0.10.0
+Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; implemented through Phase 5
+Version: 0.11.0
 Last revised: 2026-07-31
 
 ## 1. Purpose
@@ -94,6 +94,28 @@ cancellation-settlement, or reconciliation-resolution authority. Migration
 054 rewrites no existing history. Phase H production enablement remains
 separate.
 
+ADR-0019 authorizes migration 055 as the unimplemented Phase H persistence
+increment. It will add the immutable alternating production enable/disable
+chain, one immutable first production admission per request, additive Attempt
+V2 fields/shape, production audit completeness, owner-DML-safe witness/history
+guards, readiness/status, dedicated NOLOGIN production capabilities, and a
+narrow scheduler-protocol evidence interface. Migration 055 must add no login
+membership, backfill no request, reinterpret no V1 identity, and mutate no
+scheduler, lifecycle, experiment, or worker row.
+
+The frozen inventory is
+`campaign_operations_production_enablement_event`,
+`campaign_operations_production_enablement_audit_reference_event`,
+`campaign_operations_request_production_admission`, additive V2/admission
+columns on the existing dispatch-attempt/dispatch-audit tables, fixed
+enable/disable/production-acquisition transition functions, narrow scheduler
+protocol snapshot/lock functions, and
+`campaign_operations_production_readiness_v1` /
+`campaign_operations_production_status_v1` views. Constraints enforce one
+alternating head, exact canonical/typed mirrors, V1/V2 exclusive shape, one
+admission and first V2/audit, Boolean/admission equivalence, completion gates,
+immutability, and owner-DML update/delete/truncate rejection.
+
 ## 3. Responsibilities
 
 ### 3.1 Owned responsibilities
@@ -151,10 +173,20 @@ ID and creation timestamp remain metadata outside identity, and ratification
 grants no Campaign Operations or other operational authority.
 
 Campaign Operations entities and exact privilege boundaries are authorized
-incrementally by ADR-0010 through ADR-0017 and the accepted Campaign
+incrementally by ADR-0010 through ADR-0019 and the accepted Campaign
 Operations specification. Domain events remain authoritative; guarded
 request/reservation projections and optional read projections never replace
 their same-transaction event evidence.
+
+For Phase H, the exact current effective enable event is global authority and
+immutable admission plus complete Attempt V2/audit is per-request authority.
+`production_dispatch_enabled` is only a serialization witness. At commit it
+equals existence of exact admission; first admission implies exactly one
+matching first V2 attempt and audit. V1 implies false/no production fields; V2
+implies true/complete admission and enablement. Immediate false-to-true-only
+guarding and deferred bidirectional consistency repeat the proven
+`completion_boundary_closed` witness pattern rather than create a second
+authority.
 
 ### 5.2 Provenance and versions
 
@@ -281,6 +313,13 @@ scheduler sentinels byte-for-byte.
 Migration 044 tests preserve Phase 6B manifests/members, Phase 6C reviews, and
 experiment/scheduler sentinels byte-for-byte.
 
+Migration 055 tests must preserve historical Attempt V1 and Completion V1
+canonicals byte-for-byte, prove additive V1/V2 shape, reconstruct complete
+nested enable/admission/attempt/request/completion canonicals in PostgreSQL and
+C++, reject same-hash/different-canonical at every level, prove owner-DML
+update/delete/truncate rejection and atomic rollback, and inspect exact ACL,
+role ownership, search path, PUBLIC revocation, and absence of LOGIN grants.
+
 ## 10. Operational safety
 
 ### 10.1 Runtime isolation
@@ -300,6 +339,15 @@ Phase 6D grants the same narrow privilege shape for its ratification table and
 sequence. PUBLIC/runtime trigger-function execution is revoked, the invoker-
 rights trigger has a pinned safe context, and NULL ACLs are interpreted through
 PostgreSQL default ACLs in privilege tests.
+
+Migration 055 creates separate NOLOGIN enabler, disabler, dispatcher,
+production Phase 5 transactional, reader, and scheduler-evidence
+owner/capability roles. Enabler/disabler/dispatcher are mutually bounded;
+`pqxx` receives no membership. The Manager has no test role or scheduler
+mutation privilege. Global/admission/attempt/audit evidence and the Boolean
+witness reject ordinary owner DML. The scheduler evidence function owner has
+only the required scheduler protocol columns; callers receive EXECUTE, not raw
+table access.
 
 ### 10.3 Observability and recovery
 
@@ -331,7 +379,9 @@ permissions, backup, concurrency, and observability decisions.
 - [ADR-0007](adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md)
 - [ADR-0008](adr/ADR-0008-phase-6c-follow-up-proposal-administrative-review.md)
 - [ADR-0009](adr/ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md)
-- [Campaign Operations ADR-0010 through ADR-0017](adr/README.md)
+- [Campaign Operations ADR-0010 through ADR-0019](adr/README.md)
+- [ADR-0019](adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md)
+- [Normative Phase H architecture](CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md)
 - [Accepted Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 - [Phase 6B persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
 - [Phase 6C administrative review](../Phase6CRecommendationCampaignFollowUpProposalReview.rst)
@@ -353,3 +403,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.8.0 | 2026-07-25 | Added Phase 4 append-only controls, cancellation coordination and settlement, deterministic reconciliation evidence, and guarded expired-lease recovery without scheduler or worker authority. | ADR-0010–ADR-0017 |
 | 0.9.0 | 2026-07-30 | Integrated Phase F as migration 053 after the unchanged 049–052 global-control and scheduler-hardening history; reserved unimplemented Phase G for migration 054. | ADR-0010–ADR-0018 |
 | 0.10.0 | 2026-07-31 | Added Phase G immutable operational completion, exact audit/blocker/status evidence, and least-privilege completion capability without lifecycle, scientific, scheduler, or worker authority. | ADR-0014, ADR-0015, ADR-0017 |
+| 0.11.0 | 2026-07-31 | Accepted migration 055 architecture for immutable production admission, Attempt V1/V2 compatibility, Boolean/admission equations, Completion V1 nesting, owner-DML guards, least-privilege roles, and no login grants. | ADR-0019 |

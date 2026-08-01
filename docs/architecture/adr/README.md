@@ -87,6 +87,7 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0016](ADR-0016-scheduler-atomic-claim-hardening.md) | Accepted | Scheduler-owned atomic claim hardening gates production campaign dispatch. |
 | [ADR-0017](ADR-0017-campaign-privileges-and-audit.md) | Accepted | Separate least-privilege capabilities, invoker-rights Phase 5 invocation, and append-only audit prevent authority overlap. |
 | [ADR-0018](ADR-0018-scheduler-generation-52-exact-attempt-authority.md) | Accepted | Generation-52 binds scheduler mutation, signaling, finalization, analysis, and cutover to one exact-attempt authority. |
+| [ADR-0019](ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md) | Accepted | Durable exact production admission and a Campaign Operations-owned run-once Manager remain default-off and scheduler-isolated. |
 
 ## 8. Revision history
 
@@ -100,3 +101,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.5.0 | 2026-07-22 | Proposed ADR-0009 for exact append-only Phase 6D governance ratification with mandatory separation of duties and no Phase 6E authority. |
 | 1.6.0 | 2026-07-24 | Accepted ADR-0009 and ADR-0010 through ADR-0017 to close Phase 6D and Campaign Operations architectural authority. |
 | 1.7.0 | 2026-07-29 | Added ADR-0018 for generation-52 exact-attempt scheduler authority and technical cutover. |
+| 1.8.0 | 2026-07-31 | Accepted ADR-0019 for exact production-dispatch admission, bounded run-once Manager ownership, generation-52 evidence, and H4 exclusion. |

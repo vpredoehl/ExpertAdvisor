@@ -1,8 +1,8 @@
 # Volume XI — Scheduler
 
-Status: Generation-52 exact-attempt ownership correction implemented; validation pending
-Version: 0.4.0
-Last revised: 2026-07-29
+Status: Generation-52 exact-attempt ownership implemented and independently reviewed; safe-window process regression remains a pre-enable gate
+Version: 0.5.0
+Last revised: 2026-07-31
 
 ## 1. Purpose
 
@@ -48,6 +48,18 @@ canonical executable, and held-authority state. Continuation evaluation and
 queueing, exact-attempt finalization, checkpoint analysis, and recovery carry
 that context without reconstructing ownership-free options.
 
+Independent Phase G verification observed scheduler generation 52 active with
+cutover complete and found no open scheduler architecture defect. It did not
+rerun process-level scheduler/global-control suites because production workers
+were active; those suites remain an ADR-0019 rollout prerequisite in a safe
+window, not an unowned Campaign Operations workaround.
+
+ADR-0019 permits Campaign Operations to consume exactly generation-52 protocol
+and cutover evidence through a narrow pinned security-definer function. The
+function returns a versioned exact canonical and, for a mutating caller, holds
+the scheduler protocol row `FOR SHARE` through the caller transaction. It does
+not expose general scheduler tables or liveness authority.
+
 ## 3. Responsibilities
 
 ### 3.1 Owned responsibilities
@@ -85,6 +97,9 @@ Lifecycle services define legal transitions; scheduler selects and claims;
 workers calculate and report; repositories persist. Campaign Operations ends
 at accepted lifecycle handoff and may observe scheduler/lifecycle evidence
 read-only. The scheduler does not read Campaign Operations policy tables.
+It never polls the Campaign Manager or Campaign Operations request tables and
+receives no Campaign Operations privilege. Pending experiments produced by
+Phase H are ordinary work under unchanged scheduler claim/capacity policy.
 
 ## 5. Data model
 
@@ -384,6 +399,14 @@ database session declares protocol generation 52. This is defense in depth;
 the cutover record and positive absence inspection are the startup authority.
 Do not roll back the executable or migration independently after cutover.
 
+Phase H approval is exact, not monotonic: it accepts generation 52 and one
+byte-identical versioned protocol canonical only. `generation >= 52`, “52 or
+newer,” and authorization from cutover state or liveness alone are prohibited.
+A future generation does not inherit approval; Campaign Operations becomes
+ineffective for new acquisition/handoff until its own disable/new-contract/
+independent-verification/re-enable sequence completes. The scheduler neither
+reads nor enforces that Campaign Operations enable chain.
+
 Legacy no-PID attempts remain fail-closed during cutover and for a bounded
 post-cutover grace interval. After cutover is complete, old dispatch authority
 is positively absent, the exact lifecycle binding remains, no launch can still
@@ -415,6 +438,8 @@ idempotency, recovery, operator control, and regression scope.
 - [Volume I §§8–10](Volume_I_Foundation.md)
 - [ADR-0004](adr/ADR-0004-scheduler-ownership-boundaries.md)
 - [ADR-0016](adr/ADR-0016-scheduler-atomic-claim-hardening.md)
+- [ADR-0018](adr/ADR-0018-scheduler-generation-52-exact-attempt-authority.md)
+- [ADR-0019](adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md)
 - [Volume VII](Volume_VII_Experiment_Lifecycle.md)
 - [Volume XII](Volume_XII_Database.md)
 
@@ -429,3 +454,4 @@ idempotency, recovery, operator control, and regression scope.
 | 0.3.0 | 2026-07-27 | Implemented fenced ownership, durable global worker attempts/capacity, conservative recovery, gated canonical launch, shutdown, and diagnostics. | ADR-0004, ADR-0016 |
 | 0.4.0 | 2026-07-29 | Added generation-52 authority propagation, exact signaling/reaping/finalization, bounded checkpoint analysis, direct-CLI ownership enforcement, canonical lock order, technical cutover barrier, and bounded legacy no-PID reconciliation. | ADR-0016, ADR-0018 |
 | 0.4.1 | 2026-07-30 | Made stop-at-checkpoint atomically complete the exact train attempt, release capacity, clear its binding, and tolerate delayed reap and replay. | ADR-0018 |
+| 0.5.0 | 2026-07-31 | Recorded generation-52 implementation/review status and the exact narrow Phase H evidence interface without scheduler polling, Campaign Operations privileges, or future-generation approval inheritance. | ADR-0018, ADR-0019 |

@@ -2,38 +2,33 @@
 
 Status: **Accepted Campaign Operations V1 architecture**
 
-Architecture contract version: **1.2**
+Architecture contract version: **1.3**
 
-Operational implementation status: **Phase 1 foundation implemented; later increments not implemented**
+Operational implementation status: **Campaign Operations Phase 5 / architectural Phase G implemented; Phase H runtime not implemented**
 
-Last amended: **2026-07-24**
+Last amended: **2026-07-31**
 
 # 1. Executive Decision, Authority, and Acceptance Status
 
 This file is the repository's detailed normative Campaign Operations V1
 specification and the accepted refinement of Volume X. Its authority comes
-from accepted ADR-0010 through ADR-0017; it does not override those ADRs or
+from accepted ADR-0010 through ADR-0019; it does not override those ADRs or
 Volume I. A Proposed ADR remains non-authoritative.
 
 The current authority facts are deliberately separate:
 
 - **Operational implementation status:** Recommendation Governance Phases 4–6
-  are implemented. Campaign Operations Phase 1 implements foundational pure
-  value/canonical/validation contracts, budget arithmetic, and completion
-  classification helpers; migration 045 and its repositories persist only the
-  immutable campaign, optional governance provenance, authorization, and
-  audit foundation. Budget persistence, reservation, request, dispatch,
-  campaign controls, reconciliation, completion persistence, and archival read
-  behavior are not implemented unless later repository evidence says
-  otherwise.
-- **Architectural acceptance status:** ADR-0009 and ADR-0010 through ADR-0017
-  are Accepted. Volume X incorporates this specification as its detailed V1
-  contract.
+  and Campaign Operations Phases 1–5 / architectural A–G are implemented
+  through migration 054. Phase H production admission, Attempt V2, production
+  dispatch, and Manager runtime remain unimplemented.
+- **Architectural acceptance status:** ADR-0009 and ADR-0010 through ADR-0019
+  are Accepted. Volume X incorporates this specification and the normative
+  Phase H document as its detailed contract.
 - **Production enablement status:** architecture acceptance authorizes bounded
   implementation under the per-increment gates in §31. It does not grant
   database-role membership, enable a runtime service, operate a scheduler, or
-  permit production dispatch. ADR-0016 implementation and independent
-  verification remain prerequisites for production dispatch.
+  permit production dispatch. ADR-0019 requires migration 055, exact readiness,
+  reviewed role assignment, an explicit enable event, and canary-first rollout.
 
 Campaign Operations is a bounded subsystem for durable, long-lived
 coordination of explicitly authorized work over one exact Phase 4D
@@ -80,8 +75,9 @@ The central decisions are:
 - Operational completion records settled coordination, not scientific success.
 - Campaign Operations Phases A–D require no scheduler change. Phase E must remain
   disabled or isolated-test-only until scheduler claim hardening is accepted,
-  implemented, and independently verified; only then may production dispatch be
-  enabled.
+  implemented, and independently verified. Even after that prerequisite,
+  production requires ADR-0019 H1/H2 implementation, exact readiness, reviewed
+  role membership, and an explicit enable event.
 
 Implementation remains incremental. Architecture acceptance never authorizes
 production data mutation, deployment, scheduler operation, or role enablement
@@ -126,7 +122,7 @@ Formal architectural closure is now complete:
   governance-only evidence.
 - Phase 6D documentation states that any operational consumer requires its own
   accepted authority; it does not imply a Phase 6E roadmap.
-- ADR-0010 through ADR-0017 accept the bounded Campaign Operations ownership,
+- ADR-0010 through ADR-0019 accept the bounded Campaign Operations ownership,
   authorization, accounting, request/handoff, lifecycle, recovery, scheduler,
   privilege, and audit decisions.
 
@@ -1783,12 +1779,16 @@ X, is the first Campaign Operations authority. The accepted records are:
 7. ADR-0016: scheduler atomic-claim hardening and the absolute interaction boundary.
 8. ADR-0017: least-privilege roles, narrow Phase 5/lifecycle capabilities, projections,
    audit, and migration privilege rollout.
+9. ADR-0018: scheduler generation-52 exact-attempt authority and cutover evidence.
+10. ADR-0019: durable production admission, exact generation-52 evidence consumption,
+    one common Phase E engine, bounded run-once Manager, and H4 exclusion.
 
 There is no blanket “all future ADRs before any implementation” gate. Each
 increment below names its exact accepted prerequisites. A proposed later ADR
 never governs its increment, but an unrelated future ADR does not block
 already governed work. ADR-0009 is separately Accepted as governance-only
-upstream evidence. ADR-0016 implementation and independent verification gate
+upstream evidence. ADR-0016/ADR-0018 implementation and verification, followed
+by the separate ADR-0019 implementation/readiness/enablement gates, govern
 **production dispatch only**, not documentation, pure domain work, or
 non-scheduler persistence.
 
@@ -1960,32 +1960,51 @@ behavior at its commit boundary.
 
 ## 31.8 Phase H — Separate scheduler hardening and production enablement
 
-- **Gate:** ADR-0016 Accepted; scheduler atomic claim/attempt implementation completed;
-  independent verification passed; operational approval to enable Phase E production
-  dispatch recorded separately from budget and campaign grants.
-- **Scope/contracts:** scheduler-owned conditional claim, attempt identity, claim/
-  cancellation precedence, capacity, recovery, and existing-work regressions.
-- **Persistence/services/CLI:** scheduler-owned only. Campaign Operations schema and
-  services do not acquire scheduler privileges or add a work class.
-- **Tests:** multiple schedulers, claim CAS, cancellation race, launch failure, orphan
-  recovery, capacity, shutdown, and Campaign Operations isolation.
-- **Migration effect:** only as accepted by ADR-0016; independent of Campaign Operations
-  migrations.
-- **Exclusions:** campaign policy, recommendation selection, new scheduler priority or
-  capacity semantics, worker math.
-- **Acceptance criteria:** accepted/implemented/independently verified atomic claim;
-  Phase E enablement remains an explicit default-off configuration/privilege change.
-- **Rollback/recovery:** disable production dispatch first; scheduler rollback follows
-  ADR-0016 without altering Campaign Operations bindings or lifecycle truth.
+- **Authority:** ADR-0019 and
+  `docs/architecture/CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md`
+  amend the earlier Phase H wording in this section. Scheduler hardening remains
+  scheduler-owned under ADR-0016/ADR-0018; durable production admission and the
+  Manager are Campaign Operations-owned.
+- **H1 — authority/persistence:** canonical contracts and golden vectors; migration
+  055; immutable alternating enable/disable evidence; one first request admission;
+  additive Attempt V1/V2; owner-DML guards; production roles; repeatable-read
+  readiness/status. No production handoff or Manager batch.
+- **H2 — exact production dispatch:** one common Phase E engine shared with the
+  isolated-test adapter; enable/disable services; caller-keyed exact request canary;
+  fresh-connection uncertain-commit recovery; disable/acquisition/handoff races. No
+  Manager batch.
+- **H3 — bounded run-once:** optimistic read-only selection, deterministic
+  version-derived per-request keys, sequential bounded processing, request-local
+  continuation, global-failure stop, and multi-manager correctness. No daemon,
+  polling, autostart, or supervision.
+- **H4 — continuous Manager:** excluded until a separate operational ADR or explicit
+  later acceptance owns supervision, restart/autostart, cadence/backoff, shutdown,
+  health, logging, duplicate-instance/churn, deployment, and rollback.
+- **Scheduler contract:** exactly generation 52, exactly `cutover_state=complete`,
+  exact versioned protocol canonical and independent verification reference through
+  a narrow locked evidence function. Liveness is diagnostic; future generations do
+  not inherit approval. Neither side receives the other's broad privileges.
+- **Acceptance/rollout:** H1–H3 are inert without an enable event and production
+  login grants. Deploy disabled, run safe-window scheduler/global-control
+  regressions, audit a dedicated Manager login, run readiness, enable explicitly,
+  dispatch one exact canary, inspect the complete evidence chain, then run a
+  one-request Manager batch and increase only through reviewed bounds.
+- **Exclusions:** all §8 boundaries plus physical archival/retention, autonomous
+  research, adaptive budgets, partial dispatch, scheduler work classes/capacity,
+  worker/process control, scientific interpretation, automatic request acceptance
+  or completion, and initial continuous operation.
+- **Rollback/recovery:** record disable first, stop Manager, revoke roles, and retain
+  all evidence. Disable neither cancels experiments nor mutates scheduler/lifecycle
+  state; old leases expire and use existing Phase F recovery.
 
 # 32. Risks
 
-Blocking production-dispatch risk:
+Blocking production-dispatch risks:
 
-- Current scheduler claim behavior does not yet satisfy the accepted
-  cancellation and multiple-scheduler contract. ADR-0016 is accepted, but its
-  implementation and independent verification remain required before
-  production dispatch.
+- Phase H runtime and migration 055 are not implemented; no enable event or
+  production Manager login may be treated as present.
+- Process-level scheduler/global-control regressions were deferred while
+  production workers were active and remain a safe-window pre-enable gate.
 
 Implementation risks:
 
@@ -2060,9 +2079,10 @@ work classes are excluded future capabilities, not unresolved V1 decisions.
 ## 34.1 Baseline acceptance
 
 The Campaign Operations Phase A baseline is Accepted. The focused review and
-targeted amendments in §36 resolved the 17 recorded findings; ADR-0009 and
-ADR-0010 through ADR-0017 are Accepted; the ADR index, Volumes VIII/X/XI/XII,
-and Phase 6D documentation are aligned.
+targeted amendments in §36 resolved the 17 recorded findings. ADR-0009 and
+ADR-0010 through ADR-0019 are Accepted. ADR-0019 and the normative Phase H
+document further amend only the production-admission/Manager wording identified
+in §31.8 and §37; the ADR index and Volumes X/XI/XII are aligned.
 
 ## 34.2 Implementation acceptance
 
@@ -2071,8 +2091,9 @@ gates and acceptance criteria in §31. Before each increment closes, its canonic
 vectors/state matrices, schema/ACL/concurrency/failure/recovery tests, isolated migration
 upgrade, and Phase 4–6/lifecycle/scheduler regressions must pass. No proposed governing
 ADR may be used as authority. ADR-0016 acceptance, implementation, and independent
-verification are required only before production dispatch, and Phase E remains disabled
-or isolated-test-only until then.
+verification are required only before production dispatch. Phase H additionally
+requires its implemented H1/H2 gates, exact readiness, role audit, and explicit enable
+event; until then Phase E remains disabled or isolated-test-only.
 
 ## 34.3 System-wide acceptance invariants
 
@@ -2093,7 +2114,7 @@ reconciliation contracts.
 # 35. Overall Readiness Assessment
 
 This architecture is a complete, internally consistent Accepted specification
-under ADR-0010 through ADR-0017. It authorizes bounded Campaign Operations
+under ADR-0010 through ADR-0019. It authorizes bounded Campaign Operations
 implementation increment by increment under §31; it does not authorize
 deployment, production data mutation, role membership, or scheduler operation.
 
@@ -2102,9 +2123,11 @@ The fixed upstream architecture supplies strong foundations: immutable materiali
 The executable V1 scope question is closed: only one exact Phase 4D
 materialization is an origin, and Phase 6D is optional
 prerequisite/provenance. The architectural authority gates are satisfied for
-Campaign Operations Phase 2 budget, reservation, and request-acceptance
-implementation. Scheduler claim hardening remains an implementation and
-independent-verification gate only before production dispatch.
+Campaign Operations Phases 1–5 / architectural A–G implementation. Scheduler
+generation-52 hardening is implemented and independently reviewed; the
+deferred process-level suites remain a safe-window rollout gate. Phase H
+runtime, migration 055, explicit enablement, and production role assignment
+are still required before production dispatch.
 
 Campaign Operations is the correct next bounded concern. It refines the operational parts of Volume X, does not supersede completed Phases 4–6, and must not be labeled Phase 6E.
 
@@ -2145,6 +2168,7 @@ separate authority record.
 | 1.0-candidate | 2026-07-22 | Incorporated the focused-CEE candidate corrections and froze V1 authority, identity, persistence, concurrency, recovery, privilege, migration, test, and increment contracts. | Candidate later found by final verification to require the three targeted amendments in 1.1; not implementation authority. |
 | 1.1-candidate | 2026-07-22 | Narrowly corrected held-reservation cancellation lock order, authorization supersession to one successor `granted` event, and campaign creation directly into durable `awaiting_operational_authorization`; no other architecture was redesigned. | Candidate awaiting focused verification of these three amendments, formal ADR-0009 alignment, and Accepted ADR-0010; not implementation authority. |
 | 1.2 | 2026-07-24 | Accepted the verified V1 specification under ADR-0010 through ADR-0017, aligned Phase 6D, resolved institutional/adapter/scheduler/running-work/archival ambiguities, and recorded implementation traceability. | Accepted implementation authority subject to per-increment gates; production dispatch remains gated by implemented and independently verified ADR-0016 hardening. |
+| 1.3 | 2026-07-31 | Accepted ADR-0019 and the normative Phase H correction for durable production admission, exact generation-52 evidence, common Phase E engine, bounded run-once Manager, disable-first rollback, and H4 exclusion. | Accepted H1–H3 implementation authority; Phase H runtime remains default-off and unimplemented. |
 
 # 37. Architectural Authority Traceability Matrix
 
@@ -2169,7 +2193,9 @@ separate authority record.
 | Adoption and permanent V1 downstream control ownership | Campaign Operations dispatcher under extra grant | ADR-0011, ADR-0013 | §§10–12, 16, 18–21 |
 | Experiment resource ownership after handoff | Experiment Lifecycle; scheduler for execution | ADR-0004, ADR-0010, ADR-0013, ADR-0016 | §§6, 13, 16–17 |
 | Scheduler polling, capacity, atomic claims, attempts, and workers | Scheduler | ADR-0004, ADR-0016 | §§6, 13, 17 |
-| Production-dispatch enablement gate | Scheduler ownership plus operational deployment approval | ADR-0016 | §§1, 17, 31.8, 34–35 |
+| Production-dispatch global and per-request admission | Campaign Operations; scheduler supplies exact read-only protocol evidence | ADR-0016, ADR-0018, ADR-0019 | §31.8 and normative Phase H architecture §§3–8 |
+| Bounded Campaign Manager run-once | Campaign Operations, ending at the existing Phase E handoff | ADR-0013, ADR-0017, ADR-0019 | §31.8 and normative Phase H architecture §§9, 11, 18 |
+| Continuous Campaign Manager | No current runtime owner; separately deferred to H4 | ADR-0019 | §31.8 and normative Phase H architecture §18 |
 | Campaign pause/resume | Campaign Operations; future orchestration only | ADR-0014 | §§11–13, 18, 21 |
 | Scheduler-global pause/resume/cancel controls | Scheduler/global control subsystem | ADR-0004, ADR-0016 | §§6, 8, 17, 21 |
 | Campaign cancellation intent and settlement | Campaign Operations cancellation coordinator | ADR-0015 | §§11–13, 18–23 |
@@ -2200,7 +2226,8 @@ separate authority record.
 | “Launch” in the accepted Phase 5 workflow could be confused with scheduler worker launch. | Phase 5 launch means atomic lifecycle handoff to ordinary `pending/train`; scheduler launch is a later, separate authority. | ADR-0013 fixes Phase 5 as lifecycle handoff; ADR-0016 fixes scheduler claims/process execution. | Resolved; no execution-authority overlap. |
 | Existing scheduler-global pause/resume/cancel controls could be confused with Campaign Operations pause/resume/cancellation. | Global controls suppress or signal scheduler-managed work; campaign controls govern future orchestration and delegate lifecycle cancellation. | ADR-0014 through ADR-0016 name the separate owners and prohibit reuse as campaign state. | Resolved. |
 | Institutional role assignment, narrow Phase 5 privilege mechanism, running-work behavior, and archival were left external to the candidate. | Leaving them to implementation discretion could create privilege or control overlap. | ADR-0015 and ADR-0017 fix explicit administrator role assignment, invoker-rights Phase 5 reuse, no running-process power, logical archival, and no physical deletion. | Resolved for V1; later expansion requires a new ADR. |
-| Volume XI states the required atomic scheduler boundary, while repository evidence shows the target is not yet fully implemented. | This is an implementation gap against ADR-0004, not authority for Campaign Operations to repair or bypass it. | ADR-0016 specifies the scheduler-owned hardening and retains a default-off production-dispatch gate. | Architecturally resolved; scheduler implementation remains future work. |
+| Volume XI originally stated the required atomic scheduler boundary while the target was not yet fully implemented. | This was an implementation gap against ADR-0004, not authority for Campaign Operations to repair or bypass it. | ADR-0016/ADR-0018 specified and migrations 051–052 implemented scheduler-owned hardening; safe-window process regression remains a rollout gate. | Resolved without granting Campaign Operations scheduler authority. |
+| Original §31.8 made Phase H persistence/services/CLI scheduler-owned only and treated enablement as configuration/privilege, while the Phase H proposal introduced durable admission and a Campaign Operations Manager. | Implementation would otherwise invent durable and runtime ownership absent an accepted ADR. | ADR-0019 and the normative Phase H document freeze global/per-request admission, identities, operation keys, exact generation-52 evidence, common Phase E engine, run-once Manager, H1–H4 gates, privileges, readiness, and rollout. | Resolved; H1–H3 are implementation-authorized, default-off, and H4 remains excluded. |
 
 The stale branch/development-status prose in `AGENTS.md` is not a Campaign
 Operations authority record and was not changed by this documentation-only
@@ -2209,18 +2236,20 @@ specification.
 
 # 39. Readiness Decision
 
-The Phase 6D acceptance mismatch and every Campaign Operations V1 implied
-contract identified by the architecture and review chain are now explicit in
-Accepted ADRs. No V1 authority overlap or implementation-blocking ambiguity
-remains.
+The Phase 6D acceptance mismatch, every Campaign Operations V1 implied
+contract, and every targeted Phase H authority gap identified by the review
+chain are now explicit in Accepted ADRs. No H1–H3 identity, replay,
+scheduler-generation, lock-order, privilege, or rollout choice is left for an
+implementation pass to invent.
 
 Campaign Operations implementation may continue increment by increment under
-§31. In particular, the budget, reservation, and request-acceptance increment
-is authorized by ADR-0010, ADR-0011, ADR-0012, the acceptance portion of
-ADR-0013, and ADR-0017. It still MUST NOT dispatch, invoke Phase 5, create or
-activate experiments, or interact with the scheduler in that increment.
+§31. H1–H3 are independently committable and inert while there is no enable
+event and no production LOGIN membership. H4 cannot be inferred from
+multi-manager database correctness.
 
-Production dispatch remains prohibited until ADR-0016 is implemented and
-independently verified.
+Production dispatch remains prohibited until H1/H2 implementation, exact
+readiness, safe-window scheduler/global-control regressions, reviewed role
+assignment, and an explicit enable event. Documentation acceptance alone does
+not enable production.
 
 **READY FOR CAMPAIGN OPERATIONS IMPLEMENTATION**

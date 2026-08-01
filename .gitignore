@@ -32,3 +32,6 @@ review_backups/*
 # Generated inputs, outputs, logs, and temporary files for this focused review.
 /GlobalCancel_StrandedPendingCheckpoint_*
 /vi
+
+screenlog.*
+
