@@ -35,3 +35,7 @@ review_backups/*
 
 screenlog.*
 
+
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
