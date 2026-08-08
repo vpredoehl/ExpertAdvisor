@@ -1,8 +1,8 @@
 # Volume XII — Database
 
-Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; implemented through Phase 5
-Version: 0.11.0
-Last revised: 2026-07-31
+Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; implemented through Campaign Operations Phase H H1 (migration 055)
+Version: 0.15.0
+Last revised: 2026-08-03
 
 ## 1. Purpose
 
@@ -94,11 +94,14 @@ cancellation-settlement, or reconciliation-resolution authority. Migration
 054 rewrites no existing history. Phase H production enablement remains
 separate.
 
-ADR-0019 authorizes migration 055 as the unimplemented Phase H persistence
-increment. It will add the immutable alternating production enable/disable
-chain, one immutable first production admission per request, additive Attempt
+ADR-0019, as narrowly amended by ADR-0019A and ADR-0019B, authorizes migration 055,
+implemented by Phase H Step 1, as the Phase H
+authority and persistence foundation. It adds the immutable alternating
+production enable/disable chain, one immutable first production admission per
+request, additive Attempt
 V2 fields/shape, production audit completeness, owner-DML-safe witness/history
-guards, readiness/status, dedicated NOLOGIN production capabilities, and a
+guards, readiness/status, one sealed boundary owner, dedicated NOLOGIN
+production capabilities, and a
 narrow scheduler-protocol evidence interface. Migration 055 must add no login
 membership, backfill no request, reinterpret no V1 identity, and mutate no
 scheduler, lifecycle, experiment, or worker row.
@@ -115,6 +118,42 @@ protocol snapshot/lock functions, and
 alternating head, exact canonical/typed mirrors, V1/V2 exclusive shape, one
 admission and first V2/audit, Boolean/admission equivalence, completion gates,
 immutability, and owner-DML update/delete/truncate rejection.
+
+The exact production-acquisition function is
+`transition_campaign_operations_request_dispatch_production_v2` (61 UTF-8
+bytes); the former 64-byte spelling is invalid. Exact catalog tests compare
+`pg_proc.proname::text`, octet length, signature, and overload absence without
+using truncating `regprocedure` input as sole proof.
+
+The frozen role/function inventory is corrected by ADR-0019A. The seven
+ordinary production roles remain `NOLOGIN NOSUPERUSER` with no H1 membership.
+The additional infrastructure role
+`campaign_operations_h1_boundary_authority` is `NOLOGIN SUPERUSER`, has no
+memberships in either direction, and owns every table, sequence, view,
+canonical/helper/trigger, scheduler-evidence function, and fixed transition
+that can create or validate H1 authorization/evidence. It replaces the
+unaccepted ordinary transition-owner role. Superuser/physical administrator
+power is outside the threat model; every ordinary former owner, capability,
+`pqxx`, generic LOGIN, and reachable role has no ownership, direct evidence
+DML, context write, or H1 fixed-transition execution.
+
+The sealed context binds backend PID, top-level XID, kind, request, and key.
+Only the fixed transitions write it; success deletes it, rollback removes it,
+and a deferred constraint prohibits persistence at commit. Protected relation
+ownership prevents an ordinary owner from replacing guards or installing a
+recursive trigger. Owner and current/default ACL rules are frozen in
+ADR-0019A §§5–8 and catalog-tested with PostgreSQL NULL-ACL semantics.
+
+ADR-0019B makes deployment evidence automatic and fail-closed. The sealed role
+is exact down to INHERIT, connection limit, password, validity, role/database
+configuration, BYPASSRLS, and an empty recursive graph with no ADMIN OPTION.
+Migration preflight never repairs an incompatible existing role. A literal
+minimum ownership/signature manifest replaces every wildcard transfer; catalog
+audits scan all non-system schemas and object classes for extra ownership,
+alternate-schema names/wrappers/overloads/defaults, dependencies, PUBLIC
+execution, explicit/default ACL drift, and grant options. The versioned
+read-only deployment audit is mandatory before/after upgrade and restore and
+before enablement, with stable SQLSTATE/`H1A` diagnostics.
 
 ## 3. Responsibilities
 
@@ -319,6 +358,12 @@ nested enable/admission/attempt/request/completion canonicals in PostgreSQL and
 C++, reject same-hash/different-canonical at every level, prove owner-DML
 update/delete/truncate rejection and atomic rollback, and inspect exact ACL,
 role ownership, search path, PUBLIC revocation, and absence of LOGIN grants.
+The fixture rows must exist under schema 054 before migration 055, with exact
+canonical bytes and hashes captured before upgrade. Tests also cover exact
+replay/conflict for enable, disable, and acquisition before mutable head/CAS;
+the full 0a→0b→1→2→3→4→5 lock order with independent connections and
+`pg_blocking_pids()`; actual former-owner/SET ROLE/context threats; deferred
+context cleanup; and future-object default ACLs.
 
 ## 10. Operational safety
 
@@ -342,12 +387,14 @@ PostgreSQL default ACLs in privilege tests.
 
 Migration 055 creates separate NOLOGIN enabler, disabler, dispatcher,
 production Phase 5 transactional, reader, and scheduler-evidence
-owner/capability roles. Enabler/disabler/dispatcher are mutually bounded;
+owner/capability roles plus the sealed, unreachable
+`campaign_operations_h1_boundary_authority`. Enabler/disabler/dispatcher are mutually bounded;
 `pqxx` receives no membership. The Manager has no test role or scheduler
 mutation privilege. Global/admission/attempt/audit evidence and the Boolean
-witness reject ordinary owner DML. The scheduler evidence function owner has
-only the required scheduler protocol columns; callers receive EXECUTE, not raw
-table access.
+witness are sealed-owned and reject ordinary owner DML. The legacy-named
+scheduler evidence owner owns no H1 object; the sealed boundary owner owns the
+pinned scheduler helpers and callers receive only exact EXECUTE, not raw table
+access.
 
 ### 10.3 Observability and recovery
 
@@ -404,3 +451,7 @@ permissions, backup, concurrency, and observability decisions.
 | 0.9.0 | 2026-07-30 | Integrated Phase F as migration 053 after the unchanged 049–052 global-control and scheduler-hardening history; reserved unimplemented Phase G for migration 054. | ADR-0010–ADR-0018 |
 | 0.10.0 | 2026-07-31 | Added Phase G immutable operational completion, exact audit/blocker/status evidence, and least-privilege completion capability without lifecycle, scientific, scheduler, or worker authority. | ADR-0014, ADR-0015, ADR-0017 |
 | 0.11.0 | 2026-07-31 | Accepted migration 055 architecture for immutable production admission, Attempt V1/V2 compatibility, Boolean/admission equations, Completion V1 nesting, owner-DML guards, least-privilege roles, and no login grants. | ADR-0019 |
+| 0.12.0 | 2026-07-31 | Implemented migration 055 H1 authority/persistence, canonical reconstruction, fixed but ungranted production transitions, immutable/deferred constraints, inert production roles, hardened test-only V1 authority, and read-only readiness/status without an H1 production mutation surface. | ADR-0019 |
+| 0.13.0 | 2026-08-01 | Applied ADR-0019A's targeted 61-byte acquisition identifier, sealed owner-safe context/ownership inventory, exact fixed-transition replay, complete acquisition lock order, default ACL and SECURITY DEFINER hardening, and genuine pre-055 fixture requirements. | ADR-0019A |
+| 0.14.0 | 2026-08-01 | Applied ADR-0019B's exact sealed-role identity/recursive graph, literal minimum ownership and all-schema entry-point manifests, automatic deployment audits, restore A–J, complete ACL/lock/negative matrices, and post-restore historical-byte proof. | ADR-0019B |
+| 0.15.0 | 2026-08-03 | Completed migration-055 fail-closed function tuples, post-recovery reacquisition, cross-principal replay, full audit/authority hydration, stable diagnostics, and recursive edge-preserving role evidence. | ADR-0019B |

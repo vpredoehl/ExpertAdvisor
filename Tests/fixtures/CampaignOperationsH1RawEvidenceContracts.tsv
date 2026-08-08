@@ -1,0 +1,15 @@
+version	evidence_class	parser_identity	expected_authority	observed_source	receipt_policy	self_asserted_comparison_allowed
+h1-raw-contract-v2	runtime	parse_runtime_observation_bundle	CampaignOperationsH1NormativeClauses.tsv	PostgreSQL catalog+SQL diagnostics+transaction outcomes	attested_generator_and_validator	false
+h1-raw-contract-v2	role_security	parse_role_security_catalog_bundle	CampaignOperationsH1NormativeClauses.tsv	PostgreSQL roles+ACL catalogs+SQL diagnostics	attested_generator_and_validator	false
+h1-raw-contract-v2	lock	parse_lock_catalog_bundle	CampaignOperationsH1LockPathMatrix.tsv	pg_locks+pg_blocking_pids+pg_stat_activity	attested_generator_and_validator	false
+h1-raw-contract-v2	acl_origin	parse_acl_origin_catalog_bundle	CampaignOperationsH1AclOriginFixtures.tsv	PostgreSQL ACL catalogs+acldefault+aclexplode	attested_generator_and_validator	false
+h1-raw-contract-v2	acl_catalog	parse_acl_catalog_bundle	Database/manifests/055_campaign_operations_h1_*.tsv	PostgreSQL ACL/default catalogs+aclexplode	attested_generator_and_validator	false
+h1-raw-contract-v2	restore	parse_restore_execution_bundle	ADR-0019B §9	pg_dump+pg_restore+deployment audits+historical bytes	attested_generator_and_validator	false
+h1-raw-contract-v2	release_build	parse_xcodebuild_execution	Corrected Phase H build contract	xcodebuild complete captured execution	attested_generator_and_validator	false
+h1-raw-contract-v2	strict_compile	parse_compiler_execution	focused strict compilation contract	compiler diagnostics and exit status	attested_generator_and_validator	false
+h1-raw-contract-v2	checksum	parse_checksum_execution	migration/checksum/ledger contract	migration bytes+hash tool+ledger+replay	attested_generator_and_validator	false
+h1-raw-contract-v2	worktree	parse_git_execution	no-commit worktree policy	git status and diff captured execution	attested_generator_and_validator	false
+h1-raw-contract-v2	mutation	parse_mutation_execution	mutation mechanic registry	actual negative-test command output	attested_generator_and_validator	false
+h1-raw-contract-v2	exclusion	parse_exclusion_execution	H1/H2/H3/H4 boundary clauses	actual source scanner output	attested_generator_and_validator	false
+h1-raw-contract-v2	report_freshness	parse_report_derivation	provenance graph contract	materialized report bytes and input digests	attested_generator_and_validator	false
+h1-raw-contract-v2	full_pipeline	parse_pipeline_execution	complete reconciled clause/obligation graph	actual pipeline command and generated graph/report	attested_generator_and_validator	false

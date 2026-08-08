@@ -1,9 +1,9 @@
 # Campaign Operations Phase H — Production Dispatch Admission and Manager
 
 Status: Accepted implementation authority
-Version: 1.0.0
-Date: 2026-07-31
-Authority: ADR-0019; ADR-0010 through ADR-0018 remain governing as stated below
+Version: 1.2.0
+Date: 2026-08-01
+Authority: ADR-0019 as narrowly amended by ADR-0019A and ADR-0019B; ADR-0010 through ADR-0018 remain governing as stated below
 
 ## 1. Decision and normative language
 
@@ -538,7 +538,16 @@ worker launch/signal, sleep, network/external work, or other long-running work.
 
 ## 14. Privilege and deployment contract
 
-Migration 055 creates or hardens these separate NOLOGIN roles:
+Migration 055 creates or hardens one sealed infrastructure owner and the seven
+frozen NOLOGIN production roles. The exact role table in ADR-0019A §5 is
+normative.
+
+- `campaign_operations_h1_boundary_authority` is `NOLOGIN SUPERUSER`, has no
+  membership in either direction, and owns every protected H1 table, sequence,
+  view, trigger/helper, and fixed transition. It is not a production
+  capability; superuser/cluster-administrator power is outside the supported
+  threat model. PostgreSQL implicit owner authority is why no ordinary or
+  reachable role may own the boundary;
 
 - `campaign_operations_production_enabler`;
 - `campaign_operations_production_disabler`;
@@ -565,6 +574,37 @@ exact expected-state predicates, and catalog-tested ownership/ACLs. History and
 witness triggers reject ordinary owner DML. Before enablement, deployment must
 audit direct and inherited membership for the actual `session_user`, including
 nested role membership and prohibited test/production combinations.
+
+The former unaccepted
+`campaign_operations_production_transition_owner` is not part of the inventory
+and is not created. The scheduler-protocol evidence owner retains its role name
+for compatibility but owns no H1 boundary object after migration 055. Unsafe
+pre-existing memberships or default ACLs cause migration failure; they are not
+silently retained or repaired. ADR-0019A §§4–8 freeze the exact ownership,
+context, current/default ACL, and `SECURITY DEFINER` rules.
+
+ADR-0019B freezes the sealed role as exact `NOLOGIN SUPERUSER INHERIT
+NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1`, with
+no password, validity, role/database configuration, operational credential, or
+membership/ADMIN OPTION edge in either direction. Migration 055 inspects every
+attribute before mutation and fails closed rather than normalizing an existing
+role. The other seven H1 roles are likewise exact inert NOLOGIN roles.
+
+Ownership transfer is a literal schema-qualified object/signature manifest.
+Name patterns and trigger-discovery transfers are prohibited. Every non-system
+schema and relevant catalog class is audited for unexpected boundary ownership,
+same-name entry points, overloads/default variants, wrappers, triggers,
+operators, casts, rules, dependencies, PUBLIC execution, and grant options.
+The minimal table/view/sequence inventory and exact function manifest are
+normative in ADR-0019B §5 and migration 055's audit CTE.
+
+Deployment uses the read-only versioned
+`Scripts/CampaignOperationsH1DeploymentAudit.sh` at pre/post upgrade,
+pre-restore, post-role recreation, post-database restore, and pre-enablement.
+Its stable `H1A001`–`H1A011` failures block deployment. Supported restore
+workflows and hostile cases A–J are frozen by ADR-0019B §9; migration checksum
+and ledger success never substitute for role-graph, catalog, ACL, or historical
+byte evidence.
 
 Emergency rollback is: commit disable, stop Manager processes, revoke
 production roles. No persisted evidence is deleted.
@@ -640,8 +680,8 @@ production audit.
 
 ## 17. Migration 055 architecture
 
-Migration 055 is not created by this pass. Its implementation is authorized to
-add:
+Migration 055 is implemented by H1 as the disabled authority and persistence
+foundation. Its implementation is authorized to add:
 
 - `campaign_operations_production_enablement_event`, one append-only
   alternating global table with complete enable/disable typed mirrors,
@@ -662,7 +702,7 @@ add:
 - `record_campaign_operations_production_enable_v1` and
   `record_campaign_operations_production_disable_v1` fixed transition
   functions;
-- `transition_campaign_operations_request_dispatching_production_v2`, the only
+- `transition_campaign_operations_request_dispatch_production_v2`, the only
   function allowed to establish first admission, Boolean true, Attempt V2, and
   its audit atomically;
 - `campaign_operations_scheduler_protocol_evidence_snapshot_v1` and
@@ -689,6 +729,25 @@ admission/backfill, preserve every V1 canonical, grant no login role, and make
 no scheduler/lifecycle/worker data mutation. Table/sequence/function ownership,
 NULL ACL/default ACL interpretation, column privileges, search paths, and
 PUBLIC revocation are tested from PostgreSQL catalogs.
+
+The former acquisition spelling
+`transition_campaign_operations_request_dispatching_production_v2` is
+impossible at 64 UTF-8 bytes. The authoritative replacement
+`transition_campaign_operations_request_dispatch_production_v2` is exactly 61
+UTF-8 bytes. Tests compare `pg_proc.proname::text` and octet length exactly and
+reject truncation notices; `regprocedure` resolution alone is insufficient.
+
+The transaction context remains only as sealed, exact-operation evidence. It
+binds PID, top-level XID, transition kind, request, and operation key; fixed
+transitions remove it before return and a deferred constraint forbids a row at
+commit. All protected relations, triggers, helpers, and transitions are owned
+by the unreachable sealed authority, so an ordinary former owner cannot forge
+the row, grant a writer, replace a guard, or install a recursive trigger. Exact
+replay lookup and full immutable evidence comparison precede mutable head/CAS
+validation for enable, disable, and acquisition. Acquisition establishes
+0a→0b→authorization→budget→campaign/completion→reservations ascending→requests
+ascending by calling the existing Phase E lock helpers. ADR-0019A §§4–10 are
+normative for these corrections.
 
 ## 18. H1–H4 increments
 
@@ -803,3 +862,27 @@ verification remain review inputs, not authority.
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-07-31 | Accepted exact Phase H authority, identities, operation keys, generation-52 contract, invariants, state machine, Completion V1 proof, increments, privileges, readiness, and rollout. |
+| 1.1.0 | 2026-08-01 | Applied ADR-0019A's targeted 61-byte acquisition name, sealed owner-safe context, exact replay, complete lock order, and ACL/verification correction; all other Phase H boundaries remain unchanged. |
+| 1.2.0 | 2026-08-01 | Applied ADR-0019B's exact sealed-role identity/graph, literal minimum ownership and all-schema entry-point allowlists, automatic deployment audit, restore A–J, default-ACL, lock, negative-test, and historical-byte acceptance contracts. |
+
+## H1 final implementation-consistency correction
+
+The frozen lifecycle is implemented as ``ready@v3/no admission ->
+dispatching@v4/admission A/Attempt V2 #1 -> ready@v5/admission A`` after a
+committed Phase F recovery, then ``dispatching@v6/admission A/Attempt V2 #2``.
+Admission A is inserted only when absent and is never updated, replaced, or
+deleted. Each later acquisition uses the current request version, enablement,
+actor, service principal, and approved build while retaining A as immutable
+first-admission evidence.
+
+Exact replay locates an attempt by persisted request/version/key metadata and
+hydrates its original principal and build; the recovering Manager's current
+identity and build are not historical replay inputs. Repository hydration is
+closed over ``Attempt V2 -> current enablement/audit -> immutable admission ->
+first enablement/audit -> first Attempt V2/acquisition audit``. Missing,
+duplicate, or inconsistent nodes fail as persistence corruption.
+
+Readiness reports scheduler canonical/hash identity, independent verification
+reference, enablement canonical/hash, approved and actual running build
+canonical/hash, comparison result, and all blockers. Missing runtime evidence
+remains blocking while the complete available evidence stays reportable.

@@ -59,6 +59,7 @@
 #include "CampaignOperationsService.hpp"
 #include "CampaignOperationsControlService.hpp"
 #include "CampaignOperationsCompletionService.hpp"
+#include "CampaignOperationsProductionAdmissionService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
 #include "RunMetadata.hpp"
@@ -269,6 +270,8 @@ struct SchedulerOptions
     std::optional<long long> campaignOperationsControlStatusCampaignId;
     std::optional<long long> campaignOperationsCompleteCampaignId;
     std::optional<long long> campaignOperationsCompletionStatusCampaignId;
+    bool campaignOperationsProductionReadiness = false;
+    bool campaignOperationsProductionStatus = false;
     std::optional<std::string> campaignOperationsReconcileRunKey;
     bool campaignOperationsReconcileRecover = false;
     std::optional<int> campaignOperationsExpectedControlVersion;
@@ -1027,6 +1030,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--campaign-operations-control-status" ||
             arg == "--campaign-operations-complete-if-settled" ||
             arg == "--campaign-operations-completion-status" ||
+            arg == "--campaign-operations-production-readiness" ||
+            arg == "--campaign-operations-production-status" ||
             arg == "--campaign-operations-reconcile-observe" ||
             arg == "--campaign-operations-reconcile-recover" ||
             arg == "--campaign-operations-expected-control-version" ||
@@ -2316,6 +2321,20 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
         }
+        else if (arg == "--campaign-operations-production-readiness")
+        {
+            if (options.campaignOperationsProductionReadiness)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-production-readiness");
+            options.campaignOperationsProductionReadiness = true;
+        }
+        else if (arg == "--campaign-operations-production-status")
+        {
+            if (options.campaignOperationsProductionStatus)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-production-status");
+            options.campaignOperationsProductionStatus = true;
+        }
         else if (arg == "--campaign-operations-reconcile-observe" ||
                  arg == "--campaign-operations-reconcile-recover")
         {
@@ -3463,6 +3482,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
              ? 1 : 0) +
         (options.campaignOperationsCompletionStatusCampaignId.has_value()
              ? 1 : 0) +
+        (options.campaignOperationsProductionReadiness ? 1 : 0) +
+        (options.campaignOperationsProductionStatus ? 1 : 0) +
         (options.campaignOperationsReconcileRunKey.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
@@ -3992,7 +4013,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsBudgetStatusCampaignId.has_value() ||
         options.campaignOperationsRequestStatusRequestId.has_value() ||
         options.campaignOperationsControlStatusCampaignId.has_value() ||
-        options.campaignOperationsCompletionStatusCampaignId.has_value();
+        options.campaignOperationsCompletionStatusCampaignId.has_value() ||
+        options.campaignOperationsProductionReadiness ||
+        options.campaignOperationsProductionStatus;
     const bool campaignOperationsMetadata =
         options.campaignOperationsExpectedBudgetVersion.has_value() ||
         options.campaignOperationsBudgetValue.has_value() ||
@@ -4009,6 +4032,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "Campaign Operations metadata requires a budget mutation or "
             "request acceptance or control command");
+    if ((options.campaignOperationsProductionReadiness ||
+            options.campaignOperationsProductionStatus) &&
+        (options.dryRun || options.yes))
+        throw std::invalid_argument(
+            "Campaign Operations production readiness/status accepts "
+            "neither --dry-run nor --yes");
     if (campaignOperationsMutation)
     {
         if (options.dryRun)
@@ -22566,6 +22595,14 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "experiment lifecycle and never means scientific success. There "
         << "is no force-complete, reopen, override, or delete command.\n"
         << "Usage: " << exe
+        << " --campaign-operations-production-readiness | "
+        << "--campaign-operations-production-status\n"
+        << "Campaign Operations Phase H1 commands are read-only. They report "
+        << "migration 055, exact generation-52 evidence, immutable admission "
+        << "and Attempt V2 evidence, role readiness, blocked leases, and "
+        << "Completion V1 nested-V2 proof. H1 cannot enable, disable, acquire, "
+        << "handoff, dispatch, or run a Campaign Manager.\n"
+        << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
         << "--enable-checkpoint-infer=ID | --disable-checkpoint-infer=ID | "
@@ -22586,6 +22623,14 @@ void PrintExperimentSchedulerHelp(const char* executable)
 int RunCampaignOperationsCommand(const SchedulerOptions& options)
 {
     const std::string connectionString = LstmDbConnectionString();
+    if (options.campaignOperationsProductionReadiness)
+        return EA::CampaignOperations::RunProductionReadinessCommand(
+            connectionString, std::cout, std::cerr,
+            EA::CampaignOperations::CaptureActualManagerBuildContract(
+                options.selfPath));
+    if (options.campaignOperationsProductionStatus)
+        return EA::CampaignOperations::RunProductionStatusCommand(
+            connectionString, std::cout, std::cerr);
     if (options.campaignOperationsCompletionStatusCampaignId)
         return EA::CampaignOperations::RunCampaignCompletionStatusCommand(
             connectionString,
@@ -23440,6 +23485,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.campaignOperationsControlStatusCampaignId ||
             options.campaignOperationsCompleteCampaignId ||
             options.campaignOperationsCompletionStatusCampaignId ||
+            options.campaignOperationsProductionReadiness ||
+            options.campaignOperationsProductionStatus ||
             options.campaignOperationsReconcileRunKey)
             return RunCampaignOperationsCommand(options);
         if (options.generateExperimentRecommendations ||

@@ -1,0 +1,13 @@
+version	validator_class	authority_kind	authority_path	authority_anchor	independence_policy
+h1-expected-authority-v1	generic	normative_clause_registry	Tests/fixtures/CampaignOperationsH1NormativeClauses.tsv	requirement_identity	expected values never originate in runtime rows
+h1-expected-authority-v1	lock	frozen_lock_matrix	Tests/fixtures/CampaignOperationsH1LockPathMatrix.tsv	h1lock_id	expected lock direction and identity come only from reviewed matrix
+h1-expected-authority-v1	acl_origin	frozen_acl_origin_manifest	Tests/fixtures/CampaignOperationsH1AclOriginFixtures.tsv	fixture_id	expected origin comes only from reviewed manifest
+h1-expected-authority-v1	acl_catalog	frozen_acl_default_manifest	Database/manifests/055_campaign_operations_h1_manifest.tsv	requirement_id	expected tuples come only from checked-in manifest
+h1-expected-authority-v1	restore	frozen_restore_contract	docs/architecture/adr/ADR-0019B-h1-sealed-role-deployment-contract.md	section 9	expected scenarios never originate in restore output
+h1-expected-authority-v1	release_build	explicit_build_contract	Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv	release_build	expected configuration and success markers are frozen
+h1-expected-authority-v1	strict_compile	explicit_build_contract	Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv	strict_compile	expected compiler flags and translation units are frozen
+h1-expected-authority-v1	checksum	frozen_checksum_contract	Database/manifests/055_campaign_operations_h1_manifest.sha256	manifest	expected embedded and ledger identities are checked independently
+h1-expected-authority-v1	worktree	explicit_repository_contract	Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv	worktree	no-commit policy is frozen
+h1-expected-authority-v1	mutation	assurance_control_registry	Tests/fixtures/CampaignOperationsH1AssuranceControls.tsv	control_id	expected failure code and stage come from permanent test code
+h1-expected-authority-v1	exclusion	explicit_exclusion_contract	Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv	exclusion	H2 H3 H4 patterns and scan roots are frozen
+h1-expected-authority-v1	report_freshness	normative_clause_registry	Tests/fixtures/CampaignOperationsH1NormativeClauses.tsv	authority digest	report inputs and current run are independently anchored

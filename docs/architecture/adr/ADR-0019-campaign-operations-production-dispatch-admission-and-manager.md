@@ -7,6 +7,16 @@ Affected volumes: Volume X §§2–11; Volume XI §§2–11; Volume XII §§2–
 Supersedes: None
 Superseded by: None
 
+Targeted amendment: [ADR-0019A](ADR-0019A-h1-owner-safe-transaction-authorization.md)
+corrects only the H1 acquisition identifier, sealed ownership/context design,
+exact replay, complete lock order, and related migration-055 verification
+requirements. All other decisions in this ADR remain unchanged.
+
+Deployment-contract amendment: [ADR-0019B](ADR-0019B-h1-sealed-role-deployment-contract.md)
+freezes the complete sealed-role identity/graph, literal ownership and
+all-schema allowlists, automatic audits, restore matrix, and acceptance
+evidence without changing H1/H2/H3/H4 behavior.
+
 ## 1. Context and problem statement
 
 ADR-0013 accepted durable request acquisition and an atomic Phase 5 lifecycle

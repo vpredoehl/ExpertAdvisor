@@ -1,0 +1,13 @@
+version	validator_class	observed_source	minimum_structure	self_authored_summary_allowed
+h1-observed-provenance-v1	generic	PostgreSQL catalog and SQL diagnostic capture	query contract; SQLSTATE; diagnostic; object; transaction outcome	false
+h1-observed-provenance-v1	lock	raw pg_locks and pg_blocking_pids capture	backend identities; query contract; catalog rows; transaction outcomes; capture metadata	false
+h1-observed-provenance-v1	acl_origin	raw catalog ACL and expanded aclexplode capture	owner; raw ACL; acldefault contract; expanded rows; database audit output	false
+h1-observed-provenance-v1	acl_catalog	raw catalog ACL and default ACL capture	owner; raw ACL field; expanded tuple rows; database audit output	false
+h1-observed-provenance-v1	restore	raw restore execution bundle	invocation; source and target cluster identities; dump identity; pre and post audits; historical bytes	false
+h1-observed-provenance-v1	release_build	raw xcodebuild output and process receipt	tool identity; command; configuration; product identity; complete status; exit status	false
+h1-observed-provenance-v1	strict_compile	raw compiler output and process receipt	compiler identity; command; translation units; diagnostics; exit status	false
+h1-observed-provenance-v1	checksum	raw checksum computation output	actual bytes; hash implementation; embedded source; ledger and replay output	false
+h1-observed-provenance-v1	worktree	raw git status and diff output	command; repository identity; status rows; diff stat	false
+h1-observed-provenance-v1	mutation	raw negative-case execution output	command; temporary fixture identity; expected and actual failure; exit status	false
+h1-observed-provenance-v1	exclusion	raw source and CLI scan output	scanned paths; patterns; result rows; command and exit status	false
+h1-observed-provenance-v1	report_freshness	materialized report bytes	current run; input digests; output digest; validator receipt	false

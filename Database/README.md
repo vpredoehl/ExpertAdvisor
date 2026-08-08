@@ -49,6 +49,22 @@ Experiment scheduling tables are created by:
   invocations, fenced singleton ownership, durable global worker
   attempts/capacity, exact lifecycle attempt links, and conservative
   `legacy_unverified` reservations for existing active rows
+- `055_campaign_operations_production_admission_foundation.sql`: additive H1
+  production enablement/admission evidence, Attempt V2 shape and reconstruction,
+  exact fixed-transition replay, sealed owner-safe transaction context, full
+  acquisition lock order, exact fail-closed sealed-role/object/ACL preflight,
+  deterministic read-only deployment audit, deferred consistency, inert NOLOGIN
+  capabilities, and read-only readiness/status; use
+  `Scripts/CampaignOperationsH1DeploymentAudit.sh` at every documented upgrade,
+  restore, and pre-enablement stage. Before catalog comparison the audit
+  validates the versioned, checksummed object, explicit ACL, default ACL, and
+  column ACL manifests in `manifests/`. Actual catalog discovery is independent
+  from the expectation rows, preserves exact NULL-versus-explicit ACL origin,
+  and performs two-way explicit/default ACL set differences. Logical restore
+  workflows use `Scripts/CampaignOperationsH1RestoreAclOrigin.sh` to restore the
+  frozen explicit ACL origin that `pg_dump` otherwise normalizes. It grants no LOGIN membership and implements no
+  production dispatch, enable/disable service, Manager, scheduler, lifecycle,
+  or worker behavior
 
 Recommendation conversion and campaign-approval history is created by:
 

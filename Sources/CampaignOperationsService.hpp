@@ -2,6 +2,8 @@
 
 #include "CampaignOperationsRepository.hpp"
 
+#include <functional>
+
 #include <iosfwd>
 #include <optional>
 #include <string>
@@ -24,6 +26,14 @@ struct BudgetAdministrationRequest
     std::string reason;
 };
 
+enum class BudgetAdministrationTestInjectionPoint
+{
+    afterDomainLocksBeforePersistence
+};
+
+using BudgetAdministrationTestInjection =
+    std::function<void(BudgetAdministrationTestInjectionPoint)>;
+
 struct OperationalRequestAcceptanceRequest
 {
     long long campaignId = 0;
@@ -45,7 +55,8 @@ ValidateOperationalRequestAcceptanceRequest(
 
 PersistResult<PersistedBudgetLedgerEntry> AdministerCampaignBudget(
     pqxx::connection& connection,
-    const BudgetAdministrationRequest& request);
+    const BudgetAdministrationRequest& request,
+    const BudgetAdministrationTestInjection& testInjection = {});
 PersistResult<AcceptedOperationalRequest> AcceptOperationalRequest(
     pqxx::connection& connection,
     const OperationalRequestAcceptanceRequest& request);

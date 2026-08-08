@@ -1,0 +1,375 @@
+version	artifact_id	path	artifact_type	record_key_field	record_key_value	runtime_record_ids	report_entry_ids	required_phase	allowlist_reason
+h1-artifact-registry-v2	ART-GENERATED-EDGES	h1-evidence-edges.tsv	generated_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-HEALTH	h1-graph-health.tsv	generated_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-INDEX	h1-artifact-index.tsv	generated_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-PROVENANCE-CHAINS	h1-provenance-chains.tsv	provenance_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-PROVENANCE-EDGES	h1-provenance-edges.tsv	provenance_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-REPORTS	h1-report-entry-registry.tsv	generated_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-RUNTIME	h1-reconciled-runtime-records.tsv	generated_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-SNAPSHOTS	h1-artifact-snapshots.tsv	snapshot_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-VALIDATOR-RECEIPTS	h1-validator-execution-receipts.tsv	execution_receipt_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-GENERATED-VALIDATORS	h1-validator-results.tsv	generated_registry					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-RECORD-H1ACL001	runtime-artifacts/records/H1ACL001/explicit-acl-set-difference	runtime_evidence	fixture_id	H1ACL001	RT-H1ACL001	REP-H1ACL001	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACL002	runtime-artifacts/records/H1ACL002/scenario-explicit_acl_extra.log	runtime_evidence	fixture_id	H1ACL002	RT-H1ACL002	REP-H1ACL002	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACL003	runtime-artifacts/records/H1ACL003/scenario-explicit_acl_missing.log	runtime_evidence	fixture_id	H1ACL003	RT-H1ACL003	REP-H1ACL003	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACL004	runtime-artifacts/records/H1ACL004/default-acl-set-difference	runtime_evidence	fixture_id	H1ACL004	RT-H1ACL004	REP-H1ACL004	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACL005	runtime-artifacts/records/H1ACL005/scenario-default_acl_missing.log	runtime_evidence	fixture_id	H1ACL005	RT-H1ACL005	REP-H1ACL005	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACL006	runtime-artifacts/records/H1ACL006/scenario-default_acl_grant_option.log	runtime_evidence	fixture_id	H1ACL006	RT-H1ACL006	REP-H1ACL006	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACL007	runtime-artifacts/records/H1ACL007/future-object-probe-results	runtime_evidence	fixture_id	H1ACL007	RT-H1ACL007	REP-H1ACL007	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN001	runtime-artifacts/records/H1ACLORIGIN001/scenario-null_origin_schema.log	runtime_evidence	fixture_id	H1ACLORIGIN001	RT-H1ACLORIGIN001	REP-H1ACLORIGIN001	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN002	runtime-artifacts/records/H1ACLORIGIN002/scenario-null_origin_table.log	runtime_evidence	fixture_id	H1ACLORIGIN002	RT-H1ACLORIGIN002	REP-H1ACLORIGIN002	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN003	runtime-artifacts/records/H1ACLORIGIN003/scenario-null_origin_view.log	runtime_evidence	fixture_id	H1ACLORIGIN003	RT-H1ACLORIGIN003	REP-H1ACLORIGIN003	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN004	runtime-artifacts/records/H1ACLORIGIN004/scenario-null_origin_sequence.log	runtime_evidence	fixture_id	H1ACLORIGIN004	RT-H1ACLORIGIN004	REP-H1ACLORIGIN004	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN005	runtime-artifacts/records/H1ACLORIGIN005/scenario-null_origin_function.log	runtime_evidence	fixture_id	H1ACLORIGIN005	RT-H1ACLORIGIN005	REP-H1ACLORIGIN005	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN006	runtime-artifacts/records/H1ACLORIGIN006/scenario-explicit_origin_type.log	runtime_evidence	fixture_id	H1ACLORIGIN006	RT-H1ACLORIGIN006	REP-H1ACLORIGIN006	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN007	runtime-artifacts/records/H1ACLORIGIN007/scenario-null_origin_column.log	runtime_evidence	fixture_id	H1ACLORIGIN007	RT-H1ACLORIGIN007	REP-H1ACLORIGIN007	base	
+h1-artifact-registry-v2	ART-RECORD-H1ACLORIGIN008	runtime-artifacts/records/H1ACLORIGIN008/scenario-explicit_origin_column.log	runtime_evidence	fixture_id	H1ACLORIGIN008	RT-H1ACLORIGIN008	REP-H1ACLORIGIN008	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO001	raw-acl-origin/H1AO001.tsv	acl_origin_raw	fixture_id	H1AO001	RT-H1AO001	REP-H1AO001	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO002	raw-acl-origin/H1AO002.tsv	acl_origin_raw	fixture_id	H1AO002	RT-H1AO002	REP-H1AO002	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO003	raw-acl-origin/H1AO003.tsv	acl_origin_raw	fixture_id	H1AO003	RT-H1AO003	REP-H1AO003	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO004	raw-acl-origin/H1AO004.tsv	acl_origin_raw	fixture_id	H1AO004	RT-H1AO004	REP-H1AO004	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO005	raw-acl-origin/H1AO005.tsv	acl_origin_raw	fixture_id	H1AO005	RT-H1AO005	REP-H1AO005	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO006	raw-acl-origin/H1AO006.tsv	acl_origin_raw	fixture_id	H1AO006	RT-H1AO006	REP-H1AO006	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO007	raw-acl-origin/H1AO007.tsv	acl_origin_raw	fixture_id	H1AO007	RT-H1AO007	REP-H1AO007	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO008	raw-acl-origin/H1AO008.tsv	acl_origin_raw	fixture_id	H1AO008	RT-H1AO008	REP-H1AO008	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO009	raw-acl-origin/H1AO009.tsv	acl_origin_raw	fixture_id	H1AO009	RT-H1AO009	REP-H1AO009	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO010	raw-acl-origin/H1AO010.tsv	acl_origin_raw	fixture_id	H1AO010	RT-H1AO010	REP-H1AO010	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO011	raw-acl-origin/H1AO011.tsv	acl_origin_raw	fixture_id	H1AO011	RT-H1AO011	REP-H1AO011	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO012	raw-acl-origin/H1AO012.tsv	acl_origin_raw	fixture_id	H1AO012	RT-H1AO012	REP-H1AO012	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO013	raw-acl-origin/H1AO013.tsv	acl_origin_raw	fixture_id	H1AO013	RT-H1AO013	REP-H1AO013	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO014	raw-acl-origin/H1AO014.tsv	acl_origin_raw	fixture_id	H1AO014	RT-H1AO014	REP-H1AO014	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO015	raw-acl-origin/H1AO015.tsv	acl_origin_raw	fixture_id	H1AO015	RT-H1AO015	REP-H1AO015	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO016	raw-acl-origin/H1AO016.tsv	acl_origin_raw	fixture_id	H1AO016	RT-H1AO016	REP-H1AO016	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO017	raw-acl-origin/H1AO017.tsv	acl_origin_raw	fixture_id	H1AO017	RT-H1AO017	REP-H1AO017	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO018	raw-acl-origin/H1AO018.tsv	acl_origin_raw	fixture_id	H1AO018	RT-H1AO018	REP-H1AO018	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO019	raw-acl-origin/H1AO019.tsv	acl_origin_raw	fixture_id	H1AO019	RT-H1AO019	REP-H1AO019	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO020	raw-acl-origin/H1AO020.tsv	acl_origin_raw	fixture_id	H1AO020	RT-H1AO020	REP-H1AO020	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO021	raw-acl-origin/H1AO021.tsv	acl_origin_raw	fixture_id	H1AO021	RT-H1AO021	REP-H1AO021	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO022	raw-acl-origin/H1AO022.tsv	acl_origin_raw	fixture_id	H1AO022	RT-H1AO022	REP-H1AO022	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO023	raw-acl-origin/H1AO023.tsv	acl_origin_raw	fixture_id	H1AO023	RT-H1AO023	REP-H1AO023	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO024	raw-acl-origin/H1AO024.tsv	acl_origin_raw	fixture_id	H1AO024	RT-H1AO024	REP-H1AO024	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO025	raw-acl-origin/H1AO025.tsv	acl_origin_raw	fixture_id	H1AO025	RT-H1AO025	REP-H1AO025	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO026	raw-acl-origin/H1AO026.tsv	acl_origin_raw	fixture_id	H1AO026	RT-H1AO026	REP-H1AO026	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO027	raw-acl-origin/H1AO027.tsv	acl_origin_raw	fixture_id	H1AO027	RT-H1AO027	REP-H1AO027	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO028	raw-acl-origin/H1AO028.tsv	acl_origin_raw	fixture_id	H1AO028	RT-H1AO028	REP-H1AO028	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO029	raw-acl-origin/H1AO029.tsv	acl_origin_raw	fixture_id	H1AO029	RT-H1AO029	REP-H1AO029	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO030	raw-acl-origin/H1AO030.tsv	acl_origin_raw	fixture_id	H1AO030	RT-H1AO030	REP-H1AO030	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO031	raw-acl-origin/H1AO031.tsv	acl_origin_raw	fixture_id	H1AO031	RT-H1AO031	REP-H1AO031	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO032	raw-acl-origin/H1AO032.tsv	acl_origin_raw	fixture_id	H1AO032	RT-H1AO032	REP-H1AO032	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO033	raw-acl-origin/H1AO033.tsv	acl_origin_raw	fixture_id	H1AO033	RT-H1AO033	REP-H1AO033	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO034	raw-acl-origin/H1AO034.tsv	acl_origin_raw	fixture_id	H1AO034	RT-H1AO034	REP-H1AO034	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO035	raw-acl-origin/H1AO035.tsv	acl_origin_raw	fixture_id	H1AO035	RT-H1AO035	REP-H1AO035	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO036	raw-acl-origin/H1AO036.tsv	acl_origin_raw	fixture_id	H1AO036	RT-H1AO036	REP-H1AO036	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO037	raw-acl-origin/H1AO037.tsv	acl_origin_raw	fixture_id	H1AO037	RT-H1AO037	REP-H1AO037	base	
+h1-artifact-registry-v2	ART-RECORD-H1AO038	raw-acl-origin/H1AO038.tsv	acl_origin_raw	fixture_id	H1AO038	RT-H1AO038	REP-H1AO038	base	
+h1-artifact-registry-v2	ART-RECORD-H1CPP001	runtime-artifacts/records/H1CPP001/phase-h1-repository-results	runtime_evidence	fixture_id	H1CPP001	RT-H1CPP001	REP-H1CPP001	base	
+h1-artifact-registry-v2	ART-RECORD-H1CPP002	runtime-artifacts/records/H1CPP002/phase-h1-cli-results	runtime_evidence	fixture_id	H1CPP002	RT-H1CPP002	REP-H1CPP002	base	
+h1-artifact-registry-v2	ART-RECORD-H1FA001	final-assurance/FULL_PIPELINE.log	final_assurance_log	evidence_id	FULL_PIPELINE	RT-H1FA001	REP-H1FA001	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA002	final-assurance/LOCK_MUTATIONS.log	final_assurance_log	evidence_id	LOCK_MUTATIONS	RT-H1FA002	REP-H1FA002	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA003	final-assurance/ACL_MUTATIONS.log	final_assurance_log	evidence_id	ACL_MUTATIONS	RT-H1FA003	REP-H1FA003	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA004	final-assurance/GRAPH_MUTATIONS.log	final_assurance_log	evidence_id	GRAPH_MUTATIONS	RT-H1FA004	REP-H1FA004	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA005	final-assurance/MANIFEST_MUTATIONS.log	final_assurance_log	evidence_id	MANIFEST_MUTATIONS	RT-H1FA005	REP-H1FA005	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA006	final-assurance/TRACE_PARSER.log	final_assurance_log	evidence_id	TRACE_PARSER	RT-H1FA006	REP-H1FA006	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA007	final-assurance/RESTORE_ARTIFACT.log	final_assurance_log	evidence_id	RESTORE_ARTIFACT	RT-H1FA007	REP-H1FA007	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA008	final-assurance/STRICT_COMPILE.log	final_assurance_log	evidence_id	STRICT_COMPILE	RT-H1FA008	REP-H1FA008	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA009	final-assurance/RELEASE_BUILD.log	final_assurance_log	evidence_id	RELEASE_BUILD	RT-H1FA009	REP-H1FA009	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA010	final-assurance/CHECKSUM.log	final_assurance_log	evidence_id	CHECKSUM	RT-H1FA010	REP-H1FA010	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA011	final-assurance/DETERMINISTIC_REGENERATION.log	final_assurance_log	evidence_id	DETERMINISTIC_REGENERATION	RT-H1FA011	REP-H1FA011	final	
+h1-artifact-registry-v2	ART-RECORD-H1FA012	final-assurance/WORKTREE_STATUS.log	final_assurance_log	evidence_id	WORKTREE_STATUS	RT-H1FA012	REP-H1FA012	final	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH001	runtime-artifacts/records/H1GRAPH001/055-role-graph-direct.log	runtime_evidence	fixture_id	H1GRAPH001	RT-H1GRAPH001	REP-H1GRAPH001	base	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH002	runtime-artifacts/records/H1GRAPH002/055-role-graph-two_level.log	runtime_evidence	fixture_id	H1GRAPH002	RT-H1GRAPH002	REP-H1GRAPH002	base	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH003	runtime-artifacts/records/H1GRAPH003/055-role-graph-three_level.log	runtime_evidence	fixture_id	H1GRAPH003	RT-H1GRAPH003	REP-H1GRAPH003	base	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH004	runtime-artifacts/records/H1GRAPH004/scenario-e.log	runtime_evidence	fixture_id	H1GRAPH004	RT-H1GRAPH004	REP-H1GRAPH004	base	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH005	runtime-artifacts/records/H1GRAPH005/055-role-graph-boundary_inherits.log	runtime_evidence	fixture_id	H1GRAPH005	RT-H1GRAPH005	REP-H1GRAPH005	base	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH006	runtime-artifacts/records/H1GRAPH006/scenario-e-set-role.log	runtime_evidence	fixture_id	H1GRAPH006	RT-H1GRAPH006	REP-H1GRAPH006	base	
+h1-artifact-registry-v2	ART-RECORD-H1GRAPH007	runtime-artifacts/records/H1GRAPH007/scenario-e-set-local-role.log	runtime_evidence	fixture_id	H1GRAPH007	RT-H1GRAPH007	REP-H1GRAPH007	base	
+h1-artifact-registry-v2	ART-RECORD-H1INV001	runtime-artifacts/invariants/H1INV001.tsv	invariant_record	invariant_id	H1INV001	RT-H1INV001	REP-H1INV001	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK001	raw-lock/H1LOCK001.tsv	lock_raw	h1lock_id	H1LOCK001	RT-H1LOCK001	REP-H1LOCK001	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK002	raw-lock/H1LOCK002.tsv	lock_raw	h1lock_id	H1LOCK002	RT-H1LOCK002	REP-H1LOCK002	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK003	raw-lock/H1LOCK003.tsv	lock_raw	h1lock_id	H1LOCK003	RT-H1LOCK003	REP-H1LOCK003	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK004	raw-lock/H1LOCK004.tsv	lock_raw	h1lock_id	H1LOCK004	RT-H1LOCK004	REP-H1LOCK004	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK005	raw-lock/H1LOCK005.tsv	lock_raw	h1lock_id	H1LOCK005	RT-H1LOCK005	REP-H1LOCK005	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK006	raw-lock/H1LOCK006.tsv	lock_raw	h1lock_id	H1LOCK006	RT-H1LOCK006	REP-H1LOCK006	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK008	raw-lock/H1LOCK008.tsv	lock_raw	h1lock_id	H1LOCK008	RT-H1LOCK008	REP-H1LOCK008	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK010	raw-lock/H1LOCK010.tsv	lock_raw	h1lock_id	H1LOCK010	RT-H1LOCK010	REP-H1LOCK010	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK011	raw-lock/H1LOCK011.tsv	lock_raw	h1lock_id	H1LOCK011	RT-H1LOCK011	REP-H1LOCK011	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK013	raw-lock/H1LOCK013.tsv	lock_raw	h1lock_id	H1LOCK013	RT-H1LOCK013	REP-H1LOCK013	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK014	raw-lock/H1LOCK014.tsv	lock_raw	h1lock_id	H1LOCK014	RT-H1LOCK014	REP-H1LOCK014	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK015	raw-lock/H1LOCK015.tsv	lock_raw	h1lock_id	H1LOCK015	RT-H1LOCK015	REP-H1LOCK015	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK016	raw-lock/H1LOCK016.tsv	lock_raw	h1lock_id	H1LOCK016	RT-H1LOCK016	REP-H1LOCK016	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK017	raw-lock/H1LOCK017.tsv	lock_raw	h1lock_id	H1LOCK017	RT-H1LOCK017	REP-H1LOCK017	base	
+h1-artifact-registry-v2	ART-RECORD-H1LOCK018	raw-lock/H1LOCK018.tsv	lock_raw	h1lock_id	H1LOCK018	RT-H1LOCK018	REP-H1LOCK018	base	
+h1-artifact-registry-v2	ART-RECORD-H1MUT001	mutation-records/lock-stale-digest.tsv	mutation_case_record	mutation_case_id	lock-stale-digest	RT-H1MUT001	REP-H1MUT001	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT002	mutation-records/lock-waiting.tsv	mutation_case_record	mutation_case_id	lock-waiting	RT-H1MUT002	REP-H1MUT002	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT003	mutation-records/lock-direction.tsv	mutation_case_record	mutation_case_id	lock-direction	RT-H1MUT003	REP-H1MUT003	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT004	mutation-records/lock-cycle.tsv	mutation_case_record	mutation_case_id	lock-cycle	RT-H1MUT004	REP-H1MUT004	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT005	mutation-records/lock-release.tsv	mutation_case_record	mutation_case_id	lock-release	RT-H1MUT005	REP-H1MUT005	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT006	mutation-records/lock-evidence-count.tsv	mutation_case_record	mutation_case_id	lock-evidence-count	RT-H1MUT006	REP-H1MUT006	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT007	mutation-records/lock-wrong-pid.tsv	mutation_case_record	mutation_case_id	lock-wrong-pid	RT-H1MUT007	REP-H1MUT007	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT008	mutation-records/lock-lock-identity.tsv	mutation_case_record	mutation_case_id	lock-lock-identity	RT-H1MUT008	REP-H1MUT008	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT009	mutation-records/lock-stale-run-id.tsv	mutation_case_record	mutation_case_id	lock-stale-run-id	RT-H1MUT009	REP-H1MUT009	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT010	mutation-records/lock-raw-prohibited-reverse.tsv	mutation_case_record	mutation_case_id	lock-raw-prohibited-reverse	RT-H1MUT010	REP-H1MUT010	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT011	mutation-records/lock-raw-impossible-mutual.tsv	mutation_case_record	mutation_case_id	lock-raw-impossible-mutual	RT-H1MUT011	REP-H1MUT011	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT012	mutation-records/lock-raw-stale-pid.tsv	mutation_case_record	mutation_case_id	lock-raw-stale-pid	RT-H1MUT012	REP-H1MUT012	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT013	mutation-records/lock-raw-wrong-application.tsv	mutation_case_record	mutation_case_id	lock-raw-wrong-application	RT-H1MUT013	REP-H1MUT013	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT014	mutation-records/lock-missing-raw.tsv	mutation_case_record	mutation_case_id	lock-missing-raw	RT-H1MUT014	REP-H1MUT014	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT015	mutation-records/lock-altered-raw.tsv	mutation_case_record	mutation_case_id	lock-altered-raw	RT-H1MUT015	REP-H1MUT015	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT016	mutation-records/acl-digest.tsv	mutation_case_record	mutation_case_id	acl-digest	RT-H1MUT016	REP-H1MUT016	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT017	mutation-records/acl-owner.tsv	mutation_case_record	mutation_case_id	acl-owner	RT-H1MUT017	REP-H1MUT017	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT018	mutation-records/acl-object.tsv	mutation_case_record	mutation_case_id	acl-object	RT-H1MUT018	REP-H1MUT018	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT019	mutation-records/acl-expected-origin.tsv	mutation_case_record	mutation_case_id	acl-expected-origin	RT-H1MUT019	REP-H1MUT019	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT020	mutation-records/acl-actual-origin.tsv	mutation_case_record	mutation_case_id	acl-actual-origin	RT-H1MUT020	REP-H1MUT020	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT021	mutation-records/acl-direction.tsv	mutation_case_record	mutation_case_id	acl-direction	RT-H1MUT021	REP-H1MUT021	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT022	mutation-records/acl-sqlstate.tsv	mutation_case_record	mutation_case_id	acl-sqlstate	RT-H1MUT022	REP-H1MUT022	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT023	mutation-records/acl-diagnostic.tsv	mutation_case_record	mutation_case_id	acl-diagnostic	RT-H1MUT023	REP-H1MUT023	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT024	mutation-records/acl-stage.tsv	mutation_case_record	mutation_case_id	acl-stage	RT-H1MUT024	REP-H1MUT024	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT025	mutation-records/acl-missing-raw.tsv	mutation_case_record	mutation_case_id	acl-missing-raw	RT-H1MUT025	REP-H1MUT025	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT026	mutation-records/acl-raw-raw-acl.tsv	mutation_case_record	mutation_case_id	acl-raw-raw-acl	RT-H1MUT026	REP-H1MUT026	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT027	mutation-records/acl-raw-expanded-tuple.tsv	mutation_case_record	mutation_case_id	acl-raw-expanded-tuple	RT-H1MUT027	REP-H1MUT027	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT028	mutation-records/acl-raw-raw-owner.tsv	mutation_case_record	mutation_case_id	acl-raw-raw-owner	RT-H1MUT028	REP-H1MUT028	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT029	mutation-records/acl-raw-raw-object.tsv	mutation_case_record	mutation_case_id	acl-raw-raw-object	RT-H1MUT029	REP-H1MUT029	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT030	mutation-records/graph-rogue-top-level.tsv	mutation_case_record	mutation_case_id	graph-rogue-top-level	RT-H1MUT030	REP-H1MUT030	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT031	mutation-records/graph-rogue-nested.tsv	mutation_case_record	mutation_case_id	graph-rogue-nested	RT-H1MUT031	REP-H1MUT031	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT032	mutation-records/graph-filename-inferred-artifact.tsv	mutation_case_record	mutation_case_id	graph-filename-inferred-artifact	RT-H1MUT032	REP-H1MUT032	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT033	mutation-records/graph-unindexed-generated-registry.tsv	mutation_case_record	mutation_case_id	graph-unindexed-generated-registry	RT-H1MUT033	REP-H1MUT033	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT034	mutation-records/graph-unindexed-validation-log.tsv	mutation_case_record	mutation_case_id	graph-unindexed-validation-log	RT-H1MUT034	REP-H1MUT034	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT035	mutation-records/graph-unindexed-final-log.tsv	mutation_case_record	mutation_case_id	graph-unindexed-final-log	RT-H1MUT035	REP-H1MUT035	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT036	mutation-records/graph-stale-generated-report.tsv	mutation_case_record	mutation_case_id	graph-stale-generated-report	RT-H1MUT036	REP-H1MUT036	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT037	mutation-records/graph-missing-report-entry.tsv	mutation_case_record	mutation_case_id	graph-missing-report-entry	RT-H1MUT037	REP-H1MUT037	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT038	mutation-records/graph-extra-report-entry.tsv	mutation_case_record	mutation_case_id	graph-extra-report-entry	RT-H1MUT038	REP-H1MUT038	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT039	mutation-records/graph-stale-validator-result.tsv	mutation_case_record	mutation_case_id	graph-stale-validator-result	RT-H1MUT039	REP-H1MUT039	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT040	mutation-records/graph-forged-exclusion.tsv	mutation_case_record	mutation_case_id	graph-forged-exclusion	RT-H1MUT040	REP-H1MUT040	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT041	mutation-records/graph-generic-semantic.tsv	mutation_case_record	mutation_case_id	graph-generic-semantic	RT-H1MUT041	REP-H1MUT041	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT042	mutation-records/registry-forged-generator-path.tsv	mutation_case_record	mutation_case_id	registry-forged-generator-path	RT-H1MUT042	REP-H1MUT042	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT043	mutation-records/registry-forged-validator-path.tsv	mutation_case_record	mutation_case_id	registry-forged-validator-path	RT-H1MUT043	REP-H1MUT043	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT044	mutation-records/registry-requirement-placeholder.tsv	mutation_case_record	mutation_case_id	registry-requirement-placeholder	RT-H1MUT044	REP-H1MUT044	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT045	mutation-records/registry-requirement-cardinality-99.tsv	mutation_case_record	mutation_case_id	registry-requirement-cardinality-99	RT-H1MUT045	REP-H1MUT045	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT046	mutation-records/registry-fixture-semantic.tsv	mutation_case_record	mutation_case_id	registry-fixture-semantic	RT-H1MUT046	REP-H1MUT046	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT047	mutation-records/registry-generator-node-type.tsv	mutation_case_record	mutation_case_id	registry-generator-node-type	RT-H1MUT047	REP-H1MUT047	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT048	mutation-records/registry-runtime-record-type.tsv	mutation_case_record	mutation_case_id	registry-runtime-record-type	RT-H1MUT048	REP-H1MUT048	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT049	mutation-records/registry-validator-node-type.tsv	mutation_case_record	mutation_case_id	registry-validator-node-type	RT-H1MUT049	REP-H1MUT049	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT050	mutation-records/registry-report-policy.tsv	mutation_case_record	mutation_case_id	registry-report-policy	RT-H1MUT050	REP-H1MUT050	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT051	mutation-records/registry-artifact-namespace.tsv	mutation_case_record	mutation_case_id	registry-artifact-namespace	RT-H1MUT051	REP-H1MUT051	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT052	mutation-records/registry-undeclared-final-assurance.tsv	mutation_case_record	mutation_case_id	registry-undeclared-final-assurance	RT-H1MUT052	REP-H1MUT052	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT053	mutation-records/registry-missing-reverse-edge.tsv	mutation_case_record	mutation_case_id	registry-missing-reverse-edge	RT-H1MUT053	REP-H1MUT053	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT054	mutation-records/manifest-remove-object.tsv	mutation_case_record	mutation_case_id	manifest-remove-object	RT-H1MUT054	REP-H1MUT054	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT055	mutation-records/manifest-remove-acl.tsv	mutation_case_record	mutation_case_id	manifest-remove-acl	RT-H1MUT055	REP-H1MUT055	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT056	mutation-records/manifest-remove-default.tsv	mutation_case_record	mutation_case_id	manifest-remove-default	RT-H1MUT056	REP-H1MUT056	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT057	mutation-records/manifest-duplicate-object.tsv	mutation_case_record	mutation_case_id	manifest-duplicate-object	RT-H1MUT057	REP-H1MUT057	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT058	mutation-records/manifest-duplicate-acl.tsv	mutation_case_record	mutation_case_id	manifest-duplicate-acl	RT-H1MUT058	REP-H1MUT058	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT059	mutation-records/manifest-duplicate-default.tsv	mutation_case_record	mutation_case_id	manifest-duplicate-default	RT-H1MUT059	REP-H1MUT059	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT060	mutation-records/manifest-unreferenced-extra-acl.tsv	mutation_case_record	mutation_case_id	manifest-unreferenced-extra-acl	RT-H1MUT060	REP-H1MUT060	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT061	mutation-records/manifest-unreferenced-column-grant.tsv	mutation_case_record	mutation_case_id	manifest-unreferenced-column-grant	RT-H1MUT061	REP-H1MUT061	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT062	mutation-records/manifest-change-owner.tsv	mutation_case_record	mutation_case_id	manifest-change-owner	RT-H1MUT062	REP-H1MUT062	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT063	mutation-records/manifest-change-grantee.tsv	mutation_case_record	mutation_case_id	manifest-change-grantee	RT-H1MUT063	REP-H1MUT063	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT064	mutation-records/manifest-change-privilege.tsv	mutation_case_record	mutation_case_id	manifest-change-privilege	RT-H1MUT064	REP-H1MUT064	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT065	mutation-records/manifest-add-grant-option.tsv	mutation_case_record	mutation_case_id	manifest-add-grant-option	RT-H1MUT065	REP-H1MUT065	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT066	mutation-records/manifest-change-origin.tsv	mutation_case_record	mutation_case_id	manifest-change-origin	RT-H1MUT066	REP-H1MUT066	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT067	mutation-records/manifest-change-signature.tsv	mutation_case_record	mutation_case_id	manifest-change-signature	RT-H1MUT067	REP-H1MUT067	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT068	mutation-records/manifest-add-column-privilege.tsv	mutation_case_record	mutation_case_id	manifest-add-column-privilege	RT-H1MUT068	REP-H1MUT068	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT069	mutation-records/manifest-remove-column-privilege.tsv	mutation_case_record	mutation_case_id	manifest-remove-column-privilege	RT-H1MUT069	REP-H1MUT069	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT070	mutation-records/manifest-change-default-scope.tsv	mutation_case_record	mutation_case_id	manifest-change-default-scope	RT-H1MUT070	REP-H1MUT070	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT071	mutation-records/manifest-unsafe-builtin-default.tsv	mutation_case_record	mutation_case_id	manifest-unsafe-builtin-default	RT-H1MUT071	REP-H1MUT071	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT072	mutation-records/manifest-stale-embedded-copy.tsv	mutation_case_record	mutation_case_id	manifest-stale-embedded-copy	RT-H1MUT072	REP-H1MUT072	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT073	mutation-records/parser-changed-sqlstate.tsv	mutation_case_record	mutation_case_id	parser-changed-sqlstate	RT-H1MUT073	REP-H1MUT073	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT074	mutation-records/parser-changed-diagnostic.tsv	mutation_case_record	mutation_case_id	parser-changed-diagnostic	RT-H1MUT074	REP-H1MUT074	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT075	mutation-records/parser-changed-object.tsv	mutation_case_record	mutation_case_id	parser-changed-object	RT-H1MUT075	REP-H1MUT075	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT076	mutation-records/parser-changed-stage.tsv	mutation_case_record	mutation_case_id	parser-changed-stage	RT-H1MUT076	REP-H1MUT076	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT077	mutation-records/parser-missing-fixture.tsv	mutation_case_record	mutation_case_id	parser-missing-fixture	RT-H1MUT077	REP-H1MUT077	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT078	mutation-records/parser-missing-runtime.tsv	mutation_case_record	mutation_case_id	parser-missing-runtime	RT-H1MUT078	REP-H1MUT078	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT079	mutation-records/parser-duplicate-runtime.tsv	mutation_case_record	mutation_case_id	parser-duplicate-runtime	RT-H1MUT079	REP-H1MUT079	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT080	mutation-records/parser-runtime-disagreement.tsv	mutation_case_record	mutation_case_id	parser-runtime-disagreement	RT-H1MUT080	REP-H1MUT080	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT081	mutation-records/parser-deleted-manifest-row.tsv	mutation_case_record	mutation_case_id	parser-deleted-manifest-row	RT-H1MUT081	REP-H1MUT081	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT082	mutation-records/parser-duplicate-requirement.tsv	mutation_case_record	mutation_case_id	parser-duplicate-requirement	RT-H1MUT082	REP-H1MUT082	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT083	mutation-records/parser-unknown-status.tsv	mutation_case_record	mutation_case_id	parser-unknown-status	RT-H1MUT083	REP-H1MUT083	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT084	mutation-records/parser-stale-run-id.tsv	mutation_case_record	mutation_case_id	parser-stale-run-id	RT-H1MUT084	REP-H1MUT084	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT085	mutation-records/parser-missing-artifact.tsv	mutation_case_record	mutation_case_id	parser-missing-artifact	RT-H1MUT085	REP-H1MUT085	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT086	mutation-records/parser-artifact-mismatch.tsv	mutation_case_record	mutation_case_id	parser-artifact-mismatch	RT-H1MUT086	REP-H1MUT086	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT087	mutation-records/parser-pass-without-evidence.tsv	mutation_case_record	mutation_case_id	parser-pass-without-evidence	RT-H1MUT087	REP-H1MUT087	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT088	mutation-records/parser-reversed-lock-direction.tsv	mutation_case_record	mutation_case_id	parser-reversed-lock-direction	RT-H1MUT088	REP-H1MUT088	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT089	mutation-records/parser-wrong-lock-identity.tsv	mutation_case_record	mutation_case_id	parser-wrong-lock-identity	RT-H1MUT089	REP-H1MUT089	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT090	mutation-records/parser-incorrect-cycle.tsv	mutation_case_record	mutation_case_id	parser-incorrect-cycle	RT-H1MUT090	REP-H1MUT090	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT091	mutation-records/final-forged-build.tsv	mutation_case_record	mutation_case_id	final-forged-build	RT-H1MUT091	REP-H1MUT091	final	
+h1-artifact-registry-v2	ART-RECORD-H1MUT092	mutation-records/final-forged-restore.tsv	mutation_case_record	mutation_case_id	final-forged-restore	RT-H1MUT092	REP-H1MUT092	final	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ001	runtime-artifacts/records/H1OBJ001/scenario-g.log	runtime_evidence	fixture_id	H1OBJ001	RT-H1OBJ001	REP-H1OBJ001	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ002	runtime-artifacts/records/H1OBJ002/scenario-sequence.log	runtime_evidence	fixture_id	H1OBJ002	RT-H1OBJ002	REP-H1OBJ002	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ003	runtime-artifacts/records/H1OBJ003/scenario-view.log	runtime_evidence	fixture_id	H1OBJ003	RT-H1OBJ003	REP-H1OBJ003	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ004	runtime-artifacts/records/H1OBJ004/scenario-materialized_view.log	runtime_evidence	fixture_id	H1OBJ004	RT-H1OBJ004	REP-H1OBJ004	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ005	runtime-artifacts/records/H1OBJ005/scenario-type.log	runtime_evidence	fixture_id	H1OBJ005	RT-H1OBJ005	REP-H1OBJ005	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ006	runtime-artifacts/records/H1OBJ006/scenario-domain.log	runtime_evidence	fixture_id	H1OBJ006	RT-H1OBJ006	REP-H1OBJ006	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ007	runtime-artifacts/records/H1OBJ007/scenario-schema.log	runtime_evidence	fixture_id	H1OBJ007	RT-H1OBJ007	REP-H1OBJ007	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ008	runtime-artifacts/records/H1OBJ008/scenario-procedure.log	runtime_evidence	fixture_id	H1OBJ008	RT-H1OBJ008	REP-H1OBJ008	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ009	runtime-artifacts/records/H1OBJ009/scenario-rule.log	runtime_evidence	fixture_id	H1OBJ009	RT-H1OBJ009	REP-H1OBJ009	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ010	runtime-artifacts/records/H1OBJ010/scenario-operator.log	runtime_evidence	fixture_id	H1OBJ010	RT-H1OBJ010	REP-H1OBJ010	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ011	runtime-artifacts/records/H1OBJ011/scenario-ordinary_trigger.log	runtime_evidence	fixture_id	H1OBJ011	RT-H1OBJ011	REP-H1OBJ011	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ012	runtime-artifacts/records/H1OBJ012/scenario-constraint_trigger.log	runtime_evidence	fixture_id	H1OBJ012	RT-H1OBJ012	REP-H1OBJ012	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ013	runtime-artifacts/records/H1OBJ013/scenario-event_trigger.log	runtime_evidence	fixture_id	H1OBJ013	RT-H1OBJ013	REP-H1OBJ013	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ014	runtime-artifacts/records/H1OBJ014/scenario-direct_wrapper.log	runtime_evidence	fixture_id	H1OBJ014	RT-H1OBJ014	REP-H1OBJ014	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ015	runtime-artifacts/records/H1OBJ015/scenario-other_owner_wrapper.log	runtime_evidence	fixture_id	H1OBJ015	RT-H1OBJ015	REP-H1OBJ015	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ016	runtime-artifacts/records/H1OBJ016/scenario-j.log	runtime_evidence	fixture_id	H1OBJ016	RT-H1OBJ016	REP-H1OBJ016	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ017	runtime-artifacts/records/H1OBJ017/scenario-overload.log	runtime_evidence	fixture_id	H1OBJ017	RT-H1OBJ017	REP-H1OBJ017	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ018	runtime-artifacts/records/H1OBJ018/scenario-default_variant.log	runtime_evidence	fixture_id	H1OBJ018	RT-H1OBJ018	REP-H1OBJ018	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ019	runtime-artifacts/records/H1OBJ019/scenario-function_dependency.log	runtime_evidence	fixture_id	H1OBJ019	RT-H1OBJ019	REP-H1OBJ019	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ020	runtime-artifacts/records/H1OBJ020/scenario-aggregate.log	runtime_evidence	fixture_id	H1OBJ020	RT-H1OBJ020	REP-H1OBJ020	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ021	runtime-artifacts/records/H1OBJ021/scenario-foreign_table.log	runtime_evidence	fixture_id	H1OBJ021	RT-H1OBJ021	REP-H1OBJ021	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ022	runtime-artifacts/records/H1OBJ022/scenario-publication.log	runtime_evidence	fixture_id	H1OBJ022	RT-H1OBJ022	REP-H1OBJ022	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ023	runtime-artifacts/records/H1OBJ023/scenario-subscription.log	runtime_evidence	fixture_id	H1OBJ023	RT-H1OBJ023	REP-H1OBJ023	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ024	runtime-artifacts/records/H1OBJ024/scenario-large_object.log	runtime_evidence	fixture_id	H1OBJ024	RT-H1OBJ024	REP-H1OBJ024	base	
+h1-artifact-registry-v2	ART-RECORD-H1OBJ025	runtime-artifacts/records/H1OBJ025/scenario-cast.log	runtime_evidence	fixture_id	H1OBJ025	RT-H1OBJ025	REP-H1OBJ025	base	
+h1-artifact-registry-v2	ART-RECORD-H1PRE001	runtime-artifacts/pre-enablement/H1PRE001.tsv	pre_enabling_record	evidence_id	H1PRE001	RT-H1PRE001	REP-H1PRE001	base	
+h1-artifact-registry-v2	ART-RECORD-H1PRE002	runtime-artifacts/pre-enablement/H1PRE002.tsv	pre_enabling_record	evidence_id	H1PRE002	RT-H1PRE002	REP-H1PRE002	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG001	runtime-artifacts/acl-catalog/H1REG001.tsv	acl_catalog_record	fixture_id	H1REG001	RT-H1REG001	REP-H1REG001	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG002	runtime-artifacts/acl-catalog/H1REG002.tsv	acl_catalog_record	fixture_id	H1REG002	RT-H1REG002	REP-H1REG002	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG003	runtime-artifacts/acl-catalog/H1REG003.tsv	acl_catalog_record	fixture_id	H1REG003	RT-H1REG003	REP-H1REG003	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG004	runtime-artifacts/acl-catalog/H1REG004.tsv	acl_catalog_record	fixture_id	H1REG004	RT-H1REG004	REP-H1REG004	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG005	runtime-artifacts/acl-catalog/H1REG005.tsv	acl_catalog_record	fixture_id	H1REG005	RT-H1REG005	REP-H1REG005	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG006	runtime-artifacts/acl-catalog/H1REG006.tsv	acl_catalog_record	fixture_id	H1REG006	RT-H1REG006	REP-H1REG006	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG007	runtime-artifacts/acl-catalog/H1REG007.tsv	acl_catalog_record	fixture_id	H1REG007	RT-H1REG007	REP-H1REG007	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG008	runtime-artifacts/acl-catalog/H1REG008.tsv	acl_catalog_record	fixture_id	H1REG008	RT-H1REG008	REP-H1REG008	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG009	runtime-artifacts/acl-catalog/H1REG009.tsv	acl_catalog_record	fixture_id	H1REG009	RT-H1REG009	REP-H1REG009	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG010	runtime-artifacts/acl-catalog/H1REG010.tsv	acl_catalog_record	fixture_id	H1REG010	RT-H1REG010	REP-H1REG010	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG011	runtime-artifacts/acl-catalog/H1REG011.tsv	acl_catalog_record	fixture_id	H1REG011	RT-H1REG011	REP-H1REG011	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG012	runtime-artifacts/acl-catalog/H1REG012.tsv	acl_catalog_record	fixture_id	H1REG012	RT-H1REG012	REP-H1REG012	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG013	runtime-artifacts/acl-catalog/H1REG013.tsv	acl_catalog_record	fixture_id	H1REG013	RT-H1REG013	REP-H1REG013	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG014	runtime-artifacts/acl-catalog/H1REG014.tsv	acl_catalog_record	fixture_id	H1REG014	RT-H1REG014	REP-H1REG014	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG015	runtime-artifacts/acl-catalog/H1REG015.tsv	acl_catalog_record	fixture_id	H1REG015	RT-H1REG015	REP-H1REG015	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG016	runtime-artifacts/acl-catalog/H1REG016.tsv	acl_catalog_record	fixture_id	H1REG016	RT-H1REG016	REP-H1REG016	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG017	runtime-artifacts/acl-catalog/H1REG017.tsv	acl_catalog_record	fixture_id	H1REG017	RT-H1REG017	REP-H1REG017	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG018	runtime-artifacts/acl-catalog/H1REG018.tsv	acl_catalog_record	fixture_id	H1REG018	RT-H1REG018	REP-H1REG018	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG019	runtime-artifacts/acl-catalog/H1REG019.tsv	acl_catalog_record	fixture_id	H1REG019	RT-H1REG019	REP-H1REG019	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG020	runtime-artifacts/acl-catalog/H1REG020.tsv	acl_catalog_record	fixture_id	H1REG020	RT-H1REG020	REP-H1REG020	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG021	runtime-artifacts/acl-catalog/H1REG021.tsv	acl_catalog_record	fixture_id	H1REG021	RT-H1REG021	REP-H1REG021	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG022	runtime-artifacts/acl-catalog/H1REG022.tsv	acl_catalog_record	fixture_id	H1REG022	RT-H1REG022	REP-H1REG022	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG023	runtime-artifacts/acl-catalog/H1REG023.tsv	acl_catalog_record	fixture_id	H1REG023	RT-H1REG023	REP-H1REG023	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG024	runtime-artifacts/acl-catalog/H1REG024.tsv	acl_catalog_record	fixture_id	H1REG024	RT-H1REG024	REP-H1REG024	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG025	runtime-artifacts/acl-catalog/H1REG025.tsv	acl_catalog_record	fixture_id	H1REG025	RT-H1REG025	REP-H1REG025	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG026	runtime-artifacts/acl-catalog/H1REG026.tsv	acl_catalog_record	fixture_id	H1REG026	RT-H1REG026	REP-H1REG026	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG027	runtime-artifacts/acl-catalog/H1REG027.tsv	acl_catalog_record	fixture_id	H1REG027	RT-H1REG027	REP-H1REG027	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG028	runtime-artifacts/acl-catalog/H1REG028.tsv	acl_catalog_record	fixture_id	H1REG028	RT-H1REG028	REP-H1REG028	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG029	runtime-artifacts/acl-catalog/H1REG029.tsv	acl_catalog_record	fixture_id	H1REG029	RT-H1REG029	REP-H1REG029	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG030	runtime-artifacts/acl-catalog/H1REG030.tsv	acl_catalog_record	fixture_id	H1REG030	RT-H1REG030	REP-H1REG030	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG031	runtime-artifacts/acl-catalog/H1REG031.tsv	acl_catalog_record	fixture_id	H1REG031	RT-H1REG031	REP-H1REG031	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG032	runtime-artifacts/acl-catalog/H1REG032.tsv	acl_catalog_record	fixture_id	H1REG032	RT-H1REG032	REP-H1REG032	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG033	runtime-artifacts/acl-catalog/H1REG033.tsv	acl_catalog_record	fixture_id	H1REG033	RT-H1REG033	REP-H1REG033	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG034	runtime-artifacts/acl-catalog/H1REG034.tsv	acl_catalog_record	fixture_id	H1REG034	RT-H1REG034	REP-H1REG034	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG035	runtime-artifacts/acl-catalog/H1REG035.tsv	acl_catalog_record	fixture_id	H1REG035	RT-H1REG035	REP-H1REG035	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG036	runtime-artifacts/acl-catalog/H1REG036.tsv	acl_catalog_record	fixture_id	H1REG036	RT-H1REG036	REP-H1REG036	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG037	runtime-artifacts/acl-catalog/H1REG037.tsv	acl_catalog_record	fixture_id	H1REG037	RT-H1REG037	REP-H1REG037	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG038	runtime-artifacts/acl-catalog/H1REG038.tsv	acl_catalog_record	fixture_id	H1REG038	RT-H1REG038	REP-H1REG038	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG039	runtime-artifacts/acl-catalog/H1REG039.tsv	acl_catalog_record	fixture_id	H1REG039	RT-H1REG039	REP-H1REG039	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG040	runtime-artifacts/acl-catalog/H1REG040.tsv	acl_catalog_record	fixture_id	H1REG040	RT-H1REG040	REP-H1REG040	base	
+h1-artifact-registry-v2	ART-RECORD-H1REG041	runtime-artifacts/acl-catalog/H1REG041.tsv	acl_catalog_record	fixture_id	H1REG041	RT-H1REG041	REP-H1REG041	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTORE001	runtime-artifacts/records/H1RESTORE001/055-install-and-replay.log	runtime_evidence	fixture_id	H1RESTORE001	RT-H1RESTORE001	REP-H1RESTORE001	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTORE003	runtime-artifacts/records/H1RESTORE003/historical-byte-results	runtime_evidence	fixture_id	H1RESTORE003	RT-H1RESTORE003	REP-H1RESTORE003	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREA	runtime-artifacts/records/H1RESTOREA/restore-scenario-A.tsv	runtime_evidence	fixture_id	H1RESTOREA	RT-H1RESTOREA	REP-H1RESTOREA	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREB	runtime-artifacts/records/H1RESTOREB/restore-scenario-B.tsv	runtime_evidence	fixture_id	H1RESTOREB	RT-H1RESTOREB	REP-H1RESTOREB	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREC	runtime-artifacts/records/H1RESTOREC/restore-scenario-C.tsv	runtime_evidence	fixture_id	H1RESTOREC	RT-H1RESTOREC	REP-H1RESTOREC	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTORED	runtime-artifacts/records/H1RESTORED/restore-scenario-D.tsv	runtime_evidence	fixture_id	H1RESTORED	RT-H1RESTORED	REP-H1RESTORED	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREE	runtime-artifacts/records/H1RESTOREE/restore-scenario-E.tsv	runtime_evidence	fixture_id	H1RESTOREE	RT-H1RESTOREE	REP-H1RESTOREE	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREF	runtime-artifacts/records/H1RESTOREF/restore-scenario-F.tsv	runtime_evidence	fixture_id	H1RESTOREF	RT-H1RESTOREF	REP-H1RESTOREF	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREG	runtime-artifacts/records/H1RESTOREG/restore-scenario-G.tsv	runtime_evidence	fixture_id	H1RESTOREG	RT-H1RESTOREG	REP-H1RESTOREG	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREH	runtime-artifacts/records/H1RESTOREH/restore-scenario-H.tsv	runtime_evidence	fixture_id	H1RESTOREH	RT-H1RESTOREH	REP-H1RESTOREH	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREI	runtime-artifacts/records/H1RESTOREI/restore-scenario-I.tsv	runtime_evidence	fixture_id	H1RESTOREI	RT-H1RESTOREI	REP-H1RESTOREI	base	
+h1-artifact-registry-v2	ART-RECORD-H1RESTOREJ	runtime-artifacts/records/H1RESTOREJ/restore-scenario-J.tsv	runtime_evidence	fixture_id	H1RESTOREJ	RT-H1RESTOREJ	REP-H1RESTOREJ	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE001	runtime-artifacts/records/H1ROLE001/055-role-attribute-login.log	runtime_evidence	fixture_id	H1ROLE001	RT-H1ROLE001	REP-H1ROLE001	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE002	runtime-artifacts/records/H1ROLE002/055-role-attribute-superuser.log	runtime_evidence	fixture_id	H1ROLE002	RT-H1ROLE002	REP-H1ROLE002	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE003	runtime-artifacts/records/H1ROLE003/055-role-attribute-inherit.log	runtime_evidence	fixture_id	H1ROLE003	RT-H1ROLE003	REP-H1ROLE003	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE004	runtime-artifacts/records/H1ROLE004/055-role-attribute-createdb.log	runtime_evidence	fixture_id	H1ROLE004	RT-H1ROLE004	REP-H1ROLE004	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE005	runtime-artifacts/records/H1ROLE005/055-role-attribute-createrole.log	runtime_evidence	fixture_id	H1ROLE005	RT-H1ROLE005	REP-H1ROLE005	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE006	runtime-artifacts/records/H1ROLE006/055-role-attribute-replication.log	runtime_evidence	fixture_id	H1ROLE006	RT-H1ROLE006	REP-H1ROLE006	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE007	runtime-artifacts/records/H1ROLE007/055-role-attribute-bypassrls.log	runtime_evidence	fixture_id	H1ROLE007	RT-H1ROLE007	REP-H1ROLE007	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE008	runtime-artifacts/records/H1ROLE008/055-role-attribute-connlimit.log	runtime_evidence	fixture_id	H1ROLE008	RT-H1ROLE008	REP-H1ROLE008	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE009	runtime-artifacts/records/H1ROLE009/055-role-attribute-password.log	runtime_evidence	fixture_id	H1ROLE009	RT-H1ROLE009	REP-H1ROLE009	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE010	runtime-artifacts/records/H1ROLE010/055-role-attribute-validity.log	runtime_evidence	fixture_id	H1ROLE010	RT-H1ROLE010	REP-H1ROLE010	base	
+h1-artifact-registry-v2	ART-RECORD-H1ROLE011	runtime-artifacts/records/H1ROLE011/055-role-attribute-config.log	runtime_evidence	fixture_id	H1ROLE011	RT-H1ROLE011	REP-H1ROLE011	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL001	runtime-artifacts/records/H1SQL001/migration-sql-results	runtime_evidence	fixture_id	H1SQL001	RT-H1SQL001	REP-H1SQL001	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL002	runtime-artifacts/records/H1SQL002/migration-sql-results	runtime_evidence	fixture_id	H1SQL002	RT-H1SQL002	REP-H1SQL002	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL003	runtime-artifacts/records/H1SQL003/055-savepoint-session.log	runtime_evidence	fixture_id	H1SQL003	RT-H1SQL003	REP-H1SQL003	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL004	runtime-artifacts/records/H1SQL004/migration-sql-results	runtime_evidence	fixture_id	H1SQL004	RT-H1SQL004	REP-H1SQL004	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL005A	runtime-artifacts/records/H1SQL005A/migration-sql-results	runtime_evidence	fixture_id	H1SQL005A	RT-H1SQL005A	REP-H1SQL005A	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL005B	runtime-artifacts/records/H1SQL005B/migration-sql-results	runtime_evidence	fixture_id	H1SQL005B	RT-H1SQL005B	REP-H1SQL005B	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL006A	runtime-artifacts/records/H1SQL006A/migration-sql-results	runtime_evidence	fixture_id	H1SQL006A	RT-H1SQL006A	REP-H1SQL006A	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL006B	runtime-artifacts/records/H1SQL006B/migration-sql-results	runtime_evidence	fixture_id	H1SQL006B	RT-H1SQL006B	REP-H1SQL006B	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL007A	runtime-artifacts/records/H1SQL007A/migration-sql-results	runtime_evidence	fixture_id	H1SQL007A	RT-H1SQL007A	REP-H1SQL007A	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL007B	runtime-artifacts/records/H1SQL007B/migration-sql-results	runtime_evidence	fixture_id	H1SQL007B	RT-H1SQL007B	REP-H1SQL007B	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL007C	runtime-artifacts/records/H1SQL007C/migration-sql-results	runtime_evidence	fixture_id	H1SQL007C	RT-H1SQL007C	REP-H1SQL007C	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL008	runtime-artifacts/records/H1SQL008/migration-sql-results	runtime_evidence	fixture_id	H1SQL008	RT-H1SQL008	REP-H1SQL008	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL009	runtime-artifacts/records/H1SQL009/migration-sql-results	runtime_evidence	fixture_id	H1SQL009	RT-H1SQL009	REP-H1SQL009	base	
+h1-artifact-registry-v2	ART-RECORD-H1SQL010	runtime-artifacts/records/H1SQL010/migration-sql-results	runtime_evidence	fixture_id	H1SQL010	RT-H1SQL010	REP-H1SQL010	base	
+h1-artifact-registry-v2	ART-REPORT-FINAL	CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraphReporting_FinalCorrection_Implementation_Output.md	report					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-REPORT-TRACE	CampaignOperationsH1Traceability.md	report					generated	registered supporting evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK001	runtime-artifacts/records/H1LOCK001/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK001			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK002	runtime-artifacts/records/H1LOCK002/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK002			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK003	runtime-artifacts/records/H1LOCK003/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK003			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK004	runtime-artifacts/records/H1LOCK004/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK004			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK005	runtime-artifacts/records/H1LOCK005/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK005			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK006	runtime-artifacts/records/H1LOCK006/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK006			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK008	runtime-artifacts/records/H1LOCK008/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK008			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK010	runtime-artifacts/records/H1LOCK010/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK010			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK011	runtime-artifacts/records/H1LOCK011/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK011			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK013	runtime-artifacts/records/H1LOCK013/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK013			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK014	runtime-artifacts/records/H1LOCK014/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK014			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK015	runtime-artifacts/records/H1LOCK015/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK015			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK016	runtime-artifacts/records/H1LOCK016/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK016			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK017	runtime-artifacts/records/H1LOCK017/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK017			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1LOCK018	runtime-artifacts/records/H1LOCK018/h1-lock-runtime.tsv	aggregate_runtime_observation	fixture_id	H1LOCK018			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG001	runtime-artifacts/records/H1REG001/H1REG001.tsv	aggregate_runtime_observation	fixture_id	H1REG001			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG002	runtime-artifacts/records/H1REG002/H1REG002.tsv	aggregate_runtime_observation	fixture_id	H1REG002			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG003	runtime-artifacts/records/H1REG003/H1REG003.tsv	aggregate_runtime_observation	fixture_id	H1REG003			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG004	runtime-artifacts/records/H1REG004/H1REG004.tsv	aggregate_runtime_observation	fixture_id	H1REG004			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG005	runtime-artifacts/records/H1REG005/H1REG005.tsv	aggregate_runtime_observation	fixture_id	H1REG005			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG006	runtime-artifacts/records/H1REG006/H1REG006.tsv	aggregate_runtime_observation	fixture_id	H1REG006			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG007	runtime-artifacts/records/H1REG007/H1REG007.tsv	aggregate_runtime_observation	fixture_id	H1REG007			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG008	runtime-artifacts/records/H1REG008/H1REG008.tsv	aggregate_runtime_observation	fixture_id	H1REG008			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG009	runtime-artifacts/records/H1REG009/H1REG009.tsv	aggregate_runtime_observation	fixture_id	H1REG009			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG010	runtime-artifacts/records/H1REG010/H1REG010.tsv	aggregate_runtime_observation	fixture_id	H1REG010			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG011	runtime-artifacts/records/H1REG011/H1REG011.tsv	aggregate_runtime_observation	fixture_id	H1REG011			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG012	runtime-artifacts/records/H1REG012/H1REG012.tsv	aggregate_runtime_observation	fixture_id	H1REG012			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG013	runtime-artifacts/records/H1REG013/H1REG013.tsv	aggregate_runtime_observation	fixture_id	H1REG013			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG014	runtime-artifacts/records/H1REG014/H1REG014.tsv	aggregate_runtime_observation	fixture_id	H1REG014			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG015	runtime-artifacts/records/H1REG015/H1REG015.tsv	aggregate_runtime_observation	fixture_id	H1REG015			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG016	runtime-artifacts/records/H1REG016/H1REG016.tsv	aggregate_runtime_observation	fixture_id	H1REG016			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG017	runtime-artifacts/records/H1REG017/H1REG017.tsv	aggregate_runtime_observation	fixture_id	H1REG017			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG018	runtime-artifacts/records/H1REG018/H1REG018.tsv	aggregate_runtime_observation	fixture_id	H1REG018			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG019	runtime-artifacts/records/H1REG019/H1REG019.tsv	aggregate_runtime_observation	fixture_id	H1REG019			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG020	runtime-artifacts/records/H1REG020/H1REG020.tsv	aggregate_runtime_observation	fixture_id	H1REG020			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG021	runtime-artifacts/records/H1REG021/H1REG021.tsv	aggregate_runtime_observation	fixture_id	H1REG021			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG022	runtime-artifacts/records/H1REG022/H1REG022.tsv	aggregate_runtime_observation	fixture_id	H1REG022			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG023	runtime-artifacts/records/H1REG023/H1REG023.tsv	aggregate_runtime_observation	fixture_id	H1REG023			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG024	runtime-artifacts/records/H1REG024/H1REG024.tsv	aggregate_runtime_observation	fixture_id	H1REG024			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG025	runtime-artifacts/records/H1REG025/H1REG025.tsv	aggregate_runtime_observation	fixture_id	H1REG025			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG026	runtime-artifacts/records/H1REG026/H1REG026.tsv	aggregate_runtime_observation	fixture_id	H1REG026			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG027	runtime-artifacts/records/H1REG027/H1REG027.tsv	aggregate_runtime_observation	fixture_id	H1REG027			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG028	runtime-artifacts/records/H1REG028/H1REG028.tsv	aggregate_runtime_observation	fixture_id	H1REG028			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG029	runtime-artifacts/records/H1REG029/H1REG029.tsv	aggregate_runtime_observation	fixture_id	H1REG029			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG030	runtime-artifacts/records/H1REG030/H1REG030.tsv	aggregate_runtime_observation	fixture_id	H1REG030			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG031	runtime-artifacts/records/H1REG031/H1REG031.tsv	aggregate_runtime_observation	fixture_id	H1REG031			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG032	runtime-artifacts/records/H1REG032/H1REG032.tsv	aggregate_runtime_observation	fixture_id	H1REG032			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG033	runtime-artifacts/records/H1REG033/H1REG033.tsv	aggregate_runtime_observation	fixture_id	H1REG033			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG034	runtime-artifacts/records/H1REG034/H1REG034.tsv	aggregate_runtime_observation	fixture_id	H1REG034			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG035	runtime-artifacts/records/H1REG035/H1REG035.tsv	aggregate_runtime_observation	fixture_id	H1REG035			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG036	runtime-artifacts/records/H1REG036/H1REG036.tsv	aggregate_runtime_observation	fixture_id	H1REG036			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG037	runtime-artifacts/records/H1REG037/H1REG037.tsv	aggregate_runtime_observation	fixture_id	H1REG037			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG038	runtime-artifacts/records/H1REG038/H1REG038.tsv	aggregate_runtime_observation	fixture_id	H1REG038			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG039	runtime-artifacts/records/H1REG039/H1REG039.tsv	aggregate_runtime_observation	fixture_id	H1REG039			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG040	runtime-artifacts/records/H1REG040/H1REG040.tsv	aggregate_runtime_observation	fixture_id	H1REG040			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-RUNTIME-OBS-H1REG041	runtime-artifacts/records/H1REG041/H1REG041.tsv	aggregate_runtime_observation	fixture_id	H1REG041			base	registered aggregate observation distinct from primary raw evidence
+h1-artifact-registry-v2	ART-SUPPORT-ACL-CATALOG	h1-acl-requirement-evidence.tsv	acl_catalog_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-ACL-CATALOG-CAPTURE	h1-acl-catalog-observed.tsv	catalog_capture					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-ACL-CATALOG-PAYLOAD	h1-acl-catalog-payload.json	raw_catalog_payload					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-ACL-ORIGIN	h1-acl-origin-runtime.tsv	acl_origin_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-FINAL-LEDGER	h1-final-assurance-results.tsv	final_assurance_ledger					final	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-GENERATOR-RECEIPTS	h1-generator-execution-receipts.tsv	generator_receipt_registry					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-GENERATOR-SNAPSHOTS	h1-generator-output-snapshots.tsv	snapshot_registry					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-GRAPH-VALIDATION	h1-reference-graph.log	validation_log					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-INVARIANT	h1-uniqueness-invariant-runtime.tsv	invariant_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-LOCK-CATALOG	h1-lock-catalog-evidence.tsv	lock_catalog					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-LOCK-PIDS	h1-lock-special-pids.tsv	lock_pid_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-LOCK-RUNTIME	h1-lock-runtime.tsv	lock_runtime_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-MUTATION-LEDGER	h1-mutation-results.tsv	mutation_case_ledger					final	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-PRE	h1-pre-enablement-runtime.tsv	pre_enablement_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-RAW-ENVELOPES	h1-raw-evidence-envelopes.tsv	raw_evidence_registry					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-RESTORE	h1-restore-runtime.tsv	restore_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-RUN-ID	run-id	run_identity					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-RUNTIME-LEDGER	h1-runtime-results.tsv	runtime_ledger					base	registered supporting evidence
+h1-artifact-registry-v2	ART-SUPPORT-TRACE-VALIDATION	h1-traceability-validation.log	validation_log					base	registered supporting evidence

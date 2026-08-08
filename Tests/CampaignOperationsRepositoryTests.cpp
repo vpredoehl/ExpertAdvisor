@@ -377,6 +377,16 @@ FindRecommendationCampaignMaterialization(
     return value;
 }
 
+std::vector<PersistedRecommendationCampaignMaterialization>
+ListRecommendationCampaignMaterializations(
+    pqxx::transaction_base&, std::optional<long long>, int)
+{
+    // The focused Campaign Operations suite never lists upstream
+    // materializations; this adapter satisfies the handoff repository's
+    // link-time surface without granting that unrelated behavior authority.
+    return {};
+}
+
 std::optional<PersistedRecommendationCampaignFollowUpProposalRatification>
 FindRecommendationCampaignFollowUpProposalRatification(
     pqxx::transaction_base& transaction, long long ratificationEventId)

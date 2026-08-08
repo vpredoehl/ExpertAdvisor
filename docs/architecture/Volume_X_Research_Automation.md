@@ -1,8 +1,8 @@
 # Volume X — Research Automation
 
 Status: Authoritative through Campaign Operations Phase H; implemented through Phase 5
-Version: 1.6.0
-Last revised: 2026-07-31
+Version: 1.7.0
+Last revised: 2026-08-03
 
 ## 1. Purpose
 
@@ -326,3 +326,4 @@ scheduler work classes each require a later accepted owning-domain ADR.
 | 1.4.0 | 2026-07-30 | Integrated Phase F as migration 053 on the unchanged generation-52 scheduler baseline and reserved unimplemented Phase G for migration 054. | ADR-0010–ADR-0018 |
 | 1.5.0 | 2026-07-31 | Implemented Campaign Operations Phase 5 / architectural Phase G immutable operational completion, logical archival, and audit/status without lifecycle, scientific, scheduler, or worker authority. | ADR-0014, ADR-0015, ADR-0017 |
 | 1.6.0 | 2026-07-31 | Accepted default-off Phase H production admission and a bounded run-once Campaign Manager while excluding continuous, scheduler, process, scientific, and automatic request/completion authority. | ADR-0019 |
+| 1.7.0 | 2026-08-03 | Corrected H1 recovery/reacquisition consistency: later Attempt V2 records retain one immutable first admission and replay hydrates historical principal/build evidence. | ADR-0019, ADR-0019B |

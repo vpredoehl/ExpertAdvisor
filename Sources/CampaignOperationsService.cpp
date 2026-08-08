@@ -146,7 +146,8 @@ ValidateOperationalRequestAcceptanceRequest(
 
 PersistResult<PersistedBudgetLedgerEntry> AdministerCampaignBudget(
     pqxx::connection& connection,
-    const BudgetAdministrationRequest& request)
+    const BudgetAdministrationRequest& request,
+    const BudgetAdministrationTestInjection& testInjection)
 {
     const auto validated = ValidateBudgetAdministrationRequest(request);
     pqxx::work transaction{connection};
@@ -160,6 +161,9 @@ PersistResult<PersistedBudgetLedgerEntry> AdministerCampaignBudget(
         throw Error(ErrorCode::persistenceConflict,
             "campaign_operations_campaign_not_found");
     LockBudgetDomain(transaction, campaign->campaign);
+    if (testInjection)
+        testInjection(BudgetAdministrationTestInjectionPoint::
+            afterDomainLocksBeforePersistence);
 
     std::optional<PersistedBudgetLedgerEntry> predecessor;
     if (validated.expectedLedgerVersion > 0)

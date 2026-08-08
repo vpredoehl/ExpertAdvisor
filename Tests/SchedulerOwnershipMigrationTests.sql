@@ -136,7 +136,8 @@ BEGIN
     END IF;
 END $$;
 
-INSERT INTO model(model_id) VALUES (910053);
+INSERT INTO model(model_id,name)
+VALUES (910053,'scheduler-ownership-checkpoint-infer-fixture');
 INSERT INTO experiment_checkpoint_eval (
     checkpoint_eval_id,experiment_id,parent_experiment_id,
     checkpoint_epoch,checkpoint_model_id,status,phase
@@ -231,7 +232,8 @@ BEGIN
     END IF;
 END $$;
 
-INSERT INTO model(model_id) VALUES (910052);
+INSERT INTO model(model_id,name)
+VALUES (910052,'scheduler-ownership-checkpoint-analyze-fixture');
 INSERT INTO experiment_checkpoint_eval (
     checkpoint_eval_id,experiment_id,parent_experiment_id,
     checkpoint_epoch,checkpoint_model_id,status,phase

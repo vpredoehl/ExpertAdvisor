@@ -1,8 +1,8 @@
 # Volume XI — Scheduler
 
 Status: Generation-52 exact-attempt ownership implemented and independently reviewed; safe-window process regression remains a pre-enable gate
-Version: 0.5.0
-Last revised: 2026-07-31
+Version: 0.5.1
+Last revised: 2026-08-03
 
 ## 1. Purpose
 
@@ -455,3 +455,4 @@ idempotency, recovery, operator control, and regression scope.
 | 0.4.0 | 2026-07-29 | Added generation-52 authority propagation, exact signaling/reaping/finalization, bounded checkpoint analysis, direct-CLI ownership enforcement, canonical lock order, technical cutover barrier, and bounded legacy no-PID reconciliation. | ADR-0016, ADR-0018 |
 | 0.4.1 | 2026-07-30 | Made stop-at-checkpoint atomically complete the exact train attempt, release capacity, clear its binding, and tolerate delayed reap and replay. | ADR-0018 |
 | 0.5.0 | 2026-07-31 | Recorded generation-52 implementation/review status and the exact narrow Phase H evidence interface without scheduler polling, Campaign Operations privileges, or future-generation approval inheritance. | ADR-0018, ADR-0019 |
+| 0.5.1 | 2026-08-03 | Completed H1 readiness reporting for scheduler canonical/hash evidence, independent verification, and approved-versus-actual Manager build comparison while preserving fail-closed separation of authority. | ADR-0019B |

@@ -99,6 +99,8 @@ struct ReconciliationObservationIdTag;
 struct ReconciliationResolutionIdTag;
 struct CompletionEventIdTag;
 struct AuditReferenceEventIdTag;
+struct ProductionEnablementEventIdTag;
+struct RequestProductionAdmissionIdTag;
 
 using OperationalCampaignId = ImmutableIdentifier<OperationalCampaignIdTag>;
 using GovernanceProvenanceEventId =
@@ -125,6 +127,10 @@ using ReconciliationResolutionId =
 using CompletionEventId = ImmutableIdentifier<CompletionEventIdTag>;
 using AuditReferenceEventId =
     ImmutableIdentifier<AuditReferenceEventIdTag>;
+using ProductionEnablementEventId =
+    ImmutableIdentifier<ProductionEnablementEventIdTag>;
+using RequestProductionAdmissionId =
+    ImmutableIdentifier<RequestProductionAdmissionIdTag>;
 
 class CanonicalIdentity final
 {
