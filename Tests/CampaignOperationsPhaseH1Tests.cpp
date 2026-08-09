@@ -33,6 +33,13 @@ void AssertContains(const std::string& value, const std::string& expected)
 
 int main()
 {
+    assert(IsValidProductionOperationKey("canary-001/attempt:1"));
+    assert(IsValidProductionOperationKey(std::string(128, 'a')));
+    assert(!IsValidProductionOperationKey(""));
+    assert(!IsValidProductionOperationKey("1 canary"));
+    assert(!IsValidProductionOperationKey("_leading"));
+    assert(!IsValidProductionOperationKey(std::string(129, 'a')));
+
     static_assert(!std::is_copy_assignable_v<SchedulerProtocolEvidence>);
     static_assert(!std::is_copy_assignable_v<ManagerBuildContract>);
     static_assert(!std::is_copy_assignable_v<ProductionEnableEvent>);

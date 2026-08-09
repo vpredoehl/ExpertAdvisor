@@ -1,4 +1,6 @@
 #include "CampaignOperationsBindingRepository.hpp"
+#include "CampaignOperationsProductionAdmission.hpp"
+#include "CampaignOperationsProductionAdmissionRepository.hpp"
 
 #include <stdexcept>
 
@@ -90,8 +92,9 @@ long long InsertOutcome(pqxx::transaction_base& transaction,
 void InsertOutcomeAudit(pqxx::transaction_base& transaction,
     const DispatchLockedAuthority& authority,
     const DispatchAttemptRecord& attempt, long long outcomeId,
-    const DispatchAttemptOutcomeEvidence& outcome)
+    const DispatchAttemptOutcomeEvidence& outcome, bool production)
 {
+    (void)production;
     const bool successful =
         outcome.result == DispatchResultClassification::createdAndBound ||
         outcome.result ==
@@ -103,13 +106,15 @@ void InsertOutcomeAudit(pqxx::transaction_base& transaction,
         "dispatch_attempt_id,dispatch_attempt_outcome_id,cause_kind,"
         "actor_identity,capability,prior_version,resulting_version,"
         "outcome,replay_disposition,diagnostic_code) "
-        "VALUES($1,$2,$3,$4,$5,$6,"
-        "'campaign_operations_phase5_transactional',$7,$8,$9,$10,$11);",
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);",
         pqxx::params{authority.campaignId.value(),
             authority.requestId.value(), attempt.attemptId.value(),
             outcomeId, successful ? "dispatch_handoff_completed"
                                   : "dispatch_handoff_failed",
             attempt.acquisition.dispatcher.value(),
+            // H2 changes runtime reachability, not migration 048's persisted
+            // Phase E capability value.
+            "campaign_operations_phase5_transactional",
             outcome.expectedRequestVersion,
             outcome.resultingRequestVersion,
             successful ? "recorded" :
@@ -128,11 +133,53 @@ bool IsSuccessfulOutcome(const DispatchAttemptOutcomeEvidence& outcome)
         outcome.result == DispatchResultClassification::existingIdentical;
 }
 
+std::string OutcomeAttemptCanonical(pqxx::transaction_base& transaction,
+    const DispatchAttemptRecord& attempt, bool production)
+{
+    if (!production) return attempt.acquisition.identity.canonicalText();
+    return transaction.exec(
+        "SELECT attempt_identity_canonical "
+        "FROM campaign_operations_dispatch_attempt "
+        "WHERE dispatch_attempt_id=$1 AND attempt_contract_version=2;",
+        pqxx::params{attempt.attemptId.value()}).one_row()[0].as<std::string>();
+}
+
 DispatchAttemptRecord ValidateOutcomeAttempt(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
-    const DispatchAttemptOutcomeEvidence& outcome)
+    const DispatchAttemptOutcomeEvidence& outcome, bool production)
 {
-    const auto attempt = FindDispatchAttempt(transaction, outcome.attemptId);
+    std::optional<DispatchAttemptRecord> attempt;
+    std::string expectedAttemptCanonical;
+    if (production)
+    {
+        const auto persisted = FindProductionDispatchAttemptV2(
+            transaction, outcome.attemptId);
+        if (persisted)
+        {
+            expectedAttemptCanonical = persisted->attempt.identity.canonicalText();
+            attempt.emplace(DispatchAttemptRecord{
+                persisted->attemptId,
+                BuildDispatchAttemptAcquisition(
+                    persisted->attempt.requestId,
+                    persisted->attempt.requestIdentityCanonical,
+                    persisted->attempt.attemptOrdinal,
+                    persisted->attempt.expectedRequestVersion,
+                    persisted->attempt.resultingRequestVersion,
+                    persisted->attempt.leaseTokenDigest,
+                    persisted->attempt.leaseExpiresAt,
+                    persisted->attempt.requestingActor)});
+        }
+    }
+    else
+    {
+        const auto isolated = FindDispatchAttempt(transaction, outcome.attemptId);
+        if (isolated)
+        {
+            expectedAttemptCanonical =
+                isolated->acquisition.identity.canonicalText();
+            attempt.emplace(*isolated);
+        }
+    }
     const auto storedOutcomeAttemptCanonical = transaction.exec(
         "SELECT attempt_identity_canonical "
         "FROM campaign_operations_dispatch_attempt_outcome "
@@ -140,7 +187,7 @@ DispatchAttemptRecord ValidateOutcomeAttempt(
         pqxx::params{outcome.attemptId.value()});
     if (!attempt || storedOutcomeAttemptCanonical.size() != 1 ||
         attempt->acquisition.requestId != requestId ||
-        attempt->acquisition.identity.canonicalText() !=
+        expectedAttemptCanonical !=
             outcome.attemptCanonicalText ||
         storedOutcomeAttemptCanonical.one_row()[0].as<std::string>() !=
             outcome.attemptCanonicalText)
@@ -152,8 +199,9 @@ DispatchAttemptRecord ValidateOutcomeAttempt(
 void ValidateOutcomeAudit(pqxx::transaction_base& transaction,
     OperationalRequestId requestId,
     const DispatchAttemptOutcomeEvidence& outcome,
-    const DispatchAttemptRecord& attempt)
+    const DispatchAttemptRecord& attempt, bool production)
 {
+    (void)production;
     const pqxx::result rows = transaction.exec(
         "SELECT audit.operational_request_id,audit.dispatch_attempt_id,"
         "audit.dispatch_attempt_outcome_id,audit.cause_kind,"
@@ -171,7 +219,9 @@ void ValidateOutcomeAudit(pqxx::transaction_base& transaction,
             "campaign_operations_dispatch_outcome_audit_corrupt");
     const auto& audit = rows.one_row();
     const bool successful = IsSuccessfulOutcome(outcome);
-    const std::string expectedAuditOutcome = successful
+    const bool recoveryOutcome = outcome.diagnosticCode ==
+        "dispatch_lease_expired_no_downstream_evidence";
+    const std::string expectedAuditOutcome = successful || recoveryOutcome
         ? "recorded"
         : outcome.result ==
             DispatchResultClassification::reconciliationRequired
@@ -182,16 +232,21 @@ void ValidateOutcomeAudit(pqxx::transaction_base& transaction,
         audit[2].is_null() ||
         audit[3].as<std::string>() !=
             (successful ? "dispatch_handoff_completed"
-                        : "dispatch_handoff_failed") ||
+             : recoveryOutcome ? "dispatch_lease_recovered"
+                               : "dispatch_handoff_failed") ||
         audit[4].as<std::string>() !=
-            attempt.acquisition.dispatcher.value() ||
+            (recoveryOutcome ? "campaign_operations_recovery"
+                             : attempt.acquisition.dispatcher.value()) ||
         audit[5].as<std::string>() !=
-            kCampaignOperationsPhase5TransactionalRole ||
+            (recoveryOutcome ? "campaign_operations_recovery"
+                             : kCampaignOperationsPhase5TransactionalRole) ||
         audit[6].as<int>() != outcome.expectedRequestVersion ||
         audit[7].as<int>() != outcome.resultingRequestVersion ||
         audit[8].as<std::string>() != expectedAuditOutcome ||
         audit[9].as<std::string>() !=
-            (successful ? "new_operation" : "reconciliation_required") ||
+            (successful ? "new_operation"
+             : recoveryOutcome ? "proven_absent"
+                               : "reconciliation_required") ||
         audit[10].as<std::string>() != outcome.diagnosticCode)
         throw std::runtime_error(
             "campaign_operations_dispatch_outcome_audit_corrupt");
@@ -200,7 +255,8 @@ void ValidateOutcomeAudit(pqxx::transaction_base& transaction,
 } // namespace
 
 std::optional<PersistedDispatchBinding> FindAndValidateCompleteDispatchBinding(
-    pqxx::transaction_base& transaction, OperationalRequestId requestId)
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    bool production)
 {
     const pqxx::result rows = LoadBindingRows(transaction, requestId);
     if (rows.empty()) return std::nullopt;
@@ -451,26 +507,33 @@ std::optional<PersistedDispatchBinding> FindAndValidateCompleteDispatchBinding(
             bindingSet.identity.canonicalText(), bindingSet.identity.hash());
     if (outcome.identity.canonicalText() !=
             outcomeRow[11].as<std::string>() ||
-        outcome.identity.hash() != outcomeRow[12].as<std::string>() ||
-        (outcome.result !=
-             DispatchResultClassification::createdAndBound &&
-         outcome.result != DispatchResultClassification::
-             adoptedExistingPendingAndBound) ||
-        outcome.resultingRequestVersion != evidence[8].as<int>() ||
+        outcome.identity.hash() != outcomeRow[12].as<std::string>())
+        throw std::runtime_error(
+            "campaign_operations_dispatch_outcome_identity_corrupt");
+    if (outcome.result != DispatchResultClassification::createdAndBound &&
+        outcome.result != DispatchResultClassification::
+            adoptedExistingPendingAndBound)
+        throw std::runtime_error(
+            "campaign_operations_dispatch_outcome_result_corrupt");
+    if (outcome.resultingRequestVersion != evidence[8].as<int>() ||
         outcome.resultingReservationVersion != evidence[9].as<int>())
         throw std::runtime_error(
-            "campaign_operations_dispatch_outcome_corrupt");
+            "campaign_operations_dispatch_outcome_version_corrupt:" +
+            std::to_string(outcome.resultingRequestVersion) + ":" +
+            std::to_string(evidence[8].as<int>()) + ":" +
+            std::to_string(outcome.resultingReservationVersion) + ":" +
+            std::to_string(evidence[9].as<int>()));
     const auto persistedAttempt =
-        ValidateOutcomeAttempt(transaction, requestId, outcome);
+        ValidateOutcomeAttempt(transaction, requestId, outcome, production);
     ValidateOutcomeAudit(
-        transaction, requestId, outcome, persistedAttempt);
+        transaction, requestId, outcome, persistedAttempt, production);
     return PersistedDispatchBinding{
         std::move(bindingSet), std::move(outcome)};
 }
 
 std::optional<DispatchAttemptOutcomeEvidence>
 FindLatestDispatchOutcome(pqxx::transaction_base& transaction,
-    OperationalRequestId requestId)
+    OperationalRequestId requestId, bool production)
 {
     const pqxx::result rows = transaction.exec(
         "SELECT outcome.dispatch_attempt_id,"
@@ -490,6 +553,9 @@ FindLatestDispatchOutcome(pqxx::transaction_base& transaction,
         "JOIN campaign_operations_dispatch_attempt attempt "
         "ON attempt.dispatch_attempt_id=outcome.dispatch_attempt_id "
         "WHERE attempt.operational_request_id=$1 "
+        "AND attempt.attempt_ordinal=(SELECT max(latest.attempt_ordinal) "
+        "FROM campaign_operations_dispatch_attempt latest "
+        "WHERE latest.operational_request_id=$1) "
         "ORDER BY attempt.attempt_ordinal DESC LIMIT 1;",
         pqxx::params{requestId.value()});
     if (rows.empty()) return std::nullopt;
@@ -515,9 +581,9 @@ FindLatestDispatchOutcome(pqxx::transaction_base& transaction,
         throw std::runtime_error(
             "campaign_operations_dispatch_outcome_corrupt");
     const auto persistedAttempt =
-        ValidateOutcomeAttempt(transaction, requestId, outcome);
+        ValidateOutcomeAttempt(transaction, requestId, outcome, production);
     ValidateOutcomeAudit(
-        transaction, requestId, outcome, persistedAttempt);
+        transaction, requestId, outcome, persistedAttempt, production);
     return outcome;
 }
 
@@ -764,18 +830,31 @@ DispatchAttemptOutcomeEvidence BindRequestAndPersistSuccessfulOutcome(
     const DispatchAttemptRecord& attempt,
     const RequestBindingSet& bindingSet,
     DownstreamEvidenceClassification downstreamEvidence,
-    BindingDisposition disposition, DispatchTestHook testHook)
+    BindingDisposition disposition, DispatchTestHook testHook, bool production,
+    const std::string& productionOperationKey,
+    const std::string& approvedBuildContractCanonical)
 {
-    const pqxx::row changed = transaction.exec(
-        "SELECT state_version FROM "
-        "transition_campaign_operations_request_bound($1,$2,$3);",
-        pqxx::params{authority.requestId.value(), authority.requestVersion,
-            authority.leaseTokenDigest}).one_row();
+    const pqxx::row changed = production
+        ? transaction.exec(
+              "SELECT state_version FROM "
+              "transition_campaign_operations_request_bound_production_v2("
+              "$1,$2,$3,$4,$5,$6);",
+              pqxx::params{authority.requestId.value(),
+                  authority.requestVersion, authority.leaseTokenDigest,
+                  attempt.attemptId.value(), productionOperationKey,
+                  approvedBuildContractCanonical}).one_row()
+        : transaction.exec(
+              "SELECT state_version FROM "
+              "transition_campaign_operations_request_bound($1,$2,$3);",
+              pqxx::params{authority.requestId.value(),
+                  authority.requestVersion, authority.leaseTokenDigest})
+              .one_row();
     if (testHook)
         testHook(DispatchTestInjectionPoint::
             afterRequestTransitionBeforeAttemptOutcome);
     const auto outcome = BuildDispatchAttemptOutcomeEvidence(
-        attempt.attemptId, attempt.acquisition.identity.canonicalText(),
+        attempt.attemptId, OutcomeAttemptCanonical(transaction, attempt,
+            production),
         disposition == BindingDisposition::created
             ? DispatchResultClassification::createdAndBound
             : DispatchResultClassification::
@@ -793,7 +872,7 @@ DispatchAttemptOutcomeEvidence BindRequestAndPersistSuccessfulOutcome(
         testHook(
             DispatchTestInjectionPoint::afterAttemptOutcomeBeforeAudit);
     InsertOutcomeAudit(
-        transaction, authority, attempt, outcomeId, outcome);
+        transaction, authority, attempt, outcomeId, outcome, production);
     return outcome;
 }
 
@@ -803,10 +882,11 @@ DispatchAttemptOutcomeEvidence PersistFailedDispatchOutcome(
     const DispatchAttemptRecord& attempt,
     DownstreamEvidenceClassification downstreamEvidence,
     SemanticConflictClassification conflict,
-    const std::string& diagnosticCode)
+    const std::string& diagnosticCode, bool production)
 {
     const auto outcome = BuildDispatchAttemptOutcomeEvidence(
-        attempt.attemptId, attempt.acquisition.identity.canonicalText(),
+        attempt.attemptId, OutcomeAttemptCanonical(transaction, attempt,
+            production),
         DispatchResultClassification::reconciliationRequired,
         downstreamEvidence, conflict,
         UncertainCommitRecoveryClassification::ambiguousEvidence,
@@ -815,7 +895,7 @@ DispatchAttemptOutcomeEvidence PersistFailedDispatchOutcome(
         std::nullopt, std::nullopt);
     const long long outcomeId = InsertOutcome(transaction, outcome);
     InsertOutcomeAudit(
-        transaction, authority, attempt, outcomeId, outcome);
+        transaction, authority, attempt, outcomeId, outcome, production);
     return outcome;
 }
 

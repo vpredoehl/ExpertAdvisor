@@ -15,10 +15,11 @@ struct PersistedDispatchBinding final
 };
 
 std::optional<PersistedDispatchBinding> FindAndValidateCompleteDispatchBinding(
-    pqxx::transaction_base& transaction, OperationalRequestId requestId);
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    bool production = false);
 std::optional<DispatchAttemptOutcomeEvidence>
 FindLatestDispatchOutcome(pqxx::transaction_base& transaction,
-    OperationalRequestId requestId);
+    OperationalRequestId requestId, bool production = false);
 
 RequestBindingSet PersistCompleteDispatchBinding(
     pqxx::transaction_base& transaction,
@@ -44,7 +45,9 @@ DispatchAttemptOutcomeEvidence BindRequestAndPersistSuccessfulOutcome(
     const DispatchAttemptRecord& attempt,
     const RequestBindingSet& bindingSet,
     DownstreamEvidenceClassification downstreamEvidence,
-    BindingDisposition disposition, DispatchTestHook testHook = {});
+    BindingDisposition disposition, DispatchTestHook testHook = {},
+    bool production = false, const std::string& productionOperationKey = {},
+    const std::string& approvedBuildContractCanonical = {});
 
 DispatchAttemptOutcomeEvidence PersistFailedDispatchOutcome(
     pqxx::transaction_base& transaction,
@@ -52,6 +55,6 @@ DispatchAttemptOutcomeEvidence PersistFailedDispatchOutcome(
     const DispatchAttemptRecord& attempt,
     DownstreamEvidenceClassification downstreamEvidence,
     SemanticConflictClassification conflict,
-    const std::string& diagnosticCode);
+    const std::string& diagnosticCode, bool production = false);
 
 } // namespace EA::CampaignOperations

@@ -874,7 +874,7 @@ FindProductionDispatchAttemptV2(pqxx::transaction_base& transaction,
 }
 
 ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
-    pqxx::transaction_base& transaction)
+    pqxx::transaction_base& transaction, bool hydrateEvidence)
 {
     const auto row = transaction.exec(
         "SELECT migration_version,migration_filename,migration_checksum,"
@@ -892,7 +892,7 @@ ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
         "old_event_blocked_lease_count,reconciliation_required_count,"
         "completion_nested_v2_proof_version,"
         "completion_nested_v2_proof_valid "
-        "FROM campaign_operations_production_readiness_v1;").one_row();
+        "FROM campaign_operations_production_readiness_snapshot_v1();").one_row();
     ProductionReadinessSnapshot result;
     result.migrationVersion = row[0].as<std::string>();
     if (!row[1].is_null())
@@ -914,6 +914,7 @@ ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
         result.independentVerificationReference = row[11].as<std::string>();
     if (auto scheduler = LoadSchedulerProtocolEvidenceSnapshot(transaction))
         result.schedulerEvidence.emplace(std::move(*scheduler));
+    if (!hydrateEvidence) return result;
     // Structural hydration intentionally precedes every normative comparison.
     // In particular, an unsupported but internally consistent version remains
     // visible, while a stale hash, bad audit, or broken relationship fails at

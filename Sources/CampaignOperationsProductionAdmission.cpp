@@ -80,6 +80,11 @@ CanonicalIdentity Identity(const std::string& value)
 
 } // namespace
 
+bool IsValidProductionOperationKey(const std::string& value)
+{
+    return ValidOperationKey(value);
+}
+
 SchedulerProtocolEvidence::SchedulerProtocolEvidence(
     CanonicalIdentity identityValue, int requiredGenerationValue,
     std::string cutoverStateValue, UtcTimestamp cutoverCompletedAtValue,

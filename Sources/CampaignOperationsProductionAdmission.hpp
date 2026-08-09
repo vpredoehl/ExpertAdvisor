@@ -34,6 +34,13 @@ inline constexpr char kSchedulerProtocolEvidenceReaderRole[] =
 inline constexpr char kManagerServiceContract[] =
     "campaign-operations-production-dispatch-and-manager-run-once-v1";
 
+// This is the pre-existing mutation acknowledgement used by the Campaign
+// Operations CLI.  H2 deliberately reuses the literal --yes gate; it does
+// not introduce a production-only bypass or an implicit acknowledgement.
+inline constexpr char kProductionMutationAcknowledgement[] = "--yes";
+
+bool IsValidProductionOperationKey(const std::string& value);
+
 struct SchedulerProtocolEvidence final
 {
     const CanonicalIdentity identity;

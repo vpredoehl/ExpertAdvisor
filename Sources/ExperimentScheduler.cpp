@@ -59,6 +59,7 @@
 #include "CampaignOperationsService.hpp"
 #include "CampaignOperationsControlService.hpp"
 #include "CampaignOperationsCompletionService.hpp"
+#include "CampaignOperationsDispatchService.hpp"
 #include "CampaignOperationsProductionAdmissionService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
@@ -272,12 +273,18 @@ struct SchedulerOptions
     std::optional<long long> campaignOperationsCompletionStatusCampaignId;
     bool campaignOperationsProductionReadiness = false;
     bool campaignOperationsProductionStatus = false;
+    bool campaignOperationsProductionEnable = false;
+    bool campaignOperationsProductionDisable = false;
+    bool campaignOperationsProductionDispatchRequest = false;
     std::optional<std::string> campaignOperationsReconcileRunKey;
     bool campaignOperationsReconcileRecover = false;
     std::optional<int> campaignOperationsExpectedControlVersion;
     std::optional<long long> campaignOperationsControlRequestId;
     std::optional<int> campaignOperationsExpectedRequestVersion;
+    std::optional<int> campaignOperationsExpectedProductionVersion;
     std::optional<std::string> campaignOperationsOperationKey;
+    std::optional<std::string>
+        campaignOperationsIndependentVerificationReference;
     std::optional<long long> campaignOperationsReconcileAfterRequestId;
     std::optional<int> campaignOperationsReconcileLimit;
     std::optional<int> campaignOperationsExpectedBudgetVersion;
@@ -1032,12 +1039,17 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--campaign-operations-completion-status" ||
             arg == "--campaign-operations-production-readiness" ||
             arg == "--campaign-operations-production-status" ||
+            arg == "--campaign-operations-production-enable" ||
+            arg == "--campaign-operations-production-disable" ||
+            arg == "--campaign-operations-dispatch-request" ||
             arg == "--campaign-operations-reconcile-observe" ||
             arg == "--campaign-operations-reconcile-recover" ||
             arg == "--campaign-operations-expected-control-version" ||
             arg == "--campaign-operations-request-id" ||
             arg == "--campaign-operations-expected-request-version" ||
+            arg == "--campaign-operations-expected-production-version" ||
             arg == "--campaign-operations-operation-key" ||
+            arg == "--campaign-operations-independent-verification-reference" ||
             arg == "--campaign-operations-reconcile-after-request-id" ||
             arg == "--campaign-operations-reconcile-limit" ||
             arg == "--campaign-operations-expected-budget-version" ||
@@ -2335,6 +2347,27 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "duplicate --campaign-operations-production-status");
             options.campaignOperationsProductionStatus = true;
         }
+        else if (arg == "--campaign-operations-production-enable")
+        {
+            if (options.campaignOperationsProductionEnable)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-production-enable");
+            options.campaignOperationsProductionEnable = true;
+        }
+        else if (arg == "--campaign-operations-production-disable")
+        {
+            if (options.campaignOperationsProductionDisable)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-production-disable");
+            options.campaignOperationsProductionDisable = true;
+        }
+        else if (arg == "--campaign-operations-dispatch-request")
+        {
+            if (options.campaignOperationsProductionDispatchRequest)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-dispatch-request");
+            options.campaignOperationsProductionDispatchRequest = true;
+        }
         else if (arg == "--campaign-operations-reconcile-observe" ||
                  arg == "--campaign-operations-reconcile-recover")
         {
@@ -2387,12 +2420,37 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.campaignOperationsExpectedRequestVersion =
                 static_cast<int>(value);
         }
+        else if (
+            arg == "--campaign-operations-expected-production-version")
+        {
+            if (options.campaignOperationsExpectedProductionVersion)
+                throw std::invalid_argument(
+                    "duplicate "
+                    "--campaign-operations-expected-production-version");
+            const long long value = ParseSignedLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+            if (value < 0 || value > std::numeric_limits<int>::max())
+                throw std::invalid_argument(
+                    "invalid "
+                    "--campaign-operations-expected-production-version");
+            options.campaignOperationsExpectedProductionVersion =
+                static_cast<int>(value);
+        }
         else if (arg == "--campaign-operations-operation-key")
         {
             if (options.campaignOperationsOperationKey)
                 throw std::invalid_argument(
                     "duplicate --campaign-operations-operation-key");
             options.campaignOperationsOperationKey =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (arg ==
+                 "--campaign-operations-independent-verification-reference")
+        {
+            if (options.campaignOperationsIndependentVerificationReference)
+                throw std::invalid_argument(
+                    "duplicate independent verification reference");
+            options.campaignOperationsIndependentVerificationReference =
                 RequireNextArg(argc, argv, i, arg);
         }
         else if (
@@ -3484,6 +3542,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
              ? 1 : 0) +
         (options.campaignOperationsProductionReadiness ? 1 : 0) +
         (options.campaignOperationsProductionStatus ? 1 : 0) +
+        (options.campaignOperationsProductionEnable ? 1 : 0) +
+        (options.campaignOperationsProductionDisable ? 1 : 0) +
+        (options.campaignOperationsProductionDispatchRequest ? 1 : 0) +
         (options.campaignOperationsReconcileRunKey.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
@@ -4004,11 +4065,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsReconcileRunKey.has_value();
     const bool campaignOperationsCompletionMutation =
         options.campaignOperationsCompleteCampaignId.has_value();
+    const bool campaignOperationsProductionMutation =
+        options.campaignOperationsProductionEnable ||
+        options.campaignOperationsProductionDisable ||
+        options.campaignOperationsProductionDispatchRequest;
     const bool campaignOperationsMutation =
         campaignOperationsBudgetMutation ||
         campaignOperationsRequestMutation ||
         campaignOperationsControlMutation ||
-        campaignOperationsCompletionMutation;
+        campaignOperationsCompletionMutation ||
+        campaignOperationsProductionMutation;
     const bool campaignOperationsStatus =
         options.campaignOperationsBudgetStatusCampaignId.has_value() ||
         options.campaignOperationsRequestStatusRequestId.has_value() ||
@@ -4025,13 +4091,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsExpectedControlVersion.has_value() ||
         options.campaignOperationsControlRequestId.has_value() ||
         options.campaignOperationsExpectedRequestVersion.has_value() ||
+        options.campaignOperationsExpectedProductionVersion.has_value() ||
         options.campaignOperationsOperationKey.has_value() ||
+        options.campaignOperationsIndependentVerificationReference.has_value() ||
         options.campaignOperationsReconcileAfterRequestId.has_value() ||
         options.campaignOperationsReconcileLimit.has_value();
     if (campaignOperationsMetadata && !campaignOperationsMutation)
         throw std::invalid_argument(
-            "Campaign Operations metadata requires a budget mutation or "
-            "request acceptance or control command");
+            "Campaign Operations metadata requires an authorized mutation "
+            "or status command");
     if ((options.campaignOperationsProductionReadiness ||
             options.campaignOperationsProductionStatus) &&
         (options.dryRun || options.yes))
@@ -4049,11 +4117,52 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "Campaign Operations mutation requires --yes");
         if (!options.campaignOperationsReconcileRunKey &&
             (!options.campaignOperationsActor ||
-             !options.campaignOperationsReason))
+             (!options.campaignOperationsReason &&
+              !options.campaignOperationsProductionDispatchRequest)))
             throw std::invalid_argument(
                 "Campaign Operations mutation requires "
                 "--campaign-operations-actor and "
                 "--campaign-operations-reason");
+    }
+    if (campaignOperationsProductionMutation)
+    {
+        if (!options.campaignOperationsOperationKey)
+            throw std::invalid_argument(
+                "production mutation requires "
+                "--campaign-operations-operation-key");
+        if (!EA::CampaignOperations::IsValidProductionOperationKey(
+                *options.campaignOperationsOperationKey))
+            throw std::invalid_argument(
+                "invalid --campaign-operations-operation-key for production");
+        const int commandCount =
+            (options.campaignOperationsProductionEnable ? 1 : 0) +
+            (options.campaignOperationsProductionDisable ? 1 : 0) +
+            (options.campaignOperationsProductionDispatchRequest ? 1 : 0);
+        if (commandCount != 1)
+            throw std::invalid_argument(
+                "exactly one production H2 command is required");
+        if (options.campaignOperationsProductionEnable ||
+            options.campaignOperationsProductionDisable)
+        {
+            if (!options.campaignOperationsExpectedProductionVersion ||
+                !options.campaignOperationsReason)
+                throw std::invalid_argument(
+                    "production enable/disable requires expected production "
+                    "version and reason");
+        }
+        else if (options.campaignOperationsExpectedProductionVersion ||
+                 options.campaignOperationsIndependentVerificationReference)
+            throw std::invalid_argument(
+                "production dispatch does not accept enable metadata");
+        if (options.campaignOperationsProductionEnable &&
+            !options.campaignOperationsIndependentVerificationReference)
+            throw std::invalid_argument(
+                "production enable requires independent verification reference");
+        if (options.campaignOperationsProductionDispatchRequest &&
+            (!options.campaignOperationsControlRequestId ||
+             !options.campaignOperationsExpectedRequestVersion))
+            throw std::invalid_argument(
+                "production dispatch requires request ID and expected request version");
     }
     if (campaignOperationsStatus && (options.dryRun || options.yes))
         throw std::invalid_argument(
@@ -4169,12 +4278,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     }
     if ((options.campaignOperationsControlRequestId ||
             options.campaignOperationsExpectedRequestVersion) &&
-        !options.campaignOperationsCancelCampaignId)
+        !options.campaignOperationsCancelCampaignId &&
+        !options.campaignOperationsProductionDispatchRequest)
         throw std::invalid_argument(
             "cancellation metadata requires cancellation");
     if (options.campaignOperationsOperationKey &&
         !options.campaignOperationsCancelCampaignId &&
-        !options.campaignOperationsCompleteCampaignId)
+        !options.campaignOperationsCompleteCampaignId &&
+        !campaignOperationsProductionMutation)
         throw std::invalid_argument(
             "cancellation metadata requires cancellation");
     if (options.campaignOperationsCompleteCampaignId)
@@ -22600,8 +22711,27 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Campaign Operations Phase H1 commands are read-only. They report "
         << "migration 055, exact generation-52 evidence, immutable admission "
         << "and Attempt V2 evidence, role readiness, blocked leases, and "
-        << "Completion V1 nested-V2 proof. H1 cannot enable, disable, acquire, "
-        << "handoff, dispatch, or run a Campaign Manager.\n"
+        << "Completion V1 nested-V2 proof.\n"
+        << "Usage: " << exe
+        << " --campaign-operations-production-enable "
+        << "--campaign-operations-operation-key KEY "
+        << "--campaign-operations-expected-production-version N "
+        << "--campaign-operations-independent-verification-reference REF "
+        << "--campaign-operations-actor ACTOR --campaign-operations-reason REASON --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-production-disable "
+        << "--campaign-operations-operation-key KEY "
+        << "--campaign-operations-expected-production-version N "
+        << "--campaign-operations-actor ACTOR --campaign-operations-reason REASON --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-dispatch-request "
+        << "--campaign-operations-request-id ID "
+        << "--campaign-operations-expected-request-version N "
+        << "--campaign-operations-operation-key KEY "
+        << "--campaign-operations-actor ACTOR --yes\n"
+        << "Phase H2 mutations are default-off, caller-keyed, and single-request "
+        << "only. They require the dedicated deployed roles and a clean Release "
+        << "build; no Manager run-once or continuous command exists in H2.\n"
         << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
@@ -22631,6 +22761,83 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
     if (options.campaignOperationsProductionStatus)
         return EA::CampaignOperations::RunProductionStatusCommand(
             connectionString, std::cout, std::cerr);
+    if (options.campaignOperationsProductionEnable)
+    {
+        const auto build =
+            EA::CampaignOperations::CaptureActualManagerBuildContract(
+                options.selfPath);
+        if (!build)
+            throw std::runtime_error(
+                "production enable requires a clean Release build identity");
+        EA::CampaignOperations::ProductionEnableRequest request{
+            *options.campaignOperationsOperationKey,
+            *options.campaignOperationsExpectedProductionVersion,
+            *options.campaignOperationsIndependentVerificationReference,
+            EA::CampaignOperations::ActorIdentity(
+                *options.campaignOperationsActor),
+            EA::CampaignOperations::Reason(*options.campaignOperationsReason),
+            *build,
+            true};
+        return EA::CampaignOperations::RunProductionEnableCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.campaignOperationsProductionDisable)
+    {
+        EA::CampaignOperations::ProductionDisableRequest request{
+            *options.campaignOperationsOperationKey,
+            *options.campaignOperationsExpectedProductionVersion,
+            EA::CampaignOperations::ActorIdentity(
+                *options.campaignOperationsActor),
+            EA::CampaignOperations::Reason(*options.campaignOperationsReason),
+            true};
+        return EA::CampaignOperations::RunProductionDisableCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
+    if (options.campaignOperationsProductionDispatchRequest)
+    {
+        const auto build =
+            EA::CampaignOperations::CaptureActualManagerBuildContract(
+                options.selfPath);
+        if (!build)
+            throw std::runtime_error(
+                "production dispatch requires a clean Release build identity");
+        EA::CampaignOperations::ProductionDispatchRequest request{
+            EA::CampaignOperations::OperationalRequestId(
+                *options.campaignOperationsControlRequestId),
+            *options.campaignOperationsExpectedRequestVersion,
+            *options.campaignOperationsOperationKey,
+            EA::CampaignOperations::ActorIdentity(
+                *options.campaignOperationsActor),
+            *build,
+            true};
+        const auto result =
+            EA::CampaignOperations::DispatchOneRequestForProduction(
+                connectionString, request, options.selfPath);
+        std::cout << "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH"
+                  << ",request_id=" << result.requestId.value()
+                  << ",classification="
+                  << EA::CampaignOperations::ToText(result.classification)
+                  << ",downstream_evidence="
+                  << EA::CampaignOperations::ToText(result.downstreamEvidence)
+                  << ",replay_disposition="
+                  << EA::CampaignOperations::ToText(result.replayDisposition)
+                  << ",recovery="
+                  << EA::CampaignOperations::ToText(result.recovery)
+                  << ",transaction_attempts=" << result.transactionAttempts
+                  << ",binding_set_identity_hash="
+                  << (result.bindingSetIdentityHash.empty()
+                          ? "none" : result.bindingSetIdentityHash)
+                  << ",diagnostic_code=" << result.diagnosticCode << '\n';
+        return result.classification ==
+                    EA::CampaignOperations::DispatchResultClassification::
+                        createdAndBound ||
+                result.classification ==
+                    EA::CampaignOperations::DispatchResultClassification::
+                        adoptedExistingPendingAndBound ||
+                result.classification ==
+                    EA::CampaignOperations::DispatchResultClassification::
+                        existingIdentical ? 0 : 2;
+    }
     if (options.campaignOperationsCompletionStatusCampaignId)
         return EA::CampaignOperations::RunCampaignCompletionStatusCommand(
             connectionString,
@@ -23487,6 +23694,9 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.campaignOperationsCompletionStatusCampaignId ||
             options.campaignOperationsProductionReadiness ||
             options.campaignOperationsProductionStatus ||
+            options.campaignOperationsProductionEnable ||
+            options.campaignOperationsProductionDisable ||
+            options.campaignOperationsProductionDispatchRequest ||
             options.campaignOperationsReconcileRunKey)
             return RunCampaignOperationsCommand(options);
         if (options.generateExperimentRecommendations ||

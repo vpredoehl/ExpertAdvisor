@@ -71,6 +71,10 @@ cleanup() {
     if [[ -n "${restore_data:-}" && -f "$restore_data/postmaster.pid" ]]; then
         pg_ctl -D "$restore_data" -m immediate stop >/dev/null 2>&1 || true
     fi
+    if [[ -n "${H1_PRESERVE_CLUSTER_ROOT:-}" ]]; then
+        printf '%s\n' "$cluster_root" > "$H1_PRESERVE_CLUSTER_ROOT"
+        return
+    fi
     if [[ -f "$cluster_data/postmaster.pid" ]]; then
         pg_ctl -D "$cluster_data" -m immediate stop >/dev/null 2>&1 || true
     fi
@@ -2328,14 +2332,14 @@ LSTM_TEST_DB_ADMIN_USER=campaign_manager_login \
 echo "Campaign Operations Phase 1-5 repository/service/completion regression passed"
 
 if rg -q \
-  'record_campaign_operations_production_(enable|disable)_v1|transition_campaign_operations_request_dispatch_production_v2' \
+  -- '--campaign-operations-manager-run-once|--campaign-operations-production-continuous' \
   "$repo_root/Sources"; then
-  echo "H2 production transition leaked into H1 C++" >&2
+  echo "H3/H4 production command leaked into H2 C++" >&2
   exit 1
 fi
 {
-  printf 'command=rg scanned_paths=Sources patterns=H2,H3,H4 result_rows=0 exit_status=1 scan_result=PASS\n'
-  printf 'query=record_campaign_operations_production_(enable|disable)_v1|transition_campaign_operations_request_dispatch_production_v2\n'
+  printf 'command=rg scanned_paths=Sources patterns=H3,H4 result_rows=0 exit_status=1 scan_result=PASS\n'
+  printf 'query=--campaign-operations-manager-run-once|--campaign-operations-production-continuous\n'
   rg --files "$repo_root/Sources" | sed "s#^$repo_root/##" | sort
 } > "$cluster_root/phase-h1-cli-results"
   emit_runtime_result H1-H2-H4-EXCLUSION H1CPP002 CLI-and-source-policy SUCCESS \

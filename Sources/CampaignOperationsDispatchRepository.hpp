@@ -20,6 +20,9 @@ struct DispatchLease final
     int reservationVersion = 0;
     long long materializationId = 0;
     int memberCount = 0;
+    bool production = false;
+    std::string operationKey;
+    std::string approvedBuildContractCanonical;
 };
 
 struct DispatchAttemptRecord final
@@ -55,10 +58,22 @@ DispatchLease AcquireDispatchLeaseInTransaction(
     int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
     const ActorIdentity& dispatcher, DispatchTestHook testHook = {});
 
+DispatchLease AcquireProductionDispatchLeaseInTransaction(
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
+    const std::string& operationKey, const ActorIdentity& requestingActor,
+    const std::string& approvedBuildContractCanonical);
+
 DispatchLockedAuthority LockAndRevalidateDispatchAuthority(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
     int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
-    bool lockAdoptionAuthorization);
+    bool lockAdoptionAuthorization, bool productionDispatch = false,
+    const std::string& productionOperationKey = {},
+    const std::string& approvedBuildContractCanonical = {}
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+    , DispatchTestHook testHook = {}
+#endif
+    );
 
 std::optional<DispatchAttemptRecord> FindDispatchAttempt(
     pqxx::transaction_base& transaction, DispatchAttemptId attemptId);
@@ -66,6 +81,9 @@ std::optional<DispatchAttemptRecord> FindLatestDispatchAttempt(
     pqxx::transaction_base& transaction, OperationalRequestId requestId);
 std::optional<DispatchLease> FindRecoverableDispatchLease(
     pqxx::transaction_base& transaction, OperationalRequestId requestId);
+std::optional<DispatchLease> FindRecoverableProductionDispatchLease(
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    const std::string& operationKey);
 
 DownstreamEvidenceClassification ClassifyDownstreamEvidence(
     pqxx::transaction_base& transaction,

@@ -1,5 +1,6 @@
 #include "CampaignOperationsDispatchRepository.hpp"
 #include "ExperimentRecommendationConversionWorkflowRepository.hpp"
+#include "CampaignOperationsProductionAdmissionRepository.hpp"
 
 #include <algorithm>
 #include <array>
@@ -332,14 +333,109 @@ DispatchLease AcquireDispatchLeaseInTransaction(
     return {DispatchAttemptId(attemptId), std::move(acquisition),
         ReservationId(reservation[0].as<long long>()),
         reservation[2].as<int>(), reservation[4].as<long long>(),
-        reservation[5].as<int>()};
+        reservation[5].as<int>(), false, {}, {}};
+}
+
+DispatchLease AcquireProductionDispatchLeaseInTransaction(
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
+    const std::string& operationKey, const ActorIdentity& requestingActor,
+    const std::string& approvedBuildContractCanonical)
+{
+    if (!IsValidProductionOperationKey(operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    const auto leaseExpiresAt = transaction.exec(
+        "SELECT (transaction_timestamp() + make_interval(secs => $1))::text;",
+        pqxx::params{kCampaignOperationsDispatchLeaseSeconds})
+        .one_row()[0].as<std::string>();
+    const auto rows = transaction.exec(
+        "SELECT * FROM transition_campaign_operations_request_dispatch_production_v2("
+        "$1,$2,$3,$4::timestamptz,$5,$6,$7);",
+        pqxx::params{requestId.value(), expectedRequestVersion,
+            leaseTokenDigest.value(), leaseExpiresAt,
+            operationKey, requestingActor.value(),
+            approvedBuildContractCanonical});
+    if (rows.empty())
+        throw std::runtime_error(
+            "campaign_operations_production_dispatch_attempt_missing");
+
+    // The fixed transition has completed under the production dispatcher.
+    // Immutable attempt hydration and the common handoff use the accepted
+    // Phase 5 transactional capability and its established Phase E reads.
+    transaction.exec("SET LOCAL ROLE " +
+        transaction.quote_name(kProductionPhase5TransactionalRole) + ";");
+    const DispatchAttemptId attemptId(rows.one_row()[0].as<long long>());
+    const auto persisted = FindProductionDispatchAttemptV2(
+        transaction, attemptId);
+    if (!persisted || persisted->attempt.requestId != requestId ||
+        persisted->attempt.operationKey != operationKey ||
+        persisted->attempt.requestingActor != requestingActor ||
+        persisted->attempt.leaseTokenDigest != leaseTokenDigest ||
+        persisted->attempt.approvedBuildContract.identity.canonicalText() !=
+            approvedBuildContractCanonical)
+        throw std::runtime_error(
+            "campaign_operations_production_dispatch_attempt_corrupt");
+    const auto request = transaction.exec(
+        "SELECT reservation_id,"
+        "recommendation_campaign_materialization_id,"
+        "materialization_member_count,state_version,request_state,"
+        "lease_expires_at>transaction_timestamp() "
+        "FROM campaign_operations_operational_request "
+        "WHERE operational_request_id=$1;",
+        pqxx::params{requestId.value()}).one_row();
+    if (request[4].as<std::string>() != "dispatching" ||
+        request[3].as<int>() != persisted->attempt.resultingRequestVersion ||
+        !request[5].as<bool>())
+        throw std::runtime_error(
+            "campaign_operations_production_dispatch_lease_invalid");
+    const auto reservation = transaction.exec(
+        "SELECT state_version FROM campaign_operations_reservation "
+        "WHERE reservation_id=$1 AND reservation_state='held';",
+        pqxx::params{request[0].as<long long>()});
+    if (reservation.empty())
+        throw std::runtime_error(
+            "campaign_operations_production_dispatch_reservation_invalid");
+    return {attemptId,
+        BuildDispatchAttemptAcquisition(
+            persisted->attempt.requestId,
+            persisted->attempt.requestIdentityCanonical,
+            persisted->attempt.attemptOrdinal,
+            persisted->attempt.expectedRequestVersion,
+            persisted->attempt.resultingRequestVersion,
+            persisted->attempt.leaseTokenDigest,
+            persisted->attempt.leaseExpiresAt,
+            persisted->attempt.requestingActor),
+        ReservationId(request[0].as<long long>()),
+        reservation.one_row()[0].as<int>(),
+        request[1].as<long long>(), request[2].as<int>(), true,
+        operationKey, approvedBuildContractCanonical};
 }
 
 DispatchLockedAuthority LockAndRevalidateDispatchAuthority(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
     int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
-    bool lockAdoptionAuthorization)
+    bool lockAdoptionAuthorization, bool productionDispatch,
+    const std::string& productionOperationKey,
+    const std::string& approvedBuildContractCanonical
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+    , DispatchTestHook testHook
+#endif
+    )
 {
+    // Phase H's 0a/0b locks precede every Phase E domain lock.  The fixed H1
+    // acquisition transition takes these locks inside its SECURITY DEFINER
+    // body; handoff must reacquire them before entering the common engine.
+    if (productionDispatch)
+    {
+        (void)LockSchedulerProtocolEvidence(transaction);
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+        if (testHook)
+            testHook(DispatchTestInjectionPoint::beforeProductionHandoffGate);
+#endif
+        transaction.exec(
+            "SELECT pg_advisory_xact_lock_shared(19055,1);");
+    }
     const pqxx::row advisory = transaction.exec(
         "SELECT operational_campaign_id,campaign_identity_canonical,"
         "authorization_event_id,reservation_id "
@@ -394,9 +490,32 @@ DispatchLockedAuthority LockAndRevalidateDispatchAuthority(
             "SELECT $1::timestamptz > transaction_timestamp();",
             pqxx::params{request[11].as<std::string>()})
              .one_row()[0].as<bool>() ||
-        request[13].as<bool>())
+        (!productionDispatch && request[13].as<bool>()))
         throw std::runtime_error(
             "campaign_operations_dispatch_lease_invalid");
+    if (productionDispatch)
+    {
+        if (productionOperationKey.empty() ||
+            approvedBuildContractCanonical.empty())
+            throw std::runtime_error(
+                "campaign_operations_production_dispatch_identity_missing");
+        const auto attempt = FindProductionDispatchAttemptV2(
+            transaction, requestId, productionOperationKey);
+        const auto current = FindCurrentProductionEnablementHead(transaction);
+        if (!attempt || !current ||
+            current->kind != ProductionEnablementEventKind::enable ||
+            attempt->attempt.resultingRequestVersion !=
+                expectedRequestVersion ||
+            attempt->attempt.leaseTokenDigest != leaseTokenDigest ||
+            attempt->attempt.approvedBuildContract.identity.canonicalText() !=
+                approvedBuildContractCanonical ||
+            attempt->authorizingEnablement.eventId != current->eventId ||
+            !current->approvedBuildContract ||
+            current->approvedBuildContract->identity.canonicalText() !=
+                approvedBuildContractCanonical)
+            throw std::runtime_error(
+                "campaign_operations_production_dispatch_authority_invalid");
+    }
     return {requestId, OperationalCampaignId(campaignId),
         ReservationId(reservation[0].as<long long>()),
         AuthorizationEventId(advisory[2].as<long long>()),
@@ -477,7 +596,53 @@ std::optional<DispatchLease> FindRecoverableDispatchLease(
     const auto& row = rows.one_row();
     return DispatchLease{latest->attemptId, latest->acquisition,
         ReservationId(row[0].as<long long>()), row[1].as<int>(),
-        row[2].as<long long>(), row[3].as<int>()};
+        row[2].as<long long>(), row[3].as<int>(), false, {}, {}};
+}
+
+std::optional<DispatchLease> FindRecoverableProductionDispatchLease(
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    const std::string& operationKey)
+{
+    const auto persisted = FindProductionDispatchAttemptV2(
+        transaction, requestId, operationKey);
+    if (!persisted) return std::nullopt;
+    const auto rows = transaction.exec(
+        "SELECT request.reservation_id,reservation.state_version,"
+        "request.recommendation_campaign_materialization_id,"
+        "request.materialization_member_count "
+        "FROM campaign_operations_operational_request request "
+        "JOIN campaign_operations_reservation reservation "
+        "ON reservation.reservation_id=request.reservation_id "
+        "WHERE request.operational_request_id=$1 "
+        "AND request.request_state='dispatching' "
+        "AND request.state_version=$2 "
+        "AND request.lease_token_hash=$3 "
+        "AND request.lease_expires_at>transaction_timestamp() "
+        "AND request.production_dispatch_enabled=true "
+        "AND reservation.reservation_state='held' "
+        "AND NOT EXISTS(SELECT 1 FROM "
+        "campaign_operations_dispatch_attempt_outcome outcome "
+        "WHERE outcome.dispatch_attempt_id=$4);",
+        pqxx::params{requestId.value(),
+            persisted->attempt.resultingRequestVersion,
+            persisted->attempt.leaseTokenDigest.value(),
+            persisted->attemptId.value()});
+    if (rows.empty()) return std::nullopt;
+    const auto& row = rows.one_row();
+    return DispatchLease{
+        persisted->attemptId,
+        BuildDispatchAttemptAcquisition(
+            persisted->attempt.requestId,
+            persisted->attempt.requestIdentityCanonical,
+            persisted->attempt.attemptOrdinal,
+            persisted->attempt.expectedRequestVersion,
+            persisted->attempt.resultingRequestVersion,
+            persisted->attempt.leaseTokenDigest,
+            persisted->attempt.leaseExpiresAt,
+            persisted->attempt.requestingActor),
+        ReservationId(row[0].as<long long>()), row[1].as<int>(),
+        row[2].as<long long>(), row[3].as<int>(), true, operationKey,
+        persisted->attempt.approvedBuildContract.identity.canonicalText()};
 }
 
 DownstreamEvidenceClassification ClassifyDownstreamEvidence(

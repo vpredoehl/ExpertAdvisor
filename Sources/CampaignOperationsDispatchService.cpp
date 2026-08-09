@@ -1,9 +1,12 @@
 #include "CampaignOperationsDispatchService.hpp"
+#include "CampaignOperationsProductionAdmissionService.hpp"
 #include "ExperimentRecommendationCampaignExecutionRepository.hpp"
 
 #include <array>
 #include <chrono>
 #include <iomanip>
+#include <iostream>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -91,14 +94,44 @@ DispatchServiceResult ExistingResult(
 std::optional<DispatchServiceResult> LookupBeforeRetry(
     pqxx::connection& connection, OperationalRequestId requestId,
     int transactionAttempts,
-    UncertainCommitRecoveryClassification recovery)
+    UncertainCommitRecoveryClassification recovery, bool production,
+    int expectedRequestVersion = 0, const std::string& operationKey = {},
+    const std::string& requestingActor = {},
+    const std::string& approvedBuildContractCanonical = {})
 {
     pqxx::read_transaction transaction{connection};
-    SetRole(transaction, kCampaignOperationsPhase5TransactionalRole);
+    SetRole(transaction, production ? kProductionPhase5TransactionalRole
+                                    : kCampaignOperationsPhase5TransactionalRole);
     const auto existing =
-        FindAndValidateCompleteDispatchBinding(transaction, requestId);
+        FindAndValidateCompleteDispatchBinding(
+            transaction, requestId, production);
     if (existing)
+    {
+        if (production)
+        {
+            // The successful outcome is the authoritative edge from the
+            // complete binding back to the exact Attempt V2 that produced it.
+            // Attempt ordinal is only a recovery ordering field; it is never
+            // binding ownership or replay identity.
+            const auto persisted = FindProductionDispatchAttemptV2(
+                transaction, existing->outcome.attemptId);
+            if (!persisted)
+                throw std::runtime_error(
+                    "production_dispatch_replay_evidence_missing");
+            if (persisted->attempt.requestId != requestId ||
+                persisted->attempt.operationKey != operationKey ||
+                persisted->attempt.expectedRequestVersion !=
+                    expectedRequestVersion ||
+                persisted->attempt.requestingActor.value() != requestingActor ||
+                persisted->attempt.approvedBuildContract.identity.canonicalText() !=
+                    approvedBuildContractCanonical ||
+                existing->outcome.attemptCanonicalText !=
+                    persisted->attempt.identity.canonicalText())
+                throw std::runtime_error(
+                    "production_dispatch_conflicting_replay");
+        }
         return ExistingResult(*existing, transactionAttempts, recovery);
+    }
     const auto requestState = transaction.exec(
         "SELECT request_state FROM "
         "campaign_operations_operational_request "
@@ -109,7 +142,8 @@ std::optional<DispatchServiceResult> LookupBeforeRetry(
             "campaign_operations_dispatch_request_not_found");
     if (requestState.one_row()[0].as<std::string>() == "ready")
         return std::nullopt;
-    const auto outcome = FindLatestDispatchOutcome(transaction, requestId);
+    const auto outcome = FindLatestDispatchOutcome(
+        transaction, requestId, production);
     if (!outcome) return std::nullopt;
     if (outcome->result == DispatchResultClassification::createdAndBound ||
         outcome->result ==
@@ -140,11 +174,46 @@ void RetryBackoff(int attemptNumber)
 }
 
 std::optional<DispatchLease> LookupRecoverableLease(
-    pqxx::connection& connection, OperationalRequestId requestId)
+    pqxx::connection& connection, OperationalRequestId requestId,
+    bool production, const std::string& operationKey)
 {
     pqxx::read_transaction transaction{connection};
-    SetRole(transaction, kCampaignOperationsDispatcherRole);
-    return FindRecoverableDispatchLease(transaction, requestId);
+    SetRole(transaction, production
+        ? kProductionPhase5TransactionalRole
+        : kCampaignOperationsDispatcherRole);
+    return production
+        ? FindRecoverableProductionDispatchLease(
+              transaction, requestId, operationKey)
+        : FindRecoverableDispatchLease(transaction, requestId);
+}
+
+std::optional<DispatchLease> RecoverProductionLeaseAfterConflictingReplay(
+    const std::string& connectionString, OperationalRequestId requestId,
+    int expectedRequestVersion, const std::string& operationKey,
+    const std::string& requestingActor,
+    const std::string& approvedBuildContractCanonical)
+{
+    pqxx::connection connection{connectionString};
+    {
+        pqxx::read_transaction transaction{connection};
+        SetRole(transaction, kProductionPhase5TransactionalRole);
+        const auto persisted = FindProductionDispatchAttemptV2(
+            transaction, requestId, operationKey);
+        if (!persisted)
+        {
+            transaction.commit();
+            return std::nullopt;
+        }
+        if (persisted->attempt.expectedRequestVersion !=
+                expectedRequestVersion ||
+            persisted->attempt.requestingActor.value() != requestingActor ||
+            persisted->attempt.approvedBuildContract.identity.canonicalText() !=
+                approvedBuildContractCanonical)
+            throw std::runtime_error(
+                "production_dispatch_conflicting_replay");
+        transaction.commit();
+    }
+    return LookupRecoverableLease(connection, requestId, true, operationKey);
 }
 
 DispatchServiceResult RetryExhausted(OperationalRequestId requestId,
@@ -180,22 +249,39 @@ SemanticConflictClassification ConflictFor(
 
 } // namespace
 
-DispatchServiceResult DispatchOneRequestForIsolatedTest(
+DispatchServiceResult RunDispatchAdapter(
     const std::string& connectionString, OperationalRequestId requestId,
     int expectedRequestVersion, const ActorIdentity& dispatcher,
-    const IsolatedDispatchSafetyGate& safetyGate,
+    const std::optional<IsolatedDispatchSafetyGate>& safetyGate,
+    bool production, const std::string& operationKey,
+    const ManagerBuildContract* executingBuild,
     DispatchTestHook testHook)
 {
     pqxx::connection connection{connectionString};
-    ValidateSafetyGate(connection, safetyGate);
+    if (safetyGate) ValidateSafetyGate(connection, *safetyGate);
+    if (production &&
+        (!executingBuild || !IsValidProductionOperationKey(operationKey)))
+        throw std::invalid_argument(
+            "campaign_operations_production_dispatch_identity_invalid");
 
-    if (const auto existing = LookupBeforeRetry(connection, requestId, 0,
+    const std::string approvedBuildContractCanonical = executingBuild
+        ? executingBuild->identity.canonicalText() : std::string{};
+    const auto lookupExisting = [&](pqxx::connection& candidate,
+        int transactionAttempts,
+        UncertainCommitRecoveryClassification recovery)
+    {
+        return LookupBeforeRetry(candidate, requestId, transactionAttempts,
+            recovery, production, expectedRequestVersion, operationKey,
+            dispatcher.value(), approvedBuildContractCanonical);
+    };
+
+    if (const auto existing = lookupExisting(connection, 0,
             UncertainCommitRecoveryClassification::
                 completeAuthoritativeBinding))
         return *existing;
 
     std::optional<DispatchLease> lease =
-        LookupRecoverableLease(connection, requestId);
+        LookupRecoverableLease(connection, requestId, production, operationKey);
     const LeaseTokenDigest leaseTokenDigest = lease
         ? lease->acquisition.leaseTokenDigest
         : LeaseTokenDigest::Derive(GenerateOpaqueLeaseToken());
@@ -205,38 +291,71 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
              kCampaignOperationsDispatchMaximumTransactionRetries;
          ++acquisitionAttempt)
     {
-        pqxx::connection acquisitionConnection{connectionString};
-        ValidateSafetyGate(acquisitionConnection, safetyGate);
-        if (const auto existing = LookupBeforeRetry(
-                acquisitionConnection, requestId, acquisitionAttempt,
+        auto acquisitionConnection =
+            std::make_unique<pqxx::connection>(connectionString);
+        if (safetyGate) ValidateSafetyGate(*acquisitionConnection, *safetyGate);
+        if (const auto existing = lookupExisting(
+                *acquisitionConnection, acquisitionAttempt,
                 UncertainCommitRecoveryClassification::
                     completeAuthoritativeBinding))
             return *existing;
         if (const auto recovered =
-                LookupRecoverableLease(acquisitionConnection, requestId))
+                LookupRecoverableLease(*acquisitionConnection, requestId,
+                    production, operationKey))
         {
             lease.emplace(*recovered);
             break;
         }
         try
         {
-            pqxx::work transaction{acquisitionConnection};
-            SetRole(transaction, kCampaignOperationsDispatcherRole);
-            DispatchLease acquired = AcquireDispatchLeaseInTransaction(
-                transaction, requestId, expectedRequestVersion,
-                leaseTokenDigest, dispatcher,
-                [&](DispatchTestInjectionPoint point)
-                {
-                    Invoke(testHook, point, transaction);
-                });
+            pqxx::work transaction{*acquisitionConnection};
+            SetRole(transaction, production ? kProductionDispatcherRole :
+                kCampaignOperationsDispatcherRole);
+            DispatchLease acquired = production
+                ? AcquireProductionDispatchLeaseInTransaction(
+                    transaction, requestId, expectedRequestVersion,
+                    leaseTokenDigest, operationKey, dispatcher,
+                    executingBuild->identity.canonicalText())
+                : AcquireDispatchLeaseInTransaction(
+                    transaction, requestId, expectedRequestVersion,
+                    leaseTokenDigest, dispatcher,
+                    [&](DispatchTestInjectionPoint point)
+                    {
+                        Invoke(testHook, point, transaction);
+                    });
             Invoke(testHook,
                 DispatchTestInjectionPoint::beforeAcquisitionCommit,
                 transaction);
             transaction.commit();
+            // Acquisition is a separate durable transaction.  The connection
+            // has committed before the after-commit seam.  If that seam
+            // reports uncertainty, the catch path explicitly abandons this
+            // connection before opening the recovery connection.
+            InvokeAfterCommit(testHook,
+                DispatchTestInjectionPoint::afterAcquisitionCommitBeforeHandoff);
+            acquisitionConnection.reset();
             lease.emplace(std::move(acquired));
         }
         catch (const pqxx::sql_error& error)
         {
+            // Two identical callers can both enter the protected acquisition
+            // transition before the winner commits.  The database replay
+            // function sees the loser's provisional lease digest and reports
+            // 23505; reconcile that exact key against the committed Attempt
+            // V2 before classifying it as a conflict.  No other key or input
+            // is allowed through this path.
+            if (production && error.sqlstate() == "23505")
+            {
+                if (const auto recovered =
+                        RecoverProductionLeaseAfterConflictingReplay(
+                            connectionString, requestId, expectedRequestVersion,
+                            operationKey, dispatcher.value(),
+                            approvedBuildContractCanonical))
+                {
+                    lease.emplace(*recovered);
+                    break;
+                }
+            }
             if (!Retryable(error)) throw;
             if (acquisitionAttempt >=
                 kCampaignOperationsDispatchMaximumTransactionRetries)
@@ -244,17 +363,54 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                     requestId, acquisitionAttempt, error.sqlstate());
             RetryBackoff(acquisitionAttempt);
         }
+        catch (const pqxx::in_doubt_error&)
+        {
+            // Destroy the original connection before the authoritative
+            // recovery read.  pqxx exposes abandonment through destruction.
+            acquisitionConnection.reset();
+            pqxx::connection recoveryConnection{connectionString};
+            InvokeAfterCommit(testHook,
+                DispatchTestInjectionPoint::afterAcquisitionRecoveryConnectionOpened);
+            if (safetyGate)
+                ValidateSafetyGate(recoveryConnection, *safetyGate);
+            if (const auto existing = lookupExisting(
+                    recoveryConnection, acquisitionAttempt,
+                    UncertainCommitRecoveryClassification::
+                        completeAuthoritativeBinding))
+                return *existing;
+            if (const auto recovered = LookupRecoverableLease(
+                    recoveryConnection, requestId, production, operationKey))
+            {
+                lease.emplace(*recovered);
+                break;
+            }
+            if (acquisitionAttempt <
+                kCampaignOperationsDispatchMaximumTransactionRetries)
+            {
+                RetryBackoff(acquisitionAttempt);
+                continue;
+            }
+            return {DispatchResultClassification::reconciliationRequired,
+                DownstreamEvidenceClassification::causallyAmbiguous,
+                ExactReplayDisposition::reconciliationRequired,
+                UncertainCommitRecoveryClassification::ambiguousEvidence,
+                requestId, {}, acquisitionAttempt,
+                DispatchServiceFailureClassification::commitOutcomeUnknown,
+                "dispatch_commit_outcome_unknown"};
+        }
         catch (const pqxx::broken_connection&)
         {
             pqxx::connection recoveryConnection{connectionString};
-            ValidateSafetyGate(recoveryConnection, safetyGate);
-            if (const auto existing = LookupBeforeRetry(
-                    recoveryConnection, requestId, acquisitionAttempt,
+            if (safetyGate)
+                ValidateSafetyGate(recoveryConnection, *safetyGate);
+            if (const auto existing = lookupExisting(
+                    recoveryConnection, acquisitionAttempt,
                     UncertainCommitRecoveryClassification::
                         completeAuthoritativeBinding))
                 return *existing;
             if (const auto recovered =
-                    LookupRecoverableLease(recoveryConnection, requestId))
+                    LookupRecoverableLease(recoveryConnection, requestId,
+                        production, operationKey))
             {
                 lease.emplace(*recovered);
                 break;
@@ -282,23 +438,46 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
          ++attemptNumber)
     {
         pqxx::connection attemptConnection{connectionString};
-        ValidateSafetyGate(attemptConnection, safetyGate);
-        if (const auto existing = LookupBeforeRetry(
-                attemptConnection, requestId, attemptNumber,
+        if (safetyGate) ValidateSafetyGate(attemptConnection, *safetyGate);
+        if (const auto existing = lookupExisting(
+                attemptConnection, attemptNumber,
                 UncertainCommitRecoveryClassification::
                     completeAuthoritativeBinding))
             return *existing;
         try
         {
             pqxx::work transaction{attemptConnection};
-            SetRole(transaction,
-                kCampaignOperationsPhase5TransactionalRole);
+            SetRole(transaction, production
+                ? kProductionPhase5TransactionalRole
+                : kCampaignOperationsPhase5TransactionalRole);
             DispatchLockedAuthority authority =
                 LockAndRevalidateDispatchAuthority(transaction, requestId,
                     lease->acquisition.resultingRequestVersion,
-                    leaseTokenDigest, false);
-            const auto persistedAttempt = FindDispatchAttempt(
-                transaction, lease->attemptId);
+                    leaseTokenDigest, false, production, operationKey,
+                    executingBuild ? executingBuild->identity.canonicalText()
+                                    : std::string{}
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+                    , testHook
+#endif
+                    );
+            std::optional<DispatchAttemptRecord> persistedAttempt;
+            if (production)
+            {
+                const auto productionAttempt =
+                    FindProductionDispatchAttemptV2(
+                        transaction, requestId, operationKey);
+                if (productionAttempt)
+                    persistedAttempt.emplace(DispatchAttemptRecord{
+                        productionAttempt->attemptId,
+                        lease->acquisition});
+            }
+            else
+            {
+                const auto isolatedAttempt = FindDispatchAttempt(
+                    transaction, lease->attemptId);
+                if (isolatedAttempt)
+                    persistedAttempt.emplace(*isolatedAttempt);
+            }
             if (!persistedAttempt ||
                 persistedAttempt->acquisition != lease->acquisition)
                 throw std::runtime_error(
@@ -306,7 +485,7 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
 
             if (const auto existing =
                     FindAndValidateCompleteDispatchBinding(
-                        transaction, requestId))
+                        transaction, requestId, production))
             {
                 transaction.abort();
                 return ExistingResult(*existing, attemptNumber,
@@ -347,7 +526,7 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                         downstream,
                         SemanticConflictClassification::
                             controlOwnerCollision,
-                        "dispatch_control_owner_collision");
+                        "dispatch_control_owner_collision", production);
                     transaction.commit();
                     return {outcome.result, downstream,
                         ExactReplayDisposition::reconciliationRequired,
@@ -362,7 +541,7 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                         downstream,
                         SemanticConflictClassification::
                             authorizationInactive,
-                        "dispatch_adoption_authorization_required");
+                        "dispatch_adoption_authorization_required", production);
                     transaction.commit();
                     return {outcome.result, downstream,
                         ExactReplayDisposition::reconciliationRequired,
@@ -379,7 +558,7 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                 const auto outcome = PersistFailedDispatchOutcome(
                     transaction, authority, *persistedAttempt, downstream,
                     ConflictFor(downstream),
-                    "dispatch_downstream_reconciliation_required");
+                    "dispatch_downstream_reconciliation_required", production);
                 transaction.commit();
                 return {outcome.result, downstream,
                     ExactReplayDisposition::reconciliationRequired,
@@ -455,7 +634,8 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                     [&](DispatchTestInjectionPoint point)
                     {
                         Invoke(testHook, point, transaction);
-                    });
+                    }, production, operationKey,
+                    approvedBuildContractCanonical);
             Invoke(testHook,
                 DispatchTestInjectionPoint::beforeHandoffCommit,
                 transaction);
@@ -472,6 +652,11 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
         }
         catch (const pqxx::sql_error& error)
         {
+#ifdef CAMPAIGN_OPERATIONS_H2_TESTING
+            std::cerr << "H2_DISPATCH_RETRY sqlstate=" << error.sqlstate()
+                      << " diagnostic=" << error.what() << " query="
+                      << error.query() << '\n';
+#endif
             if (Retryable(error) &&
                 attemptNumber <
                     kCampaignOperationsDispatchMaximumTransactionRetries)
@@ -484,12 +669,40 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                     requestId, attemptNumber, error.sqlstate());
             throw;
         }
+        catch (const pqxx::in_doubt_error&)
+        {
+            // The handoff connection is never reused after an uncertain
+            // commit.  A fresh read can acknowledge only a complete durable
+            // binding; otherwise recovery remains bounded and indeterminate.
+            pqxx::connection recoveryConnection{connectionString};
+            if (safetyGate)
+                ValidateSafetyGate(recoveryConnection, *safetyGate);
+            if (const auto existing = lookupExisting(
+                    recoveryConnection, attemptNumber,
+                    UncertainCommitRecoveryClassification::
+                        completeAuthoritativeBinding))
+                return *existing;
+            if (attemptNumber <
+                kCampaignOperationsDispatchMaximumTransactionRetries)
+            {
+                RetryBackoff(attemptNumber);
+                continue;
+            }
+            return {DispatchResultClassification::reconciliationRequired,
+                DownstreamEvidenceClassification::causallyAmbiguous,
+                ExactReplayDisposition::reconciliationRequired,
+                UncertainCommitRecoveryClassification::ambiguousEvidence,
+                requestId, {}, attemptNumber,
+                DispatchServiceFailureClassification::commitOutcomeUnknown,
+                "dispatch_commit_outcome_unknown"};
+        }
         catch (const pqxx::broken_connection&)
         {
             pqxx::connection recoveryConnection{connectionString};
-            ValidateSafetyGate(recoveryConnection, safetyGate);
-            if (const auto existing = LookupBeforeRetry(
-                    recoveryConnection, requestId, attemptNumber,
+            if (safetyGate)
+                ValidateSafetyGate(recoveryConnection, *safetyGate);
+            if (const auto existing = lookupExisting(
+                    recoveryConnection, attemptNumber,
                     UncertainCommitRecoveryClassification::
                         completeAuthoritativeBinding))
                 return *existing;
@@ -508,9 +721,97 @@ DispatchServiceResult DispatchOneRequestForIsolatedTest(
                 DispatchServiceFailureClassification::commitOutcomeUnknown,
                 "dispatch_commit_outcome_unknown"};
         }
+        catch (const std::runtime_error& error)
+        {
+            // A same-key contender can own the exact recovered Attempt V2
+            // while the winner is finishing the reservation projection.  The
+            // winner's commit makes the transient held-reservation predicate
+            // false; retry through the normal complete-binding replay lookup
+            // rather than treating that serialization window as a conflict.
+            if (production &&
+                std::string(error.what()) ==
+                    "campaign_operations_dispatch_reservation_unavailable" &&
+                attemptNumber <
+                    kCampaignOperationsDispatchMaximumTransactionRetries)
+            {
+                RetryBackoff(attemptNumber);
+                continue;
+            }
+            throw;
+        }
     }
     throw std::runtime_error(
         "campaign_operations_dispatch_retry_exhausted");
 }
+
+DispatchServiceResult DispatchOneRequestForIsolatedTest(
+    const std::string& connectionString, OperationalRequestId requestId,
+    int expectedRequestVersion, const ActorIdentity& dispatcher,
+    const IsolatedDispatchSafetyGate& safetyGate, DispatchTestHook testHook)
+{
+    return RunDispatchAdapter(connectionString, requestId,
+        expectedRequestVersion, dispatcher, safetyGate, false, {}, nullptr,
+        std::move(testHook));
+}
+
+DispatchServiceResult DispatchOneRequestForProduction(
+    const std::string& connectionString, const ProductionDispatchRequest& request,
+    const std::string& executablePath)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production dispatch requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    if (request.expectedRequestVersion <= 0)
+        throw std::invalid_argument(
+            "campaign_operations_production_expected_request_version_invalid");
+    ValidateManagerBuildContract(request.executingBuild);
+    const auto actualBuild = CaptureActualManagerBuildContract(executablePath);
+    if (!actualBuild || request.executingBuild != *actualBuild)
+        throw std::runtime_error("production_dispatch_build_mismatch");
+    pqxx::connection readinessConnection{connectionString};
+    const auto readiness = LoadProductionReadiness(readinessConnection,
+        actualBuild);
+    if (!readiness.ready)
+        throw std::runtime_error(
+            "campaign_operations_production_readiness_blocked:" +
+            [&]
+            {
+                std::string joined;
+                for (const auto& blocker : readiness.blockers)
+                {
+                    if (!joined.empty()) joined += ';';
+                    joined += blocker;
+                }
+                return joined;
+            }());
+    return RunDispatchAdapter(connectionString, request.requestId,
+        request.expectedRequestVersion, request.requestingActor, std::nullopt,
+        true, request.operationKey, &request.executingBuild, {});
+}
+
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+DispatchServiceResult DispatchOneRequestForProductionForTest(
+    const std::string& connectionString, const ProductionDispatchRequest& request,
+    DispatchTestHook testHook)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production dispatch requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    if (request.expectedRequestVersion <= 0)
+        throw std::invalid_argument(
+            "campaign_operations_production_expected_request_version_invalid");
+    ValidateManagerBuildContract(request.executingBuild);
+    return RunDispatchAdapter(connectionString, request.requestId,
+        request.expectedRequestVersion, request.requestingActor, std::nullopt,
+        true, request.operationKey, &request.executingBuild,
+        std::move(testHook));
+}
+#endif
 
 } // namespace EA::CampaignOperations

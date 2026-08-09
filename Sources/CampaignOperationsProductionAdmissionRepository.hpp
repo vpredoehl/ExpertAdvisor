@@ -171,7 +171,7 @@ std::optional<PersistedProductionDispatchAttemptV2>
 FindProductionDispatchAttemptV2(pqxx::transaction_base&,
     OperationalRequestId, const std::string& operationKey);
 ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
-    pqxx::transaction_base&);
+    pqxx::transaction_base&, bool hydrateEvidence = true);
 std::vector<ProductionRequestStatus> LoadProductionStatusSnapshot(
     pqxx::transaction_base&);
 

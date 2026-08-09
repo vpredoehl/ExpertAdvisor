@@ -166,6 +166,260 @@ std::optional<std::string> CommandOutput(const std::string& command)
     return result;
 }
 
+ProductionMutationResult MutationResult(
+    ProductionMutationDisposition disposition, const pqxx::row& row,
+    UncertainCommitRecoveryClassification recovery,
+    const char* diagnostic, pqxx::row::size_type resultVersionIndex)
+{
+    ProductionMutationResult result;
+    result.disposition = disposition;
+    result.eventId.emplace(row[0].as<long long>());
+    result.resultingVersion = row[resultVersionIndex].as<int>();
+    result.recovery = recovery;
+    result.diagnosticCode = diagnostic;
+    return result;
+}
+
+std::optional<ProductionMutationResult> ExistingEnableResult(
+    pqxx::transaction_base& transaction, const ProductionEnableRequest& request)
+{
+    if (!FindProductionEnablementEventByOperationKey(
+            transaction, request.operationKey))
+        return std::nullopt;
+    const auto rows = transaction.exec(
+        "SELECT production_enablement_event_id,event_kind,"
+        "expected_prior_version,independent_verification_reference,"
+        "actor_identity,manager_service_contract,"
+        "approved_build_contract_canonical,approved_build_source_commit,"
+        "approved_build_compiler_contract,approved_build_executable_sha256,"
+        "reason,resulting_version FROM "
+        "campaign_operations_production_enablement_event WHERE operation_key=$1;",
+        pqxx::params{request.operationKey});
+    if (rows.empty()) return std::nullopt;
+    const auto& row = rows.one_row();
+    const bool exact = row[1].as<std::string>() == "enable" &&
+        row[2].as<int>() == request.expectedPriorVersion &&
+        row[3].as<std::string>() == request.independentVerificationReference &&
+        row[4].as<std::string>() == request.authorizingActor.value() &&
+        row[5].as<std::string>() == kManagerServiceContract &&
+        row[6].as<std::string>() ==
+            request.approvedBuildContract.identity.canonicalText() &&
+        row[7].as<std::string>() == request.approvedBuildContract.sourceCommit &&
+        row[8].as<std::string>() == request.approvedBuildContract.compilerContract &&
+        row[9].as<std::string>() == request.approvedBuildContract.executableSha256 &&
+        row[10].as<std::string>() == request.reason.value();
+    return MutationResult(
+        exact ? ProductionMutationDisposition::exactReplay
+              : ProductionMutationDisposition::conflictingReplay,
+        row, UncertainCommitRecoveryClassification::completeAuthoritativeBinding,
+        exact ? "production_enable_exact_replay"
+              : "production_enable_conflicting_replay", 11);
+}
+
+std::optional<ProductionMutationResult> ExistingDisableResult(
+    pqxx::transaction_base& transaction, const ProductionDisableRequest& request)
+{
+    if (!FindProductionEnablementEventByOperationKey(
+            transaction, request.operationKey))
+        return std::nullopt;
+    const auto rows = transaction.exec(
+        "SELECT production_enablement_event_id,event_kind,"
+        "expected_prior_version,actor_identity,reason,resulting_version "
+        "FROM campaign_operations_production_enablement_event "
+        "WHERE operation_key=$1;", pqxx::params{request.operationKey});
+    if (rows.empty()) return std::nullopt;
+    const auto& row = rows.one_row();
+    const bool exact = row[1].as<std::string>() == "disable" &&
+        row[2].as<int>() == request.expectedPriorVersion &&
+        row[3].as<std::string>() == request.disablingActor.value() &&
+        row[4].as<std::string>() == request.reason.value();
+    return MutationResult(
+        exact ? ProductionMutationDisposition::exactReplay
+              : ProductionMutationDisposition::conflictingReplay,
+        row, UncertainCommitRecoveryClassification::completeAuthoritativeBinding,
+        exact ? "production_disable_exact_replay"
+              : "production_disable_conflicting_replay", 5);
+}
+
+void ValidateH2EnablePrerequisites(pqxx::transaction_base& transaction,
+    const ProductionEnableRequest& request,
+    const SchedulerProtocolEvidence& scheduler)
+{
+    const auto snapshot = LoadProductionReadinessSnapshot(transaction, false);
+    if (snapshot.migrationVersion != "055" ||
+        snapshot.migrationFilename != kProductionAdmissionMigrationFilename ||
+        !snapshot.migrationChecksum ||
+        *snapshot.migrationChecksum != kProductionAdmissionMigrationChecksum)
+        throw std::runtime_error("production_enable_migration_not_ready");
+    if (!snapshot.schedulerEvidenceComplete ||
+        !snapshot.schedulerEvidence ||
+        snapshot.schedulerEvidence->identity.canonicalText() !=
+            scheduler.identity.canonicalText())
+        throw std::runtime_error("production_enable_scheduler_not_ready");
+    if (request.independentVerificationReference.empty())
+        throw std::invalid_argument(
+            "production_enable_independent_verification_required");
+    ValidateManagerBuildContract(request.approvedBuildContract);
+}
+
+ProductionMutationResult EnableProductionOnce(
+    pqxx::connection& connection, const ProductionEnableRequest& request,
+    ProductionMutationTestHook& testHook)
+{
+    pqxx::work transaction{connection};
+    if (const auto existing = ExistingEnableResult(transaction, request))
+    {
+        transaction.abort();
+        return *existing;
+    }
+    const auto scheduler = LoadSchedulerProtocolEvidenceSnapshot(transaction);
+    if (!scheduler)
+        throw std::runtime_error("production_enable_scheduler_not_ready");
+    ValidateH2EnablePrerequisites(transaction, request, *scheduler);
+    const auto predecessor = FindCurrentProductionEnablementHead(transaction);
+    if ((request.expectedPriorVersion == 0 && predecessor) ||
+        (request.expectedPriorVersion > 0 &&
+         (!predecessor || predecessor->resultingVersion !=
+             request.expectedPriorVersion || predecessor->kind !=
+             ProductionEnablementEventKind::disable)))
+        throw std::runtime_error("production_enable_predecessor_mismatch");
+    const auto candidate = BuildProductionEnableEvent(request.operationKey,
+        predecessor ? std::optional<ProductionEnablementEventId>(
+            predecessor->eventId) : std::nullopt,
+        predecessor ? predecessor->identity.canonicalText() : std::string{},
+        request.expectedPriorVersion, request.expectedPriorVersion + 1,
+        *scheduler, request.independentVerificationReference,
+        request.authorizingActor, kManagerServiceContract,
+        request.approvedBuildContract, request.reason);
+    if (testHook) testHook(ProductionMutationInjectionPoint::beforeCommit);
+    const auto rows = transaction.exec(
+        "SELECT * FROM record_campaign_operations_production_enable_v1("
+        "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);",
+        pqxx::params{request.operationKey, request.expectedPriorVersion,
+            scheduler->identity.canonicalText(),
+            request.independentVerificationReference,
+            request.authorizingActor.value(), kManagerServiceContract,
+            request.approvedBuildContract.identity.canonicalText(),
+            request.approvedBuildContract.sourceCommit,
+            request.approvedBuildContract.compilerContract,
+            request.approvedBuildContract.executableSha256,
+            request.reason.value()});
+    if (rows.empty()) throw std::runtime_error(
+        "production_enable_transition_return_missing");
+    const auto row = rows.one_row();
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+    if (testHook)
+        testHook(ProductionMutationInjectionPoint::afterTransitionBeforeCommit);
+#endif
+    transaction.commit();
+    if (testHook)
+        testHook(ProductionMutationInjectionPoint::afterCommitBeforeResponse);
+    return MutationResult(ProductionMutationDisposition::newOperation, row,
+        UncertainCommitRecoveryClassification::provenNoCommit,
+        "production_enable_recorded", 6);
+}
+
+ProductionMutationResult DisableProductionOnce(
+    pqxx::connection& connection, const ProductionDisableRequest& request,
+    ProductionMutationTestHook& testHook)
+{
+    pqxx::work transaction{connection};
+    if (const auto existing = ExistingDisableResult(transaction, request))
+    {
+        transaction.abort();
+        return *existing;
+    }
+    const auto predecessor = FindCurrentProductionEnablementHead(transaction);
+    if (!predecessor || predecessor->kind != ProductionEnablementEventKind::enable ||
+        predecessor->resultingVersion != request.expectedPriorVersion)
+        throw std::runtime_error("production_disable_predecessor_mismatch");
+    const auto candidate = BuildProductionDisableEvent(request.operationKey,
+        predecessor->eventId, predecessor->identity.canonicalText(),
+        request.expectedPriorVersion, request.expectedPriorVersion + 1,
+        request.disablingActor, request.reason);
+    (void)candidate;
+    if (testHook) testHook(ProductionMutationInjectionPoint::beforeCommit);
+    const auto rows = transaction.exec(
+        "SELECT * FROM record_campaign_operations_production_disable_v1("
+        "$1,$2,$3,$4,$5,$6);",
+        pqxx::params{request.operationKey, predecessor->eventId.value(),
+            predecessor->identity.canonicalText(), request.expectedPriorVersion,
+            request.disablingActor.value(), request.reason.value()});
+    if (rows.empty()) throw std::runtime_error(
+        "production_disable_transition_return_missing");
+    const auto row = rows.one_row();
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+    if (testHook)
+        testHook(ProductionMutationInjectionPoint::afterTransitionBeforeCommit);
+#endif
+    transaction.commit();
+    if (testHook)
+        testHook(ProductionMutationInjectionPoint::afterCommitBeforeResponse);
+    return MutationResult(ProductionMutationDisposition::newOperation, row,
+        UncertainCommitRecoveryClassification::provenNoCommit,
+        "production_disable_recorded", 6);
+}
+
+template <typename Lookup, typename Operation>
+ProductionMutationResult RunProductionMutation(
+    const ProductionMutationConnectionFactory& connectionFactory,
+    const std::string& operationKey, Lookup&& lookup, Operation&& operation,
+    ProductionMutationTestHook testHook)
+{
+    if (!connectionFactory)
+        throw std::invalid_argument(
+            "campaign_operations_production_connection_factory_required");
+    for (int attempt = 1; attempt <= 3; ++attempt)
+    {
+        try
+        {
+            auto connection = connectionFactory();
+            if (!connection || !connection->is_open())
+                throw pqxx::broken_connection(
+                    "campaign operations production connection unavailable");
+            return operation(*connection, testHook);
+        }
+        catch (const pqxx::in_doubt_error&)
+        {
+            auto recoveryConnection = connectionFactory();
+            if (recoveryConnection && recoveryConnection->is_open())
+            {
+                pqxx::read_transaction transaction{*recoveryConnection};
+                if (const auto recovered = lookup(transaction, operationKey))
+                    return *recovered;
+            }
+            if (attempt == 3)
+                return {ProductionMutationDisposition::ambiguous, std::nullopt,
+                    0, UncertainCommitRecoveryClassification::ambiguousEvidence,
+                    "production_mutation_outcome_unknown"};
+        }
+        catch (const pqxx::broken_connection&)
+        {
+            auto recoveryConnection = connectionFactory();
+            if (recoveryConnection && recoveryConnection->is_open())
+            {
+                pqxx::read_transaction transaction{*recoveryConnection};
+                if (const auto recovered = lookup(transaction, operationKey))
+                    return *recovered;
+            }
+            if (attempt == 3)
+                return {ProductionMutationDisposition::ambiguous, std::nullopt,
+                    0, UncertainCommitRecoveryClassification::ambiguousEvidence,
+                    "production_mutation_outcome_unknown"};
+        }
+        catch (const pqxx::sql_error& error)
+        {
+            if (error.sqlstate() != "40001" && error.sqlstate() != "40P01")
+                throw;
+            if (attempt == 3)
+                throw;
+        }
+    }
+    return {ProductionMutationDisposition::ambiguous, std::nullopt, 0,
+        UncertainCommitRecoveryClassification::ambiguousEvidence,
+        "production_mutation_retry_exhausted"};
+}
+
 } // namespace
 
 std::optional<ManagerBuildContract> CaptureActualManagerBuildContract(
@@ -483,6 +737,148 @@ int RunProductionStatusCommand(const std::string& connectionString,
                << rows.size() << '\n';
         return 0;
     }, errors, "CAMPAIGN_OPERATIONS_PRODUCTION_STATUS");
+}
+
+ProductionMutationResult EnableProduction(
+    const ProductionMutationConnectionFactory& connectionFactory,
+    const ProductionEnableRequest& request, ProductionMutationTestHook testHook)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production enable requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    if (request.expectedPriorVersion < 0)
+        throw std::invalid_argument(
+            "production_enable_expected_prior_version_invalid");
+    ValidateManagerBuildContract(request.approvedBuildContract);
+    const auto lookup = [&request](pqxx::transaction_base& transaction,
+        const std::string&) -> std::optional<ProductionMutationResult>
+    {
+        if (!FindProductionEnablementEventByOperationKey(
+                transaction, request.operationKey))
+            return std::nullopt;
+        auto result = ExistingEnableResult(transaction, request);
+        if (!result) throw std::runtime_error(
+            "production_enablement_recovery_evidence_incomplete");
+        result->recovery =
+            UncertainCommitRecoveryClassification::completeAuthoritativeBinding;
+        return result;
+    };
+    const auto operation = [&request](pqxx::connection& connection,
+        ProductionMutationTestHook& hook)
+    {
+        return EnableProductionOnce(connection, request, hook);
+    };
+    return RunProductionMutation(connectionFactory, request.operationKey,
+        lookup, operation, std::move(testHook));
+}
+
+ProductionMutationResult DisableProduction(
+    const ProductionMutationConnectionFactory& connectionFactory,
+    const ProductionDisableRequest& request, ProductionMutationTestHook testHook)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production disable requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    if (request.expectedPriorVersion <= 0)
+        throw std::invalid_argument(
+            "production_disable_expected_prior_version_invalid");
+    const auto lookup = [&request](pqxx::transaction_base& transaction,
+        const std::string&) -> std::optional<ProductionMutationResult>
+    {
+        if (!FindProductionEnablementEventByOperationKey(
+                transaction, request.operationKey))
+            return std::nullopt;
+        auto result = ExistingDisableResult(transaction, request);
+        if (!result) throw std::runtime_error(
+            "production_enablement_recovery_evidence_incomplete");
+        result->recovery =
+            UncertainCommitRecoveryClassification::completeAuthoritativeBinding;
+        return result;
+    };
+    const auto operation = [&request](pqxx::connection& connection,
+        ProductionMutationTestHook& hook)
+    {
+        return DisableProductionOnce(connection, request, hook);
+    };
+    return RunProductionMutation(connectionFactory, request.operationKey,
+        lookup, operation, std::move(testHook));
+}
+
+namespace
+{
+
+const char* MutationDispositionText(ProductionMutationDisposition disposition)
+{
+    switch (disposition)
+    {
+        case ProductionMutationDisposition::newOperation: return "new_operation";
+        case ProductionMutationDisposition::exactReplay: return "exact_replay";
+        case ProductionMutationDisposition::conflictingReplay:
+            return "conflicting_replay";
+        case ProductionMutationDisposition::ambiguous: return "ambiguous";
+        case ProductionMutationDisposition::rejected: return "rejected";
+    }
+    return "rejected";
+}
+
+template <typename Operation>
+int RunProductionMutationCommand(Operation&& operation,
+    std::ostream& output, std::ostream& errors, const char* marker)
+{
+    return RunReadCommand([&]
+    {
+        const auto result = operation();
+        output << marker << ",status="
+               << (result.disposition == ProductionMutationDisposition::ambiguous
+                       ? "indeterminate" : "ok")
+               << ",disposition=" << MutationDispositionText(result.disposition)
+               << ",event_id="
+               << (result.eventId ? std::to_string(result.eventId->value())
+                                   : "none")
+               << ",resulting_version=" << result.resultingVersion
+               << ",recovery=" << ToText(result.recovery)
+               << ",diagnostic_code=" << result.diagnosticCode << '\n';
+        return result.disposition == ProductionMutationDisposition::ambiguous
+            ? 3
+            : result.disposition == ProductionMutationDisposition::conflictingReplay
+            ? 2 : 0;
+    }, errors, marker);
+}
+
+} // namespace
+
+int RunProductionEnableCommand(const std::string& connectionString,
+    const ProductionEnableRequest& request, std::ostream& output,
+    std::ostream& errors)
+{
+    return RunProductionMutationCommand([&]
+    {
+        return EnableProduction(
+            [&connectionString]
+            {
+                return std::make_unique<pqxx::connection>(connectionString);
+            }, request);
+    }, output, errors, "CAMPAIGN_OPERATIONS_PRODUCTION_ENABLE");
+}
+
+int RunProductionDisableCommand(const std::string& connectionString,
+    const ProductionDisableRequest& request, std::ostream& output,
+    std::ostream& errors)
+{
+    return RunProductionMutationCommand([&]
+    {
+        return DisableProduction(
+            [&connectionString]
+            {
+                return std::make_unique<pqxx::connection>(connectionString);
+            }, request);
+    }, output, errors, "CAMPAIGN_OPERATIONS_PRODUCTION_DISABLE");
 }
 
 } // namespace EA::CampaignOperations

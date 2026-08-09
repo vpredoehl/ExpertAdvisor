@@ -123,6 +123,11 @@ enum class DispatchTestInjectionPoint
     afterRequestTransitionBeforeAttemptOutcome,
     afterAttemptOutcomeBeforeAudit,
     beforeHandoffCommit,
+    afterAcquisitionCommitBeforeHandoff,
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+    beforeProductionHandoffGate,
+#endif
+    afterAcquisitionRecoveryConnectionOpened,
     afterSuccessfulCommitBeforeResponse
 };
 
