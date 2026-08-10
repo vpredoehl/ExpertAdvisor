@@ -66,6 +66,25 @@ DispatchServiceResult DispatchOneRequestForProduction(
     const std::string& connectionString, const ProductionDispatchRequest&,
     const std::string& executablePath);
 
+// H3's bounded Manager adapter.  It supplies only the frozen deterministic
+// source canonical to the shared Phase E engine; it exposes no test hook.
+DispatchServiceResult DispatchOneRequestForProductionManager(
+    const std::string& connectionString, const ProductionDispatchRequest&,
+    const std::string& managerSourceCanonical,
+    const std::string& executablePath);
+
+#if defined(CAMPAIGN_OPERATIONS_H3_TESTING)
+// Test-only build injection for the disposable H3 harness.  It enters the
+// same Manager production adapter and readiness/authority path while avoiding
+// a dependency on the dirty development worktree's executable contract.
+using ManagerAdapterTestHook = std::function<void(DispatchTestInjectionPoint)>;
+
+DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
+    const std::string& connectionString, const ProductionDispatchRequest&,
+    const std::string& managerSourceCanonical, const ManagerBuildContract&,
+    ManagerAdapterTestHook testHook = {});
+#endif
+
 #if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
 // Test-only production adapter entry point.  It retains the production role
 // switching and handoff path while accepting a fixture-owned build contract;

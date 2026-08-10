@@ -21,6 +21,7 @@ sources=(
   "$repo_root/Sources/CampaignOperationsRepository.cpp"
   "$repo_root/Sources/CampaignOperationsService.cpp"
   "$repo_root/Sources/CampaignOperationsDispatchRepository.cpp"
+  "$repo_root/Sources/CampaignOperationsManager.cpp"
   "$repo_root/Sources/CampaignOperationsDispatchService.cpp"
   "$repo_root/Sources/CampaignOperationsBindingRepository.cpp"
   "$repo_root/Sources/CampaignOperationsControlRepository.cpp"

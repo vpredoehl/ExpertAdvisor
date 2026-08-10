@@ -77,9 +77,10 @@ rg -Fq -- "Phase H2 mutations are default-off, caller-keyed, and single-request"
 rg -Fq -- "--campaign-operations-production-enable" "$help_output"
 rg -Fq -- "--campaign-operations-production-disable" "$help_output"
 rg -Fq -- "--campaign-operations-dispatch-request" "$help_output"
-if rg -q -- '--campaign-operations-manager-run-once|--campaign-operations-production-continuous' \
+rg -Fq -- "--campaign-operations-manager-run-once LIMIT --yes" "$help_output"
+if rg -q -- '--campaign-operations-production-continuous|--campaign-operations-manager-daemon|--campaign-operations-manager-poll' \
     "$help_output"; then
-    echo "H3/H4 command leaked into H2 help" >&2
+    echo "H4 continuous command leaked into H3 help" >&2
     exit 1
 fi
 

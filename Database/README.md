@@ -65,6 +65,15 @@ Experiment scheduling tables are created by:
   frozen explicit ACL origin that `pg_dump` otherwise normalizes. It grants no LOGIN membership and implements no
   production dispatch, enable/disable service, Manager, scheduler, lifecycle,
   or worker behavior
+- `058_campaign_operations_h3_manager_run_once.sql`: additive H3 complete
+  Manager source-canonical evidence keyed to immutable Attempt V2 rows, with
+  a deferred COMMIT-time reverse guarantee so every reserved `mgr-v1:` Attempt
+  V2 has exactly one matching source row; it also snapshots the finite,
+  immutable set of complete pre-058 H2 caller-keyed `mgr-v1:` Attempt V2
+  operations for exact H2 replay/recovery only.  No post-058 caller-keyed
+  acquisition may use that namespace, and the compatibility rows never create
+  or backfill Manager source evidence; no durable batch identity, LOGIN grant,
+  scheduler capability, or worker control
 
 Recommendation conversion and campaign-approval history is created by:
 

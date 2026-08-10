@@ -209,6 +209,10 @@
 		0B6400093089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6400023089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.cpp */; };
 		0B64000A3089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6400043089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp */; };
 		0B64000B3089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6400043089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp */; };
+		0B6500043090000100AAA001 /* CampaignOperationsManager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500003090000100AAA001 /* CampaignOperationsManager.cpp */; };
+		0B6500053090000100AAA001 /* CampaignOperationsManager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500003090000100AAA001 /* CampaignOperationsManager.cpp */; };
+		0B6500063090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */; };
+		0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -498,6 +502,10 @@
 		0B6400033089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsProductionAdmissionRepository.hpp; path = Sources/CampaignOperationsProductionAdmissionRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0B6400043089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsProductionAdmissionService.cpp; path = Sources/CampaignOperationsProductionAdmissionService.cpp; sourceTree = SOURCE_ROOT; };
 		0B6400053089000100AAA001 /* CampaignOperationsProductionAdmissionService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsProductionAdmissionService.hpp; path = Sources/CampaignOperationsProductionAdmissionService.hpp; sourceTree = SOURCE_ROOT; };
+		0B6500003090000100AAA001 /* CampaignOperationsManager.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsManager.cpp; path = Sources/CampaignOperationsManager.cpp; sourceTree = SOURCE_ROOT; };
+		0B6500013090000100AAA001 /* CampaignOperationsManager.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManager.hpp; path = Sources/CampaignOperationsManager.hpp; sourceTree = SOURCE_ROOT; };
+		0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsManagerService.cpp; path = Sources/CampaignOperationsManagerService.cpp; sourceTree = SOURCE_ROOT; };
+		0B6500033090000100AAA001 /* CampaignOperationsManagerService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManagerService.hpp; path = Sources/CampaignOperationsManagerService.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -755,6 +763,10 @@
 				0B6400033089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.hpp */,
 				0B6400043089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp */,
 				0B6400053089000100AAA001 /* CampaignOperationsProductionAdmissionService.hpp */,
+				0B6500003090000100AAA001 /* CampaignOperationsManager.cpp */,
+				0B6500013090000100AAA001 /* CampaignOperationsManager.hpp */,
+				0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */,
+				0B6500033090000100AAA001 /* CampaignOperationsManagerService.hpp */,
 				0A5000082FC0000100AAA001 /* WorkerLifecycleDiagnostics.hpp */,
 				0A4000002FB0000100AAA001 /* RunMetadata.cpp */,
 				0890B6A42F1DC54900CEDECF /* LSTM.cpp */,
@@ -1029,6 +1041,8 @@
 				0B6400063089000100AAA001 /* CampaignOperationsProductionAdmission.cpp in Sources */,
 				0B6400083089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.cpp in Sources */,
 				0B64000A3089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp in Sources */,
+				0B6500043090000100AAA001 /* CampaignOperationsManager.cpp in Sources */,
+				0B6500063090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
@@ -1132,6 +1146,8 @@
 				0B6400073089000100AAA001 /* CampaignOperationsProductionAdmission.cpp in Sources */,
 				0B6400093089000100AAA001 /* CampaignOperationsProductionAdmissionRepository.cpp in Sources */,
 				0B64000B3089000100AAA001 /* CampaignOperationsProductionAdmissionService.cpp in Sources */,
+				0B6500053090000100AAA001 /* CampaignOperationsManager.cpp in Sources */,
+				0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,

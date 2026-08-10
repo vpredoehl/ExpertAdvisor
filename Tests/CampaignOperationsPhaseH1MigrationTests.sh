@@ -1573,6 +1573,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
   "$repo_root/Sources/CampaignOperationsRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsService.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchRepository.cpp" \
+  "$repo_root/Sources/CampaignOperationsManager.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchService.cpp" \
   "$repo_root/Sources/CampaignOperationsBindingRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsControlRepository.cpp" \
@@ -2295,6 +2296,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
   "$repo_root/Sources/CampaignOperationsRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsService.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchRepository.cpp" \
+  "$repo_root/Sources/CampaignOperationsManager.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchService.cpp" \
   "$repo_root/Sources/CampaignOperationsBindingRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsControlRepository.cpp" \

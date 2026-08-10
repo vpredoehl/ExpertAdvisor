@@ -8,8 +8,10 @@
 #include "ExperimentRecommendationConversionRepository.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -22,6 +24,13 @@ namespace
 {
 
 constexpr long long kPrimaryCampaignId = 71;
+
+std::string FixtureSymbol(long long campaignId)
+{
+    if (campaignId == 71) return "eurusd";
+    if (campaignId == 72) return "gbpusd";
+    return "gbp" + std::to_string(campaignId);
+}
 
 EA::ExperimentRecommendation::ProposedExperimentSpecification
 BuildH2FixtureProposal(
@@ -112,7 +121,7 @@ void SeedH2PhaseEUpstream(
     recommendationId = campaignId * 2000 + 1;
     sourceExperimentId = campaignId * 3000 + 1;
     sourceAnalysisId = campaignId * 6000 + 1;
-    const std::string symbol = campaignId == 71 ? "eurusd" : "gbpusd";
+    const std::string symbol = FixtureSymbol(campaignId);
     transaction.exec(
         "INSERT INTO experiment (experiment_id,symbol,prediction_horizon,"
         "c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,"
@@ -145,7 +154,7 @@ void SeedH2CompletePhaseEFixtureOne(
     long long sourceAnalysisId = 0;
     SeedH2PhaseEUpstream(transaction, id, recommendationId,
         sourceExperimentId, sourceAnalysisId);
-    const auto symbol = id == 71 ? "eurusd" : "gbpusd";
+    const auto symbol = FixtureSymbol(id);
     const auto proposal = BuildH2FixtureProposal(
         recommendationId, sourceExperimentId, symbol);
     const auto persistedProposal = PersistRecommendationConversionProposal(
@@ -448,6 +457,21 @@ void SeedFixtures(const std::string& connectionString, bool completePhaseE)
     transaction.exec("SET LOCAL session_replication_role=replica;");
     SeedOneFixture(transaction, kPrimaryCampaignId, completePhaseE);
     SeedOneFixture(transaction, 72, completePhaseE);
+    if (const char* extra = std::getenv("H3_EXTRA_FIXTURE_IDS");
+        extra && *extra)
+    {
+        std::stringstream ids(extra);
+        std::string idText;
+        while (std::getline(ids, idText, ','))
+        {
+            if (idText.empty())
+                throw std::invalid_argument("h3_fixture_id_empty");
+            const long long id = std::stoll(idText);
+            if (id <= 72)
+                throw std::invalid_argument("h3_fixture_id_not_extra");
+            SeedOneFixture(transaction, id, completePhaseE);
+        }
+    }
     transaction.commit();
 }
 

@@ -60,6 +60,7 @@
 #include "CampaignOperationsControlService.hpp"
 #include "CampaignOperationsCompletionService.hpp"
 #include "CampaignOperationsDispatchService.hpp"
+#include "CampaignOperationsManagerService.hpp"
 #include "CampaignOperationsProductionAdmissionService.hpp"
 #include "PgModelIO.hpp"
 #include "Params.hpp"
@@ -276,6 +277,7 @@ struct SchedulerOptions
     bool campaignOperationsProductionEnable = false;
     bool campaignOperationsProductionDisable = false;
     bool campaignOperationsProductionDispatchRequest = false;
+    std::optional<int> campaignOperationsManagerRunOnceLimit;
     std::optional<std::string> campaignOperationsReconcileRunKey;
     bool campaignOperationsReconcileRecover = false;
     std::optional<int> campaignOperationsExpectedControlVersion;
@@ -1042,6 +1044,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--campaign-operations-production-enable" ||
             arg == "--campaign-operations-production-disable" ||
             arg == "--campaign-operations-dispatch-request" ||
+            arg == "--campaign-operations-manager-run-once" ||
             arg == "--campaign-operations-reconcile-observe" ||
             arg == "--campaign-operations-reconcile-recover" ||
             arg == "--campaign-operations-expected-control-version" ||
@@ -2368,6 +2371,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "duplicate --campaign-operations-dispatch-request");
             options.campaignOperationsProductionDispatchRequest = true;
         }
+        else if (arg == "--campaign-operations-manager-run-once")
+        {
+            if (options.campaignOperationsManagerRunOnceLimit)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-manager-run-once");
+            options.campaignOperationsManagerRunOnceLimit = ParsePositiveInt(
+                arg, RequireNextArg(argc, argv, i, arg));
+        }
         else if (arg == "--campaign-operations-reconcile-observe" ||
                  arg == "--campaign-operations-reconcile-recover")
         {
@@ -3545,6 +3556,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.campaignOperationsProductionEnable ? 1 : 0) +
         (options.campaignOperationsProductionDisable ? 1 : 0) +
         (options.campaignOperationsProductionDispatchRequest ? 1 : 0) +
+        (options.campaignOperationsManagerRunOnceLimit.has_value() ? 1 : 0) +
         (options.campaignOperationsReconcileRunKey.has_value() ? 1 : 0) +
         (options.requeueAnalysisExperimentId.has_value() ? 1 : 0) +
         (options.requeueInferenceExperimentId.has_value() ? 1 : 0) +
@@ -4069,12 +4081,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsProductionEnable ||
         options.campaignOperationsProductionDisable ||
         options.campaignOperationsProductionDispatchRequest;
+    const bool campaignOperationsManagerMutation =
+        options.campaignOperationsManagerRunOnceLimit.has_value();
     const bool campaignOperationsMutation =
         campaignOperationsBudgetMutation ||
         campaignOperationsRequestMutation ||
         campaignOperationsControlMutation ||
         campaignOperationsCompletionMutation ||
-        campaignOperationsProductionMutation;
+        campaignOperationsProductionMutation ||
+        campaignOperationsManagerMutation;
     const bool campaignOperationsStatus =
         options.campaignOperationsBudgetStatusCampaignId.has_value() ||
         options.campaignOperationsRequestStatusRequestId.has_value() ||
@@ -4116,6 +4131,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             throw std::invalid_argument(
                 "Campaign Operations mutation requires --yes");
         if (!options.campaignOperationsReconcileRunKey &&
+            !options.campaignOperationsManagerRunOnceLimit &&
             (!options.campaignOperationsActor ||
              (!options.campaignOperationsReason &&
               !options.campaignOperationsProductionDispatchRequest)))
@@ -4124,6 +4140,17 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 "--campaign-operations-actor and "
                 "--campaign-operations-reason");
     }
+    if (campaignOperationsManagerMutation &&
+        (options.dryRun || !options.yes))
+        throw std::invalid_argument(
+            "Campaign Operations Manager run-once requires --yes and no --dry-run");
+    if (campaignOperationsManagerMutation &&
+        (options.campaignOperationsActor || options.campaignOperationsReason ||
+         options.campaignOperationsOperationKey ||
+         options.campaignOperationsControlRequestId ||
+         options.campaignOperationsExpectedRequestVersion))
+        throw std::invalid_argument(
+            "Campaign Operations Manager run-once accepts no request metadata");
     if (campaignOperationsProductionMutation)
     {
         if (!options.campaignOperationsOperationKey)
@@ -22729,9 +22756,14 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--campaign-operations-expected-request-version N "
         << "--campaign-operations-operation-key KEY "
         << "--campaign-operations-actor ACTOR --yes\n"
+        << "Usage: " << exe
+        << " --campaign-operations-manager-run-once LIMIT --yes\n"
+        << "Phase H3 run-once takes one optimistic read-only candidate snapshot,"
+        << " processes at most LIMIT requests sequentially, and has no daemon,"
+        << " polling, sleep, or continuous mode.\n"
         << "Phase H2 mutations are default-off, caller-keyed, and single-request "
         << "only. They require the dedicated deployed roles and a clean Release "
-        << "build; no Manager run-once or continuous command exists in H2.\n"
+        << "build; H3 run-once is bounded and H4 continuous mode is excluded.\n"
         << "Usage: " << exe
         << " --stop-after-checkpoint=ID:EPOCH | --clear-stop-after-checkpoint=ID | "
         << "--stop-after-checkpoint-all=EPOCH | --clear-stop-after-checkpoint-all | "
@@ -22761,6 +22793,10 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
     if (options.campaignOperationsProductionStatus)
         return EA::CampaignOperations::RunProductionStatusCommand(
             connectionString, std::cout, std::cerr);
+    if (options.campaignOperationsManagerRunOnceLimit)
+        return EA::CampaignOperations::RunCampaignOperationsManagerOnceCommand(
+            connectionString, *options.campaignOperationsManagerRunOnceLimit,
+            options.selfPath, std::cout, std::cerr);
     if (options.campaignOperationsProductionEnable)
     {
         const auto build =
@@ -23697,6 +23733,7 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.campaignOperationsProductionEnable ||
             options.campaignOperationsProductionDisable ||
             options.campaignOperationsProductionDispatchRequest ||
+            options.campaignOperationsManagerRunOnceLimit ||
             options.campaignOperationsReconcileRunKey)
             return RunCampaignOperationsCommand(options);
         if (options.generateExperimentRecommendations ||

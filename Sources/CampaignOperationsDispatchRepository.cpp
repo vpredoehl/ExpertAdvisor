@@ -1,4 +1,7 @@
 #include "CampaignOperationsDispatchRepository.hpp"
+
+#include "CampaignOperationsManager.hpp"
+#include "CampaignOperationsProductionAdmission.hpp"
 #include "ExperimentRecommendationConversionWorkflowRepository.hpp"
 #include "CampaignOperationsProductionAdmissionRepository.hpp"
 
@@ -213,6 +216,164 @@ std::vector<OperationalRequestId> SelectDispatchCandidatesForIsolatedTest(
     return result;
 }
 
+std::vector<DispatchCandidate> SelectDispatchCandidatesForManager(
+    pqxx::connection& connection, int limit)
+{
+    if (limit <= 0 || limit > kCampaignOperationsManagerMaximumRunOnceLimit)
+        throw std::invalid_argument("campaign_operations_manager_run_once_limit");
+
+    pqxx::read_transaction transaction{connection};
+    transaction.exec(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+    // The Phase 5 capability already owns the exact read surface used by the
+    // common Phase E engine, including the authoritative future-action gate.
+    // This transaction remains READ ONLY; selecting the capability does not
+    // grant the Manager any additional mutation path.
+    transaction.exec("SET LOCAL ROLE " +
+        transaction.quote_name(kProductionPhase5TransactionalRole) + ";");
+    const auto rows = transaction.exec(
+        "SELECT request.operational_request_id,"
+        "request.request_identity_canonical,request.state_version "
+        "FROM campaign_operations_operational_request request "
+        "WHERE request.request_state='ready' "
+        "AND request.production_dispatch_enabled=false "
+        "AND campaign_operations_future_actions_allowed("
+        " request.operational_campaign_id) "
+        "ORDER BY request.operational_request_id LIMIT $1;",
+        pqxx::params{limit});
+    std::vector<DispatchCandidate> result;
+    result.reserve(rows.size());
+    for (const auto& row : rows)
+        result.push_back({OperationalRequestId(row[0].as<long long>()),
+            row[1].as<std::string>(), row[2].as<int>()});
+    transaction.commit();
+    return result;
+}
+
+void RequireExactManagerOperationSourceEvidence(
+    pqxx::transaction_base& transaction, DispatchAttemptId attemptId,
+    OperationalRequestId requestId, const std::string& operationKey,
+    const std::string& requestIdentityCanonical, int expectedRequestVersion,
+    const std::string& expectedSourceCanonical)
+{
+    const auto expected = BuildManagerRequestOperationIdentity(
+        requestIdentityCanonical, expectedRequestVersion);
+    if (expected.source.canonicalText() != expectedSourceCanonical ||
+        expected.operationKey != operationKey)
+        throw Error(ErrorCode::persistenceConflict,
+            "campaign_operations_manager_operation_conflicting_replay");
+    const auto rows = transaction.exec(
+        "SELECT operational_request_id,operation_key,request_identity_canonical,"
+        "expected_request_version,source_canonical,source_hash,contract_version "
+        "FROM campaign_operations_dispatch_manager_operation "
+        "WHERE dispatch_attempt_id=$1;", pqxx::params{attemptId.value()});
+    if (rows.empty())
+        throw Error(ErrorCode::persistenceCorruption,
+            "campaign_operations_manager_operation_evidence_missing");
+    if (rows.size() != 1U)
+        throw Error(ErrorCode::persistenceCorruption,
+            "campaign_operations_manager_operation_evidence_corrupt");
+    const auto& row = rows.one_row();
+    if (row[0].is_null() || row[1].is_null() || row[2].is_null() ||
+        row[3].is_null() || row[4].is_null() || row[5].is_null() ||
+        row[6].is_null() || row[0].as<long long>() != requestId.value() ||
+        row[1].as<std::string>() != operationKey ||
+        row[2].as<std::string>() != requestIdentityCanonical ||
+        row[3].as<int>() != expectedRequestVersion ||
+        row[4].as<std::string>() != expectedSourceCanonical ||
+        row[5].as<std::string>() != expected.source.hash() ||
+        row[6].as<int>() != kCampaignOperationsManagerOperationContractVersion)
+        throw Error(ErrorCode::persistenceConflict,
+            "campaign_operations_manager_operation_conflicting_replay");
+    (void)CanonicalIdentity::Hydrate(1, row[4].as<std::string>(),
+        row[5].as<std::string>());
+}
+
+void PersistManagerOperationSourceCanonical(
+    pqxx::transaction_base& transaction, DispatchAttemptId attemptId,
+    OperationalRequestId requestId, const std::string& operationKey,
+    const std::string& requestIdentityCanonical, int expectedRequestVersion,
+    const std::string& sourceCanonical, const std::string& sourceHash)
+{
+    const auto expected = BuildManagerRequestOperationIdentity(
+        requestIdentityCanonical, expectedRequestVersion);
+    if (expected.source.canonicalText() != sourceCanonical ||
+        expected.source.hash() != sourceHash ||
+        expected.operationKey != operationKey)
+        throw Error(ErrorCode::persistenceConflict,
+            "campaign_operations_manager_operation_conflicting_replay");
+    const auto rows = transaction.exec(
+        "INSERT INTO campaign_operations_dispatch_manager_operation("
+        "dispatch_attempt_id,operational_request_id,operation_key,"
+        "request_identity_canonical,expected_request_version,source_canonical,"
+        "source_hash,contract_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8) "
+        "ON CONFLICT DO NOTHING "
+        "RETURNING dispatch_attempt_id;",
+        pqxx::params{attemptId.value(), requestId.value(), operationKey,
+            requestIdentityCanonical, expectedRequestVersion, sourceCanonical,
+            sourceHash, kCampaignOperationsManagerOperationContractVersion});
+    (void)rows;
+    RequireExactManagerOperationSourceEvidence(transaction, attemptId,
+        requestId, operationKey, requestIdentityCanonical,
+        expectedRequestVersion, sourceCanonical);
+}
+
+bool IsExactGrandfatheredH2ManagerOperation(
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    const std::string& operationKey)
+{
+    // Before 058 there was no reserved Manager namespace.  Retaining that
+    // grammar for a pre-058 executable/schema pair is necessary for the
+    // upgrade regression; once the inventory relation exists, only its exact
+    // immutable rows may pass this gate.
+    if (!transaction.exec(
+            "SELECT to_regclass("
+            "'campaign_operations_h2_manager_key_compatibility') IS NOT NULL;")
+             .one_row()[0].as<bool>())
+        return true;
+
+    const auto rows = transaction.exec(
+        "SELECT compatibility.dispatch_attempt_id,"
+        "compatibility.request_identity_canonical,"
+        "compatibility.expected_request_version,"
+        "compatibility.requesting_actor,"
+        "compatibility.approved_build_contract_canonical,"
+        "compatibility.attempt_identity_canonical,"
+        "compatibility.attempt_identity_hash "
+        "FROM campaign_operations_h2_manager_key_compatibility compatibility "
+        "WHERE compatibility.operational_request_id=$1 "
+        "AND compatibility.operation_key=$2;",
+        pqxx::params{requestId.value(), operationKey});
+    if (rows.empty()) return false;
+    if (rows.size() != 1U)
+        throw Error(ErrorCode::persistenceCorruption,
+            "campaign_operations_h2_manager_key_compatibility_corrupt");
+
+    const auto& row = rows.one_row();
+    const DispatchAttemptId attemptId(row[0].as<long long>());
+    const auto persisted = FindProductionDispatchAttemptV2(transaction,
+        attemptId);
+    if (!persisted || persisted->attempt.requestId != requestId ||
+        persisted->attempt.operationKey != operationKey ||
+        persisted->attempt.requestIdentityCanonical != row[1].as<std::string>() ||
+        persisted->attempt.expectedRequestVersion != row[2].as<int>() ||
+        persisted->attempt.requestingActor.value() != row[3].as<std::string>() ||
+        persisted->attempt.approvedBuildContract.identity.canonicalText() !=
+            row[4].as<std::string>() ||
+        persisted->attempt.identity.canonicalText() != row[5].as<std::string>() ||
+        persisted->attempt.identity.hash() != row[6].as<std::string>() ||
+        persisted->attempt.requestingActor.value() ==
+            "campaign_operations_manager" ||
+        transaction.exec(
+            "SELECT EXISTS(SELECT 1 FROM "
+            "campaign_operations_dispatch_manager_operation "
+            "WHERE dispatch_attempt_id=$1);",
+            pqxx::params{attemptId.value()}).one_row()[0].as<bool>())
+        throw Error(ErrorCode::persistenceCorruption,
+            "campaign_operations_h2_manager_key_compatibility_corrupt");
+    return true;
+}
+
 DispatchLease AcquireDispatchLeaseInTransaction(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
     int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
@@ -340,11 +501,27 @@ DispatchLease AcquireProductionDispatchLeaseInTransaction(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
     int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
     const std::string& operationKey, const ActorIdentity& requestingActor,
-    const std::string& approvedBuildContractCanonical)
+    const std::string& approvedBuildContractCanonical,
+    const std::optional<std::string>& managerSourceCanonical)
 {
     if (!IsValidProductionOperationKey(operationKey))
         throw std::invalid_argument(
             "campaign_operations_production_operation_key_invalid");
+    bool managerAttemptExistedBeforeAcquisition = false;
+    if (managerSourceCanonical)
+    {
+        // A Manager caller may create its source row only for the Attempt V2
+        // it is acquiring now.  An existing row is recovery/replay evidence,
+        // so it must already be complete; never repair an orphaned attempt by
+        // backfilling source evidence.
+        transaction.exec("SET LOCAL ROLE " +
+            transaction.quote_name(kProductionPhase5TransactionalRole) + ";");
+        managerAttemptExistedBeforeAcquisition = static_cast<bool>(
+            FindProductionDispatchAttemptV2(transaction, requestId,
+                operationKey));
+        transaction.exec("SET LOCAL ROLE " +
+            transaction.quote_name(kProductionDispatcherRole) + ";");
+    }
     const auto leaseExpiresAt = transaction.exec(
         "SELECT (transaction_timestamp() + make_interval(secs => $1))::text;",
         pqxx::params{kCampaignOperationsDispatchLeaseSeconds})
@@ -376,6 +553,35 @@ DispatchLease AcquireProductionDispatchLeaseInTransaction(
             approvedBuildContractCanonical)
         throw std::runtime_error(
             "campaign_operations_production_dispatch_attempt_corrupt");
+    if (managerSourceCanonical)
+    {
+        const auto expectedManagerIdentity =
+            BuildManagerRequestOperationIdentity(
+                persisted->attempt.requestIdentityCanonical,
+                expectedRequestVersion);
+        if (expectedManagerIdentity.source.canonicalText() !=
+                *managerSourceCanonical ||
+            expectedManagerIdentity.operationKey != operationKey)
+            throw Error(ErrorCode::persistenceConflict,
+                "campaign_operations_manager_operation_conflicting_replay");
+        if (managerAttemptExistedBeforeAcquisition)
+        {
+            RequireExactManagerOperationSourceEvidence(transaction, attemptId,
+                requestId, operationKey,
+                persisted->attempt.requestIdentityCanonical,
+                expectedRequestVersion, *managerSourceCanonical);
+        }
+        else
+            PersistManagerOperationSourceCanonical(transaction, attemptId,
+                requestId, operationKey,
+                persisted->attempt.requestIdentityCanonical,
+                expectedRequestVersion, *managerSourceCanonical,
+                expectedManagerIdentity.source.hash());
+        RequireExactManagerOperationSourceEvidence(transaction, attemptId,
+            requestId, operationKey,
+            persisted->attempt.requestIdentityCanonical,
+            expectedRequestVersion, *managerSourceCanonical);
+    }
     const auto request = transaction.exec(
         "SELECT reservation_id,"
         "recommendation_campaign_materialization_id,"
@@ -601,11 +807,18 @@ std::optional<DispatchLease> FindRecoverableDispatchLease(
 
 std::optional<DispatchLease> FindRecoverableProductionDispatchLease(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
-    const std::string& operationKey)
+    const std::string& operationKey,
+    const std::optional<std::string>& managerSourceCanonical)
 {
     const auto persisted = FindProductionDispatchAttemptV2(
         transaction, requestId, operationKey);
     if (!persisted) return std::nullopt;
+    if (managerSourceCanonical)
+        RequireExactManagerOperationSourceEvidence(transaction,
+            persisted->attemptId, requestId, operationKey,
+            persisted->attempt.requestIdentityCanonical,
+            persisted->attempt.expectedRequestVersion,
+            *managerSourceCanonical);
     const auto rows = transaction.exec(
         "SELECT request.reservation_id,reservation.state_version,"
         "request.recommendation_campaign_materialization_id,"

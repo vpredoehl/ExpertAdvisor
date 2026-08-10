@@ -48,10 +48,37 @@ struct DispatchLockedAuthority final
     std::string leaseTokenDigest;
 };
 
+struct DispatchCandidate final
+{
+    OperationalRequestId requestId;
+    std::string requestIdentityCanonical;
+    int expectedRequestVersion = 0;
+};
+
 bool DispatchSchemaExists(pqxx::transaction_base& transaction);
 
 std::vector<OperationalRequestId> SelectDispatchCandidatesForIsolatedTest(
     pqxx::transaction_base& transaction, int limit);
+std::vector<DispatchCandidate> SelectDispatchCandidatesForManager(
+    pqxx::connection& connection, int limit);
+
+void RequireExactManagerOperationSourceEvidence(
+    pqxx::transaction_base& transaction, DispatchAttemptId attemptId,
+    OperationalRequestId requestId, const std::string& operationKey,
+    const std::string& requestIdentityCanonical, int expectedRequestVersion,
+    const std::string& expectedSourceCanonical);
+void PersistManagerOperationSourceCanonical(
+    pqxx::transaction_base& transaction, DispatchAttemptId attemptId,
+    OperationalRequestId requestId, const std::string& operationKey,
+    const std::string& requestIdentityCanonical, int expectedRequestVersion,
+    const std::string& sourceCanonical, const std::string& sourceHash);
+
+// Migration 058 records the finite set of pre-existing H2 caller-keyed
+// mgr-v1 operations.  This is intentionally an exact historical lookup, not
+// a namespace exception for new caller-keyed acquisition.
+bool IsExactGrandfatheredH2ManagerOperation(
+    pqxx::transaction_base& transaction, OperationalRequestId requestId,
+    const std::string& operationKey);
 
 DispatchLease AcquireDispatchLeaseInTransaction(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
@@ -62,7 +89,8 @@ DispatchLease AcquireProductionDispatchLeaseInTransaction(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
     int expectedRequestVersion, const LeaseTokenDigest& leaseTokenDigest,
     const std::string& operationKey, const ActorIdentity& requestingActor,
-    const std::string& approvedBuildContractCanonical);
+    const std::string& approvedBuildContractCanonical,
+    const std::optional<std::string>& managerSourceCanonical = std::nullopt);
 
 DispatchLockedAuthority LockAndRevalidateDispatchAuthority(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
@@ -83,7 +111,8 @@ std::optional<DispatchLease> FindRecoverableDispatchLease(
     pqxx::transaction_base& transaction, OperationalRequestId requestId);
 std::optional<DispatchLease> FindRecoverableProductionDispatchLease(
     pqxx::transaction_base& transaction, OperationalRequestId requestId,
-    const std::string& operationKey);
+    const std::string& operationKey,
+    const std::optional<std::string>& managerSourceCanonical = std::nullopt);
 
 DownstreamEvidenceClassification ClassifyDownstreamEvidence(
     pqxx::transaction_base& transaction,

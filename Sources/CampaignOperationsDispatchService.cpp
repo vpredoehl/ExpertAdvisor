@@ -1,4 +1,5 @@
 #include "CampaignOperationsDispatchService.hpp"
+#include "CampaignOperationsManager.hpp"
 #include "CampaignOperationsProductionAdmissionService.hpp"
 #include "ExperimentRecommendationCampaignExecutionRepository.hpp"
 
@@ -77,6 +78,33 @@ void SetRole(pqxx::transaction_base& transaction, const char* role)
     transaction.exec("SET LOCAL ROLE " + transaction.quote_name(role) + ";");
 }
 
+bool IsReservedManagerOperationKey(const std::string& operationKey)
+{
+    return operationKey.rfind("mgr-v1:", 0U) == 0U;
+}
+
+bool IsExactGrandfatheredH2ManagerOperation(
+    const std::string& connectionString, OperationalRequestId requestId,
+    const std::string& operationKey)
+{
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    SetRole(transaction, kProductionPhase5TransactionalRole);
+    return EA::CampaignOperations::IsExactGrandfatheredH2ManagerOperation(
+        transaction, requestId, operationKey);
+}
+
+bool HasH2ManagerKeyCompatibilityInventory(const std::string& connectionString)
+{
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    SetRole(transaction, kProductionPhase5TransactionalRole);
+    return transaction.exec(
+        "SELECT to_regclass("
+        "'campaign_operations_h2_manager_key_compatibility') IS NOT NULL;")
+        .one_row()[0].as<bool>();
+}
+
 DispatchServiceResult ExistingResult(
     const PersistedDispatchBinding& existing, int transactionAttempts,
     UncertainCommitRecoveryClassification recovery)
@@ -97,7 +125,8 @@ std::optional<DispatchServiceResult> LookupBeforeRetry(
     UncertainCommitRecoveryClassification recovery, bool production,
     int expectedRequestVersion = 0, const std::string& operationKey = {},
     const std::string& requestingActor = {},
-    const std::string& approvedBuildContractCanonical = {})
+    const std::string& approvedBuildContractCanonical = {},
+    const std::optional<std::string>& managerSourceCanonical = std::nullopt)
 {
     pqxx::read_transaction transaction{connection};
     SetRole(transaction, production ? kProductionPhase5TransactionalRole
@@ -129,6 +158,13 @@ std::optional<DispatchServiceResult> LookupBeforeRetry(
                     persisted->attempt.identity.canonicalText())
                 throw std::runtime_error(
                     "production_dispatch_conflicting_replay");
+            if (managerSourceCanonical)
+            {
+                RequireExactManagerOperationSourceEvidence(transaction,
+                    persisted->attemptId, requestId, operationKey,
+                    persisted->attempt.requestIdentityCanonical,
+                    expectedRequestVersion, *managerSourceCanonical);
+            }
         }
         return ExistingResult(*existing, transactionAttempts, recovery);
     }
@@ -175,7 +211,8 @@ void RetryBackoff(int attemptNumber)
 
 std::optional<DispatchLease> LookupRecoverableLease(
     pqxx::connection& connection, OperationalRequestId requestId,
-    bool production, const std::string& operationKey)
+    bool production, const std::string& operationKey,
+    const std::optional<std::string>& managerSourceCanonical = std::nullopt)
 {
     pqxx::read_transaction transaction{connection};
     SetRole(transaction, production
@@ -183,7 +220,7 @@ std::optional<DispatchLease> LookupRecoverableLease(
         : kCampaignOperationsDispatcherRole);
     return production
         ? FindRecoverableProductionDispatchLease(
-              transaction, requestId, operationKey)
+              transaction, requestId, operationKey, managerSourceCanonical)
         : FindRecoverableDispatchLease(transaction, requestId);
 }
 
@@ -191,7 +228,8 @@ std::optional<DispatchLease> RecoverProductionLeaseAfterConflictingReplay(
     const std::string& connectionString, OperationalRequestId requestId,
     int expectedRequestVersion, const std::string& operationKey,
     const std::string& requestingActor,
-    const std::string& approvedBuildContractCanonical)
+    const std::string& approvedBuildContractCanonical,
+    const std::optional<std::string>& managerSourceCanonical)
 {
     pqxx::connection connection{connectionString};
     {
@@ -211,9 +249,15 @@ std::optional<DispatchLease> RecoverProductionLeaseAfterConflictingReplay(
                 approvedBuildContractCanonical)
             throw std::runtime_error(
                 "production_dispatch_conflicting_replay");
+        if (managerSourceCanonical)
+            RequireExactManagerOperationSourceEvidence(transaction,
+                persisted->attemptId, requestId, operationKey,
+                persisted->attempt.requestIdentityCanonical,
+                expectedRequestVersion, *managerSourceCanonical);
         transaction.commit();
     }
-    return LookupRecoverableLease(connection, requestId, true, operationKey);
+    return LookupRecoverableLease(connection, requestId, true, operationKey,
+        managerSourceCanonical);
 }
 
 DispatchServiceResult RetryExhausted(OperationalRequestId requestId,
@@ -255,7 +299,9 @@ DispatchServiceResult RunDispatchAdapter(
     const std::optional<IsolatedDispatchSafetyGate>& safetyGate,
     bool production, const std::string& operationKey,
     const ManagerBuildContract* executingBuild,
-    DispatchTestHook testHook)
+    DispatchTestHook testHook,
+    const std::optional<std::string>& managerSourceCanonical = std::nullopt,
+    bool grandfatheredH2Only = false)
 {
     pqxx::connection connection{connectionString};
     if (safetyGate) ValidateSafetyGate(connection, *safetyGate);
@@ -272,7 +318,8 @@ DispatchServiceResult RunDispatchAdapter(
     {
         return LookupBeforeRetry(candidate, requestId, transactionAttempts,
             recovery, production, expectedRequestVersion, operationKey,
-            dispatcher.value(), approvedBuildContractCanonical);
+            dispatcher.value(), approvedBuildContractCanonical,
+            managerSourceCanonical);
     };
 
     if (const auto existing = lookupExisting(connection, 0,
@@ -281,7 +328,11 @@ DispatchServiceResult RunDispatchAdapter(
         return *existing;
 
     std::optional<DispatchLease> lease =
-        LookupRecoverableLease(connection, requestId, production, operationKey);
+        LookupRecoverableLease(connection, requestId, production, operationKey,
+            managerSourceCanonical);
+    if (grandfatheredH2Only && !lease)
+        throw std::runtime_error(
+            "campaign_operations_grandfathered_h2_operation_not_recoverable");
     const LeaseTokenDigest leaseTokenDigest = lease
         ? lease->acquisition.leaseTokenDigest
         : LeaseTokenDigest::Derive(GenerateOpaqueLeaseToken());
@@ -301,7 +352,7 @@ DispatchServiceResult RunDispatchAdapter(
             return *existing;
         if (const auto recovered =
                 LookupRecoverableLease(*acquisitionConnection, requestId,
-                    production, operationKey))
+                    production, operationKey, managerSourceCanonical))
         {
             lease.emplace(*recovered);
             break;
@@ -315,7 +366,8 @@ DispatchServiceResult RunDispatchAdapter(
                 ? AcquireProductionDispatchLeaseInTransaction(
                     transaction, requestId, expectedRequestVersion,
                     leaseTokenDigest, operationKey, dispatcher,
-                    executingBuild->identity.canonicalText())
+                    executingBuild->identity.canonicalText(),
+                    managerSourceCanonical)
                 : AcquireDispatchLeaseInTransaction(
                     transaction, requestId, expectedRequestVersion,
                     leaseTokenDigest, dispatcher,
@@ -350,7 +402,8 @@ DispatchServiceResult RunDispatchAdapter(
                         RecoverProductionLeaseAfterConflictingReplay(
                             connectionString, requestId, expectedRequestVersion,
                             operationKey, dispatcher.value(),
-                            approvedBuildContractCanonical))
+                            approvedBuildContractCanonical,
+                            managerSourceCanonical))
                 {
                     lease.emplace(*recovered);
                     break;
@@ -379,7 +432,8 @@ DispatchServiceResult RunDispatchAdapter(
                         completeAuthoritativeBinding))
                 return *existing;
             if (const auto recovered = LookupRecoverableLease(
-                    recoveryConnection, requestId, production, operationKey))
+                    recoveryConnection, requestId, production, operationKey,
+                    managerSourceCanonical))
             {
                 lease.emplace(*recovered);
                 break;
@@ -410,7 +464,7 @@ DispatchServiceResult RunDispatchAdapter(
                 return *existing;
             if (const auto recovered =
                     LookupRecoverableLease(recoveryConnection, requestId,
-                        production, operationKey))
+                        production, operationKey, managerSourceCanonical))
             {
                 lease.emplace(*recovered);
                 break;
@@ -450,16 +504,6 @@ DispatchServiceResult RunDispatchAdapter(
             SetRole(transaction, production
                 ? kProductionPhase5TransactionalRole
                 : kCampaignOperationsPhase5TransactionalRole);
-            DispatchLockedAuthority authority =
-                LockAndRevalidateDispatchAuthority(transaction, requestId,
-                    lease->acquisition.resultingRequestVersion,
-                    leaseTokenDigest, false, production, operationKey,
-                    executingBuild ? executingBuild->identity.canonicalText()
-                                    : std::string{}
-#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
-                    , testHook
-#endif
-                    );
             std::optional<DispatchAttemptRecord> persistedAttempt;
             if (production)
             {
@@ -467,9 +511,17 @@ DispatchServiceResult RunDispatchAdapter(
                     FindProductionDispatchAttemptV2(
                         transaction, requestId, operationKey);
                 if (productionAttempt)
+                {
+                    if (managerSourceCanonical)
+                        RequireExactManagerOperationSourceEvidence(transaction,
+                            productionAttempt->attemptId, requestId,
+                            operationKey,
+                            productionAttempt->attempt.requestIdentityCanonical,
+                            expectedRequestVersion,
+                            *managerSourceCanonical);
                     persistedAttempt.emplace(DispatchAttemptRecord{
-                        productionAttempt->attemptId,
-                        lease->acquisition});
+                        productionAttempt->attemptId, lease->acquisition});
+                }
             }
             else
             {
@@ -482,7 +534,16 @@ DispatchServiceResult RunDispatchAdapter(
                 persistedAttempt->acquisition != lease->acquisition)
                 throw std::runtime_error(
                     "campaign_operations_dispatch_attempt_mismatch");
-
+            DispatchLockedAuthority authority =
+                LockAndRevalidateDispatchAuthority(transaction, requestId,
+                    lease->acquisition.resultingRequestVersion,
+                    leaseTokenDigest, false, production, operationKey,
+                    executingBuild ? executingBuild->identity.canonicalText()
+                                    : std::string{}
+#if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
+                    , testHook
+#endif
+                    );
             if (const auto existing =
                     FindAndValidateCompleteDispatchBinding(
                         transaction, requestId, production))
@@ -764,6 +825,14 @@ DispatchServiceResult DispatchOneRequestForProduction(
     if (!IsValidProductionOperationKey(request.operationKey))
         throw std::invalid_argument(
             "campaign_operations_production_operation_key_invalid");
+    const bool hasCompatibilityInventory =
+        HasH2ManagerKeyCompatibilityInventory(connectionString);
+    const bool grandfatheredH2 = IsReservedManagerOperationKey(
+        request.operationKey) && IsExactGrandfatheredH2ManagerOperation(
+            connectionString, request.requestId, request.operationKey);
+    if (IsReservedManagerOperationKey(request.operationKey) && !grandfatheredH2)
+        throw std::invalid_argument(
+            "campaign_operations_manager_operation_key_reserved");
     if (request.expectedRequestVersion <= 0)
         throw std::invalid_argument(
             "campaign_operations_production_expected_request_version_invalid");
@@ -789,8 +858,94 @@ DispatchServiceResult DispatchOneRequestForProduction(
             }());
     return RunDispatchAdapter(connectionString, request.requestId,
         request.expectedRequestVersion, request.requestingActor, std::nullopt,
-        true, request.operationKey, &request.executingBuild, {});
+        true, request.operationKey, &request.executingBuild, {}, std::nullopt,
+        grandfatheredH2 && hasCompatibilityInventory);
 }
+
+DispatchServiceResult DispatchOneRequestForProductionManager(
+    const std::string& connectionString, const ProductionDispatchRequest& request,
+    const std::string& managerSourceCanonical, const std::string& executablePath)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production dispatch requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    if (request.expectedRequestVersion <= 0)
+        throw std::invalid_argument(
+            "campaign_operations_production_expected_request_version_invalid");
+    if (managerSourceCanonical.empty())
+        throw std::invalid_argument(
+            "campaign_operations_manager_source_canonical_required");
+    ValidateManagerBuildContract(request.executingBuild);
+    const auto actualBuild = CaptureActualManagerBuildContract(executablePath);
+    if (!actualBuild || request.executingBuild != *actualBuild)
+        throw std::runtime_error("production_dispatch_build_mismatch");
+    pqxx::connection readinessConnection{connectionString};
+    const auto readiness = LoadProductionReadiness(readinessConnection,
+        actualBuild);
+    if (!readiness.ready)
+        throw std::runtime_error(
+            "campaign_operations_production_readiness_blocked:" +
+            [&]
+            {
+                std::string joined;
+                for (const auto& blocker : readiness.blockers)
+                {
+                    if (!joined.empty()) joined += ';';
+                    joined += blocker;
+                }
+                return joined;
+            }());
+    return RunDispatchAdapter(connectionString, request.requestId,
+        request.expectedRequestVersion, request.requestingActor, std::nullopt,
+        true, request.operationKey, &request.executingBuild, {},
+        managerSourceCanonical);
+}
+
+#if defined(CAMPAIGN_OPERATIONS_H3_TESTING)
+DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
+    const std::string& connectionString, const ProductionDispatchRequest& request,
+    const std::string& managerSourceCanonical,
+    const ManagerBuildContract& fixtureBuild, ManagerAdapterTestHook testHook)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production dispatch requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    if (request.expectedRequestVersion <= 0 || managerSourceCanonical.empty())
+        throw std::invalid_argument(
+            "campaign_operations_manager_fixture_identity_invalid");
+    ValidateManagerBuildContract(request.executingBuild);
+    ValidateManagerBuildContract(fixtureBuild);
+    if (request.executingBuild != fixtureBuild)
+        throw std::runtime_error("campaign_operations_manager_fixture_build_mismatch");
+    pqxx::connection readinessConnection{connectionString};
+    const auto readiness = LoadProductionReadiness(readinessConnection,
+        fixtureBuild);
+    std::string blockers;
+    for (const auto& blocker : readiness.blockers)
+    {
+        // The repository-native H1 disposable fixture intentionally retains
+        // historical Attempt V1 materializations.  They are immutable test
+        // data and make only the aggregate version summary non-ready; all
+        // runtime authority/readiness blockers remain enforced here.
+        if (blocker == "canonical_contract_versions") continue;
+        if (!blockers.empty()) blockers += ';';
+        blockers += blocker;
+    }
+    if (!blockers.empty())
+        throw std::runtime_error(
+            "campaign_operations_production_readiness_blocked:" + blockers);
+    return RunDispatchAdapter(connectionString, request.requestId,
+        request.expectedRequestVersion, request.requestingActor, std::nullopt,
+        true, request.operationKey, &fixtureBuild, std::move(testHook),
+        managerSourceCanonical);
+}
+#endif
 
 #if defined(CAMPAIGN_OPERATIONS_H2_TESTING)
 DispatchServiceResult DispatchOneRequestForProductionForTest(
@@ -803,6 +958,14 @@ DispatchServiceResult DispatchOneRequestForProductionForTest(
     if (!IsValidProductionOperationKey(request.operationKey))
         throw std::invalid_argument(
             "campaign_operations_production_operation_key_invalid");
+    const bool hasCompatibilityInventory =
+        HasH2ManagerKeyCompatibilityInventory(connectionString);
+    const bool grandfatheredH2 = IsReservedManagerOperationKey(
+        request.operationKey) && IsExactGrandfatheredH2ManagerOperation(
+            connectionString, request.requestId, request.operationKey);
+    if (IsReservedManagerOperationKey(request.operationKey) && !grandfatheredH2)
+        throw std::invalid_argument(
+            "campaign_operations_manager_operation_key_reserved");
     if (request.expectedRequestVersion <= 0)
         throw std::invalid_argument(
             "campaign_operations_production_expected_request_version_invalid");
@@ -810,7 +973,8 @@ DispatchServiceResult DispatchOneRequestForProductionForTest(
     return RunDispatchAdapter(connectionString, request.requestId,
         request.expectedRequestVersion, request.requestingActor, std::nullopt,
         true, request.operationKey, &request.executingBuild,
-        std::move(testHook));
+        std::move(testHook), std::nullopt,
+        grandfatheredH2 && hasCompatibilityInventory);
 }
 #endif
 
