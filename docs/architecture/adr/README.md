@@ -90,6 +90,8 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | [ADR-0019](ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md) | Accepted | Durable exact production admission and a Campaign Operations-owned run-once Manager remain default-off and scheduler-isolated. |
 | [ADR-0019A](ADR-0019A-h1-owner-safe-transaction-authorization.md) | Accepted | Targeted H1 correction for the 61-byte acquisition identifier, sealed owner-safe transaction context, exact replay, and full lock order. |
 | [ADR-0019B](ADR-0019B-h1-sealed-role-deployment-contract.md) | Accepted | Exact sealed-role identity/graph, literal all-schema allowlists, automatic deployment audits, restore A–J, and complete H1 acceptance evidence. |
+| [ADR-0019C](ADR-0019C-h2-privilege-deployment-contract.md) | Accepted | Targeted H2 privilege-deployment contract for exact Manager LOGIN authority, readiness access, and sealed-role deployment verification. |
+| [ADR-0020](ADR-0020-campaign-manager-continuous-operation.md) | Accepted | External-supervisor composition of the bounded H3 run-once Manager, with deployment-owned cadence, lifecycle, health, logging, and rollback. |
 
 ## 8. Revision history
 
@@ -106,3 +108,4 @@ The [ADR template](ADR_TEMPLATE.md) is normative for new records.
 | 1.8.0 | 2026-07-31 | Accepted ADR-0019 for exact production-dispatch admission, bounded run-once Manager ownership, generation-52 evidence, and H4 exclusion. |
 | 1.9.0 | 2026-08-01 | Accepted ADR-0019A as the narrow H1 identifier, ownership/context, replay, lock-order, ACL, and verification amendment. |
 | 1.10.0 | 2026-08-01 | Accepted ADR-0019B as the narrow H1 sealed-role deployment, audit, restore, allowlist, and acceptance-evidence correction. |
+| 1.11.0 | 2026-08-09 | Added accepted ADR-0019C to the index and accepted ADR-0020 for externally supervised continuous Campaign Manager operation after independent review and reverification. |
