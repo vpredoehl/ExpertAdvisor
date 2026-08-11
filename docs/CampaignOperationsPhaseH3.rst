@@ -45,7 +45,10 @@ the migration boundary and retain only their exact H2 replay/recovery authority.
 They remain H2 operations: they are never adopted into H3, never receive
 Manager source evidence, and cannot be used to create a new H2 acquisition.
 New caller-keyed acquisition in the namespace remains prohibited. The H3
-Manager source-evidence requirements and H4 exclusion are unchanged.
+Manager source-evidence requirements remain unchanged. H3 itself remains a
+bounded run-once operation and has no continuous execution mode. ADR-0020
+separately authorizes external deployment-owned H4 supervision around the
+bounded H3 command.
 The namespace remains reserved to this contract: a Manager-shaped Attempt V2 and its one exact
 source-evidence row are transactionally inseparable at COMMIT. A missing,
 duplicate, malformed, or mismatched row fails closed; an existing attempt is

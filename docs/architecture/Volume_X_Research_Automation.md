@@ -53,12 +53,14 @@ Campaign Operations Phase 5 implements architectural Phase G as migration 054:
 one immutable complete-if-settled event, disjoint terminal classification,
 logical archival, exact blockers, and read-only audit/status. It changes no
 lifecycle or scientific result and adds no scheduler or worker authority.
-Architectural Phase H runtime remains unimplemented. ADR-0019 and the
-normative Phase H architecture accept durable, default-off production
-admission plus a Campaign Operations-owned Manager. H1–H3 must deliver exact
-enable/disable evidence, first request admission, Attempt V2, caller-keyed
-exact dispatch, and bounded sequential run-once processing incrementally. H4
-continuous operation remains excluded.
+ADR-0019 and the normative Phase H architecture accept durable, default-off
+production admission plus a Campaign Operations-owned Manager. H1–H3 deliver
+exact enable/disable evidence, first request admission, Attempt V2,
+caller-keyed exact dispatch, and bounded sequential run-once processing.
+ADR-0020 later accepts H4 only as external, deployment-owned supervision that
+repeatedly invokes H3 run-once. An in-process continuous CLI/daemon,
+scheduler-owned Campaign Manager polling, and database singleton, heartbeat,
+lease, or leader-election authority remain excluded.
 Broader autonomous research remains reserved;
 existing recommendation and continuation capabilities MUST NOT be composed
 into it informally.
@@ -297,10 +299,12 @@ experimentation.
 
 ### 11.3 Required decisions
 
-ADR-0010 through ADR-0019 close Phase H authority through bounded run-once.
-Continuous Manager operation requires separate H4 acceptance. Physical
-retention/deletion, partial-member dispatch, new executable origins, adaptive
-budgets, autonomous selection, running-worker stop authority, and new
+ADR-0010 through ADR-0019 close Phase H authority through bounded run-once;
+ADR-0020 accepts only external, deployment-owned H4 supervision around that
+command. An in-process continuous CLI/daemon, scheduler-owned Campaign
+Manager polling, and database coordination authority remain prohibited.
+Physical retention/deletion, partial-member dispatch, new executable origins,
+adaptive budgets, autonomous selection, running-worker stop authority, and new
 scheduler work classes each require a later accepted owning-domain ADR.
 
 ## 12. References
@@ -327,3 +331,4 @@ scheduler work classes each require a later accepted owning-domain ADR.
 | 1.5.0 | 2026-07-31 | Implemented Campaign Operations Phase 5 / architectural Phase G immutable operational completion, logical archival, and audit/status without lifecycle, scientific, scheduler, or worker authority. | ADR-0014, ADR-0015, ADR-0017 |
 | 1.6.0 | 2026-07-31 | Accepted default-off Phase H production admission and a bounded run-once Campaign Manager while excluding continuous, scheduler, process, scientific, and automatic request/completion authority. | ADR-0019 |
 | 1.7.0 | 2026-08-03 | Corrected H1 recovery/reacquisition consistency: later Attempt V2 records retain one immutable first admission and replay hydrates historical principal/build evidence. | ADR-0019, ADR-0019B |
+| 1.8.0 | 2026-08-10 | Recorded ADR-0020's later acceptance of external deployment-owned H4 supervision while retaining the prohibition on an in-process continuous Manager, scheduler polling, and database coordination authority. | ADR-0020 |

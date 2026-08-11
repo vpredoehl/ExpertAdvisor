@@ -157,7 +157,7 @@ $$;
 ALTER FUNCTION reject_campaign_operations_h2_manager_key_compat_mutation()
     OWNER TO campaign_operations_owner;
 REVOKE ALL PRIVILEGES ON FUNCTION
-    reject_campaign_operations_h2_manager_key_compatibility_mutation()
+    reject_campaign_operations_h2_manager_key_compat_mutation()
     FROM PUBLIC, pqxx, campaign_operations_production_dispatcher,
          campaign_operations_production_phase5_transactional,
          campaign_operations_production_reader;

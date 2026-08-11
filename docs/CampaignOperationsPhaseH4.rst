@@ -1,9 +1,9 @@
 Campaign Operations Phase H4 — external continuous-operation supervisor
 =======================================================================
 
-H4 is deployment-owned composition around the accepted bounded H3 command. It
-does not add an ``LSTM_Release`` mode, database state, scheduler integration,
-or a new Campaign Operations authority. See ADR-0020.
+ADR-0020 accepts H4 as deployment-owned composition around the bounded H3
+command. It does not add an in-process ``LSTM_Release`` continuous mode,
+database state, scheduler integration, or a new Campaign Operations authority.
 
 Install
 -------
@@ -24,6 +24,11 @@ accessible configuration is rejected as ``STOP_INVALID_CONFIGURATION`` before
 schedule activation. This is required because the JSON controls the reviewed
 executable path/hash, deployment identity, cadence, retry policy, and
 state/log destinations.
+
+Existing state and log directories must be real, non-symlink directories
+owned by the deployment execution identity and accessible only by that owner.
+An insecure existing deployment-evidence directory is invalid configuration
+and is rejected before persisted state can become restart authority.
 
 The deployment identity, deployment execution identity, target database identity, target environment,
 reviewed PostgreSQL login identity,

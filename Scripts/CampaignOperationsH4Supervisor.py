@@ -226,6 +226,34 @@ class Config:
             directory = Path(text(directory_key))
             if not directory.is_absolute():
                 raise ConfigurationError("state and log directories must be absolute")
+
+            # Reject symlinks before exists(): a dangling symlink must not be
+            # accepted merely because Path.exists() follows its missing target.
+            if directory.is_symlink():
+                raise ConfigurationError(
+                    "state and log paths must not be symlinks"
+                )
+
+            if directory.exists():
+                if not directory.is_dir():
+                    raise ConfigurationError(
+                        "existing state and log paths must be directories"
+                    )
+                directory_stat = directory.stat()
+
+                # main() separately proves that the process execution identity
+                # equals deployment_execution_identity. Therefore ownership by
+                # this effective UID is the filesystem form of that contract.
+                if directory_stat.st_uid != os.geteuid():
+                    raise ConfigurationError(
+                        "existing state and log directories must be owned by "
+                        "the deployment execution identity"
+                    )
+
+                if directory_stat.st_mode & 0o077:
+                    raise ConfigurationError(
+                        "existing state and log directories must be owner-only"
+                    )
         login_identity = text("postgresql_login_identity")
         if login_identity != H3_LOGIN_IDENTITY:
             raise ConfigurationError("postgresql_login_identity must match the reviewed LSTM_Release login identity")

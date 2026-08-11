@@ -1,8 +1,8 @@
 # Volume XII — Database
 
-Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; implemented through Campaign Operations Phase H H1 (migration 055)
-Version: 0.15.0
-Last revised: 2026-08-03
+Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; database implementation complete through Phase H H3 (migrations 055-058); H4 adds no database state
+Version: 0.16.0
+Last revised: 2026-08-10
 
 ## 1. Purpose
 
@@ -95,16 +95,32 @@ cancellation-settlement, or reconciliation-resolution authority. Migration
 separate.
 
 ADR-0019, as narrowly amended by ADR-0019A and ADR-0019B, authorizes migration 055,
-implemented by Phase H Step 1, as the Phase H
-authority and persistence foundation. It adds the immutable alternating
-production enable/disable chain, one immutable first production admission per
-request, additive Attempt
-V2 fields/shape, production audit completeness, owner-DML-safe witness/history
+implemented by Phase H H1, as the Phase H authority and persistence
+foundation. It adds the immutable alternating production enable/disable chain,
+one immutable first production admission per request, additive Attempt V2
+fields/shape, production audit completeness, owner-DML-safe witness/history
 guards, readiness/status, one sealed boundary owner, dedicated NOLOGIN
-production capabilities, and a
-narrow scheduler-protocol evidence interface. Migration 055 must add no login
-membership, backfill no request, reinterpret no V1 identity, and mutate no
-scheduler, lifecycle, experiment, or worker row.
+production capabilities, and a narrow scheduler-protocol evidence interface.
+Migration 055 adds no login membership, backfills no request, reinterprets no
+V1 identity, and mutates no scheduler, lifecycle, experiment, or worker row.
+
+Phase H H2 is implemented by migrations 056 and 057. Those migrations complete
+the accepted production-dispatch privilege/deployment and exact-dispatch
+database contracts while preserving the common Phase E transaction, replay,
+request/version, operation-key, concurrency, and scheduler-authority
+boundaries. ADR-0019C governs the final H2 privilege/deployment reachability
+contract.
+
+Phase H H3 is implemented by migration 058. It adds the database-side contract
+required by the bounded Campaign Manager run-once path and preserves H2 as the
+authoritative production-dispatch engine. H3 adds no continuous cadence,
+scheduler ownership, process-lifetime database authority, singleton, or
+deployment supervision.
+
+ADR-0020 accepts Phase H H4 only as external deployment-owned supervision
+around the bounded H3 command. H4 adds no database migration, schema object,
+ACL/role authority, database scheduler, singleton, heartbeat, lease, or
+leader-election state.
 
 The frozen inventory is
 `campaign_operations_production_enablement_event`,
@@ -426,8 +442,10 @@ permissions, backup, concurrency, and observability decisions.
 - [ADR-0007](adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md)
 - [ADR-0008](adr/ADR-0008-phase-6c-follow-up-proposal-administrative-review.md)
 - [ADR-0009](adr/ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md)
-- [Campaign Operations ADR-0010 through ADR-0019](adr/README.md)
+- [Campaign Operations ADR-0010 through ADR-0020](adr/README.md)
 - [ADR-0019](adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md)
+- [ADR-0019C](adr/ADR-0019C-h2-privilege-deployment-contract.md)
+- [ADR-0020](adr/ADR-0020-campaign-manager-continuous-operation.md)
 - [Normative Phase H architecture](CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md)
 - [Accepted Campaign Operations specification](../../ArchitectureReviews/CampaignOperations/02_CEE/CampaignOperations_Revised_Architecture_Output.md)
 - [Phase 6B persistence and preview](../Phase6BRecommendationCampaignFollowUpProposalPersistence.rst)
@@ -455,3 +473,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.13.0 | 2026-08-01 | Applied ADR-0019A's targeted 61-byte acquisition identifier, sealed owner-safe context/ownership inventory, exact fixed-transition replay, complete acquisition lock order, default ACL and SECURITY DEFINER hardening, and genuine pre-055 fixture requirements. | ADR-0019A |
 | 0.14.0 | 2026-08-01 | Applied ADR-0019B's exact sealed-role identity/recursive graph, literal minimum ownership and all-schema entry-point manifests, automatic deployment audits, restore A–J, complete ACL/lock/negative matrices, and post-restore historical-byte proof. | ADR-0019B |
 | 0.15.0 | 2026-08-03 | Completed migration-055 fail-closed function tuples, post-recovery reacquisition, cross-principal replay, full audit/authority hydration, stable diagnostics, and recursive edge-preserving role evidence. | ADR-0019B |
+| 0.16.0 | 2026-08-10 | Aligned the implemented Phase H database state through H3 migrations 055-058, including H2 privilege/dispatch and H3 bounded Manager database contracts; recorded that ADR-0020 H4 adds no database schema, ACL, role, singleton, or scheduling authority. | ADR-0019, ADR-0019C, ADR-0020 |

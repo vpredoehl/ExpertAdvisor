@@ -6,6 +6,7 @@ repository="$repo_root/Sources/CampaignOperationsDispatchRepository.cpp"
 service="$repo_root/Sources/CampaignOperationsManagerService.cpp"
 migration_service="$repo_root/Sources/CampaignOperationsDispatchService.cpp"
 migration="$repo_root/Database/migrations/058_campaign_operations_h3_manager_run_once.sql"
+help_source="$repo_root/Sources/ExperimentScheduler.cpp"
 
 snapshot="$(sed -n '/SelectDispatchCandidatesForManager(/,/^}/p' "$repository")"
 grep -q 'REPEATABLE READ, READ ONLY' <<<"$snapshot"
@@ -28,5 +29,9 @@ grep -q 'source evidence incomplete' "$migration"
 grep -q 'RequireExactManagerOperationSourceEvidence' "$repository"
 grep -q 'managerSourceCanonical' "$repository"
 grep -q 'campaign_operations_manager_operation_key_reserved' "$migration_service"
+
+grep -Fq 'continuous CLI/daemon mode. ADR-0020 accepts' "$help_source"
+grep -Fq 'external deployment-owned H4 supervision' "$help_source"
+grep -Fq 'no scheduler polling or database singleton, heartbeat,' "$help_source"
 
 echo "Campaign Operations Phase H3 structural contract tests passed"

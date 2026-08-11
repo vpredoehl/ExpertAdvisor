@@ -1,9 +1,9 @@
 # Campaign Operations Phase H — Production Dispatch Admission and Manager
 
 Status: Accepted implementation authority
-Version: 1.2.0
-Date: 2026-08-01
-Authority: ADR-0019 as narrowly amended by ADR-0019A and ADR-0019B; ADR-0010 through ADR-0018 remain governing as stated below
+Version: 1.2.1
+Date: 2026-08-10
+Authority: ADR-0019 as narrowly amended by ADR-0019A and ADR-0019B, and later refined for external H4 supervision by ADR-0020; ADR-0010 through ADR-0018 remain governing as stated below
 
 ## 1. Decision and normative language
 
@@ -40,9 +40,12 @@ Physical archival, retention/deletion, autonomous research, adaptive budgets,
 partial dispatch, scheduler work classes, scheduler capacity or priority
 policy, scheduler claims/attempts/leases, worker/process launch or control,
 running-worker cancellation, scientific interpretation, automatic request
-acceptance, automatic completion, and continuous Manager operation are out of
-scope. Disable does not stop or signal work and does not mutate lifecycle or
-scheduler state.
+acceptance, automatic completion, and an in-process continuous Manager
+CLI/daemon are out of scope. ADR-0020 separately accepts external,
+deployment-owned H4 supervision that repeatedly invokes H3 run-once; it adds
+no scheduler polling or database singleton, heartbeat, lease, or leader-
+election authority. Disable does not stop or signal work and does not mutate
+lifecycle or scheduler state.
 
 ### 2.3 Component ownership
 
@@ -774,11 +777,15 @@ correctness tests. H3 has no daemon, polling, sleep, autostart, or supervision.
 
 ### H4 — Continuous Campaign Manager
 
-Excluded from the initial implementation. It requires a separate operational
-ADR or explicit later acceptance covering supervision, restart/autostart
-ownership, cadence/backoff, graceful shutdown, health/status, log ownership
-and rotation, duplicate-instance/churn limits, deployment ownership, and
-rollback. Database-level multi-manager correctness cannot imply H4 authority.
+ADR-0019 excluded H4 from its initial implementation. ADR-0020 later accepts
+H4 solely as external, deployment-owned (including launchd) supervision that
+repeatedly invokes the bounded H3 run-once command. It owns the operational
+supervision, restart/autostart, cadence/backoff, graceful shutdown,
+health/status, log ownership/rotation, duplicate-instance limits, and rollback
+contract. It does not authorize an in-process `LSTM_Release` continuous
+CLI/daemon, scheduler-owned Campaign Manager polling, or database singleton,
+heartbeat, lease, or leader-election authority. Database-level multi-manager
+correctness remains only an H3 request-boundary backstop.
 
 H1, H2, and H3 are independently committable and safe while no enable event
 exists and no production LOGIN membership has been granted.
@@ -795,7 +802,8 @@ actor, reason where applicable, and literal acknowledgement. H3 adds only
 `--campaign-operations-manager-run-once` with a positive bounded dispatch
 limit. Production mutation rejects dry-run; read-only commands reject
 acknowledgement. No production flag exposes test hooks, and no continuous
-Manager command exists before H4.
+Manager CLI/daemon command exists. ADR-0020 H4 is an external supervisor, not
+an additional `LSTM_Release` command.
 
 ## 19. Required implementation verification
 
@@ -834,7 +842,8 @@ Rollout order is fixed:
 7. inspect admission, attempt, binding, lifecycle, scheduler claim, and audit;
 8. run one-request run-once;
 9. increase only through bounded reviewed limits;
-10. consider H4 separately.
+10. when continuous operation is required, use only the ADR-0020 external H4
+    deployment contract.
 
 Rollback is always disable first, then stop Manager, then revoke roles. No
 admission, attempt, binding, enablement, disablement, or audit evidence is

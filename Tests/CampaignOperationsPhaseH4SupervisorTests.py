@@ -74,6 +74,71 @@ class H4SupervisorTests(unittest.TestCase):
         self.write_config(limit=101)
         with self.assertRaises(h4.ConfigurationError): h4.Config.load(self.config_path)
 
+    def test_existing_state_directory_must_be_owner_only(self):
+        self.config.state_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.config.state_directory.chmod(0o755)
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
+
+    def test_existing_log_directory_must_be_owner_only(self):
+        self.config.log_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.config.log_directory.chmod(0o755)
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
+
+    def test_existing_state_directory_must_not_be_symlink(self):
+        target = self.config.state_directory.parent / "state-target"
+        target.mkdir(mode=0o700)
+        self.config.state_directory.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
+
+    def test_tampered_stop_in_untrusted_state_directory_is_rejected(self):
+        self.config.state_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+        # Simulate a syntactically plausible replacement of a prior durable
+        # STOP with a launch-permitting scheduled state.
+        state_path = (
+            self.config.state_directory /
+            "campaign_operations_h4_state.json"
+        )
+        state_path.write_text(json.dumps({
+            "complete": True,
+            "deployment_identity": self.config.deployment_identity,
+            "deployment_execution_identity":
+                self.config.deployment_execution_identity,
+            "target_database_identity": self.config.target_database_identity,
+            "target_environment": self.config.target_environment,
+            "postgresql_login_identity": self.config.postgresql_login_identity,
+            "classification": "no_work_completion",
+            "next_action": h4.NORMAL_ACTION,
+            "retry_count": 0,
+            "status": "scheduled",
+            "service_alive": True,
+            "terminal_result_validity": "valid",
+            "graceful_drain_state": "not_requested",
+            "duplicate_drift_detected": None,
+            "invocation_start": None,
+            "invocation_end": None,
+            "child_exit_status": 0,
+            "next_scheduled_invocation": h4.future(1),
+            "work_occurred": False,
+            "last_valid_work_result": False,
+            "last_valid_no_work_result": True,
+            "readiness_check_at": None,
+            "readiness_result": None,
+            "readiness_blocker": None,
+            "updated_at": h4.now(),
+        }))
+
+        # An untrusted principal's ability to replace deployment state is
+        # represented by an insecure containing directory. Configuration must
+        # fail before the persisted record can become restart authority.
+        self.config.state_directory.chmod(0o777)
+
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
+
     def test_main_configuration_file_must_be_owner_only(self):
         self.config_path.chmod(0o644)
         with self.assertRaises(h4.ConfigurationError):
