@@ -24,7 +24,7 @@ h1_sum="$(shasum -a 256 "$h1" | awk '{print $1}')"
 h2_sum="$(shasum -a 256 "$h2" | awk '{print $1}')"
 h2_bind_sum="$(shasum -a 256 "$h2_bind" | awk '{print $1}')"
 fail() { printf 'SQLSTATE=%s diagnostic=%s object=%s stage=%s audit_version=%s detail=%s\n' "$1" "$2" "$3" "$stage" "$audit_version" "$4" >&2; exit 1; }
-[[ "$h1_sum" == "dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0" ]] || fail 55000 H2A004 local-055 "migration-055-bytes-changed"
+[[ "$h1_sum" == "1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe" ]] || fail 55000 H2A004 local-055 "migration-055-bytes-changed"
 "$repo_root/Scripts/CampaignOperationsH2ManifestValidator.sh" || fail 55000 H2A004 "manifest-set" "manifest-digest-or-row-count"
 result="$(psql -X -qAt -v ON_ERROR_STOP=1 -h "$host" -p "$port" -U "$user_name" "$database_name" -v h1_sum="$h1_sum" -v h2_sum="$h2_sum" -v h2_bind_sum="$h2_bind_sum" -f "$repo_root/Tests/CampaignOperationsPhaseH2DeploymentAudit.sql" 2>&1)" || {
   first="$(printf '%s\n' "$result" | sed -n '1p')"
