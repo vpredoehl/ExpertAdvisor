@@ -42,13 +42,15 @@ validated child environment is retained for later H1/H3 commands. A malformed
 or unapproved setting, including ``PGSERVICE`` or ``PGUSER``, produces the
 deployment-owned ``STOP_INVALID_CONFIGURATION`` health/state record and no H3
 launch.
-The current reviewed ``LSTM_Release`` connection builder explicitly selects the
-``pqxx`` PostgreSQL login and receives only ``LSTM_DB_HOST`` and
-``LSTM_DB_NAME`` from this deployment file. The config must name that exact
-login; it cannot silently inherit an ambient PostgreSQL user or service.
-``PGSERVICE`` and ``PGUSER`` are deliberately rejected here because they do
-not override that existing explicit connection mechanism. ``UserName`` in the
-plist is the separate reviewed macOS execution identity and is compared to
+H4 supplies ``LSTM_DB_HOST``, ``LSTM_DB_NAME``, and the required
+``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER``. The config's
+``postgresql_login_identity`` must exactly equal that environment value. The
+Phase-H command path constructs an explicit Manager-login connection and fails
+closed when it is absent; the generic ``pqxx`` connection builder remains
+unchanged for scheduler, training, inference, and pre-Phase-H commands.
+``PGSERVICE`` and ``PGUSER`` are deliberately rejected so an ambient user or
+service cannot replace the reviewed identity. ``UserName`` in the plist is the
+separate reviewed macOS execution identity and is compared to
 ``deployment_execution_identity`` by the supervisor at launch.
 ``log_retention_policy`` is a mandatory reviewed external rotation/retention
 reference; H4 itself does not delete or rotate evidence.
@@ -60,6 +62,42 @@ The actual H3 child command is exactly::
 Immediately before every child, the supervisor runs the existing read-only
 ``--campaign-operations-production-readiness`` command. H3 retains final
 transactional gates.
+
+Production LOGIN procedure
+--------------------------
+
+LOGINs are deployment-time objects, never migration 056 objects. Before
+enablement, the deployment operator creates or configures the three LOGINs
+through the approved PostgreSQL authentication mechanism, then grants only
+these direct NOLOGIN memberships (replace the placeholders with reviewed LOGIN
+names)::
+
+   GRANT campaign_operations_production_enabler,
+         campaign_operations_production_reader,
+         campaign_operations_scheduler_protocol_evidence_reader
+     TO <ENABLER_LOGIN>;
+   GRANT campaign_operations_production_disabler,
+         campaign_operations_production_reader
+     TO <DISABLER_LOGIN>;
+   GRANT campaign_operations_production_dispatcher,
+         campaign_operations_production_phase5_transactional,
+         campaign_operations_production_reader,
+         campaign_operations_scheduler_protocol_evidence_reader
+     TO <MANAGER_LOGIN>;
+
+Set ``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=<MANAGER_LOGIN>`` only in
+the owner-only H4 connection environment file. Use the enabler and disabler
+environment variables only for their corresponding direct CLI commands:
+``CAMPAIGN_OPERATIONS_PRODUCTION_ENABLER_DB_USER`` and
+``CAMPAIGN_OPERATIONS_PRODUCTION_DISABLER_DB_USER``. No variable has a ``pqxx``
+fallback and no password belongs in these files.
+
+Verify the exact tuples with ``Scripts/CampaignOperationsH2DeploymentAudit.sh``
+followed by ``Scripts/CampaignOperationsH1DeploymentAudit.sh --stage
+pre-enablement ...``. The H2 audit rejects an unsafe capability graph,
+transitive path, ADMIN OPTION, sealed-owner reachability, or a ``pqxx``
+production-capability membership. Do not enable production as part of either
+audit.
 
 launchd operation
 -----------------

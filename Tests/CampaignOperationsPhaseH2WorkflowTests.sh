@@ -159,6 +159,73 @@ echo "H2_BRIDGE_DISABLE native=record_campaign_operations_production_disable_v1 
   --stage post-upgrade --host "$cluster_socket" --port 5432 \
   --user campaign_manager_login --database "$database" | tee "$tmp_root/h2-privilege.log"
 
+# H1 remains historical authority.  Its post-H1 pre-enablement stage is a
+# closed, ledger-bound union: H2's one readiness adapter is accepted, but it
+# was not added to the frozen 055 manifest.
+"$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+  --stage pre-enablement --host "$cluster_socket" --port 5432 \
+  --user campaign_manager_login --database "$database" | \
+  tee "$tmp_root/h1-post-h2-pre-enablement.log"
+rg -q 'post_h1_evolution=056-readiness-wrapper' \
+  "$tmp_root/h1-post-h2-pre-enablement.log"
+if rg -q 'production_readiness_snapshot_v1' \
+    "$repo_root/Database/manifests/055_campaign_operations_h1_object_inventory.tsv"; then
+  echo "frozen H1 inventory was rewritten to claim the H2 adapter" >&2
+  exit 1
+fi
+
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" <<'SQL'
+SET SESSION AUTHORIZATION campaign_operations_h1_boundary_authority;
+CREATE FUNCTION public.campaign_operations_h1_post_h2_unknown_probe()
+RETURNS integer LANGUAGE sql AS 'SELECT 1';
+RESET SESSION AUTHORIZATION;
+SQL
+if "$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+    --stage pre-enablement --host "$cluster_socket" --port 5432 \
+    --user campaign_manager_login --database "$database" \
+    >"$tmp_root/h1-post-h2-unknown-owner.log" 2>&1; then
+  echo "post-H1 audit accepted an unknown sealed-owner function" >&2
+  exit 1
+fi
+rg -q 'H1A004.*boundary-function-set' "$tmp_root/h1-post-h2-unknown-owner.log"
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  'DROP FUNCTION public.campaign_operations_h1_post_h2_unknown_probe();'
+
+# H2's ledger-bound wrapper audit is also the authority for every accepted
+# property and ACL; each mutation must reject rather than normalize.
+expect_h1_post_h2_wrapper_rejection() {
+  local label="$1" mutate_sql="$2" restore_sql="$3"
+  psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c "$mutate_sql"
+  if "$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+      --stage pre-enablement --host "$cluster_socket" --port 5432 \
+      --user campaign_manager_login --database "$database" \
+      >"$tmp_root/h1-post-h2-${label}.log" 2>&1; then
+    echo "post-H1 audit accepted altered H2 readiness wrapper: $label" >&2
+    exit 1
+  fi
+  rg -q 'H2A002|H2A003|H2A005' "$tmp_root/h1-post-h2-${label}.log"
+  psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c "$restore_sql"
+}
+expect_h1_post_h2_wrapper_rejection security_definer \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() SECURITY INVOKER;' \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() SECURITY DEFINER;'
+expect_h1_post_h2_wrapper_rejection volatility \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() VOLATILE;' \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() STABLE;'
+expect_h1_post_h2_wrapper_rejection owner \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() OWNER TO campaign_manager_login;' \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() OWNER TO campaign_operations_h1_boundary_authority;'
+expect_h1_post_h2_wrapper_rejection search_path \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() SET search_path TO pg_catalog;' \
+  'ALTER FUNCTION public.campaign_operations_production_readiness_snapshot_v1() SET search_path TO pg_catalog, public;'
+expect_h1_post_h2_wrapper_rejection reader_acl \
+  'REVOKE EXECUTE ON FUNCTION public.campaign_operations_production_readiness_snapshot_v1() FROM campaign_operations_production_reader;' \
+  'GRANT EXECUTE ON FUNCTION public.campaign_operations_production_readiness_snapshot_v1() TO campaign_operations_production_reader;'
+"$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+  --stage pre-enablement --host "$cluster_socket" --port 5432 \
+  --user campaign_manager_login --database "$database" >/dev/null
+echo "H1_POST_H2_EVOLUTION accepted_wrapper=PASS wrapper_mutations=REJECTED unknown_owner=REJECTED frozen_h1=UNCHANGED"
+
 # Recursive deployment-role hostile fixtures.  The clean audit above is the
 # allowed H2 graph control.  These mutations are cluster-audit fixtures only;
 # each is removed before the restored clean audit.

@@ -30,7 +30,7 @@ RETRY_ACTION = "BACKOFF_AND_RETRY_WITH_READINESS"
 NORMAL_ACTION = "CONTINUE_AFTER_NORMAL_INTERVAL"
 RESTORE_ACTION = "RESTORE_PERSISTED_NEXT_ACTION"
 ALL_ACTIONS = STOP_ACTIONS | {RETRY_ACTION, NORMAL_ACTION, RESTORE_ACTION}
-H3_LOGIN_IDENTITY = "pqxx"  # Literal login selected by LSTM_Release's existing connection builder.
+H3_LOGIN_ENVIRONMENT_KEY = "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"
 
 NORMAL_CLASSIFICATIONS = {"work_completion", "no_work_completion", "request_local_semantic_failure"}
 RETRY_CLASSIFICATIONS = {"database_failure", "connectivity_transport_failure", "process_interruption"}
@@ -255,9 +255,9 @@ class Config:
                         "existing state and log directories must be owner-only"
                     )
         login_identity = text("postgresql_login_identity")
-        if login_identity != H3_LOGIN_IDENTITY:
-            raise ConfigurationError("postgresql_login_identity must match the reviewed LSTM_Release login identity")
         child_environment = Config._validated_child_environment(env_file)
+        if child_environment[H3_LOGIN_ENVIRONMENT_KEY] != login_identity:
+            raise ConfigurationError("postgresql_login_identity must match the configured Manager production LOGIN")
         return Config(path, text("deployment_identity"), text("deployment_execution_identity"),
                       text("target_database_identity"), text("target_environment"), login_identity,
                       executable, digest, env_file, child_environment, limit,
@@ -271,7 +271,9 @@ class Config:
             lines = connection_environment_file.read_text().splitlines()
         except Exception as error:
             raise ConfigurationError("connection environment file is unreadable") from error
-        allowed = {"LSTM_DB_HOST", "LSTM_DB_NAME", "PGPASSFILE", "PGSSLMODE", "PGSSLROOTCERT"}
+        allowed = {"LSTM_DB_HOST", "LSTM_DB_NAME",
+                   "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER",
+                   "PGPASSFILE", "PGSSLMODE", "PGSSLROOTCERT"}
         for line in lines:
             if not line or line.startswith("#"):
                 continue
@@ -281,10 +283,12 @@ class Config:
             if key not in allowed or not value or key in values or "\x00" in value:
                 raise ConfigurationError("connection environment file has an unapproved setting")
             values[key] = value
-        if not values.get("LSTM_DB_HOST") or not values.get("LSTM_DB_NAME"):
-            raise ConfigurationError("connection environment must explicitly identify LSTM_DB_HOST and LSTM_DB_NAME")
-        # LSTM_Release explicitly constructs host/dbname/user=pqxx.  Do not
-        # suggest PGSERVICE can override that reviewed connection identity.
+        if (not values.get("LSTM_DB_HOST") or not values.get("LSTM_DB_NAME") or
+                not values.get("CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER")):
+            raise ConfigurationError("connection environment must explicitly identify LSTM_DB_HOST, LSTM_DB_NAME, and the Manager production LOGIN")
+        # H4 invokes only Manager/readiness commands.  PGSERVICE/PGUSER remain
+        # rejected so an ambient connection identity cannot replace the
+        # reviewed explicit Manager LOGIN.
         # Do not inherit arbitrary parent LSTM/PG substitutions.
         environment = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL") if key in os.environ}
         environment.update(values)

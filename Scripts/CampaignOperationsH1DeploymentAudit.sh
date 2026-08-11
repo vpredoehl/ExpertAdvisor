@@ -149,6 +149,15 @@ if [[ "$stage" == "pre-upgrade" ]]; then
     role_findings="$(printf '%s\n' "$role_findings" |
         awk '!/^missing:/' | sed '/^$/d')"
 fi
+if [[ "$stage" == "pre-enablement" ]]; then
+    # H2 alone authorizes the direct deployment LOGIN-to-capability graph.
+    # Retain H1's sealed-owner reachability check here; the H2 audit below
+    # validates the exact accepted capability tuples and rejects every other
+    # graph edge, including pqxx membership and ADMIN OPTION.
+    role_findings="$(printf '%s\n' "$role_findings" |
+        awk '!/^graph:/ || /campaign_operations_h1_boundary_authority/' |
+        sed '/^$/d')"
+fi
 if [[ -n "$role_findings" ]]; then
     if rg -q '^graph:' <<<"$role_findings"; then
         audit_failure 42501 H1A003 "$role_findings" "$stage" \
@@ -160,6 +169,68 @@ if [[ -n "$role_findings" ]]; then
         audit_failure 42501 H1A002 "$role_findings" "$stage" \
             "role-identity-mismatch"
     fi
+fi
+
+# H1's frozen in-database audit intentionally proves the exact 055 catalog.
+# At pre-enablement after H2 is installed, it must not be asked to claim that
+# the H2 readiness adapter existed at H1.  The H2 deployment audit is the
+# separately versioned authority for that one extension (including migration
+# ledger identity, ACL, owner, SECURITY DEFINER, volatility and search path).
+# Keep the H1 manifest immutable and add only this checked-in, ledger-bound
+# union at the post-H1 stage.  Any other boundary-owned function remains a
+# closed-set mismatch.
+if [[ "$stage" == "pre-enablement" ]]; then
+    "$repo_root/Scripts/CampaignOperationsH2DeploymentAudit.sh" \
+        --stage "$stage" --host "$audit_host" --port "$audit_port" \
+        --user "$audit_user" --database "$audit_database"
+
+    post_h1_function_findings="$({
+        printf '%s\n' 'BEGIN TRANSACTION READ ONLY;'
+        printf '%s\n' 'WITH expected_h1(signature) AS ('
+        awk -F '\t' '
+            NR > 1 && $3 == "function" &&
+            $6 == "campaign_operations_h1_boundary_authority" {
+                value = $5
+                gsub(/\047/, "\047\047", value)
+                if (count++) printf " UNION ALL\n"
+                printf " SELECT \047%s\047::text", value
+            }
+            END { if (!count) exit 1; printf "\n" }
+        ' "$repo_root/Database/manifests/055_campaign_operations_h1_object_inventory.tsv"
+        printf '%s\n' '), accepted_post_h1(signature) AS ('
+        printf '%s\n' " SELECT 'public.campaign_operations_production_readiness_snapshot_v1()'::text"
+        printf '%s\n' '), expected(signature) AS ('
+        printf '%s\n' ' SELECT signature FROM expected_h1 UNION ALL SELECT signature FROM accepted_post_h1'
+        printf '%s\n' '), actual(signature) AS ('
+        printf '%s\n' " SELECT namespace.nspname || '.' || function_row.oid::pg_catalog.regprocedure::text"
+        printf '%s\n' ' FROM pg_catalog.pg_proc function_row'
+        printf '%s\n' ' JOIN pg_catalog.pg_namespace namespace ON namespace.oid = function_row.pronamespace'
+        printf '%s\n' " WHERE function_row.proowner = 'campaign_operations_h1_boundary_authority'::regrole"
+        printf '%s\n' '), wrapper AS ('
+        printf '%s\n' ' SELECT function_row.proowner = '\''campaign_operations_h1_boundary_authority'\''::regrole'
+        printf '%s\n' "        AND function_row.prosecdef AND function_row.prokind = 'f'"
+        printf '%s\n' "        AND function_row.provolatile = 's' AND function_row.proparallel = 'u'"
+        printf '%s\n' '        AND NOT function_row.proleakproof AND function_row.pronargdefaults = 0'
+        printf '%s\n' '        AND function_row.provariadic = 0'
+        printf '%s\n' "        AND function_row.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public']::text[] AS valid"
+        printf '%s\n' ' FROM pg_catalog.pg_proc function_row'
+        printf '%s\n' " WHERE function_row.oid = 'public.campaign_operations_production_readiness_snapshot_v1()'::regprocedure"
+        printf '%s\n' ')'
+        printf '%s\n' "SELECT 'boundary-function-set:' || signature FROM ("
+        printf '%s\n' ' SELECT signature FROM expected EXCEPT SELECT signature FROM actual'
+        printf '%s\n' ' UNION ALL SELECT signature FROM actual EXCEPT SELECT signature FROM expected'
+        printf '%s\n' ') mismatch'
+        printf '%s\n' 'UNION ALL'
+        printf '%s\n' "SELECT 'readiness-wrapper-properties' WHERE NOT coalesce((SELECT valid FROM wrapper), false);"
+        printf '%s\n' 'COMMIT;'
+    } | psql "${psql_target[@]}")"
+    if [[ -n "$post_h1_function_findings" ]]; then
+        audit_failure 42501 H1A004 "$post_h1_function_findings" "$stage" \
+            "unaccepted-post-H1-boundary-function-evolution"
+    fi
+
+    echo "H1_DEPLOYMENT_AUDIT_V1_OK stage=$stage post_h1_evolution=056-readiness-wrapper"
+    exit 0
 fi
 
 if [[ "$stage" == "pre-upgrade" || "$stage" == "pre-restore" ]]; then

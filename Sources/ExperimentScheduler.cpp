@@ -1252,6 +1252,38 @@ std::string LstmDbConnectionString()
            " gssencmode=disable user=pqxx dbname=" + GetEnvOrDefault("LSTM_DB_NAME", "LSTM");
 }
 
+std::string LibpqConnectionValue(const std::string& value)
+{
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('\'');
+    for (const char character : value)
+    {
+        if (character == '\'' || character == '\\')
+            escaped.push_back('\\');
+        escaped.push_back(character);
+    }
+    escaped.push_back('\'');
+    return escaped;
+}
+
+std::string CampaignOperationsProductionConnectionString(
+    const char* principalEnvironmentVariable)
+{
+    const char* principal = std::getenv(principalEnvironmentVariable);
+    if (principal == nullptr || *principal == '\0')
+        throw std::runtime_error(
+            std::string{"missing required Campaign Operations production "}
+            + "principal environment variable " + principalEnvironmentVariable);
+
+    // This is intentionally separate from LstmDbConnectionString(): only the
+    // accepted Phase-H production command family may use a deployment LOGIN.
+    return "hostaddr=" + LibpqConnectionValue(
+               GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1")) +
+           " gssencmode=disable user=" + LibpqConnectionValue(principal) +
+           " dbname=" + LibpqConnectionValue(GetEnvOrDefault("LSTM_DB_NAME", "LSTM"));
+}
+
 std::string CurrentLocalFilenameTimestamp()
 {
     const auto now = std::chrono::system_clock::now();
@@ -22787,18 +22819,23 @@ void PrintExperimentSchedulerHelp(const char* executable)
 
 int RunCampaignOperationsCommand(const SchedulerOptions& options)
 {
-    const std::string connectionString = LstmDbConnectionString();
     if (options.campaignOperationsProductionReadiness)
         return EA::CampaignOperations::RunProductionReadinessCommand(
-            connectionString, std::cout, std::cerr,
+            CampaignOperationsProductionConnectionString(
+                "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
+            std::cout, std::cerr,
             EA::CampaignOperations::CaptureActualManagerBuildContract(
                 options.selfPath));
     if (options.campaignOperationsProductionStatus)
         return EA::CampaignOperations::RunProductionStatusCommand(
-            connectionString, std::cout, std::cerr);
+            CampaignOperationsProductionConnectionString(
+                "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
+            std::cout, std::cerr);
     if (options.campaignOperationsManagerRunOnceLimit)
         return EA::CampaignOperations::RunCampaignOperationsManagerOnceCommand(
-            connectionString, *options.campaignOperationsManagerRunOnceLimit,
+            CampaignOperationsProductionConnectionString(
+                "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
+            *options.campaignOperationsManagerRunOnceLimit,
             options.selfPath, std::cout, std::cerr);
     if (options.campaignOperationsProductionEnable)
     {
@@ -22818,7 +22855,9 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
             *build,
             true};
         return EA::CampaignOperations::RunProductionEnableCommand(
-            connectionString, request, std::cout, std::cerr);
+            CampaignOperationsProductionConnectionString(
+                "CAMPAIGN_OPERATIONS_PRODUCTION_ENABLER_DB_USER"),
+            request, std::cout, std::cerr);
     }
     if (options.campaignOperationsProductionDisable)
     {
@@ -22830,7 +22869,9 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
             EA::CampaignOperations::Reason(*options.campaignOperationsReason),
             true};
         return EA::CampaignOperations::RunProductionDisableCommand(
-            connectionString, request, std::cout, std::cerr);
+            CampaignOperationsProductionConnectionString(
+                "CAMPAIGN_OPERATIONS_PRODUCTION_DISABLER_DB_USER"),
+            request, std::cout, std::cerr);
     }
     if (options.campaignOperationsProductionDispatchRequest)
     {
@@ -22851,7 +22892,9 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
             true};
         const auto result =
             EA::CampaignOperations::DispatchOneRequestForProduction(
-                connectionString, request, options.selfPath);
+                CampaignOperationsProductionConnectionString(
+                    "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
+                request, options.selfPath);
         std::cout << "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH"
                   << ",request_id=" << result.requestId.value()
                   << ",classification="
@@ -22877,6 +22920,11 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
                     EA::CampaignOperations::DispatchResultClassification::
                         existingIdentical ? 0 : 2;
     }
+
+    // Pre-Phase-H Campaign Operations commands intentionally retain the
+    // generic runtime connection and therefore cannot acquire production
+    // capability merely by being invoked from this command family.
+    const std::string connectionString = LstmDbConnectionString();
     if (options.campaignOperationsCompletionStatusCampaignId)
         return EA::CampaignOperations::RunCampaignCompletionStatusCommand(
             connectionString,

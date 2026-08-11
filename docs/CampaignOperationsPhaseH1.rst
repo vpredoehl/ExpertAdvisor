@@ -99,6 +99,15 @@ same target. The manifest expands NULL ACLs with ``acldefault()``, uses
 ``aclexplode()``, preserves ``catalog_acl IS NULL`` for every scanned ACL
 column, and reports every row from both expected-minus-actual and
 actual-minus-expected differences as stable ``H1A006`` or ``H1A007`` output.
+For ``pre-enablement`` after H2 is installed, the historical 055 function is
+not reinterpreted as if the H2 readiness adapter had existed at H1. The H1
+manifest remains frozen and is validated unchanged; the audit then invokes the
+versioned H2 deployment audit (which binds migration 056/057 ledger identity)
+and permits exactly
+``public.campaign_operations_production_readiness_snapshot_v1()`` in the
+sealed-owner function set. Its owner, SECURITY DEFINER/STABLE properties,
+search path, and ACL remain H2-exact. Any other sealed-owner function still
+fails closed as ``H1A004``.
 Historical restore verification calls the same
 surface with the final argument ``true`` after restoring the captured pre-055
 fixture.

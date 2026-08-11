@@ -96,3 +96,10 @@ H2 has no Manager run-once command, candidate-selection loop, deterministic
 Manager-generated operation key, polling, daemon, cadence/backoff loop,
 supervision, autostart, or continuous command. Those behaviors remain H3/H4
 boundaries.
+
+The production CLI never reuses the generic ``pqxx`` connection identity.
+Readiness, status, direct dispatch, and H3 Manager run-once require
+``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER``; enable requires
+``CAMPAIGN_OPERATIONS_PRODUCTION_ENABLER_DB_USER``; disable requires
+``CAMPAIGN_OPERATIONS_PRODUCTION_DISABLER_DB_USER``. Each is required and has
+no fallback. The accepted direct membership tuples remain ADR-0019C authority.

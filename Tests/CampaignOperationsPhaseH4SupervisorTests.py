@@ -43,7 +43,7 @@ class H4SupervisorTests(unittest.TestCase):
         self.executable.write_text("#!/bin/sh\nexit 0\n")
         self.executable.chmod(0o700)
         self.env = root / "connection.env"
-        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\n")
+        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\n")
         self.env.chmod(0o600)
         self.config_path = root / "config.json"
         self.write_config()
@@ -55,7 +55,7 @@ class H4SupervisorTests(unittest.TestCase):
 
     def write_config(self, **changes):
         root = Path(self.temp.name)
-        value = {"deployment_identity":"test.h4", "deployment_execution_identity":"test-h4", "target_database_identity":"test-db", "target_environment":"test", "postgresql_login_identity":"pqxx", "executable_path":str(self.executable), "executable_sha256":hashlib.sha256(self.executable.read_bytes()).hexdigest(), "connection_environment_file":str(self.env), "limit":1, "normal_interval_seconds":1, "backoff_seconds":[1,2], "retry_budget":2, "graceful_drain_timeout_seconds":1, "state_directory":str(root / "state"), "log_directory":str(root / "logs"), "log_retention_policy":"test-policy"}
+        value = {"deployment_identity":"test.h4", "deployment_execution_identity":"test-h4", "target_database_identity":"test-db", "target_environment":"test", "postgresql_login_identity":"test_manager_login", "executable_path":str(self.executable), "executable_sha256":hashlib.sha256(self.executable.read_bytes()).hexdigest(), "connection_environment_file":str(self.env), "limit":1, "normal_interval_seconds":1, "backoff_seconds":[1,2], "retry_budget":2, "graceful_drain_timeout_seconds":1, "state_directory":str(root / "state"), "log_directory":str(root / "logs"), "log_retention_policy":"test-policy"}
         value.update(changes)
         self.config_path.write_text(json.dumps(value))
         self.config_path.chmod(0o600)
@@ -230,19 +230,30 @@ class H4SupervisorTests(unittest.TestCase):
         with mock.patch.object(h4.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="test-h4")):
             self.config.validate_execution_identity()
         for contents in (
-                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nPGSERVICE=ambient\n",
-                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nPGUSER=ambient\n",
+                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nPGSERVICE=ambient\n",
+                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nPGUSER=ambient\n",
                 "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nnot-an-assignment\n",
                 "LSTM_DB_HOST=127.0.0.1\n",
                 "LSTM_DB_NAME=test\n"):
             self.env.write_text(contents)
             with self.subTest(contents=contents), self.assertRaises(h4.ConfigurationError):
                 h4.Config.load(self.config_path)
-        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\n")
+        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\n")
         self.env.chmod(0o644)
         with self.assertRaises(h4.ConfigurationError): h4.Config.load(self.config_path)
         self.env.chmod(0o600)
         self.assertEqual(h4.redact("password=secret-value"), "password=<redacted>")
+
+    def test_manager_production_login_is_required_and_matches_reviewed_identity(self):
+        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\n")
+        self.env.chmod(0o600)
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
+
+        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=other_login\n")
+        self.env.chmod(0o600)
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
 
     def test_invalid_connection_environment_stops_at_startup_with_health_evidence(self):
         self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nPGSERVICE=ambient\n")
@@ -629,7 +640,8 @@ class H4SupervisorTests(unittest.TestCase):
         self.assertIn("<key>Crashed</key><true/>", plist)
         self.assertIn("<key>ThrottleInterval</key><integer>60</integer>", plist)
         self.assertEqual(configuration["deployment_execution_identity"], "expertadvisor-h4")
-        self.assertEqual(configuration["postgresql_login_identity"], "pqxx")
+        self.assertEqual(configuration["postgresql_login_identity"], "REPLACE_WITH_MANAGER_LOGIN")
+        self.assertIn("CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=REPLACE_WITH_MANAGER_LOGIN", env)
         self.assertNotIn("PGSERVICE=", env)
         self.assertIn("--campaign-operations-manager-run-once", source)
         for forbidden in ("psycopg", "CREATE TABLE", "advisory", "heartbeat", "--schedule-experiments"):
