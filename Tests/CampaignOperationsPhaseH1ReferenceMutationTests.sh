@@ -54,10 +54,17 @@ if validate "$root" >"$root.log" 2>&1; then echo "stale validator unexpectedly p
 rg -q 'H1V007 key=h1-validator-results.tsv stage=authentic-runtime-validation detail=stale-validator-results' "$root.log" || { cat "$root.log" >&2; exit 1; }
 printf 'H1_MUTATION_CASE\tgraph-stale-validator-result\th1-validator-results.tsv\tH1V007:stale-validator-results\tauthentic-runtime-validation\tH1V007:stale-validator-results\tauthentic-runtime-validation\tPASS\n'
 
-# Replace a semantically parsed H2/H3/H4-exclusion artifact, then refresh both
-# valid SHA-256 fields.  Digest agreement must not make the false claim pass.
+# Replace the semantically parsed H1CPP002 artifact with evidence claiming a
+# forbidden continuous H4 production command, then refresh both valid SHA-256
+# fields. Digest agreement must not make the false claim pass.
 root="$scratch/forged_exclusion"; cp -R "$base" "$root"
-printf 'H2 H3 H4 mutation entry points are present\n' > "$root/runtime-artifacts/records/H1CPP002/phase-h1-cli-results"
+printf '%s\n' \
+  'command=rg scanned_paths=Sources continuous_h4_result_rows=1 scan_result=FAIL' \
+  'prohibited_query=--campaign-operations-production-continuous' \
+  'accepted_post_h1_query=--campaign-operations-manager-run-once' \
+  'accepted_post_h1_files=Sources/ExperimentScheduler.cpp' \
+  '--campaign-operations-production-continuous' \
+  > "$root/runtime-artifacts/records/H1CPP002/phase-h1-cli-results"
 python3 - "$root/h1-runtime-results.tsv" "$root/runtime-artifacts/records/H1CPP002/phase-h1-cli-results" <<'PY'
 import csv, hashlib, sys
 ledger, artifact = sys.argv[1:]
@@ -72,8 +79,8 @@ with open(ledger, "w", newline="") as target:
     writer = csv.DictWriter(target, fieldnames=fields, delimiter="\t", lineterminator="\n"); writer.writeheader(); writer.writerows(rows)
 PY
 if validate "$root" >"$root.log" 2>&1; then echo "forged exclusion unexpectedly passed" >&2; exit 1; fi
-rg -q 'H1V106 key=H1CPP002 stage=authentic-runtime-validation detail=prohibited-h2-h3-h4-entry-point' "$root.log" || { cat "$root.log" >&2; exit 1; }
-printf 'H1_MUTATION_CASE\tgraph-forged-exclusion\truntime-artifacts/records/H1CPP002/phase-h1-cli-results\tH1V106:prohibited-h2-h3-h4-entry-point\tauthentic-runtime-validation\tH1V106:prohibited-h2-h3-h4-entry-point\tauthentic-runtime-validation\tPASS\n'
+rg -q 'H1V106 key=H1CPP002 stage=authentic-runtime-validation detail=prohibited-continuous-h4-entry-point' "$root.log" || { cat "$root.log" >&2; exit 1; }
+printf 'H1_MUTATION_CASE\tgraph-forged-exclusion\truntime-artifacts/records/H1CPP002/phase-h1-cli-results\tH1V106:prohibited-continuous-h4-entry-point\tauthentic-runtime-validation\tH1V106:prohibited-continuous-h4-entry-point\tauthentic-runtime-validation\tPASS\n'
 
 # A syntactically valid replacement of a generic runtime semantic is rejected
 # even after its record digest is recomputed.

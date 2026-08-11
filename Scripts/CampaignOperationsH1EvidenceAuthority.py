@@ -23,10 +23,10 @@ csv.field_size_limit(sys.maxsize)
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN_ROOT = ROOT / "Tests/fixtures"
 AUTHORITY_VERSION = "h1-normative-authority-v2"
-AUTHORITY_DIGEST = "34be85602ebf1c492530ebf17955aaaa2e407c1ee8d7cbc569627f6d8934df4f"
+AUTHORITY_DIGEST = "d071538dfedcd2125bf87f476cf3750ff585d2c06acb4d690925916308ab14ef"
 CONTROL_DIGEST = "0107496646e3473d24238dba27b65de2333bcf265b1528586548eee682261b99"
 POLICY_DIGESTS = {
-    "CampaignOperationsH1EvidenceObligations.tsv": "e2ad39bfecfec92a0297bedb505f1ff5dac1714be5c18acd80e6136717d224a2",
+    "CampaignOperationsH1EvidenceObligations.tsv": "642466cce380ba6351d6aea218658a8472f5b1be30461648d4b46bd2e584c9b9",
     "CampaignOperationsH1ClauseRequirementDerivations.tsv": "46355637cac0b024c8711d90dc6ce7462ff9df6d9578d26aaf290da4f2d598f0",
     "CampaignOperationsH1FinalAssuranceControls.tsv": "c44d8f7805682af844ec92f0a934ec76cabff861d8dca42b8d3fcc61284abaec",
     "CampaignOperationsH1MutationMechanics.tsv": "1a38d77cd18929b55a01b4edfefd9dd51a6a7d7e06e19e7089f86bd7cf8337f3",
@@ -35,6 +35,7 @@ POLICY_DIGESTS = {
     "CampaignOperationsH1RawEvidenceContracts.tsv": "16b4e64594ac94a54f0ad46a37412ebf7b6683d58b003727eecc9fe0b7a48128",
     "CampaignOperationsH1DirectoryPolicy.tsv": "257f0b40257c3feb1d115888a34e7c2b8b81426d0df37691ac94e31e0250f03e",
     "CampaignOperationsH1ReviewDisposition.tsv": "466012f1bccbac6384249fa594b6510096cd70ed7f03283ba7afc1d740b1394f",
+    "CampaignOperationsH1SourceBindings.tsv": "5702ebdb1137205199a6e0c532bc890b90c2489c5b0421d640abf704fa832c3e",
 }
 
 
@@ -77,12 +78,12 @@ def keyed(path: Path, key: str, stage: str) -> dict[str, dict[str, str]]:
     return result
 
 
-def _source_excerpt_digest(row: dict[str, str]) -> str:
+def _source_excerpt_digest(row: dict[str, str], source_root: Path = ROOT) -> str:
     match = re.fullmatch(r"lines ([1-9][0-9]*)-([1-9][0-9]*)", row["exact_source_anchor"])
     if not match:
         fail("104", row["normative_clause_id"], "invalid-source-anchor", "normative-authority-validation")
     first, last = map(int, match.groups())
-    path = ROOT / row["source_document"]
+    path = source_root / row["source_document"]
     try:
         lines = path.read_text().splitlines(keepends=True)
     except OSError:
@@ -96,9 +97,90 @@ def _source_excerpt_digest(row: dict[str, str]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def validate_normative_authority(registry_root: Path, authority_root: Path | None = None) -> dict[str, dict[str, str]]:
+SOURCE_BINDING_HEADER = ["normative_clause_id", "source_binding_policy", "superseding_authority",
+                         "reviewed_live_excerpt", "reviewed_live_clause_digest", "review_basis"]
+SOURCE_BINDING_POLICIES = {"historical_superseded", "semantic_equivalent_revision"}
+SOURCE_BINDING_EXPECTATIONS = {
+    "PHASEH-INCREMENTS": {
+        "source_binding_policy": "historical_superseded",
+        "superseding_authority": "docs/architecture/adr/ADR-0020-campaign-manager-continuous-operation.md",
+        "review_basis": "ADR-0020-H4-EXTERNAL-SUPERVISION-V1",
+    },
+    "VOLUMEXII-MIGRATION": {
+        "source_binding_policy": "semantic_equivalent_revision",
+        "superseding_authority": "docs/architecture/Volume_XII_Database.md",
+        "review_basis": "VOLUME-XII-MIGRATION-055-H1-SEMANTIC-EQUIVALENCE-V1",
+    },
+}
+
+
+def _reviewed_source_excerpt_digest(row: dict[str, str], source_root: Path) -> str:
+    match = re.fullmatch(r"lines ([1-9][0-9]*)-([1-9][0-9]*)", row["exact_source_anchor"])
+    if not match:
+        return ""
+    first, last = map(int, match.groups())
+    try:
+        lines = (source_root / row["source_document"]).read_text().splitlines(keepends=True)
+    except OSError:
+        return ""
+    if first > last or last > len(lines):
+        return ""
+    raw = "".join(lines[first - 1:last])
+    if re.sub(r"\s+", " ", raw).strip() != row["reviewed_live_excerpt"]:
+        return ""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _validate_adr0020_external_supervision(source_root: Path, clause_id: str) -> None:
+    path = source_root / SOURCE_BINDING_EXPECTATIONS[clause_id]["superseding_authority"]
+    try:
+        text = path.read_text()
+    except OSError:
+        fail("111", clause_id, "missing-superseding-authority", "source-binding-validation")
+    required = (
+        "Status: Accepted",
+        "external, deployment-owned\nsupervisor** repeatedly invoking only the existing H3 bounded command",
+        "without changing an H1–H3 runtime,\nschema, command, role, ACL, migration, or database contract",
+        "It introduces no in-process continuous command,\ndaemon, scheduler-owned campaign polling, database singleton, heartbeat,\nManager lease, invocation row, leader election, or process-lifetime fence.",
+    )
+    if any(value not in text for value in required):
+        fail("111", clause_id, "invalid-accepted-adr0020-external-supervision", "source-binding-validation")
+
+
+def validate_source_bindings(authority_root: Path, clauses: dict[str, dict[str, str]], source_root: Path) -> dict[str, dict[str, str]]:
+    path = authority_root / "CampaignOperationsH1SourceBindings.tsv"
+    header, _ = read_tsv(path)
+    if header != SOURCE_BINDING_HEADER:
+        fail("111", path.name, "wrong-source-binding-schema", "source-binding-validation")
+    bindings = keyed(path, "normative_clause_id", "source-binding-validation")
+    if set(bindings) != set(SOURCE_BINDING_EXPECTATIONS):
+        offender = sorted(set(bindings) ^ set(SOURCE_BINDING_EXPECTATIONS))[0]
+        fail("111", offender, "unexpected-or-missing-source-binding", "source-binding-validation")
+    for clause_id, binding in bindings.items():
+        if clause_id not in clauses or binding["source_binding_policy"] not in SOURCE_BINDING_POLICIES:
+            fail("111", clause_id, "unknown-source-binding-policy", "source-binding-validation")
+        expected = SOURCE_BINDING_EXPECTATIONS[clause_id]
+        if any(binding[field] != value for field, value in expected.items()):
+            fail("111", clause_id, "unreviewed-source-binding-relationship", "source-binding-validation")
+        if binding["source_binding_policy"] == "historical_superseded":
+            if binding["reviewed_live_excerpt"] or binding["reviewed_live_clause_digest"]:
+                fail("111", clause_id, "historical-binding-has-live-revision", "source-binding-validation")
+            _validate_adr0020_external_supervision(source_root, clause_id)
+        else:
+            if binding["superseding_authority"] != clauses[clause_id]["source_document"]:
+                fail("111", clause_id, "semantic-revision-wrong-live-authority", "source-binding-validation")
+            if not re.fullmatch(r"[0-9a-f]{64}", binding["reviewed_live_clause_digest"]):
+                fail("111", clause_id, "semantic-revision-invalid-live-digest", "source-binding-validation")
+            if _reviewed_source_excerpt_digest({**clauses[clause_id], **binding}, source_root) != binding["reviewed_live_clause_digest"]:
+                fail("111", clause_id, "semantic-revision-altered-live-text", "source-binding-validation")
+    return bindings
+
+
+def validate_normative_authority(registry_root: Path, authority_root: Path | None = None,
+                                 source_root: Path | None = None) -> dict[str, dict[str, str]]:
     frozen = authority_root is None
     authority_root = authority_root or FROZEN_ROOT
+    source_root = source_root or ROOT
     authority_path = authority_root / "CampaignOperationsH1NormativeClauses.tsv"
     control_path = authority_root / "CampaignOperationsH1AssuranceControls.tsv"
     if frozen:
@@ -135,6 +217,7 @@ def validate_normative_authority(registry_root: Path, authority_root: Path | Non
     extra_inventory = sorted(set(clauses) - governing_ids)
     if extra_inventory:
         fail("110", extra_inventory[0], "authority-row-without-governing-clause", "governing-clause-reconciliation")
+    bindings = validate_source_bindings(authority_root, clauses, source_root)
     architecture_ids: set[str] = set()
     for clause_id, row in clauses.items():
         if row.get("authority_version") != AUTHORITY_VERSION:
@@ -145,8 +228,15 @@ def validate_normative_authority(registry_root: Path, authority_root: Path | Non
         match = re.fullmatch(r"lines ([0-9]+)-([0-9]+)", row["exact_source_anchor"])
         if match is None or int(match.group(2)) - int(match.group(1)) + 1 > 32:
             fail("104", clause_id, "broad-or-invalid-source-anchor", "normative-authority-validation")
-        if _source_excerpt_digest(row) != row["canonical_clause_digest"]:
-            fail("104", clause_id, "altered-normative-text", "normative-authority-validation")
+        binding = bindings.get(clause_id)
+        if binding is None:
+            if _source_excerpt_digest(row, source_root) != row["canonical_clause_digest"]:
+                fail("104", clause_id, "altered-normative-text", "normative-authority-validation")
+        elif binding["source_binding_policy"] == "semantic_equivalent_revision":
+            # The frozen H1 excerpt/digest remain authoritative historical proof;
+            # only this reviewed live revision is allowed to differ from them.
+            if not row["canonical_excerpt"] or not re.fullmatch(r"[0-9a-f]{64}", row["canonical_clause_digest"]):
+                fail("111", clause_id, "invalid-frozen-historical-authority", "source-binding-validation")
         architecture_id = row["derived_h1_requirement_identity"]
         if not architecture_id or architecture_id in architecture_ids:
             fail("103", architecture_id or clause_id, "duplicate-architectural-requirement", "normative-authority-validation")

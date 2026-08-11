@@ -104,6 +104,7 @@ CREATE ROLE campaign_operations_budget_administrator NOLOGIN;
 CREATE ROLE campaign_operations_request_acceptor NOLOGIN;
 CREATE ROLE campaign_operations_dispatcher NOLOGIN;
 CREATE ROLE campaign_operations_phase5_transactional NOLOGIN;
+CREATE ROLE experiment_lifecycle_cancellation_owner NOLOGIN;
 SQL
 # Seed exclusively from the repository-owned schema-049 backup.  The H1
 # assurance suite must never inspect or clone the live production database.
@@ -698,6 +699,69 @@ ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner
   REVOKE EXECUTE ON FUNCTIONS FROM pqxx;
 SQL
 
+# The discovered predecessor defaults are admissible only as their complete,
+# exact tuple matrix.  An incomplete matrix must remain an H1A007 blocker.
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" <<'SQL'
+ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
+  GRANT SELECT ON TABLES TO pqxx;
+SQL
+if psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 "$database" \
+    -f "$repo_root/Database/migrations/055_campaign_operations_production_admission_foundation.sql" \
+    >"$cluster_root/055-incomplete-predecessor-default-acl.log" 2>&1; then
+  echo "migration 055 accepted an incomplete predecessor default-ACL matrix" >&2
+  exit 1
+fi
+if ! rg -q 'H1A007 unsafe pre-existing default ACL' \
+    "$cluster_root/055-incomplete-predecessor-default-acl.log"; then
+  echo "migration 055 incomplete predecessor default-ACL test reached the wrong failure" >&2
+  exit 1
+fi
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" <<'SQL'
+ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
+  REVOKE SELECT ON TABLES FROM pqxx;
+ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
+  GRANT SELECT ON TABLES TO pqxx;
+ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
+  GRANT SELECT, USAGE ON SEQUENCES TO pqxx;
+SQL
+[[ "$(psql "${target[@]}" -q -tA -v ON_ERROR_STOP=1 "$database" <<'SQL'
+WITH actual_acl(owner_oid, namespace_oid, object_type, grantee_oid,
+                privilege_type, is_grantable) AS (
+    SELECT default_acl.defaclrole, default_acl.defaclnamespace,
+           default_acl.defaclobjtype, acl.grantee, acl.privilege_type,
+           acl.is_grantable
+    FROM pg_catalog.pg_default_acl default_acl
+    JOIN pg_catalog.pg_roles owner_role ON owner_role.oid = default_acl.defaclrole,
+    LATERAL pg_catalog.aclexplode(default_acl.defaclacl) acl
+    WHERE owner_role.rolname IN (
+        'campaign_operations_h1_boundary_authority',
+        'campaign_operations_owner',
+        'campaign_operations_scheduler_protocol_evidence_owner')
+      AND acl.grantee <> default_acl.defaclrole
+), expected_acl(owner_oid, namespace_oid, object_type, grantee_oid,
+                privilege_type, is_grantable) AS (
+    SELECT owner_role.oid, namespace.oid, object_type, pqxx_role.oid,
+           privilege_type, false
+    FROM pg_catalog.pg_roles owner_role
+    JOIN pg_catalog.pg_roles pqxx_role ON pqxx_role.rolname = 'pqxx'
+    JOIN pg_catalog.pg_namespace namespace ON namespace.nspname = 'public'
+    CROSS JOIN (VALUES ('r'::"char", 'SELECT'::text),
+                       ('S'::"char", 'SELECT'::text),
+                       ('S'::"char", 'USAGE'::text))
+               predecessor(object_type, privilege_type)
+    WHERE owner_role.rolname = 'campaign_operations_owner'
+)
+SELECT EXISTS (SELECT 1 FROM actual_acl)
+   AND NOT EXISTS (
+       (SELECT * FROM actual_acl EXCEPT SELECT * FROM expected_acl)
+       UNION ALL
+       (SELECT * FROM expected_acl EXCEPT SELECT * FROM actual_acl));
+SQL
+)" == "t" ]] || {
+  echo "predecessor default-ACL fixture did not establish the exact matrix" >&2
+  exit 1
+}
+
 if ! psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 "$database" \
     -f "$repo_root/Database/migrations/055_campaign_operations_production_admission_foundation.sql" \
     >"$cluster_root/055-install.log" 2>&1; then
@@ -706,6 +770,30 @@ if ! psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 "$database" \
 fi
 if rg -q 'will be truncated' "$cluster_root/055-install.log"; then
   echo "migration 055 emitted an identifier truncation notice" >&2
+  exit 1
+fi
+[[ "$(psql "${target[@]}" -q -tA -v ON_ERROR_STOP=1 "$database" <<'SQL'
+SELECT NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_default_acl default_acl
+    JOIN pg_catalog.pg_roles owner_role
+      ON owner_role.oid = default_acl.defaclrole
+    JOIN pg_catalog.pg_namespace namespace
+      ON namespace.oid = default_acl.defaclnamespace,
+    LATERAL pg_catalog.aclexplode(default_acl.defaclacl) acl
+    JOIN pg_catalog.pg_roles grantee_role ON grantee_role.oid = acl.grantee
+    WHERE owner_role.rolname = 'campaign_operations_owner'
+      AND namespace.nspname = 'public'
+      AND default_acl.defaclobjtype IN ('r', 'S')
+      AND grantee_role.rolname = 'pqxx');
+SQL
+)" == "t" ]] || {
+  echo "migration 055 retained predecessor-only pqxx default ACLs" >&2
+  exit 1
+}
+if [[ "$(psql "${target[@]}" -q -tA -v ON_ERROR_STOP=1 "$database" -c \
+    'SELECT campaign_operations_h1_deployment_audit_v1(NULL,false,false)')" != "t" ]]; then
+  echo "migration 055 predecessor default-ACL normalization failed final H1 audit" >&2
   exit 1
 fi
 # Supported replay before any H1 evidence must be idempotent and transactional.
@@ -1584,6 +1672,9 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
   "$repo_root/Sources/CampaignOperationsProductionAdmissionRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsProductionAdmissionService.cpp" \
   "$repo_root/Sources/ExperimentRecommendation.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationConversion.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationReview.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationRanking.cpp" \
   "$repo_root/Sources/ExperimentRecommendationCampaignActivation.cpp" \
   "$repo_root/Sources/ExperimentRecommendationCampaignActivationRepository.cpp" \
   "$repo_root/Sources/ExperimentRecommendationCampaignHandoff.cpp" \
@@ -2257,7 +2348,8 @@ echo "Campaign Operations Phase H1 deterministic lock-order tests passed"
 
 repository_test="$(mktemp -t CampaignOperationsPhaseH1RepositoryTests)"
 trap 'rm -f "$repository_test"; cleanup' EXIT
-clang++ -std=c++20 -I "$repo_root/Sources" -I "$repo_root/Headers" \
+clang++ -std=c++20 -DCAMPAIGN_OPERATIONS_H1_READINESS_VIEW \
+  -I "$repo_root/Sources" -I "$repo_root/Headers" \
   -I /opt/homebrew/opt/libpqxx@7.10.1/include \
   -I /opt/homebrew/opt/libpq/include \
   "$repo_root/Tests/CampaignOperationsPhaseH1RepositoryTests.cpp" \
@@ -2333,19 +2425,40 @@ LSTM_TEST_DB_ADMIN_USER=campaign_manager_login \
   "$broad_repository_test"
 echo "Campaign Operations Phase 1-5 repository/service/completion regression passed"
 
+# The repository now legitimately contains the bounded Phase H3 Manager
+# run-once command.  H4 remains external supervision only, so a continuous
+# production CLI/daemon surface must still be absent from the current tree.
 if rg -q \
-  -- '--campaign-operations-manager-run-once|--campaign-operations-production-continuous' \
+  -- '--campaign-operations-production-continuous' \
   "$repo_root/Sources"; then
-  echo "H3/H4 production command leaked into H2 C++" >&2
+  echo "continuous H4 production command leaked into C++" >&2
   exit 1
 fi
+
+# The post-H1 bounded Manager command is expected only in the current CLI
+# implementation; its presence must not invalidate historical H1 migration
+# assurance.
+manager_run_once_files="$(
+  rg -l -- '--campaign-operations-manager-run-once' "$repo_root/Sources" \
+    | sed "s#^$repo_root/##" \
+    | sort
+)"
+[[ "$manager_run_once_files" == "Sources/ExperimentScheduler.cpp" ]] || {
+  echo "unexpected Manager run-once command surface" >&2
+  printf '%s\n' "$manager_run_once_files" >&2
+  exit 1
+}
+
 {
-  printf 'command=rg scanned_paths=Sources patterns=H3,H4 result_rows=0 exit_status=1 scan_result=PASS\n'
-  printf 'query=--campaign-operations-manager-run-once|--campaign-operations-production-continuous\n'
+  printf 'command=rg scanned_paths=Sources continuous_h4_result_rows=0 scan_result=PASS\n'
+  printf 'prohibited_query=--campaign-operations-production-continuous\n'
+  printf 'accepted_post_h1_query=--campaign-operations-manager-run-once\n'
+  printf 'accepted_post_h1_files=%s\n' "$manager_run_once_files"
   rg --files "$repo_root/Sources" | sed "s#^$repo_root/##" | sort
 } > "$cluster_root/phase-h1-cli-results"
-  emit_runtime_result H1-H2-H4-EXCLUSION H1CPP002 CLI-and-source-policy SUCCESS \
-  00000 no-H2-H3-H4-surface CLI-and-scheduler compile H1CPP002 \
+
+emit_runtime_result H1-H2-H4-EXCLUSION H1CPP002 CLI-and-source-policy SUCCESS \
+  00000 no-continuous-H4-surface CLI-and-scheduler compile H1CPP002 \
   phase-h1-cli-results "$cluster_root/phase-h1-cli-results"
 
 pre_runtime="$cluster_root/h1-pre-enablement-runtime.tsv"

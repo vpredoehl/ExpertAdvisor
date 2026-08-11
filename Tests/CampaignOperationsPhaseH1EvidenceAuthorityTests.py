@@ -36,8 +36,20 @@ class NormativeAuthorityTests(FailureMixin, unittest.TestCase):
                      "CampaignOperationsH1FinalAssuranceControls.tsv", "CampaignOperationsH1MutationMechanics.tsv",
                      "CampaignOperationsH1ExpectedValueAuthorities.tsv", "CampaignOperationsH1ObservedValueProvenance.tsv",
                      "CampaignOperationsH1RawEvidenceContracts.tsv", "CampaignOperationsH1DirectoryPolicy.tsv",
-                     "CampaignOperationsH1ReviewDisposition.tsv"]:
+                     "CampaignOperationsH1ReviewDisposition.tsv", "CampaignOperationsH1SourceBindings.tsv"]:
             shutil.copy(ROOT / "Tests/fixtures" / name, self.root)
+        self.source_root = self.root / "source"
+        for relative in [
+            "docs/architecture/adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md",
+            "docs/architecture/adr/ADR-0019A-h1-owner-safe-transaction-authorization.md",
+            "docs/architecture/adr/ADR-0019B-h1-sealed-role-deployment-contract.md",
+            "docs/architecture/adr/ADR-0020-campaign-manager-continuous-operation.md",
+            "docs/architecture/CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md",
+            "docs/architecture/Volume_XII_Database.md",
+        ]:
+            target = self.source_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / relative, target)
 
     def tearDown(self): self.temp.cleanup()
 
@@ -92,6 +104,20 @@ class NormativeAuthorityTests(FailureMixin, unittest.TestCase):
             writer = csv.DictWriter(target, fieldnames=fields, delimiter="\t", lineterminator="\n")
             writer.writeheader(); writer.writerows(rows)
 
+    def binding_rows(self):
+        path = self.root / "CampaignOperationsH1SourceBindings.tsv"
+        with path.open(newline="") as source:
+            reader = csv.DictReader(source, delimiter="\t")
+            return list(reader.fieldnames), list(reader)
+
+    def write_bindings(self, fields, rows):
+        with (self.root / "CampaignOperationsH1SourceBindings.tsv").open("w", newline="") as target:
+            writer = csv.DictWriter(target, fieldnames=fields, delimiter="\t", lineterminator="\n")
+            writer.writeheader(); writer.writerows(rows)
+
+    def validate(self):
+        return authority.validate_normative_authority(self.root, self.root, self.source_root)
+
     def assert_clause_omission(self, clause_id):
         fields, rows = self.authority_rows()
         rows = [row for row in rows if row["normative_clause_id"] != clause_id]
@@ -132,6 +158,60 @@ class NormativeAuthorityTests(FailureMixin, unittest.TestCase):
         self.assert_failure(
             "H1A106 key=H1-MUTATION-ACL_ACTUAL_ORIGIN stage=normative-requirement-reconciliation detail=test-mechanic-labeled-normative",
             authority.validate_normative_authority, self.root, self.root)
+
+    def test_live_exact_row_with_matching_source_passes(self):
+        self.validate()
+
+    def test_live_exact_row_with_changed_source_fails(self):
+        path = self.source_root / "docs/architecture/adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md"
+        path.write_text(path.read_text().replace("Production deployment is default-off", "Production deployment is default-on", 1))
+        self.assert_failure("H1A104 key=ADR19-AUTHORITY stage=normative-authority-validation detail=altered-canonical-excerpt",
+                            self.validate)
+
+    def test_historical_superseded_increment_passes_with_accepted_adr0020(self):
+        self.validate()
+
+    def test_changed_superseding_adr_path_fails(self):
+        fields, rows = self.binding_rows()
+        next(row for row in rows if row["normative_clause_id"] == "PHASEH-INCREMENTS")["superseding_authority"] = "docs/architecture/adr/ADR-0021.md"
+        self.write_bindings(fields, rows)
+        self.assert_failure("H1A111 key=PHASEH-INCREMENTS stage=source-binding-validation detail=unreviewed-source-binding-relationship",
+                            self.validate)
+
+    def test_unaccepted_adr0020_fails(self):
+        path = self.source_root / "docs/architecture/adr/ADR-0020-campaign-manager-continuous-operation.md"
+        path.write_text(path.read_text().replace("Status: Accepted", "Status: Proposed", 1))
+        self.assert_failure("H1A111 key=PHASEH-INCREMENTS stage=source-binding-validation detail=invalid-accepted-adr0020-external-supervision",
+                            self.validate)
+
+    def test_adr0020_without_external_supervision_boundary_fails(self):
+        path = self.source_root / "docs/architecture/adr/ADR-0020-campaign-manager-continuous-operation.md"
+        path.write_text(path.read_text().replace("It introduces no in-process continuous command,\ndaemon", "It introduces an in-process continuous command,\ndaemon", 1))
+        self.assert_failure("H1A111 key=PHASEH-INCREMENTS stage=source-binding-validation detail=invalid-accepted-adr0020-external-supervision",
+                            self.validate)
+
+    def test_arbitrary_historical_supersession_is_rejected(self):
+        fields, rows = self.binding_rows(); arbitrary = dict(rows[0])
+        arbitrary["normative_clause_id"] = "ADR19-AUTHORITY"; rows.append(arbitrary)
+        self.write_bindings(fields, rows)
+        self.assert_failure("H1A111 key=ADR19-AUTHORITY stage=source-binding-validation detail=unexpected-or-missing-source-binding",
+                            self.validate)
+
+    def test_semantic_equivalent_migration_revision_passes_only_as_reviewed(self):
+        self.validate()
+
+    def test_semantic_equivalent_migration_invariant_change_fails(self):
+        path = self.source_root / "docs/architecture/Volume_XII_Database.md"
+        path.write_text(path.read_text().replace("Migration 055 adds no login membership", "Migration 055 adds login membership", 1))
+        self.assert_failure("H1A111 key=VOLUMEXII-MIGRATION stage=source-binding-validation detail=semantic-revision-altered-live-text",
+                            self.validate)
+
+    def test_unknown_source_binding_policy_fails(self):
+        fields, rows = self.binding_rows()
+        next(row for row in rows if row["normative_clause_id"] == "VOLUMEXII-MIGRATION")["source_binding_policy"] = "automatic_equivalence"
+        self.write_bindings(fields, rows)
+        self.assert_failure("H1A111 key=VOLUMEXII-MIGRATION stage=source-binding-validation detail=unknown-source-binding-policy",
+                            self.validate)
 
 
 class RuntimeInventoryTests(FailureMixin, unittest.TestCase):

@@ -1170,18 +1170,41 @@ END $$;
 DO $$
 BEGIN
     IF EXISTS (
+        WITH actual_acl(owner_oid, namespace_oid, object_type, grantee_oid,
+                        privilege_type, is_grantable) AS (
+            SELECT default_acl.defaclrole, default_acl.defaclnamespace,
+                   default_acl.defaclobjtype, acl.grantee,
+                   acl.privilege_type, acl.is_grantable
+            FROM pg_catalog.pg_default_acl default_acl
+            JOIN pg_catalog.pg_roles owner_role
+              ON owner_role.oid = default_acl.defaclrole,
+            LATERAL pg_catalog.aclexplode(default_acl.defaclacl) acl
+            WHERE owner_role.rolname IN (
+                'campaign_operations_h1_boundary_authority',
+                'campaign_operations_owner',
+                'campaign_operations_scheduler_protocol_evidence_owner')
+              AND acl.grantee <> default_acl.defaclrole
+        ),
+        predecessor_acl(owner_oid, namespace_oid, object_type, grantee_oid,
+                        privilege_type, is_grantable) AS (
+            SELECT owner_role.oid, namespace.oid, predecessor.object_type,
+                   pqxx_role.oid, predecessor.privilege_type, false
+            FROM pg_catalog.pg_roles owner_role
+            JOIN pg_catalog.pg_roles pqxx_role ON pqxx_role.rolname = 'pqxx'
+            JOIN pg_catalog.pg_namespace namespace ON namespace.nspname = 'public'
+            CROSS JOIN (VALUES ('r'::"char", 'SELECT'::text),
+                               ('S'::"char", 'SELECT'::text),
+                               ('S'::"char", 'USAGE'::text))
+                       predecessor(object_type, privilege_type)
+            WHERE owner_role.rolname = 'campaign_operations_owner'
+        )
         SELECT 1
-        FROM pg_catalog.pg_default_acl default_acl
-        JOIN pg_catalog.pg_roles owner_role
-          ON owner_role.oid = default_acl.defaclrole,
-        LATERAL pg_catalog.aclexplode(default_acl.defaclacl) acl
-        LEFT JOIN pg_catalog.pg_roles grantee_role
-          ON grantee_role.oid = acl.grantee
-        WHERE owner_role.rolname IN (
-            'campaign_operations_h1_boundary_authority',
-            'campaign_operations_owner',
-            'campaign_operations_scheduler_protocol_evidence_owner')
-          AND acl.grantee <> default_acl.defaclrole) THEN
+        WHERE EXISTS (SELECT 1 FROM actual_acl)
+          AND EXISTS (
+              (SELECT * FROM actual_acl EXCEPT SELECT * FROM predecessor_acl)
+              UNION ALL
+              (SELECT * FROM predecessor_acl EXCEPT SELECT * FROM actual_acl)
+          )) THEN
         RAISE EXCEPTION 'H1A007 unsafe pre-existing default ACL'
             USING ERRCODE = '42501';
     END IF;
@@ -4592,6 +4615,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
     REVOKE ALL ON SEQUENCES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
     REVOKE USAGE ON TYPES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
+    REVOKE SELECT ON TABLES FROM pqxx;
+ALTER DEFAULT PRIVILEGES FOR ROLE campaign_operations_owner IN SCHEMA public
+    REVOKE SELECT, USAGE ON SEQUENCES FROM pqxx;
 ALTER DEFAULT PRIVILEGES FOR ROLE
     campaign_operations_scheduler_protocol_evidence_owner
     REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;

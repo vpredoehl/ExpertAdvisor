@@ -18,7 +18,7 @@ inline constexpr int kRequiredSchedulerProtocolGeneration = 52;
 inline constexpr char kProductionAdmissionMigrationFilename[] =
     "055_campaign_operations_production_admission_foundation.sql";
 inline constexpr char kProductionAdmissionMigrationChecksum[] =
-    "dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0";
+    "1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe";
 inline constexpr char kProductionEnablerRole[] =
     "campaign_operations_production_enabler";
 inline constexpr char kProductionDisablerRole[] =

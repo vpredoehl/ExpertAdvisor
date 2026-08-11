@@ -4,7 +4,7 @@ WHERE NOT EXISTS (
   SELECT 1 FROM public.schema_migrations
   WHERE version='055'
     AND filename='055_campaign_operations_production_admission_foundation.sql'
-    AND checksum='dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0');
+    AND checksum='1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe');
 SELECT 'H2A004:migration-056'
 WHERE NOT EXISTS (
   SELECT 1 FROM public.schema_migrations

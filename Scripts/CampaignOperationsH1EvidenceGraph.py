@@ -521,10 +521,24 @@ def validate_persisted_generic_semantics(graph: dict, snapshots) -> None:
             raise SystemExit(1)
         if fixture_id == "H1CPP002":
             contents = snapshots.by_id(fixture["artifact_id"]).text()
-            if re.search(r"H[234].*(entry points?|mutation).*(present|reachable)", contents, re.I):
-                print("H1V106 key=H1CPP002 stage=authentic-runtime-validation "
-                      "detail=prohibited-h2-h3-h4-entry-point", file=sys.stderr)
-                raise SystemExit(1)
+            required_markers = [
+                "command=rg",
+                "scanned_paths=Sources",
+                "continuous_h4_result_rows=0",
+                "scan_result=PASS",
+                "prohibited_query=--campaign-operations-production-continuous",
+                "accepted_post_h1_query=--campaign-operations-manager-run-once",
+                "accepted_post_h1_files=Sources/ExperimentScheduler.cpp",
+            ]
+            for marker in required_markers:
+                if marker not in contents:
+                    print(
+                        "H1V106 key=H1CPP002 "
+                        "stage=authentic-runtime-validation "
+                        "detail=insufficient-exclusion-authenticity:"
+                        f"{marker.split('=')[0]}",
+                        file=sys.stderr)
+                    raise SystemExit(1)
 
 
 def validate_persisted_special_semantics(snapshots, run_id: str) -> None:

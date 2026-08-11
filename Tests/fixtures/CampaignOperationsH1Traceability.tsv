@@ -84,7 +84,7 @@ H1-RESTORE-I	ADR0019B-9	restore-harness	H1RESTOREI	disposable-catalog	public-exe
 H1-RESTORE-J	ADR0019B-9	restore-harness	H1RESTOREJ	disposable-catalog	alternate-wrapper	scenario-J	42501	H1A005	h1_alternate.record_campaign_operations_production_disable_v1	post-database-restore	restore-scenario-J.tsv	EXPECTED_FAILURE
 H1-HISTORICAL-BYTES	ADR0019B-13	historical-byte-audit	H1RESTORE003	cluster-auditor	schema054-fixture	post-restore-byte-compare	00000	historical-bytes-exact	Attempt-V1-Completion-V1	post-database-restore	historical-byte-results	SUCCESS
 H1-INERTNESS	ADR0019B-15	migration055-postcondition	H1SQL010	all-H1-roles-empty	migration-install	default-off-query	00000	h1-inert-default-off	H1-evidence-tables	postcondition	migration-sql-results	SUCCESS
-H1-H2-H4-EXCLUSION	ADR0019B-15	CLI-and-source-policy	H1CPP002	no-production-login	build-H1	CLI-help-and-source-scan	00000	no-H2-H3-H4-surface	CLI-and-scheduler	compile	phase-h1-cli-results	SUCCESS
+H1-H2-H4-EXCLUSION	ADR0019B-15	CLI-and-source-policy	H1CPP002	no-production-login	build-H1	CLI-help-and-source-scan	00000	no-continuous-H4-surface	CLI-and-scheduler	compile	phase-h1-cli-results	SUCCESS
 H1-LOCK-001	ADR0019B-11	workflow-lock-probes	H1LOCK001	independent-app-names	disposable-lock-clone	acquisition-enable	00000	no-deadlock-cycle	acquisition/enable	concurrency	h1-lock-runtime.tsv	SUCCESS
 H1-LOCK-002	ADR0019B-11	workflow-lock-probes	H1LOCK002	independent-app-names	disposable-lock-clone	acquisition-disable	00000	no-deadlock-cycle	acquisition/disable	concurrency	h1-lock-runtime.tsv	SUCCESS
 H1-LOCK-003	ADR0019B-11	workflow-lock-probes	H1LOCK003	independent-app-names	disposable-lock-clone	acquisition-completion	00000	no-deadlock-cycle	acquisition/completion	concurrency	h1-lock-runtime.tsv	SUCCESS

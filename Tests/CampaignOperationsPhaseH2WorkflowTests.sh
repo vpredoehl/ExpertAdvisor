@@ -41,7 +41,7 @@ database="$(psql "${target[@]}" -At postgres -c \
 
 echo "H2_FIXTURE schema=055 database=$database socket=$cluster_socket"
 before_055="$(shasum -a 256 "$repo_root/Database/migrations/055_campaign_operations_production_admission_foundation.sql" | awk '{print $1}')"
-[[ "$before_055" == dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0 ]]
+[[ "$before_055" == 1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe ]]
 
 # Make the predecessor ledger coherent for the real runner. The schema was
 # restored through 049 and 050-055 were applied by the native H1 fixture.

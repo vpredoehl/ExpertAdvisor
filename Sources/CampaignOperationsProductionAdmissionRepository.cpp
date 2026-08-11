@@ -892,7 +892,11 @@ ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
         "old_event_blocked_lease_count,reconciliation_required_count,"
         "completion_nested_v2_proof_version,"
         "completion_nested_v2_proof_valid "
+#ifdef CAMPAIGN_OPERATIONS_H1_READINESS_VIEW
+        "FROM campaign_operations_production_readiness_v1;").one_row();
+#else
         "FROM campaign_operations_production_readiness_snapshot_v1();").one_row();
+#endif
     ProductionReadinessSnapshot result;
     result.migrationVersion = row[0].as<std::string>();
     if (!row[1].is_null())

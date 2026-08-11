@@ -194,12 +194,29 @@ def validate_generic(source: dict[str, str], expected: dict[str, str], fixture: 
         fail("105", fixture_id, f"semantic-mismatch:{differing}")
     if fixture_id == "H1CPP002":
         contents = evidence_text(evidence)
-        if re.search(r"H[234].*(entry points?|mutation).*(present|reachable)", contents, re.I):
-            fail("106", fixture_id, "prohibited-h2-h3-h4-entry-point")
-        for marker in ["command=rg", "scanned_paths=Sources", "patterns=H2,H3,H4",
-                       "result_rows=0", "exit_status=1", "scan_result=PASS"]:
+        if re.search(
+                r"--campaign-operations-production-continuous", contents):
+            prohibited_line = next(
+                (line for line in contents.splitlines()
+                 if line.startswith("prohibited_query=")),
+                "")
+            if prohibited_line != (
+                    "prohibited_query="
+                    "--campaign-operations-production-continuous"):
+                fail("106", fixture_id,
+                     "prohibited-continuous-h4-entry-point")
+        for marker in [
+                "command=rg",
+                "scanned_paths=Sources",
+                "continuous_h4_result_rows=0",
+                "scan_result=PASS",
+                "prohibited_query=--campaign-operations-production-continuous",
+                "accepted_post_h1_query=--campaign-operations-manager-run-once",
+                "accepted_post_h1_files=Sources/ExperimentScheduler.cpp"]:
             if marker not in contents:
-                fail("106", fixture_id, f"insufficient-exclusion-authenticity:{marker.split('=')[0]}")
+                fail("106", fixture_id,
+                     f"insufficient-exclusion-authenticity:"
+                     f"{marker.split('=')[0]}")
     return wanted, actual, source["actual_status"], source["diagnostic"], recomputed
 
 
