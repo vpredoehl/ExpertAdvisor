@@ -410,11 +410,30 @@ DECLARE
         'public.enforce_campaign_operations_request()',
         'public.enforce_campaign_operations_request_acquisition_complete()',
         'public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)'];
-    -- Some deployed pre-H1 databases already removed PUBLIC EXECUTE from
-    -- selected historical NULL/default-ACL functions.  These grants describe
-    -- only the exact explicit hardened predecessor representation; they are
-    -- not part of the final H1 ACL contract.
+    -- Some deployed pre-H1 databases already carry explicit hardened ACLs
+    -- instead of the historical PUBLIC-capable predecessor representation.
+    -- These signatures and grants describe only exact accepted predecessor
+    -- state; they are not part of the final H1 ACL contract.
+    protected_function_hardened_predecessor_acl_signatures text[] := ARRAY[
+        'public.lock_campaign_operations_authorization_head(bigint,text)',
+        'public.lock_campaign_operations_budget_head(bigint)',
+        'public.lock_campaign_operations_campaign(bigint)',
+        'public.lock_campaign_operations_request(bigint)',
+        'public.lock_campaign_operations_reservation(bigint)',
+        'public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)'];
     protected_function_hardened_predecessor_extra_acl_contracts text[] := ARRAY[
+        'public.lock_campaign_operations_authorization_head(bigint,text)|campaign_operations_dispatcher',
+        'public.lock_campaign_operations_authorization_head(bigint,text)|campaign_operations_phase5_transactional',
+        'public.lock_campaign_operations_budget_head(bigint)|campaign_operations_dispatcher',
+        'public.lock_campaign_operations_budget_head(bigint)|campaign_operations_phase5_transactional',
+        'public.lock_campaign_operations_campaign(bigint)|campaign_operations_budget_administrator',
+        'public.lock_campaign_operations_campaign(bigint)|campaign_operations_dispatcher',
+        'public.lock_campaign_operations_campaign(bigint)|campaign_operations_phase5_transactional',
+        'public.lock_campaign_operations_campaign(bigint)|campaign_operations_request_acceptor',
+        'public.lock_campaign_operations_request(bigint)|campaign_operations_dispatcher',
+        'public.lock_campaign_operations_request(bigint)|campaign_operations_phase5_transactional',
+        'public.lock_campaign_operations_reservation(bigint)|campaign_operations_dispatcher',
+        'public.lock_campaign_operations_reservation(bigint)|campaign_operations_phase5_transactional',
         'public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)|campaign_operations_dispatcher'];
     new_h1_functions text[] := ARRAY[
         'campaign_operations_dispatch_attempt_v2_canonical',
@@ -966,6 +985,15 @@ BEGIN
                      pg_catalog.split_part(expected.contract, '|', 2)
                 WHERE owner_role.rolname = 'campaign_operations_owner'
                   AND function_row.proacl IS NOT NULL
+                  AND (
+                    pg_catalog.format('%I.%s', namespace.nspname,
+                      function_row.oid::pg_catalog.regprocedure::text) =
+                      'public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)'
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM pg_catalog.aclexplode(function_row.proacl)
+                        predecessor_acl
+                      WHERE predecessor_acl.grantee = 0))
                   AND pg_catalog.split_part(expected.contract, '|', 1) =
                       pg_catalog.format('%I.%s', namespace.nspname,
                         function_row.oid::pg_catalog.regprocedure::text)
@@ -978,17 +1006,28 @@ BEGIN
                   AND pg_catalog.format('%I.%s', namespace.nspname,
                         function_row.oid::pg_catalog.regprocedure::text) =
                       ANY (protected_function_legacy_public_acl_signatures)
-                  -- Only the five historical NULL/default-ACL functions lose
-                  -- their predecessor PUBLIC expectation when they arrive
-                  -- with an explicit hardened ACL.  Other legacy-public
-                  -- functions retain their frozen predecessor ACL contract.
+                  -- Historical NULL/default-ACL signatures may be explicitly
+                  -- owner-hardened. Exact hardened-predecessor signatures may
+                  -- instead retain their listed predecessor-only grants.
                   AND (
-                    NOT (
+                    (NOT (
                       pg_catalog.format('%I.%s', namespace.nspname,
                         function_row.oid::pg_catalog.regprocedure::text) =
                       ANY (protected_function_legacy_null_acl_signatures)
                     )
+                    AND NOT (
+                      pg_catalog.format('%I.%s', namespace.nspname,
+                        function_row.oid::pg_catalog.regprocedure::text) =
+                      ANY (protected_function_hardened_predecessor_acl_signatures)
+                    ))
                     OR function_row.proacl IS NULL
+                    OR EXISTS (
+                      SELECT 1
+                      FROM pg_catalog.aclexplode(function_row.proacl)
+                        predecessor_acl
+                      WHERE predecessor_acl.grantee = 0
+                        AND predecessor_acl.privilege_type = 'EXECUTE'
+                        AND NOT predecessor_acl.is_grantable)
                   )
               )
               SELECT 1 FROM (
@@ -4401,6 +4440,54 @@ BEGIN
         EXECUTE format(
             'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM PUBLIC, pqxx',
             function_name);
+
+        -- Production predecessors may contain exact historical execution
+        -- capabilities that H1A006 accepts only long enough to normalize the
+        -- object.  Remove those predecessor-only grants before final H1 audit.
+        IF function_name =
+           'lock_campaign_operations_authorization_head(bigint,text)'::regprocedure
+        THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM '
+                'campaign_operations_dispatcher, '
+                'campaign_operations_phase5_transactional',
+                function_name);
+        ELSIF function_name =
+              'lock_campaign_operations_budget_head(bigint)'::regprocedure
+        THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM '
+                'campaign_operations_dispatcher, '
+                'campaign_operations_phase5_transactional',
+                function_name);
+        ELSIF function_name =
+              'lock_campaign_operations_campaign(bigint)'::regprocedure
+        THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM '
+                'campaign_operations_budget_administrator, '
+                'campaign_operations_dispatcher, '
+                'campaign_operations_phase5_transactional, '
+                'campaign_operations_request_acceptor',
+                function_name);
+        ELSIF function_name =
+              'lock_campaign_operations_request(bigint)'::regprocedure
+        THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM '
+                'campaign_operations_dispatcher, '
+                'campaign_operations_phase5_transactional',
+                function_name);
+        ELSIF function_name =
+              'lock_campaign_operations_reservation(bigint)'::regprocedure
+        THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM '
+                'campaign_operations_dispatcher, '
+                'campaign_operations_phase5_transactional',
+                function_name);
+        END IF;
+
         IF (SELECT function_row.prosecdef
             FROM pg_catalog.pg_proc function_row
             WHERE function_row.oid = function_name) THEN

@@ -129,6 +129,7 @@ CREATE ROLE campaign_operations_budget_administrator NOLOGIN;
 CREATE ROLE campaign_operations_request_acceptor NOLOGIN;
 CREATE ROLE campaign_operations_dispatcher NOLOGIN;
 CREATE ROLE campaign_operations_phase5_transactional NOLOGIN;
+CREATE ROLE experiment_lifecycle_cancellation_owner NOLOGIN;
 SQL
 
 pg_restore --schema-only --no-privileges --file=- \
@@ -398,6 +399,172 @@ SELECT NOT has_function_privilege(
 dropdb "${target[@]}" "$hardened_transition_database"
 
 printf 'H1_PROTECTED_FUNCTION_PREFLIGHT fixture=already_hardened_transition_acl result=PASS predecessor_dispatcher_execute=ACCEPTED final_dispatcher_execute=ABSENT public_execute=ABSENT audit=PASS\n'
+
+# Production-discovered predecessor state: the five lock helpers may already
+# have had PUBLIC removed while retaining exact Phase A-G execution
+# capabilities.  H1 accepts only this exact predecessor form and strips the
+# predecessor-only capabilities while sealing the functions.
+hardened_locks_database="h1_preflight_hardened_locks_${$}"
+createdb "${target[@]}" -T schema054 "$hardened_locks_database"
+
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 \
+  "$hardened_locks_database" <<'SQL'
+REVOKE EXECUTE ON FUNCTION
+  lock_campaign_operations_authorization_head(bigint,text),
+  lock_campaign_operations_budget_head(bigint),
+  lock_campaign_operations_campaign(bigint),
+  lock_campaign_operations_request(bigint),
+  lock_campaign_operations_reservation(bigint)
+FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION
+  lock_campaign_operations_authorization_head(bigint,text),
+  lock_campaign_operations_budget_head(bigint),
+  lock_campaign_operations_campaign(bigint),
+  lock_campaign_operations_request(bigint),
+  lock_campaign_operations_reservation(bigint)
+TO campaign_operations_dispatcher;
+
+GRANT EXECUTE ON FUNCTION
+  lock_campaign_operations_authorization_head(bigint,text),
+  lock_campaign_operations_budget_head(bigint),
+  lock_campaign_operations_campaign(bigint),
+  lock_campaign_operations_request(bigint),
+  lock_campaign_operations_reservation(bigint)
+TO campaign_operations_phase5_transactional;
+
+GRANT EXECUTE ON FUNCTION
+  lock_campaign_operations_campaign(bigint)
+TO campaign_operations_budget_administrator;
+
+GRANT EXECUTE ON FUNCTION
+  lock_campaign_operations_campaign(bigint)
+TO campaign_operations_request_acceptor;
+SQL
+
+# Prove the fixture actually contains all production-discovered
+# predecessor-only direct ACL tuples before migration 055.
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_locks_database" -c "
+WITH expected(function_identity, grantee_name) AS (
+  VALUES
+    ('lock_campaign_operations_authorization_head(bigint,text)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_authorization_head(bigint,text)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_budget_head(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_budget_head(bigint)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_budget_administrator'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_request_acceptor'),
+    ('lock_campaign_operations_request(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_request(bigint)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_reservation(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_reservation(bigint)',
+     'campaign_operations_phase5_transactional')
+),
+actual AS (
+  SELECT
+    function_row.oid::regprocedure::text AS function_identity,
+    pg_get_userbyid(acl.grantee) AS grantee_name
+  FROM pg_proc function_row
+  CROSS JOIN LATERAL aclexplode(function_row.proacl) acl
+  WHERE function_row.oid = ANY (ARRAY[
+    'lock_campaign_operations_authorization_head(bigint,text)'::regprocedure,
+    'lock_campaign_operations_budget_head(bigint)'::regprocedure,
+    'lock_campaign_operations_campaign(bigint)'::regprocedure,
+    'lock_campaign_operations_request(bigint)'::regprocedure,
+    'lock_campaign_operations_reservation(bigint)'::regprocedure
+  ])
+    AND acl.privilege_type='EXECUTE'
+    AND NOT acl.is_grantable
+)
+SELECT
+  NOT EXISTS (
+    SELECT * FROM expected
+    EXCEPT
+    SELECT * FROM actual
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_proc function_row
+    CROSS JOIN LATERAL aclexplode(function_row.proacl) acl
+    WHERE function_row.oid = ANY (ARRAY[
+      'lock_campaign_operations_authorization_head(bigint,text)'::regprocedure,
+      'lock_campaign_operations_budget_head(bigint)'::regprocedure,
+      'lock_campaign_operations_campaign(bigint)'::regprocedure,
+      'lock_campaign_operations_request(bigint)'::regprocedure,
+      'lock_campaign_operations_reservation(bigint)'::regprocedure
+    ])
+      AND acl.grantee=0)
+")" == t ]]
+
+psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 \
+  "$hardened_locks_database" -f "$migration" \
+  >"$cluster_root/hardened-locks-install.log" 2>&1
+
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_locks_database" -c \
+  'SELECT campaign_operations_h1_deployment_audit_v1(NULL,false,false)')" == t ]]
+
+# Verify direct predecessor-only ACL tuples are gone.  Use aclexplode rather
+# than has_function_privilege so inherited role membership cannot mask the
+# direct catalog contract being tested.
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_locks_database" -c "
+WITH forbidden(function_identity, grantee_name) AS (
+  VALUES
+    ('lock_campaign_operations_authorization_head(bigint,text)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_authorization_head(bigint,text)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_budget_head(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_budget_head(bigint)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_budget_administrator'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_campaign(bigint)',
+     'campaign_operations_request_acceptor'),
+    ('lock_campaign_operations_request(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_request(bigint)',
+     'campaign_operations_phase5_transactional'),
+    ('lock_campaign_operations_reservation(bigint)',
+     'campaign_operations_dispatcher'),
+    ('lock_campaign_operations_reservation(bigint)',
+     'campaign_operations_phase5_transactional')
+)
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM pg_proc function_row
+  CROSS JOIN LATERAL aclexplode(function_row.proacl) acl
+  JOIN forbidden
+    ON forbidden.function_identity =
+         function_row.oid::regprocedure::text
+   AND forbidden.grantee_name =
+         pg_get_userbyid(acl.grantee)
+  WHERE acl.privilege_type='EXECUTE'
+)
+")" == t ]]
+
+dropdb "${target[@]}" "$hardened_locks_database"
+
+printf 'H1_PROTECTED_FUNCTION_PREFLIGHT fixture=already_hardened_lock_acl_family result=PASS predecessor_capabilities=ACCEPTED final_predecessor_capabilities=ABSENT public_execute=ABSENT audit=PASS\n'
 
 run_negative_fixture return_type '
 DROP FUNCTION transition_campaign_operations_request_dispatching(bigint,integer,text,text);
