@@ -2,7 +2,7 @@
 -- evidence foundation.  This migration is deliberately operationally inert:
 -- it grants no LOGIN membership and exposes no enable, disable, acquisition,
 -- handoff, Manager, scheduler-mutation, or lifecycle-mutation command.
--- H1_MANIFEST_DIGEST_SHA256: cf0b6969de915c3766af91e3f55e17dfae27b755d37c78545d344de31379524b
+-- H1_MANIFEST_DIGEST_SHA256: 5e4234e929be2f9e844bd491fc913f1ed451da21a510d67da14dabd50b32f4bf
 
 DO $$
 BEGIN
@@ -410,6 +410,12 @@ DECLARE
         'public.enforce_campaign_operations_request()',
         'public.enforce_campaign_operations_request_acquisition_complete()',
         'public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)'];
+    -- Some deployed pre-H1 databases already removed PUBLIC EXECUTE from
+    -- selected historical NULL/default-ACL functions.  These grants describe
+    -- only the exact explicit hardened predecessor representation; they are
+    -- not part of the final H1 ACL contract.
+    protected_function_hardened_predecessor_extra_acl_contracts text[] := ARRAY[
+        'public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)|campaign_operations_dispatcher'];
     new_h1_functions text[] := ARRAY[
         'campaign_operations_dispatch_attempt_v2_canonical',
         'campaign_operations_h1_deployment_audit_v1',
@@ -915,11 +921,15 @@ BEGIN
           AND (
             (owner_role.rolname = 'campaign_operations_h1_boundary_authority'
              AND function_row.proacl IS NULL) OR
+            -- Historical NULL/default ACL functions may also arrive in an
+            -- explicitly hardened predecessor form.  Non-legacy protected
+            -- functions owned by campaign_operations_owner still require
+            -- explicit ACL origin.
             (owner_role.rolname = 'campaign_operations_owner' AND
-             ((pg_catalog.format('%I.%s', namespace.nspname,
-                  function_row.oid::pg_catalog.regprocedure::text) =
-                    ANY (protected_function_legacy_null_acl_signatures)) <>
-              (function_row.proacl IS NULL))) OR
+             NOT (pg_catalog.format('%I.%s', namespace.nspname,
+                    function_row.oid::pg_catalog.regprocedure::text) =
+                      ANY (protected_function_legacy_null_acl_signatures))
+             AND function_row.proacl IS NULL) OR
             EXISTS (
               WITH actual_acl(grantee, privilege_type, is_grantable) AS (
                 SELECT acl.grantee, acl.privilege_type, acl.is_grantable
@@ -944,11 +954,42 @@ BEGIN
                          'campaign_operations_h1_boundary_authority' OR
                        grantee_role.oid <> function_row.proowner)
                 UNION
+                -- Exact grants that are valid only for an explicitly
+                -- hardened pre-H1 predecessor.  They intentionally do not
+                -- alter protected_function_final_extra_acl_contracts.
+                SELECT grantee_role.oid, 'EXECUTE'::text, false
+                FROM pg_catalog.unnest(
+                       protected_function_hardened_predecessor_extra_acl_contracts)
+                     expected(contract)
+                LEFT JOIN pg_catalog.pg_roles grantee_role
+                  ON grantee_role.rolname =
+                     pg_catalog.split_part(expected.contract, '|', 2)
+                WHERE owner_role.rolname = 'campaign_operations_owner'
+                  AND function_row.proacl IS NOT NULL
+                  AND pg_catalog.split_part(expected.contract, '|', 1) =
+                      pg_catalog.format('%I.%s', namespace.nspname,
+                        function_row.oid::pg_catalog.regprocedure::text)
+                UNION
+                -- PUBLIC EXECUTE is valid only for the historical NULL ACL
+                -- representation.  Explicitly hardened predecessors must
+                -- match the owner/per-function contract without PUBLIC.
                 SELECT 0::oid, 'EXECUTE'::text, false
                 WHERE owner_role.rolname = 'campaign_operations_owner'
                   AND pg_catalog.format('%I.%s', namespace.nspname,
                         function_row.oid::pg_catalog.regprocedure::text) =
                       ANY (protected_function_legacy_public_acl_signatures)
+                  -- Only the five historical NULL/default-ACL functions lose
+                  -- their predecessor PUBLIC expectation when they arrive
+                  -- with an explicit hardened ACL.  Other legacy-public
+                  -- functions retain their frozen predecessor ACL contract.
+                  AND (
+                    NOT (
+                      pg_catalog.format('%I.%s', namespace.nspname,
+                        function_row.oid::pg_catalog.regprocedure::text) =
+                      ANY (protected_function_legacy_null_acl_signatures)
+                    )
+                    OR function_row.proacl IS NULL
+                  )
               )
               SELECT 1 FROM (
                 (SELECT * FROM actual_acl EXCEPT SELECT * FROM expected_acl)
@@ -4295,6 +4336,21 @@ BEGIN
             function_name);
         EXECUTE format('REVOKE ALL PRIVILEGES ON FUNCTION %s FROM PUBLIC, pqxx',
             function_name);
+
+        -- The schema-054 isolated Attempt V1 transition may arrive with the
+        -- explicitly hardened predecessor-only dispatcher capability accepted
+        -- by the H1A006 preflight.  That capability is not part of the final
+        -- H1 contract, so remove it while sealing the function under the H1
+        -- boundary authority.
+        IF function_name =
+           'transition_campaign_operations_request_dispatching(bigint,integer,text,text)'::regprocedure
+        THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %s '
+                'FROM campaign_operations_dispatcher',
+                function_name);
+        END IF;
+
         IF (SELECT function_row.prosecdef
             FROM pg_catalog.pg_proc function_row
             WHERE function_row.oid = function_name) THEN

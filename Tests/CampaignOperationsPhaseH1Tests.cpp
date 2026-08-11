@@ -247,7 +247,7 @@ int main()
     for (const std::string& field : {
              "migration_version=055",
              "migration_filename=055_campaign_operations_production_admission_foundation.sql",
-             "migration_checksum=86a35844edd3cc233e8f72ff985c339474dc09d3cd79d354fcb3adeb902aa66f",
+             "migration_checksum=dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0",
              "scheduler_contract_version=1",
              "scheduler_generation=52",
              "scheduler_evidence_canonical=campaign_operations_scheduler_protocol_evidence_v1",

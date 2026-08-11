@@ -90,7 +90,7 @@ BEGIN
         WHERE version = '055'
           AND filename = '055_campaign_operations_production_admission_foundation.sql'
           AND checksum =
-            '86a35844edd3cc233e8f72ff985c339474dc09d3cd79d354fcb3adeb902aa66f') THEN
+            'dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0') THEN
         RAISE EXCEPTION 'H2A004 migration 055 checksum or ledger mismatch'
             USING ERRCODE = '55000';
     END IF;

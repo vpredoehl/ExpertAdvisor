@@ -13,7 +13,7 @@ BEGIN
         WHERE version = '056'
           AND filename = '056_campaign_operations_h2_privilege_deployment_contract.sql'
           AND checksum =
-            '4616e269f6a670e6edbc0572a029c48531c55f48c1cf9ed951624c83fc5025cc') THEN
+            'e382ea14cfe80bf9d4ef01a01861679cc23be19ff190beb8c21df73d15ad4310') THEN
         RAISE EXCEPTION 'H2A007 migration 056 checksum or ledger mismatch'
             USING ERRCODE = '55000';
     END IF;

@@ -1,7 +1,7 @@
 version	object_key	object_class	schema_name	object_identity	owner	acl_catalog_column	expected_acl_origin	requirement_id
 h1-object-inventory-v1	schema:public	schema	public	public	pg_database_owner	nspacl	explicit	H1-ACL-SCHEMA-PUBLIC
 h1-object-inventory-v1	table:public.schema_migrations	table	public	public.schema_migrations	vjp	relacl	explicit	H1-ACL-LEDGER
-h1-object-inventory-v1	table:public.experiment_scheduler_protocol	table	public	public.experiment_scheduler_protocol	campaign_manager_login	relacl	explicit	H1-ACL-SCHEDULER-EVIDENCE
+h1-object-inventory-v1	table:public.experiment_scheduler_protocol	table	public	public.experiment_scheduler_protocol	vjp	relacl	explicit	H1-ACL-SCHEDULER-EVIDENCE
 h1-object-inventory-v1	table:public.campaign_operations_production_transition_context	table	public	public.campaign_operations_production_transition_context	campaign_operations_h1_boundary_authority	relacl	explicit	H1-ACL-CONTEXT
 h1-object-inventory-v1	table:public.campaign_operations_production_enablement_event	table	public	public.campaign_operations_production_enablement_event	campaign_operations_h1_boundary_authority	relacl	explicit	H1-ACL-ENABLEMENT
 h1-object-inventory-v1	table:public.campaign_operations_production_enablement_audit_reference_event	table	public	public.campaign_operations_production_enablement_audit_reference_event	campaign_operations_h1_boundary_authority	relacl	explicit	H1-ACL-ENABLEMENT-AUDIT

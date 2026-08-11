@@ -12,7 +12,7 @@ BEGIN
         WHERE version = '057'
           AND filename = '057_campaign_operations_h2_production_bind_state_contract.sql'
           AND checksum =
-            '4360f72635e5a6135ab355071f9dff8196b9c1612be2b87e13294a41d65c89af') THEN
+            'ab58c6e7433bd81925497de9b4eb825fa0c8b908d202da61a261cfd4b18368fb') THEN
         RAISE EXCEPTION 'H3A001 migration 057 checksum or ledger mismatch'
             USING ERRCODE = '55000';
     END IF;

@@ -275,6 +275,130 @@ printf 'H1_PROTECTED_FUNCTION_PREFLIGHT fixture=schema054_exact result=PASS repl
 
 transition_identity='public.transition_campaign_operations_request_dispatching(bigint,integer,text,text)'
 
+# A deployed predecessor may already have removed PUBLIC EXECUTE from one of
+# the five historical NULL/default-ACL functions.  Owner-only explicit ACL is
+# a valid hardened predecessor for this enforcement trigger.
+hardened_owner_database="h1_preflight_hardened_owner_${$}"
+createdb "${target[@]}" -T schema054 "$hardened_owner_database"
+
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 \
+  "$hardened_owner_database" -c '
+REVOKE EXECUTE ON FUNCTION
+  enforce_campaign_operations_complete_binding()
+FROM PUBLIC;
+'
+
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_owner_database" -c "
+SELECT function_row.proacl IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1
+     FROM aclexplode(function_row.proacl) acl
+     WHERE acl.grantee <> function_row.proowner
+        OR acl.privilege_type <> 'EXECUTE'
+        OR acl.is_grantable)
+FROM pg_proc function_row
+WHERE function_row.oid =
+  'enforce_campaign_operations_complete_binding()'::regprocedure
+")" == t ]]
+
+psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 \
+  "$hardened_owner_database" -f "$migration" \
+  >"$cluster_root/hardened-owner-install.log" 2>&1
+
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_owner_database" -c \
+  'SELECT campaign_operations_h1_deployment_audit_v1(NULL,false,false)')" == t ]]
+
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_owner_database" -c "
+SELECT pg_get_userbyid(function_row.proowner) =
+         'campaign_operations_h1_boundary_authority'
+   AND NOT has_function_privilege(
+         'public',
+         function_row.oid,
+         'EXECUTE')
+FROM pg_proc function_row
+WHERE function_row.oid =
+  'enforce_campaign_operations_complete_binding()'::regprocedure
+")" == t ]]
+
+dropdb "${target[@]}" "$hardened_owner_database"
+
+printf 'H1_PROTECTED_FUNCTION_PREFLIGHT fixture=already_hardened_owner_acl result=PASS audit=PASS public_execute=ABSENT\n'
+
+# The legacy dispatch transition is different: its valid hardened predecessor
+# retains campaign_operations_dispatcher EXECUTE while PUBLIC is absent.
+# This predecessor-only capability must not be added to the final H1 contract.
+hardened_transition_database="h1_preflight_hardened_transition_${$}"
+createdb "${target[@]}" -T schema054 "$hardened_transition_database"
+
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 \
+  "$hardened_transition_database" <<'SQL'
+REVOKE EXECUTE ON FUNCTION
+  transition_campaign_operations_request_dispatching(bigint,integer,text,text)
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+  transition_campaign_operations_request_dispatching(bigint,integer,text,text)
+TO campaign_operations_dispatcher;
+SQL
+
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_transition_database" -c "
+SELECT function_row.proacl IS NOT NULL
+   AND NOT EXISTS (
+     (SELECT acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM aclexplode(function_row.proacl) acl
+      EXCEPT
+      SELECT expected.grantee, 'EXECUTE'::text, false
+      FROM (VALUES
+        (function_row.proowner),
+        ((SELECT oid
+          FROM pg_roles
+          WHERE rolname='campaign_operations_dispatcher'))
+      ) expected(grantee))
+     UNION ALL
+     (SELECT expected.grantee, 'EXECUTE'::text, false
+      FROM (VALUES
+        (function_row.proowner),
+        ((SELECT oid
+          FROM pg_roles
+          WHERE rolname='campaign_operations_dispatcher'))
+      ) expected(grantee)
+      EXCEPT
+      SELECT acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM aclexplode(function_row.proacl) acl))
+FROM pg_proc function_row
+WHERE function_row.oid =
+  'transition_campaign_operations_request_dispatching(bigint,integer,text,text)'::regprocedure
+")" == t ]]
+
+psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 \
+  "$hardened_transition_database" -f "$migration" \
+  >"$cluster_root/hardened-transition-install.log" 2>&1
+
+# Final H1 behavior remains authoritative: dispatcher does not acquire a new
+# final grant merely because its predecessor grant was accepted.
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_transition_database" -c "
+SELECT NOT has_function_privilege(
+         'campaign_operations_dispatcher',
+         'transition_campaign_operations_request_dispatching(bigint,integer,text,text)',
+         'EXECUTE')
+   AND NOT has_function_privilege(
+         'public',
+         'transition_campaign_operations_request_dispatching(bigint,integer,text,text)',
+         'EXECUTE')
+")" == t ]]
+
+[[ "$(psql "${target[@]}" -X -At -v ON_ERROR_STOP=1 \
+  "$hardened_transition_database" -c \
+  'SELECT campaign_operations_h1_deployment_audit_v1(NULL,false,false)')" == t ]]
+
+dropdb "${target[@]}" "$hardened_transition_database"
+
+printf 'H1_PROTECTED_FUNCTION_PREFLIGHT fixture=already_hardened_transition_acl result=PASS predecessor_dispatcher_execute=ACCEPTED final_dispatcher_execute=ABSENT public_execute=ABSENT audit=PASS\n'
+
 run_negative_fixture return_type '
 DROP FUNCTION transition_campaign_operations_request_dispatching(bigint,integer,text,text);
 -- Recreate with the exact frozen input names; return identity is the only

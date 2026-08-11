@@ -68,7 +68,7 @@ int main(int argc, char** argv)
         if (phase == "pre")
         {
             CO::ProductionEnableRequest enable{
-                "h3-compat-enable", 0, "cee://h3-compat/generation-52",
+                "h3-compat-enable", 2, "cee://h3-compat/generation-52",
                 CO::ActorIdentity("h2.enabler@example.test"),
                 CO::Reason("H3 compatibility disposable enable"), build, true};
             const auto enabled = CO::EnableProduction(

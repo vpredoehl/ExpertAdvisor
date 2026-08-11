@@ -8,7 +8,7 @@ object_manifest(object_class,schema_name,object_name,object_owner,
                 acldefault_type,acl_is_null,requirement_id) AS (VALUES
  ('schema','public','public','pg_database_owner','n'::"char",false,'H1-ACL-SCHEMA-PUBLIC'),
  ('table','public','public.schema_migrations','vjp','r'::"char",false,'H1-ACL-LEDGER'),
- ('table','public','public.experiment_scheduler_protocol','campaign_manager_login','r'::"char",false,'H1-ACL-SCHEDULER-EVIDENCE'),
+ ('table','public','public.experiment_scheduler_protocol','vjp','r'::"char",false,'H1-ACL-SCHEDULER-EVIDENCE'),
  ('table','public','public.campaign_operations_production_transition_context','campaign_operations_h1_boundary_authority','r'::"char",false,'H1-ACL-CONTEXT'),
  ('table','public','public.campaign_operations_production_enablement_event','campaign_operations_h1_boundary_authority','r'::"char",false,'H1-ACL-ENABLEMENT'),
  ('table','public','public.campaign_operations_production_enablement_audit_reference_event','campaign_operations_h1_boundary_authority','r'::"char",false,'H1-ACL-ENABLEMENT-AUDIT'),

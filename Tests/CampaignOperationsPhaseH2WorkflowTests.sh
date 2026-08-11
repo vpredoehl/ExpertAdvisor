@@ -20,29 +20,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# H1 already owns the repository-native schema-054 fixture and 055 upgrade
-# setup. Stop at its first known H1REG027 comparison so this test can reuse
-# the disposable cluster before H2 workflow state is exercised.
+# H1 owns the repository-native schema-054 fixture and 055 upgrade setup.
+# Reuse its successfully reconciled disposable cluster before H2 workflow
+# state is exercised.
 set +e
 H1_PRESERVE_CLUSTER_ROOT="$preserve_marker" \
   bash "$repo_root/Tests/CampaignOperationsPhaseH1MigrationTests.sh" \
   >"$tmp_root/h1-output.log" 2>&1
 h1_status=$?
 set -e
-[[ "$h1_status" -ne 0 ]]
-rg -q 'RuntimeError: acl-comparison-failed:H1REG027:H1-ACL-SCHEDULER-COLUMNS:missing-observed-tuples' \
-  "$tmp_root/h1-output.log"
+[[ "$h1_status" -eq 0 ]]
+rg -q 'H1_ACL_CATALOG_V3_OK rows=41' "$tmp_root/h1-output.log"
 [[ -s "$preserve_marker" ]]
 cluster_root="$(sed -n '1p' "$preserve_marker")"
 cluster_socket="$cluster_root/s"
 target=(-h "$cluster_socket" -p 5432 -U campaign_manager_login)
 database="$(psql "${target[@]}" -At postgres -c \
-  "SELECT datname FROM pg_database WHERE datname LIKE 'expertadvisor_campaign_operations_phase3_test_h1_%' ORDER BY datname DESC LIMIT 1")"
+  "SELECT datname FROM pg_database WHERE datname ~ '^expertadvisor_campaign_operations_phase3_test_h1_[0-9]+$' ORDER BY datname DESC LIMIT 1")"
 [[ -n "$database" ]]
 
 echo "H2_FIXTURE schema=055 database=$database socket=$cluster_socket"
 before_055="$(shasum -a 256 "$repo_root/Database/migrations/055_campaign_operations_production_admission_foundation.sql" | awk '{print $1}')"
-[[ "$before_055" == 86a35844edd3cc233e8f72ff985c339474dc09d3cd79d354fcb3adeb902aa66f ]]
+[[ "$before_055" == dd01812b04f0f48ab8caac40a5280ff5c6831ed2fc4f53ceb9774e0dc92c3ff0 ]]
 
 # Make the predecessor ledger coherent for the real runner. The schema was
 # restored through 049 and 050-055 were applied by the native H1 fixture.
@@ -122,6 +121,36 @@ GRANT campaign_operations_production_dispatcher,
       campaign_operations_scheduler_protocol_evidence_reader
   TO h2_manager_login;
 SQL
+
+# Preserve the successful H1 enablement evidence as the first ledger event,
+# then extend that exact canonical predecessor through the native disable
+# transition.  H2's first enable therefore starts from the required disabled
+# version-2 head instead of attempting a second genesis enable.
+h1_enable_head="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
+  "SELECT production_enablement_event_id||'|'||event_kind||'|'||resulting_version
+     FROM campaign_operations_production_enablement_event
+    WHERE production_enablement_event_id=1")"
+[[ "$h1_enable_head" == "1|enable|1" ]]
+echo "H2_H1_ENABLE_HEAD event_id=1 kind=enable resulting_version=1 preserved=PASS"
+
+psql -h "$cluster_socket" -p 5432 -U h2_disabler_login -q -v ON_ERROR_STOP=1 \
+  "$database" -c "SELECT record_campaign_operations_production_disable_v1(
+    'h2-fixture-bridge-disable-v2',
+    predecessor.production_enablement_event_id,
+    predecessor.enablement_identity_canonical,
+    predecessor.resulting_version,
+    'h2.disabler@example.test',
+    'Bridge the preserved H1 enablement head for H2 workflow.')
+    FROM campaign_operations_production_enablement_event predecessor
+   WHERE predecessor.production_enablement_event_id=1
+     AND predecessor.event_kind='enable'
+     AND predecessor.resulting_version=1;"
+bridge_disable_head="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
+  "SELECT production_enablement_event_id||'|'||event_kind||'|'||resulting_version||'|'||predecessor_event_id
+     FROM campaign_operations_production_enablement_event
+    ORDER BY resulting_version DESC LIMIT 1")"
+[[ "$bridge_disable_head" == "2|disable|2|1" ]]
+echo "H2_BRIDGE_DISABLE native=record_campaign_operations_production_disable_v1 predecessor_event=1 resulting_version=2 head=disable preserved_h1=PASS"
 
 "$repo_root/Scripts/CampaignOperationsH2DeploymentAudit.sh" \
   --stage post-upgrade --host "$cluster_socket" --port 5432 \

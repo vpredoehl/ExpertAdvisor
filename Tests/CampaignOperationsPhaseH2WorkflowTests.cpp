@@ -97,7 +97,7 @@ int main(int argc, char** argv)
 
         BackendFactory enabler{enablerConnection, "enable"};
         CO::ProductionEnableRequest enableRequest{
-            "h2-enable-001", 0, "cee://h2/generation-52",
+            "h2-enable-001", 2, "cee://h2/generation-52",
             CO::ActorIdentity("h2.enabler@example.test"),
             CO::Reason("H2 disposable enable"), build, true};
         bool injectEnableInDoubt = true;
@@ -221,7 +221,7 @@ int main(int argc, char** argv)
 
         BackendFactory disabler{disablerConnection, "disable"};
         CO::ProductionDisableRequest disableRequest{
-            "h2-disable-001", 1,
+            "h2-disable-001", 3,
             CO::ActorIdentity("h2.disabler@example.test"),
             CO::Reason("H2 disposable disable"), true};
         bool injectDisableInDoubt = true;
