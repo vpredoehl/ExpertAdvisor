@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.expertadvisor.campaign-operations-h4</string>
+  <key>UserName</key><string>expertadvisor-h4</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/python3</string>
+    <string>/opt/expertadvisor/Scripts/CampaignOperationsH4Supervisor.py</string>
+    <string>--config</string>
+    <string>/Library/Application Support/ExpertAdvisor/campaign-operations-h4.json</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict>
+    <!-- Restart only an unexpected process crash; a deliberate STOP exits 0. -->
+    <key>Crashed</key><true/>
+  </dict>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/var/log/expertadvisor/campaign-operations-h4.launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/var/log/expertadvisor/campaign-operations-h4.launchd.err.log</string>
+</dict></plist>
