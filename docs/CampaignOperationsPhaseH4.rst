@@ -18,6 +18,13 @@ connection file owner-only, replace every placeholder, and validate the plist:
    plutil -lint Deployment/CampaignOperationsH4/com.expertadvisor.campaign-operations-h4.plist
    /usr/bin/python3 Scripts/CampaignOperationsH4Supervisor.py --config /absolute/path/campaign-operations-h4.json
 
+The JSON configuration file itself and the connection environment file must
+both be absolute regular files with owner-only permissions. A group/world
+accessible configuration is rejected as ``STOP_INVALID_CONFIGURATION`` before
+schedule activation. This is required because the JSON controls the reviewed
+executable path/hash, deployment identity, cadence, retry policy, and
+state/log destinations.
+
 The deployment identity, deployment execution identity, target database identity, target environment,
 reviewed PostgreSQL login identity,
 executable SHA-256, positive H3 limit (1..100), positive normal interval,
@@ -99,11 +106,32 @@ the reviewed launchd job only after this explicit action. The normal supervisor
 start validates the configuration again and performs immediate H1 readiness
 before any H3 child can begin; failed readiness remains fail-closed.
 
-``duplicate_drift_detected`` is ``null`` in this first increment: H4 has no
-duplicate observer and therefore does not manufacture a verified ``false``.
-Likewise, a stopped state records ``service_alive=false``. Scheduled actions
-record their actual computed future invocation time; a restored pending action
-has no invented schedule timestamp.
+Ordinary duplicate launch prevention remains owned by the reviewed launchd
+label/job identity; H4 does not introduce a database singleton, lease,
+heartbeat, PID ownership table, advisory lock, or process-lifetime fence.
+
+If the deployment owner independently observes duplicate-instance drift, it
+records that observation by creating:
+
+::
+
+   campaign_operations_h4_duplicate_drift.marker
+
+in the configured H4 state directory. The marker is an operational observation
+input only, never coordination authority. Before each readiness/H3 cycle the
+supervisor checks for this marker. If present, it launches neither readiness nor
+H3, records ``duplicate_drift_detected=true``, classifies
+``duplicate_drift_observed``, and selects
+``STOP_DEGRADED_OPERATOR_REQUIRED``. The resulting MUST-stop remains durable
+until the operator investigates the duplicate deployment, removes/suppresses
+the duplicate through deployment controls, removes the marker, and deliberately
+resolves the H4 STOP state.
+
+When no independent observation has been made,
+``duplicate_drift_detected`` remains ``null`` rather than manufacturing a
+verified ``false``. Likewise, a stopped state records
+``service_alive=false``. Scheduled actions record their actual computed future
+invocation time; a restored pending action has no invented schedule timestamp.
 
 Emergency production disable is the existing immutable global disable event
 first, then prevent future H4 launches and drain. H4 rollback removes/boots out

@@ -38,7 +38,8 @@ STOP_CLASSIFICATIONS = {
     "STOP_DISABLED": {"production_disabled"},
     "STOP_DEGRADED_OPERATOR_REQUIRED": {
         "scheduler_protocol_ineffective", "manager_build_not_ready", "privilege_failure",
-        "indeterminate", "retry_budget_exhausted", "graceful_stop"},
+        "indeterminate", "retry_budget_exhausted", "graceful_stop",
+        "duplicate_drift_observed"},
     "STOP_INVALID_CONFIGURATION": {"invalid_configuration"},
     "STOP_MALFORMED_RESULT": {"malformed_result", "unclassifiable_process_state", "restart_incomplete_state"},
 }
@@ -168,6 +169,11 @@ class Config:
 
     @staticmethod
     def load(path: Path) -> "Config":
+        if (not path.is_absolute() or not path.is_file() or
+                (path.stat().st_mode & 0o077)):
+            raise ConfigurationError(
+                "configuration file must be absolute, regular, and owner-only"
+            )
         try:
             raw = json.loads(path.read_text())
         except Exception as error:
@@ -398,6 +404,20 @@ class Supervisor:
         self.forced_termination = False
         self.last_readiness: dict = {}
         self.last_invocation_start: Optional[str] = None
+        self.duplicate_drift_marker = (
+            config.state_directory /
+            "campaign_operations_h4_duplicate_drift.marker"
+        )
+
+    def duplicate_drift_observed(self) -> bool:
+        """Deployment-owned duplicate observation input.
+
+        The marker is diagnostic/operational evidence only. It provides no
+        ownership, liveness, fencing, or database-coordination authority.
+        Its presence means the deployment owner has independently observed
+        duplicate-instance drift and H4 must suppress further launches.
+        """
+        return self.duplicate_drift_marker.exists()
 
     def _capture(self, label: str, completed) -> None:
         self.config.log_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -581,8 +601,8 @@ class Supervisor:
                   "next_action": action, "retry_count": retry_count, "status": "stopped" if action in STOP_ACTIONS else "scheduled",
                   "terminal_result_validity": extra.pop("terminal_result_validity", "not_applicable"),
                   "graceful_drain_state": "requested" if self.shutdown_requested else "not_requested",
-                  # H4 has no duplicate observer in this increment; null is an
-                  # explicit unknown, never a verified negative observation.
+                  # Null means no deployment-owned duplicate observation has
+                  # been supplied; it is never a manufactured negative.
                   "duplicate_drift_detected": None, "invocation_start": self.last_invocation_start,
                   "invocation_end": None, "child_exit_status": None,
                   "next_scheduled_invocation": next_scheduled, "work_occurred": implied_work,
@@ -632,8 +652,13 @@ class Supervisor:
             return None
         if existing.get("graceful_drain_state") not in {"not_requested", "requested", "draining", "forced"}:
             return None
-        if existing.get("duplicate_drift_detected") is not None:
-            return None  # This increment cannot truthfully restore a claimed observation.
+        duplicate_drift = existing.get("duplicate_drift_detected")
+        if duplicate_drift not in {None, True}:
+            return None
+        if duplicate_drift is True and not (
+                action == "STOP_DEGRADED_OPERATOR_REQUIRED" and
+                classification == "duplicate_drift_observed"):
+            return None
         for key in ("service_alive", "last_valid_work_result", "last_valid_no_work_result"):
             if not isinstance(existing.get(key), bool):
                 return None
@@ -778,6 +803,16 @@ class Supervisor:
             # RESTORE_PERSISTED_NEXT_ACTION is durable; every later launch still preflights.
         cycles = 0
         while not self.shutdown_requested and (max_cycles is None or cycles < max_cycles):
+            if self.duplicate_drift_observed():
+                self.persist(
+                    "duplicate_drift_observed",
+                    "STOP_DEGRADED_OPERATOR_REQUIRED",
+                    retry_count,
+                    terminal_result_validity="not_applicable",
+                    duplicate_drift_detected=True,
+                )
+                return 0
+
             ready, readiness_class, diagnostic = self.readiness()
             self.last_readiness = {"readiness_check_at": now(), "readiness_result": "ready" if ready else "blocked",
                                    "readiness_blocker": None if ready else readiness_class}

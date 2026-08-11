@@ -58,6 +58,7 @@ class H4SupervisorTests(unittest.TestCase):
         value = {"deployment_identity":"test.h4", "deployment_execution_identity":"test-h4", "target_database_identity":"test-db", "target_environment":"test", "postgresql_login_identity":"pqxx", "executable_path":str(self.executable), "executable_sha256":hashlib.sha256(self.executable.read_bytes()).hexdigest(), "connection_environment_file":str(self.env), "limit":1, "normal_interval_seconds":1, "backoff_seconds":[1,2], "retry_budget":2, "graceful_drain_timeout_seconds":1, "state_directory":str(root / "state"), "log_directory":str(root / "logs"), "log_retention_policy":"test-policy"}
         value.update(changes)
         self.config_path.write_text(json.dumps(value))
+        self.config_path.chmod(0o600)
 
     def classify(self, completed, forced=False):
         return self.supervisor.classify_h3(completed, forced)
@@ -72,6 +73,77 @@ class H4SupervisorTests(unittest.TestCase):
         self.assertEqual(commands[1], [str(self.executable), "--campaign-operations-manager-run-once", "1", "--yes"])
         self.write_config(limit=101)
         with self.assertRaises(h4.ConfigurationError): h4.Config.load(self.config_path)
+
+    def test_main_configuration_file_must_be_owner_only(self):
+        self.config_path.chmod(0o644)
+        with self.assertRaises(h4.ConfigurationError):
+            h4.Config.load(self.config_path)
+
+        self.config_path.chmod(0o600)
+        self.assertIsInstance(h4.Config.load(self.config_path), h4.Config)
+
+    def test_duplicate_drift_marker_stops_before_readiness_or_h3(self):
+        calls = []
+
+        def runner(args, **kwargs):
+            calls.append(args)
+            return result(0)
+
+        supervisor = h4.Supervisor(
+            self.config,
+            runner=runner,
+            sleeper=lambda _: None,
+        )
+
+        supervisor.duplicate_drift_marker.parent.mkdir(
+            mode=0o700, parents=True, exist_ok=True
+        )
+        supervisor.duplicate_drift_marker.write_text(
+            "observed by deployment owner\n"
+        )
+
+        self.assertEqual(supervisor.run(max_cycles=1), 0)
+        self.assertEqual(calls, [])
+
+        state = supervisor.state.read()
+        health = json.loads(
+            (self.config.state_directory /
+             "campaign_operations_h4_health.json").read_text()
+        )
+
+        self.assertEqual(
+            state["classification"],
+            "duplicate_drift_observed",
+        )
+        self.assertEqual(
+            state["next_action"],
+            "STOP_DEGRADED_OPERATOR_REQUIRED",
+        )
+        self.assertEqual(state["status"], "stopped")
+        self.assertFalse(state["service_alive"])
+        self.assertTrue(state["duplicate_drift_detected"])
+
+        self.assertEqual(
+            health["classification"],
+            "duplicate_drift_observed",
+        )
+        self.assertTrue(health["duplicate_drift_detected"])
+
+        # The resulting MUST-stop state remains durable across restart.
+        restarted = h4.Supervisor(
+            self.config,
+            runner=runner,
+            sleeper=lambda _: None,
+        )
+        restarted.run(max_cycles=1)
+
+        restored = restarted.state.read()
+        self.assertEqual(
+            restored["next_action"],
+            "STOP_DEGRADED_OPERATOR_REQUIRED",
+        )
+        self.assertTrue(restored["duplicate_drift_detected"])
+        self.assertEqual(calls, [])
 
     def test_invalid_configuration_and_credential_secrecy(self):
         self.write_config(normal_interval_seconds=0)
