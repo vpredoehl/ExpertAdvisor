@@ -17,6 +17,12 @@ WHERE NOT EXISTS (
   WHERE version='057'
     AND filename='057_campaign_operations_h2_production_bind_state_contract.sql'
     AND checksum=:'h2_bind_sum');
+SELECT 'H8A004:migration-059'
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.schema_migrations
+  WHERE version='059'
+    AND filename='059_campaign_operations_direct_sql_readiness_boundary.sql'
+    AND checksum=:'h8_sum');
 
 WITH expected(object_identity,grantee) AS (VALUES
  ('record_campaign_operations_production_enable_v1(text,integer,text,text,text,text,text,text,text,text,text)','campaign_operations_h1_boundary_authority'),
@@ -24,7 +30,8 @@ WITH expected(object_identity,grantee) AS (VALUES
  ('record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)','campaign_operations_h1_boundary_authority'),
  ('record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)','campaign_operations_production_disabler'),
  ('transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)','campaign_operations_h1_boundary_authority'),
- ('transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)','campaign_operations_production_dispatcher'),
+ ('campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)','campaign_operations_h1_boundary_authority'),
+ ('campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)','campaign_operations_production_dispatch_service'),
  ('transition_campaign_operations_request_bound_production_v2(bigint,integer,text,bigint,text,text)','campaign_operations_owner'),
  ('transition_campaign_operations_request_bound_production_v2(bigint,integer,text,bigint,text,text)','campaign_operations_production_phase5_transactional')),
 actual AS (
@@ -49,6 +56,35 @@ WHERE p.oid IN (
  'record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)'::regprocedure,
  'transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure)
 AND (r.rolname<>'campaign_operations_h1_boundary_authority' OR NOT p.prosecdef OR p.prokind<>'f' OR p.proleakproof OR p.provolatile<>'v' OR p.proparallel<>'u' OR p.pronargdefaults<>0 OR p.provariadic<>0 OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public']::text[])
+LIMIT 1;
+
+SELECT 'H2A005:authorized-production-boundary'
+FROM pg_catalog.pg_proc p
+JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
+WHERE p.oid='campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure
+AND (r.rolname<>'campaign_operations_h1_boundary_authority' OR NOT p.prosecdef OR
+     p.prokind<>'f' OR p.proleakproof OR p.provolatile<>'v' OR
+     p.proparallel<>'u' OR p.pronargdefaults<>0 OR p.provariadic<>0 OR
+     p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public']::text[])
+LIMIT 1;
+
+SELECT 'H8A005:readiness-gate'
+FROM pg_catalog.pg_proc p
+JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
+WHERE p.oid='campaign_operations_production_dispatch_readiness_gate_v1(text)'::regprocedure
+AND (r.rolname<>'campaign_operations_h1_boundary_authority' OR NOT p.prosecdef OR
+     p.prokind<>'f' OR p.proleakproof OR p.provolatile<>'s' OR
+     p.proparallel<>'u' OR p.pronargdefaults<>0 OR p.provariadic<>0 OR
+     p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, public']::text[])
+LIMIT 1;
+
+SELECT 'H2A003:raw-production-transition-reachable'
+FROM pg_catalog.pg_proc p
+CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(
+    p.proacl, pg_catalog.acldefault('f', p.proowner))) a
+WHERE p.oid='transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure
+  AND (a.grantee=0 OR a.is_grantable OR
+       a.grantee='campaign_operations_production_dispatcher'::regrole)
 LIMIT 1;
 
 SELECT 'H2A005:production-bind-transition'
@@ -144,6 +180,7 @@ FROM (VALUES
  ('campaign_operations_production_enabler',false),
  ('campaign_operations_production_disabler',false),
  ('campaign_operations_production_dispatcher',false),
+ ('campaign_operations_production_dispatch_service',false),
  ('campaign_operations_production_phase5_transactional',false),
  ('campaign_operations_production_reader',false),
  ('campaign_operations_scheduler_protocol_evidence_reader',false)) expected(role_name,must_super)
@@ -164,8 +201,17 @@ SELECT 'H2A002:capability-graph:'||g.rolname||'->'||m.rolname
 FROM pg_catalog.pg_auth_members x
 JOIN pg_catalog.pg_roles g ON g.oid=x.roleid
 JOIN pg_catalog.pg_roles m ON m.oid=x.member
-WHERE g.rolname IN ('campaign_operations_production_enabler','campaign_operations_production_disabler','campaign_operations_production_dispatcher','campaign_operations_production_phase5_transactional','campaign_operations_production_reader','campaign_operations_scheduler_protocol_evidence_reader')
+WHERE g.rolname IN ('campaign_operations_production_enabler','campaign_operations_production_disabler','campaign_operations_production_dispatcher','campaign_operations_production_phase5_transactional','campaign_operations_production_reader','campaign_operations_scheduler_protocol_evidence_reader','campaign_operations_production_dispatch_service')
   AND (NOT m.rolcanlogin OR x.admin_option)
+LIMIT 1;
+
+SELECT 'H2A006:service-principal-overlap:'||login.rolname
+FROM pg_catalog.pg_roles login
+WHERE login.rolcanlogin AND NOT login.rolsuper
+  AND pg_catalog.pg_has_role(login.rolname,
+      'campaign_operations_production_dispatch_service', 'MEMBER')
+  AND pg_catalog.pg_has_role(login.rolname,
+      'campaign_operations_production_dispatcher', 'MEMBER')
 LIMIT 1;
 
 WITH RECURSIVE role_reach(login_oid,reached_oid,path,depth) AS (
@@ -189,8 +235,8 @@ WITH RECURSIVE role_reach(login_oid,reached_oid,path,depth) AS (
 ), combos AS (
  SELECT login_name,pg_catalog.string_agg(reached_name,',' ORDER BY reached_name) AS combo
  FROM effective
- WHERE reached_name IN ('campaign_operations_production_enabler','campaign_operations_production_disabler','campaign_operations_production_dispatcher','campaign_operations_production_phase5_transactional','campaign_operations_production_reader','campaign_operations_scheduler_protocol_evidence_reader')
- GROUP BY login_name)
+WHERE reached_name IN ('campaign_operations_production_enabler','campaign_operations_production_disabler','campaign_operations_production_dispatcher','campaign_operations_production_phase5_transactional','campaign_operations_production_reader','campaign_operations_scheduler_protocol_evidence_reader','campaign_operations_production_dispatch_service')
+GROUP BY login_name)
 SELECT 'H2A006:login:'||login_name||':'||combo
 FROM combos
 WHERE combo NOT IN (
@@ -199,7 +245,8 @@ WHERE combo NOT IN (
  'campaign_operations_production_reader,campaign_operations_scheduler_protocol_evidence_reader',
  'campaign_operations_production_enabler,campaign_operations_production_reader,campaign_operations_scheduler_protocol_evidence_reader',
  'campaign_operations_production_disabler,campaign_operations_production_reader',
- 'campaign_operations_production_dispatcher,campaign_operations_production_phase5_transactional,campaign_operations_production_reader,campaign_operations_scheduler_protocol_evidence_reader')
+ 'campaign_operations_production_dispatcher,campaign_operations_production_phase5_transactional,campaign_operations_production_reader,campaign_operations_scheduler_protocol_evidence_reader',
+ 'campaign_operations_production_dispatch_service,campaign_operations_production_phase5_transactional')
 LIMIT 1;
 
 WITH RECURSIVE role_reach(login_oid,reached_oid,path,depth) AS (

@@ -82,7 +82,7 @@ void AcquireK2WithAuthoritativeTransition(const std::string& connectionString,
     {
         transaction.exec(
             "SELECT dispatch_attempt_id FROM "
-            "transition_campaign_operations_request_dispatch_production_v2("
+            "campaign_operations_production_dispatch_authorized_v3("
             "$1,$2,$3,now()+interval '300 seconds',$4,$5,$6);",
             pqxx::params{71, 5, "fnv1a64:1111111111111111", "h2-replay-k2",
                 "h2.manager@example.test", buildCanonical});
@@ -101,10 +101,11 @@ void AcquireK2WithAuthoritativeTransition(const std::string& connectionString,
 
 int main(int argc, char** argv)
 {
-    if (argc != 4)
+    if (argc != 5)
     {
         std::cerr << "usage: CampaignOperationsPhaseH2ReplayAssociationTests "
-                     "ENABLER_CONNECTION MANAGER_CONNECTION RECOVERY_CONNECTION\n";
+                     "ENABLER_CONNECTION MANAGER_CONNECTION "
+                     "DISPATCH_SERVICE_CONNECTION RECOVERY_CONNECTION\n";
         return 64;
     }
 
@@ -112,12 +113,13 @@ int main(int argc, char** argv)
     {
         const std::string enablerConnection = argv[1];
         const std::string managerConnection = argv[2];
-        const std::string recoveryConnection = argv[3];
+        const std::string dispatchServiceConnection = argv[3];
+        const std::string recoveryConnection = argv[4];
         const auto build = FixtureBuild();
         std::cerr << "H2_REPLAY_PROGRESS enable\n";
 
         CO::ProductionEnableRequest enableRequest{
-            "h2-replay-enable-001", 0, "cee://h2/replay-reacquisition",
+            "h2-replay-enable-001", 2, "cee://h2/replay-reacquisition",
             CO::ActorIdentity("h2.enabler@example.test"),
             CO::Reason("H2 exact producing attempt fixture"), build, true};
         (void)CO::EnableProduction(
@@ -129,6 +131,7 @@ int main(int argc, char** argv)
         {
             (void)CO::DispatchOneRequestForProductionForTest(
                 managerConnection,
+                dispatchServiceConnection,
                 CO::ProductionDispatchRequest{
                     CO::OperationalRequestId(71), 3, "h2-replay-k1",
                     CO::ActorIdentity("h2.manager@example.test"), build, true},
@@ -162,7 +165,7 @@ int main(int argc, char** argv)
         const int k2ExpectedVersion = std::stoi(
             recoveredState.substr(recoveredState.find('|') + 1));
         PrintReplayPredecessor(recoveryConnection);
-        AcquireK2WithAuthoritativeTransition(managerConnection,
+        AcquireK2WithAuthoritativeTransition(dispatchServiceConnection,
             build.identity.canonicalText());
         std::cout << "H2_REPLAY_FIXTURE recovery=PASS state="
                   << recoveredState << " resolution_count="
@@ -173,7 +176,7 @@ int main(int argc, char** argv)
             CO::ActorIdentity("h2.manager@example.test"), build, true};
         const auto firstK2 =
             CO::DispatchOneRequestForProductionForTest(
-                managerConnection, k2Request);
+                managerConnection, dispatchServiceConnection, k2Request);
         std::cerr << "H2_REPLAY_PROGRESS k2_classification="
                   << CO::ToText(firstK2.classification)
                   << " diagnostic=" << firstK2.diagnosticCode << '\n';
@@ -181,7 +184,7 @@ int main(int argc, char** argv)
             CO::DispatchResultClassification::createdAndBound);
         const auto replayK2 =
             CO::DispatchOneRequestForProductionForTest(
-                managerConnection, k2Request);
+                managerConnection, dispatchServiceConnection, k2Request);
         assert(replayK2.classification ==
             CO::DispatchResultClassification::existingIdentical);
         assert(replayK2.bindingSetIdentityHash ==
@@ -194,6 +197,7 @@ int main(int argc, char** argv)
         {
             (void)CO::DispatchOneRequestForProductionForTest(
                 managerConnection,
+                dispatchServiceConnection,
                 CO::ProductionDispatchRequest{
                     CO::OperationalRequestId(71), 3, "h2-replay-k1",
                     CO::ActorIdentity("h2.manager@example.test"), build, true});

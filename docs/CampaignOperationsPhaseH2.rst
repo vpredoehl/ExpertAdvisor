@@ -57,6 +57,31 @@ boundaries before the established Phase E lock order. A completed immutable
 binding is returned as exact replay without a second experiment, binding,
 handoff, admission, or contradictory audit row.
 
+Direct SQL authority correction
+-------------------------------
+
+Migration 059 preserves the atomic H1 production V2 transition but removes
+``EXECUTE`` from ``campaign_operations_production_dispatcher``. The deployed
+Manager/dispatcher login cannot invoke the mutation-capable wrapper. A distinct
+deployment LOGIN is granted only the NOLOGIN
+``campaign_operations_production_dispatch_service`` capability, and the
+reviewed C++ process uses that service connection only after its application
+build preflight succeeds.
+That sealed SECURITY DEFINER service boundary validates the database-side
+readiness contract, canonical evidence, current enablement, completion proof,
+reconciliation state, role graph, and supplied approved build identity before
+entering the raw transition. The raw transition is owned by, and executable
+only through, the sealed H1 boundary authority; PUBLIC, ``pqxx``, and the
+dispatcher role have no direct path to it. The C++ readiness evaluator remains
+the application-only actual-running-build preflight, while migration 059 makes
+the database-observable gate unavoidable for both direct dispatch and H3
+Manager run-once. The ordinary Manager login retains read/candidate-selection
+authority but no wrapper or raw-transition authority.
+
+Migration 059 must be applied and recorded in ``schema_migrations`` after 058.
+Deployment audits verify the corrected function ACL and deny raw transition
+execution, including through inherited dispatcher membership.
+
 State-contract seam
 -------------------
 
@@ -98,8 +123,19 @@ supervision, autostart, or continuous command. Those behaviors remain H3/H4
 boundaries.
 
 The production CLI never reuses the generic ``pqxx`` connection identity.
-Readiness, status, direct dispatch, and H3 Manager run-once require
-``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER``; enable requires
+Readiness, status, and Manager candidate selection use
+``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER``. Direct dispatch and H3
+Manager run-once perform the application preflight through that Manager LOGIN,
+then route the mutation transaction through the distinct
+``CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER``. Enable requires
 ``CAMPAIGN_OPERATIONS_PRODUCTION_ENABLER_DB_USER``; disable requires
 ``CAMPAIGN_OPERATIONS_PRODUCTION_DISABLER_DB_USER``. Each is required and has
-no fallback. The accepted direct membership tuples remain ADR-0019C authority.
+no fallback. The service LOGIN must not equal the Manager LOGIN and must not
+reach the dispatcher role. The accepted direct membership tuples remain
+ADR-0019C authority, with the additional service tuple documented below.
+
+::
+
+   GRANT campaign_operations_production_dispatch_service,
+         campaign_operations_production_phase5_transactional
+     TO <DISPATCH_SERVICE_LOGIN>;

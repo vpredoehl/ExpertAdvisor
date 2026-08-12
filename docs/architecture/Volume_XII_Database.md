@@ -1,6 +1,6 @@
 # Volume XII — Database
 
-Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; database implementation complete through Phase H H3 (migrations 055-058); H4 adds no database state
+Status: Aligned through scheduler generation 52 and accepted Campaign Operations Phase H architecture; database implementation complete through the Phase H direct-SQL boundary correction (migrations 055-059); H4 adds no database state
 Version: 0.16.0
 Last revised: 2026-08-10
 
@@ -117,6 +117,12 @@ authoritative production-dispatch engine. H3 adds no continuous cadence,
 scheduler ownership, process-lifetime database authority, singleton, or
 deployment supervision.
 
+Migration 059 is the forward direct-SQL readiness-boundary correction. It
+preserves the raw atomic production V2 transition under the sealed H1 owner,
+revokes its dispatcher EXECUTE edge, and exposes only the sealed readiness-gated
+service boundary to the deployed Manager/dispatcher role. The migration ledger,
+ACL manifest, and H2 deployment audit must all include this correction.
+
 ADR-0020 accepts Phase H H4 only as external deployment-owned supervision
 around the bounded H3 command. H4 adds no database migration, schema object,
 ACL/role authority, database scheduler, singleton, heartbeat, lease, or
@@ -135,9 +141,12 @@ alternating head, exact canonical/typed mirrors, V1/V2 exclusive shape, one
 admission and first V2/audit, Boolean/admission equivalence, completion gates,
 immutability, and owner-DML update/delete/truncate rejection.
 
-The exact production-acquisition function is
+The unchanged raw exact production-acquisition function is
 `transition_campaign_operations_request_dispatch_production_v2` (61 UTF-8
-bytes); the former 64-byte spelling is invalid. Exact catalog tests compare
+bytes); the former 64-byte spelling is invalid. After migration 059, deployed
+dispatchers invoke only
+`campaign_operations_production_dispatch_authorized_v3`,
+which gates entry to that raw function. Exact catalog tests compare
 `pg_proc.proname::text`, octet length, signature, and overload absence without
 using truncating `regprocedure` input as sole proof.
 
@@ -474,3 +483,4 @@ permissions, backup, concurrency, and observability decisions.
 | 0.14.0 | 2026-08-01 | Applied ADR-0019B's exact sealed-role identity/recursive graph, literal minimum ownership and all-schema entry-point manifests, automatic deployment audits, restore A–J, complete ACL/lock/negative matrices, and post-restore historical-byte proof. | ADR-0019B |
 | 0.15.0 | 2026-08-03 | Completed migration-055 fail-closed function tuples, post-recovery reacquisition, cross-principal replay, full audit/authority hydration, stable diagnostics, and recursive edge-preserving role evidence. | ADR-0019B |
 | 0.16.0 | 2026-08-10 | Aligned the implemented Phase H database state through H3 migrations 055-058, including H2 privilege/dispatch and H3 bounded Manager database contracts; recorded that ADR-0020 H4 adds no database schema, ACL, role, singleton, or scheduling authority. | ADR-0019, ADR-0019C, ADR-0020 |
+| 0.17.0 | 2026-08-11 | Corrected the confirmed direct-SQL production-readiness bypass with forward migration 059, a sealed readiness-gated acquisition service boundary, raw-transition ACL revocation, and deployment/catalog evidence. | ADR-0019, ADR-0019C |

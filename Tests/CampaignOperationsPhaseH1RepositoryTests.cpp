@@ -2,6 +2,7 @@
 #include "../Sources/CampaignOperationsProductionAdmissionService.hpp"
 
 #include <cassert>
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -435,6 +436,8 @@ int main(int argc, char** argv)
         assert(readiness.enablementContractVersion == "1");
         assert(readiness.admissionContractVersion == "1");
         assert(readiness.productionAttemptContractVersion == "2");
+        assert(readiness.admissionEvidenceCount == 1);
+        assert(readiness.productionAttemptEvidenceCount >= 1);
         assert(readiness.readyAdmittedRequestCount == 0);
         assert(readiness.completionNestedV2ProofVersion == "1");
         assert(readiness.completionNestedV2ProofValid);
@@ -453,6 +456,55 @@ int main(int argc, char** argv)
     const auto evaluated = LoadProductionReadiness(connection);
     assert(!evaluated.ready);
     assert(!evaluated.blockers.empty());
+
+    // Exercise the actual repository snapshot with an enabled, otherwise
+    // intact disposable state whose production evidence families are empty.
+    // The transaction is rolled back and never touches a live database.
+    {
+        pqxx::work transaction{connection};
+        transaction.exec("SET LOCAL session_replication_role=replica;");
+        transaction.exec(
+            "DELETE FROM campaign_operations_dispatch_audit_reference_event "
+            "WHERE dispatch_attempt_id IS NOT NULL OR "
+            "request_production_admission_id IS NOT NULL;"
+            "DELETE FROM campaign_operations_dispatch_attempt_outcome "
+            "WHERE dispatch_attempt_id IN (SELECT dispatch_attempt_id FROM "
+            "campaign_operations_dispatch_attempt WHERE "
+            "request_production_admission_id IS NOT NULL OR "
+            "production_enablement_event_id IS NOT NULL OR "
+            "attempt_contract_version=2);"
+            "DELETE FROM campaign_operations_dispatch_attempt WHERE "
+            "request_production_admission_id IS NOT NULL OR "
+            "production_enablement_event_id IS NOT NULL OR "
+            "attempt_contract_version=2;"
+            "DELETE FROM campaign_operations_request_production_admission;"
+            "UPDATE campaign_operations_operational_request SET "
+            "request_state='ready',state_version=3,lease_token_hash=NULL,"
+            "lease_expires_at=NULL,dispatcher_identity=NULL,"
+            "production_dispatch_enabled=false;");
+        transaction.exec("SET LOCAL session_replication_role=origin;");
+        const auto snapshot = LoadProductionReadinessSnapshot(transaction);
+        assert(snapshot.admissionEvidenceCount == 0);
+        assert(snapshot.productionAttemptEvidenceCount == 0);
+        assert(!snapshot.admissionContractVersion);
+        assert(!snapshot.productionAttemptContractVersion);
+        const auto genesisBuild = [&]() -> std::optional<ManagerBuildContract>
+        {
+            const auto head = FindCurrentProductionEnablementHead(transaction);
+            assert(head && head->approvedBuildContract);
+            return head->approvedBuildContract;
+        }();
+        const auto genesis = EvaluateProductionReadiness(snapshot,
+            genesisBuild);
+        assert(std::find(genesis.blockers.begin(), genesis.blockers.end(),
+            "canonical_contract_versions") == genesis.blockers.end());
+        assert(RenderProductionReadiness(genesis).find(
+            "admission_contract_version=genesis-empty") != std::string::npos);
+        assert(RenderProductionReadiness(genesis).find(
+            "production_attempt_contract_version=genesis-empty") !=
+            std::string::npos);
+        transaction.abort();
+    }
     AssertRoleHelperCatalogSnapshotDependency(connection);
     const auto status = LoadProductionStatus(connection);
     assert(status.size() == 1U);

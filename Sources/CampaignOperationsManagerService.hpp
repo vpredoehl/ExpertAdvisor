@@ -69,6 +69,11 @@ using ManagerTestHook = std::function<void(
 ManagerRunOnceResult RunCampaignOperationsManagerOnceForTest(
     const std::string& connectionString, int dispatchLimit,
     const ManagerBuildContract&, const ManagerTestHook&);
+
+ManagerRunOnceResult RunCampaignOperationsManagerOnceForTest(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
+    const ManagerBuildContract&, const ManagerTestHook&);
 #endif
 
 std::string ToText(ManagerRequestOutcomeClassification value);
@@ -78,8 +83,19 @@ ManagerRunOnceResult RunCampaignOperationsManagerOnce(
     const std::string& connectionString, int dispatchLimit,
     const std::string& executablePath);
 
+ManagerRunOnceResult RunCampaignOperationsManagerOnce(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
+    const std::string& executablePath);
+
 int RunCampaignOperationsManagerOnceCommand(
     const std::string& connectionString, int dispatchLimit,
+    const std::string& executablePath, std::ostream& output,
+    std::ostream& errors);
+
+int RunCampaignOperationsManagerOnceCommand(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
     const std::string& executablePath, std::ostream& output,
     std::ostream& errors);
 

@@ -60,9 +60,9 @@ SELECT record_campaign_operations_production_enable_v1(
   'H2 migration 057 clean predecessor fixture');
 SQL
   psql -X -qAt -v ON_ERROR_STOP=1 -h "$cluster_socket" -p 5432 \
-    -U h2_manager_login "$database" -v lease="$lease_digest" -v build="$build_contract" <<'SQL' >/tmp/m057-acquire.$$
+    -U h2_dispatch_service_login "$database" -v lease="$lease_digest" -v build="$build_contract" <<'SQL' >/tmp/m057-acquire.$$
 SELECT dispatch_attempt_id,lease_token_digest,lease_expires_at::text
-FROM transition_campaign_operations_request_dispatch_production_v2(
+FROM campaign_operations_production_dispatch_authorized_v3(
   71,3,:'lease',now()+interval '300 seconds',
   'm057-operation','h2.manager@example.test',:'build');
 SQL

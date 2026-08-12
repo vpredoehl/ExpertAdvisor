@@ -25,6 +25,8 @@ inline constexpr char kProductionDisablerRole[] =
     "campaign_operations_production_disabler";
 inline constexpr char kProductionDispatcherRole[] =
     "campaign_operations_production_dispatcher";
+inline constexpr char kProductionDispatchServiceRole[] =
+    "campaign_operations_production_dispatch_service";
 inline constexpr char kProductionPhase5TransactionalRole[] =
     "campaign_operations_production_phase5_transactional";
 inline constexpr char kProductionReaderRole[] =

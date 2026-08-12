@@ -48,10 +48,11 @@ void RequireReserved(const std::string& connection,
 
 int main(int argc, char** argv)
 {
-    if (argc != 4)
+    if (argc != 5)
     {
         std::cerr << "usage: CampaignOperationsPhaseH3CompatibilityTests "
-                     "pre|post ENABLER_CONNECTION MANAGER_CONNECTION\n";
+                     "pre|post ENABLER_CONNECTION MANAGER_CONNECTION "
+                     "DISPATCH_SERVICE_CONNECTION\n";
         return 64;
     }
     try
@@ -59,6 +60,7 @@ int main(int argc, char** argv)
         const std::string phase = argv[1];
         const std::string enablerConnection = argv[2];
         const std::string managerConnection = argv[3];
+        const std::string dispatchServiceConnection = argv[4];
         const auto build = FixtureBuild();
         const CO::ActorIdentity h2Actor("h2.manager@example.test");
         const auto exact = Request(71, "mgr-v1:legacy-h2-exact", h2Actor, build);
@@ -77,10 +79,10 @@ int main(int argc, char** argv)
             assert(enabled.disposition == CO::ProductionMutationDisposition::newOperation);
 
             const auto first = CO::DispatchOneRequestForProductionForTest(
-                managerConnection, exact);
+                managerConnection, dispatchServiceConnection, exact);
             assert(first.classification == CO::DispatchResultClassification::createdAndBound);
             const auto replay = CO::DispatchOneRequestForProductionForTest(
-                managerConnection, exact);
+                managerConnection, dispatchServiceConnection, exact);
             assert(replay.classification ==
                 CO::DispatchResultClassification::existingIdentical);
 
@@ -88,7 +90,7 @@ int main(int argc, char** argv)
             try
             {
                 (void)CO::DispatchOneRequestForProductionForTest(
-                    managerConnection, recoverable,
+                    managerConnection, dispatchServiceConnection, recoverable,
                     [](CO::DispatchTestInjectionPoint point)
                     {
                         if (point == CO::DispatchTestInjectionPoint::
@@ -110,7 +112,7 @@ int main(int argc, char** argv)
         if (phase != "post") throw std::invalid_argument("h3_compatibility_phase");
 
         const auto replay = CO::DispatchOneRequestForProductionForTest(
-            managerConnection, exact);
+            managerConnection, dispatchServiceConnection, exact);
         assert(replay.classification == CO::DispatchResultClassification::existingIdentical);
 
         const auto conflicting = Request(71, exact.operationKey,
@@ -119,7 +121,7 @@ int main(int argc, char** argv)
         try
         {
             (void)CO::DispatchOneRequestForProductionForTest(
-                managerConnection, conflicting);
+                managerConnection, dispatchServiceConnection, conflicting);
         }
         catch (const std::exception& error)
         {
@@ -129,14 +131,15 @@ int main(int argc, char** argv)
         assert(conflictObserved);
 
         const auto recovered = CO::DispatchOneRequestForProductionForTest(
-            managerConnection, recoverable);
+            managerConnection, dispatchServiceConnection, recoverable);
         assert(recovered.classification == CO::DispatchResultClassification::createdAndBound ||
             recovered.classification == CO::DispatchResultClassification::existingIdentical);
 
         RequireReserved(managerConnection,
             Request(73, "mgr-v1:post058-new", h2Actor, build));
         const auto ordinary = CO::DispatchOneRequestForProductionForTest(
-            managerConnection, Request(73, "h2-post058-ordinary", h2Actor, build));
+            managerConnection, dispatchServiceConnection,
+            Request(73, "h2-post058-ordinary", h2Actor, build));
         assert(ordinary.classification == CO::DispatchResultClassification::createdAndBound);
 
         pqxx::connection lookup{managerConnection};
@@ -151,8 +154,8 @@ int main(int argc, char** argv)
         const auto managerRequest = Request(74, managerIdentity.operationKey,
             CO::ActorIdentity("campaign_operations_manager"), build);
         const auto manager = CO::DispatchOneRequestForProductionManagerWithFixture(
-            managerConnection, managerRequest, managerIdentity.source.canonicalText(),
-            build);
+            managerConnection, dispatchServiceConnection, managerRequest,
+            managerIdentity.source.canonicalText(), build);
         assert(manager.classification == CO::DispatchResultClassification::createdAndBound ||
             manager.classification == CO::DispatchResultClassification::existingIdentical);
         RequireReserved(managerConnection, managerRequest);

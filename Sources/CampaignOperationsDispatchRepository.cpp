@@ -520,14 +520,14 @@ DispatchLease AcquireProductionDispatchLeaseInTransaction(
             FindProductionDispatchAttemptV2(transaction, requestId,
                 operationKey));
         transaction.exec("SET LOCAL ROLE " +
-            transaction.quote_name(kProductionDispatcherRole) + ";");
+            transaction.quote_name(kProductionDispatchServiceRole) + ";");
     }
     const auto leaseExpiresAt = transaction.exec(
         "SELECT (transaction_timestamp() + make_interval(secs => $1))::text;",
         pqxx::params{kCampaignOperationsDispatchLeaseSeconds})
         .one_row()[0].as<std::string>();
     const auto rows = transaction.exec(
-        "SELECT * FROM transition_campaign_operations_request_dispatch_production_v2("
+        "SELECT * FROM campaign_operations_production_dispatch_authorized_v3("
         "$1,$2,$3,$4::timestamptz,$5,$6,$7);",
         pqxx::params{requestId.value(), expectedRequestVersion,
             leaseTokenDigest.value(), leaseExpiresAt,

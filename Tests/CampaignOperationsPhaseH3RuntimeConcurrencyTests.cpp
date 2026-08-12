@@ -69,6 +69,13 @@ std::string Scalar(const std::string& connectionString,
     return value;
 }
 
+std::string DispatchServiceConnection(const Arguments& arguments,
+    const std::string& database, const std::string& label)
+{
+    return Connection(arguments, database, "h2_dispatch_service_login",
+        "h3-service-" + label);
+}
+
 void ExecuteFixtureMutation(const std::string& connectionString,
     const std::string& mutation)
 {
@@ -83,7 +90,7 @@ void Enable(const Arguments& arguments, const std::string& database,
     const auto connection = Connection(arguments, database,
         "h2_enabler_login", "h3-" + label + "-enabler");
     const CO::ProductionEnableRequest request{
-        "h3-" + label + "-enable", 0, "cee://h3/generation-52",
+        "h3-" + label + "-enable", 2, "cee://h3/generation-52",
         CO::ActorIdentity("h3.enabler@example.test"),
         CO::Reason("H3 disposable runtime enable"), Build(), true};
     const auto result = CO::EnableProduction(
@@ -98,7 +105,7 @@ void Disable(const Arguments& arguments, const std::string& database,
     const auto connection = Connection(arguments, database,
         "h2_disabler_login", "h3-" + label + "-disabler");
     const CO::ProductionDisableRequest request{
-        "h3-" + label + "-disable", 1,
+        "h3-" + label + "-disable", 3,
         CO::ActorIdentity("h3.disabler@example.test"),
         CO::Reason("H3 disposable runtime disable"), true};
     const auto result = CO::DisableProduction(
@@ -113,6 +120,7 @@ CO::ManagerRunOnceResult Run(const Arguments& arguments,
 {
     return CO::RunCampaignOperationsManagerOnceForTest(
         Connection(arguments, database, "h2_manager_login", application),
+        DispatchServiceConnection(arguments, database, application),
         limit, Build(), hook);
 }
 
@@ -676,6 +684,7 @@ void ExpectManagerReplayFailure(const Arguments& arguments,
     {
         (void)CO::DispatchOneRequestForProductionManagerWithFixture(
             Connection(arguments, database, "h2_manager_login", "h3-" + label),
+            DispatchServiceConnection(arguments, database, label),
             identity.request, source, Build());
     }
     catch (const std::exception& error)
@@ -694,7 +703,7 @@ void AcquireManagerShapedAttemptWithoutSource(const Arguments& arguments,
     const std::string& label, bool bypassConstraints)
 {
     pqxx::connection connection{Connection(arguments, database,
-        "campaign_manager_login", "h3-rv001-" + label)};
+        "h2_dispatch_service_login", "h3-rv001-" + label)};
     pqxx::work transaction{connection};
     if (bypassConstraints)
         transaction.exec("SET LOCAL session_replication_role=replica;");
@@ -705,7 +714,7 @@ void AcquireManagerShapedAttemptWithoutSource(const Arguments& arguments,
         std::string(32U, 'h') + "-h3-rv001-" + label + "-lease");
     const auto rows = transaction.exec(
         "SELECT dispatch_attempt_id FROM "
-        "transition_campaign_operations_request_dispatch_production_v2("
+        "campaign_operations_production_dispatch_authorized_v3("
         "$1,$2,$3,$4::timestamptz,$5,$6,$7);",
         pqxx::params{identity.request.requestId.value(),
             identity.request.expectedRequestVersion, lease.value(), expiry,
@@ -764,6 +773,7 @@ void RunSourceEvidence(const Arguments& arguments, const std::string& database)
 
     const auto rolled = CO::DispatchOneRequestForProductionManagerWithFixture(
         Connection(arguments, database, "h2_manager_login", "h3-source-rollback"),
+        DispatchServiceConnection(arguments, database, "source-rollback"),
         four.request, four.operation.source.canonicalText(), Build(),
         [](CO::DispatchTestInjectionPoint point)
         {
@@ -782,7 +792,9 @@ void RunSourceEvidence(const Arguments& arguments, const std::string& database)
     {
         (void)CO::DispatchOneRequestForProductionManagerWithFixture(
             Connection(arguments, database, "h2_manager_login",
-                "h3-rv001-boundary-interrupt"), six.request,
+                "h3-rv001-boundary-interrupt"),
+            DispatchServiceConnection(arguments, database, "boundary-interrupt"),
+            six.request,
             six.operation.source.canonicalText(), Build(),
             [](CO::DispatchTestInjectionPoint point)
             {
@@ -802,7 +814,9 @@ void RunSourceEvidence(const Arguments& arguments, const std::string& database)
     const auto boundaryRecovery =
         CO::DispatchOneRequestForProductionManagerWithFixture(
             Connection(arguments, database, "h2_manager_login",
-                "h3-rv001-boundary-recovery"), six.request,
+                "h3-rv001-boundary-recovery"),
+            DispatchServiceConnection(arguments, database, "boundary-recovery"),
+            six.request,
             six.operation.source.canonicalText(), Build());
     Require(boundaryRecovery.replayDisposition ==
                 CO::ExactReplayDisposition::newOperation &&
@@ -827,6 +841,7 @@ void RunSourceEvidence(const Arguments& arguments, const std::string& database)
 
     const auto exact = CO::DispatchOneRequestForProductionManagerWithFixture(
         Connection(arguments, database, "h2_manager_login", "h3-source-replay"),
+        DispatchServiceConnection(arguments, database, "source-replay"),
         one.request, one.operation.source.canonicalText(), Build());
     Require(exact.replayDisposition ==
             CO::ExactReplayDisposition::authoritativeExisting,

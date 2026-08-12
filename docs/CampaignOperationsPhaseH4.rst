@@ -43,7 +43,8 @@ or unapproved setting, including ``PGSERVICE`` or ``PGUSER``, produces the
 deployment-owned ``STOP_INVALID_CONFIGURATION`` health/state record and no H3
 launch.
 H4 supplies ``LSTM_DB_HOST``, ``LSTM_DB_NAME``, and the required
-``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER``. The config's
+``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER`` and the distinct
+``CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER``. The config's
 ``postgresql_login_identity`` must exactly equal that environment value. The
 Phase-H command path constructs an explicit Manager-login connection and fails
 closed when it is absent; the generic ``pqxx`` connection builder remains
@@ -54,6 +55,15 @@ separate reviewed macOS execution identity and is compared to
 ``deployment_execution_identity`` by the supervisor at launch.
 ``log_retention_policy`` is a mandatory reviewed external rotation/retention
 reference; H4 itself does not delete or rotate evidence.
+
+The Manager login is not permitted to execute the corrected migration-059
+service function or the raw production V2 transition. The distinct dispatch
+service LOGIN performs that sealed database-side readiness authorization only
+after the reviewed C++ Manager preflight, before invoking the unchanged atomic
+transition.
+Emergency disable remains a separate disabler capability and does not require
+Manager readiness. Recovery, replay, and supervisor stop semantics are
+unchanged.
 
 The actual H3 child command is exactly::
 
@@ -66,8 +76,8 @@ transactional gates.
 Production LOGIN procedure
 --------------------------
 
-LOGINs are deployment-time objects, never migration 056 objects. Before
-enablement, the deployment operator creates or configures the three LOGINs
+LOGINs are deployment-time objects, never migration 056/059 objects. Before
+enablement, the deployment operator creates or configures the four LOGINs
 through the approved PostgreSQL authentication mechanism, then grants only
 these direct NOLOGIN memberships (replace the placeholders with reviewed LOGIN
 names)::
@@ -84,8 +94,12 @@ names)::
          campaign_operations_production_reader,
          campaign_operations_scheduler_protocol_evidence_reader
      TO <MANAGER_LOGIN>;
+   GRANT campaign_operations_production_dispatch_service,
+         campaign_operations_production_phase5_transactional
+     TO <DISPATCH_SERVICE_LOGIN>;
 
-Set ``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=<MANAGER_LOGIN>`` only in
+Set ``CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=<MANAGER_LOGIN>`` and
+``CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER=<DISPATCH_SERVICE_LOGIN>`` only in
 the owner-only H4 connection environment file. Use the enabler and disabler
 environment variables only for their corresponding direct CLI commands:
 ``CAMPAIGN_OPERATIONS_PRODUCTION_ENABLER_DB_USER`` and

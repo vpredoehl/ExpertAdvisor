@@ -542,7 +542,8 @@ worker launch/signal, sleep, network/external work, or other long-running work.
 ## 14. Privilege and deployment contract
 
 Migration 055 creates or hardens one sealed infrastructure owner and the seven
-frozen NOLOGIN production roles. The exact role table in ADR-0019A §5 is
+frozen NOLOGIN production roles; migration 059 adds the NOLOGIN dispatch-service
+capability. The exact role table in ADR-0019A §5 is
 normative.
 
 - `campaign_operations_h1_boundary_authority` is `NOLOGIN SUPERUSER`, has no
@@ -559,15 +560,22 @@ normative.
 - `campaign_operations_production_reader`;
 - `campaign_operations_scheduler_protocol_evidence_owner`;
 - `campaign_operations_scheduler_protocol_evidence_reader`.
+- `campaign_operations_production_dispatch_service` (migration 059 only; the
+  sole EXECUTE grantee for the final mutation-capable wrapper).
 
 The enabler cannot disable or dispatch. The disabler cannot enable or dispatch.
-The Manager login receives only `campaign_operations_production_dispatcher`,
+The ordinary Manager login receives only `campaign_operations_production_dispatcher`,
 `campaign_operations_production_phase5_transactional`,
 `campaign_operations_production_reader`,
 `campaign_operations_scheduler_protocol_evidence_reader`, and the existing
 read capabilities explicitly required by the common Phase E engine. It lacks
 enabler, disabler, every isolated-test role, and
-all scheduler mutation capabilities. The scheduler cannot read Campaign
+all scheduler mutation capabilities, and it cannot reach the dispatch-service
+capability. A separately provisioned dispatch-service LOGIN receives only
+`campaign_operations_production_dispatch_service` and
+`campaign_operations_production_phase5_transactional`; it must not receive
+`campaign_operations_production_dispatcher` and is used only by the reviewed
+C++ mutation path after the Manager-side actual-build preflight. The scheduler cannot read Campaign
 Operations. The Manager cannot mutate scheduler claims, attempts, leases,
 capacity, ownership, invocation, or processes. `pqxx` receives no new
 membership. Migration 055 grants no LOGIN membership.
@@ -577,6 +585,33 @@ exact expected-state predicates, and catalog-tested ownership/ACLs. History and
 witness triggers reject ordinary owner DML. Before enablement, deployment must
 audit direct and inherited membership for the actual `session_user`, including
 nested role membership and prohibited test/production combinations.
+
+### 14.1 Direct SQL readiness boundary correction
+
+Migration 059 is the forward correction for the confirmed direct-SQL
+readiness bypass. The deployed Manager/dispatcher login retains no
+`EXECUTE` privilege on
+`transition_campaign_operations_request_dispatch_production_v2`. That raw
+SECURITY DEFINER function remains owned by
+`campaign_operations_h1_boundary_authority` and is entered only by the sealed
+`campaign_operations_production_dispatch_authorized_v3`
+service boundary. Only the distinct dispatch-service capability can execute
+that wrapper; the ordinary Manager/dispatcher login cannot. Before invoking the
+unchanged atomic transition it evaluates the
+existing readiness view, role graph, scheduler generation-52 evidence,
+effective enablement, approved build identity, canonical Admission/Attempt
+evidence, completion nested-V2 proof, and reconciliation blockers. PUBLIC,
+`pqxx`, and inherited dispatcher membership cannot execute the raw function.
+
+The application still performs the reviewed C++ readiness/build preflight through
+the Manager connection, then routes the mutation transaction through the
+dispatch-service connection. H3 Manager/H4 supervisor continue to use that
+path. Migration 059 makes the
+database-side authorization unavoidable, so a SQL caller cannot manufacture a
+caller-settable GUC/token or skip readiness by invoking the raw transition.
+Emergency disable remains independently executable by the disabler boundary;
+replay, uncertain-commit recovery, valid lease recovery, and the existing lock
+ordering remain in the unchanged transition and common dispatch engine.
 
 The former unaccepted
 `campaign_operations_production_transition_owner` is not part of the inventory
@@ -828,6 +863,16 @@ In addition to the tests already named:
 
 No test may alter production experiment rows, roles, scheduler state, or
 workers.
+
+Canonical contract-version readiness constrains relevant persisted evidence that
+exists. During genesis, an entirely uninstantiated Admission V1 family and an
+entirely uninstantiated production Attempt V2 family are represented by explicit
+zero evidence counts and are ``genesis-empty`` rather than version mismatches.
+After the first relevant row exists, the aggregate must be exactly Admission
+V1 or Attempt V2 as applicable. Wrong or mixed versions, malformed or unreadable
+rows, stale canonical/hash evidence, and broken required links remain
+fail-closed. Genesis-empty does not waive enablement, build, role, scheduler,
+lease, reconciliation, completion-proof, or any other readiness requirement.
 
 ## 20. Rollout, rollback, and implementation acceptance
 

@@ -31,6 +31,7 @@ NORMAL_ACTION = "CONTINUE_AFTER_NORMAL_INTERVAL"
 RESTORE_ACTION = "RESTORE_PERSISTED_NEXT_ACTION"
 ALL_ACTIONS = STOP_ACTIONS | {RETRY_ACTION, NORMAL_ACTION, RESTORE_ACTION}
 H3_LOGIN_ENVIRONMENT_KEY = "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"
+DISPATCH_SERVICE_LOGIN_ENVIRONMENT_KEY = "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER"
 
 NORMAL_CLASSIFICATIONS = {"work_completion", "no_work_completion", "request_local_semantic_failure"}
 RETRY_CLASSIFICATIONS = {"database_failure", "connectivity_transport_failure", "process_interruption"}
@@ -258,6 +259,8 @@ class Config:
         child_environment = Config._validated_child_environment(env_file)
         if child_environment[H3_LOGIN_ENVIRONMENT_KEY] != login_identity:
             raise ConfigurationError("postgresql_login_identity must match the configured Manager production LOGIN")
+        if child_environment[DISPATCH_SERVICE_LOGIN_ENVIRONMENT_KEY] == login_identity:
+            raise ConfigurationError("dispatch service LOGIN must be distinct from the Manager production LOGIN")
         return Config(path, text("deployment_identity"), text("deployment_execution_identity"),
                       text("target_database_identity"), text("target_environment"), login_identity,
                       executable, digest, env_file, child_environment, limit,
@@ -273,6 +276,7 @@ class Config:
             raise ConfigurationError("connection environment file is unreadable") from error
         allowed = {"LSTM_DB_HOST", "LSTM_DB_NAME",
                    "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER",
+                   "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER",
                    "PGPASSFILE", "PGSSLMODE", "PGSSLROOTCERT"}
         for line in lines:
             if not line or line.startswith("#"):
@@ -284,8 +288,9 @@ class Config:
                 raise ConfigurationError("connection environment file has an unapproved setting")
             values[key] = value
         if (not values.get("LSTM_DB_HOST") or not values.get("LSTM_DB_NAME") or
-                not values.get("CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER")):
-            raise ConfigurationError("connection environment must explicitly identify LSTM_DB_HOST, LSTM_DB_NAME, and the Manager production LOGIN")
+                not values.get("CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER") or
+                not values.get("CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER")):
+            raise ConfigurationError("connection environment must explicitly identify LSTM_DB_HOST, LSTM_DB_NAME, the Manager production LOGIN, and the distinct dispatch-service LOGIN")
         # H4 invokes only Manager/readiness commands.  PGSERVICE/PGUSER remain
         # rejected so an ambient connection identity cannot replace the
         # reviewed explicit Manager LOGIN.

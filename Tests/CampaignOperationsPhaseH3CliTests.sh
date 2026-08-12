@@ -32,8 +32,8 @@ expect_invalid "invalid --campaign-operations-manager-run-once value 'nope'" \
     --campaign-operations-manager-run-once nope --yes
 expect_invalid "invalid --campaign-operations-manager-run-once value '999999999999999999999'" \
     --campaign-operations-manager-run-once 999999999999999999999 --yes
-expect_invalid "missing required Campaign Operations production principal environment variable CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER" \
-    --campaign-operations-manager-run-once 101 --yes
+expect_invalid "campaign_operations_manager_build_contract_unavailable" \
+    --campaign-operations-manager-run-once 100 --yes
 expect_invalid "duplicate --campaign-operations-manager-run-once" \
     --campaign-operations-manager-run-once 1 \
     --campaign-operations-manager-run-once 1 --yes
@@ -60,7 +60,7 @@ if rg -q -- 'invalid --campaign-operations-manager-run-once|requires --yes|--dry
     sed -n '1,30p' "$output_file" >&2
     exit 1
 fi
-rg -q -- 'missing required Campaign Operations production principal environment variable CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER' \
+rg -q -- 'missing required Campaign Operations production principal environment variable CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER|campaign_operations_manager_build_contract_unavailable' \
     "$output_file"
 
 rg -q -- 'DispatchTestHook|DispatchOneRequestForProductionForTest' \

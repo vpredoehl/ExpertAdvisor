@@ -199,6 +199,8 @@ if [[ "$stage" == "pre-enablement" ]]; then
         ' "$repo_root/Database/manifests/055_campaign_operations_h1_object_inventory.tsv"
         printf '%s\n' '), accepted_post_h1(signature) AS ('
         printf '%s\n' " SELECT 'public.campaign_operations_production_readiness_snapshot_v1()'::text"
+        printf '%s\n' " UNION ALL SELECT 'public.campaign_operations_production_dispatch_readiness_gate_v1(text)'::text"
+        printf '%s\n' " UNION ALL SELECT 'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)'::text"
         printf '%s\n' '), expected(signature) AS ('
         printf '%s\n' ' SELECT signature FROM expected_h1 UNION ALL SELECT signature FROM accepted_post_h1'
         printf '%s\n' '), actual(signature) AS ('
@@ -207,14 +209,15 @@ if [[ "$stage" == "pre-enablement" ]]; then
         printf '%s\n' ' JOIN pg_catalog.pg_namespace namespace ON namespace.oid = function_row.pronamespace'
         printf '%s\n' " WHERE function_row.proowner = 'campaign_operations_h1_boundary_authority'::regrole"
         printf '%s\n' '), wrapper AS ('
-        printf '%s\n' ' SELECT function_row.proowner = '\''campaign_operations_h1_boundary_authority'\''::regrole'
+        printf '%s\n' ' SELECT bool_and(function_row.proowner = '\''campaign_operations_h1_boundary_authority'\''::regrole'
         printf '%s\n' "        AND function_row.prosecdef AND function_row.prokind = 'f'"
-        printf '%s\n' "        AND function_row.provolatile = 's' AND function_row.proparallel = 'u'"
+        printf '%s\n' "        AND ((function_row.oid = 'public.campaign_operations_production_readiness_snapshot_v1()'::regprocedure AND function_row.provolatile = 's') OR (function_row.oid = 'public.campaign_operations_production_dispatch_readiness_gate_v1(text)'::regprocedure AND function_row.provolatile = 's') OR (function_row.oid = 'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure AND function_row.provolatile = 'v'))"
+        printf '%s\n' "        AND function_row.proparallel = 'u'"
         printf '%s\n' '        AND NOT function_row.proleakproof AND function_row.pronargdefaults = 0'
         printf '%s\n' '        AND function_row.provariadic = 0'
-        printf '%s\n' "        AND function_row.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public']::text[] AS valid"
+        printf '%s\n' "        AND function_row.proconfig IS NOT DISTINCT FROM ARRAY['search_path=pg_catalog, public']::text[]) AS valid"
         printf '%s\n' ' FROM pg_catalog.pg_proc function_row'
-        printf '%s\n' " WHERE function_row.oid = 'public.campaign_operations_production_readiness_snapshot_v1()'::regprocedure"
+        printf '%s\n' " WHERE function_row.oid IN ('public.campaign_operations_production_readiness_snapshot_v1()'::regprocedure, 'public.campaign_operations_production_dispatch_readiness_gate_v1(text)'::regprocedure, 'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure)"
         printf '%s\n' ')'
         printf '%s\n' "SELECT 'boundary-function-set:' || signature FROM ("
         printf '%s\n' ' SELECT signature FROM expected EXCEPT SELECT signature FROM actual'
@@ -229,7 +232,7 @@ if [[ "$stage" == "pre-enablement" ]]; then
             "unaccepted-post-H1-boundary-function-evolution"
     fi
 
-    echo "H1_DEPLOYMENT_AUDIT_V1_OK stage=$stage post_h1_evolution=056-readiness-wrapper"
+    echo "H1_DEPLOYMENT_AUDIT_V1_OK stage=$stage post_h1_evolution=059-direct-sql-boundary"
     exit 0
 fi
 

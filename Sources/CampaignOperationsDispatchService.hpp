@@ -66,10 +66,17 @@ DispatchServiceResult DispatchOneRequestForProduction(
     const std::string& connectionString, const ProductionDispatchRequest&,
     const std::string& executablePath);
 
+DispatchServiceResult DispatchOneRequestForProduction(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest&, const std::string& executablePath);
+
 // H3's bounded Manager adapter.  It supplies only the frozen deterministic
 // source canonical to the shared Phase E engine; it exposes no test hook.
 DispatchServiceResult DispatchOneRequestForProductionManager(
-    const std::string& connectionString, const ProductionDispatchRequest&,
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest&,
     const std::string& managerSourceCanonical,
     const std::string& executablePath);
 
@@ -80,7 +87,9 @@ DispatchServiceResult DispatchOneRequestForProductionManager(
 using ManagerAdapterTestHook = std::function<void(DispatchTestInjectionPoint)>;
 
 DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
-    const std::string& connectionString, const ProductionDispatchRequest&,
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest&,
     const std::string& managerSourceCanonical, const ManagerBuildContract&,
     ManagerAdapterTestHook testHook = {});
 #endif
@@ -92,6 +101,11 @@ DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
 DispatchServiceResult DispatchOneRequestForProductionForTest(
     const std::string& connectionString, const ProductionDispatchRequest&,
     DispatchTestHook testHook = {});
+
+DispatchServiceResult DispatchOneRequestForProductionForTest(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest&, DispatchTestHook testHook = {});
 #endif
 
 } // namespace EA::CampaignOperations

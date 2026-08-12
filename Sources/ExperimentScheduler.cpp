@@ -22835,6 +22835,8 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
         return EA::CampaignOperations::RunCampaignOperationsManagerOnceCommand(
             CampaignOperationsProductionConnectionString(
                 "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
+            CampaignOperationsProductionConnectionString(
+                "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER"),
             *options.campaignOperationsManagerRunOnceLimit,
             options.selfPath, std::cout, std::cerr);
     if (options.campaignOperationsProductionEnable)
@@ -22894,6 +22896,8 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
             EA::CampaignOperations::DispatchOneRequestForProduction(
                 CampaignOperationsProductionConnectionString(
                     "CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER"),
+                CampaignOperationsProductionConnectionString(
+                    "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER"),
                 request, options.selfPath);
         std::cout << "CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH"
                   << ",request_id=" << result.requestId.value()

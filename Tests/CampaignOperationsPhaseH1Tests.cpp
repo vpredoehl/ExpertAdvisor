@@ -215,6 +215,8 @@ int main()
     readySnapshot.enablementContractVersion = "1";
     readySnapshot.admissionContractVersion = "1";
     readySnapshot.productionAttemptContractVersion = "2";
+    readySnapshot.admissionEvidenceCount = 1;
+    readySnapshot.productionAttemptEvidenceCount = 1;
     readySnapshot.schedulerGeneration = 52;
     readySnapshot.schedulerCutoverState = "complete";
     readySnapshot.schedulerEvidenceComplete = true;
@@ -279,6 +281,67 @@ int main()
              "reconciliation_required=0",
              "blockers=none"})
         AssertContains(readinessOutput, field);
+
+    auto genesisSnapshot = ready.snapshot;
+    genesisSnapshot.admissionContractVersion.reset();
+    genesisSnapshot.productionAttemptContractVersion.reset();
+    genesisSnapshot.admissionEvidenceCount = 0;
+    genesisSnapshot.productionAttemptEvidenceCount = 0;
+    const auto genesis = EvaluateProductionReadiness(
+        std::move(genesisSnapshot), build);
+    assert(genesis.ready);
+    assert(genesis.blockers.empty());
+    AssertContains(RenderProductionReadiness(genesis),
+        "admission_contract_version=genesis-empty,");
+    AssertContains(RenderProductionReadiness(genesis),
+        "production_attempt_contract_version=genesis-empty,");
+
+    auto admissionOnlySnapshot = ready.snapshot;
+    admissionOnlySnapshot.productionAttemptContractVersion.reset();
+    admissionOnlySnapshot.productionAttemptEvidenceCount = 0;
+    const auto admissionOnly = EvaluateProductionReadiness(
+        std::move(admissionOnlySnapshot), build);
+    assert(admissionOnly.ready);
+
+    auto attemptOnlySnapshot = ready.snapshot;
+    attemptOnlySnapshot.admissionContractVersion.reset();
+    attemptOnlySnapshot.admissionEvidenceCount = 0;
+    const auto attemptOnly = EvaluateProductionReadiness(
+        std::move(attemptOnlySnapshot), build);
+    assert(attemptOnly.ready);
+
+    auto wrongAdmissionSnapshot = ready.snapshot;
+    wrongAdmissionSnapshot.admissionContractVersion = "2";
+    const auto wrongAdmission = EvaluateProductionReadiness(
+        std::move(wrongAdmissionSnapshot), build);
+    assert(!wrongAdmission.ready);
+    assert(wrongAdmission.blockers == std::vector<std::string>{
+        "canonical_contract_versions"});
+
+    auto wrongAttemptSnapshot = ready.snapshot;
+    wrongAttemptSnapshot.productionAttemptContractVersion = "3";
+    const auto wrongAttempt = EvaluateProductionReadiness(
+        std::move(wrongAttemptSnapshot), build);
+    assert(!wrongAttempt.ready);
+    assert(wrongAttempt.blockers == std::vector<std::string>{
+        "canonical_contract_versions"});
+
+    auto mixedSnapshot = ready.snapshot;
+    mixedSnapshot.admissionContractVersion = "1|2";
+    mixedSnapshot.admissionEvidenceCount = 2;
+    const auto mixed = EvaluateProductionReadiness(
+        std::move(mixedSnapshot), build);
+    assert(!mixed.ready);
+    assert(mixed.blockers == std::vector<std::string>{
+        "canonical_contract_versions"});
+
+    auto unknownPresenceSnapshot = ready.snapshot;
+    unknownPresenceSnapshot.admissionEvidenceCount.reset();
+    const auto unknownPresence = EvaluateProductionReadiness(
+        std::move(unknownPresenceSnapshot), build);
+    assert(!unknownPresence.ready);
+    assert(unknownPresence.blockers == std::vector<std::string>{
+        "canonical_contract_versions"});
 
     auto missingChecksumSnapshot = ready.snapshot;
     missingChecksumSnapshot.migrationChecksum.reset();

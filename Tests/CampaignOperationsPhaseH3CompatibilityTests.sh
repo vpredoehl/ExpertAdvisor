@@ -38,6 +38,7 @@ SQL
 [[ "$(psql "${target[@]}" -At "$database" -c "SELECT to_regclass('campaign_operations_h2_manager_key_compatibility') IS NULL AND to_regclass('campaign_operations_dispatch_manager_operation') IS NULL;")" == t ]]
 enabler="host=$socket port=5432 dbname=$database user=h2_enabler_login application_name=h3-compat-enabler"
 manager="host=$socket port=5432 dbname=$database user=h2_manager_login application_name=h3-compat-manager"
+dispatch_service="host=$socket port=5432 dbname=$database user=h2_dispatch_service_login application_name=h3-compat-dispatch-service"
 
 includes=(-I "$repo_root/Sources" -I "$repo_root/Headers"
   -I /opt/homebrew/opt/libpqxx@7.10.1/include -I /opt/homebrew/opt/libpq/include)
@@ -81,7 +82,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
   "${sources[@]}" -L /opt/homebrew/opt/libpqxx@7.10.1/lib -L /opt/homebrew/opt/libpq/lib \
   -lpqxx -lpq -Wl,-dead_strip -o "$harness"
 
-"$harness" pre "$enabler" "$manager" | tee "$tmp_root/pre.log"
+"$harness" pre "$enabler" "$manager" "$dispatch_service" | tee "$tmp_root/pre.log"
 rg -q 'H3_COMPAT_PRE058 exact_h2_replay=PASS recoverable_h2_attempt=PASS' "$tmp_root/pre.log"
 
 pre_bytes="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
@@ -97,7 +98,7 @@ psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
 [[ "$(psql "${target[@]}" -At "$database" -c "SELECT count(*) FROM campaign_operations_h2_manager_key_compatibility WHERE operation_key LIKE 'mgr-v1:legacy-h2-%';")" == 2 ]]
 [[ "$(psql "${target[@]}" -At "$database" -c "SELECT count(*) FROM campaign_operations_dispatch_manager_operation;")" == 0 ]]
 
-"$harness" post "$enabler" "$manager" | tee "$tmp_root/post.log"
+"$harness" post "$enabler" "$manager" "$dispatch_service" | tee "$tmp_root/post.log"
 rg -q 'H3_COMPAT_POST058 historical_exact=PASS historical_conflict=PASS historical_recovery=PASS new_prefix_rejected=PASS ordinary_h2=PASS manager_only=PASS' "$tmp_root/post.log"
 
 post_bytes="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \

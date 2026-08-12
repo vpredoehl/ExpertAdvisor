@@ -102,7 +102,7 @@ void Rethrow(const std::exception_ptr& error, const std::string& label)
 CO::ProductionMutationResult Enable(const std::string& connection)
 {
     const CO::ProductionEnableRequest request{
-        "h2-enable", 0, "cee://h2/generation-52",
+        "h2-enable", 2, "cee://h2/generation-52",
         CO::ActorIdentity("h2.enabler@example.test"),
         CO::Reason("H2 concurrency fixture enable"), Build(), true};
     return CO::EnableProduction(
@@ -113,10 +113,12 @@ CO::ProductionMutationResult Enable(const std::string& connection)
 }
 
 CO::ProductionMutationResult Disable(const std::string& connection,
-    CO::ProductionMutationTestHook testHook = {})
+    CO::ProductionMutationTestHook testHook = {}, bool forceNewOperation = false)
 {
     const CO::ProductionDisableRequest request{
-        "h2-disable", 1, CO::ActorIdentity("h2.disabler@example.test"),
+        forceNewOperation ? "h2-disable-race" : "h2-disable",
+        3,
+        CO::ActorIdentity("h2.disabler@example.test"),
         CO::Reason("H2 concurrency fixture disable"), true};
     bool pidPrinted = false;
     return CO::DisableProduction(
@@ -358,19 +360,21 @@ void RunDisableAcquisition(const std::string& socket,
     const auto enabler = Conn(socket, database, "h2_enabler_login", "h2-c1-enabler");
     const auto disabler = Conn(socket, database, "h2_disabler_login", "h2-c1-disable");
     const auto manager = Conn(socket, database, "h2_manager_login", "h2-c1-acquisition");
+    const auto dispatchService = Conn(socket, database,
+        "h2_dispatch_service_login", "h2-c1-dispatch-service");
     (void)Enable(enabler);
     HoldPoint hold;
     AsyncResult<CO::DispatchServiceResult> acquisition;
     auto acquisitionThread = Start(acquisition, [&]
     {
         return CO::DispatchOneRequestForProductionForTest(
-            manager, DispatchRequest("h2-c1-dispatch"), [&](CO::DispatchTestInjectionPoint point)
+            manager, dispatchService, DispatchRequest("h2-c1-dispatch"), [&](CO::DispatchTestInjectionPoint point)
             { hold.Hold(point, CO::DispatchTestInjectionPoint::beforeAcquisitionCommit); });
     });
     hold.WaitUntilEntered("C1 acquisition");
     AsyncResult<CO::ProductionMutationResult> disable;
     auto disableThread = Start(disable, [&] { return Disable(disabler); });
-    (void)WaitForBlocking(admin, "h2-c1-disable", "h2-c1-acquisition", "C1");
+    (void)WaitForBlocking(admin, "h2-c1-disable", "h2-c1-dispatch-service", "C1");
     hold.Release();
     acquisitionThread.join();
     disableThread.join();
@@ -387,7 +391,7 @@ void RunDisableAcquisition(const std::string& socket,
     if (fields[0] != "dispatching" || fields[1] != "4" || fields[2] != "true" ||
         fields[3] != "false")
         throw std::runtime_error("C1 stale authorization/state result");
-    RequireCounts(snapshot, "C1", {"2", "1", "1", "1", "0", "0", "0", "0", "0", "0"});
+    RequireCounts(snapshot, "C1", {"4", "1", "1", "1", "0", "0", "0", "0", "0", "0"});
     std::cout << "H2_RACE_PASS case=C1 acquisition_won_gate=PASS disable_blocked=PASS "
                  "disable_committed=PASS no_downstream_duplicate=PASS\n";
 }
@@ -399,6 +403,8 @@ void RunDisableFirst(const std::string& socket, const std::string& database,
     const auto enabler = Conn(socket, database, "h2_enabler_login", "h2-" + label + "-enabler");
     const auto disabler = Conn(socket, database, "h2_disabler_login", "h2-" + label + "-disable");
     const auto manager = Conn(socket, database, "h2_manager_login", "h2-" + label + "-handoff");
+    const auto dispatchService = Conn(socket, database, "h2_dispatch_service_login",
+        "h2-" + label + "-dispatch-service");
     (void)Enable(enabler);
     const auto disabled = Disable(disabler);
     if (disabled.disposition != CO::ProductionMutationDisposition::newOperation)
@@ -407,7 +413,7 @@ void RunDisableFirst(const std::string& socket, const std::string& database,
     try
     {
         (void)CO::DispatchOneRequestForProductionForTest(
-            manager, DispatchRequest("h2-" + label + "-dispatch"));
+            manager, dispatchService, DispatchRequest("h2-" + label + "-dispatch"));
     }
     catch (const pqxx::sql_error& error)
     {
@@ -424,7 +430,7 @@ void RunDisableFirst(const std::string& socket, const std::string& database,
     if (fields[0] != "ready" || fields[1] != "3" || fields[2] != "false" ||
         fields[3] != "true")
         throw std::runtime_error(label + " stale authorization/state result");
-    RequireCounts(snapshot, label, {"2", "0", "0", "0", "0", "0", "0", "0", "0", "0"});
+    RequireCounts(snapshot, label, {"4", "0", "0", "0", "0", "0", "0", "0", "0", "0"});
     std::cout << "H2_RACE_PASS case=" << label << " disable_won=PASS "
                  "immediate_fail_closed=PASS no_production_rows=PASS\n";
 }
@@ -435,19 +441,21 @@ void RunHandoffFirst(const std::string& socket, const std::string& database)
     const auto enabler = Conn(socket, database, "h2_enabler_login", "h2-d1-enabler");
     const auto disabler = Conn(socket, database, "h2_disabler_login", "h2-d1-disable");
     const auto manager = Conn(socket, database, "h2_manager_login", "h2-d1-handoff");
+    const auto dispatchService = Conn(socket, database, "h2_dispatch_service_login",
+        "h2-d1-dispatch-service");
     (void)Enable(enabler);
     HoldPoint hold;
     AsyncResult<CO::DispatchServiceResult> handoff;
     auto handoffThread = Start(handoff, [&]
     {
         return CO::DispatchOneRequestForProductionForTest(
-            manager, DispatchRequest("h2-d1-dispatch"), [&](CO::DispatchTestInjectionPoint point)
+            manager, dispatchService, DispatchRequest("h2-d1-dispatch"), [&](CO::DispatchTestInjectionPoint point)
             { hold.Hold(point, CO::DispatchTestInjectionPoint::beforeHandoffCommit); });
     });
     hold.WaitUntilEntered("D1 handoff");
     AsyncResult<CO::ProductionMutationResult> disable;
     auto disableThread = Start(disable, [&] { return Disable(disabler); });
-    (void)WaitForBlocking(admin, "h2-d1-disable", "h2-d1-handoff", "D1");
+    (void)WaitForBlocking(admin, "h2-d1-disable", "h2-d1-dispatch-service", "D1");
     hold.Release();
     handoffThread.join();
     disableThread.join();
@@ -462,7 +470,7 @@ void RunHandoffFirst(const std::string& socket, const std::string& database)
     if (fields[0] != "bound" || fields[1] != "5" || fields[2] != "true" ||
         fields[3] != "true")
         throw std::runtime_error("D1 bound state changed by disable");
-    RequireCounts(snapshot, "D1", {"2", "1", "1", "2", "1", "1", "1", "1", "1", "1"});
+    RequireCounts(snapshot, "D1", {"4", "1", "1", "2", "1", "1", "1", "1", "1", "1"});
     std::cout << "H2_RACE_PASS case=D1 handoff_won_gate=PASS disable_blocked=PASS "
                  "bound_state_preserved=PASS exact_downstream_counts=PASS\n";
 }
@@ -478,13 +486,15 @@ void RunDisableFirstAfterAcquisition(const std::string& socket,
         "h2-d2-disable");
     const auto manager = Conn(socket, database, "h2_manager_login",
         "h2-d2-handoff");
+    const auto dispatchService = Conn(socket, database, "h2_dispatch_service_login",
+        "h2-d2-dispatch-service");
     (void)Enable(enabler);
     HoldPoint handoffGate;
     AsyncResult<CO::DispatchServiceResult> handoff;
     auto handoffThread = Start(handoff, [&]
     {
         return CO::DispatchOneRequestForProductionForTest(
-            manager, DispatchRequest("h2-d2-dispatch"),
+            manager, dispatchService, DispatchRequest("h2-d2-dispatch"),
             [&](CO::DispatchTestInjectionPoint point)
             {
                 handoffGate.Hold(point,
@@ -499,7 +509,7 @@ void RunDisableFirstAfterAcquisition(const std::string& socket,
     const auto preRaceFields = Fields(preRace);
     if (preRaceFields[0] != "dispatching" || preRaceFields[1] != "4" ||
         preRaceFields[2] != "true" || preRaceFields[3] != "false" ||
-        preRaceFields[4] != "1" || preRaceFields[5] != "1" ||
+        preRaceFields[4] != "3" || preRaceFields[5] != "1" ||
         preRaceFields[6] != "1" || preRaceFields[7] != "1")
         throw std::runtime_error("D2 pre-race predecessor is not durably acquired");
     pqxx::read_transaction preRaceTransaction{observer};
@@ -525,7 +535,7 @@ void RunDisableFirstAfterAcquisition(const std::string& socket,
               << preRaceEvidence << '\n';
     const auto handoffPid = preRaceTransaction.exec(
         "SELECT pid FROM pg_stat_activity "
-        "WHERE application_name='h2-d2-handoff' AND pid <> pg_backend_pid() "
+        "WHERE application_name='h2-d2-dispatch-service' AND pid <> pg_backend_pid() "
         "ORDER BY pid DESC LIMIT 1;").one_row()[0].as<long>();
     preRaceTransaction.commit();
     std::cout << "H2_ACTOR_PID label=handoff pid=" << handoffPid << '\n';
@@ -538,12 +548,34 @@ void RunDisableFirstAfterAcquisition(const std::string& socket,
         {
             disableBeforeCommit.Hold(point,
                 CO::ProductionMutationInjectionPoint::afterTransitionBeforeCommit);
-        });
+        }, true);
     });
-    disableBeforeCommit.WaitUntilEntered("D2 disable exclusive gate");
+    try
+    {
+        disableBeforeCommit.WaitUntilEntered("D2 disable exclusive gate");
+    }
+    catch (...)
+    {
+        handoffGate.Release();
+        disableThread.join();
+        handoffThread.join();
+        Rethrow(disable.error, "D2 disable before-commit hold");
+        throw;
+    }
     handoffGate.Release();
-    const auto blocking = WaitForBlocking(admin, "h2-d2-handoff",
-        "h2-d2-disable", "D2");
+    BlockingEvidence blocking;
+    try
+    {
+        blocking = WaitForBlocking(admin, "h2-d2-dispatch-service",
+            "h2-d2-disable", "D2");
+    }
+    catch (...)
+    {
+        disableBeforeCommit.Release();
+        disableThread.join();
+        handoffThread.join();
+        throw;
+    }
     if (blocking.waiterPid != handoffPid || blocking.blockerPid == handoffPid ||
         blocking.lockCatalog.find("advisory:ShareLock:false:19055:1") ==
             std::string::npos ||
@@ -576,7 +608,7 @@ void RunDisableFirstAfterAcquisition(const std::string& socket,
         std::cout << "H2_D2_HANDOFF_REJECTED diagnostic=" << error.what() << '\n';
     }
     const auto final = Snapshot(observer, "D2");
-    RequireCounts(final, "D2", {"2", "1", "1", "1", "0", "0", "0", "0", "0", "0"});
+    RequireCounts(final, "D2", {"4", "1", "1", "1", "0", "0", "0", "0", "0", "0"});
     const auto finalFields = Fields(final);
     if (finalFields[0] != "dispatching" || finalFields[1] != "4" ||
         finalFields[2] != "true" || finalFields[3] != "false")
@@ -594,6 +626,10 @@ void RunConcurrentDispatch(const std::string& socket,
     const auto enabler = Conn(socket, database, "h2_enabler_login", "h2-" + label + "-enabler");
     const auto first = Conn(socket, database, "h2_manager_login", "h2-" + label + "-first");
     const auto second = Conn(socket, database, "h2_manager_login", "h2-" + label + "-second");
+    const auto firstService = Conn(socket, database, "h2_dispatch_service_login",
+        "h2-" + label + "-first-service");
+    const auto secondService = Conn(socket, database, "h2_dispatch_service_login",
+        "h2-" + label + "-second-service");
     (void)Enable(enabler);
     const std::string firstKey = "h2-" + label + "-key-a";
     const std::string secondKey = differentKey ? "h2-" + label + "-key-b" : firstKey;
@@ -602,7 +638,7 @@ void RunConcurrentDispatch(const std::string& socket,
     auto firstThread = Start(firstResult, [&]
     {
         return CO::DispatchOneRequestForProductionForTest(
-            first, DispatchRequest(firstKey), [&](CO::DispatchTestInjectionPoint point)
+            first, firstService, DispatchRequest(firstKey), [&](CO::DispatchTestInjectionPoint point)
             { hold.Hold(point, CO::DispatchTestInjectionPoint::beforeAcquisitionCommit); });
     });
     hold.WaitUntilEntered(label + " first dispatch");
@@ -610,10 +646,10 @@ void RunConcurrentDispatch(const std::string& socket,
     auto secondThread = Start(secondResult, [&]
     {
         return CO::DispatchOneRequestForProductionForTest(
-            second, DispatchRequest(secondKey));
+            second, secondService, DispatchRequest(secondKey));
     });
-    (void)WaitForBlocking(admin, "h2-" + label + "-second",
-        "h2-" + label + "-first", label);
+    (void)WaitForBlocking(admin, "h2-" + label + "-second-service",
+        "h2-" + label + "-first-service", label);
     hold.Release();
     firstThread.join();
     secondThread.join();
@@ -641,7 +677,7 @@ void RunConcurrentDispatch(const std::string& socket,
     auto observer = std::make_unique<pqxx::connection>(admin);
     const auto snapshot = Snapshot(*observer, label);
     PrintIdentities(*observer, label);
-    RequireCounts(snapshot, label, {"1", "1", "1", "2", "1", "1", "1", "1", "1", "1"});
+    RequireCounts(snapshot, label, {"3", "1", "1", "2", "1", "1", "1", "1", "1", "1"});
     const auto fields = Fields(snapshot);
     if (fields[15].find(firstKey) == std::string::npos ||
         fields[16].find("fnv1a64:") == std::string::npos)

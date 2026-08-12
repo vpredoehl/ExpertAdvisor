@@ -80,10 +80,11 @@ SELECT string_agg(label||'='||value, E'\n' ORDER BY label) FROM signatures;
 
 int main(int argc, char** argv)
 {
-    if (argc != 4)
+    if (argc != 5)
     {
         std::cerr << "usage: CampaignOperationsPhaseH2WorkflowTests "
                      "ENABLER_CONNECTION DISABLER_CONNECTION MANAGER_CONNECTION "
+                     "DISPATCH_SERVICE_CONNECTION "
                      "\n";
         return 64;
     }
@@ -93,6 +94,7 @@ int main(int argc, char** argv)
         const std::string enablerConnection = argv[1];
         const std::string disablerConnection = argv[2];
         const std::string managerConnection = argv[3];
+        const std::string dispatchServiceConnection = argv[4];
         const auto build = FixtureBuild();
 
         BackendFactory enabler{enablerConnection, "enable"};
@@ -141,7 +143,7 @@ int main(int argc, char** argv)
         bool injectHandoffInDoubt = true;
         bool acquisitionRecoveryOpened = false;
         const auto dispatched = CO::DispatchOneRequestForProductionForTest(
-            managerConnection, dispatchRequest,
+            managerConnection, dispatchServiceConnection, dispatchRequest,
             [&](CO::DispatchTestInjectionPoint point)
             {
                 if (point == CO::DispatchTestInjectionPoint::
@@ -175,7 +177,7 @@ int main(int argc, char** argv)
 
         const auto dispatchReplay =
             CO::DispatchOneRequestForProductionForTest(
-                managerConnection, dispatchRequest);
+                managerConnection, dispatchServiceConnection, dispatchRequest);
         assert(dispatchReplay.classification ==
             CO::DispatchResultClassification::existingIdentical);
         std::cout << "H2_DISPATCH_REPLAY same_key=PASS\n";
@@ -191,7 +193,7 @@ int main(int argc, char** argv)
         try
         {
             (void)CO::DispatchOneRequestForProductionForTest(
-                managerConnection, changedDispatch,
+                managerConnection, dispatchServiceConnection, changedDispatch,
                 [&](CO::DispatchTestInjectionPoint point)
                 {
                     if (point == CO::DispatchTestInjectionPoint::

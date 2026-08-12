@@ -919,6 +919,32 @@ ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
     if (auto scheduler = LoadSchedulerProtocolEvidenceSnapshot(transaction))
         result.schedulerEvidence.emplace(std::move(*scheduler));
     if (!hydrateEvidence) return result;
+
+    // Presence is deliberately collected independently of the nullable
+    // aggregate fields.  In particular, a row whose version cannot be
+    // hydrated must not look like an empty genesis family.
+    const auto admissionRows = transaction.exec(
+        "SELECT admission.request_production_admission_id FROM "
+        "campaign_operations_request_production_admission admission "
+        "ORDER BY admission.request_production_admission_id;");
+    result.admissionEvidenceCount =
+        static_cast<long long>(admissionRows.size());
+    const auto attemptRows = transaction.exec(
+        "SELECT dispatch_attempt_id FROM campaign_operations_dispatch_attempt "
+        "WHERE attempt_contract_version=2 OR "
+        "request_production_admission_id IS NOT NULL OR "
+        "request_production_admission_canonical IS NOT NULL OR "
+        "request_production_admission_hash IS NOT NULL OR "
+        "production_enablement_event_id IS NOT NULL OR "
+        "production_enablement_event_canonical IS NOT NULL OR "
+        "production_enablement_event_hash IS NOT NULL OR operation_key IS NOT NULL OR "
+        "requesting_actor IS NOT NULL OR "
+        "original_executing_service_principal IS NOT NULL OR "
+        "approved_build_contract_canonical IS NOT NULL OR "
+        "approved_build_contract_hash IS NOT NULL OR production_capability IS NOT NULL "
+        "ORDER BY dispatch_attempt_id;");
+    result.productionAttemptEvidenceCount =
+        static_cast<long long>(attemptRows.size());
     // Structural hydration intentionally precedes every normative comparison.
     // In particular, an unsupported but internally consistent version remains
     // visible, while a stale hash, bad audit, or broken relationship fails at
@@ -949,17 +975,6 @@ ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
     else result.managerBuildContractVersion.reset();
 
     std::set<int> admissionVersions;
-    const auto admissionRows = transaction.exec(
-        "SELECT admission.request_production_admission_id FROM "
-        "campaign_operations_request_production_admission admission JOIN "
-        "campaign_operations_operational_request request ON "
-        "request.operational_request_id=admission.operational_request_id "
-        "WHERE request.production_dispatch_enabled OR EXISTS (SELECT 1 FROM "
-        "campaign_operations_dispatch_attempt attempt WHERE "
-        "attempt.request_production_admission_id="
-        "admission.request_production_admission_id AND "
-        "attempt.attempt_contract_version=2) "
-        "ORDER BY admission.request_production_admission_id;");
     for (const auto& admissionRow : admissionRows)
     {
         const RequestProductionAdmissionId admissionId(
@@ -972,20 +987,6 @@ ProductionReadinessSnapshot LoadProductionReadinessSnapshot(
     else result.admissionContractVersion.reset();
 
     std::set<int> attemptVersions;
-    const auto attemptRows = transaction.exec(
-        "SELECT dispatch_attempt_id FROM campaign_operations_dispatch_attempt "
-        "WHERE attempt_contract_version=2 OR "
-        "request_production_admission_id IS NOT NULL OR "
-        "request_production_admission_canonical IS NOT NULL OR "
-        "request_production_admission_hash IS NOT NULL OR "
-        "production_enablement_event_id IS NOT NULL OR "
-        "production_enablement_event_canonical IS NOT NULL OR "
-        "production_enablement_event_hash IS NOT NULL OR operation_key IS NOT NULL OR "
-        "requesting_actor IS NOT NULL OR "
-        "original_executing_service_principal IS NOT NULL OR "
-        "approved_build_contract_canonical IS NOT NULL OR "
-        "approved_build_contract_hash IS NOT NULL OR production_capability IS NOT NULL "
-        "ORDER BY dispatch_attempt_id;");
     for (const auto& attemptRow : attemptRows)
     {
         auto attempt = LoadObservedAttemptById(transaction,

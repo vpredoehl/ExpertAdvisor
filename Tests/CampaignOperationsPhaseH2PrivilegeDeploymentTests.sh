@@ -32,9 +32,15 @@ WITH checks(label, passed) AS (VALUES
    AND NOT has_function_privilege('campaign_operations_production_disabler', 'public.record_campaign_operations_production_enable_v1(text,integer,text,text,text,text,text,text,text,text,text)', 'EXECUTE')
    AND NOT has_function_privilege('campaign_operations_production_disabler', 'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)', 'EXECUTE')),
  ('dispatcher-fixed-only',
-   has_function_privilege('campaign_operations_production_dispatcher', 'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)', 'EXECUTE')
+   NOT has_function_privilege('campaign_operations_production_dispatcher', 'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)', 'EXECUTE')
+   AND NOT has_function_privilege('campaign_operations_production_dispatcher', 'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)', 'EXECUTE')
    AND NOT has_function_privilege('campaign_operations_production_dispatcher', 'public.record_campaign_operations_production_enable_v1(text,integer,text,text,text,text,text,text,text,text,text)', 'EXECUTE')
    AND NOT has_function_privilege('campaign_operations_production_dispatcher', 'public.record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)', 'EXECUTE')),
+ ('dispatch-service-minimum',
+   has_function_privilege('campaign_operations_production_dispatch_service', 'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)', 'EXECUTE')
+   AND NOT has_function_privilege('campaign_operations_production_dispatch_service', 'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)', 'EXECUTE')
+   AND NOT has_function_privilege('campaign_operations_production_dispatch_service', 'public.record_campaign_operations_production_enable_v1(text,integer,text,text,text,text,text,text,text,text,text)', 'EXECUTE')
+   AND NOT has_function_privilege('campaign_operations_production_dispatch_service', 'public.record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)', 'EXECUTE')),
  ('phase5-helper-and-production-bind',
    has_function_privilege('campaign_operations_production_phase5_transactional', 'public.campaign_operations_scheduler_protocol_evidence_lock_v1()', 'EXECUTE')
    AND has_function_privilege('campaign_operations_production_phase5_transactional', 'public.transition_campaign_operations_request_bound_production_v2(bigint,integer,text,bigint,text,text)', 'EXECUTE')
@@ -56,7 +62,8 @@ WITH checks(label, passed) AS (VALUES
      WHERE p.oid IN (
        'public.record_campaign_operations_production_enable_v1(text,integer,text,text,text,text,text,text,text,text,text)'::regprocedure,
        'public.record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)'::regprocedure,
-       'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure)
+       'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure,
+       'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure)
        AND a.grantee=0 AND a.privilege_type='EXECUTE')),
  ('no-pqxx-fixed-execute',
    NOT EXISTS (
@@ -66,7 +73,8 @@ WITH checks(label, passed) AS (VALUES
      WHERE p.oid IN (
        'public.record_campaign_operations_production_enable_v1(text,integer,text,text,text,text,text,text,text,text,text)'::regprocedure,
        'public.record_campaign_operations_production_disable_v1(text,bigint,text,integer,text,text)'::regprocedure,
-       'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure)
+       'public.transition_campaign_operations_request_dispatch_production_v2(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure,
+       'public.campaign_operations_production_dispatch_authorized_v3(bigint,integer,text,timestamp with time zone,text,text,text)'::regprocedure)
        AND r.rolname='pqxx')))
 SELECT CASE WHEN bool_and(passed) THEN 'H2_PRIVILEGE_MATRIX_OK'
             ELSE 'H2A003:privilege-matrix' END

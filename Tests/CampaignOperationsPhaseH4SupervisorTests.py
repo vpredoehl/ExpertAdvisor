@@ -43,7 +43,7 @@ class H4SupervisorTests(unittest.TestCase):
         self.executable.write_text("#!/bin/sh\nexit 0\n")
         self.executable.chmod(0o700)
         self.env = root / "connection.env"
-        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\n")
+        self.env.write_text("LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nCAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER=test_dispatch_service_login\n")
         self.env.chmod(0o600)
         self.config_path = root / "config.json"
         self.write_config()
@@ -230,8 +230,8 @@ class H4SupervisorTests(unittest.TestCase):
         with mock.patch.object(h4.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="test-h4")):
             self.config.validate_execution_identity()
         for contents in (
-                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nPGSERVICE=ambient\n",
-                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nPGUSER=ambient\n",
+                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nCAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER=test_dispatch_service_login\nPGSERVICE=ambient\n",
+                "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nCAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=test_manager_login\nCAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER=test_dispatch_service_login\nPGUSER=ambient\n",
                 "LSTM_DB_HOST=127.0.0.1\nLSTM_DB_NAME=test\nnot-an-assignment\n",
                 "LSTM_DB_HOST=127.0.0.1\n",
                 "LSTM_DB_NAME=test\n"):
@@ -642,6 +642,7 @@ class H4SupervisorTests(unittest.TestCase):
         self.assertEqual(configuration["deployment_execution_identity"], "expertadvisor-h4")
         self.assertEqual(configuration["postgresql_login_identity"], "REPLACE_WITH_MANAGER_LOGIN")
         self.assertIn("CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER=REPLACE_WITH_MANAGER_LOGIN", env)
+        self.assertIn("CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER=REPLACE_WITH_DISPATCH_SERVICE_LOGIN", env)
         self.assertNotIn("PGSERVICE=", env)
         self.assertIn("--campaign-operations-manager-run-once", source)
         for forbidden in ("psycopg", "CREATE TABLE", "advisory", "heartbeat", "--schedule-experiments"):

@@ -49,7 +49,7 @@ for migration in "$repo_root"/Database/migrations/*.sql; do
   filename="$(basename "$migration")"
   version="${filename%%_*}"
   [[ "$version" != "$filename" ]] || version="${filename%.sql}"
-  [[ "$version" != "056" && "$version" != "057" ]] || continue
+  [[ "$version" != "056" && "$version" != "057" && "$version" != "059" ]] || continue
   checksum="$(shasum -a 256 "$migration" | awk '{print $1}')"
   psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
     "INSERT INTO schema_migrations(version,filename,checksum)
@@ -108,6 +108,7 @@ SET session_replication_role = origin;
 CREATE ROLE h2_enabler_login LOGIN;
 CREATE ROLE h2_disabler_login LOGIN;
 CREATE ROLE h2_manager_login LOGIN;
+CREATE ROLE h2_dispatch_service_login LOGIN;
 GRANT campaign_operations_production_enabler,
       campaign_operations_production_reader,
       campaign_operations_scheduler_protocol_evidence_reader
@@ -120,6 +121,9 @@ GRANT campaign_operations_production_dispatcher,
       campaign_operations_production_reader,
       campaign_operations_scheduler_protocol_evidence_reader
   TO h2_manager_login;
+GRANT campaign_operations_production_dispatch_service,
+      campaign_operations_production_phase5_transactional
+  TO h2_dispatch_service_login;
 SQL
 
 # Preserve the successful H1 enablement evidence as the first ledger event,
@@ -166,7 +170,7 @@ echo "H2_BRIDGE_DISABLE native=record_campaign_operations_production_disable_v1 
   --stage pre-enablement --host "$cluster_socket" --port 5432 \
   --user campaign_manager_login --database "$database" | \
   tee "$tmp_root/h1-post-h2-pre-enablement.log"
-rg -q 'post_h1_evolution=056-readiness-wrapper' \
+rg -q 'post_h1_evolution=059-direct-sql-boundary' \
   "$tmp_root/h1-post-h2-pre-enablement.log"
 if rg -q 'production_readiness_snapshot_v1' \
     "$repo_root/Database/manifests/055_campaign_operations_h1_object_inventory.tsv"; then
@@ -386,6 +390,7 @@ connection_for() {
 enabler_connection="$(connection_for h2_enabler_login enabler)"
 disabler_connection="$(connection_for h2_disabler_login disabler)"
 manager_connection="$(connection_for h2_manager_login manager)"
+dispatch_service_connection="$(connection_for h2_dispatch_service_login dispatch-service)"
 workflow_test="$tmp_root/CampaignOperationsPhaseH2WorkflowTests"
 includes=(-I "$repo_root/Sources" -I "$repo_root/Headers"
   -I /opt/homebrew/opt/libpqxx@7.10.1/include -I /opt/homebrew/opt/libpq/include)
@@ -433,7 +438,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
   "${sources[@]}" -L /opt/homebrew/opt/libpqxx@7.10.1/lib \
   -L /opt/homebrew/opt/libpq/lib -lpqxx -lpq -Wl,-dead_strip -o "$workflow_test"
 "$workflow_test" "$enabler_connection" "$disabler_connection" \
-  "$manager_connection" | tee "$tmp_root/h2-workflow.log"
+  "$manager_connection" "$dispatch_service_connection" | tee "$tmp_root/h2-workflow.log"
 psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
   "REVOKE campaign_operations_owner FROM h2_manager_login;"
 psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \

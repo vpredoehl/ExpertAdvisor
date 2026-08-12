@@ -125,7 +125,8 @@ using ManagerCandidateHook = std::function<void(
     int, int, OperationalRequestId)>;
 
 ManagerRunOnceResult RunManagerOnceInternal(
-    const std::string& connectionString, int dispatchLimit,
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
     const std::string& executablePath,
     const std::optional<ManagerBuildContract>& fixtureBuild,
     const ManagerCandidateHook& hook)
@@ -143,7 +144,7 @@ ManagerRunOnceResult RunManagerOnceInternal(
     ManagerRunOnceResult result;
     result.dispatchLimit = dispatchLimit;
     {
-        pqxx::connection connection{connectionString};
+        pqxx::connection connection{managerConnectionString};
         result.candidates = SelectDispatchCandidatesForManager(
             connection, dispatchLimit);
     }
@@ -175,14 +176,15 @@ ManagerRunOnceResult RunManagerOnceInternal(
             const auto dispatched = fixtureBuild
 #if defined(CAMPAIGN_OPERATIONS_H3_TESTING)
                 ? DispatchOneRequestForProductionManagerWithFixture(
-                    connectionString, request,
+                    managerConnectionString, dispatchServiceConnectionString,
+                    request,
                     operation.source.canonicalText(), *fixtureBuild)
 #else
                 ? throw std::logic_error("H3 fixture adapter unavailable")
 #endif
                 : DispatchOneRequestForProductionManager(
-                    connectionString, request, operation.source.canonicalText(),
-                    executablePath);
+                    managerConnectionString, dispatchServiceConnectionString,
+                    request, operation.source.canonicalText(), executablePath);
             if (dispatched.failure ==
                 DispatchServiceFailureClassification::commitOutcomeUnknown)
             {
@@ -235,8 +237,18 @@ ManagerRunOnceResult RunCampaignOperationsManagerOnce(
     const std::string& connectionString, int dispatchLimit,
     const std::string& executablePath)
 {
-    return RunManagerOnceInternal(connectionString, dispatchLimit,
+    return RunManagerOnceInternal(connectionString, connectionString, dispatchLimit,
         executablePath, std::nullopt, {});
+}
+
+ManagerRunOnceResult RunCampaignOperationsManagerOnce(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
+    const std::string& executablePath)
+{
+    return RunManagerOnceInternal(managerConnectionString,
+        dispatchServiceConnectionString, dispatchLimit, executablePath,
+        std::nullopt, {});
 }
 
 #if defined(CAMPAIGN_OPERATIONS_H3_TESTING)
@@ -255,8 +267,29 @@ ManagerRunOnceResult RunCampaignOperationsManagerOnceForTest(
                 : ManagerTestInjectionPoint::afterCandidateProcessing;
         testHook(injection, index, requestId);
     };
-    return RunManagerOnceInternal(connectionString, dispatchLimit, {},
+    return RunManagerOnceInternal(connectionString, connectionString,
+        dispatchLimit, {},
         fixtureBuild, hook);
+}
+
+ManagerRunOnceResult RunCampaignOperationsManagerOnceForTest(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
+    const ManagerBuildContract& fixtureBuild, const ManagerTestHook& testHook)
+{
+    const ManagerCandidateHook hook = [&](int point, int index,
+        OperationalRequestId requestId)
+    {
+        if (!testHook) return;
+        const auto injection = point == 0
+            ? ManagerTestInjectionPoint::afterCandidateSnapshot
+            : point == 1
+                ? ManagerTestInjectionPoint::beforeCandidateProcessing
+                : ManagerTestInjectionPoint::afterCandidateProcessing;
+        testHook(injection, index, requestId);
+    };
+    return RunManagerOnceInternal(managerConnectionString,
+        dispatchServiceConnectionString, dispatchLimit, {}, fixtureBuild, hook);
 }
 #endif
 
@@ -267,6 +300,41 @@ int RunCampaignOperationsManagerOnceCommand(
 {
     const auto result = RunCampaignOperationsManagerOnce(
         connectionString, dispatchLimit, executablePath);
+    output << "CAMPAIGN_OPERATIONS_MANAGER_RUN_ONCE"
+           << ",dispatch_limit=" << result.dispatchLimit
+           << ",candidates_selected=" << result.candidates.size()
+           << ",processed=" << result.requests.size()
+           << ",stopped_early=" << (result.stoppedEarly ? "true" : "false")
+           << ",stop_reason=" << ToText(result.stopReason)
+           << ",candidate_request_ids=";
+    for (std::size_t index = 0; index < result.candidates.size(); ++index)
+    {
+        if (index != 0U) output << ':';
+        output << result.candidates[index].requestId.value();
+    }
+    if (result.candidates.empty()) output << "none";
+    output << '\n';
+    for (const auto& request : result.requests)
+        RenderRequest(output, request);
+    if (result.stoppedEarly)
+    {
+        errors << "CAMPAIGN_OPERATIONS_MANAGER_STOPPED"
+               << ",reason=" << ToText(result.stopReason)
+               << ",diagnostic=" << result.stopDiagnostic << '\n';
+        return 2;
+    }
+    return 0;
+}
+
+int RunCampaignOperationsManagerOnceCommand(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString, int dispatchLimit,
+    const std::string& executablePath, std::ostream& output,
+    std::ostream& errors)
+{
+    const auto result = RunCampaignOperationsManagerOnce(
+        managerConnectionString, dispatchServiceConnectionString,
+        dispatchLimit, executablePath);
     output << "CAMPAIGN_OPERATIONS_MANAGER_RUN_ONCE"
            << ",dispatch_limit=" << result.dispatchLimit
            << ",candidates_selected=" << result.candidates.size()

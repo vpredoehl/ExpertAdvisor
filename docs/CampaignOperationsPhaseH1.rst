@@ -165,11 +165,17 @@ enablement versions are read from persisted enablement evidence; admission and
 Attempt V2 versions are aggregates across their relevant persisted evidence;
 and the completion nested-V2 proof version is the aggregate of persisted
 Completion V1 rows, falling back only when there are no completed campaigns to
-the deployed Completion V1 column-contract catalog evidence. The corresponding
+the deployed Completion V1 column-contract catalog evidence. An entirely
+uninstantiated Admission or production Attempt V2 family is valid at genesis:
+its explicit evidence count is zero and its displayed version is
+``genesis-empty``, not a version mismatch. Once a family has persisted
+evidence, the canonical version must be exact and readable; wrong, mixed,
+stale, malformed, or structurally unreadable evidence remains fail-closed.
+Genesis-empty changes only this evidence-family interpretation and waives no
+other readiness requirement. The corresponding
 ``expected_*_contract_version`` fields are normative constants used only for
-comparison. A readable wrong or mixed observed value remains in the row and
-blocks readiness. Canonical/hash/audit corruption remains an integrity error
-rather than a fabricated snapshot.
+comparison. Canonical/hash/audit corruption remains an integrity error rather
+than a fabricated snapshot.
 
 The readiness command exits ``0`` only for complete readiness, ``2`` for a
 valid blocked snapshot, and ``1`` for an execution or integrity failure. Status

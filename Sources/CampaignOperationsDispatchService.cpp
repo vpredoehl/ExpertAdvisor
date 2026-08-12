@@ -360,7 +360,7 @@ DispatchServiceResult RunDispatchAdapter(
         try
         {
             pqxx::work transaction{*acquisitionConnection};
-            SetRole(transaction, production ? kProductionDispatcherRole :
+            SetRole(transaction, production ? kProductionDispatchServiceRole :
                 kCampaignOperationsDispatcherRole);
             DispatchLease acquired = production
                 ? AcquireProductionDispatchLeaseInTransaction(
@@ -862,8 +862,58 @@ DispatchServiceResult DispatchOneRequestForProduction(
         grandfatheredH2 && hasCompatibilityInventory);
 }
 
+DispatchServiceResult DispatchOneRequestForProduction(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest& request, const std::string& executablePath)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production dispatch requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    const bool hasCompatibilityInventory =
+        HasH2ManagerKeyCompatibilityInventory(managerConnectionString);
+    const bool grandfatheredH2 = IsReservedManagerOperationKey(
+        request.operationKey) && IsExactGrandfatheredH2ManagerOperation(
+            managerConnectionString, request.requestId, request.operationKey);
+    if (IsReservedManagerOperationKey(request.operationKey) && !grandfatheredH2)
+        throw std::invalid_argument(
+            "campaign_operations_manager_operation_key_reserved");
+    if (request.expectedRequestVersion <= 0)
+        throw std::invalid_argument(
+            "campaign_operations_production_expected_request_version_invalid");
+    ValidateManagerBuildContract(request.executingBuild);
+    const auto actualBuild = CaptureActualManagerBuildContract(executablePath);
+    if (!actualBuild || request.executingBuild != *actualBuild)
+        throw std::runtime_error("production_dispatch_build_mismatch");
+    pqxx::connection readinessConnection{managerConnectionString};
+    const auto readiness = LoadProductionReadiness(readinessConnection,
+        actualBuild);
+    if (!readiness.ready)
+        throw std::runtime_error(
+            "campaign_operations_production_readiness_blocked:" +
+            [&]
+            {
+                std::string joined;
+                for (const auto& blocker : readiness.blockers)
+                {
+                    if (!joined.empty()) joined += ';';
+                    joined += blocker;
+                }
+                return joined;
+            }());
+    return RunDispatchAdapter(dispatchServiceConnectionString, request.requestId,
+        request.expectedRequestVersion, request.requestingActor, std::nullopt,
+        true, request.operationKey, &request.executingBuild, {}, std::nullopt,
+        grandfatheredH2 && hasCompatibilityInventory);
+}
+
 DispatchServiceResult DispatchOneRequestForProductionManager(
-    const std::string& connectionString, const ProductionDispatchRequest& request,
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest& request,
     const std::string& managerSourceCanonical, const std::string& executablePath)
 {
     if (!request.acknowledged)
@@ -882,7 +932,7 @@ DispatchServiceResult DispatchOneRequestForProductionManager(
     const auto actualBuild = CaptureActualManagerBuildContract(executablePath);
     if (!actualBuild || request.executingBuild != *actualBuild)
         throw std::runtime_error("production_dispatch_build_mismatch");
-    pqxx::connection readinessConnection{connectionString};
+    pqxx::connection readinessConnection{managerConnectionString};
     const auto readiness = LoadProductionReadiness(readinessConnection,
         actualBuild);
     if (!readiness.ready)
@@ -898,7 +948,7 @@ DispatchServiceResult DispatchOneRequestForProductionManager(
                 }
                 return joined;
             }());
-    return RunDispatchAdapter(connectionString, request.requestId,
+    return RunDispatchAdapter(dispatchServiceConnectionString, request.requestId,
         request.expectedRequestVersion, request.requestingActor, std::nullopt,
         true, request.operationKey, &request.executingBuild, {},
         managerSourceCanonical);
@@ -906,7 +956,9 @@ DispatchServiceResult DispatchOneRequestForProductionManager(
 
 #if defined(CAMPAIGN_OPERATIONS_H3_TESTING)
 DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
-    const std::string& connectionString, const ProductionDispatchRequest& request,
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest& request,
     const std::string& managerSourceCanonical,
     const ManagerBuildContract& fixtureBuild, ManagerAdapterTestHook testHook)
 {
@@ -923,7 +975,7 @@ DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
     ValidateManagerBuildContract(fixtureBuild);
     if (request.executingBuild != fixtureBuild)
         throw std::runtime_error("campaign_operations_manager_fixture_build_mismatch");
-    pqxx::connection readinessConnection{connectionString};
+    pqxx::connection readinessConnection{managerConnectionString};
     const auto readiness = LoadProductionReadiness(readinessConnection,
         fixtureBuild);
     std::string blockers;
@@ -940,7 +992,7 @@ DispatchServiceResult DispatchOneRequestForProductionManagerWithFixture(
     if (!blockers.empty())
         throw std::runtime_error(
             "campaign_operations_production_readiness_blocked:" + blockers);
-    return RunDispatchAdapter(connectionString, request.requestId,
+    return RunDispatchAdapter(dispatchServiceConnectionString, request.requestId,
         request.expectedRequestVersion, request.requestingActor, std::nullopt,
         true, request.operationKey, &fixtureBuild, std::move(testHook),
         managerSourceCanonical);
@@ -971,6 +1023,36 @@ DispatchServiceResult DispatchOneRequestForProductionForTest(
             "campaign_operations_production_expected_request_version_invalid");
     ValidateManagerBuildContract(request.executingBuild);
     return RunDispatchAdapter(connectionString, request.requestId,
+        request.expectedRequestVersion, request.requestingActor, std::nullopt,
+        true, request.operationKey, &request.executingBuild,
+        std::move(testHook), std::nullopt,
+        grandfatheredH2 && hasCompatibilityInventory);
+}
+
+DispatchServiceResult DispatchOneRequestForProductionForTest(
+    const std::string& managerConnectionString,
+    const std::string& dispatchServiceConnectionString,
+    const ProductionDispatchRequest& request, DispatchTestHook testHook)
+{
+    if (!request.acknowledged)
+        throw std::invalid_argument(
+            "production dispatch requires the literal --yes acknowledgement");
+    if (!IsValidProductionOperationKey(request.operationKey))
+        throw std::invalid_argument(
+            "campaign_operations_production_operation_key_invalid");
+    const bool hasCompatibilityInventory =
+        HasH2ManagerKeyCompatibilityInventory(managerConnectionString);
+    const bool grandfatheredH2 = IsReservedManagerOperationKey(
+        request.operationKey) && IsExactGrandfatheredH2ManagerOperation(
+            managerConnectionString, request.requestId, request.operationKey);
+    if (IsReservedManagerOperationKey(request.operationKey) && !grandfatheredH2)
+        throw std::invalid_argument(
+            "campaign_operations_manager_operation_key_reserved");
+    if (request.expectedRequestVersion <= 0)
+        throw std::invalid_argument(
+            "campaign_operations_production_expected_request_version_invalid");
+    ValidateManagerBuildContract(request.executingBuild);
+    return RunDispatchAdapter(dispatchServiceConnectionString, request.requestId,
         request.expectedRequestVersion, request.requestingActor, std::nullopt,
         true, request.operationKey, &request.executingBuild,
         std::move(testHook), std::nullopt,

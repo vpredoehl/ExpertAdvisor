@@ -43,6 +43,23 @@ bool ObservedVersionMatches(const std::optional<std::string>& observed,
     return observed && *observed == std::to_string(expected);
 }
 
+bool ObservedVersionMatchesOrGenesis(
+    const std::optional<std::string>& observed,
+    const std::optional<long long>& evidenceCount, int expected)
+{
+    if (!evidenceCount || *evidenceCount < 0) return false;
+    if (*evidenceCount == 0) return !observed;
+    return ObservedVersionMatches(observed, expected);
+}
+
+std::string RenderObservedContractVersion(
+    const std::optional<std::string>& observed,
+    const std::optional<long long>& evidenceCount)
+{
+    if (evidenceCount && *evidenceCount == 0) return "genesis-empty";
+    return MachineOptional(observed);
+}
+
 bool HasObservedEnablement(const ProductionReadinessSnapshot& snapshot)
 {
     return snapshot.observedEnablementHead.has_value() ||
@@ -477,9 +494,13 @@ ProductionReadinessEvaluation EvaluateProductionReadiness(
             kManagerBuildContractVersion) ||
         !ObservedVersionMatches(result.snapshot.enablementContractVersion,
             kProductionEnablementContractVersion) ||
-        !ObservedVersionMatches(result.snapshot.admissionContractVersion,
+        !ObservedVersionMatchesOrGenesis(
+            result.snapshot.admissionContractVersion,
+            result.snapshot.admissionEvidenceCount,
             kProductionAdmissionContractVersion) ||
-        !ObservedVersionMatches(result.snapshot.productionAttemptContractVersion,
+        !ObservedVersionMatchesOrGenesis(
+            result.snapshot.productionAttemptContractVersion,
+            result.snapshot.productionAttemptEvidenceCount,
             kProductionAttemptContractVersion))
         result.blockers.push_back("canonical_contract_versions");
     if (!result.snapshot.schedulerEvidenceComplete ||
@@ -588,11 +609,18 @@ std::string RenderProductionReadiness(
            << ",expected_manager_service_contract="
            << kManagerServiceContract
            << ",admission_contract_version="
-           << MachineOptional(snapshot.admissionContractVersion)
+           << RenderObservedContractVersion(snapshot.admissionContractVersion,
+                snapshot.admissionEvidenceCount)
+           << ",admission_evidence_count="
+           << MachineOptional(snapshot.admissionEvidenceCount)
            << ",expected_admission_contract_version="
            << kProductionAdmissionContractVersion
            << ",production_attempt_contract_version="
-           << MachineOptional(snapshot.productionAttemptContractVersion)
+           << RenderObservedContractVersion(
+                snapshot.productionAttemptContractVersion,
+                snapshot.productionAttemptEvidenceCount)
+           << ",production_attempt_evidence_count="
+           << MachineOptional(snapshot.productionAttemptEvidenceCount)
            << ",expected_production_attempt_contract_version="
            << kProductionAttemptContractVersion
            << ",independent_verification_reference="

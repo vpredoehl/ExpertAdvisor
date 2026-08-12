@@ -80,6 +80,7 @@ connection_for() {
 }
 "$binary" "$(connection_for h2_enabler_login enabler)" \
   "$(connection_for h2_manager_login manager)" \
+  "$(connection_for h2_dispatch_service_login dispatch-service)" \
   "$(connection_for campaign_manager_login recovery)"
 
 pg_ctl -D "$cluster_root/data" -m immediate stop >/dev/null

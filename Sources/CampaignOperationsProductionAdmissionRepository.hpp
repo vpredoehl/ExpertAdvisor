@@ -108,6 +108,11 @@ struct ProductionReadinessSnapshot final
     std::optional<std::string> enablementContractVersion;
     std::optional<std::string> admissionContractVersion;
     std::optional<std::string> productionAttemptContractVersion;
+    // These counts are explicit persisted-evidence presence proofs.  A zero
+    // count is the only representation of a genesis-empty family; an unset
+    // count is unknown and must remain fail-closed in readiness evaluation.
+    std::optional<long long> admissionEvidenceCount;
+    std::optional<long long> productionAttemptEvidenceCount;
     std::optional<int> schedulerGeneration;
     std::optional<std::string> schedulerCutoverState;
     bool schedulerEvidenceComplete = false;
