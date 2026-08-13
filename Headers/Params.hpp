@@ -10,6 +10,7 @@
 #define Params_h
 
 #include <cstddef>
+#include "FeatureLayout.hpp"
 
 enum class CandleTF { m15 = 0, Hour = 1, Hr4 = 2, Day = 3, Week = 4 };
 inline constexpr int time_cycle_seconds(CandleTF tc)
@@ -70,7 +71,6 @@ inline constexpr float default_head_weight_lr_mult = 25.0f;
 inline constexpr float default_head_bias_lr_mult = 2.5f;
 
 inline std::size_t hidden_size = default_hidden_size;
-constexpr auto feature_size = 32;
 //constexpr auto n_in = feature_size + hidden_size;
 inline std::size_t n_out = default_hidden_size;
 constexpr size_t direction_output_size = 3;
