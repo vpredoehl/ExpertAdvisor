@@ -1,0 +1,586 @@
+PHASE 4D STEP 1 — DETERMINISTIC RECOMMENDATION CAMPAIGN PLANNING
+
+REASONING
+
+Phase 4C is complete and committed at:
+
+  c2d7fef
+  Implement read-only recommendation conversion workflow status and diagnostics.
+
+Phase 4C established a complete, durable, auditable manual mutation chain:
+
+  recommendation
+  → conversion proposal
+  → append-only review
+  → execution to paused experiment
+  → explicit activation to pending
+  → ordinary scheduler lifecycle
+
+Step 6 added read-only end-to-end workflow observability and deterministic integrity diagnostics.
+
+The next safe Phase 4 increment should not jump directly to automatic proposal creation or automatic activation. The system first needs a deterministic campaign-planning layer that can answer:
+
+  “Given the current ranked recommendations and existing Phase 4C workflow history, which recommendations would be selected for a bounded campaign, which would be skipped, and why?”
+
+This is the correct bridge from single-item manual operation to larger-scale campaign control.
+
+Phase 4D Step 1 should therefore be read-only. It should produce a reproducible campaign plan from existing recommendation/ranking/workflow data, without creating proposals, reviews, executions, activations, experiments, workers, or scheduler activity.
+
+The plan should:
+
+- select a bounded set of eligible recommendations;
+- prevent duplicate or conflicting conversion work;
+- preserve deterministic ordering;
+- explain every included and excluded candidate;
+- expose stable campaign-plan identity and hash;
+- support machine-readable and human-readable output;
+- remain entirely separate from future campaign execution.
+
+This gives us a reviewable, testable policy boundary before any batch mutation is introduced.
+
+PROMPT FOR CODEX
+
+Using high reasoning, implement Phase 4D Step 1: deterministic, read-only recommendation campaign planning.
+
+CURRENT STATE
+
+Branch:
+
+  phase0-architecture
+
+Current committed HEAD:
+
+  c2d7fef
+
+The working tree should be clean before implementation.
+
+You must:
+
+- inspect the actual repository and current Phase 4 documentation;
+- treat Phase 4C Steps 2–6 as authoritative;
+- preserve all existing recommendation, ranking, conversion, workflow, scheduler, and continuation behavior;
+- not reset, clean, checkout, stash, discard, or overwrite user work;
+- not commit.
+
+GOAL
+
+Add a read-only campaign planner that takes a bounded set of ranked experiment recommendations and determines which candidates would be included in a future conversion campaign.
+
+The planner must not perform the campaign.
+
+It must produce a deterministic plan containing:
+
+- campaign-plan contract version;
+- campaign-plan canonical identity;
+- campaign-plan identity hash;
+- plan generation timestamp for display only;
+- policy/configuration snapshot;
+- deterministic ordered candidate rows;
+- include/exclude decision for every considered candidate;
+- stable reason codes;
+- relevant recommendation/ranking/workflow IDs;
+- summary counts.
+
+The campaign plan should answer:
+
+- which recommendations are eligible;
+- which recommendations are already represented by an existing proposal;
+- which recommendations already have execution or activation history;
+- which source experiments already have an active or completed conversion workflow;
+- which candidates conflict with another selected candidate;
+- which candidates are outside campaign limits;
+- which candidates fail score, accuracy, neutrality, profitability, lifecycle, or integrity requirements;
+- which candidates would be selected if campaign execution were later approved.
+
+READ-ONLY BOUNDARY
+
+Phase 4D Step 1 must be strictly observational.
+
+It must not:
+
+- insert, update, or delete any row;
+- create a campaign database record;
+- create a proposal;
+- review a proposal;
+- execute a proposal;
+- activate an execution;
+- create, queue, pause, resume, cancel, retry, or modify an experiment;
+- start the scheduler;
+- start a worker;
+- add automatic scans;
+- alter scheduler polling or selection;
+- alter recommendation evaluation, scoring, or ranking;
+- mutate Phase 4C workflow records;
+- add triggers;
+- commit changes.
+
+No production SQL in this step may contain:
+
+- INSERT
+- UPDATE
+- DELETE
+- TRUNCATE
+- SELECT ... FOR UPDATE
+- advisory locks
+- sequence access
+
+CAMPAIGN POLICY
+
+Add a versioned campaign-planning policy/configuration structure.
+
+Use naming consistent with the existing project, such as:
+
+  RecommendationCampaignPlanningPolicy
+
+At minimum, support:
+
+- enabled;
+- maximum selected recommendations;
+- maximum candidates considered;
+- minimum leader score;
+- minimum inference accuracy;
+- maximum predicted neutral proportion;
+- optional minimum profitability metric when available;
+- optional maximum recommendations per symbol;
+- optional maximum recommendations per horizon;
+- optional maximum recommendations per source experiment;
+- whether rejected workflows may be reconsidered;
+- whether failed or cancelled converted experiments may be reconsidered;
+- whether completed conversion workflows exclude future selection;
+- whether inconsistent workflows are always excluded;
+- deterministic tie-breaking configuration;
+- contract version.
+
+Do not invent profitability semantics if the current schema does not contain a reliable profitability metric. Inspect the existing analysis/ranking model first.
+
+If profitability is not yet durably available:
+
+- represent the policy field as unsupported or unset;
+- emit a stable diagnostic/reason code;
+- document that profitability-aware selection remains deferred;
+- do not approximate profitability from accuracy.
+
+The default policy must be conservative and disabled unless the user explicitly invokes the planning command.
+
+DETERMINISTIC ORDERING
+
+Selection must be deterministic.
+
+Prefer existing ranking order when it has a durable rank and policy identity.
+
+Otherwise derive order from stable persisted fields, for example:
+
+1. ranking score descending;
+2. inference accuracy descending;
+3. leader score descending;
+4. recommendation ID ascending.
+
+Do not use timestamps as the primary tie-breaker when stable IDs exist.
+
+The same database snapshot and same policy must produce:
+
+- identical selected candidates;
+- identical reason codes;
+- identical canonical plan identity;
+- identical plan hash.
+
+PLAN IDENTITY
+
+Add a canonical campaign-plan identity function and deterministic hash.
+
+The canonical identity must include all inputs that affect candidate inclusion, exclusion, or order, including:
+
+- contract version;
+- ranking snapshot or invocation identity;
+- policy canonical identity/hash;
+- bounded candidate IDs in deterministic order;
+- relevant persisted workflow identity/provenance;
+- selection decisions and stable reason codes.
+
+Do not include:
+
+- wall-clock generation time;
+- database connection details;
+- process ID;
+- host name;
+- mutable display text.
+
+Reuse the existing canonical escaping and hashing conventions.
+
+READ MODEL
+
+Add a narrowly scoped read-only aggregate layer.
+
+Prefer structures such as:
+
+  RecommendationCampaignCandidateView
+  RecommendationCampaignPlan
+  RecommendationCampaignPlanSummary
+
+Each candidate should preserve, when available:
+
+- recommendation ID;
+- ranking snapshot/rank;
+- source experiment ID;
+- symbol;
+- prediction horizon;
+- target epochs or proposed conversion target;
+- leader score;
+- inference accuracy;
+- predicted neutral proportion;
+- profitability metric and metric identity when supported;
+- existing proposal ID;
+- latest review decision ID and disposition;
+- execution ID;
+- activation ID;
+- converted experiment ID;
+- current workflow state;
+- workflow integrity status;
+- include/exclude decision;
+- stable reason codes.
+
+Keep SQL out of CLI parsing and output formatting code.
+
+Reuse existing recommendation ranking, conversion workflow, and canonical validation code where practical.
+
+Do not duplicate Phase 4C workflow-state logic.
+
+SELECTION AND EXCLUSION RULES
+
+At minimum, add deterministic reason codes for:
+
+Included:
+
+- selected
+
+Excluded:
+
+- planning_disabled
+- recommendation_not_ranked
+- below_minimum_leader_score
+- below_minimum_inference_accuracy
+- predicted_neutral_above_maximum
+- profitability_metric_unavailable
+- below_minimum_profitability
+- proposal_already_exists
+- workflow_pending_review
+- workflow_rejected_not_reconsiderable
+- workflow_approved_not_executed
+- workflow_executed_paused
+- workflow_activated_or_scheduler_owned
+- workflow_completed
+- workflow_failed_not_reconsiderable
+- workflow_cancelled_not_reconsiderable
+- workflow_inconsistent
+- source_experiment_conflict
+- symbol_limit_reached
+- horizon_limit_reached
+- source_experiment_limit_reached
+- campaign_limit_reached
+- candidate_limit_reached
+- unsupported_contract_version
+- identity_validation_failed
+
+Only emit reason codes that are justified by durable state.
+
+A candidate may have multiple diagnostic reason codes, but exactly one final decision:
+
+  include
+  exclude
+
+The reason-code order must be deterministic.
+
+CONFLICT RULES
+
+Prevent the campaign plan from selecting logically conflicting work.
+
+At minimum:
+
+- do not select more than one candidate that would create the same conversion identity;
+- do not select a recommendation already represented by an existing proposal unless explicit reconsideration policy permits it;
+- do not select an inconsistent workflow;
+- do not select multiple candidates for the same source experiment when policy limits it to one;
+- enforce symbol, horizon, source-experiment, and campaign limits deterministically.
+
+Do not silently collapse duplicates. Preserve and report every considered candidate.
+
+REPOSITORY
+
+Add a read-only repository layer that can:
+
+- verify required schemas;
+- load a bounded deterministic candidate set from existing recommendation/ranking persistence;
+- load existing Phase 4C workflow state for those candidates;
+- produce all facts needed by the pure planner;
+- optionally filter by symbol, horizon, ranking snapshot, or recommendation ID;
+- use one consistent PostgreSQL read transaction.
+
+Avoid N+1 queries where practical.
+
+A bounded aggregate query or a small fixed number of set-based queries is preferred.
+
+Do not add a migration unless a missing supporting index is proven necessary.
+
+If an index is added:
+
+- show the exact query it supports;
+- use an idempotent migration;
+- add migration tests;
+- add no new write privileges.
+
+CLI
+
+Add a primary command such as:
+
+  --plan-recommendation-campaign
+
+Recommended options:
+
+  --campaign-ranking-snapshot=ID
+  --campaign-policy-id=ID
+  --campaign-limit=N
+  --campaign-candidate-limit=N
+  --campaign-symbol=SYMBOL
+  --campaign-horizon=N
+  --campaign-min-leader-score=VALUE
+  --campaign-min-inference-accuracy=VALUE
+  --campaign-max-neutral-proportion=VALUE
+  --campaign-max-per-symbol=N
+  --campaign-max-per-horizon=N
+  --campaign-max-per-source-experiment=N
+  --campaign-reconsider-rejected
+  --campaign-reconsider-failed
+  --campaign-reconsider-cancelled
+
+Prefer existing durable policy persistence if Phase 4B already has an appropriate policy/configuration model.
+
+Do not create an overlapping policy table without architectural justification.
+
+The command should emit:
+
+1. one stable machine-readable campaign summary line;
+2. one stable machine-readable row per considered candidate;
+3. optional human-readable explanation;
+4. a final count summary.
+
+The campaign summary should include at least:
+
+- campaign_plan_contract_version;
+- campaign_plan_identity_hash;
+- policy_identity_hash;
+- ranking_snapshot_id or null;
+- candidate_count;
+- selected_count;
+- excluded_count;
+- read_only=true;
+- proposal_created=false;
+- experiment_created=false;
+- experiment_modified=false;
+- scheduler_started=false;
+- worker_started=false.
+
+Each candidate row should include at least:
+
+- ordinal;
+- decision;
+- recommendation_id;
+- source_experiment_id;
+- symbol;
+- prediction_horizon;
+- ranking_position or null;
+- ranking_score or null;
+- leader_score or null;
+- inference_accuracy or null;
+- predicted_neutral_proportion or null;
+- profitability_metric or null;
+- proposal_id or null;
+- execution_id or null;
+- activation_id or null;
+- converted_experiment_id or null;
+- workflow_state or null;
+- workflow_integrity or null;
+- reason_count;
+- reason_codes.
+
+Use the existing machine-text escaping convention.
+
+A missing ranking snapshot, unsupported schema, or invalid policy should return a clear event and nonzero exit code.
+
+A valid plan with zero selected candidates is a successful read-only result.
+
+LIST/INSPECTION SUPPORT
+
+Optionally add:
+
+  --recommendation-campaign-plan-candidate=RECOMMENDATION_ID
+
+to inspect one candidate’s inclusion/exclusion reasoning under the same policy.
+
+Do not persist plans in Step 1.
+
+SCHEDULER ISOLATION
+
+Do not alter:
+
+- scheduler polling;
+- scheduler command selection;
+- worker launch;
+- continuation automation;
+- checkpoint inference;
+- analysis workers;
+- recommendation evaluation;
+- recommendation ranking;
+- Phase 4C proposal/review/execution/activation behavior.
+
+The scheduler must remain unaware of campaign plans.
+
+TESTS
+
+Add focused pure-domain tests and live-PostgreSQL repository tests.
+
+Cover at least:
+
+1. planning disabled;
+2. empty candidate set;
+3. deterministic ordering;
+4. exact tie-breaking;
+5. campaign limit;
+6. candidate consideration limit;
+7. symbol limit;
+8. horizon limit;
+9. source-experiment limit;
+10. duplicate conversion identity;
+11. existing pending-review proposal;
+12. existing rejected workflow with reconsideration disabled;
+13. rejected workflow with reconsideration enabled;
+14. approved-not-executed workflow;
+15. executed-paused workflow;
+16. activated-pending workflow;
+17. scheduler-claimed/running workflow;
+18. completed workflow;
+19. failed workflow with reconsideration disabled/enabled;
+20. cancelled workflow with reconsideration disabled/enabled;
+21. inconsistent workflow always excluded;
+22. minimum leader score;
+23. minimum inference accuracy;
+24. maximum neutral proportion;
+25. profitability unavailable behavior;
+26. supported profitability threshold behavior if durable data exists;
+27. canonical policy identity;
+28. canonical plan identity;
+29. identical inputs produce identical plan hash;
+30. changed policy changes plan hash;
+31. changed workflow state changes plan hash;
+32. deterministic reason ordering;
+33. every candidate has exactly one final decision;
+34. CLI success output;
+35. CLI zero-selection success;
+36. CLI invalid policy failure;
+37. CLI schema-missing failure;
+38. CLI machine escaping;
+39. repository bounded query behavior;
+40. repository deterministic ordering;
+41. repository uses read-only transaction;
+42. no timestamps or audit rows mutate;
+43. no proposals or experiments are created;
+44. Phase 4A recommendation tests pass;
+45. Phase 4B ranking tests pass;
+46. Phase 4C Steps 2–6 tests pass;
+47. normal Release build passes.
+
+Repository tests must:
+
+- require an explicit disposable test database;
+- refuse database name LSTM;
+- use isolated per-process schemas;
+- avoid fixed sequence assumptions;
+- avoid sleeps;
+- clean up schemas;
+- verify table row counts and updated_at values before and after planning;
+- verify no sequence was advanced by planning.
+
+POSTGRESQL VERIFICATION
+
+Use the existing PostgreSQL server with a disposable database.
+
+Do not use the active LSTM database.
+
+If PostgreSQL is unavailable in the Codex environment:
+
+- compile all repository tests;
+- verify the safety guard;
+- provide exact local commands;
+- do not claim PostgreSQL tests passed.
+
+DOCUMENTATION
+
+Add Phase 4D Step 1 documentation covering:
+
+- why campaign planning precedes campaign execution;
+- strict read-only boundary;
+- policy fields;
+- deterministic ordering;
+- include/exclude rules;
+- reason codes;
+- duplicate/conflict handling;
+- campaign-plan canonical identity and hash;
+- bounded query behavior;
+- scheduler isolation;
+- CLI examples;
+- zero-selection behavior;
+- profitability support status;
+- exact PostgreSQL verification commands;
+- deferred future mutation.
+
+Update the architecture documentation to show:
+
+  recommendation ranking
+  → read-only campaign plan
+  → future operator approval
+  → future campaign execution
+  → existing Phase 4C manual workflow
+
+Make clear that Step 1 stops at the plan.
+
+FINAL REVIEW
+
+Before reporting completion:
+
+- inspect the complete diff;
+- run git diff --check;
+- validate the Xcode project;
+- verify all new production source files are members of both application targets;
+- run strict warnings-as-errors compilation;
+- run all pure-domain tests;
+- compile and run live PostgreSQL repository tests when available;
+- run the normal Release build;
+- check git status;
+- ensure nothing is staged;
+- ensure no commit was created;
+- confirm no scheduler or worker was launched;
+- confirm no database mutation occurred.
+
+FINAL REPORT
+
+Return:
+
+1. concise Phase 4D Step 1 implementation summary;
+2. campaign policy model;
+3. deterministic ordering and tie-breaking model;
+4. inclusion/exclusion and conflict rules;
+5. reason-code model;
+6. campaign-plan canonical identity/hash model;
+7. repository/query design;
+8. CLI commands and output examples;
+9. files changed;
+10. exact build/test commands and results;
+11. PostgreSQL verification status;
+12. Release/Metal verification status;
+13. profitability support status;
+14. remaining risks or unverified items;
+15. confirmation all behavior is read-only;
+16. confirmation scheduler behavior was not modified;
+17. confirmation no proposal, experiment, activation, worker, or scheduler action occurred;
+18. confirmation no commit was created.
+
+Do not implement campaign execution, proposal creation, bulk approval, bulk activation, background scans, or scheduler integration in this step.

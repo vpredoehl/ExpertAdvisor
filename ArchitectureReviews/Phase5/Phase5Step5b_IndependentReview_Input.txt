@@ -1,0 +1,349 @@
+Use model_reasoning_effort="xhigh".
+
+You are performing an INDEPENDENT architectural and implementation review of Phase 5 Step 5b in the current local checkout.
+
+This is NOT a continuation of the implementation session.
+Review the code as though it was written by another senior engineer.
+Do not trust the implementation summary without verifying the code and tests directly.
+
+Repository and execution rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do NOT switch branches.
+- Work only from the current local checkout.
+- Preserve the current branch.
+- Preserve all unrelated worktree changes.
+- Do not create a commit.
+- Do not stage files.
+- Do not clean DerivedData.
+- Reuse the existing DerivedData.
+- Perform an Xcode Release build only.
+- Do not perform a Debug build.
+
+Primary objective
+
+Determine whether Phase 5 Step 5b is actually ready to commit.
+
+Step 5b integrates the pure Step 5a outcome-assessment domain model with authoritative persisted campaign, materialization, lifecycle, provenance, source-scientific, and result-scientific evidence.
+
+Review the implementation for:
+
+- architectural correctness
+- authoritative evidence ownership
+- SQL row-selection correctness
+- transaction and snapshot correctness
+- lifecycle authority reuse
+- provenance preservation
+- inconsistency propagation
+- scientific metric equivalence
+- comparison-context correctness
+- deterministic behavior
+- immutable-domain integration
+- output contract correctness
+- CLI parsing and conflict handling
+- exception safety
+- test completeness
+- regression safety
+- future compatibility with later Phase 5 work
+
+Do not merely rerun tests. Challenge the design and assumptions.
+
+Required initial inspection
+
+Before editing:
+
+1. Record the current branch, HEAD, and complete worktree status.
+
+2. Identify all Step 5b changes relative to HEAD.
+
+3. Trace the complete flow:
+
+   CLI
+   -> command dispatch
+   -> read-only transaction
+   -> repository evidence loading
+   -> campaign-status lifecycle projection
+   -> service mapping
+   -> Step 5a member evidence
+   -> BuildRecommendationCampaignOutcomeAssessment(...)
+   -> deterministic machine output
+
+4. Read the Step 5a domain model and its independent-review hardening so the integration contract is understood exactly.
+
+5. Read the existing Phase 4C, Phase 4D, and Phase 5 status/materialization repositories and documentation used as authorities.
+
+Critical review areas
+
+1. Campaign and materialization identity binding
+
+Verify that:
+
+- campaign approval ID is authoritative;
+- campaign approval canonical text and hash are loaded from persisted approval evidence;
+- materialization canonical text and hash are loaded through the existing authoritative loader;
+- the materialization's persisted approval identity hash is passed unchanged into Step 5a;
+- approval/materialization disagreement fails closed;
+- no identity is silently reconstructed in a way that hides persisted corruption;
+- the complete authoritative canonical texts are bound into the Step 5a assessment identity;
+- contract versions are checked correctly.
+
+2. Exact materialized membership
+
+Verify preservation of:
+
+- member ordinal
+- materialization-member ID
+- ranking-member ID
+- recommendation ID
+- source-experiment ID
+- proposal ID
+- expected downstream experiment ID
+
+Verify that exact persisted membership is the only membership source, ordering is deterministic and ordinal-based, invalid top-level membership fails appropriately, and malformed downstream evidence does not incorrectly invalidate trustworthy membership.
+
+3. Lifecycle authority and inconsistency propagation
+
+Verify that:
+
+- Step 5b reuses the existing Phase 5 campaign-status lifecycle projection;
+- Step 5b does not implement a second lifecycle classifier;
+- terminal-result mapping to Step 5a lifecycle is complete and correct;
+- unknown or malformed lifecycle evidence remains visible;
+- campaign-status inconsistency is propagated through inputConsistency=Inconsistent;
+- scientific-link inconsistency is propagated consistently;
+- absence of optional scientific evidence is not incorrectly converted into upstream inconsistency when Step 5a should diagnose or classify it;
+- Step 5b does not normalize, erase, or repair inconsistent evidence.
+
+4. Scientific source evidence
+
+Verify the exact authoritative source of:
+
+- source experiment ID
+- source model ID
+- source analysis ID
+- source inference accuracy
+- source leader score
+- source comparison context
+
+Determine whether the implementation uses immutable values captured by the persisted recommendation and whether each source value has the same scientific meaning and units as the result value.
+
+Challenge any fallback, reconstruction, or current-row lookup that could substitute stale or semantically different evidence.
+
+5. Scientific result evidence and row selection
+
+Review the SQL and mapping for exact selection of:
+
+- execution-linked result experiment
+- current linked model
+- final inference row
+- final analysis row
+- typed result identities
+
+Pay particular attention to missing, duplicate, failed, historical, checkpoint, stale-model, mismatched, or null evidence; cardinality assumptions; deterministic selection; and whether malformed evidence is retained for Step 5a diagnostics rather than discarded prematurely.
+
+Any SQL that selects a row using implicit order, greatest ID, LIMIT 1, aggregate collapse, or incomplete predicates must be justified against the project’s authoritative lifecycle and result contracts.
+
+6. Metric semantics
+
+The implementation reportedly maps:
+
+- inference_accuracy
+- leader_score
+
+Verify that source and result values are semantically equivalent, units and definitions match, final analysis fields are authoritative, NumericDelta is appropriate, missing values remain missing, no value is recomputed differently, and unsupported future metrics would not accidentally receive NumericDelta.
+
+If semantic equivalence is not provable, correct the mapping or mark the metric Unsupported.
+
+7. Comparison context
+
+Verify authoritative persisted construction of:
+
+- symbol
+- prediction horizon
+- threshold
+- window size
+- label definition
+- inference range start
+- inference range end
+
+Pay special attention to whether window_size is persisted rather than inferred from a default; whether label_rule_id and target_type are encoded in an unambiguous, version-stable canonical representation; whether source and result contexts use the same convention; date normalization and timezone behavior; floating-point threshold equality and canonicalization; and changed contexts producing ContextChanged rather than numeric deltas.
+
+8. Read-only transaction behavior
+
+Verify that the complete operation uses one PostgreSQL REPEATABLE READ, READ ONLY transaction and one consistent snapshot.
+
+Confirm:
+
+- no nested independent transaction breaks snapshot consistency;
+- no helper opens a second connection or transaction;
+- no advisory locks;
+- no row locks;
+- no writes;
+- no sequence calls;
+- no temporary persistent state;
+- no scheduler, worker, queue, activation, retry, launch, or experiment mutation;
+- transaction_timestamp() is used consistently as observed_at.
+
+9. CLI and command integration
+
+Verify:
+
+- the CLI name follows established conventions;
+- joined and separated forms behave correctly;
+- positive ID validation;
+- duplicate option rejection;
+- conflict detection with every other standalone operation;
+- --yes rejection;
+- --dry-run rejection;
+- no confirmation requirement for read-only execution;
+- database dispatch occurs only after complete parser validation;
+- no unintended change to existing command behavior.
+
+Review the modification to ExperimentScheduler.cpp narrowly for regression risk.
+
+10. Machine output contract
+
+Verify that output is deterministic, ordinal ordered, machine parseable, complete, percent encoded where required, explicit about nulls, and explicit about safety boundaries.
+
+Verify the top-level row includes contract versions, campaign/materialization identities, assessment hash, aggregate outcome, complete summary counts, and read-only/no-write/no-scheduler safety fields.
+
+Verify each member row includes exact identity and provenance, lifecycle, input/final consistency, outcome, diagnostics, source/result identities, source/result contexts, metrics, comparisons, and explicit nulls.
+
+Ensure output does not overstate campaign success or authorize follow-up work.
+
+11. API cleanliness and ownership
+
+Verify:
+
+- SQL remains in repository code;
+- service owns mapping and orchestration;
+- formatting is not improperly mixed into SQL row mapping;
+- Step 5a remains database-free;
+- immutable Step 5a output remains builder-controlled;
+- no unnecessary public surface was added;
+- names and contracts match nearby Phase 5 code;
+- no persistence table or schema change was added unnecessarily.
+
+12. Test quality
+
+Inspect the tests, not only their pass/fail results.
+
+Verify coverage for:
+
+- campaign/materialization identity propagation
+- persisted approval identity hash
+- deterministic ordering
+- lifecycle mapping
+- inputConsistency propagation
+- comparable evidence
+- changed context
+- missing source metric
+- missing result metric
+- missing model/analysis identity
+- expected/result experiment mismatch
+- duplicate expected experiment identity
+- duplicate result experiment identity
+- duplicate result model identity
+- duplicate typed-result identity
+- proposal-only member
+- nonterminal member
+- failed member
+- cancelled member
+- unknown or malformed lifecycle
+- malformed downstream evidence retention
+- one-snapshot behavior under concurrent update
+- no writes and sequence stability
+- CLI parser conflicts
+- deterministic output and percent encoding
+
+Review changes to existing campaign-status repository tests and ensure no assertion was weakened or repurposed merely to make Step 5b pass.
+
+Corrections
+
+If you find architectural weakness, incorrect SQL selection, semantic metric mismatch, broken provenance, incomplete inconsistency propagation, transaction-boundary defect, nondeterminism, parser conflict gap, output ambiguity, missing invariant, missing test, undefined behavior, hidden edge case, or regression risk, fix it.
+
+Make only narrowly scoped corrections.
+
+Do NOT:
+
+- make stylistic changes;
+- perform unrelated refactoring;
+- modify LSTM architecture;
+- modify training or inference math;
+- modify optimizer behavior;
+- modify feature engineering;
+- modify label generation;
+- modify model serialization;
+- modify leader_score calculation;
+- modify scheduler queue selection;
+- modify worker behavior;
+- modify continuation policy;
+- modify Phase 5 Steps 1-4 behavior;
+- implement later campaign-success or follow-up policy;
+- add schema unless a demonstrated correctness defect makes it unavoidable.
+
+Verification
+
+After corrections:
+
+1. Run all focused Step 5b pure tests.
+2. Run all Step 5b database-backed tests.
+3. Re-run the Step 5a outcome-assessment tests.
+4. Re-run affected campaign-status, campaign-execution, campaign-activation, campaign-launch, conversion-workflow, and materialization-loader tests.
+5. Run AddressSanitizer and UndefinedBehaviorSanitizer where supported for pure C++ tests.
+6. Verify one-snapshot behavior under concurrent database mutation.
+7. Verify no-write and sequence-stability behavior.
+8. Run CLI joined/separated forms and all relevant conflict cases.
+9. Run git diff --check and git diff --cached --check, and check untracked source, test, and documentation files for whitespace errors.
+10. Validate the Xcode project.
+11. Perform an incremental Xcode Release build only:
+
+    xcodebuild -project ExpertAdvisor.xcodeproj \
+      -scheme "LSTM Release" \
+      -configuration Release \
+      -destination "platform=macOS,arch=arm64" \
+      build
+
+Do not clean DerivedData.
+Do not create a fresh DerivedData directory unless the existing one is concretely unusable. If an alternate directory is required, explain why.
+
+Final audit
+
+Before reporting:
+
+- inspect the complete final diff;
+- confirm every modified file belongs to Step 5b or a necessary correction;
+- identify unrelated pre-existing or concurrent changes;
+- confirm nothing is staged;
+- confirm no commit was created;
+- confirm branch and HEAD were preserved.
+
+Completion report
+
+Provide:
+
+- architectural assessment
+- authoritative evidence-flow assessment
+- SQL row-selection assessment
+- metric semantic assessment
+- context-construction assessment
+- transaction and read-only assessment
+- CLI/output assessment
+- defects corrected
+- remaining concerns
+- files modified
+- tests executed
+- database verification
+- sanitizer results
+- Release build result
+- explicit recommendation:
+
+READY TO COMMIT
+
+or
+
+NOT READY TO COMMIT

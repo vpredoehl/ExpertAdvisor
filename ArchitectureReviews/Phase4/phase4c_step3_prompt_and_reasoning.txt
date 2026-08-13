@@ -1,0 +1,457 @@
+PHASE 4C STEP 3 — MANUAL REVIEW AND APPROVAL WORKFLOW FOR DURABLE CONVERSION PROPOSALS
+
+Use high reasoning.
+
+Repository:
+- ExpertAdvisor
+- Work on the current branch and current uncommitted state only.
+- Preserve all completed Phase 4A, Phase 4B, and Phase 4C Step 1–2 behavior.
+- Do not interrupt, launch, resume, cancel, pause, retry, or otherwise affect any running or pending experiments.
+- Do not run tests against the active LSTM production/research database.
+- Any PostgreSQL integration testing must use a separate disposable database and isolated schema.
+
+GOAL
+
+Implement Phase 4C Step 3: a durable, explicit, manual review and approval workflow for persisted experiment recommendation conversion proposals.
+
+Step 2 established immutable persistence for conversion proposals. Step 3 must add the durable review decision layer that records whether a human operator approved or rejected a specific persisted proposal.
+
+This step must remain advisory and administrative. Approval must not create, queue, resume, modify, or execute an experiment.
+
+The result must provide:
+
+1. A durable append-only review-decision record.
+2. Explicit proposal states derived from persisted decisions.
+3. Deterministic duplicate/idempotency behavior.
+4. Repository APIs for recording and reading decisions.
+5. CLI commands for manually approving, rejecting, and inspecting proposals.
+6. Tests covering schema, repository behavior, concurrency, immutability, and CLI behavior.
+7. Documentation of invariants and operational boundaries.
+
+PHASE BOUNDARY
+
+Phase 4C Step 3 may:
+
+- read persisted conversion proposals,
+- list or inspect proposals,
+- record an explicit manual approval decision,
+- record an explicit manual rejection decision,
+- persist optional operator notes or reason text,
+- report the current review disposition of a proposal,
+- expose proposal and review information through CLI commands.
+
+Phase 4C Step 3 must not:
+
+- create an experiment,
+- insert into the experiment table,
+- queue an experiment,
+- modify experiment status or phase,
+- launch training, inference, or analysis,
+- invoke scheduler behavior,
+- resume, retry, pause, cancel, or continue an experiment,
+- score or rerank recommendations,
+- regenerate or mutate an existing conversion proposal,
+- silently approve anything,
+- automatically approve based on score or policy,
+- convert approval into execution,
+- alter existing Phase 3 continuation behavior,
+- alter the active scheduler,
+- add background workers or automation.
+
+Approval in Step 3 means only:
+
+“An operator has durably approved this exact persisted proposal for possible conversion in a later phase.”
+
+It does not mean:
+
+“Create or queue the experiment now.”
+
+DESIGN REQUIREMENTS
+
+A. Review decisions must refer to exact persisted proposals
+
+Each review decision must reference the durable proposal primary key created in Step 2.
+
+Do not reconstruct proposal identity from recommendation fields at review time.
+
+Do not approve by hash alone.
+
+Do not approve by rank position, symbol, horizon, or recommendation ID alone.
+
+The proposal row is the exact object under review.
+
+B. Append-only audit history
+
+Prefer an append-only review-decision table rather than mutable approval columns on the proposal table.
+
+The decision table should preserve:
+
+- review decision ID,
+- proposal ID,
+- decision type,
+- optional reason or note,
+- operator identity when supplied,
+- decision timestamp,
+- deterministic idempotency key or equivalent request identity if needed,
+- creation timestamp.
+
+Do not update or delete historical decisions through the runtime repository.
+
+Do not mutate the persisted proposal row.
+
+C. Decision model
+
+At minimum support:
+
+- approved
+- rejected
+
+Do not add automatic, queued, converted, executed, expired, or scheduler-related states in this step.
+
+The current disposition should be derived deterministically from persisted history.
+
+Recommended rule:
+
+- no decision rows: pending_review
+- latest valid decision approved: approved
+- latest valid decision rejected: rejected
+
+If the project’s architecture strongly favors one terminal decision only, evaluate that alternative carefully. However, do not silently choose a model without documenting the tradeoff.
+
+The preferred design is to support an auditable sequence of explicit manual decisions so that a later operator may reverse an earlier decision without destroying history. If reversals are supported:
+
+- each new decision is appended,
+- the latest decision determines current disposition,
+- the full decision history remains queryable,
+- duplicate retries of the same request do not append duplicate rows.
+
+D. Idempotency and duplicate semantics
+
+Manual CLI retries must be safe.
+
+Define a clear deterministic rule for duplicate decision requests.
+
+A robust approach is an explicit decision request key generated or supplied by the caller and uniquely constrained per proposal. Another acceptable approach is a canonical decision identity covering proposal, disposition, normalized operator identity, normalized reason, and a caller-visible request token.
+
+Do not make repeated identical approvals create unlimited duplicate audit rows due only to network or CLI retry.
+
+At the same time, do not prevent a legitimate later reversal or a new deliberate decision.
+
+Document the exact distinction between:
+
+- retry of the same decision request,
+- a new approval,
+- a new rejection,
+- a reversal of an earlier decision.
+
+E. Concurrency
+
+Two concurrent attempts to record the same idempotent decision must produce one durable decision and deterministic equivalent results.
+
+Concurrent conflicting decisions must have a documented ordering rule.
+
+Use PostgreSQL transactions and constraints as the authority.
+
+Do not rely only on process-local mutexes.
+
+Avoid race-prone “SELECT, then INSERT” behavior unless protected by a transaction-safe database mechanism.
+
+F. Permissions and immutability
+
+Follow the Step 2 persistence model:
+
+- runtime role may INSERT and SELECT the review-decision table,
+- runtime role must not UPDATE, DELETE, or TRUNCATE review decisions,
+- runtime role must not mutate proposal identity rows,
+- migration/admin ownership may retain schema-management rights.
+
+Tests must tolerate the established libpqxx behavior where sql_error::sqlstate() may be empty for a PostgreSQL permission error. Prefer SQLSTATE 42501, with a narrowly scoped fallback that confirms the server message reports “permission denied.”
+
+Do not weaken tests to accept arbitrary SQL errors.
+
+G. Canonical values and validation
+
+Use a constrained database representation for decision type.
+
+Reject unknown decision values.
+
+Normalize and validate optional operator and reason fields consistently.
+
+Define size limits to prevent unbounded text storage.
+
+Preserve user-entered reason text unless an existing project convention requires normalization.
+
+Do not allow empty strings to create ambiguous identities where NULL is the intended representation.
+
+H. Repository API
+
+Add a focused repository abstraction consistent with the Step 2 repository.
+
+Expected capabilities include equivalents of:
+
+- recordReviewDecision(...)
+- findReviewDecisionById(...)
+- listReviewDecisionsForProposal(...)
+- getCurrentReviewDisposition(...)
+- listProposalsByReviewDisposition(...), if consistent with existing repository patterns.
+
+The API must return enough information to distinguish:
+
+- inserted,
+- idempotent replay,
+- not found,
+- invalid request,
+- database failure.
+
+Do not mix CLI formatting into repository logic.
+
+Do not add scheduler or experiment creation dependencies to the repository.
+
+I. CLI
+
+Add explicit manual commands consistent with current CLI conventions.
+
+The exact naming should follow the repository’s existing style, but expected capabilities include:
+
+- approve a persisted conversion proposal,
+- reject a persisted conversion proposal,
+- show one proposal with current review disposition,
+- list proposal review history,
+- optionally list proposals filtered by pending/approved/rejected.
+
+Possible command shape, subject to repository conventions:
+
+  --approve-conversion-proposal=PROPOSAL_ID
+  --reject-conversion-proposal=PROPOSAL_ID
+  --conversion-proposal-review-reason=TEXT
+  --conversion-proposal-review-operator=TEXT
+  --conversion-proposal-review-request-id=TOKEN
+  --show-conversion-proposal=PROPOSAL_ID
+  --list-conversion-proposal-reviews=PROPOSAL_ID
+  --list-conversion-proposals-by-review-status=STATUS
+
+Do not require all optional metadata when it is not needed.
+
+Do require enough request identity to make retries safe.
+
+CLI output should be deterministic and script-friendly.
+
+Include explicit result markers such as:
+
+- CONVERSION_PROPOSAL_REVIEW_RECORDED
+- CONVERSION_PROPOSAL_REVIEW_ALREADY_RECORDED
+- CONVERSION_PROPOSAL_NOT_FOUND
+- CONVERSION_PROPOSAL_REVIEW_INVALID
+
+Use existing terminal formatting conventions where appropriate, but retain stable plain-text fields.
+
+J. Migration
+
+Create the next sequential migration after 036.
+
+The migration must:
+
+- create the review-decision table,
+- add foreign key protection to the proposal table,
+- add required uniqueness constraints,
+- add useful indexes for proposal history and current-disposition lookup,
+- enforce decision-value validity,
+- enforce text length and non-empty rules,
+- establish runtime grants,
+- revoke mutation privileges,
+- include comments documenting append-only semantics where project conventions support comments.
+
+Do not alter migration 036 unless a concrete defect requires it.
+
+Do not edit historical migrations merely to make tests easier.
+
+K. Current disposition query
+
+Implement current disposition deterministically.
+
+If using latest-decision-wins, define “latest” using an unambiguous database ordering:
+
+1. decision timestamp only if guaranteed unique and server-generated, or
+2. preferably monotonically increasing review decision primary key, with timestamp as descriptive metadata.
+
+Avoid nondeterministic ordering when timestamps tie.
+
+A view may be appropriate if it improves clarity and consistency, but do not add one unless it materially simplifies repository behavior and remains migration-safe.
+
+L. Tests
+
+Add or extend tests covering at least:
+
+Schema and migration:
+- table and column definitions,
+- foreign key behavior,
+- decision check constraint,
+- unique idempotency constraint,
+- indexes,
+- grants and revocations,
+- inability of runtime role to UPDATE/DELETE,
+- rollback behavior.
+
+Repository:
+- approve an existing proposal,
+- reject an existing proposal,
+- read decision history,
+- derive pending_review with no decisions,
+- derive approved after approval,
+- derive rejected after rejection,
+- reversal behavior if supported,
+- exact deterministic ordering,
+- proposal-not-found behavior,
+- invalid decision rejection,
+- optional metadata behavior,
+- text-length limits,
+- transaction rollback,
+- idempotent retry,
+- concurrent identical requests,
+- concurrent conflicting requests,
+- foreign key enforcement,
+- immutable decision rows.
+
+CLI:
+- successful approval,
+- successful rejection,
+- duplicate/idempotent replay,
+- missing proposal,
+- invalid arguments,
+- required request identity,
+- inspection output,
+- no experiment creation or queueing side effects.
+
+Regression:
+- existing Phase 4A tests,
+- existing Phase 4B tests,
+- Phase 4C conversion tests,
+- Step 2 migration tests,
+- Step 2 repository tests,
+- clean LSTM Release build.
+
+Use isolated PostgreSQL only.
+
+The tests must not depend on the active LSTM database or scheduler.
+
+M. Documentation
+
+Update:
+
+- Database/README.md,
+- Phase 4C conversion documentation,
+- persistence documentation,
+- recommendation engine architecture volume,
+- CLI documentation or help text,
+- migration inventory.
+
+Document clearly:
+
+- proposals remain immutable,
+- review decisions are append-only,
+- approval is manual,
+- approval does not execute conversion,
+- latest-decision semantics if reversals are supported,
+- idempotency behavior,
+- concurrency ordering,
+- runtime privilege boundaries,
+- the future step that will perform actual conversion remains outside Step 3.
+
+IMPLEMENTATION PROCESS
+
+1. Inspect before editing
+
+Review:
+
+- migration 036,
+- ExperimentRecommendationConversionRepository,
+- conversion proposal domain types,
+- current CLI dispatch and formatting,
+- existing repository and migration test conventions,
+- PostgreSQL connection construction,
+- role/grant conventions,
+- all Phase 4C documentation.
+
+2. Present the design briefly before implementing
+
+State:
+
+- chosen review history model,
+- idempotency strategy,
+- concurrency strategy,
+- current-disposition rule,
+- schema shape,
+- why the design preserves Step 3 boundaries.
+
+3. Implement the smallest coherent Step 3
+
+Do not redesign Step 2.
+
+Do not add future execution behavior.
+
+Do not introduce generalized workflow frameworks unless clearly required.
+
+4. Verify thoroughly
+
+Run:
+
+- strict compilation with warnings as errors,
+- all relevant pure C++ tests,
+- migration tests against isolated PostgreSQL,
+- repository tests against isolated PostgreSQL,
+- CLI tests,
+- clean LSTM Release build.
+
+If PostgreSQL tests cannot be run automatically, provide exact commands and state precisely what remains unverified.
+
+5. Review the final diff
+
+Before reporting completion, inspect:
+
+- git diff --check,
+- git status --short,
+- changed migration and privilege behavior,
+- absence of experiment/scheduler mutations,
+- documentation consistency,
+- project file inclusion.
+
+DELIVERABLE FORMAT
+
+Return:
+
+1. Summary
+2. Design decisions
+3. Files changed
+4. Schema and migration behavior
+5. Repository behavior
+6. CLI behavior
+7. Idempotency and concurrency guarantees
+8. Test and build results
+9. Phase-boundary audit
+10. Remaining risks or unverified items
+11. Final verdict:
+   - PASS
+   - PASS WITH FIXES
+   - FAIL
+
+Do not claim tests passed unless they were actually executed successfully.
+
+Do not commit changes unless explicitly asked.
+
+REASONING
+
+Phase 4C Step 2 made conversion proposals durable and immutable, but persistence alone does not provide a safe operational workflow. Before any later phase may create experiments, the system needs an explicit human decision boundary that is durable, inspectable, idempotent, and auditable.
+
+An append-only review-decision table is preferable to mutable approval columns because it preserves history. A mutable approved flag would lose who made the decision, why it was made, whether it was reversed, and how concurrent or repeated requests were handled. The audit record becomes especially important once later steps are allowed to convert an approved proposal into an experiment.
+
+The proposal itself must remain immutable. A review is a statement about one exact persisted proposal, not a mutation of that proposal. Referencing the proposal primary key prevents a later review from accidentally applying to a regenerated recommendation or to a hash collision.
+
+Approval must remain separate from execution. Combining approval with experiment creation would make it difficult to inspect, test, retry, or reverse a human decision without risking scheduler side effects. Step 3 therefore ends after durable review persistence. A later step can consume approved proposals under its own transactional safeguards and explicit operator command.
+
+Idempotency is necessary because a CLI command may be retried after a timeout or uncertain response. Without request identity, a retry could create duplicate audit rows. At the same time, legitimate reversals must remain possible. Therefore, the implementation must distinguish replay of the same request from a new deliberate decision.
+
+Database constraints and transactions must define concurrency behavior. Process-local synchronization is insufficient because multiple CLI processes may operate simultaneously. Identical concurrent requests should converge to one durable decision. Conflicting decisions should both remain auditable or follow another explicitly documented deterministic rule; the current disposition must never depend on unspecified row ordering.
+
+Runtime permissions should continue the Step 2 pattern: INSERT and SELECT are allowed, while UPDATE and DELETE are denied. This makes the append-only guarantee enforceable at the database boundary rather than merely by convention. Tests should verify the actual PostgreSQL denial while remaining portable across the observed libpqxx behavior where SQLSTATE may be absent.
+
+This step creates the durable human-governance boundary required before actual conversion. It should not yet create experiments, queue work, or involve the scheduler. Keeping that boundary strict limits regression risk and makes the later execution step easier to reason about and audit.

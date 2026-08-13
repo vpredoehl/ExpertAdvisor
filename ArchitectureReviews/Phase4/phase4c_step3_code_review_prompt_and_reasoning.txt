@@ -1,0 +1,614 @@
+PHASE 4C STEP 3 — FOCUSED CODE REVIEW AND VERIFICATION
+
+Use high reasoning.
+
+Repository:
+- ExpertAdvisor
+- Review the current branch and current uncommitted state only.
+- The current HEAD should remain unchanged unless this review identifies a concrete defect that must be fixed.
+- Preserve all completed Phase 4A, Phase 4B, Phase 4C Step 1, and Phase 4C Step 2 behavior.
+- Do not redesign the recommendation or conversion subsystems.
+- Do not implement Phase 4C Step 4 or any experiment-creation behavior.
+- Do not interrupt, launch, resume, cancel, pause, retry, or otherwise affect running or pending experiments.
+- Do not run PostgreSQL tests against the active LSTM production/research database.
+- Any PostgreSQL integration testing must use a separate disposable database and isolated schema.
+
+GOAL
+
+Perform a focused code review and verification of the completed Phase 4C Step 3 implementation:
+
+“Manual Review and Approval Workflow for Durable Conversion Proposals.”
+
+Review the actual current diff for correctness, consistency, regression risk, maintainability, database safety, CLI safety, test quality, and readiness to commit.
+
+Do not merely summarize the implementation transcript. Inspect the actual source, migration, repository, service, CLI, tests, Xcode project membership, and documentation.
+
+Make changes only when the review identifies a concrete defect, missing verification, unsafe privilege, concurrency flaw, inconsistent validation rule, misleading documentation, test weakness, build integration problem, or violation of the Step 3 boundary.
+
+PHASE BOUNDARY
+
+Phase 4C Step 3 must remain administrative and advisory only.
+
+It may:
+
+- read persisted conversion proposals,
+- record explicit manual approve/reject decisions,
+- preserve append-only decision history,
+- derive current review disposition,
+- support deliberate reversals through new decisions,
+- provide idempotent manual CLI operations,
+- list and inspect proposals and review history.
+
+It must not:
+
+- create an experiment,
+- insert into the experiment table,
+- queue an experiment,
+- modify experiment status or phase,
+- launch training, inference, or analysis,
+- invoke scheduler behavior,
+- resume, retry, pause, cancel, or continue an experiment,
+- regenerate or mutate a conversion proposal,
+- score, evaluate, or rerank recommendations,
+- automatically approve anything,
+- convert approval into execution,
+- add workers, automation, polling, or background processing,
+- weaken Phase 3 continuation boundaries,
+- modify the active scheduler’s operational behavior.
+
+Approval must mean only:
+
+“An operator durably approved this exact persisted proposal for possible conversion in a later phase.”
+
+It must never mean:
+
+“Create or queue an experiment now.”
+
+PRIMARY REVIEW AREAS
+
+1. DATABASE MIGRATION 037
+
+Review:
+
+Database/migrations/037_experiment_recommendation_conversion_review.sql
+
+Verify:
+
+- migration number and naming are correct,
+- migration is additive and does not rewrite historical migrations,
+- table naming follows project conventions,
+- proposal foreign key references the exact Step 2 proposal primary key,
+- ON DELETE behavior is restrictive,
+- decision values are limited to approve/reject,
+- request identity uses bytewise collation,
+- request-ID validation matches C++ validation exactly,
+- operator and reason validation matches C++ normalization exactly,
+- byte limits are enforced consistently,
+- generated decision ID is positive,
+- timestamps are server-generated,
+- uniqueness is exactly per proposal and request ID,
+- indexes support proposal history and latest-decision queries,
+- repeated migration execution is safe if repository conventions require idempotency,
+- comments accurately describe append-only, non-executing semantics.
+
+Pay special attention to privilege boundaries.
+
+Confirm that runtime role pqxx:
+
+- can SELECT review decisions,
+- can INSERT only the intended decision payload columns,
+- cannot supply or overwrite the generated decision ID,
+- cannot supply or overwrite server timestamps,
+- cannot UPDATE,
+- cannot DELETE,
+- cannot TRUNCATE,
+- cannot mutate conversion proposal rows,
+- has only the sequence rights required for generated IDs.
+
+Determine whether column-level INSERT plus sequence usage behaves correctly under PostgreSQL and libpqxx for the repository’s INSERT statement.
+
+Check for privilege inheritance or PUBLIC privileges that could accidentally re-enable mutation.
+
+2. CURRENT DISPOSITION ORDERING
+
+The intended rule is:
+
+- no decisions → pending_review
+- greatest review-decision primary key with approve → approved
+- greatest review-decision primary key with reject → rejected
+
+Verify that every repository and CLI query uses this rule consistently.
+
+Check:
+
+- no query orders only by timestamp,
+- no timestamp tie can create nondeterminism,
+- no caller can forge the ordering ID,
+- sequences and concurrent transactions cannot create an unexpected semantic gap,
+- rollback behavior does not cause an uncommitted decision to become current,
+- committed rows with different request IDs remain auditable,
+- the documented “latest decision wins” behavior matches actual SQL.
+
+Evaluate whether sequence allocation order versus transaction commit order creates a semantic concern.
+
+For example:
+
+- Transaction A obtains decision ID 100 but commits after transaction B.
+- Transaction B obtains decision ID 101 and commits first.
+- Current disposition remains ID 101 even after A later commits.
+
+Determine whether this is acceptable and correctly documented as sequence-ID order rather than commit order. If it is acceptable, explicitly confirm it. If it is not acceptable, identify the smallest safe fix without redesigning the subsystem.
+
+3. IDEMPOTENCY AND DUPLICATE SEMANTICS
+
+Inspect:
+
+- unique constraint,
+- INSERT ... ON CONFLICT behavior,
+- replay lookup,
+- exact payload comparison,
+- conflict reporting.
+
+Verify:
+
+- same proposal + same request ID + identical normalized payload:
+  returns the original row as an idempotent replay,
+- same proposal + same request ID + different decision:
+  returns a deterministic conflict,
+- same proposal + same request ID + different operator or reason:
+  returns a deterministic conflict,
+- same request ID on a different proposal:
+  is allowed,
+- new request ID on the same proposal:
+  creates a deliberate new decision,
+- a reversal requires a new request ID,
+- concurrent identical requests produce one durable row,
+- concurrent identical requests both receive equivalent deterministic results,
+- no race-prone SELECT-then-INSERT window exists,
+- ON CONFLICT does not hide unrelated database failures,
+- corrupted or noncanonical persisted data is not silently accepted.
+
+Review whether optional metadata comparison is exact and stable after normalization.
+
+4. REPOSITORY TRANSACTIONS AND ERROR MODEL
+
+Inspect:
+
+- ExperimentRecommendationConversionProposalReviewRepository.hpp
+- ExperimentRecommendationConversionProposalReviewRepository.cpp
+
+Verify:
+
+- proposal existence checks are correct,
+- transactions are appropriately scoped,
+- proposal-not-found behavior is deterministic,
+- transaction commit/rollback behavior is correct,
+- read transactions are used consistently,
+- SQL is parameterized,
+- no user data is concatenated into SQL,
+- result mapping validates database invariants,
+- list limits are bounded,
+- ordering is deterministic,
+- not-found, invalid request, idempotent replay, conflict, and database failure remain distinguishable,
+- repository logic contains no CLI formatting,
+- repository logic has no scheduler or experiment-creation dependency.
+
+Review this specific sequence carefully:
+
+1. SELECT proposal existence.
+2. INSERT ... ON CONFLICT DO NOTHING RETURNING.
+3. SELECT existing row after conflict.
+4. Compare persisted payload.
+
+Confirm that PostgreSQL visibility and unique-index waiting semantics make the post-conflict SELECT reliable under concurrent identical requests.
+
+5. VALIDATION CONSISTENCY
+
+Inspect:
+
+- ExperimentRecommendationConversionProposalReview.hpp
+- ExperimentRecommendationConversionProposalReview.cpp
+- migration 037
+- CLI parsing and service paths
+- tests and documentation
+
+Verify exact agreement for:
+
+- valid decision strings,
+- valid disposition strings,
+- request-ID first character,
+- request-ID permitted later characters,
+- request-ID length measured in bytes,
+- ASCII trimming behavior,
+- operator length,
+- reason length,
+- NULL versus empty string,
+- whitespace-only metadata,
+- canonical stored values,
+- non-ASCII behavior,
+- control-character behavior.
+
+Identify any cross-layer mismatch where:
+
+- C++ accepts what PostgreSQL rejects,
+- PostgreSQL accepts what repository mapping rejects,
+- CLI documentation permits what implementation rejects,
+- char signedness or locale affects ASCII validation,
+- character count is confused with byte count.
+
+6. CLI PARSING, ROUTING, AND OUTPUT
+
+Inspect the actual changes in ExperimentScheduler.cpp and the review service.
+
+Verify:
+
+- approve and reject are mutually exclusive,
+- request ID is required for decision writes,
+- operator/reason options cannot appear without a decision action,
+- list limit is accepted only for list commands,
+- review status accepts only pending_review/approved/rejected,
+- standalone command counting includes every new command exactly once,
+- no review command can be combined with queue, retry, resume, scheduler, or experiment-control commands,
+- dispatch occurs through the intended standalone recommendation command path,
+- no fallthrough reaches scheduler execution,
+- database connection is not opened for parser-invalid commands,
+- help text matches actual syntax,
+- both --option=value and --option value forms work consistently if project conventions support both.
+
+Review machine-readable output markers:
+
+- CONVERSION_PROPOSAL_REVIEW_RECORDED
+- CONVERSION_PROPOSAL_REVIEW_ALREADY_RECORDED
+- CONVERSION_PROPOSAL_NOT_FOUND
+- CONVERSION_PROPOSAL_REVIEW_INVALID
+- CONVERSION_PROPOSAL_REVIEW_CONFLICT
+- CONVERSION_PROPOSAL_REVIEW
+- list/history completion markers
+
+Verify:
+
+- fields are stable and script-friendly,
+- untrusted text is escaped with existing conventions,
+- NULL representation is consistent,
+- exit codes are deterministic,
+- conflict is distinguishable from generic failure,
+- output never claims an experiment was created or queued,
+- rejection output does not use approval-specific language,
+- human-readable lines do not undermine machine parsing conventions.
+
+7. IMMUTABILITY AND AUDIT SAFETY
+
+Verify at both repository and database levels:
+
+- proposal rows remain immutable,
+- review rows remain append-only,
+- runtime cannot rewrite decision type,
+- runtime cannot rewrite request ID,
+- runtime cannot rewrite operator/reason,
+- runtime cannot rewrite timestamps,
+- runtime cannot delete history,
+- runtime cannot truncate history,
+- runtime cannot forge a high decision ID,
+- runtime cannot delete a proposal referenced by review history,
+- no triggers or cascades mutate source recommendation, experiment, model, score, evaluation, or ranking records.
+
+Review whether ownership, PUBLIC privileges, role membership, or sequence grants undermine these protections.
+
+8. TEST QUALITY
+
+Inspect:
+
+- Tests/ExperimentRecommendationConversionProposalReviewTests.cpp
+- Tests/ExperimentRecommendationConversionProposalReviewMigrationTests.sql
+- Tests/ExperimentRecommendationConversionProposalReviewRepositoryTests.cpp
+- any CLI/parser tests added or reused
+
+Verify coverage for:
+
+Schema and migration:
+- table and columns,
+- primary key,
+- positive ID constraint,
+- restrictive foreign key,
+- decision CHECK,
+- request-ID CHECK,
+- canonical metadata CHECKs,
+- unique proposal/request key,
+- bytewise collation,
+- indexes,
+- runtime SELECT,
+- allowed payload-column INSERT,
+- forbidden generated-column INSERT,
+- sequence privilege,
+- forbidden UPDATE/DELETE/TRUNCATE,
+- proposal immutability,
+- migration reapplication,
+- rollback or isolated schema cleanup.
+
+Repository:
+- pending_review with no decisions,
+- approve,
+- reject,
+- reversal,
+- deterministic history order,
+- latest-decision current state,
+- exact replay,
+- conflicting replay,
+- same token on another proposal,
+- optional NULL metadata,
+- missing proposal,
+- invalid decision constraint,
+- FK constraint,
+- noncanonical metadata rejection,
+- transaction rollback,
+- concurrent identical requests,
+- concurrent conflicting decisions,
+- immutable review rows,
+- forged-order attempt,
+- invalid limits,
+- no experiment side effects.
+
+CLI:
+- successful approval,
+- successful rejection,
+- duplicate replay,
+- conflict,
+- missing proposal,
+- missing request ID,
+- orphan metadata options,
+- invalid status,
+- conflicting actions,
+- show output,
+- history output,
+- status-filtered list output,
+- safe escaping,
+- exit codes,
+- no experiment or scheduler side effects.
+
+Do not accept tests that merely compile when behavioral execution is required.
+
+For PostgreSQL permission checks, preserve the narrow portability fallback:
+
+- prefer SQLSTATE 42501,
+- only if sqlstate() is empty, accept an error message containing “permission denied,”
+- do not accept arbitrary SQL errors.
+
+Identify missing assertions, false positives, environment assumptions, brittle timing, or concurrency tests that do not prove what they claim.
+
+9. POSTGRESQL INTEGRATION VERIFICATION
+
+Use only a disposable database and isolated schema.
+
+Never connect to or migrate the active LSTM database.
+
+If an existing disposable test database is available, use it.
+
+Recommended environment shape:
+
+- LSTM_TEST_DB_NAME must be set,
+- reject LSTM_TEST_DB_NAME=LSTM,
+- use an isolated per-process schema,
+- owner/admin connection applies migrations and fixtures,
+- pqxx runtime connection exercises actual runtime privileges.
+
+Run:
+
+- migration 036,
+- migration 037,
+- migration SQL tests,
+- Step 2 repository tests as regression,
+- Step 3 repository tests,
+- database-backed CLI tests if available.
+
+Verify cleanup even after failures.
+
+If PostgreSQL execution is blocked by the environment, do not claim it passed. Provide exact commands for the user to run locally.
+
+10. BUILD AND PROJECT INTEGRATION
+
+Verify:
+
+- new .cpp files are included in all intended Xcode targets,
+- no duplicate build-file membership causes duplicate symbols,
+- headers are referenced correctly,
+- Debug/Release target membership is consistent with existing Step 2 files,
+- project.pbxproj passes plutil validation,
+- strict C++20 compilation passes with:
+  -Wall -Wextra -Wpedantic -Werror,
+- third-party headers are treated as system headers where necessary,
+- clean LSTM Release build succeeds,
+- no build setting is weakened,
+- no Fast Math or unrelated compiler setting is changed,
+- git diff --check passes.
+
+If the Metal toolchain blocks a clean build, distinguish:
+
+- a source-code build failure,
+- a project-membership failure,
+- an external Metal toolchain failure.
+
+Do not classify an external toolchain failure as a code pass without confirming that the new C++ units compiled successfully in an earlier or targeted build.
+
+11. REGRESSION AND PHASE-BOUNDARY AUDIT
+
+Search the diff and relevant call graph for:
+
+- INSERT INTO experiment,
+- UPDATE experiment,
+- queue operations,
+- scheduler launch,
+- continuation queueing,
+- training/inference/analysis process creation,
+- mutation of recommendation, score, evaluation, ranking, or proposal identity,
+- background scans,
+- automatic approval.
+
+Confirm that Step 3 added only:
+
+- domain validation,
+- migration,
+- repository,
+- manual service/CLI,
+- tests,
+- documentation,
+- project membership.
+
+Confirm no active experiment or scheduler command was run during verification.
+
+12. DOCUMENTATION CONSISTENCY
+
+Review:
+
+- Database/README.md
+- docs/Phase4CExperimentRecommendationConversion.rst
+- docs/Phase4CExperimentRecommendationConversionPersistence.rst
+- docs/Phase4CExperimentRecommendationConversionProposalReview.rst
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+- CLI help text
+
+Verify documentation accurately states:
+
+- proposals are immutable,
+- decisions are append-only,
+- approval is manual,
+- approval does not execute conversion,
+- reversals require a new request ID,
+- identical retries are idempotent,
+- token reuse with changed payload conflicts,
+- greatest decision ID defines current disposition,
+- timestamps are descriptive,
+- concurrent different request IDs may both persist,
+- runtime privileges are column-limited,
+- generated IDs/timestamps are not caller-writable,
+- Phase 4C Step 4 or later remains responsible for actual conversion.
+
+Pay special attention to whether “latest,” “ordering,” or “concurrent” wording incorrectly implies commit-time order rather than generated decision-ID order.
+
+REVIEW PROCESS
+
+1. Inspect first.
+
+Run at minimum:
+
+git status --short
+git diff --check
+git diff --stat
+git diff
+git log -3 --oneline
+
+Inspect all Step 3 files and the relevant Step 2 repository/migration conventions.
+
+2. Produce a concise pre-fix review.
+
+Before changing code, report concrete findings with:
+
+- severity,
+- file and line,
+- why it matters,
+- smallest appropriate fix.
+
+Do not edit based on taste alone.
+
+3. Apply only justified fixes.
+
+Allowed fixes include:
+
+- privilege corrections,
+- concurrency correctness,
+- validation consistency,
+- deterministic ordering,
+- parser/dispatch safety,
+- test defects,
+- misleading docs,
+- missing project membership,
+- build errors caused by Step 3.
+
+Do not add future execution behavior.
+
+4. Verify.
+
+Run all safe pure tests, strict compilation, parser tests, project validation, and clean Release build.
+
+Run PostgreSQL tests only on isolated disposable infrastructure.
+
+5. Final diff review.
+
+Confirm:
+
+- no unrelated changes,
+- no scheduler/experiment side effects,
+- migration and docs agree,
+- project membership is correct,
+- tests prove the intended invariants,
+- git diff --check is clean.
+
+DELIVERABLE FORMAT
+
+Return:
+
+1. Executive summary
+2. Findings, ordered by severity
+3. Fixes applied
+4. Database and privilege review
+5. Idempotency and concurrency review
+6. Repository review
+7. CLI parsing and routing review
+8. Test review
+9. Build and project integration results
+10. PostgreSQL integration results
+11. Phase-boundary audit
+12. Remaining risks or unverified items
+13. Exact commands needed for any remaining local verification
+14. Final verdict:
+   - PASS
+   - PASS WITH FIXES
+   - FAIL
+
+VERDICT RULES
+
+PASS:
+- no material defects remain,
+- all required tests and builds actually pass,
+- PostgreSQL behavior is verified on isolated infrastructure,
+- phase boundary is preserved.
+
+PASS WITH FIXES:
+- concrete defects were found and corrected,
+- or implementation appears correct but required PostgreSQL/build verification remains externally blocked,
+- clearly state what must still be run before commit.
+
+FAIL:
+- unresolved correctness, concurrency, privilege, immutability, CLI-routing, or phase-boundary defect remains,
+- or the implementation creates/queues/modifies experiments,
+- or tests falsely claim safety.
+
+Do not claim a test passed unless it was actually executed successfully.
+
+Do not commit changes unless explicitly asked.
+
+REASONING
+
+Phase 4C Step 3 creates the durable human-governance boundary that will eventually authorize later experiment conversion. That boundary must be stricter than an ordinary UI flag because it becomes audit evidence for a potentially consequential future action.
+
+The primary risks are not limited to basic SQL correctness. They include:
+
+- allowing runtime SQL to forge decision ordering,
+- confusing sequence-allocation order with commit order,
+- accepting inconsistent canonical values across C++ and PostgreSQL,
+- creating duplicate audit rows during retries,
+- losing deterministic behavior under concurrent requests,
+- routing a supposedly advisory CLI command into scheduler behavior,
+- weakening proposal immutability,
+- and overstating verification when PostgreSQL tests were not executed.
+
+The append-only model is appropriate because it preserves approvals, rejections, reversals, operator identity, reasons, and retry semantics without rewriting history. The proposal row remains the exact immutable object under review.
+
+The request token is central to safe retries. A repeated command after a timeout must return the same durable decision rather than creating another row. At the same time, a later deliberate reversal must remain possible. Uniqueness scoped to proposal plus request ID provides that distinction, provided exact normalized payload comparison is correct.
+
+Database constraints and privileges must be the authority. Repository conventions alone cannot prevent another runtime process from issuing raw SQL. In particular, allowing the runtime role to write the ordering primary key would undermine the “greatest decision ID wins” rule. Column-level insertion and server-generated ordering fields therefore deserve explicit review and testing.
+
+Concurrency requires careful inspection. PostgreSQL unique-index behavior should make identical concurrent retries converge safely, but the review must verify the actual INSERT/ON CONFLICT/readback sequence. Conflicting decisions with distinct request IDs may both persist, so the resulting disposition must follow one documented deterministic order. If that order is generated decision ID rather than transaction commit order, the implementation and documentation must say so precisely.
+
+CLI safety matters because ExperimentScheduler.cpp is the central executable entry point. Adding review commands there is acceptable only if standalone command counting, validation, and dispatch prevent review actions from mixing with scheduler or experiment-control operations.
+
+Finally, the implementation transcript reported environmental blockers for PostgreSQL and a final Metal rebuild. Those are not necessarily code defects, but they leave important behavior unverified. This review must distinguish source correctness from environment limitations and provide exact local commands for closing any remaining verification gap before commit.

@@ -1,0 +1,321 @@
+Use model_reasoning_effort="xhigh".
+
+Perform a focused correction pass followed immediately by an independent architecture and implementation review of Phase 6B.
+
+Do not redesign Phase 6B.
+
+Do not add new Phase 6 capabilities.
+
+Modify files only where a concrete defect is found.
+
+Repository rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Preserve the current branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not stage files.
+- Preserve DerivedData.
+- Reuse existing Release build products.
+- Use Release builds only.
+
+Current state
+
+Phase 6A is committed and independently reviewed.
+
+Phase 6B implementation completed and reported:
+
+READY FOR INDEPENDENT REVIEW
+
+A subsequent analysis identified one concrete documentation defect:
+
+- docs/architecture/adr/README.md contains the ADR-0007 index row twice.
+- docs/architecture/adr/README.md contains the version 1.3.0 revision-history row twice.
+
+Required correction
+
+Before beginning the independent review:
+
+1. Remove exactly one duplicate ADR-0007 index row.
+2. Remove exactly one duplicate version 1.3.0 revision-history row.
+3. Make no other correction unless the independent review finds a concrete defect.
+
+After that narrow correction, perform an independent review as if you did not implement Phase 6B.
+
+Primary review question
+
+Does the corrected Phase 6B implementation safely persist and preview immutable Phase 6A follow-up proposals without introducing approval, activation, execution, experiment-creation, queueing, scheduler, or follow-up authorization capability?
+
+Review scope
+
+Review the complete current Phase 6B diff, including:
+
+- Database/migrations/042_experiment_recommendation_campaign_follow_up_proposal.sql
+- Sources/ExperimentRecommendationCampaignFollowUpProposal.hpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposal.cpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.hpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.cpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalPreview.hpp
+- Sources/ExperimentRecommendationCampaignFollowUpProposalPreview.cpp
+- Tests/ExperimentRecommendationCampaignFollowUpProposalMigrationTests.sql
+- Tests/ExperimentRecommendationCampaignFollowUpProposalRepositoryTests.cpp
+- docs/Phase6BRecommendationCampaignFollowUpProposalPersistence.rst
+- docs/architecture/adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md
+- docs/architecture/adr/README.md
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+- docs/architecture/Volume_XII_Database.md
+- Database/README.md
+- ExpertAdvisor.xcodeproj/project.pbxproj
+
+Focus areas
+
+1. Architectural boundary
+
+Verify Phase 6B adds only:
+
+- append-only persistence of immutable Phase 6A proposals;
+- exact reload of the original immutable proposal type;
+- read-only operator preview.
+
+Verify it adds no:
+
+- approval;
+- rejection workflow;
+- activation;
+- execution;
+- experiment creation;
+- recommendation creation;
+- scheduler integration;
+- queueing;
+- worker launch;
+- follow-up authorization;
+- campaign-success declaration.
+
+2. Phase 6A contract preservation
+
+Verify the Phase 6A public builder and canonical grammar remain unchanged unless a narrowly necessary hydration invariant was added.
+
+Verify:
+
+- proposal canonical text remains authoritative;
+- hash remains an accelerator only;
+- persistence metadata does not alter proposal identity;
+- reload reconstructs the same immutable typed value;
+- public mutability was not introduced;
+- constructor visibility was not broadly weakened.
+
+3. Hydration seam
+
+This is a highest-priority review item.
+
+Determine whether:
+
+- hydration is available only through a narrow private repository friend or equivalent restricted seam;
+- hydration reuses or enforces all Phase 6A invariants;
+- persisted canonical/hash fields are not blindly trusted;
+- the complete proposal canonical text is regenerated and compared;
+- member order, count, provenance, versions, eligibility, interpretation, and false authorization are validated;
+- malformed persisted rows fail closed;
+- repository metadata cannot enter the Phase 6A identity.
+
+4. Schema and migration
+
+Review migration 042 for:
+
+- additive-only behavior;
+- repeatability/idempotence;
+- exact `C` collation usage where byte identity matters;
+- primary keys, foreign keys, unique constraints, and indexes;
+- exact proposal/hash/collision-ordinal behavior;
+- ordered member constraints;
+- deferred complete-member-set enforcement;
+- append-only protections;
+- runtime privilege restrictions;
+- no changes to experiment or scheduler tables;
+- no hidden lifecycle or authority columns;
+- safe dependency on Phase 4D approval/materialization tables.
+
+Inspect deferred trigger behavior for:
+
+- zero members;
+- missing members;
+- duplicate ordinals;
+- wrong member count;
+- rollback;
+- exact replay;
+- concurrent inserts.
+
+5. Identity and collision handling
+
+Verify:
+
+- canonical text equality is authoritative;
+- hash collisions do not merge distinct canonical identities;
+- exact canonical replay is idempotent;
+- collision ordinal is outside identity;
+- locking strategy prevents duplicate or racing inserts;
+- persisted row ID, timestamp, and collision ordinal cannot affect equality;
+- identity lookup never treats hash alone as sufficient.
+
+6. Repository behavior
+
+Verify:
+
+- transaction ownership is correct and explicit;
+- persistence is atomic;
+- partial manifests cannot commit;
+- exact replay returns existing-identical behavior;
+- conflicting persistence fails clearly;
+- load-by-ID and load-by-identity validate fully;
+- errors are deterministic and fail closed;
+- no owner-independent mutation path exists through runtime repository APIs.
+
+7. Preview safety
+
+Verify preview:
+
+- uses REPEATABLE READ;
+- uses READ ONLY;
+- acquires no advisory locks or row locks;
+- inserts, updates, and deletes nothing;
+- advances no sequences;
+- has no scheduler or worker behavior;
+- clearly reports advisory/non-authoritative status;
+- preserves complete provenance;
+- does not parse display text back into authority;
+- handles large canonical output safely.
+
+8. Tests
+
+Determine whether tests genuinely prove the behavior rather than mirror implementation.
+
+Look for:
+
+- exact round-trip equality;
+- canonical/hash preservation;
+- immutable/non-assignable reload;
+- exact duplicate replay;
+- deliberate same-hash/different-canonical collision case;
+- duplicate persisted identity rejection;
+- malformed row rejection;
+- member completeness enforcement;
+- ordering enforcement;
+- privilege assertions;
+- trigger assertions;
+- repeatable migration;
+- preview read-only transaction evidence;
+- sequence sentinel verification;
+- failure rollback;
+- concurrent behavior where practical.
+
+Identify any missing negative case that would block commit.
+
+9. Documentation
+
+Verify:
+
+- ADR-0007 is present exactly once in the ADR index;
+- version 1.3.0 appears exactly once in revision history;
+- ADR-0007 authorizes only Phase 6B persistence and preview;
+- documentation does not authorize approval, activation, execution, or scheduler work;
+- Volume VIII and Volume XII remain consistent;
+- Database README accurately describes migration 042;
+- Phase 6A documentation remains truthful after adding persistence;
+- terminology clearly distinguishes Phase 4D materialization from Phase 6 follow-up proposal persistence.
+
+10. Xcode/project integration
+
+Verify:
+
+- all intended new source files are included correctly;
+- no duplicate build-file references;
+- no unintended target membership;
+- plist/project validation passes;
+- incremental arm64 Release build succeeds.
+
+Verification
+
+Run, at minimum:
+
+- focused Phase 6B repository tests;
+- Phase 6B migration tests;
+- Phase 6B preview tests;
+- Phase 6A focused tests;
+- Phase 5A assessment tests;
+- Phase 5B integration/reporting tests;
+- Phase 5C policy tests;
+- relevant Phase 4D materialization tests;
+- Xcode project plist/list validation;
+- incremental macOS arm64 LSTM Release build;
+- git diff --check;
+- git diff --cached --check;
+- untracked-file whitespace checks.
+
+Use a disposable verification database only.
+
+Do not apply migration 042 to the production LSTM database.
+
+Treat unchanged project/toolchain warnings as environmental if they remain non-fatal.
+
+Correction policy
+
+Beyond removing the two known duplicate documentation rows:
+
+- make a change only for a concrete correctness, safety, identity, migration, test, documentation, or build defect;
+- do not refactor for style;
+- do not add future Phase 6 work;
+- do not expand scope.
+
+If additional corrections are made:
+
+- explain each defect;
+- explain why it is commit-blocking;
+- rerun affected verification and regressions.
+
+Worktree audit
+
+Confirm at the end:
+
+- branch unchanged;
+- HEAD unchanged;
+- no commit created;
+- nothing staged;
+- only intended Phase 6B files changed;
+- no scheduler source modified;
+- no production database migration applied;
+- disposable database removed;
+- DerivedData preserved.
+
+Deliverable
+
+Provide:
+
+1. Executive summary.
+2. Known duplicate correction performed.
+3. Architecture assessment.
+4. Phase 6A contract-preservation assessment.
+5. Hydration-seam assessment.
+6. Schema and migration assessment.
+7. Identity and collision-handling assessment.
+8. Repository assessment.
+9. Preview safety assessment.
+10. Test assessment.
+11. Documentation assessment.
+12. Xcode/build assessment.
+13. Verification results.
+14. Worktree audit.
+15. Mandatory corrections made.
+16. Optional improvements.
+17. Commit recommendation.
+
+Conclude with exactly one of:
+
+READY TO COMMIT
+
+or
+
+NOT READY TO COMMIT

@@ -1,0 +1,503 @@
+Using High reasoning, perform an independent, focused code review of the completed Phase 4B Step 2 implementation for advisory recommendation ranking and comparison.
+
+CONTEXT
+
+The implementation is already committed locally as:
+
+745f1864d28611db115181cc147376ee00665067
+phase4b: add advisory recommendation ranking and comparison
+
+The working tree should initially be clean.
+
+This task is a post-implementation review and hardening pass. Review the actual commit and current repository state rather than relying on the prior implementation summary.
+
+IMPORTANT COMMIT INSTRUCTION
+
+Do not create a new commit.
+
+If you make justified corrections, leave the changes uncommitted so I can amend the existing Step 2 commit myself with:
+
+git commit --amend
+
+Do not push, merge, rebase, reset, or rewrite history.
+
+GOAL
+
+Determine whether Phase 4B Step 2 is correct, internally consistent, regression-safe, maintainable, and ready to remain as the completed Step 2 implementation.
+
+Inspect the actual diff introduced by commit 745f1864d28611db115181cc147376ee00665067, including:
+
+- ranking domain and policy logic
+- canonical identity and hashing
+- snapshot and membership persistence
+- PostgreSQL migration 035
+- runtime privileges and database trigger behavior
+- repository concurrency and retry behavior
+- comparison semantics
+- CLI parsing, validation, mutual exclusion, and output
+- Xcode project membership
+- tests
+- implementation and architecture documentation
+- incidental changes to ExperimentScheduler.cpp
+
+Do not redesign the recommendation subsystem.
+
+Do not implement Phase 4B Step 3 or any later phase.
+
+Do not add approval, conversion, experiment creation, queueing, autonomous selection, scheduler execution, profitability scoring, expected-return estimation, Sharpe ratio, drawdown analysis, or trading behavior.
+
+PHASE BOUNDARY
+
+Phase 4B Step 2 must remain advisory only.
+
+It must not:
+
+- approve or reject recommendations
+- alter recommendation review status
+- create experiment rows
+- queue experiments
+- modify experiment status or phase
+- resume, retry, pause, cancel, or stop experiments
+- enter scheduler polling
+- change continuation behavior
+- modify source evaluation results or components
+- reinterpret rank as profitability or execution authority
+- select an arbitrary “latest” evaluation or ranking snapshot
+- introduce a second scoring formula
+
+AUTHORITATIVE DATA BOUNDARY
+
+Verify that persisted Phase 4B Step 1 evaluation results and components remain the sole scoring authority.
+
+Ranking may read recommendation rows only for immutable identity, scope, and display fields.
+
+Ranking must not reconstruct or recalculate Step 1 scores from:
+
+- experiment metrics
+- models
+- inference results
+- analysis results
+- checkpoint evaluations
+- continuation evidence
+- recommendation score history
+- live scheduler state
+
+REVIEW PRIORITIES
+
+1. Migration and schema correctness
+
+Review Database/migrations/035_experiment_recommendation_ranking.sql carefully.
+
+Verify:
+
+- migration numbering and compatibility with the migration framework
+- additive behavior
+- table, column, constraint, index, and foreign-key correctness
+- finite-score constraints, including NaN and infinity behavior in PostgreSQL
+- lifecycle and count invariants
+- bucket/rank/global-ordinal uniqueness
+- scope representation
+- canonical identity uniqueness
+- restrictive foreign-key choices
+- trigger correctness
+- trigger security and search-path safety
+- trigger locking behavior and deadlock risk
+- append-only member behavior
+- narrow snapshot update privileges
+- absence of runtime DELETE or broad UPDATE authority
+- no source-table mutation trigger
+- idempotent migration behavior where required by project conventions
+
+Pay special attention to whether runtime INSERT permission plus the enforcement trigger truly prevents:
+
+- appending members after snapshot completion
+- copying mismatched recommendation or evaluation identities
+- copying mismatched score, disposition, scope, provenance, or display values
+- inserting membership for a different evaluation than the stored member claims
+- bypassing invariants through NULL semantics or PostgreSQL special floating-point values
+
+2. Canonical identity and deterministic behavior
+
+Verify that canonical text, rather than its hash, is authoritative.
+
+Check that snapshot identity changes whenever any semantically relevant input changes, including:
+
+- ranking-policy canonical text or version
+- scope type or value
+- explicit global scope
+- requested limit
+- complete sorted source membership
+- evaluation-result identity
+
+Verify:
+
+- deterministic ordering
+- locale-independent formatting
+- stable NULL representation
+- stable floating-point canonicalization
+- no dependence on database arrival order
+- no hidden use of timestamps, row addresses, unordered-container iteration, or process-dependent state
+- hashes are used only as accelerators and collision-safe canonical equality remains authoritative
+
+3. Scope semantics
+
+Verify all seven supported scopes:
+
+- evaluation run
+- recommendation scan
+- symbol
+- horizon
+- family
+- symbol plus horizon
+- explicit global
+
+Confirm exactly one scope is required.
+
+Confirm non-evaluation-run scopes intentionally include all matching historical Step 1 evaluation-result rows and do not silently choose a latest result or collapse repeated evaluations.
+
+Check bounds and validation for:
+
+- identifiers
+- symbols
+- family names
+- control characters
+- leading/trailing whitespace
+- limits
+- oversized source membership
+- oversized output requests
+- comparison-component bounds
+
+4. Ranking policy and bucket correctness
+
+Verify the three buckets and their exact ordering:
+
+advisory_ready:
+- final score descending
+- semantic hash
+- evaluation identity hash
+- evaluation-result ID as uniqueness fallback
+
+blocked:
+- pending duplicate
+- active duplicate
+- completed duplicate
+- deterministic identity tie-breaks
+
+non_actionable:
+- insufficient evidence
+- stale evidence
+- unsupported evidence
+- invalid evidence
+- deterministic identity tie-breaks
+
+Check:
+
+- complete disposition mapping
+- no accidentally omitted persisted disposition
+- strict weak ordering
+- rank and global ordinal assignment
+- deterministic tie behavior
+- no false claim that blocked order is execution priority
+- no additional score component or weighting
+- top-positive and top-penalty component selection from persisted components only
+- deterministic component tie-breaking
+- duplicate component-name handling
+- component validation consistent with valid Step 1 evidence
+
+5. Repository persistence and transactionality
+
+Review snapshot creation, lookup, retry, member persistence, completion, and read paths.
+
+Verify:
+
+- one short transaction for complete membership
+- no partial member set after failure
+- exact persisted member-count and per-bucket count verification
+- correct handling of zero-member snapshots if allowed
+- exact retry comparison
+- mismatch detection
+- no N+1 read behavior
+- bounded list queries
+- correct component reconstruction
+- historical member display uses snapshot-time stored metadata where intended
+- source rows are never updated
+- runtime role uses only intended privileges
+- owner/test cleanup remains exact and isolated
+
+6. Concurrency and locking
+
+Independently validate the race fix involving identical concurrent ranking requests.
+
+Check whether the short FOR UPDATE lock on the ranking-owned snapshot:
+
+- prevents collisions on all secondary unique indexes
+- produces deterministic convergence
+- avoids inconsistent completion counts
+- handles one successful writer and one retrying writer correctly
+- avoids deadlocks with the member-insert trigger
+- avoids locking recommendation, evaluation, experiment, model, analysis, checkpoint, continuation, review, or scheduler rows
+- does not unnecessarily serialize unrelated snapshots
+
+Review transaction ordering carefully for lock inversion.
+
+Run repeated identical-request concurrency tests and unrelated-scope concurrency tests in disposable schemas or databases only.
+
+7. Comparison semantics
+
+Review both:
+
+- direct evaluation-result comparison
+- ranked-member comparison
+
+Verify comparability requires the intended authoritative compatibility fields, including:
+
+- recommendation/evaluation policy identity as appropriate
+- scoring policy canonical identity and version
+- evaluator version
+- family
+- final score availability
+
+Confirm:
+
+- incompatible cases return explicit incomparability states
+- no fabricated winner
+- score deltas use correct direction and NULL behavior
+- equal-score behavior is correct
+- persisted components align by stable component name
+- missing-side components are reported as NULL
+- no component is silently treated as zero unless explicitly required
+- ranked comparison uses ranks only for members in the same explicit snapshot
+- different snapshots produce incomparable_scope
+- no arbitrary latest snapshot is selected
+
+8. CLI integration
+
+Review all Step 2 CLI options and their integration in ExperimentScheduler.cpp.
+
+Verify:
+
+- help text
+- parsing
+- exact-one-command behavior
+- exact-one-scope behavior
+- malformed ID-pair handling
+- dry-run behavior
+- list/detail/status behavior
+- bucket filters
+- output limits
+- mutual exclusion with scheduler, continuation, generation, scoring, evaluation, and review commands
+- stable exit codes
+- human-readable output
+- machine-readable output
+- percent escaping
+- control-byte safety
+- explicit NULL values
+- explicit advisory safety fields:
+
+experiment_created=false
+experiment_queued=false
+scheduler_modified=false
+
+Confirm no CLI path can accidentally enter scheduler polling or mutate scheduler/experiment state.
+
+9. Incidental ExperimentScheduler.cpp changes
+
+Separate necessary Step 2 integration from unrelated edits.
+
+Inspect the changes to MetricSql parameters and ParseNonNegativeFiniteDouble.
+
+Determine whether they are:
+
+- required for strict compilation
+- harmless and behavior-preserving
+- misleading
+- masking a real unused-code problem
+- better handled differently
+
+Do not make style-only churn. Change them only if there is a concrete correctness, warning, or maintainability issue.
+
+10. Test quality and safety
+
+Review all new and modified tests.
+
+Verify coverage for:
+
+- all seven scopes
+- all three buckets
+- deterministic identity
+- limit-sensitive identity
+- full source membership
+- dry-run zero writes
+- exact retry
+- retry mismatch
+- atomic rollback
+- privilege restrictions
+- terminal snapshot insert rejection
+- mismatched provenance rejection
+- NaN/infinity rejection
+- component validation
+- missing component comparison
+- identical concurrency
+- unrelated concurrency
+- list/detail/status
+- machine and human escaping
+- Step 1 immutability
+- recommendation/review immutability
+- experiment/model/analysis immutability
+- inference/checkpoint/continuation immutability
+- scheduler non-interference
+
+Ensure database-writing tests use exact disposable schemas or a disposable database.
+
+Do not run any unsafe test against the scheduler-active live database if it snapshots or mutates unrelated live rows.
+
+If a legacy test is unsafe against live concurrent scheduler activity, document that clearly and use a disposable database rather than weakening the test or pausing the scheduler.
+
+11. Documentation consistency
+
+Verify docs/Phase4BExperimentRecommendationRanking.rst and Volume VIII accurately describe implemented behavior.
+
+Check for mismatches involving:
+
+- authoritative evidence
+- historical-scope behavior
+- ranking policy
+- snapshot identity
+- concurrency locking
+- privileges
+- trigger behavior
+- comparison rules
+- dry-run semantics
+- advisory-only boundary
+- deferred profitability and execution work
+
+Do not expand documentation beyond what is needed for accuracy.
+
+REVIEW METHOD
+
+Start by inspecting:
+
+git status --short
+git show --stat --oneline 745f1864d28611db115181cc147376ee00665067
+git diff 745f1864d28611db115181cc147376ee00665067^ 745f1864d28611db115181cc147376ee00665067
+
+Read the relevant architecture documents and ADRs before judging deviations:
+
+- docs/architecture/Volume_I_Foundation.md
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+- docs/architecture/adr/ADR-0001-postgresql-source-of-truth.md
+- docs/architecture/adr/ADR-0002-deterministic-experiment-identity.md
+- docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md
+- docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md
+- docs/Phase4BExperimentRecommendationEvaluation.rst
+- docs/Phase4BExperimentRecommendationRanking.rst
+
+Inspect actual implementation and tests rather than trusting comments or the previous completion summary.
+
+CHANGES ALLOWED
+
+Make changes only when the review identifies a concrete:
+
+- correctness defect
+- concurrency defect
+- database-integrity defect
+- privilege or security defect
+- missing validation
+- unsafe test behavior
+- missing high-value regression test
+- misleading or inaccurate documentation
+- CLI inconsistency
+- maintainability issue with a clear practical consequence
+- inconsistency between schema, repository, service, CLI, tests, and documentation
+
+Do not make speculative refactors, naming churn, formatting-only edits, broad cleanup, or architectural redesign.
+
+OPERATIONAL SAFETY
+
+The live LSTM scheduler may be running and experiments may be active.
+
+Do not:
+
+- stop, restart, signal, or reconfigure the scheduler
+- start another scheduler
+- pause, cancel, retry, resume, or queue experiments
+- run live ranking or evaluation writes against production data
+- apply migration 035 to the live LSTM database
+- modify the live migration ledger
+- create public ranking tables in the live database
+- alter live experiment, recommendation, review, evaluation, model, analysis, inference, checkpoint, or continuation rows
+
+Use rollback-only isolated schemas or disposable databases for migration and repository tests.
+
+Clean up only exact disposable resources created by this review.
+
+Before and after testing, verify:
+
+- live migration ledger remains unchanged
+- public ranking tables remain absent unless they were already intentionally present before this review
+- no disposable schema/database remains
+- scheduler PID and launch configuration remain unchanged
+- no experiment was created or queued
+
+VERIFICATION
+
+At minimum, run:
+
+- strict compilation of changed/new ranking units with project-appropriate include and library flags
+- focused pure ranking/comparison tests
+- migration 035 tests in an isolated rollback-only schema
+- repository/service tests in an exact disposable schema
+- repeated identical concurrency tests
+- unrelated-snapshot concurrency tests
+- Phase 4A recommendation identity/candidate/service regressions
+- Phase 4A scoring and review regressions
+- Phase 4B Step 1 evaluation regressions
+- continuation-policy regressions
+- scheduler child-status regression
+- CLI validation and mutual-exclusion checks
+- plutil validation of the Xcode project
+- git diff --check
+- Xcode Release build using the actual scheme name "LSTM Release"
+
+If a test cannot safely run against the live database, run it in a disposable database with an appropriate cloned schema and explain why.
+
+Do not claim a check passed unless it actually ran successfully.
+
+FINAL RESPONSE
+
+Provide:
+
+1. Review verdict
+2. Findings ordered by severity
+3. Exact corrections made, if any
+4. Verification performed and outcomes
+5. Operational-safety confirmation
+6. Remaining risks or deferred concerns
+7. Current Git status and changed files
+
+If no defects are found, say so explicitly and leave the tree unchanged.
+
+If defects are found and fixed, leave all fixes uncommitted.
+
+Do not create a commit.
+
+Do not provide or run a commit command.
+
+REASONING FOR THIS REVIEW
+
+Phase 4B Step 2 introduced a relatively large persistence and CLI surface: immutable ranking snapshots, copied snapshot-time member metadata, a runtime enforcement trigger, deterministic canonical identities, comparison semantics, and concurrent idempotent construction. The implementation report showed strong testing and found a real concurrency race, but the most important risks cannot be fully validated from the report alone.
+
+The highest-risk areas are:
+
+- PostgreSQL trigger and privilege semantics
+- NULL and special floating-point behavior
+- canonical identity completeness
+- lock ordering between repository transactions and the insert trigger
+- exact retry behavior under concurrent writers
+- historical-scope semantics
+- accidental scheduler or experiment mutation through CLI integration
+- consistency among schema, C++ domain logic, repository mapping, output, tests, and documentation
+
+An independent review should therefore inspect the committed code itself, repeat the critical concurrency and migration tests, and make only evidence-based corrections. The review must preserve the advisory-only boundary and avoid interrupting the active experiment scheduler.
+
+Because the existing Step 2 commit is intended to remain the single atomic implementation commit, any justified review corrections must be left uncommitted for a later git commit --amend performed manually by the user.

@@ -1,0 +1,149 @@
+Using High reasoning, perform a focused, independent review of ONLY the
+PostgreSQL trigger implementation added in Phase 4B Step 2.
+
+GOAL
+
+Review the trigger implementation from first principles. Do not review
+the rest of the ranking implementation except where necessary to verify
+trigger correctness.
+
+This is a trigger-focused hardening review only.
+
+IMPORTANT
+
+Do not create a commit.
+
+Do not stage changes.
+
+If concrete defects are found, fix only those defects and leave all
+changes uncommitted so I can later use:
+
+git commit –amend
+
+REVIEW TARGETS
+
+Focus on:
+
+• Database/migrations/035_experiment_recommendation_ranking.sql
+
+Especially:
+
+-   enforce_recommendation_ranking_member_insert()
+-   trigger creation
+-   function security
+-   privileges
+-   search_path handling
+-   locking
+-   concurrency
+-   membership validation
+-   scope validation
+-   immutable snapshot enforcement
+
+VERIFY
+
+1.  Trigger security
+
+-   SECURITY INVOKER/DEFINER correctness
+-   search_path safety
+-   SQL injection resistance
+-   privilege boundary
+-   runtime role assumptions
+
+2.  Membership validation
+
+Confirm there is no possibility of accepting:
+
+-   evaluation outside snapshot scope
+-   evaluation absent from captured membership
+-   mismatched recommendation
+-   mismatched evaluation identity
+-   mismatched semantic hash
+-   mismatched provenance
+-   mismatched disposition
+-   mismatched copied display fields
+
+Look specifically for substring, canonical parsing, delimiter, or
+length-prefix edge cases.
+
+3.  Membership lookup
+
+Carefully inspect the use of:
+
+-   generate_series(…)
+-   strpos(…)
+-   canonical membership text
+
+Determine whether any false positive or false negative match is
+possible.
+
+Attempt to construct adversarial identities and IDs.
+
+4.  Locking
+
+Verify:
+
+-   FOR UPDATE usage
+-   lock ordering
+-   deadlock potential
+-   interaction with repository transactions
+-   concurrent identical snapshot creation
+-   unrelated snapshot concurrency
+
+5.  Runtime invariants
+
+Confirm runtime INSERT permission cannot bypass:
+
+-   completed snapshot
+-   requested member limit
+-   bucket invariants
+-   inclusion reason
+-   block reason
+-   top component validation
+
+6.  Performance
+
+Evaluate:
+
+-   membership search complexity
+-   scalability at 1000 members
+-   trigger cost
+-   unnecessary locking
+-   unnecessary scans
+
+Recommend improvements only if they preserve identical behavior.
+
+7.  Tests
+
+Review migration tests covering the trigger.
+
+Identify any missing regression tests.
+
+DO NOT
+
+-   redesign ranking
+-   redesign persistence
+-   redesign canonical identity
+-   redesign repository
+-   change advisory boundaries
+-   implement Phase 4B Step 3
+-   create commits
+
+VERIFICATION
+
+Run only isolated migration tests and disposable-schema tests.
+
+Do not touch the live scheduler database.
+
+FINAL RESPONSE
+
+Provide:
+
+1.  Overall trigger verdict
+2.  Findings by severity
+3.  Exact fixes made (if any)
+4.  Tests performed
+5.  Remaining risks
+6.  Files modified
+7.  Current git status
+
+Do not create or suggest a commit.

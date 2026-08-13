@@ -1,0 +1,1107 @@
+# Campaign Operations Phase H H1 ADR-0019B Evidence Graph and Reporting Final Correction Implementation Output
+
+## 1. Executive result
+
+Run `h1-20260804T045405Z-90836` produced ready=`1` from 0 computed defects and 12/12 validated final-assurance records.
+
+## 2. Confirmation no architecture redesign occurred
+
+No sealed-role identity, role graph, ownership allowlist, transition identity, canonical format, replay semantic, migration number, restore policy, H1/H2/H3/H4 boundary, scheduler ownership, or lifecycle ownership was changed.
+
+## 3. Files changed
+
+The implementation changes are enumerated by the authenticated worktree evidence in section 32; no commit was created.
+
+## 4. Graph-health computation
+
+Health was computed from materialized nodes, explicit edges, versions, run IDs, artifact bytes, record bytes, cardinalities, semantic parsers, and the recursive file scan: conflicting_edges=0, duplicate_keys=0, invalid_cardinalities=0, invalid_semantic_fields=0, missing_final_assurance_records=0, missing_forward_edges=0, missing_report_entries=0, missing_reverse_edges=0, missing_runtime_records=0, missing_validator_results=0, orphan_nodes=0, stale_artifact_digests=0, stale_record_digests=0, stale_run_ids=0, stale_versions=0, trust_acl_catalog_independent=0, trust_authority_complete=0, trust_no_legacy_path_reachable=0, trust_provenance_graph_complete=0, trust_raw_envelopes_complete=0, trust_report_complete=0, trust_runtime_records_complete=0, trust_snapshots_complete=0, trust_trusted_generator_execution_complete=0, trust_trusted_validator_execution_complete=0, trust_validator_results_complete=0, unknown_files=0, unknown_nodes=0.
+
+## 5. Explicit forward/reverse adjacency
+
+The v2 edge registry contains 4018 directed edges; every forward edge has a separately stored reverse edge.
+
+## 6. Unified artifact-ID design
+
+All 374 declarations use the same `ART-*` identity referenced by runtime, validator, report, and artifact-index rows; paths are metadata.
+
+## 7. Unknown-file scanning
+
+The entire evidence root is scanned recursively. Only registered paths and the explicit disposable-cluster `data/`, `s/`, and `restore/` non-evidence prefixes are allowed.
+
+## 8. Final-assurance graph registration
+
+All 12 final-assurance requirements, fixtures, runtime nodes, validator results, report entries, artifacts, and bidirectional edges are ordinary registry rows.
+
+## 9. Authentic validator-result design
+
+287 validator-result rows carry implementation/entry point, run, runtime/requirement/fixture/artifact IDs, expected/actual parsed JSON, comparison, diagnostic, stage, timestamp, and output digest.
+
+## 10. Semantic log parsing
+
+Lock, ACL-origin, ACL/default catalog, restore, build, strict compile, checksum, mutation, exclusion, determinism, and worktree evidence are parsed by evidence class before report generation.
+
+## 11. Registry semantic validation
+
+Exact v2 schemas, versions, enums, paths, entry points, node types, cardinalities, policies, aliases, adjacency lists, and cross-registry mappings were validated.
+
+## 12. Accepted-negative regression matrix
+
+The reconciled graph contains 92/92 independently addressable mutation-case records with expected and actual diagnostic/stage fields. requirement `H1-ASSURANCE-GRAPH-MUTATIONS`; runtime `RT-H1FA004`; validator `VR-H1FA004`; report `REP-H1FA004`; artifact `ART-RECORD-H1FA004`; record `e0ef29088a684a1073d33b9baaaad8fae79191aed12ee2cdbc8a77d76afe6f77`; aggregate `26921957e2def4f35fd2f1a788e52c92d92d1196c2f0bdbf413e29b03b9d99b6`; status `PASS`.
+
+## 13. Authoritative requirement derivation
+
+The reviewed registry contains 287 clause records with exact architecture sections and behavioral descriptions; final-assurance clauses are not appended during reporting.
+
+## 14. Forty-one ACL/default results
+
+The computed ACL/default catalog count is 41. requirement `H1-ACL-ADMISSION`; runtime `RT-H1REG001`; validator `VR-H1REG001`; report `REP-H1REG001`; artifact `ART-RECORD-H1REG001`; record `7eaf89facade627fe3d89ef2618bfb88e8c2221d0efbcc48574215b430f508cd`; aggregate `7eaf89facade627fe3d89ef2618bfb88e8c2221d0efbcc48574215b430f508cd`; status `SUCCESS`.
+
+## 15. Record-level evidence design
+
+Every reconciled runtime row retains canonical serialized bytes, a record digest, a stable artifact ID, aggregate digest, and explicit record selector.
+
+## 16. One-record/one-entry delta results
+
+The graph mutation receipt includes five locality checks covering lock, ACL-origin, restore, generic, and final-assurance records. requirement `H1-ASSURANCE-GRAPH-MUTATIONS`; runtime `RT-H1FA004`; validator `VR-H1FA004`; report `REP-H1FA004`; artifact `ART-RECORD-H1FA004`; record `e0ef29088a684a1073d33b9baaaad8fae79191aed12ee2cdbc8a77d76afe6f77`; aggregate `26921957e2def4f35fd2f1a788e52c92d92d1196c2f0bdbf413e29b03b9d99b6`; status `PASS`.
+
+## 17. Lock normalizer correction
+
+The computed executable lock count is 15; observation is derived from raw blocker PIDs before comparison with the permitted direction. requirement `H1-LOCK-001`; runtime `RT-H1LOCK001`; validator `VR-H1LOCK001`; report `REP-H1LOCK001`; artifact `ART-RECORD-H1LOCK001`; record `cb4be321286c13278a9e22cc1d51a7c8455c4180e455b4abc157200986524edf`; aggregate `b815c26bd9fcbc33ca51594da7c7d2cf06e4f742af2f875aeed529b0aa2c884a`; status `SUCCESS`.
+
+## 18. Prohibited-direction mutation result
+
+requirement `H1-ASSURANCE-LOCK-MUTATIONS`; runtime `RT-H1FA002`; validator `VR-H1FA002`; report `REP-H1FA002`; artifact `ART-RECORD-H1FA002`; record `7a7aa23e2aeb0b1e7a0681b8e31aa49550ce1e4024d2f8954d4fff6c6b37c328`; aggregate `fa0ecfea68a4dbd860e36abacc01b063281938ef3f171bdd73398c09fcbbc185`; status `PASS`.
+
+## 19. Lock run/version result
+
+Every raw and normalized lock record carries format version, run ID, H1LOCK ID, generator identity, raw artifact ID, output artifact ID, and record digest.
+
+## 20. Report provenance
+
+Every factual evidence row below names requirement, runtime record, validator result, report entry, artifact, record digest, and aggregate digest.
+
+## 21. Stale-report and forged-evidence results
+
+requirement `H1-ASSURANCE-GRAPH-MUTATIONS`; runtime `RT-H1FA004`; validator `VR-H1FA004`; report `REP-H1FA004`; artifact `ART-RECORD-H1FA004`; record `e0ef29088a684a1073d33b9baaaad8fae79191aed12ee2cdbc8a77d76afe6f77`; aggregate `26921957e2def4f35fd2f1a788e52c92d92d1196c2f0bdbf413e29b03b9d99b6`; status `PASS`.
+
+## 22. Determinism plus correctness
+
+requirement `H1-ASSURANCE-DETERMINISM`; runtime `RT-H1FA011`; validator `VR-H1FA011`; report `REP-H1FA011`; artifact `ART-RECORD-H1FA011`; record `3d3a59274c3729b7e8522e57ba25a8e744a79cd971cc9a1c70d7e6eb1a5f8abc`; aggregate `e114b345eb282a116009a83a1e0ead60a8db613aa84e51935759c327633d202f`; status `PASS`.
+
+## 23. Migration/restore/historical regression
+
+The computed restore evidence count is 11. requirement `H1-RESTORE-A`; runtime `RT-H1RESTOREA`; validator `VR-H1RESTOREA`; report `REP-H1RESTOREA`; artifact `ART-RECORD-H1RESTOREA`; record `6adb3847a723105aae0e378374703f974cf4152b4d7d000761ac08b1222694ba`; aggregate `4add629f20ab1d2e60885d3249fddfd1904953412954f5be5702b4eaf16f0c65`; status `SUCCESS`.
+
+## 24. Strict compilation
+
+Parsed values: `{"command":"clang++","error_count":"0","exit_status":"0","flags":"-std=c++20,-Wall,-Wextra,-Werror,-fsyntax-only","translation_units":"Sources/CampaignOperationsService.cpp,Tests/CampaignOperationsPhaseH1WorkflowLockTests.cpp","warning_count":"0"}`. requirement `H1-ASSURANCE-STRICT-COMPILE`; runtime `RT-H1FA008`; validator `VR-H1FA008`; report `REP-H1FA008`; artifact `ART-RECORD-H1FA008`; record `81789d49ae781526d90b3106293d3a037bea7f19d9a8e09466d3d3ef7856e684`; aggregate `f6d10da5fedb259558f603736a43458bf0e812ee4ba69e59b0ce92d8b7e51d93`; status `PASS`.
+
+## 25. Isolated Release build
+
+Parsed values: `{"build_failed_marker":"false","build_succeeded_marker":"true","configuration":"Release","derived_data_path":"Build/Products/Release/LSTM_Release","exit_status":"0","product_path":"Build/Products/Release/LSTM_Release","warning_classification":"legacy-libpqxx-and-toolchain","warning_count":"371"}`. requirement `H1-ASSURANCE-RELEASE-BUILD`; runtime `RT-H1FA009`; validator `VR-H1FA009`; report `REP-H1FA009`; artifact `ART-RECORD-H1FA009`; record `b0cbca8e04a02d921a23d47b247bbe44e1f77cd6848afbb3c40210aab1bbdc49`; aggregate `448d04ce6253b203207b7c3f50e22faf375bbbf90df0465717f66c334a967541`; status `PASS`.
+
+## 26. H1 inertness and H2/H3/H4 exclusion
+
+requirement `H1-H2-H4-EXCLUSION`; runtime `RT-H1CPP002`; validator `VR-H1CPP002`; report `REP-H1CPP002`; artifact `ART-RECORD-H1CPP002`; record `13462f9df6005ad2f2e25c6496bde6db793499a697648e71eff8b6a7ffcce496`; aggregate `a3a8450f10eef4dfa150fb9882cc0d5c0996847c0dad554dcf4904f12a623a7f`; status `SUCCESS`.
+
+## 27. Skipped-suite classifications
+
+Process-interfering shared scheduler/worker suites are safety-deferred and classified as pre-production blockers; H2/H3/H4 suites remain phase prerequisites outside H1.
+
+## 28. Residual risks
+
+Legacy/libpqxx Release warnings remain separately classified; no production cutover, production migration, or live scheduler integration was attempted.
+
+## 29. Migration checksum and manifest digest
+
+Parsed values: `{"embedded_checksum":"6d2a37552e95454083ce643e5b3dc2f7d2085cb1298cddbc8c5f0cf54e028056","ledger_result":"PASS","manifest_digest":"ec6e34b1dd3ee68bf5315f193baee233222822eb045437d154d4b29e9444fb9f","migration_sha256":"6d2a37552e95454083ce643e5b3dc2f7d2085cb1298cddbc8c5f0cf54e028056","replay_result":"PASS"}`. requirement `H1-ASSURANCE-CHECKSUM`; runtime `RT-H1FA010`; validator `VR-H1FA010`; report `REP-H1FA010`; artifact `ART-RECORD-H1FA010`; record `bb402937ca80b1dce9ef2d080d8e930a33508f1402963d2901323dff5a089cd8`; aggregate `6213118a376eca3e1bd8d016e0738bb95c09839f6a3b4238e7c30e06c4711eee`; status `PASS`.
+
+## 30. Final node and edge counts
+
+requirements=287, fixtures=287, generators=8, runtime=287, validators=287, reports=287, artifacts=374, directed_edges=4018.
+
+## 31. Final defect counts
+
+conflicting_edges=0, duplicate_keys=0, invalid_cardinalities=0, invalid_semantic_fields=0, missing_final_assurance_records=0, missing_forward_edges=0, missing_report_entries=0, missing_reverse_edges=0, missing_runtime_records=0, missing_validator_results=0, orphan_nodes=0, stale_artifact_digests=0, stale_record_digests=0, stale_run_ids=0, stale_versions=0, trust_acl_catalog_independent=0, trust_authority_complete=0, trust_no_legacy_path_reachable=0, trust_provenance_graph_complete=0, trust_raw_envelopes_complete=0, trust_report_complete=0, trust_runtime_records_complete=0, trust_snapshots_complete=0, trust_trusted_generator_execution_complete=0, trust_trusted_validator_execution_complete=0, trust_validator_results_complete=0, unknown_files=0, unknown_nodes=0.
+
+## 32. Final git status
+
+```text
+tracked_count=27 untracked_count=139 policy=no-commit
+ M Database/README.md
+ A Database/migrations/055_campaign_operations_production_admission_foundation.sql
+ M ExpertAdvisor.xcodeproj/project.pbxproj
+ M Sources/CampaignOperations.hpp
+ A Sources/CampaignOperationsProductionAdmission.cpp
+ A Sources/CampaignOperationsProductionAdmission.hpp
+ A Sources/CampaignOperationsProductionAdmissionRepository.cpp
+ A Sources/CampaignOperationsProductionAdmissionRepository.hpp
+ A Sources/CampaignOperationsProductionAdmissionService.cpp
+ A Sources/CampaignOperationsProductionAdmissionService.hpp
+ M Sources/CampaignOperationsService.cpp
+ M Sources/CampaignOperationsService.hpp
+ M Sources/ExperimentScheduler.cpp
+ A Tests/CampaignOperationsPhaseH1CliTests.sh
+ A Tests/CampaignOperationsPhaseH1MigrationTests.sh
+ A Tests/CampaignOperationsPhaseH1MigrationTests.sql
+ A Tests/CampaignOperationsPhaseH1RepositoryTests.cpp
+ A Tests/CampaignOperationsPhaseH1Tests.cpp
+ M Tests/CampaignOperationsRepositoryTests.cpp
+ M Tests/SchedulerOwnershipMigrationTests.sql
+ A docs/CampaignOperationsPhaseH1.rst
+ M docs/architecture/CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md
+ M docs/architecture/Volume_XII_Database.md
+ M docs/architecture/Volume_XI_Scheduler.md
+ M docs/architecture/Volume_X_Research_Automation.md
+ M docs/architecture/adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md
+ M docs/architecture/adr/README.md
+?? .h1-five-finding-review.8FElTh/reproduce.py
+?? CampaignOperations_ADR0019B_FinalAssurance_RemainingBlockers_ImplementationReview_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_ClassificationCalibration_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_StaticFiveFindingContinuationReview_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_EvidenceCompletion_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraphReporting_FinalCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraph_RuntimeReporting_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FinalAssuranceCompletion_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FinalAssurance_TargetedIndependentAudit_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FinalEvidenceModelCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FiveBlockerTargetedAssuranceCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FiveTrustBoundary_FocusedIndependentCEEReverification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_LegacyBypassElimination_FullTrustModelIntegration_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedAssuranceCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthorityCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthority_FocusedIndependentReverification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedEvidenceCompletion_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_FinalArchitectureConsistencyReview_Output.md
+?? CampaignOperations_PhaseH_H1_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_IndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_SealedRoleDeploymentContract_TargetedArchitectureCorrectionAndImplementation_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedArchitectureCorrectionAndImplementation_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedArchitectureCorrection_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedCorrection_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_LegacyBypassElimination_FinalIntegration_Output.md
+?? Database/manifests/055_campaign_operations_h1_acl_manifest.sql
+?? Database/manifests/055_campaign_operations_h1_column_acl.tsv
+?? Database/manifests/055_campaign_operations_h1_default_acl.tsv
+?? Database/manifests/055_campaign_operations_h1_explicit_acl.tsv
+?? Database/manifests/055_campaign_operations_h1_manifest.sha256
+?? Database/manifests/055_campaign_operations_h1_object_inventory.tsv
+?? Scripts/CampaignOperationsH1AclCatalog.py
+?? Scripts/CampaignOperationsH1AclCatalogGenerator.py
+?? Scripts/CampaignOperationsH1AclEvidence.py
+?? Scripts/CampaignOperationsH1ArtifactSnapshot.py
+?? Scripts/CampaignOperationsH1CatalogPipeline.py
+?? Scripts/CampaignOperationsH1DeploymentAudit.sh
+?? Scripts/CampaignOperationsH1EvidenceAuthority.py
+?? Scripts/CampaignOperationsH1EvidenceGraph.py
+?? Scripts/CampaignOperationsH1EvidencePayloadGenerator.py
+?? Scripts/CampaignOperationsH1EvidenceValidator.py
+?? Scripts/CampaignOperationsH1LegacyInventory.py
+?? Scripts/CampaignOperationsH1LockEvidence.py
+?? Scripts/CampaignOperationsH1ManifestValidator.sh
+?? Scripts/CampaignOperationsH1NormativeAuthority.py
+?? Scripts/CampaignOperationsH1Provenance.py
+?? Scripts/CampaignOperationsH1RegistryCompiler.py
+?? Scripts/CampaignOperationsH1RestoreAclOrigin.sh
+?? Scripts/CampaignOperationsH1RestoreEvidence.py
+?? Scripts/CampaignOperationsH1TrustModel.py
+?? Scripts/CampaignOperationsH1TrustedEvidencePipeline.py
+?? Scripts/CampaignOperationsH1TrustedGenerator.py
+?? Scripts/CampaignOperationsH1TrustedRunner.py
+?? Scripts/__pycache__/CampaignOperationsH1AclCatalog.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1AclCatalogGenerator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1AclEvidence.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1ArtifactSnapshot.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1CatalogPipeline.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidenceAuthority.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidenceGraph.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidencePayloadGenerator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidenceValidator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1LegacyInventory.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1LockEvidence.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1NormativeAuthority.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1Provenance.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1RegistryCompiler.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1RestoreEvidence.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustModel.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustedEvidencePipeline.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustedGenerator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustedRunner.cpython-314.pyc
+?? Tests/CampaignOperationsPhaseH1AclCatalogIndependenceTests.py
+?? Tests/CampaignOperationsPhaseH1AclOriginArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1AclOriginMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1AclOriginTests.sh
+?? Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.py
+?? Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.sh
+?? Tests/CampaignOperationsPhaseH1EvidenceDeltaTests.sh
+?? Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh
+?? Tests/CampaignOperationsPhaseH1FinalEvidenceMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1LegacyReachabilityTests.py
+?? Tests/CampaignOperationsPhaseH1LockArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1LockMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1ManifestMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1PreEnablementArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1ProvenanceIntegrationTests.py
+?? Tests/CampaignOperationsPhaseH1ReferenceGraphTests.sh
+?? Tests/CampaignOperationsPhaseH1ReferenceMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1RegistrySemanticMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1RegistrySemanticTests.sh
+?? Tests/CampaignOperationsPhaseH1RestoreArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1SnapshotConsumerTests.py
+?? Tests/CampaignOperationsPhaseH1TraceabilityMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1TraceabilityTests.sh
+?? Tests/CampaignOperationsPhaseH1TrustModelIntegrationTests.py
+?? Tests/CampaignOperationsPhaseH1TrustedGeneratorTests.py
+?? Tests/CampaignOperationsPhaseH1TrustedRunnerTests.py
+?? Tests/CampaignOperationsPhaseH1UniquenessInvariantTests.sh
+?? Tests/CampaignOperationsPhaseH1WorkflowLockTests.cpp
+?? Tests/__pycache__/CampaignOperationsPhaseH1AclCatalogIndependenceTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1EvidenceAuthorityTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1LegacyReachabilityTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1ProvenanceIntegrationTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1SnapshotConsumerTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1TrustModelIntegrationTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1TrustedGeneratorTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1TrustedRunnerTests.cpython-314.pyc
+?? Tests/fixtures/CampaignOperationsH1AclOriginFixtures.tsv
+?? Tests/fixtures/CampaignOperationsH1Artifacts.tsv
+?? Tests/fixtures/CampaignOperationsH1AssuranceControls.tsv
+?? Tests/fixtures/CampaignOperationsH1ClauseRequirementDerivations.tsv
+?? Tests/fixtures/CampaignOperationsH1DirectoryPolicy.tsv
+?? Tests/fixtures/CampaignOperationsH1Edges.tsv
+?? Tests/fixtures/CampaignOperationsH1EvidenceObligations.tsv
+?? Tests/fixtures/CampaignOperationsH1ExpectedValueAuthorities.tsv
+?? Tests/fixtures/CampaignOperationsH1FinalAssuranceControls.tsv
+?? Tests/fixtures/CampaignOperationsH1Fixtures.tsv
+?? Tests/fixtures/CampaignOperationsH1Generators.tsv
+?? Tests/fixtures/CampaignOperationsH1LegacyPathInventory.tsv
+?? Tests/fixtures/CampaignOperationsH1LockPathMatrix.tsv
+?? Tests/fixtures/CampaignOperationsH1MutationMechanics.tsv
+?? Tests/fixtures/CampaignOperationsH1NormativeClauses.tsv
+?? Tests/fixtures/CampaignOperationsH1ObservedValueProvenance.tsv
+?? Tests/fixtures/CampaignOperationsH1PreEnablementEvidence.tsv
+?? Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv
+?? Tests/fixtures/CampaignOperationsH1RegistryDigests.tsv
+?? Tests/fixtures/CampaignOperationsH1ReportEntries.tsv
+?? Tests/fixtures/CampaignOperationsH1Requirements.tsv
+?? Tests/fixtures/CampaignOperationsH1ReviewDisposition.tsv
+?? Tests/fixtures/CampaignOperationsH1RuntimeRecords.tsv
+?? Tests/fixtures/CampaignOperationsH1Traceability.tsv
+?? Tests/fixtures/CampaignOperationsH1UniquenessInvariants.tsv
+?? Tests/fixtures/CampaignOperationsH1Validators.tsv
+?? docs/CampaignOperationsH1Traceability.md
+?? docs/architecture/CampaignOperations_PhaseH_Legacy_Bypass_Elimination.md
+?? docs/architecture/adr/ADR-0019A-h1-owner-safe-transaction-authorization.md
+?? docs/architecture/adr/ADR-0019B-h1-sealed-role-deployment-contract.md
+tracked_diff_stat_begin
+ Database/README.md                                 |   16 +
+ ..._operations_production_admission_foundation.sql | 4781 ++++++++++++++++++++
+ ExpertAdvisor.xcodeproj/project.pbxproj            |   24 +
+ Sources/CampaignOperations.hpp                     |    6 +
+ Sources/CampaignOperationsProductionAdmission.cpp  |  511 +++
+ Sources/CampaignOperationsProductionAdmission.hpp  |  256 ++
+ ...aignOperationsProductionAdmissionRepository.cpp |  590 +++
+ ...aignOperationsProductionAdmissionRepository.hpp |  150 +
+ ...ampaignOperationsProductionAdmissionService.cpp |  404 ++
+ ...ampaignOperationsProductionAdmissionService.hpp |   37 +
+ Sources/CampaignOperationsService.cpp              |    6 +-
+ Sources/CampaignOperationsService.hpp              |   13 +-
+ Sources/ExperimentScheduler.cpp                    |   49 +-
+ Tests/CampaignOperationsPhaseH1CliTests.sh         |   63 +
+ Tests/CampaignOperationsPhaseH1MigrationTests.sh   | 2436 ++++++++++
+ Tests/CampaignOperationsPhaseH1MigrationTests.sql  | 1600 +++++++
+ Tests/CampaignOperationsPhaseH1RepositoryTests.cpp |  294 ++
+ Tests/CampaignOperationsPhaseH1Tests.cpp           |  244 +
+ Tests/CampaignOperationsRepositoryTests.cpp        |   10 +
+ Tests/SchedulerOwnershipMigrationTests.sql         |    6 +-
+ docs/CampaignOperationsPhaseH1.rst                 |  193 +
+ ...eH_Production_Dispatch_Admission_and_Manager.md |   97 +-
+ docs/architecture/Volume_XII_Database.md           |   67 +-
+ docs/architecture/Volume_XI_Scheduler.md           |    1 +
+ docs/architecture/Volume_X_Research_Automation.md  |    1 +
+ ...ns-production-dispatch-admission-and-manager.md |   10 +
+ docs/architecture/adr/README.md                    |    4 +
+ 27 files changed, 11849 insertions(+), 20 deletions(-)
+tracked_diff_stat_end
+untracked_diff_stat_begin
+untracked lines=519 bytes=32091 path=.h1-five-finding-review.8FElTh/reproduce.py
+untracked lines=206 bytes=16461 path=CampaignOperations_ADR0019B_FinalAssurance_RemainingBlockers_ImplementationReview_Output.md
+untracked lines=22 bytes=1535 path=CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_ClassificationCalibration_FocusedIndependentCEEVerification_Output.md
+untracked lines=17 bytes=994 path=CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_StaticFiveFindingContinuationReview_Output.md
+untracked lines=627 bytes=29689 path=CampaignOperations_PhaseH_H1_ADR0019B_EvidenceCompletion_FocusedIndependentCEEVerification_Output.md
+untracked lines=38 bytes=2170 path=CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraphReporting_FinalCorrection_Implementation_Output.md
+untracked lines=669 bytes=31257 path=CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraph_RuntimeReporting_FocusedIndependentCEEVerification_Output.md
+untracked lines=39 bytes=1957 path=CampaignOperations_PhaseH_H1_ADR0019B_FinalAssuranceCompletion_Implementation_Output.md
+untracked lines=525 bytes=30220 path=CampaignOperations_PhaseH_H1_ADR0019B_FinalAssurance_TargetedIndependentAudit_Output.md
+untracked lines=51 bytes=2849 path=CampaignOperations_PhaseH_H1_ADR0019B_FinalEvidenceModelCorrection_Implementation_Output.md
+untracked lines=46 bytes=2416 path=CampaignOperations_PhaseH_H1_ADR0019B_FiveBlockerTargetedAssuranceCorrection_Implementation_Output.md
+untracked lines=25 bytes=1246 path=CampaignOperations_PhaseH_H1_ADR0019B_FiveTrustBoundary_FocusedIndependentCEEReverification_Output.md
+untracked lines=143 bytes=5531 path=CampaignOperations_PhaseH_H1_ADR0019B_LegacyBypassElimination_FullTrustModelIntegration_Implementation_Output.md
+untracked lines=30 bytes=1563 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedAssuranceCorrection_Implementation_Output.md
+untracked lines=44 bytes=2421 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthorityCorrection_Implementation_Output.md
+untracked lines=38 bytes=2585 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthority_FocusedIndependentReverification_Output.md
+untracked lines=52 bytes=3010 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedEvidenceCompletion_Implementation_Output.md
+untracked lines=87 bytes=9671 path=CampaignOperations_PhaseH_H1_FinalArchitectureConsistencyReview_Output.md
+untracked lines=101 bytes=5344 path=CampaignOperations_PhaseH_H1_Implementation_Output.md
+untracked lines=292 bytes=14434 path=CampaignOperations_PhaseH_H1_IndependentCEEVerification_Output.md
+untracked lines=95 bytes=4623 path=CampaignOperations_PhaseH_H1_SealedRoleDeploymentContract_TargetedArchitectureCorrectionAndImplementation_Output.md
+untracked lines=379 bytes=18803 path=CampaignOperations_PhaseH_H1_TargetedArchitectureCorrectionAndImplementation_Output.md
+untracked lines=597 bytes=29277 path=CampaignOperations_PhaseH_H1_TargetedArchitectureCorrection_FocusedIndependentCEEVerification_Output.md
+untracked lines=610 bytes=38800 path=CampaignOperations_PhaseH_H1_TargetedCorrection_FocusedIndependentCEEVerification_Output.md
+untracked lines=374 bytes=20185 path=CampaignOperations_PhaseH_H1_TargetedCorrection_Implementation_Output.md
+untracked lines=158 bytes=5796 path=CampaignOperations_PhaseH_LegacyBypassElimination_FinalIntegration_Output.md
+untracked lines=399 bytes=36691 path=Database/manifests/055_campaign_operations_h1_acl_manifest.sql
+untracked lines=8 bytes=2477 path=Database/manifests/055_campaign_operations_h1_column_acl.tsv
+untracked lines=28 bytes=4150 path=Database/manifests/055_campaign_operations_h1_default_acl.tsv
+untracked lines=71 bytes=16495 path=Database/manifests/055_campaign_operations_h1_explicit_acl.tsv
+untracked lines=1 bytes=84 path=Database/manifests/055_campaign_operations_h1_manifest.sha256
+untracked lines=93 bytes=23102 path=Database/manifests/055_campaign_operations_h1_object_inventory.tsv
+untracked lines=213 bytes=12871 path=Scripts/CampaignOperationsH1AclCatalog.py
+untracked lines=165 bytes=8904 path=Scripts/CampaignOperationsH1AclCatalogGenerator.py
+untracked lines=151 bytes=7782 path=Scripts/CampaignOperationsH1AclEvidence.py
+untracked lines=314 bytes=15618 path=Scripts/CampaignOperationsH1ArtifactSnapshot.py
+untracked lines=148 bytes=8906 path=Scripts/CampaignOperationsH1CatalogPipeline.py
+untracked lines=301 bytes=13220 path=Scripts/CampaignOperationsH1DeploymentAudit.sh
+untracked lines=439 bytes=27494 path=Scripts/CampaignOperationsH1EvidenceAuthority.py
+untracked lines=1002 bytes=67206 path=Scripts/CampaignOperationsH1EvidenceGraph.py
+untracked lines=153 bytes=8418 path=Scripts/CampaignOperationsH1EvidencePayloadGenerator.py
+untracked lines=727 bytes=43551 path=Scripts/CampaignOperationsH1EvidenceValidator.py
+untracked lines=113 bytes=8120 path=Scripts/CampaignOperationsH1LegacyInventory.py
+untracked lines=302 bytes=14788 path=Scripts/CampaignOperationsH1LockEvidence.py
+untracked lines=133 bytes=5867 path=Scripts/CampaignOperationsH1ManifestValidator.sh
+untracked lines=95 bytes=14472 path=Scripts/CampaignOperationsH1NormativeAuthority.py
+untracked lines=63 bytes=3334 path=Scripts/CampaignOperationsH1Provenance.py
+untracked lines=514 bytes=35174 path=Scripts/CampaignOperationsH1RegistryCompiler.py
+untracked lines=65 bytes=2574 path=Scripts/CampaignOperationsH1RestoreAclOrigin.sh
+untracked lines=111 bytes=6357 path=Scripts/CampaignOperationsH1RestoreEvidence.py
+untracked lines=126 bytes=6040 path=Scripts/CampaignOperationsH1TrustModel.py
+untracked lines=136 bytes=7202 path=Scripts/CampaignOperationsH1TrustedEvidencePipeline.py
+untracked lines=132 bytes=7203 path=Scripts/CampaignOperationsH1TrustedGenerator.py
+untracked lines=264 bytes=15131 path=Scripts/CampaignOperationsH1TrustedRunner.py
+untracked lines=61 bytes=15887 path=Scripts/__pycache__/CampaignOperationsH1AclCatalog.cpython-314.pyc
+untracked lines=102 bytes=11800 path=Scripts/__pycache__/CampaignOperationsH1AclCatalogGenerator.cpython-314.pyc
+untracked lines=114 bytes=14490 path=Scripts/__pycache__/CampaignOperationsH1AclEvidence.cpython-314.pyc
+untracked lines=98 bytes=26739 path=Scripts/__pycache__/CampaignOperationsH1ArtifactSnapshot.cpython-314.pyc
+untracked lines=59 bytes=9142 path=Scripts/__pycache__/CampaignOperationsH1CatalogPipeline.cpython-314.pyc
+untracked lines=123 bytes=37930 path=Scripts/__pycache__/CampaignOperationsH1EvidenceAuthority.cpython-314.pyc
+untracked lines=353 bytes=94339 path=Scripts/__pycache__/CampaignOperationsH1EvidenceGraph.cpython-314.pyc
+untracked lines=65 bytes=10896 path=Scripts/__pycache__/CampaignOperationsH1EvidencePayloadGenerator.cpython-314.pyc
+untracked lines=193 bytes=56139 path=Scripts/__pycache__/CampaignOperationsH1EvidenceValidator.cpython-314.pyc
+untracked lines=34 bytes=11308 path=Scripts/__pycache__/CampaignOperationsH1LegacyInventory.cpython-314.pyc
+untracked lines=95 bytes=25454 path=Scripts/__pycache__/CampaignOperationsH1LockEvidence.cpython-314.pyc
+untracked lines=38 bytes=12022 path=Scripts/__pycache__/CampaignOperationsH1NormativeAuthority.cpython-314.pyc
+untracked lines=24 bytes=4882 path=Scripts/__pycache__/CampaignOperationsH1Provenance.cpython-314.pyc
+untracked lines=128 bytes=33444 path=Scripts/__pycache__/CampaignOperationsH1RegistryCompiler.cpython-314.pyc
+untracked lines=29 bytes=8674 path=Scripts/__pycache__/CampaignOperationsH1RestoreEvidence.cpython-314.pyc
+untracked lines=41 bytes=10882 path=Scripts/__pycache__/CampaignOperationsH1TrustModel.cpython-314.pyc
+untracked lines=48 bytes=10647 path=Scripts/__pycache__/CampaignOperationsH1TrustedEvidencePipeline.cpython-314.pyc
+untracked lines=88 bytes=9304 path=Scripts/__pycache__/CampaignOperationsH1TrustedGenerator.cpython-314.pyc
+untracked lines=90 bytes=22300 path=Scripts/__pycache__/CampaignOperationsH1TrustedRunner.cpython-314.pyc
+untracked lines=94 bytes=6781 path=Tests/CampaignOperationsPhaseH1AclCatalogIndependenceTests.py
+untracked lines=11 bytes=481 path=Tests/CampaignOperationsPhaseH1AclOriginArtifactTests.sh
+untracked lines=66 bytes=5198 path=Tests/CampaignOperationsPhaseH1AclOriginMutationTests.sh
+untracked lines=153 bytes=8733 path=Tests/CampaignOperationsPhaseH1AclOriginTests.sh
+untracked lines=381 bytes=23458 path=Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.py
+untracked lines=6 bytes=334 path=Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.sh
+untracked lines=84 bytes=5173 path=Tests/CampaignOperationsPhaseH1EvidenceDeltaTests.sh
+untracked lines=220 bytes=14547 path=Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh
+untracked lines=52 bytes=3305 path=Tests/CampaignOperationsPhaseH1FinalEvidenceMutationTests.sh
+untracked lines=67 bytes=3096 path=Tests/CampaignOperationsPhaseH1LegacyReachabilityTests.py
+untracked lines=10 bytes=449 path=Tests/CampaignOperationsPhaseH1LockArtifactTests.sh
+untracked lines=135 bytes=7795 path=Tests/CampaignOperationsPhaseH1LockMutationTests.sh
+untracked lines=74 bytes=6608 path=Tests/CampaignOperationsPhaseH1ManifestMutationTests.sh
+untracked lines=16 bytes=954 path=Tests/CampaignOperationsPhaseH1PreEnablementArtifactTests.sh
+untracked lines=50 bytes=2010 path=Tests/CampaignOperationsPhaseH1ProvenanceIntegrationTests.py
+untracked lines=23 bytes=1249 path=Tests/CampaignOperationsPhaseH1ReferenceGraphTests.sh
+untracked lines=97 bytes=6829 path=Tests/CampaignOperationsPhaseH1ReferenceMutationTests.sh
+untracked lines=78 bytes=5834 path=Tests/CampaignOperationsPhaseH1RegistrySemanticMutationTests.sh
+untracked lines=4 bytes=185 path=Tests/CampaignOperationsPhaseH1RegistrySemanticTests.sh
+untracked lines=10 bytes=393 path=Tests/CampaignOperationsPhaseH1RestoreArtifactTests.sh
+untracked lines=78 bytes=3950 path=Tests/CampaignOperationsPhaseH1SnapshotConsumerTests.py
+untracked lines=123 bytes=7146 path=Tests/CampaignOperationsPhaseH1TraceabilityMutationTests.sh
+untracked lines=167 bytes=7316 path=Tests/CampaignOperationsPhaseH1TraceabilityTests.sh
+untracked lines=79 bytes=4175 path=Tests/CampaignOperationsPhaseH1TrustModelIntegrationTests.py
+untracked lines=63 bytes=2897 path=Tests/CampaignOperationsPhaseH1TrustedGeneratorTests.py
+untracked lines=126 bytes=6534 path=Tests/CampaignOperationsPhaseH1TrustedRunnerTests.py
+untracked lines=16 bytes=971 path=Tests/CampaignOperationsPhaseH1UniquenessInvariantTests.sh
+untracked lines=336 bytes=17240 path=Tests/CampaignOperationsPhaseH1WorkflowLockTests.cpp
+untracked lines=47 bytes=12325 path=Tests/__pycache__/CampaignOperationsPhaseH1AclCatalogIndependenceTests.cpython-314.pyc
+untracked lines=139 bytes=42127 path=Tests/__pycache__/CampaignOperationsPhaseH1EvidenceAuthorityTests.cpython-314.pyc
+untracked lines=18 bytes=6047 path=Tests/__pycache__/CampaignOperationsPhaseH1LegacyReachabilityTests.cpython-314.pyc
+untracked lines=18 bytes=4333 path=Tests/__pycache__/CampaignOperationsPhaseH1ProvenanceIntegrationTests.cpython-314.pyc
+untracked lines=26 bytes=6955 path=Tests/__pycache__/CampaignOperationsPhaseH1SnapshotConsumerTests.cpython-314.pyc
+untracked lines=22 bytes=6049 path=Tests/__pycache__/CampaignOperationsPhaseH1TrustModelIntegrationTests.cpython-314.pyc
+untracked lines=23 bytes=5200 path=Tests/__pycache__/CampaignOperationsPhaseH1TrustedGeneratorTests.cpython-314.pyc
+untracked lines=45 bytes=11562 path=Tests/__pycache__/CampaignOperationsPhaseH1TrustedRunnerTests.cpython-314.pyc
+untracked lines=39 bytes=4498 path=Tests/fixtures/CampaignOperationsH1AclOriginFixtures.tsv
+untracked lines=375 bytes=65038 path=Tests/fixtures/CampaignOperationsH1Artifacts.tsv
+untracked lines=105 bytes=13892 path=Tests/fixtures/CampaignOperationsH1AssuranceControls.tsv
+untracked lines=1161 bytes=257305 path=Tests/fixtures/CampaignOperationsH1ClauseRequirementDerivations.tsv
+untracked lines=10 bytes=932 path=Tests/fixtures/CampaignOperationsH1DirectoryPolicy.tsv
+untracked lines=4019 bytes=561138 path=Tests/fixtures/CampaignOperationsH1Edges.tsv
+untracked lines=184 bytes=45385 path=Tests/fixtures/CampaignOperationsH1EvidenceObligations.tsv
+untracked lines=13 bytes=2325 path=Tests/fixtures/CampaignOperationsH1ExpectedValueAuthorities.tsv
+untracked lines=13 bytes=1669 path=Tests/fixtures/CampaignOperationsH1FinalAssuranceControls.tsv
+untracked lines=288 bytes=67557 path=Tests/fixtures/CampaignOperationsH1Fixtures.tsv
+untracked lines=9 bytes=7827 path=Tests/fixtures/CampaignOperationsH1Generators.tsv
+untracked lines=19 bytes=2673 path=Tests/fixtures/CampaignOperationsH1LegacyPathInventory.tsv
+untracked lines=16 bytes=4693 path=Tests/fixtures/CampaignOperationsH1LockPathMatrix.tsv
+untracked lines=93 bytes=14382 path=Tests/fixtures/CampaignOperationsH1MutationMechanics.tsv
+untracked lines=37 bytes=50898 path=Tests/fixtures/CampaignOperationsH1NormativeClauses.tsv
+untracked lines=13 bytes=1927 path=Tests/fixtures/CampaignOperationsH1ObservedValueProvenance.tsv
+untracked lines=3 bytes=891 path=Tests/fixtures/CampaignOperationsH1PreEnablementEvidence.tsv
+untracked lines=15 bytes=2556 path=Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv
+untracked lines=9 bytes=1006 path=Tests/fixtures/CampaignOperationsH1RegistryDigests.tsv
+untracked lines=288 bytes=54276 path=Tests/fixtures/CampaignOperationsH1ReportEntries.tsv
+untracked lines=288 bytes=74075 path=Tests/fixtures/CampaignOperationsH1Requirements.tsv
+untracked lines=2 bytes=394 path=Tests/fixtures/CampaignOperationsH1ReviewDisposition.tsv
+untracked lines=288 bytes=51547 path=Tests/fixtures/CampaignOperationsH1RuntimeRecords.tsv
+untracked lines=143 bytes=31985 path=Tests/fixtures/CampaignOperationsH1Traceability.tsv
+untracked lines=2 bytes=536 path=Tests/fixtures/CampaignOperationsH1UniquenessInvariants.tsv
+untracked lines=8 bytes=12369 path=Tests/fixtures/CampaignOperationsH1Validators.tsv
+untracked lines=59 bytes=3581 path=docs/CampaignOperationsH1Traceability.md
+untracked lines=119 bytes=4514 path=docs/architecture/CampaignOperations_PhaseH_Legacy_Bypass_Elimination.md
+untracked lines=337 bytes=19917 path=docs/architecture/adr/ADR-0019A-h1-owner-safe-transaction-authorization.md
+untracked lines=368 bytes=19302 path=docs/architecture/adr/ADR-0019B-h1-sealed-role-deployment-contract.md
+untracked_diff_stat_end
+```
+
+## 33. Full diff stat including untracked files
+
+```text
+tracked_count=27 untracked_count=139 policy=no-commit
+ M Database/README.md
+ A Database/migrations/055_campaign_operations_production_admission_foundation.sql
+ M ExpertAdvisor.xcodeproj/project.pbxproj
+ M Sources/CampaignOperations.hpp
+ A Sources/CampaignOperationsProductionAdmission.cpp
+ A Sources/CampaignOperationsProductionAdmission.hpp
+ A Sources/CampaignOperationsProductionAdmissionRepository.cpp
+ A Sources/CampaignOperationsProductionAdmissionRepository.hpp
+ A Sources/CampaignOperationsProductionAdmissionService.cpp
+ A Sources/CampaignOperationsProductionAdmissionService.hpp
+ M Sources/CampaignOperationsService.cpp
+ M Sources/CampaignOperationsService.hpp
+ M Sources/ExperimentScheduler.cpp
+ A Tests/CampaignOperationsPhaseH1CliTests.sh
+ A Tests/CampaignOperationsPhaseH1MigrationTests.sh
+ A Tests/CampaignOperationsPhaseH1MigrationTests.sql
+ A Tests/CampaignOperationsPhaseH1RepositoryTests.cpp
+ A Tests/CampaignOperationsPhaseH1Tests.cpp
+ M Tests/CampaignOperationsRepositoryTests.cpp
+ M Tests/SchedulerOwnershipMigrationTests.sql
+ A docs/CampaignOperationsPhaseH1.rst
+ M docs/architecture/CampaignOperations_PhaseH_Production_Dispatch_Admission_and_Manager.md
+ M docs/architecture/Volume_XII_Database.md
+ M docs/architecture/Volume_XI_Scheduler.md
+ M docs/architecture/Volume_X_Research_Automation.md
+ M docs/architecture/adr/ADR-0019-campaign-operations-production-dispatch-admission-and-manager.md
+ M docs/architecture/adr/README.md
+?? .h1-five-finding-review.8FElTh/reproduce.py
+?? CampaignOperations_ADR0019B_FinalAssurance_RemainingBlockers_ImplementationReview_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_ClassificationCalibration_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_StaticFiveFindingContinuationReview_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_EvidenceCompletion_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraphReporting_FinalCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraph_RuntimeReporting_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FinalAssuranceCompletion_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FinalAssurance_TargetedIndependentAudit_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FinalEvidenceModelCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FiveBlockerTargetedAssuranceCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_FiveTrustBoundary_FocusedIndependentCEEReverification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_LegacyBypassElimination_FullTrustModelIntegration_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedAssuranceCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthorityCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthority_FocusedIndependentReverification_Output.md
+?? CampaignOperations_PhaseH_H1_ADR0019B_TargetedEvidenceCompletion_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_FinalArchitectureConsistencyReview_Output.md
+?? CampaignOperations_PhaseH_H1_Implementation_Output.md
+?? CampaignOperations_PhaseH_H1_IndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_SealedRoleDeploymentContract_TargetedArchitectureCorrectionAndImplementation_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedArchitectureCorrectionAndImplementation_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedArchitectureCorrection_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedCorrection_FocusedIndependentCEEVerification_Output.md
+?? CampaignOperations_PhaseH_H1_TargetedCorrection_Implementation_Output.md
+?? CampaignOperations_PhaseH_LegacyBypassElimination_FinalIntegration_Output.md
+?? Database/manifests/055_campaign_operations_h1_acl_manifest.sql
+?? Database/manifests/055_campaign_operations_h1_column_acl.tsv
+?? Database/manifests/055_campaign_operations_h1_default_acl.tsv
+?? Database/manifests/055_campaign_operations_h1_explicit_acl.tsv
+?? Database/manifests/055_campaign_operations_h1_manifest.sha256
+?? Database/manifests/055_campaign_operations_h1_object_inventory.tsv
+?? Scripts/CampaignOperationsH1AclCatalog.py
+?? Scripts/CampaignOperationsH1AclCatalogGenerator.py
+?? Scripts/CampaignOperationsH1AclEvidence.py
+?? Scripts/CampaignOperationsH1ArtifactSnapshot.py
+?? Scripts/CampaignOperationsH1CatalogPipeline.py
+?? Scripts/CampaignOperationsH1DeploymentAudit.sh
+?? Scripts/CampaignOperationsH1EvidenceAuthority.py
+?? Scripts/CampaignOperationsH1EvidenceGraph.py
+?? Scripts/CampaignOperationsH1EvidencePayloadGenerator.py
+?? Scripts/CampaignOperationsH1EvidenceValidator.py
+?? Scripts/CampaignOperationsH1LegacyInventory.py
+?? Scripts/CampaignOperationsH1LockEvidence.py
+?? Scripts/CampaignOperationsH1ManifestValidator.sh
+?? Scripts/CampaignOperationsH1NormativeAuthority.py
+?? Scripts/CampaignOperationsH1Provenance.py
+?? Scripts/CampaignOperationsH1RegistryCompiler.py
+?? Scripts/CampaignOperationsH1RestoreAclOrigin.sh
+?? Scripts/CampaignOperationsH1RestoreEvidence.py
+?? Scripts/CampaignOperationsH1TrustModel.py
+?? Scripts/CampaignOperationsH1TrustedEvidencePipeline.py
+?? Scripts/CampaignOperationsH1TrustedGenerator.py
+?? Scripts/CampaignOperationsH1TrustedRunner.py
+?? Scripts/__pycache__/CampaignOperationsH1AclCatalog.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1AclCatalogGenerator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1AclEvidence.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1ArtifactSnapshot.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1CatalogPipeline.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidenceAuthority.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidenceGraph.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidencePayloadGenerator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1EvidenceValidator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1LegacyInventory.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1LockEvidence.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1NormativeAuthority.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1Provenance.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1RegistryCompiler.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1RestoreEvidence.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustModel.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustedEvidencePipeline.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustedGenerator.cpython-314.pyc
+?? Scripts/__pycache__/CampaignOperationsH1TrustedRunner.cpython-314.pyc
+?? Tests/CampaignOperationsPhaseH1AclCatalogIndependenceTests.py
+?? Tests/CampaignOperationsPhaseH1AclOriginArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1AclOriginMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1AclOriginTests.sh
+?? Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.py
+?? Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.sh
+?? Tests/CampaignOperationsPhaseH1EvidenceDeltaTests.sh
+?? Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh
+?? Tests/CampaignOperationsPhaseH1FinalEvidenceMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1LegacyReachabilityTests.py
+?? Tests/CampaignOperationsPhaseH1LockArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1LockMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1ManifestMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1PreEnablementArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1ProvenanceIntegrationTests.py
+?? Tests/CampaignOperationsPhaseH1ReferenceGraphTests.sh
+?? Tests/CampaignOperationsPhaseH1ReferenceMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1RegistrySemanticMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1RegistrySemanticTests.sh
+?? Tests/CampaignOperationsPhaseH1RestoreArtifactTests.sh
+?? Tests/CampaignOperationsPhaseH1SnapshotConsumerTests.py
+?? Tests/CampaignOperationsPhaseH1TraceabilityMutationTests.sh
+?? Tests/CampaignOperationsPhaseH1TraceabilityTests.sh
+?? Tests/CampaignOperationsPhaseH1TrustModelIntegrationTests.py
+?? Tests/CampaignOperationsPhaseH1TrustedGeneratorTests.py
+?? Tests/CampaignOperationsPhaseH1TrustedRunnerTests.py
+?? Tests/CampaignOperationsPhaseH1UniquenessInvariantTests.sh
+?? Tests/CampaignOperationsPhaseH1WorkflowLockTests.cpp
+?? Tests/__pycache__/CampaignOperationsPhaseH1AclCatalogIndependenceTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1EvidenceAuthorityTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1LegacyReachabilityTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1ProvenanceIntegrationTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1SnapshotConsumerTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1TrustModelIntegrationTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1TrustedGeneratorTests.cpython-314.pyc
+?? Tests/__pycache__/CampaignOperationsPhaseH1TrustedRunnerTests.cpython-314.pyc
+?? Tests/fixtures/CampaignOperationsH1AclOriginFixtures.tsv
+?? Tests/fixtures/CampaignOperationsH1Artifacts.tsv
+?? Tests/fixtures/CampaignOperationsH1AssuranceControls.tsv
+?? Tests/fixtures/CampaignOperationsH1ClauseRequirementDerivations.tsv
+?? Tests/fixtures/CampaignOperationsH1DirectoryPolicy.tsv
+?? Tests/fixtures/CampaignOperationsH1Edges.tsv
+?? Tests/fixtures/CampaignOperationsH1EvidenceObligations.tsv
+?? Tests/fixtures/CampaignOperationsH1ExpectedValueAuthorities.tsv
+?? Tests/fixtures/CampaignOperationsH1FinalAssuranceControls.tsv
+?? Tests/fixtures/CampaignOperationsH1Fixtures.tsv
+?? Tests/fixtures/CampaignOperationsH1Generators.tsv
+?? Tests/fixtures/CampaignOperationsH1LegacyPathInventory.tsv
+?? Tests/fixtures/CampaignOperationsH1LockPathMatrix.tsv
+?? Tests/fixtures/CampaignOperationsH1MutationMechanics.tsv
+?? Tests/fixtures/CampaignOperationsH1NormativeClauses.tsv
+?? Tests/fixtures/CampaignOperationsH1ObservedValueProvenance.tsv
+?? Tests/fixtures/CampaignOperationsH1PreEnablementEvidence.tsv
+?? Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv
+?? Tests/fixtures/CampaignOperationsH1RegistryDigests.tsv
+?? Tests/fixtures/CampaignOperationsH1ReportEntries.tsv
+?? Tests/fixtures/CampaignOperationsH1Requirements.tsv
+?? Tests/fixtures/CampaignOperationsH1ReviewDisposition.tsv
+?? Tests/fixtures/CampaignOperationsH1RuntimeRecords.tsv
+?? Tests/fixtures/CampaignOperationsH1Traceability.tsv
+?? Tests/fixtures/CampaignOperationsH1UniquenessInvariants.tsv
+?? Tests/fixtures/CampaignOperationsH1Validators.tsv
+?? docs/CampaignOperationsH1Traceability.md
+?? docs/architecture/CampaignOperations_PhaseH_Legacy_Bypass_Elimination.md
+?? docs/architecture/adr/ADR-0019A-h1-owner-safe-transaction-authorization.md
+?? docs/architecture/adr/ADR-0019B-h1-sealed-role-deployment-contract.md
+tracked_diff_stat_begin
+ Database/README.md                                 |   16 +
+ ..._operations_production_admission_foundation.sql | 4781 ++++++++++++++++++++
+ ExpertAdvisor.xcodeproj/project.pbxproj            |   24 +
+ Sources/CampaignOperations.hpp                     |    6 +
+ Sources/CampaignOperationsProductionAdmission.cpp  |  511 +++
+ Sources/CampaignOperationsProductionAdmission.hpp  |  256 ++
+ ...aignOperationsProductionAdmissionRepository.cpp |  590 +++
+ ...aignOperationsProductionAdmissionRepository.hpp |  150 +
+ ...ampaignOperationsProductionAdmissionService.cpp |  404 ++
+ ...ampaignOperationsProductionAdmissionService.hpp |   37 +
+ Sources/CampaignOperationsService.cpp              |    6 +-
+ Sources/CampaignOperationsService.hpp              |   13 +-
+ Sources/ExperimentScheduler.cpp                    |   49 +-
+ Tests/CampaignOperationsPhaseH1CliTests.sh         |   63 +
+ Tests/CampaignOperationsPhaseH1MigrationTests.sh   | 2436 ++++++++++
+ Tests/CampaignOperationsPhaseH1MigrationTests.sql  | 1600 +++++++
+ Tests/CampaignOperationsPhaseH1RepositoryTests.cpp |  294 ++
+ Tests/CampaignOperationsPhaseH1Tests.cpp           |  244 +
+ Tests/CampaignOperationsRepositoryTests.cpp        |   10 +
+ Tests/SchedulerOwnershipMigrationTests.sql         |    6 +-
+ docs/CampaignOperationsPhaseH1.rst                 |  193 +
+ ...eH_Production_Dispatch_Admission_and_Manager.md |   97 +-
+ docs/architecture/Volume_XII_Database.md           |   67 +-
+ docs/architecture/Volume_XI_Scheduler.md           |    1 +
+ docs/architecture/Volume_X_Research_Automation.md  |    1 +
+ ...ns-production-dispatch-admission-and-manager.md |   10 +
+ docs/architecture/adr/README.md                    |    4 +
+ 27 files changed, 11849 insertions(+), 20 deletions(-)
+tracked_diff_stat_end
+untracked_diff_stat_begin
+untracked lines=519 bytes=32091 path=.h1-five-finding-review.8FElTh/reproduce.py
+untracked lines=206 bytes=16461 path=CampaignOperations_ADR0019B_FinalAssurance_RemainingBlockers_ImplementationReview_Output.md
+untracked lines=22 bytes=1535 path=CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_ClassificationCalibration_FocusedIndependentCEEVerification_Output.md
+untracked lines=17 bytes=994 path=CampaignOperations_PhaseH_H1_ADR0019B_DefensiveEvidenceAuthority_StaticFiveFindingContinuationReview_Output.md
+untracked lines=627 bytes=29689 path=CampaignOperations_PhaseH_H1_ADR0019B_EvidenceCompletion_FocusedIndependentCEEVerification_Output.md
+untracked lines=38 bytes=2170 path=CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraphReporting_FinalCorrection_Implementation_Output.md
+untracked lines=669 bytes=31257 path=CampaignOperations_PhaseH_H1_ADR0019B_EvidenceGraph_RuntimeReporting_FocusedIndependentCEEVerification_Output.md
+untracked lines=39 bytes=1957 path=CampaignOperations_PhaseH_H1_ADR0019B_FinalAssuranceCompletion_Implementation_Output.md
+untracked lines=525 bytes=30220 path=CampaignOperations_PhaseH_H1_ADR0019B_FinalAssurance_TargetedIndependentAudit_Output.md
+untracked lines=51 bytes=2849 path=CampaignOperations_PhaseH_H1_ADR0019B_FinalEvidenceModelCorrection_Implementation_Output.md
+untracked lines=46 bytes=2416 path=CampaignOperations_PhaseH_H1_ADR0019B_FiveBlockerTargetedAssuranceCorrection_Implementation_Output.md
+untracked lines=25 bytes=1246 path=CampaignOperations_PhaseH_H1_ADR0019B_FiveTrustBoundary_FocusedIndependentCEEReverification_Output.md
+untracked lines=143 bytes=5531 path=CampaignOperations_PhaseH_H1_ADR0019B_LegacyBypassElimination_FullTrustModelIntegration_Implementation_Output.md
+untracked lines=30 bytes=1563 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedAssuranceCorrection_Implementation_Output.md
+untracked lines=44 bytes=2421 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthorityCorrection_Implementation_Output.md
+untracked lines=38 bytes=2585 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedDefensiveEvidenceAuthority_FocusedIndependentReverification_Output.md
+untracked lines=52 bytes=3010 path=CampaignOperations_PhaseH_H1_ADR0019B_TargetedEvidenceCompletion_Implementation_Output.md
+untracked lines=87 bytes=9671 path=CampaignOperations_PhaseH_H1_FinalArchitectureConsistencyReview_Output.md
+untracked lines=101 bytes=5344 path=CampaignOperations_PhaseH_H1_Implementation_Output.md
+untracked lines=292 bytes=14434 path=CampaignOperations_PhaseH_H1_IndependentCEEVerification_Output.md
+untracked lines=95 bytes=4623 path=CampaignOperations_PhaseH_H1_SealedRoleDeploymentContract_TargetedArchitectureCorrectionAndImplementation_Output.md
+untracked lines=379 bytes=18803 path=CampaignOperations_PhaseH_H1_TargetedArchitectureCorrectionAndImplementation_Output.md
+untracked lines=597 bytes=29277 path=CampaignOperations_PhaseH_H1_TargetedArchitectureCorrection_FocusedIndependentCEEVerification_Output.md
+untracked lines=610 bytes=38800 path=CampaignOperations_PhaseH_H1_TargetedCorrection_FocusedIndependentCEEVerification_Output.md
+untracked lines=374 bytes=20185 path=CampaignOperations_PhaseH_H1_TargetedCorrection_Implementation_Output.md
+untracked lines=158 bytes=5796 path=CampaignOperations_PhaseH_LegacyBypassElimination_FinalIntegration_Output.md
+untracked lines=399 bytes=36691 path=Database/manifests/055_campaign_operations_h1_acl_manifest.sql
+untracked lines=8 bytes=2477 path=Database/manifests/055_campaign_operations_h1_column_acl.tsv
+untracked lines=28 bytes=4150 path=Database/manifests/055_campaign_operations_h1_default_acl.tsv
+untracked lines=71 bytes=16495 path=Database/manifests/055_campaign_operations_h1_explicit_acl.tsv
+untracked lines=1 bytes=84 path=Database/manifests/055_campaign_operations_h1_manifest.sha256
+untracked lines=93 bytes=23102 path=Database/manifests/055_campaign_operations_h1_object_inventory.tsv
+untracked lines=213 bytes=12871 path=Scripts/CampaignOperationsH1AclCatalog.py
+untracked lines=165 bytes=8904 path=Scripts/CampaignOperationsH1AclCatalogGenerator.py
+untracked lines=151 bytes=7782 path=Scripts/CampaignOperationsH1AclEvidence.py
+untracked lines=314 bytes=15618 path=Scripts/CampaignOperationsH1ArtifactSnapshot.py
+untracked lines=148 bytes=8906 path=Scripts/CampaignOperationsH1CatalogPipeline.py
+untracked lines=301 bytes=13220 path=Scripts/CampaignOperationsH1DeploymentAudit.sh
+untracked lines=439 bytes=27494 path=Scripts/CampaignOperationsH1EvidenceAuthority.py
+untracked lines=1002 bytes=67206 path=Scripts/CampaignOperationsH1EvidenceGraph.py
+untracked lines=153 bytes=8418 path=Scripts/CampaignOperationsH1EvidencePayloadGenerator.py
+untracked lines=727 bytes=43551 path=Scripts/CampaignOperationsH1EvidenceValidator.py
+untracked lines=113 bytes=8120 path=Scripts/CampaignOperationsH1LegacyInventory.py
+untracked lines=302 bytes=14788 path=Scripts/CampaignOperationsH1LockEvidence.py
+untracked lines=133 bytes=5867 path=Scripts/CampaignOperationsH1ManifestValidator.sh
+untracked lines=95 bytes=14472 path=Scripts/CampaignOperationsH1NormativeAuthority.py
+untracked lines=63 bytes=3334 path=Scripts/CampaignOperationsH1Provenance.py
+untracked lines=514 bytes=35174 path=Scripts/CampaignOperationsH1RegistryCompiler.py
+untracked lines=65 bytes=2574 path=Scripts/CampaignOperationsH1RestoreAclOrigin.sh
+untracked lines=111 bytes=6357 path=Scripts/CampaignOperationsH1RestoreEvidence.py
+untracked lines=126 bytes=6040 path=Scripts/CampaignOperationsH1TrustModel.py
+untracked lines=136 bytes=7202 path=Scripts/CampaignOperationsH1TrustedEvidencePipeline.py
+untracked lines=132 bytes=7203 path=Scripts/CampaignOperationsH1TrustedGenerator.py
+untracked lines=264 bytes=15131 path=Scripts/CampaignOperationsH1TrustedRunner.py
+untracked lines=61 bytes=15887 path=Scripts/__pycache__/CampaignOperationsH1AclCatalog.cpython-314.pyc
+untracked lines=102 bytes=11800 path=Scripts/__pycache__/CampaignOperationsH1AclCatalogGenerator.cpython-314.pyc
+untracked lines=114 bytes=14490 path=Scripts/__pycache__/CampaignOperationsH1AclEvidence.cpython-314.pyc
+untracked lines=98 bytes=26739 path=Scripts/__pycache__/CampaignOperationsH1ArtifactSnapshot.cpython-314.pyc
+untracked lines=59 bytes=9142 path=Scripts/__pycache__/CampaignOperationsH1CatalogPipeline.cpython-314.pyc
+untracked lines=123 bytes=37930 path=Scripts/__pycache__/CampaignOperationsH1EvidenceAuthority.cpython-314.pyc
+untracked lines=353 bytes=94339 path=Scripts/__pycache__/CampaignOperationsH1EvidenceGraph.cpython-314.pyc
+untracked lines=65 bytes=10896 path=Scripts/__pycache__/CampaignOperationsH1EvidencePayloadGenerator.cpython-314.pyc
+untracked lines=193 bytes=56139 path=Scripts/__pycache__/CampaignOperationsH1EvidenceValidator.cpython-314.pyc
+untracked lines=34 bytes=11308 path=Scripts/__pycache__/CampaignOperationsH1LegacyInventory.cpython-314.pyc
+untracked lines=95 bytes=25454 path=Scripts/__pycache__/CampaignOperationsH1LockEvidence.cpython-314.pyc
+untracked lines=38 bytes=12022 path=Scripts/__pycache__/CampaignOperationsH1NormativeAuthority.cpython-314.pyc
+untracked lines=24 bytes=4882 path=Scripts/__pycache__/CampaignOperationsH1Provenance.cpython-314.pyc
+untracked lines=128 bytes=33444 path=Scripts/__pycache__/CampaignOperationsH1RegistryCompiler.cpython-314.pyc
+untracked lines=29 bytes=8674 path=Scripts/__pycache__/CampaignOperationsH1RestoreEvidence.cpython-314.pyc
+untracked lines=41 bytes=10882 path=Scripts/__pycache__/CampaignOperationsH1TrustModel.cpython-314.pyc
+untracked lines=48 bytes=10647 path=Scripts/__pycache__/CampaignOperationsH1TrustedEvidencePipeline.cpython-314.pyc
+untracked lines=88 bytes=9304 path=Scripts/__pycache__/CampaignOperationsH1TrustedGenerator.cpython-314.pyc
+untracked lines=90 bytes=22300 path=Scripts/__pycache__/CampaignOperationsH1TrustedRunner.cpython-314.pyc
+untracked lines=94 bytes=6781 path=Tests/CampaignOperationsPhaseH1AclCatalogIndependenceTests.py
+untracked lines=11 bytes=481 path=Tests/CampaignOperationsPhaseH1AclOriginArtifactTests.sh
+untracked lines=66 bytes=5198 path=Tests/CampaignOperationsPhaseH1AclOriginMutationTests.sh
+untracked lines=153 bytes=8733 path=Tests/CampaignOperationsPhaseH1AclOriginTests.sh
+untracked lines=381 bytes=23458 path=Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.py
+untracked lines=6 bytes=334 path=Tests/CampaignOperationsPhaseH1EvidenceAuthorityTests.sh
+untracked lines=84 bytes=5173 path=Tests/CampaignOperationsPhaseH1EvidenceDeltaTests.sh
+untracked lines=220 bytes=14547 path=Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh
+untracked lines=52 bytes=3305 path=Tests/CampaignOperationsPhaseH1FinalEvidenceMutationTests.sh
+untracked lines=67 bytes=3096 path=Tests/CampaignOperationsPhaseH1LegacyReachabilityTests.py
+untracked lines=10 bytes=449 path=Tests/CampaignOperationsPhaseH1LockArtifactTests.sh
+untracked lines=135 bytes=7795 path=Tests/CampaignOperationsPhaseH1LockMutationTests.sh
+untracked lines=74 bytes=6608 path=Tests/CampaignOperationsPhaseH1ManifestMutationTests.sh
+untracked lines=16 bytes=954 path=Tests/CampaignOperationsPhaseH1PreEnablementArtifactTests.sh
+untracked lines=50 bytes=2010 path=Tests/CampaignOperationsPhaseH1ProvenanceIntegrationTests.py
+untracked lines=23 bytes=1249 path=Tests/CampaignOperationsPhaseH1ReferenceGraphTests.sh
+untracked lines=97 bytes=6829 path=Tests/CampaignOperationsPhaseH1ReferenceMutationTests.sh
+untracked lines=78 bytes=5834 path=Tests/CampaignOperationsPhaseH1RegistrySemanticMutationTests.sh
+untracked lines=4 bytes=185 path=Tests/CampaignOperationsPhaseH1RegistrySemanticTests.sh
+untracked lines=10 bytes=393 path=Tests/CampaignOperationsPhaseH1RestoreArtifactTests.sh
+untracked lines=78 bytes=3950 path=Tests/CampaignOperationsPhaseH1SnapshotConsumerTests.py
+untracked lines=123 bytes=7146 path=Tests/CampaignOperationsPhaseH1TraceabilityMutationTests.sh
+untracked lines=167 bytes=7316 path=Tests/CampaignOperationsPhaseH1TraceabilityTests.sh
+untracked lines=79 bytes=4175 path=Tests/CampaignOperationsPhaseH1TrustModelIntegrationTests.py
+untracked lines=63 bytes=2897 path=Tests/CampaignOperationsPhaseH1TrustedGeneratorTests.py
+untracked lines=126 bytes=6534 path=Tests/CampaignOperationsPhaseH1TrustedRunnerTests.py
+untracked lines=16 bytes=971 path=Tests/CampaignOperationsPhaseH1UniquenessInvariantTests.sh
+untracked lines=336 bytes=17240 path=Tests/CampaignOperationsPhaseH1WorkflowLockTests.cpp
+untracked lines=47 bytes=12325 path=Tests/__pycache__/CampaignOperationsPhaseH1AclCatalogIndependenceTests.cpython-314.pyc
+untracked lines=139 bytes=42127 path=Tests/__pycache__/CampaignOperationsPhaseH1EvidenceAuthorityTests.cpython-314.pyc
+untracked lines=18 bytes=6047 path=Tests/__pycache__/CampaignOperationsPhaseH1LegacyReachabilityTests.cpython-314.pyc
+untracked lines=18 bytes=4333 path=Tests/__pycache__/CampaignOperationsPhaseH1ProvenanceIntegrationTests.cpython-314.pyc
+untracked lines=26 bytes=6955 path=Tests/__pycache__/CampaignOperationsPhaseH1SnapshotConsumerTests.cpython-314.pyc
+untracked lines=22 bytes=6049 path=Tests/__pycache__/CampaignOperationsPhaseH1TrustModelIntegrationTests.cpython-314.pyc
+untracked lines=23 bytes=5200 path=Tests/__pycache__/CampaignOperationsPhaseH1TrustedGeneratorTests.cpython-314.pyc
+untracked lines=45 bytes=11562 path=Tests/__pycache__/CampaignOperationsPhaseH1TrustedRunnerTests.cpython-314.pyc
+untracked lines=39 bytes=4498 path=Tests/fixtures/CampaignOperationsH1AclOriginFixtures.tsv
+untracked lines=375 bytes=65038 path=Tests/fixtures/CampaignOperationsH1Artifacts.tsv
+untracked lines=105 bytes=13892 path=Tests/fixtures/CampaignOperationsH1AssuranceControls.tsv
+untracked lines=1161 bytes=257305 path=Tests/fixtures/CampaignOperationsH1ClauseRequirementDerivations.tsv
+untracked lines=10 bytes=932 path=Tests/fixtures/CampaignOperationsH1DirectoryPolicy.tsv
+untracked lines=4019 bytes=561138 path=Tests/fixtures/CampaignOperationsH1Edges.tsv
+untracked lines=184 bytes=45385 path=Tests/fixtures/CampaignOperationsH1EvidenceObligations.tsv
+untracked lines=13 bytes=2325 path=Tests/fixtures/CampaignOperationsH1ExpectedValueAuthorities.tsv
+untracked lines=13 bytes=1669 path=Tests/fixtures/CampaignOperationsH1FinalAssuranceControls.tsv
+untracked lines=288 bytes=67557 path=Tests/fixtures/CampaignOperationsH1Fixtures.tsv
+untracked lines=9 bytes=7827 path=Tests/fixtures/CampaignOperationsH1Generators.tsv
+untracked lines=19 bytes=2673 path=Tests/fixtures/CampaignOperationsH1LegacyPathInventory.tsv
+untracked lines=16 bytes=4693 path=Tests/fixtures/CampaignOperationsH1LockPathMatrix.tsv
+untracked lines=93 bytes=14382 path=Tests/fixtures/CampaignOperationsH1MutationMechanics.tsv
+untracked lines=37 bytes=50898 path=Tests/fixtures/CampaignOperationsH1NormativeClauses.tsv
+untracked lines=13 bytes=1927 path=Tests/fixtures/CampaignOperationsH1ObservedValueProvenance.tsv
+untracked lines=3 bytes=891 path=Tests/fixtures/CampaignOperationsH1PreEnablementEvidence.tsv
+untracked lines=15 bytes=2556 path=Tests/fixtures/CampaignOperationsH1RawEvidenceContracts.tsv
+untracked lines=9 bytes=1006 path=Tests/fixtures/CampaignOperationsH1RegistryDigests.tsv
+untracked lines=288 bytes=54276 path=Tests/fixtures/CampaignOperationsH1ReportEntries.tsv
+untracked lines=288 bytes=74075 path=Tests/fixtures/CampaignOperationsH1Requirements.tsv
+untracked lines=2 bytes=394 path=Tests/fixtures/CampaignOperationsH1ReviewDisposition.tsv
+untracked lines=288 bytes=51547 path=Tests/fixtures/CampaignOperationsH1RuntimeRecords.tsv
+untracked lines=143 bytes=31985 path=Tests/fixtures/CampaignOperationsH1Traceability.tsv
+untracked lines=2 bytes=536 path=Tests/fixtures/CampaignOperationsH1UniquenessInvariants.tsv
+untracked lines=8 bytes=12369 path=Tests/fixtures/CampaignOperationsH1Validators.tsv
+untracked lines=59 bytes=3581 path=docs/CampaignOperationsH1Traceability.md
+untracked lines=119 bytes=4514 path=docs/architecture/CampaignOperations_PhaseH_Legacy_Bypass_Elimination.md
+untracked lines=337 bytes=19917 path=docs/architecture/adr/ADR-0019A-h1-owner-safe-transaction-authorization.md
+untracked lines=368 bytes=19302 path=docs/architecture/adr/ADR-0019B-h1-sealed-role-deployment-contract.md
+untracked_diff_stat_end
+```
+
+## 34. Explicit disposition
+
+`READY_FOR_FOCUSED_INDEPENDENT_REVERIFICATION`. This is not a claim that H1 is ready to commit.
+
+## Reconciled evidence ledger
+
+| Requirement | Runtime | Validator | Report | Artifact | Record digest | Aggregate digest | Status |
+|---|---|---|---|---|---|---|---|
+| H1-ACL-EXACT | RT-H1ACL001 | VR-H1ACL001 | REP-H1ACL001 | ART-RECORD-H1ACL001 | `9c2ebe3dbf4a515115d680c2a00a87dd1b5b0a71f45d0459614cddfd89dc6d45` | `43cbfc96351738678823d891d88ffac428dbfb0063810e0b9dfebae13c6fa149` | SUCCESS |
+| H1-ACL-EXTRA | RT-H1ACL002 | VR-H1ACL002 | REP-H1ACL002 | ART-RECORD-H1ACL002 | `1ab936afdd1889b376d46cba2c641616eb7a93534621ea6ed8d280e291704165` | `a37fc21d851ddcaa8c7fcde77fa0756e677df53e9f7f19bf776de01162d113e1` | EXPECTED_FAILURE |
+| H1-ACL-MISSING | RT-H1ACL003 | VR-H1ACL003 | REP-H1ACL003 | ART-RECORD-H1ACL003 | `b812424b6ebc8d1b20676d7f189a70ea2651022c261d1d8284c10883259b716a` | `4104c3b6337e8e60b9349ed06743d3aecb66912231cce9813c3d55a228581534` | EXPECTED_FAILURE |
+| H1-DEFAULT-EXACT | RT-H1ACL004 | VR-H1ACL004 | REP-H1ACL004 | ART-RECORD-H1ACL004 | `1e85a4dcf87b3c168793b396121c8f37ebd9152e3ddd40ba3ded87d527e3a392` | `43cbfc96351738678823d891d88ffac428dbfb0063810e0b9dfebae13c6fa149` | SUCCESS |
+| H1-DEFAULT-MISSING | RT-H1ACL005 | VR-H1ACL005 | REP-H1ACL005 | ART-RECORD-H1ACL005 | `dbe615aa377d7af3e8bc2e9dfdbc6b0400c68a8bb9588cd5ba792643c0b3d8b0` | `1c719d7fbe0b5b3a8be21bfd4e522d48090e24450844ef3a17818faf1b5d75b6` | EXPECTED_FAILURE |
+| H1-DEFAULT-GRANTOPTION | RT-H1ACL006 | VR-H1ACL006 | REP-H1ACL006 | ART-RECORD-H1ACL006 | `dc63bce90e71bf53c4b66923503b42fd72b72ad453313ee8b1f1c19688c7e48c` | `7c5c9e91a1465b98df4de0ec3441082b600298b2b380c6fa451247981cd07372` | EXPECTED_FAILURE |
+| H1-FUTURE-PROBES | RT-H1ACL007 | VR-H1ACL007 | REP-H1ACL007 | ART-RECORD-H1ACL007 | `8ae13bd46fe24b7edcbda84fe901e745d841940fd468e943fb811e0b7d141415` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |
+| H1-ACL-ORIGIN-SCHEMA | RT-H1ACLORIGIN001 | VR-H1ACLORIGIN001 | REP-H1ACLORIGIN001 | ART-RECORD-H1ACLORIGIN001 | `2199e4d81e9266fbfcc64d08ff2fad0c23db45e00f533f63f09807b455060237` | `95329e0245e03f0dc44daa75b954c20c2a0523d0b0b06811dd1c80b43f18cf5b` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-TABLE | RT-H1ACLORIGIN002 | VR-H1ACLORIGIN002 | REP-H1ACLORIGIN002 | ART-RECORD-H1ACLORIGIN002 | `2967df2ec9eddf5d6902a14d4531752cc1930e4941cc270193dd89987e4e861c` | `3c71fa34e387910fc1b3cc423551a4f43b64b1b8b54d0ed460e6faf50e6dd1aa` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-VIEW | RT-H1ACLORIGIN003 | VR-H1ACLORIGIN003 | REP-H1ACLORIGIN003 | ART-RECORD-H1ACLORIGIN003 | `2ef9722e94d4910ccc46734872762f12e533b9c2fc93a7f2df593e3017110b1b` | `2e1469cd19a6442e400a7f47f815f2a8cb1e594f3cd506e3020b6add7d7d5ee4` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-SEQUENCE | RT-H1ACLORIGIN004 | VR-H1ACLORIGIN004 | REP-H1ACLORIGIN004 | ART-RECORD-H1ACLORIGIN004 | `5667a121482aef0dbeb8723c60fa54a789cd4853693e964de9591cd27a80e3df` | `649d2f87e0a24b5ac69177d3a3cbd72b396b0694fe390d256b16c1207f1c24a4` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-FUNCTION | RT-H1ACLORIGIN005 | VR-H1ACLORIGIN005 | REP-H1ACLORIGIN005 | ART-RECORD-H1ACLORIGIN005 | `e2df451d3215b62a8ccbcab7a9c4c8d91304a19aed9a0b92e2a98946be44c777` | `9ee1465d50f997568ce239dc29b46cb84a4c62201ab0bd81ad9104f3703203ad` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-TYPE | RT-H1ACLORIGIN006 | VR-H1ACLORIGIN006 | REP-H1ACLORIGIN006 | ART-RECORD-H1ACLORIGIN006 | `bbce57552b53af363941bb85ad4daf35ed21c45b8dacfe27772f07ccc0ee4b50` | `3c71fa34e387910fc1b3cc423551a4f43b64b1b8b54d0ed460e6faf50e6dd1aa` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-COLUMN-EXPLICIT | RT-H1ACLORIGIN007 | VR-H1ACLORIGIN007 | REP-H1ACLORIGIN007 | ART-RECORD-H1ACLORIGIN007 | `0b044809ba5ce485235733d72219aeb6dec6aaada4c41eb63888810f2e838c40` | `79cef0b507e1ad9d7f845d97907c09011f555db20c1359a216ca1cfdc794eb01` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-COLUMN-NULL | RT-H1ACLORIGIN008 | VR-H1ACLORIGIN008 | REP-H1ACLORIGIN008 | ART-RECORD-H1ACLORIGIN008 | `5ecf46ba6ea6dfa35895ef6dd1ba76069af479e19c4f578b3767483f125eed65` | `b664dfd2b6d7ec64118cb39cc13befbd7365f3fceea6bb7c2744425901cdb325` | EXPECTED_FAILURE |
+| H1-ACL-ORIGIN-SCHEMA-A | RT-H1AO001 | VR-H1AO001 | REP-H1AO001 | ART-RECORD-H1AO001 | `86e4a90ca468935f7f92c3ed07631d1a56dcccb2e10688ad33c627918434bd60` | `b70b44ec63eb934acb2e83c3aaf5878720ccf69c345aa0773f5c34d09020dc8a` | SUCCESS |
+| H1-ACL-ORIGIN-SCHEMA-B | RT-H1AO002 | VR-H1AO002 | REP-H1AO002 | ART-RECORD-H1AO002 | `a9ca6d1f8a3f2abeb10bccbd089188d494f37db12c737d404679b74435f150a8` | `f426664d82c6222b8afa25a6d480988cc60cffa0e615baa25db05f868006b730` | SUCCESS |
+| H1-ACL-ORIGIN-TABLE-A | RT-H1AO003 | VR-H1AO003 | REP-H1AO003 | ART-RECORD-H1AO003 | `0a8da7628125be3b6857c499e75d30cfce917cda0fa99ecdb2add846e26a95eb` | `4432e46cf7dff5a5948408648a53dbd8a1afbf9ce4a547cab836e36c7c4fbb61` | SUCCESS |
+| H1-ACL-ORIGIN-TABLE-B | RT-H1AO004 | VR-H1AO004 | REP-H1AO004 | ART-RECORD-H1AO004 | `dcf3c913974d2d5d942b4a9642bee1a155165dfa2c715732ce75e88dd9517287` | `eb947467812edea2a7ccb79a26355ac2256858be1293b6b75b71420b5d02ca41` | SUCCESS |
+| H1-ACL-ORIGIN-PARTITIONED-TABLE-A | RT-H1AO005 | VR-H1AO005 | REP-H1AO005 | ART-RECORD-H1AO005 | `c2c6273d650098ffee271a27f078269d87c9920c03cdd5ace829cac63c8b41f1` | `c2f82730c66567061fdbc7a461aee2f02e068b1b3d0a049788cde962592ae29f` | SUCCESS |
+| H1-ACL-ORIGIN-PARTITIONED-TABLE-B | RT-H1AO006 | VR-H1AO006 | REP-H1AO006 | ART-RECORD-H1AO006 | `0b3cb3756c342b8e2323599beca19cff16dc37107f445628887281d8157fbdc7` | `8783b1bed47fc3c8044bf51bf0498d4eb55a870cb488a327ce7173d1c4caa68e` | SUCCESS |
+| H1-ACL-ORIGIN-VIEW-A | RT-H1AO007 | VR-H1AO007 | REP-H1AO007 | ART-RECORD-H1AO007 | `73913fb080f8cb89b78a75fb0f13927eb2c2fb9baa9bc363504bcf25ac099446` | `a6da192d942ebd8097c21d13c1806d1550bfb3be22c0fe2b23f5a66a8aceb117` | SUCCESS |
+| H1-ACL-ORIGIN-VIEW-B | RT-H1AO008 | VR-H1AO008 | REP-H1AO008 | ART-RECORD-H1AO008 | `0c6c65d8153f33b5db9b5a5f4c8fe59f0f614dbf89fe91a64e14020c275ab547` | `57ae3b721834f207418526ab1783bb23f79f43a8d4fc9c1dc1a280d386f256bf` | SUCCESS |
+| H1-ACL-ORIGIN-MATERIALIZED-VIEW-A | RT-H1AO009 | VR-H1AO009 | REP-H1AO009 | ART-RECORD-H1AO009 | `d5c6338bf4d1bb80c3efb21ebeceace23b887598eeef2c461bffdbeccbd240a2` | `7b9d24ba10fb90e3aa3878a1b685d6044d4a05729bf25427fc76e7c980d39cfa` | SUCCESS |
+| H1-ACL-ORIGIN-MATERIALIZED-VIEW-B | RT-H1AO010 | VR-H1AO010 | REP-H1AO010 | ART-RECORD-H1AO010 | `f208c0063a0d8df7eba70e3d22f385c470cec2a7e4e92acb6477e2330754ee30` | `408d4f88577c83db6ace545bb72a2ce702aaf050dc644ffa49a537828b5c5d8a` | SUCCESS |
+| H1-ACL-ORIGIN-FOREIGN-TABLE-A | RT-H1AO011 | VR-H1AO011 | REP-H1AO011 | ART-RECORD-H1AO011 | `6f3da23dad3801ba5a103d127292ef614b192110309ea859f8bb0e028b76e858` | `2596e1c87e7a985f0197aff0515a5453ad3512c35716e58837b5967956870677` | SUCCESS |
+| H1-ACL-ORIGIN-FOREIGN-TABLE-B | RT-H1AO012 | VR-H1AO012 | REP-H1AO012 | ART-RECORD-H1AO012 | `151a7eee85e8c49ea55fd42f21e8951406568d8c778b428c7d29731598404d56` | `bb0296f3d411a170e22a2e5d74e3e97663fe27b1430ed70575e8fd0394f12ff7` | SUCCESS |
+| H1-ACL-ORIGIN-SEQUENCE-A | RT-H1AO013 | VR-H1AO013 | REP-H1AO013 | ART-RECORD-H1AO013 | `c2bfd134b64fec7a15015768dfa6bf64f950e758b2eb00ac9751fdfcf166eb00` | `9ce7ae82c15d6329196ad65a7290f678b3591179bc4f791675f1fa041eba1fef` | SUCCESS |
+| H1-ACL-ORIGIN-SEQUENCE-B | RT-H1AO014 | VR-H1AO014 | REP-H1AO014 | ART-RECORD-H1AO014 | `087a3ad3a6cbf5f32563f23326f51ed7d61d7a0be89f0b4acc3660ef5fc10c88` | `284ed9761d956dfcbe80394110aa62450b5a8eef5b40e0697955f08f7868aab6` | SUCCESS |
+| H1-ACL-ORIGIN-FUNCTION-A | RT-H1AO015 | VR-H1AO015 | REP-H1AO015 | ART-RECORD-H1AO015 | `4de77a71b56cc7c4bd90321aa0c5a0d2c9b9f0b94d20d82b4bf222ee73f5b932` | `91b9c8bc57ec2a78a4dca03b2ba27c15e8c86c25447cee97944eaa7f591e56c7` | SUCCESS |
+| H1-ACL-ORIGIN-FUNCTION-B | RT-H1AO016 | VR-H1AO016 | REP-H1AO016 | ART-RECORD-H1AO016 | `f42a56cbdff2ca4b885b3762d3c82879d81216f4cb0e58adc469cc6277aa1895` | `c7281c51db0bedcd49b146f647c81b7af92b99ec17737b539a049f8a9289eb67` | SUCCESS |
+| H1-ACL-ORIGIN-PROCEDURE-A | RT-H1AO017 | VR-H1AO017 | REP-H1AO017 | ART-RECORD-H1AO017 | `5764143fd1710483c29c84b2c9d58e9d2bb8a1c722f965fcda8f5951912e0565` | `9cb789e0f46670aa71a147c04925bb1da3a5b7a9b98a8061c7b5597d19557b1f` | SUCCESS |
+| H1-ACL-ORIGIN-PROCEDURE-B | RT-H1AO018 | VR-H1AO018 | REP-H1AO018 | ART-RECORD-H1AO018 | `742fdd05f6c289b7a0e5be03fb7b23d81172ef8078db9f837916aecdcac3ab33` | `27eb61061e1835b84e65f2c324d72954e6f98db7acbec6d60e1adb9343cdb162` | SUCCESS |
+| H1-ACL-ORIGIN-AGGREGATE-A | RT-H1AO019 | VR-H1AO019 | REP-H1AO019 | ART-RECORD-H1AO019 | `f6c8b0e71a541f6d3f78deb7fde8dfae588de702e035ed0e3b1233ca1959ecdd` | `246206a56e5423ef29ff829f2c5b926afbbdc98ca6e2d2f72e807b6c0296db23` | SUCCESS |
+| H1-ACL-ORIGIN-AGGREGATE-B | RT-H1AO020 | VR-H1AO020 | REP-H1AO020 | ART-RECORD-H1AO020 | `84cad5badbc8b0c44f60cd9f4dc811cc9a7611011a59ac4432bc1b793ce623d6` | `6e26afcc10507f97ffa9141d1d45752976fe51925a8fcc5d11e34f49ded5cb61` | SUCCESS |
+| H1-ACL-ORIGIN-TYPE-A | RT-H1AO021 | VR-H1AO021 | REP-H1AO021 | ART-RECORD-H1AO021 | `d30c7f96df6630a74e937396d30a932dacea1c7f0785330a3278349d6b1658eb` | `81ff7ab2bc5914a51305f93d07217b1fc609a902cb908d7f90ecab484b6d175d` | SUCCESS |
+| H1-ACL-ORIGIN-TYPE-B | RT-H1AO022 | VR-H1AO022 | REP-H1AO022 | ART-RECORD-H1AO022 | `3d77d1213becd998e6b100b6db64c72832bf3190ec7f67b52235350be1c16743` | `cd4bfa8f10384b7cc70a7c29bec1cd41c2ff4af845da96d0d8003d8d9dbb9b30` | SUCCESS |
+| H1-ACL-ORIGIN-DOMAIN-A | RT-H1AO023 | VR-H1AO023 | REP-H1AO023 | ART-RECORD-H1AO023 | `846ee2eb9f3ddf1dd71d8db2f26442e8831ac133f2d45a1a672e726639fb2a7c` | `7b77248aa6d4a92584c666dd14eccaaa736dcbf3a6114114e40e3a245a207475` | SUCCESS |
+| H1-ACL-ORIGIN-DOMAIN-B | RT-H1AO024 | VR-H1AO024 | REP-H1AO024 | ART-RECORD-H1AO024 | `fcdd500644a4ee869cd52787a0bdc46b3f520f2e4c6ad2698408e9585416fef0` | `954c5fb5a618a47cf5d9955158487a05592b5dfeb41d7ced984a4d46e819a0b6` | SUCCESS |
+| H1-ACL-ORIGIN-COMPLETION-COLUMN-A | RT-H1AO025 | VR-H1AO025 | REP-H1AO025 | ART-RECORD-H1AO025 | `86727185f2ea0d6fadf5161e3d4d6146fae7ad07cb7d7f3a91945528bd2dca81` | `6dabd6ff2b98c9a111e9a8f5478d69551468f7a1cac3975ab5e1254a0874d04b` | SUCCESS |
+| H1-ACL-ORIGIN-COMPLETION-COLUMN-B | RT-H1AO026 | VR-H1AO026 | REP-H1AO026 | ART-RECORD-H1AO026 | `0f1b29458193447d8743e3944b60a083338aebdc1c19ca92ade589bfe9216c39` | `3946902f32aafe822a81a848e6b5b3ceb7313ad38885d1da3a9e2c6189c30beb` | SUCCESS |
+| H1-ACL-ORIGIN-COMPLETION-AUDIT-COLUMN-A | RT-H1AO027 | VR-H1AO027 | REP-H1AO027 | ART-RECORD-H1AO027 | `ae6ec9d29c6b481c8416080520a46e9e12784380808c8a85cd3b4bf090a1bcb3` | `9d118a0c9b91d5501eeed786f919a7b476e77a4fc051b486a947cee67b3fa88b` | SUCCESS |
+| H1-ACL-ORIGIN-COMPLETION-AUDIT-COLUMN-B | RT-H1AO028 | VR-H1AO028 | REP-H1AO028 | ART-RECORD-H1AO028 | `85aca4e7be189b36ce829f067b53d7da2daab367c139100c956f7f9a00205af4` | `263529f88bb180d894e2b1e3afd858bd6c5f1c8198973dcc79f95debd5df5b02` | SUCCESS |
+| H1-ACL-ORIGIN-REQUEST-OWNER-COLUMN-A | RT-H1AO029 | VR-H1AO029 | REP-H1AO029 | ART-RECORD-H1AO029 | `bd00452a9082a26163d256ae89d9e2464d8eb123a3e9ab4dbbfb073c944f3e85` | `615a13236ce841d9f760b434c175031792a342952dbe8fce4c569a003d265709` | SUCCESS |
+| H1-ACL-ORIGIN-REQUEST-OWNER-COLUMN-B | RT-H1AO030 | VR-H1AO030 | REP-H1AO030 | ART-RECORD-H1AO030 | `b2716da7511b08f4ac27d2c580b77ce0bb14c355c9c7cd9ac2cbf1ba8843d197` | `4632a8d1938c1eadf9cb4229d47a9a82083b0603b44617ae1bbb1ff7643b899f` | SUCCESS |
+| H1-ACL-ORIGIN-REQUEST-BOUNDARY-COLUMN-A | RT-H1AO031 | VR-H1AO031 | REP-H1AO031 | ART-RECORD-H1AO031 | `0195757148fac15a9f246451245c02889a80c6e6de86dbf0454641d56a6045c4` | `fa69eb40929410e0759e2e3e3d88427e9678ce744e80a59f575c7ca1a939ec05` | SUCCESS |
+| H1-ACL-ORIGIN-REQUEST-BOUNDARY-COLUMN-B | RT-H1AO032 | VR-H1AO032 | REP-H1AO032 | ART-RECORD-H1AO032 | `88b332489182d790e4047b2b3f16423c7e628e60542aeab2dd8994279d88bb8b` | `221e4f84103129b3c7b848581fdabd557f44b9f8dd535a175a123a3e8900f98f` | SUCCESS |
+| H1-ACL-ORIGIN-CANCELLATION-AUDIT-COLUMN-A | RT-H1AO033 | VR-H1AO033 | REP-H1AO033 | ART-RECORD-H1AO033 | `59c922f282e48363ba2da5212082802bf02fe72346dc1408c7b45ea5cb963f2d` | `b429761ab8473a29e1933c8815b7bb15219428c3eb2933a4a1058f74bf58e8cc` | SUCCESS |
+| H1-ACL-ORIGIN-CANCELLATION-AUDIT-COLUMN-B | RT-H1AO034 | VR-H1AO034 | REP-H1AO034 | ART-RECORD-H1AO034 | `ab6dbd417bf220ff6c21142ecfb28c808408a001ca4c97cbec35c8046738c829` | `89b6af0801318312a852c53b82d6eb32ece2eaa9d30003ba095b748498692551` | SUCCESS |
+| H1-ACL-ORIGIN-RECOVERY-AUDIT-COLUMN-A | RT-H1AO035 | VR-H1AO035 | REP-H1AO035 | ART-RECORD-H1AO035 | `9cdfdaeddc744cbde873065dc8b1ff8ac2a5a76413dcb39fc542d44cbca43b1b` | `8b1d7cd5cf5df7cfb251b0e891f135b3df5b65e715d5c692a0d7b672fe5bb14e` | SUCCESS |
+| H1-ACL-ORIGIN-RECOVERY-AUDIT-COLUMN-B | RT-H1AO036 | VR-H1AO036 | REP-H1AO036 | ART-RECORD-H1AO036 | `4f7b807e0b8500245fc94082fa5608e9535a169fadde48f9633923d00911f2ee` | `c33c660625e8b18670448b1945952bfc13ea46794b986ad4f7fef7bb27038650` | SUCCESS |
+| H1-ACL-ORIGIN-SCHEDULER-COLUMN-A | RT-H1AO037 | VR-H1AO037 | REP-H1AO037 | ART-RECORD-H1AO037 | `9973cb46f9449026412a743895655f960ce5da256d1f5540ade893dfdba5d063` | `c6fe57ac3dcb3238309e699468db3f8fcd0dea1e8336ddc9a8dea25ea215dff4` | SUCCESS |
+| H1-ACL-ORIGIN-SCHEDULER-COLUMN-B | RT-H1AO038 | VR-H1AO038 | REP-H1AO038 | ART-RECORD-H1AO038 | `0ffda7da423c38ad161cf036f2546d93fc166f794e78c78c231a19a081e674ab` | `7ed9e0b487cc00b6d106b0ba2ac3758fb06c49acbf8c6b24cfec2f286049ca99` | SUCCESS |
+| H1-HYDRATION | RT-H1CPP001 | VR-H1CPP001 | REP-H1CPP001 | ART-RECORD-H1CPP001 | `baec399eae98cc2a7b1b02c729d983228f7f35154cdf389b298ebbe294c343de` | `08112141cb1214bb1c9eebf2ef91118aa7b51b2cc0180c0d4d725bc97209e7fe` | EXPECTED_FAILURE |
+| H1-H2-H4-EXCLUSION | RT-H1CPP002 | VR-H1CPP002 | REP-H1CPP002 | ART-RECORD-H1CPP002 | `13462f9df6005ad2f2e25c6496bde6db793499a697648e71eff8b6a7ffcce496` | `a3a8450f10eef4dfa150fb9882cc0d5c0996847c0dad554dcf4904f12a623a7f` | SUCCESS |
+| H1-ASSURANCE-FULL-PIPELINE | RT-H1FA001 | VR-H1FA001 | REP-H1FA001 | ART-RECORD-H1FA001 | `c4a963abe9181964caaf305ba881e57b6bca9b163f9d5812cf25f95f11ce9b93` | `943449066102bf2f6b4a49bf3fe04823dd092504ee581c6cf5210feab478e60a` | PASS |
+| H1-ASSURANCE-LOCK-MUTATIONS | RT-H1FA002 | VR-H1FA002 | REP-H1FA002 | ART-RECORD-H1FA002 | `7a7aa23e2aeb0b1e7a0681b8e31aa49550ce1e4024d2f8954d4fff6c6b37c328` | `fa0ecfea68a4dbd860e36abacc01b063281938ef3f171bdd73398c09fcbbc185` | PASS |
+| H1-ASSURANCE-ACL-MUTATIONS | RT-H1FA003 | VR-H1FA003 | REP-H1FA003 | ART-RECORD-H1FA003 | `4681c5c4633844eb398274e3053b9ddc82c7938fd9ab97c38fadf6e16aeb056f` | `769c69f886459de5d7f1fd3cdbc77a5999294ec5d4ab18e4f1a615f489b7a129` | PASS |
+| H1-ASSURANCE-GRAPH-MUTATIONS | RT-H1FA004 | VR-H1FA004 | REP-H1FA004 | ART-RECORD-H1FA004 | `e0ef29088a684a1073d33b9baaaad8fae79191aed12ee2cdbc8a77d76afe6f77` | `26921957e2def4f35fd2f1a788e52c92d92d1196c2f0bdbf413e29b03b9d99b6` | PASS |
+| H1-ASSURANCE-MANIFEST-MUTATIONS | RT-H1FA005 | VR-H1FA005 | REP-H1FA005 | ART-RECORD-H1FA005 | `e911d1cf8b535af2f38ede839d3ebfd4e9df48aaf24ae3654cf141c1ed49a08c` | `d8ca9770ab687c0308a4046e978a14fa3811078883383028b4ce3cf551f45f00` | PASS |
+| H1-ASSURANCE-PARSER-CLASSIFICATION | RT-H1FA006 | VR-H1FA006 | REP-H1FA006 | ART-RECORD-H1FA006 | `3aa87be75054061fd868d90b7546eaa6bd40028480c335b18c7bd86b53f3e449` | `82e1ed43cf748b9b2f1ed49a933853ed6d114cf381f6c93108cd8dddc09aa4d4` | PASS |
+| H1-ASSURANCE-RESTORE | RT-H1FA007 | VR-H1FA007 | REP-H1FA007 | ART-RECORD-H1FA007 | `978d96f4ddb0001fe8a82db488ca480d284d96fc9a4610af9b0d3ce034a717d3` | `0ca09230c144397fb729edd736d07c89f64a1fa2940a802ca084ece6b242ef08` | PASS |
+| H1-ASSURANCE-STRICT-COMPILE | RT-H1FA008 | VR-H1FA008 | REP-H1FA008 | ART-RECORD-H1FA008 | `81789d49ae781526d90b3106293d3a037bea7f19d9a8e09466d3d3ef7856e684` | `f6d10da5fedb259558f603736a43458bf0e812ee4ba69e59b0ce92d8b7e51d93` | PASS |
+| H1-ASSURANCE-RELEASE-BUILD | RT-H1FA009 | VR-H1FA009 | REP-H1FA009 | ART-RECORD-H1FA009 | `b0cbca8e04a02d921a23d47b247bbe44e1f77cd6848afbb3c40210aab1bbdc49` | `448d04ce6253b203207b7c3f50e22faf375bbbf90df0465717f66c334a967541` | PASS |
+| H1-ASSURANCE-CHECKSUM | RT-H1FA010 | VR-H1FA010 | REP-H1FA010 | ART-RECORD-H1FA010 | `bb402937ca80b1dce9ef2d080d8e930a33508f1402963d2901323dff5a089cd8` | `6213118a376eca3e1bd8d016e0738bb95c09839f6a3b4238e7c30e06c4711eee` | PASS |
+| H1-ASSURANCE-DETERMINISM | RT-H1FA011 | VR-H1FA011 | REP-H1FA011 | ART-RECORD-H1FA011 | `3d3a59274c3729b7e8522e57ba25a8e744a79cd971cc9a1c70d7e6eb1a5f8abc` | `e114b345eb282a116009a83a1e0ead60a8db613aa84e51935759c327633d202f` | PASS |
+| H1-ASSURANCE-WORKTREE | RT-H1FA012 | VR-H1FA012 | REP-H1FA012 | ART-RECORD-H1FA012 | `479b054e1d45b9ee93bed6d2b629a815f9ea7dae46526c8f260d709d6019aa8a` | `a3b853ca4e3b5baba661cd4301a7a33b3b85ef48f4a8380bd7f540ffff80f65d` | PASS |
+| H1-GRAPH-DIRECT | RT-H1GRAPH001 | VR-H1GRAPH001 | REP-H1GRAPH001 | ART-RECORD-H1GRAPH001 | `ab2e36956ee558d41de7711def929a45bd21fbe43582b6d4522a8d92d90c627e` | `f8c9bf41ea52bfaa8d8a190adb503a606a044dedee1e17c3f301ad30f4d6f7ed` | EXPECTED_FAILURE |
+| H1-GRAPH-TWO | RT-H1GRAPH002 | VR-H1GRAPH002 | REP-H1GRAPH002 | ART-RECORD-H1GRAPH002 | `b075a09662179a29975f85cd01a703a8e099f3953ee5632b66bc61c95611777b` | `f8c9bf41ea52bfaa8d8a190adb503a606a044dedee1e17c3f301ad30f4d6f7ed` | EXPECTED_FAILURE |
+| H1-GRAPH-THREE | RT-H1GRAPH003 | VR-H1GRAPH003 | REP-H1GRAPH003 | ART-RECORD-H1GRAPH003 | `45e0d62894a6b5562c8c51037e6eb4cc05ce7b996f703a234b528cb88ae90ed3` | `f8c9bf41ea52bfaa8d8a190adb503a606a044dedee1e17c3f301ad30f4d6f7ed` | EXPECTED_FAILURE |
+| H1-GRAPH-ADMIN | RT-H1GRAPH004 | VR-H1GRAPH004 | REP-H1GRAPH004 | ART-RECORD-H1GRAPH004 | `244e2196287a86cf295430c3b639f94f28e9350217c977e380eec20fffa3dcb1` | `8f1ba6d06f392a44a010bbd13812f907ad377453c77780c4faadbcfc707916bd` | EXPECTED_FAILURE |
+| H1-GRAPH-OUTWARD | RT-H1GRAPH005 | VR-H1GRAPH005 | REP-H1GRAPH005 | ART-RECORD-H1GRAPH005 | `162d88b1ee4fd73e82dd026ac5e8572ed5a934a7640d564afe086d734da942c4` | `f8c9bf41ea52bfaa8d8a190adb503a606a044dedee1e17c3f301ad30f4d6f7ed` | EXPECTED_FAILURE |
+| H1-SET-ROLE | RT-H1GRAPH006 | VR-H1GRAPH006 | REP-H1GRAPH006 | ART-RECORD-H1GRAPH006 | `5f73cf8bc47318c7f138be4686b21eb7a75ba8d3292fcab96d728b6297624a36` | `e8f152fecedbc2d764325056d8648a8d1d6a5c37d9ac472420d458703ec81bc3` | SUCCESS |
+| H1-SET-LOCAL-ROLE | RT-H1GRAPH007 | VR-H1GRAPH007 | REP-H1GRAPH007 | ART-RECORD-H1GRAPH007 | `1351d478fbc511e8ed74d9c6101314f6abbb0db9d441d12accb2a8a8d2faadc3` | `e8f152fecedbc2d764325056d8648a8d1d6a5c37d9ac472420d458703ec81bc3` | SUCCESS |
+| H1-LOCK-012 | RT-H1INV001 | VR-H1INV001 | REP-H1INV001 | ART-RECORD-H1INV001 | `4f8374a4feab931ded770f8d7de1098073d291ac6e406bdba03086f25d5398ca` | `4f8374a4feab931ded770f8d7de1098073d291ac6e406bdba03086f25d5398ca` | SUCCESS |
+| H1-LOCK-001 | RT-H1LOCK001 | VR-H1LOCK001 | REP-H1LOCK001 | ART-RECORD-H1LOCK001 | `cb4be321286c13278a9e22cc1d51a7c8455c4180e455b4abc157200986524edf` | `b815c26bd9fcbc33ca51594da7c7d2cf06e4f742af2f875aeed529b0aa2c884a` | SUCCESS |
+| H1-LOCK-002 | RT-H1LOCK002 | VR-H1LOCK002 | REP-H1LOCK002 | ART-RECORD-H1LOCK002 | `f9112f4d905efc035be5b4a31639034ad78b043ad325c10a2ccbe92c4348465d` | `6d061c4969c123455ad216cee43aa5801a5feabb511da0df79bfce4f8aeb7150` | SUCCESS |
+| H1-LOCK-003 | RT-H1LOCK003 | VR-H1LOCK003 | REP-H1LOCK003 | ART-RECORD-H1LOCK003 | `a5a9d266f0161d0bb711e06ea309cb84d4170e073d7270a84cbd7b349b5ea5f8` | `967cfadc022a32304acf51ba3b4103d48e56bdd3116701193fb98a6a36ffe1c5` | SUCCESS |
+| H1-LOCK-004 | RT-H1LOCK004 | VR-H1LOCK004 | REP-H1LOCK004 | ART-RECORD-H1LOCK004 | `37c7f33fad55346c01a52a736654e1f62acd2cd04d8223689915087f867565a2` | `366470e3041fb108dc0ba94b3bf3be10990df7e5dcb84904c2684eaf43b5bd84` | SUCCESS |
+| H1-LOCK-005 | RT-H1LOCK005 | VR-H1LOCK005 | REP-H1LOCK005 | ART-RECORD-H1LOCK005 | `8caf9966b8ff3edb00694099208701a8db9cef8b9b846f39835499865360785b` | `9c20808ba338290681e485a6242414fc04f931c1a3109eb959f8743d0d39e358` | SUCCESS |
+| H1-LOCK-006 | RT-H1LOCK006 | VR-H1LOCK006 | REP-H1LOCK006 | ART-RECORD-H1LOCK006 | `f35c312ed623b3584c1967481cd9a1751dd3afc37af2bea1c0954011a80889a2` | `8bcdb0c0d066aeba79e85b939a22e045b72f636c34b1034da7091068faa4f3a0` | SUCCESS |
+| H1-LOCK-008 | RT-H1LOCK008 | VR-H1LOCK008 | REP-H1LOCK008 | ART-RECORD-H1LOCK008 | `023025bbeac54844e167d3bfd27ded52e2962f56edd823010075adb0391c8013` | `3136d703f7718c2fdc7897334675a983772756b902276dc7cbadc79b519ef17b` | SUCCESS |
+| H1-LOCK-010 | RT-H1LOCK010 | VR-H1LOCK010 | REP-H1LOCK010 | ART-RECORD-H1LOCK010 | `bf8258235a4500dc45c913d65278b891e31fc144f092778449cb74f509d59aa6` | `7a2e99bd99aad092fd887b3409b66f489603d25f2966de03979f7f54ad3f920b` | SUCCESS |
+| H1-LOCK-011 | RT-H1LOCK011 | VR-H1LOCK011 | REP-H1LOCK011 | ART-RECORD-H1LOCK011 | `b997a4ed5299bd7a559785def50bbd4e1d7cc7bf22ed9b87cde68a995facbd09` | `131747b3eb41c0fd9aeced36152794ad70951524c7422a3180d8f78aca10ba94` | SUCCESS |
+| H1-LOCK-013 | RT-H1LOCK013 | VR-H1LOCK013 | REP-H1LOCK013 | ART-RECORD-H1LOCK013 | `d409c0d616e679a9946ac77e6f8077b925bdbfa8f78223df3622e9f527e812d0` | `ee446466532a734bda28ca9e72ccbc221f68ebda843a3e4f6408325c8101e8c3` | SUCCESS |
+| H1-LOCK-014 | RT-H1LOCK014 | VR-H1LOCK014 | REP-H1LOCK014 | ART-RECORD-H1LOCK014 | `3f163f7e6d7a7add93e0561dc597e7143bf070b6f13b3aa08a5f59c90a205fdd` | `981224ea9c7528759fceaf0988a9eea1ae5ee43551c29074cf052d70a9c209ab` | SUCCESS |
+| H1-LOCK-015 | RT-H1LOCK015 | VR-H1LOCK015 | REP-H1LOCK015 | ART-RECORD-H1LOCK015 | `54d49e6bebcb7be662ea78d92c8adb9e50499b337c64f69bc89665b4eca1c242` | `de5bfeb843433b26faf3b96badfd9665624cf68578d124ac1b2840ffcdfc241e` | SUCCESS |
+| H1-LOCK-016 | RT-H1LOCK016 | VR-H1LOCK016 | REP-H1LOCK016 | ART-RECORD-H1LOCK016 | `8b8dbf0fbcb2e9042ffceae66b2e44da826f2a11416ec51f0a39059d82fb5199` | `f1a6694ff25a2e66b67d1eb878e9681adb5ee5e9bb6db769d0b5fc18a097bc16` | SUCCESS |
+| H1-LOCK-017 | RT-H1LOCK017 | VR-H1LOCK017 | REP-H1LOCK017 | ART-RECORD-H1LOCK017 | `21ff73a2fcac5f5ca6fd25671decba265edbce0450c338aace498a570b7b7076` | `a3fc6884417043c73f9763d4c51de8102ff34d870c3c759bd78cfbed5552b19f` | SUCCESS |
+| H1-LOCK-018 | RT-H1LOCK018 | VR-H1LOCK018 | REP-H1LOCK018 | ART-RECORD-H1LOCK018 | `ad4d1da6dfcb741cad7ed64c914ae3025461e58a4afc0857ce06eaf35eec65b3` | `5f6fadb91911c2b490c1202d85d1a719efe8830854de7aa3f930b12574a35681` | SUCCESS |
+| H1-MUTATION-LOCK_STALE_DIGEST | RT-H1MUT001 | VR-H1MUT001 | REP-H1MUT001 | ART-RECORD-H1MUT001 | `ad75a773ad348cb70cde9fa8e3980632ab35c150b662108c6087d351bb4bbd57` | `ad75a773ad348cb70cde9fa8e3980632ab35c150b662108c6087d351bb4bbd57` | PASS |
+| H1-MUTATION-LOCK_WAITING | RT-H1MUT002 | VR-H1MUT002 | REP-H1MUT002 | ART-RECORD-H1MUT002 | `54d5e2b09d1beb6b1e9c790e5e1a5cba6666c56148c969483f874f40d3c8e604` | `54d5e2b09d1beb6b1e9c790e5e1a5cba6666c56148c969483f874f40d3c8e604` | PASS |
+| H1-MUTATION-LOCK_DIRECTION | RT-H1MUT003 | VR-H1MUT003 | REP-H1MUT003 | ART-RECORD-H1MUT003 | `ac93525d8e40bbe1c8684e273e61b0d56edde218b9b61550e45043ff814ef460` | `ac93525d8e40bbe1c8684e273e61b0d56edde218b9b61550e45043ff814ef460` | PASS |
+| H1-MUTATION-LOCK_CYCLE | RT-H1MUT004 | VR-H1MUT004 | REP-H1MUT004 | ART-RECORD-H1MUT004 | `fb036c22f8a2dc0a9cd809e08b4a482f074403b9f4f868135cc1661f14244471` | `fb036c22f8a2dc0a9cd809e08b4a482f074403b9f4f868135cc1661f14244471` | PASS |
+| H1-MUTATION-LOCK_RELEASE | RT-H1MUT005 | VR-H1MUT005 | REP-H1MUT005 | ART-RECORD-H1MUT005 | `9340037328cf572268e09bc28d3e75ecf9c3ba3d3e6791be512a8356b0110b43` | `9340037328cf572268e09bc28d3e75ecf9c3ba3d3e6791be512a8356b0110b43` | PASS |
+| H1-MUTATION-LOCK_EVIDENCE_COUNT | RT-H1MUT006 | VR-H1MUT006 | REP-H1MUT006 | ART-RECORD-H1MUT006 | `ebd074a826fae40c6fae5113f0e954015aeebafe022f28eb952f5a2072ff4d94` | `ebd074a826fae40c6fae5113f0e954015aeebafe022f28eb952f5a2072ff4d94` | PASS |
+| H1-MUTATION-LOCK_WRONG_PID | RT-H1MUT007 | VR-H1MUT007 | REP-H1MUT007 | ART-RECORD-H1MUT007 | `1f34edafdb1d47db0ac73e8dd34208c9b86e36ef818648c928c7b59c6cf66298` | `1f34edafdb1d47db0ac73e8dd34208c9b86e36ef818648c928c7b59c6cf66298` | PASS |
+| H1-MUTATION-LOCK_LOCK_IDENTITY | RT-H1MUT008 | VR-H1MUT008 | REP-H1MUT008 | ART-RECORD-H1MUT008 | `2acc707b09058ea88fe98fcf46198e588cc3ec574be5e5897ef1b6cd68050e1d` | `2acc707b09058ea88fe98fcf46198e588cc3ec574be5e5897ef1b6cd68050e1d` | PASS |
+| H1-MUTATION-LOCK_STALE_RUN_ID | RT-H1MUT009 | VR-H1MUT009 | REP-H1MUT009 | ART-RECORD-H1MUT009 | `21cd2d85b223a29b29cc549727e65df50fbe393ac0f4343825389c9e8b202267` | `21cd2d85b223a29b29cc549727e65df50fbe393ac0f4343825389c9e8b202267` | PASS |
+| H1-MUTATION-LOCK_RAW_PROHIBITED_REVERSE | RT-H1MUT010 | VR-H1MUT010 | REP-H1MUT010 | ART-RECORD-H1MUT010 | `e69932c3d86d14b4a8fbcbba8afc257b9157a39ebf1f48afd6f130bcfa66b63b` | `e69932c3d86d14b4a8fbcbba8afc257b9157a39ebf1f48afd6f130bcfa66b63b` | PASS |
+| H1-MUTATION-LOCK_RAW_IMPOSSIBLE_MUTUAL | RT-H1MUT011 | VR-H1MUT011 | REP-H1MUT011 | ART-RECORD-H1MUT011 | `cb8e175b1a569513bb53b3deca42f00970bdd59865491946a8c563a1989d7b49` | `cb8e175b1a569513bb53b3deca42f00970bdd59865491946a8c563a1989d7b49` | PASS |
+| H1-MUTATION-LOCK_RAW_STALE_PID | RT-H1MUT012 | VR-H1MUT012 | REP-H1MUT012 | ART-RECORD-H1MUT012 | `75ed527aabefaac8ecd3b394c30c6dc25862cb8cc29d7101eb52c78d5847f0ff` | `75ed527aabefaac8ecd3b394c30c6dc25862cb8cc29d7101eb52c78d5847f0ff` | PASS |
+| H1-MUTATION-LOCK_RAW_WRONG_APPLICATION | RT-H1MUT013 | VR-H1MUT013 | REP-H1MUT013 | ART-RECORD-H1MUT013 | `ee7686299abd98a4e80ffcc1161377cdd4851ee77316c411ce16c9146f59386f` | `ee7686299abd98a4e80ffcc1161377cdd4851ee77316c411ce16c9146f59386f` | PASS |
+| H1-MUTATION-LOCK_MISSING_RAW | RT-H1MUT014 | VR-H1MUT014 | REP-H1MUT014 | ART-RECORD-H1MUT014 | `8c5685bb0df682a7ecc459caf746d72d3b4f462b9bf27eb7812adf22c09054af` | `8c5685bb0df682a7ecc459caf746d72d3b4f462b9bf27eb7812adf22c09054af` | PASS |
+| H1-MUTATION-LOCK_ALTERED_RAW | RT-H1MUT015 | VR-H1MUT015 | REP-H1MUT015 | ART-RECORD-H1MUT015 | `5ffcb5b447cd20577ccf5d3118c1106c688c06955c83c5752b9bba92c658d952` | `5ffcb5b447cd20577ccf5d3118c1106c688c06955c83c5752b9bba92c658d952` | PASS |
+| H1-MUTATION-ACL_DIGEST | RT-H1MUT016 | VR-H1MUT016 | REP-H1MUT016 | ART-RECORD-H1MUT016 | `ed713cd31e2771ae56e1d9f68a190dab36722311aadbf87bd9d4e765af4c7665` | `ed713cd31e2771ae56e1d9f68a190dab36722311aadbf87bd9d4e765af4c7665` | PASS |
+| H1-MUTATION-ACL_OWNER | RT-H1MUT017 | VR-H1MUT017 | REP-H1MUT017 | ART-RECORD-H1MUT017 | `2a869eddfe1f748934aee03b73087ea38bbdcd2512e67584c64a024b277cb06e` | `2a869eddfe1f748934aee03b73087ea38bbdcd2512e67584c64a024b277cb06e` | PASS |
+| H1-MUTATION-ACL_OBJECT | RT-H1MUT018 | VR-H1MUT018 | REP-H1MUT018 | ART-RECORD-H1MUT018 | `c493a077cf4b0e6792e179d54a7b918c7e9078790e052df873fe287c99a21da8` | `c493a077cf4b0e6792e179d54a7b918c7e9078790e052df873fe287c99a21da8` | PASS |
+| H1-MUTATION-ACL_EXPECTED_ORIGIN | RT-H1MUT019 | VR-H1MUT019 | REP-H1MUT019 | ART-RECORD-H1MUT019 | `189738ed7884b284dd5904959f6b1a30fcf76357772716e72761c3b9b75f1b8d` | `189738ed7884b284dd5904959f6b1a30fcf76357772716e72761c3b9b75f1b8d` | PASS |
+| H1-MUTATION-ACL_ACTUAL_ORIGIN | RT-H1MUT020 | VR-H1MUT020 | REP-H1MUT020 | ART-RECORD-H1MUT020 | `6767d5c38985cef275fff33e9c57dac6a2b78431a6aef9b8ec764d17ceca6d1f` | `6767d5c38985cef275fff33e9c57dac6a2b78431a6aef9b8ec764d17ceca6d1f` | PASS |
+| H1-MUTATION-ACL_DIRECTION | RT-H1MUT021 | VR-H1MUT021 | REP-H1MUT021 | ART-RECORD-H1MUT021 | `689edddf6362270ce394a3a11590e5e8e5a5307aeef6dcf091228a32dfbdaa01` | `689edddf6362270ce394a3a11590e5e8e5a5307aeef6dcf091228a32dfbdaa01` | PASS |
+| H1-MUTATION-ACL_SQLSTATE | RT-H1MUT022 | VR-H1MUT022 | REP-H1MUT022 | ART-RECORD-H1MUT022 | `d05143fec5c06cdfa52bfeb17f834a2a758363ca73a1be360d9c428abc35e2d6` | `d05143fec5c06cdfa52bfeb17f834a2a758363ca73a1be360d9c428abc35e2d6` | PASS |
+| H1-MUTATION-ACL_DIAGNOSTIC | RT-H1MUT023 | VR-H1MUT023 | REP-H1MUT023 | ART-RECORD-H1MUT023 | `a14299fa1d9bde90e93d1b42db42e2010b8c138ec56eb91e30e5f7d330caa235` | `a14299fa1d9bde90e93d1b42db42e2010b8c138ec56eb91e30e5f7d330caa235` | PASS |
+| H1-MUTATION-ACL_STAGE | RT-H1MUT024 | VR-H1MUT024 | REP-H1MUT024 | ART-RECORD-H1MUT024 | `05d843810e33e182fa4f23cf11fc75fb3a4f20ec74514c28761cbbda75b1119d` | `05d843810e33e182fa4f23cf11fc75fb3a4f20ec74514c28761cbbda75b1119d` | PASS |
+| H1-MUTATION-ACL_MISSING_RAW | RT-H1MUT025 | VR-H1MUT025 | REP-H1MUT025 | ART-RECORD-H1MUT025 | `dcb51bf9f2d81382d5eaa39f49122d2613b8aaa0a7225a7a98b16f84296036f2` | `dcb51bf9f2d81382d5eaa39f49122d2613b8aaa0a7225a7a98b16f84296036f2` | PASS |
+| H1-MUTATION-ACL_RAW_RAW_ACL | RT-H1MUT026 | VR-H1MUT026 | REP-H1MUT026 | ART-RECORD-H1MUT026 | `8fdb05fce4b9d7e78ad9de078f760e28e114e3951600c255875bbffc5aafb8ea` | `8fdb05fce4b9d7e78ad9de078f760e28e114e3951600c255875bbffc5aafb8ea` | PASS |
+| H1-MUTATION-ACL_RAW_EXPANDED_TUPLE | RT-H1MUT027 | VR-H1MUT027 | REP-H1MUT027 | ART-RECORD-H1MUT027 | `2ef18a5a3cb0d587269de64b2558ffdac4da105973ced3db44cb538fecb1b56a` | `2ef18a5a3cb0d587269de64b2558ffdac4da105973ced3db44cb538fecb1b56a` | PASS |
+| H1-MUTATION-ACL_RAW_RAW_OWNER | RT-H1MUT028 | VR-H1MUT028 | REP-H1MUT028 | ART-RECORD-H1MUT028 | `66c661430161ac1b16f54f629185d49adbfa321d151c34cf6ff942396f9808da` | `66c661430161ac1b16f54f629185d49adbfa321d151c34cf6ff942396f9808da` | PASS |
+| H1-MUTATION-ACL_RAW_RAW_OBJECT | RT-H1MUT029 | VR-H1MUT029 | REP-H1MUT029 | ART-RECORD-H1MUT029 | `65ecb0de5dd4b5453c0449c9fbca6acdf65d855158893a092846569000ffa97d` | `65ecb0de5dd4b5453c0449c9fbca6acdf65d855158893a092846569000ffa97d` | PASS |
+| H1-MUTATION-GRAPH_ROGUE_TOP_LEVEL | RT-H1MUT030 | VR-H1MUT030 | REP-H1MUT030 | ART-RECORD-H1MUT030 | `b88cb661303f34be0176836507597ef7a5b5583c1b42f77a585a488e8212f66a` | `b88cb661303f34be0176836507597ef7a5b5583c1b42f77a585a488e8212f66a` | PASS |
+| H1-MUTATION-GRAPH_ROGUE_NESTED | RT-H1MUT031 | VR-H1MUT031 | REP-H1MUT031 | ART-RECORD-H1MUT031 | `e41eac7431fd121f6718b3d84fbdd544b3511f17cfa93737c0f922a9b4559f3b` | `e41eac7431fd121f6718b3d84fbdd544b3511f17cfa93737c0f922a9b4559f3b` | PASS |
+| H1-MUTATION-GRAPH_FILENAME_INFERRED_ARTIFACT | RT-H1MUT032 | VR-H1MUT032 | REP-H1MUT032 | ART-RECORD-H1MUT032 | `08dca804f2d900896f39125b34edafa888fbd0cfb7db5acecba9e93bb7380829` | `08dca804f2d900896f39125b34edafa888fbd0cfb7db5acecba9e93bb7380829` | PASS |
+| H1-MUTATION-GRAPH_UNINDEXED_GENERATED_REGISTRY | RT-H1MUT033 | VR-H1MUT033 | REP-H1MUT033 | ART-RECORD-H1MUT033 | `2fc4e40bcb9bcdae8545257754249c03770accf23e75a48f554c039cdc8398ef` | `2fc4e40bcb9bcdae8545257754249c03770accf23e75a48f554c039cdc8398ef` | PASS |
+| H1-MUTATION-GRAPH_UNINDEXED_VALIDATION_LOG | RT-H1MUT034 | VR-H1MUT034 | REP-H1MUT034 | ART-RECORD-H1MUT034 | `efd678485fb9e0593eb8abd8c88b23ccd000f1129fe527bddaf4e8301a4bd2e5` | `efd678485fb9e0593eb8abd8c88b23ccd000f1129fe527bddaf4e8301a4bd2e5` | PASS |
+| H1-MUTATION-GRAPH_UNINDEXED_FINAL_LOG | RT-H1MUT035 | VR-H1MUT035 | REP-H1MUT035 | ART-RECORD-H1MUT035 | `3b4ba9817a98331bcd415cb6f04877b4b7611e112e05bc938f459b3886ffc2b5` | `3b4ba9817a98331bcd415cb6f04877b4b7611e112e05bc938f459b3886ffc2b5` | PASS |
+| H1-MUTATION-GRAPH_STALE_GENERATED_REPORT | RT-H1MUT036 | VR-H1MUT036 | REP-H1MUT036 | ART-RECORD-H1MUT036 | `b0098362d1bd47ce09ede8f57273e41e609fc605316477b57966184368417a18` | `b0098362d1bd47ce09ede8f57273e41e609fc605316477b57966184368417a18` | PASS |
+| H1-MUTATION-GRAPH_MISSING_REPORT_ENTRY | RT-H1MUT037 | VR-H1MUT037 | REP-H1MUT037 | ART-RECORD-H1MUT037 | `32d066a38c3745f663fcc37bb3cd54d7e4e2e020836da7987169d92d1453cd24` | `32d066a38c3745f663fcc37bb3cd54d7e4e2e020836da7987169d92d1453cd24` | PASS |
+| H1-MUTATION-GRAPH_EXTRA_REPORT_ENTRY | RT-H1MUT038 | VR-H1MUT038 | REP-H1MUT038 | ART-RECORD-H1MUT038 | `3e0ead1a5c5db034e8c8e9c7c08eba368f35ceee3239d4c58908ab19e0a74049` | `3e0ead1a5c5db034e8c8e9c7c08eba368f35ceee3239d4c58908ab19e0a74049` | PASS |
+| H1-MUTATION-GRAPH_STALE_VALIDATOR_RESULT | RT-H1MUT039 | VR-H1MUT039 | REP-H1MUT039 | ART-RECORD-H1MUT039 | `e7f04b83a7c9efe4fb6e1d8d7ce1d08a01744eed1bd168c8d6b275c3e92c04e6` | `e7f04b83a7c9efe4fb6e1d8d7ce1d08a01744eed1bd168c8d6b275c3e92c04e6` | PASS |
+| H1-MUTATION-GRAPH_FORGED_EXCLUSION | RT-H1MUT040 | VR-H1MUT040 | REP-H1MUT040 | ART-RECORD-H1MUT040 | `96d9ea783d94430dc0ba3e5edac0928dabba4c4cc007ae7062268653aa67cc23` | `96d9ea783d94430dc0ba3e5edac0928dabba4c4cc007ae7062268653aa67cc23` | PASS |
+| H1-MUTATION-GRAPH_GENERIC_SEMANTIC | RT-H1MUT041 | VR-H1MUT041 | REP-H1MUT041 | ART-RECORD-H1MUT041 | `4586dac767e348cbf0b44c77c652d278e05d8f002666a335151321240bbdbdac` | `4586dac767e348cbf0b44c77c652d278e05d8f002666a335151321240bbdbdac` | PASS |
+| H1-MUTATION-REGISTRY_FORGED_GENERATOR_PATH | RT-H1MUT042 | VR-H1MUT042 | REP-H1MUT042 | ART-RECORD-H1MUT042 | `b418f656d945c125aa7995e96c4c99ea9fa528efb46295d57cea0a0c524a330b` | `b418f656d945c125aa7995e96c4c99ea9fa528efb46295d57cea0a0c524a330b` | PASS |
+| H1-MUTATION-REGISTRY_FORGED_VALIDATOR_PATH | RT-H1MUT043 | VR-H1MUT043 | REP-H1MUT043 | ART-RECORD-H1MUT043 | `87cd40c07f55d52b51fb2dca57c447fcbdc8e08230d51590df3206a02a008c62` | `87cd40c07f55d52b51fb2dca57c447fcbdc8e08230d51590df3206a02a008c62` | PASS |
+| H1-MUTATION-REGISTRY_REQUIREMENT_PLACEHOLDER | RT-H1MUT044 | VR-H1MUT044 | REP-H1MUT044 | ART-RECORD-H1MUT044 | `a4a8f83d3a84e752e036e7495b8c9befbd83ad30905ae20a7e814356781d8f7e` | `a4a8f83d3a84e752e036e7495b8c9befbd83ad30905ae20a7e814356781d8f7e` | PASS |
+| H1-MUTATION-REGISTRY_REQUIREMENT_CARDINALITY_99 | RT-H1MUT045 | VR-H1MUT045 | REP-H1MUT045 | ART-RECORD-H1MUT045 | `db0ebe52b87c6d550b913fb5ce2c78365e23d387137e87c54f13b98c576ba80c` | `db0ebe52b87c6d550b913fb5ce2c78365e23d387137e87c54f13b98c576ba80c` | PASS |
+| H1-MUTATION-REGISTRY_FIXTURE_SEMANTIC | RT-H1MUT046 | VR-H1MUT046 | REP-H1MUT046 | ART-RECORD-H1MUT046 | `2c233608172e32bd95ed1227d245b71e102d485406b2a01dc2a281b516d7fd80` | `2c233608172e32bd95ed1227d245b71e102d485406b2a01dc2a281b516d7fd80` | PASS |
+| H1-MUTATION-REGISTRY_GENERATOR_NODE_TYPE | RT-H1MUT047 | VR-H1MUT047 | REP-H1MUT047 | ART-RECORD-H1MUT047 | `189953acdf1f78ab295645b43bad4b8cd2cdddf7fc7ebb2edc55ee79b932488c` | `189953acdf1f78ab295645b43bad4b8cd2cdddf7fc7ebb2edc55ee79b932488c` | PASS |
+| H1-MUTATION-REGISTRY_RUNTIME_RECORD_TYPE | RT-H1MUT048 | VR-H1MUT048 | REP-H1MUT048 | ART-RECORD-H1MUT048 | `c0cdbe8e48f28384a73b1be3491d69cc97bd910303f588e2d66ba1d13638ff59` | `c0cdbe8e48f28384a73b1be3491d69cc97bd910303f588e2d66ba1d13638ff59` | PASS |
+| H1-MUTATION-REGISTRY_VALIDATOR_NODE_TYPE | RT-H1MUT049 | VR-H1MUT049 | REP-H1MUT049 | ART-RECORD-H1MUT049 | `a2a3f5af7f3eff6beb104a3488de90e90f75daa446a7d480db99cfecaee1dd73` | `a2a3f5af7f3eff6beb104a3488de90e90f75daa446a7d480db99cfecaee1dd73` | PASS |
+| H1-MUTATION-REGISTRY_REPORT_POLICY | RT-H1MUT050 | VR-H1MUT050 | REP-H1MUT050 | ART-RECORD-H1MUT050 | `2978bd3a8c44759a26ed95725d94a8ae21bb0d518f6dfafd3c3e78f0ab565bec` | `2978bd3a8c44759a26ed95725d94a8ae21bb0d518f6dfafd3c3e78f0ab565bec` | PASS |
+| H1-MUTATION-REGISTRY_ARTIFACT_NAMESPACE | RT-H1MUT051 | VR-H1MUT051 | REP-H1MUT051 | ART-RECORD-H1MUT051 | `9b61b31a5b75a855f63a4c7c4c92fc97633948bf57dcef77d2541db73af5540c` | `9b61b31a5b75a855f63a4c7c4c92fc97633948bf57dcef77d2541db73af5540c` | PASS |
+| H1-MUTATION-REGISTRY_UNDECLARED_FINAL_ASSURANCE | RT-H1MUT052 | VR-H1MUT052 | REP-H1MUT052 | ART-RECORD-H1MUT052 | `1c09e31435b0d1687f2cf9a9424824d688d45fd036647f653ad1bb500de5ce21` | `1c09e31435b0d1687f2cf9a9424824d688d45fd036647f653ad1bb500de5ce21` | PASS |
+| H1-MUTATION-REGISTRY_MISSING_REVERSE_EDGE | RT-H1MUT053 | VR-H1MUT053 | REP-H1MUT053 | ART-RECORD-H1MUT053 | `5217bd83d37b446621d0a9bf6050f016e7dad16dad0d12d3e5f1edf584a6984c` | `5217bd83d37b446621d0a9bf6050f016e7dad16dad0d12d3e5f1edf584a6984c` | PASS |
+| H1-MUTATION-MANIFEST_REMOVE_OBJECT | RT-H1MUT054 | VR-H1MUT054 | REP-H1MUT054 | ART-RECORD-H1MUT054 | `dad65ce904e987d1a5149618d82a55deb51e43c2ccf95d200938be16cdbea910` | `dad65ce904e987d1a5149618d82a55deb51e43c2ccf95d200938be16cdbea910` | PASS |
+| H1-MUTATION-MANIFEST_REMOVE_ACL | RT-H1MUT055 | VR-H1MUT055 | REP-H1MUT055 | ART-RECORD-H1MUT055 | `b300e67bce4ab5d916cac8af98ef1003c5a4e7570479e85514eab95ff70e2771` | `b300e67bce4ab5d916cac8af98ef1003c5a4e7570479e85514eab95ff70e2771` | PASS |
+| H1-MUTATION-MANIFEST_REMOVE_DEFAULT | RT-H1MUT056 | VR-H1MUT056 | REP-H1MUT056 | ART-RECORD-H1MUT056 | `b56f7448bf8b24baa08f6ea260ae82518d278b4815b879ca7da319eb7fc8a029` | `b56f7448bf8b24baa08f6ea260ae82518d278b4815b879ca7da319eb7fc8a029` | PASS |
+| H1-MUTATION-MANIFEST_DUPLICATE_OBJECT | RT-H1MUT057 | VR-H1MUT057 | REP-H1MUT057 | ART-RECORD-H1MUT057 | `444b7799a71640f635b0a0757d864faf3f86f5bc6d5e70df0fc09c9adf60e73e` | `444b7799a71640f635b0a0757d864faf3f86f5bc6d5e70df0fc09c9adf60e73e` | PASS |
+| H1-MUTATION-MANIFEST_DUPLICATE_ACL | RT-H1MUT058 | VR-H1MUT058 | REP-H1MUT058 | ART-RECORD-H1MUT058 | `0f227000f87364db63275453c98246d0b820c7d3f6a93abeb181fbd1469c5743` | `0f227000f87364db63275453c98246d0b820c7d3f6a93abeb181fbd1469c5743` | PASS |
+| H1-MUTATION-MANIFEST_DUPLICATE_DEFAULT | RT-H1MUT059 | VR-H1MUT059 | REP-H1MUT059 | ART-RECORD-H1MUT059 | `8a468b2ecd7cfa95e06448df04fc0abeaa9d4d7383ac390984e25ada8aa970ce` | `8a468b2ecd7cfa95e06448df04fc0abeaa9d4d7383ac390984e25ada8aa970ce` | PASS |
+| H1-MUTATION-MANIFEST_UNREFERENCED_EXTRA_ACL | RT-H1MUT060 | VR-H1MUT060 | REP-H1MUT060 | ART-RECORD-H1MUT060 | `5a3456672a6eadc4d338d4700c114dbd1a21338c416f0e5b8d7ef98da6b2715e` | `5a3456672a6eadc4d338d4700c114dbd1a21338c416f0e5b8d7ef98da6b2715e` | PASS |
+| H1-MUTATION-MANIFEST_UNREFERENCED_COLUMN_GRANT | RT-H1MUT061 | VR-H1MUT061 | REP-H1MUT061 | ART-RECORD-H1MUT061 | `0bdebf7e36cb79467b4ea0b221469366390f4cc0d9fdc10e23bbe205072862ce` | `0bdebf7e36cb79467b4ea0b221469366390f4cc0d9fdc10e23bbe205072862ce` | PASS |
+| H1-MUTATION-MANIFEST_CHANGE_OWNER | RT-H1MUT062 | VR-H1MUT062 | REP-H1MUT062 | ART-RECORD-H1MUT062 | `46a29fd185562093c05edf14aeb8296853e9ecdd9d83e3528b6c66b3d4df3a68` | `46a29fd185562093c05edf14aeb8296853e9ecdd9d83e3528b6c66b3d4df3a68` | PASS |
+| H1-MUTATION-MANIFEST_CHANGE_GRANTEE | RT-H1MUT063 | VR-H1MUT063 | REP-H1MUT063 | ART-RECORD-H1MUT063 | `c0bd85f184fc9067545d7fd57467ddbc4a5ffd36758a5ac7a617598a1196ab67` | `c0bd85f184fc9067545d7fd57467ddbc4a5ffd36758a5ac7a617598a1196ab67` | PASS |
+| H1-MUTATION-MANIFEST_CHANGE_PRIVILEGE | RT-H1MUT064 | VR-H1MUT064 | REP-H1MUT064 | ART-RECORD-H1MUT064 | `ae7b4cb7cdf3478b49ab0f87e77f6876883a7a30985007712f39c67f165dd9a9` | `ae7b4cb7cdf3478b49ab0f87e77f6876883a7a30985007712f39c67f165dd9a9` | PASS |
+| H1-MUTATION-MANIFEST_ADD_GRANT_OPTION | RT-H1MUT065 | VR-H1MUT065 | REP-H1MUT065 | ART-RECORD-H1MUT065 | `d7c0e3232945e236d4a1b15b062af18e58eefe815b02e1d4710219c315414f8e` | `d7c0e3232945e236d4a1b15b062af18e58eefe815b02e1d4710219c315414f8e` | PASS |
+| H1-MUTATION-MANIFEST_CHANGE_ORIGIN | RT-H1MUT066 | VR-H1MUT066 | REP-H1MUT066 | ART-RECORD-H1MUT066 | `ff53f1cb532127ded692eda2788e3bb773744dff2a2df5cd45c5fdb65943a212` | `ff53f1cb532127ded692eda2788e3bb773744dff2a2df5cd45c5fdb65943a212` | PASS |
+| H1-MUTATION-MANIFEST_CHANGE_SIGNATURE | RT-H1MUT067 | VR-H1MUT067 | REP-H1MUT067 | ART-RECORD-H1MUT067 | `bdf8bb332cbf614c861f1692372b77f249eb773282ae8d8b076b3cb0bc43eed7` | `bdf8bb332cbf614c861f1692372b77f249eb773282ae8d8b076b3cb0bc43eed7` | PASS |
+| H1-MUTATION-MANIFEST_ADD_COLUMN_PRIVILEGE | RT-H1MUT068 | VR-H1MUT068 | REP-H1MUT068 | ART-RECORD-H1MUT068 | `af19e3cf5e7bf93f6e8eda967e0e3cd9c8339132115317cda8a58058cad81638` | `af19e3cf5e7bf93f6e8eda967e0e3cd9c8339132115317cda8a58058cad81638` | PASS |
+| H1-MUTATION-MANIFEST_REMOVE_COLUMN_PRIVILEGE | RT-H1MUT069 | VR-H1MUT069 | REP-H1MUT069 | ART-RECORD-H1MUT069 | `22a27216889bc3975a40f604826f523bc8574d1dd8445aa0f52f5d25b2efa5e1` | `22a27216889bc3975a40f604826f523bc8574d1dd8445aa0f52f5d25b2efa5e1` | PASS |
+| H1-MUTATION-MANIFEST_CHANGE_DEFAULT_SCOPE | RT-H1MUT070 | VR-H1MUT070 | REP-H1MUT070 | ART-RECORD-H1MUT070 | `148559170dabc0a28a82dc577b958456d1aa3046875208d2587ec073706ba5e3` | `148559170dabc0a28a82dc577b958456d1aa3046875208d2587ec073706ba5e3` | PASS |
+| H1-MUTATION-MANIFEST_UNSAFE_BUILTIN_DEFAULT | RT-H1MUT071 | VR-H1MUT071 | REP-H1MUT071 | ART-RECORD-H1MUT071 | `4dd2217bbfea95c1ae0afe7971bdd7a3fc038ebebdc36e3ee2c948670914fb9e` | `4dd2217bbfea95c1ae0afe7971bdd7a3fc038ebebdc36e3ee2c948670914fb9e` | PASS |
+| H1-MUTATION-MANIFEST_STALE_EMBEDDED_COPY | RT-H1MUT072 | VR-H1MUT072 | REP-H1MUT072 | ART-RECORD-H1MUT072 | `b9199d2291c7804b28fc378ccd5216b0a7a87e8babeab444233e2c0ef8d1f0ba` | `b9199d2291c7804b28fc378ccd5216b0a7a87e8babeab444233e2c0ef8d1f0ba` | PASS |
+| H1-MUTATION-PARSER_CHANGED_SQLSTATE | RT-H1MUT073 | VR-H1MUT073 | REP-H1MUT073 | ART-RECORD-H1MUT073 | `32cf6f6f5274529f058fd6b78ef98178e74c86bcc07583379dce4ccfe684d9d6` | `32cf6f6f5274529f058fd6b78ef98178e74c86bcc07583379dce4ccfe684d9d6` | PASS |
+| H1-MUTATION-PARSER_CHANGED_DIAGNOSTIC | RT-H1MUT074 | VR-H1MUT074 | REP-H1MUT074 | ART-RECORD-H1MUT074 | `a770a713bbf5341299f484a8f352c65aa6090bcdb5ddfbee20875d167e7ff09a` | `a770a713bbf5341299f484a8f352c65aa6090bcdb5ddfbee20875d167e7ff09a` | PASS |
+| H1-MUTATION-PARSER_CHANGED_OBJECT | RT-H1MUT075 | VR-H1MUT075 | REP-H1MUT075 | ART-RECORD-H1MUT075 | `03d8b7b11f8b36141bb3adbb1bb3a50f730245c164f46e592eb6a6dce10ca836` | `03d8b7b11f8b36141bb3adbb1bb3a50f730245c164f46e592eb6a6dce10ca836` | PASS |
+| H1-MUTATION-PARSER_CHANGED_STAGE | RT-H1MUT076 | VR-H1MUT076 | REP-H1MUT076 | ART-RECORD-H1MUT076 | `c7a871bb32c6df74af1306686e8c269a5df79080c53bab1fd12a2fa761f8b247` | `c7a871bb32c6df74af1306686e8c269a5df79080c53bab1fd12a2fa761f8b247` | PASS |
+| H1-MUTATION-PARSER_MISSING_FIXTURE | RT-H1MUT077 | VR-H1MUT077 | REP-H1MUT077 | ART-RECORD-H1MUT077 | `b536a9e56fd5d7e8959bbbed48b6353e42e13b2542bbb6dc63579dbbbaea9820` | `b536a9e56fd5d7e8959bbbed48b6353e42e13b2542bbb6dc63579dbbbaea9820` | PASS |
+| H1-MUTATION-PARSER_MISSING_RUNTIME | RT-H1MUT078 | VR-H1MUT078 | REP-H1MUT078 | ART-RECORD-H1MUT078 | `f74330815d800b8f5f291cde08fa8924e7670e92f1a9585a5c92e7532da5c1c0` | `f74330815d800b8f5f291cde08fa8924e7670e92f1a9585a5c92e7532da5c1c0` | PASS |
+| H1-MUTATION-PARSER_DUPLICATE_RUNTIME | RT-H1MUT079 | VR-H1MUT079 | REP-H1MUT079 | ART-RECORD-H1MUT079 | `90577c149f3f6172f1c50a1126afdef91c09a58fe1e3a8b920864d225b1d42eb` | `90577c149f3f6172f1c50a1126afdef91c09a58fe1e3a8b920864d225b1d42eb` | PASS |
+| H1-MUTATION-PARSER_RUNTIME_DISAGREEMENT | RT-H1MUT080 | VR-H1MUT080 | REP-H1MUT080 | ART-RECORD-H1MUT080 | `43ef06c77614c1844eb38a9b0fadfd5df13cef9fa14d0232d3222aa416051166` | `43ef06c77614c1844eb38a9b0fadfd5df13cef9fa14d0232d3222aa416051166` | PASS |
+| H1-MUTATION-PARSER_DELETED_MANIFEST_ROW | RT-H1MUT081 | VR-H1MUT081 | REP-H1MUT081 | ART-RECORD-H1MUT081 | `e603fc2d64b19bb88887fb753b03f6ac071482c626c729aad36447ea1fdbb27b` | `e603fc2d64b19bb88887fb753b03f6ac071482c626c729aad36447ea1fdbb27b` | PASS |
+| H1-MUTATION-PARSER_DUPLICATE_REQUIREMENT | RT-H1MUT082 | VR-H1MUT082 | REP-H1MUT082 | ART-RECORD-H1MUT082 | `1358b5bc319cda584408a3ec4bfe7071b28657f4940eab895f60cfe9d6ea6abf` | `1358b5bc319cda584408a3ec4bfe7071b28657f4940eab895f60cfe9d6ea6abf` | PASS |
+| H1-MUTATION-PARSER_UNKNOWN_STATUS | RT-H1MUT083 | VR-H1MUT083 | REP-H1MUT083 | ART-RECORD-H1MUT083 | `66e59130afcac1c1bdbeb3a8a83d9904d9ba7af0942236c0b96efd7ab20c24ee` | `66e59130afcac1c1bdbeb3a8a83d9904d9ba7af0942236c0b96efd7ab20c24ee` | PASS |
+| H1-MUTATION-PARSER_STALE_RUN_ID | RT-H1MUT084 | VR-H1MUT084 | REP-H1MUT084 | ART-RECORD-H1MUT084 | `ed644a5dc2820bd4e578b86c17e4a6e123b002e6055d575eff7b80f1b67fc68a` | `ed644a5dc2820bd4e578b86c17e4a6e123b002e6055d575eff7b80f1b67fc68a` | PASS |
+| H1-MUTATION-PARSER_MISSING_ARTIFACT | RT-H1MUT085 | VR-H1MUT085 | REP-H1MUT085 | ART-RECORD-H1MUT085 | `63f07c9e26ee70d6a735d6f6d0b2debbf39c7548e76f0d0e47f7f0c447aac82f` | `63f07c9e26ee70d6a735d6f6d0b2debbf39c7548e76f0d0e47f7f0c447aac82f` | PASS |
+| H1-MUTATION-PARSER_ARTIFACT_MISMATCH | RT-H1MUT086 | VR-H1MUT086 | REP-H1MUT086 | ART-RECORD-H1MUT086 | `641b232b099d8ff9f02823681e92af1b397076ac4436a18e4f5ba0bd419a1e1b` | `641b232b099d8ff9f02823681e92af1b397076ac4436a18e4f5ba0bd419a1e1b` | PASS |
+| H1-MUTATION-PARSER_PASS_WITHOUT_EVIDENCE | RT-H1MUT087 | VR-H1MUT087 | REP-H1MUT087 | ART-RECORD-H1MUT087 | `ddca6ea2e646d885bd7b917a195837a79d4c6123beec747cefd992fdcff0b62b` | `ddca6ea2e646d885bd7b917a195837a79d4c6123beec747cefd992fdcff0b62b` | PASS |
+| H1-MUTATION-PARSER_REVERSED_LOCK_DIRECTION | RT-H1MUT088 | VR-H1MUT088 | REP-H1MUT088 | ART-RECORD-H1MUT088 | `6f5bc0b1a87023907d05e290d7ac7146a4454d5db597f86702ec1d8ca334ecca` | `6f5bc0b1a87023907d05e290d7ac7146a4454d5db597f86702ec1d8ca334ecca` | PASS |
+| H1-MUTATION-PARSER_WRONG_LOCK_IDENTITY | RT-H1MUT089 | VR-H1MUT089 | REP-H1MUT089 | ART-RECORD-H1MUT089 | `74df1466b9385ffb65dcf40c498827cbbbbfa7bb1b5e07d6a88bbeacb2453f1b` | `74df1466b9385ffb65dcf40c498827cbbbbfa7bb1b5e07d6a88bbeacb2453f1b` | PASS |
+| H1-MUTATION-PARSER_INCORRECT_CYCLE | RT-H1MUT090 | VR-H1MUT090 | REP-H1MUT090 | ART-RECORD-H1MUT090 | `6c5accf011cb7d7811c88a85438452470d92edc4eda8fb478aa86293d5e7670f` | `6c5accf011cb7d7811c88a85438452470d92edc4eda8fb478aa86293d5e7670f` | PASS |
+| H1-MUTATION-FINAL_FORGED_BUILD | RT-H1MUT091 | VR-H1MUT091 | REP-H1MUT091 | ART-RECORD-H1MUT091 | `f8ae60cbbd82970d2fd70300cef2222720a83607c27822d5591d0a2a0db9c825` | `f8ae60cbbd82970d2fd70300cef2222720a83607c27822d5591d0a2a0db9c825` | PASS |
+| H1-MUTATION-FINAL_FORGED_RESTORE | RT-H1MUT092 | VR-H1MUT092 | REP-H1MUT092 | ART-RECORD-H1MUT092 | `f8eb375ae91ccb1a568fb88b685cac330f22177ddeca5aa8bce057e80fd21c69` | `f8eb375ae91ccb1a568fb88b685cac330f22177ddeca5aa8bce057e80fd21c69` | PASS |
+| H1-OBJ-TABLE | RT-H1OBJ001 | VR-H1OBJ001 | REP-H1OBJ001 | ART-RECORD-H1OBJ001 | `cc89d307d876ea540726d2e76122bbbd3491bfb00c5f99a1c6336a9c966ed736` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-SEQUENCE | RT-H1OBJ002 | VR-H1OBJ002 | REP-H1OBJ002 | ART-RECORD-H1OBJ002 | `1194c6c87eed722907b2d0b6c386802278fa36c0d3b4b3195e11525f6b6ae2f1` | `4f8ed882ba0f7c71f6dd114d7133bba5fb79670e61629d9116b4b845bc4032ce` | EXPECTED_FAILURE |
+| H1-OBJ-VIEW | RT-H1OBJ003 | VR-H1OBJ003 | REP-H1OBJ003 | ART-RECORD-H1OBJ003 | `d71986b349fa171d4b09850a6bf01809dcde8ed1f1b25cf5f023c60d402efbac` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-MATVIEW | RT-H1OBJ004 | VR-H1OBJ004 | REP-H1OBJ004 | ART-RECORD-H1OBJ004 | `ea3d217e3579a4892492e81efa3bb18b76b8c46ed1e019641a774bd978feaf15` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-TYPE | RT-H1OBJ005 | VR-H1OBJ005 | REP-H1OBJ005 | ART-RECORD-H1OBJ005 | `05808d97e5d34193d5eb860cae76c2cc0973b0dafeb2d4a8dd099ff71fba58a1` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-DOMAIN | RT-H1OBJ006 | VR-H1OBJ006 | REP-H1OBJ006 | ART-RECORD-H1OBJ006 | `00ba7ef69d625186e6389dc08aa6b20b2e2a2fb058c5379b27c54d2a8d258f2b` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-SCHEMA | RT-H1OBJ007 | VR-H1OBJ007 | REP-H1OBJ007 | ART-RECORD-H1OBJ007 | `b2fe14e79361a9d83f95ac758896daedf406dec2c13f654af195d2bb7830db85` | `c28807c53120ea102f80ca90d05a38dea0c3e64f234655481a662d47deaef658` | EXPECTED_FAILURE |
+| H1-OBJ-PROCEDURE | RT-H1OBJ008 | VR-H1OBJ008 | REP-H1OBJ008 | ART-RECORD-H1OBJ008 | `b4ed41dd490470cd218838804ba19457cce688c20c7d76a0a47d643cf1bfc24b` | `b5d1a6996038a8cd14fb184cb37ecbda50493a0b718a6272a9c5dd6956a88422` | EXPECTED_FAILURE |
+| H1-OBJ-RULE | RT-H1OBJ009 | VR-H1OBJ009 | REP-H1OBJ009 | ART-RECORD-H1OBJ009 | `e718e9d710bfe18ee3fc2fa2abce9c66496eeaac1089ba1e3882d44ab5070990` | `888caccb3fcc106123ddf20529abfae0d616a061d1a2b82148805aa90554b8f5` | EXPECTED_FAILURE |
+| H1-OBJ-OPERATOR | RT-H1OBJ010 | VR-H1OBJ010 | REP-H1OBJ010 | ART-RECORD-H1OBJ010 | `e6ed6915eff20abfd3b792efea1b65a84433e70ba2a2b8926f4597990b7ad923` | `4e98572f8887ba4a4f85e42fb276d204559a3b220cad4218eae1af7c3367413d` | EXPECTED_FAILURE |
+| H1-OBJ-TRIGGER | RT-H1OBJ011 | VR-H1OBJ011 | REP-H1OBJ011 | ART-RECORD-H1OBJ011 | `045b0c9e394a63be5676228683be245e987bf1789fb4f66d4346d6564d95471b` | `4cadd1e21222711be55a13d9dcb6b0380250e474c266b41e9cce960db9081573` | EXPECTED_FAILURE |
+| H1-OBJ-CONSTRAINT-TRIGGER | RT-H1OBJ012 | VR-H1OBJ012 | REP-H1OBJ012 | ART-RECORD-H1OBJ012 | `23b542db684ae953779ccd47a87e87c2a0c8551a9eaa20be96e535df8cee6248` | `36a21a669cfc9fed382ede187ea8a6f8ae3cff80a858fb1a041d6ffff5acf4f2` | EXPECTED_FAILURE |
+| H1-OBJ-EVENT-TRIGGER | RT-H1OBJ013 | VR-H1OBJ013 | REP-H1OBJ013 | ART-RECORD-H1OBJ013 | `ece5246f17c8fb891043e1c3f883acbef766cbb9544c2d3decf052e4683b3297` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-DIRECT-WRAPPER | RT-H1OBJ014 | VR-H1OBJ014 | REP-H1OBJ014 | ART-RECORD-H1OBJ014 | `162200655d978420a95e0e0271cc69c20a9f5debb44549be12b9d7a710379d44` | `b5d1a6996038a8cd14fb184cb37ecbda50493a0b718a6272a9c5dd6956a88422` | EXPECTED_FAILURE |
+| H1-OBJ-OTHER-WRAPPER | RT-H1OBJ015 | VR-H1OBJ015 | REP-H1OBJ015 | ART-RECORD-H1OBJ015 | `7d4bece750da740c44b6f5b2b11ad1631c9b4f0f9756e8dc555a41599401975b` | `edd34a4b1895cc92b713027f1111730bf486f78848053812e7eb13f0c96f1155` | EXPECTED_FAILURE |
+| H1-OBJ-ALT-NAME | RT-H1OBJ016 | VR-H1OBJ016 | REP-H1OBJ016 | ART-RECORD-H1OBJ016 | `9df6187be53e661d6d39b12fd1660da01b63d18cb0f310339c146abc8f0752ca` | `d9b09afed01a41bdc8048d70ef1a259661b5738988c45acb759dfa693d7b25ca` | EXPECTED_FAILURE |
+| H1-OBJ-OVERLOAD | RT-H1OBJ017 | VR-H1OBJ017 | REP-H1OBJ017 | ART-RECORD-H1OBJ017 | `30ef0749540b9ea7ac5ce7cd08ddc0a0437cb135858b287a2d35ddd472973259` | `d9b09afed01a41bdc8048d70ef1a259661b5738988c45acb759dfa693d7b25ca` | EXPECTED_FAILURE |
+| H1-OBJ-DEFAULT-VARIANT | RT-H1OBJ018 | VR-H1OBJ018 | REP-H1OBJ018 | ART-RECORD-H1OBJ018 | `2b385feb712428eb8f8e0561aac6d9e43838d6372ae70f4564f006429d1d73c6` | `d9b09afed01a41bdc8048d70ef1a259661b5738988c45acb759dfa693d7b25ca` | EXPECTED_FAILURE |
+| H1-OBJ-DEPENDENCY | RT-H1OBJ019 | VR-H1OBJ019 | REP-H1OBJ019 | ART-RECORD-H1OBJ019 | `022a7c9b15bd52bb8bd8a79366278b95b45c122612ad2b4cbd0d05c3bf51ecdc` | `2f9de0544a38a5b99614d4238221b009c73e8fbdf9ac05959de5e183ee0ba658` | EXPECTED_FAILURE |
+| H1-OBJ-AGGREGATE | RT-H1OBJ020 | VR-H1OBJ020 | REP-H1OBJ020 | ART-RECORD-H1OBJ020 | `35fca6251764e2fb78e69f68b5bb0f2415317cfad2577fd49b370c240fd86d09` | `b5d1a6996038a8cd14fb184cb37ecbda50493a0b718a6272a9c5dd6956a88422` | EXPECTED_FAILURE |
+| H1-OBJ-FOREIGN-TABLE | RT-H1OBJ021 | VR-H1OBJ021 | REP-H1OBJ021 | ART-RECORD-H1OBJ021 | `f5b08430c23c83ef2564c0dd64a166c00b5fb522558bfcce31d5ea5efebfc5b8` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-PUBLICATION | RT-H1OBJ022 | VR-H1OBJ022 | REP-H1OBJ022 | ART-RECORD-H1OBJ022 | `0727cc2badaa69b2244d5e3d9f7c5ace36d3d90e3190b2929d211d3fb81c1689` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-SUBSCRIPTION | RT-H1OBJ023 | VR-H1OBJ023 | REP-H1OBJ023 | ART-RECORD-H1OBJ023 | `3c163749430201da6c77f2a45f56ba72dd6912847f915ca4c30e33f0a43f87e7` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-LARGE-OBJECT | RT-H1OBJ024 | VR-H1OBJ024 | REP-H1OBJ024 | ART-RECORD-H1OBJ024 | `569c46f6d15f02d9135aadc43753c5f480a79bad8a390353ba2995358cdadf64` | `7a789d8d24135141f8f779cb95d1b4d9f2735d0ea39233c3838a9cde12ecaecf` | EXPECTED_FAILURE |
+| H1-OBJ-CAST | RT-H1OBJ025 | VR-H1OBJ025 | REP-H1OBJ025 | ART-RECORD-H1OBJ025 | `deda53aaa3539bd9330a8f42ee181c5714738e641765050f268de6f2014f0b38` | `c66b8db517028f055892732c3e07fc8169b833ffdf43fd350118c02b35f7b57a` | EXPECTED_FAILURE |
+| H1-LOCK-007 | RT-H1PRE001 | VR-H1PRE001 | REP-H1PRE001 | ART-RECORD-H1PRE001 | `451b03c96c8d00b2cef4e829d2e3b9c87e4d4db821eb31f524d067cbdecaee54` | `451b03c96c8d00b2cef4e829d2e3b9c87e4d4db821eb31f524d067cbdecaee54` | BLOCKED_PRE_ENABLEMENT |
+| H1-LOCK-009 | RT-H1PRE002 | VR-H1PRE002 | REP-H1PRE002 | ART-RECORD-H1PRE002 | `9c11863d4372c847f27a64b294f4abb168a4df676640cac99e3173930ea925cc` | `9c11863d4372c847f27a64b294f4abb168a4df676640cac99e3173930ea925cc` | BLOCKED_PRE_ENABLEMENT |
+| H1-ACL-ADMISSION | RT-H1REG001 | VR-H1REG001 | REP-H1REG001 | ART-RECORD-H1REG001 | `7eaf89facade627fe3d89ef2618bfb88e8c2221d0efbcc48574215b430f508cd` | `7eaf89facade627fe3d89ef2618bfb88e8c2221d0efbcc48574215b430f508cd` | SUCCESS |
+| H1-ACL-ATTEMPT | RT-H1REG002 | VR-H1REG002 | REP-H1REG002 | ART-RECORD-H1REG002 | `934c12d9ad5861b89d1aacad580f175f50ddad63e49160b5b5082a736ab3fcf7` | `934c12d9ad5861b89d1aacad580f175f50ddad63e49160b5b5082a736ab3fcf7` | SUCCESS |
+| H1-ACL-ATTEMPT-V1 | RT-H1REG003 | VR-H1REG003 | REP-H1REG003 | ART-RECORD-H1REG003 | `8a078404929241533c111ffbc6cd8d0c9aeaa9d2089d50e41dbbcd1b018406ff` | `8a078404929241533c111ffbc6cd8d0c9aeaa9d2089d50e41dbbcd1b018406ff` | SUCCESS |
+| H1-ACL-CANONICAL | RT-H1REG004 | VR-H1REG004 | REP-H1REG004 | ART-RECORD-H1REG004 | `88fe6ae96f6562dda9fc5105f386a0ae84f060c7df33480db612c8cd563c4631` | `88fe6ae96f6562dda9fc5105f386a0ae84f060c7df33480db612c8cd563c4631` | SUCCESS |
+| H1-ACL-COMPLETION | RT-H1REG005 | VR-H1REG005 | REP-H1REG005 | ART-RECORD-H1REG005 | `a8d986800a59c832403063cfd4d9515dd99b29985058c796aad77ebb7578156c` | `a8d986800a59c832403063cfd4d9515dd99b29985058c796aad77ebb7578156c` | SUCCESS |
+| H1-ACL-COMPLETION-AUDIT | RT-H1REG006 | VR-H1REG006 | REP-H1REG006 | ART-RECORD-H1REG006 | `077f103334f4bb318803989e43c68962906786e2b5c57c9ddf16cea0248ede10` | `077f103334f4bb318803989e43c68962906786e2b5c57c9ddf16cea0248ede10` | SUCCESS |
+| H1-ACL-COMPLETION-AUDIT-COLUMNS | RT-H1REG007 | VR-H1REG007 | REP-H1REG007 | ART-RECORD-H1REG007 | `e13ecd948cbb6cc0158ebc042e797b1ea88adb89746c1ac26b9811c7ba630e65` | `e13ecd948cbb6cc0158ebc042e797b1ea88adb89746c1ac26b9811c7ba630e65` | SUCCESS |
+| H1-ACL-COMPLETION-COLUMNS | RT-H1REG008 | VR-H1REG008 | REP-H1REG008 | ART-RECORD-H1REG008 | `7044f94cb645f2a42c88aa624e7dff32f767a45c8622e26674b21a3018f178ad` | `7044f94cb645f2a42c88aa624e7dff32f767a45c8622e26674b21a3018f178ad` | SUCCESS |
+| H1-ACL-CONTEXT | RT-H1REG009 | VR-H1REG009 | REP-H1REG009 | ART-RECORD-H1REG009 | `f9b006ef656d2f9541778cfed1848ceab555b1dc851a0d35e8a1a00cc27c757f` | `f9b006ef656d2f9541778cfed1848ceab555b1dc851a0d35e8a1a00cc27c757f` | SUCCESS |
+| H1-ACL-COUPLED-TYPES | RT-H1REG010 | VR-H1REG010 | REP-H1REG010 | ART-RECORD-H1REG010 | `66f1211ec22cf36bf50267b4c30af851f3f931fe4356bef6199e9883d01eb1e3` | `66f1211ec22cf36bf50267b4c30af851f3f931fe4356bef6199e9883d01eb1e3` | SUCCESS |
+| H1-ACL-DEPLOYMENT-AUDIT | RT-H1REG011 | VR-H1REG011 | REP-H1REG011 | ART-RECORD-H1REG011 | `9371559d605fbbedb8e9b21c94e001c17f76b4c9bb073e3fc7c2a75d8afd3648` | `9371559d605fbbedb8e9b21c94e001c17f76b4c9bb073e3fc7c2a75d8afd3648` | SUCCESS |
+| H1-ACL-DISPATCH-AUDIT | RT-H1REG012 | VR-H1REG012 | REP-H1REG012 | ART-RECORD-H1REG012 | `53fa0278e0c89ea87bc8d5c7625f610ae85592d0453c83359c4737817ab6e7ca` | `53fa0278e0c89ea87bc8d5c7625f610ae85592d0453c83359c4737817ab6e7ca` | SUCCESS |
+| H1-ACL-DISPATCH-AUDIT-COLUMNS | RT-H1REG013 | VR-H1REG013 | REP-H1REG013 | ART-RECORD-H1REG013 | `4824ecd78599316d63245053c22105efb7efab5c793988ea78144b2077223d54` | `4824ecd78599316d63245053c22105efb7efab5c793988ea78144b2077223d54` | SUCCESS |
+| H1-ACL-ENABLEMENT | RT-H1REG014 | VR-H1REG014 | REP-H1REG014 | ART-RECORD-H1REG014 | `be8f354cffd08cbfc11535cd5b525732898222ab91948544299516ed72403d8a` | `be8f354cffd08cbfc11535cd5b525732898222ab91948544299516ed72403d8a` | SUCCESS |
+| H1-ACL-ENABLEMENT-AUDIT | RT-H1REG015 | VR-H1REG015 | REP-H1REG015 | ART-RECORD-H1REG015 | `fd1829f944ec039be42141cdc899ca667c5e2bb9f744275cd1aa2fdabd3f4058` | `fd1829f944ec039be42141cdc899ca667c5e2bb9f744275cd1aa2fdabd3f4058` | SUCCESS |
+| H1-ACL-FIXED-TRANSITIONS | RT-H1REG016 | VR-H1REG016 | REP-H1REG016 | ART-RECORD-H1REG016 | `f79f7dc7a40d38e7fb765e301214700f37bd509d45087a8e8361f24d18c2037a` | `f79f7dc7a40d38e7fb765e301214700f37bd509d45087a8e8361f24d18c2037a` | SUCCESS |
+| H1-ACL-LEDGER | RT-H1REG017 | VR-H1REG017 | REP-H1REG017 | ART-RECORD-H1REG017 | `b6e79d4cc1e97b033647401de260a8d726c9885082d37f59bd6dbe3a4071f929` | `b6e79d4cc1e97b033647401de260a8d726c9885082d37f59bd6dbe3a4071f929` | SUCCESS |
+| H1-ACL-LOCK-1 | RT-H1REG018 | VR-H1REG018 | REP-H1REG018 | ART-RECORD-H1REG018 | `a6486d291724e63aaa1e34425ca404495c3a93482ddc137247c8225e083339aa` | `a6486d291724e63aaa1e34425ca404495c3a93482ddc137247c8225e083339aa` | SUCCESS |
+| H1-ACL-LOCK-2 | RT-H1REG019 | VR-H1REG019 | REP-H1REG019 | ART-RECORD-H1REG019 | `98306a246466c4f80ddda66d1e806933d9d2abfdeb5101eee655b71cfdda351e` | `98306a246466c4f80ddda66d1e806933d9d2abfdeb5101eee655b71cfdda351e` | SUCCESS |
+| H1-ACL-LOCK-3 | RT-H1REG020 | VR-H1REG020 | REP-H1REG020 | ART-RECORD-H1REG020 | `42dd68e623c09c5b22e50afec9dfab0e7bc0cbc8042df33d576ad133d55480fc` | `42dd68e623c09c5b22e50afec9dfab0e7bc0cbc8042df33d576ad133d55480fc` | SUCCESS |
+| H1-ACL-LOCK-4 | RT-H1REG021 | VR-H1REG021 | REP-H1REG021 | ART-RECORD-H1REG021 | `f04338311042c451d1395750783942fa281667534dde2df86675013af647e359` | `f04338311042c451d1395750783942fa281667534dde2df86675013af647e359` | SUCCESS |
+| H1-ACL-LOCK-5 | RT-H1REG022 | VR-H1REG022 | REP-H1REG022 | ART-RECORD-H1REG022 | `e97322d42e3333d0a42b65569a92a417ee52560f30b4a077def5e7b477f6bbb8` | `e97322d42e3333d0a42b65569a92a417ee52560f30b4a077def5e7b477f6bbb8` | SUCCESS |
+| H1-ACL-READINESS | RT-H1REG023 | VR-H1REG023 | REP-H1REG023 | ART-RECORD-H1REG023 | `531569bf2e75cbaa75258e190f6079a428364e330b8499f40dc99dde40bc39fd` | `531569bf2e75cbaa75258e190f6079a428364e330b8499f40dc99dde40bc39fd` | SUCCESS |
+| H1-ACL-REPLAY | RT-H1REG024 | VR-H1REG024 | REP-H1REG024 | ART-RECORD-H1REG024 | `0c5b4f92c0134fd9a815f2e90248ec737dbd65329d47d174ad6092f9c3131351` | `0c5b4f92c0134fd9a815f2e90248ec737dbd65329d47d174ad6092f9c3131351` | SUCCESS |
+| H1-ACL-REQUEST | RT-H1REG025 | VR-H1REG025 | REP-H1REG025 | ART-RECORD-H1REG025 | `04edfe03e5e60793cf909c3d307b3d9769753003c74a0f8b345444dd03d38a78` | `04edfe03e5e60793cf909c3d307b3d9769753003c74a0f8b345444dd03d38a78` | SUCCESS |
+| H1-ACL-REQUEST-COLUMNS | RT-H1REG026 | VR-H1REG026 | REP-H1REG026 | ART-RECORD-H1REG026 | `71226ee14dced68159d213ce7cc18b1d761aa513e29d8f1ce3f5e95a83136752` | `71226ee14dced68159d213ce7cc18b1d761aa513e29d8f1ce3f5e95a83136752` | SUCCESS |
+| H1-ACL-SCHEDULER-COLUMNS | RT-H1REG027 | VR-H1REG027 | REP-H1REG027 | ART-RECORD-H1REG027 | `f3e27a6b7b424591689a04e283cfaca6920ad394d4da544c0015e5f13216b652` | `f3e27a6b7b424591689a04e283cfaca6920ad394d4da544c0015e5f13216b652` | SUCCESS |
+| H1-ACL-SCHEDULER-EVIDENCE | RT-H1REG028 | VR-H1REG028 | REP-H1REG028 | ART-RECORD-H1REG028 | `c126d5bcc837155d081c64dbf3896b3b114ce5d413671c7c22829c0e0a0c460d` | `c126d5bcc837155d081c64dbf3896b3b114ce5d413671c7c22829c0e0a0c460d` | SUCCESS |
+| H1-ACL-SCHEMA-PUBLIC | RT-H1REG029 | VR-H1REG029 | REP-H1REG029 | ART-RECORD-H1REG029 | `20f659192dd0d7eda2786d704962ca6269f23e85096c88a180ba34589cfa56ad` | `20f659192dd0d7eda2786d704962ca6269f23e85096c88a180ba34589cfa56ad` | SUCCESS |
+| H1-ACL-SEQUENCES | RT-H1REG030 | VR-H1REG030 | REP-H1REG030 | ART-RECORD-H1REG030 | `ed6b368a739223cf246e1c1e8deefa22e3be621448269efb547ce00ed3811a89` | `ed6b368a739223cf246e1c1e8deefa22e3be621448269efb547ce00ed3811a89` | SUCCESS |
+| H1-ACL-STATUS | RT-H1REG031 | VR-H1REG031 | REP-H1REG031 | ART-RECORD-H1REG031 | `109a6cfcc1d80e76e59f3de6fcdab41f612d0de512aa781fedd0be0feab74e41` | `109a6cfcc1d80e76e59f3de6fcdab41f612d0de512aa781fedd0be0feab74e41` | SUCCESS |
+| H1-ACL-SUPPORTING-DEFINERS | RT-H1REG032 | VR-H1REG032 | REP-H1REG032 | ART-RECORD-H1REG032 | `b3f06f8c917eb2cad93352caac83ea2f0c3288fb7c2afcb5ed36fb9e13713934` | `b3f06f8c917eb2cad93352caac83ea2f0c3288fb7c2afcb5ed36fb9e13713934` | SUCCESS |
+| H1-DEFAULT-GLOBAL-FUNCTION | RT-H1REG033 | VR-H1REG033 | REP-H1REG033 | ART-RECORD-H1REG033 | `8ee2069766e307bbe4d73c5940325cbd7b2daa1f925b546bfbd49193392fb5e6` | `8ee2069766e307bbe4d73c5940325cbd7b2daa1f925b546bfbd49193392fb5e6` | SUCCESS |
+| H1-DEFAULT-GLOBAL-SCHEMA | RT-H1REG034 | VR-H1REG034 | REP-H1REG034 | ART-RECORD-H1REG034 | `6d3acdc24f8b3e0949cd91372a79a7610f6d6da744af2b233dbaeea7757e808a` | `6d3acdc24f8b3e0949cd91372a79a7610f6d6da744af2b233dbaeea7757e808a` | SUCCESS |
+| H1-DEFAULT-GLOBAL-SEQUENCE | RT-H1REG035 | VR-H1REG035 | REP-H1REG035 | ART-RECORD-H1REG035 | `16b1cf7e256319b0f625be841284a743afe2e2a63d34814e9425c0f50934635d` | `16b1cf7e256319b0f625be841284a743afe2e2a63d34814e9425c0f50934635d` | SUCCESS |
+| H1-DEFAULT-GLOBAL-TABLE | RT-H1REG036 | VR-H1REG036 | REP-H1REG036 | ART-RECORD-H1REG036 | `1ca5650c6c8bffa79febcd6b3784fa556ed10f8d86e3b5791fff56b8c26dfccc` | `1ca5650c6c8bffa79febcd6b3784fa556ed10f8d86e3b5791fff56b8c26dfccc` | SUCCESS |
+| H1-DEFAULT-GLOBAL-TYPE | RT-H1REG037 | VR-H1REG037 | REP-H1REG037 | ART-RECORD-H1REG037 | `78f8243541d9f26fe9a4a3f061c0b1d7ece8ea88c8a42400190ea1e24f74c238` | `78f8243541d9f26fe9a4a3f061c0b1d7ece8ea88c8a42400190ea1e24f74c238` | SUCCESS |
+| H1-DEFAULT-PUBLIC-FUNCTION | RT-H1REG038 | VR-H1REG038 | REP-H1REG038 | ART-RECORD-H1REG038 | `d134108d70d3a86cb946c13d1b00d5d8848f0f0eccfb9b0dedf6438a9c25d181` | `d134108d70d3a86cb946c13d1b00d5d8848f0f0eccfb9b0dedf6438a9c25d181` | SUCCESS |
+| H1-DEFAULT-PUBLIC-SEQUENCE | RT-H1REG039 | VR-H1REG039 | REP-H1REG039 | ART-RECORD-H1REG039 | `11b3241e65f523ae10d420d91df841e51b5ccfbc8a9daf9a815b1c4ee65aafea` | `11b3241e65f523ae10d420d91df841e51b5ccfbc8a9daf9a815b1c4ee65aafea` | SUCCESS |
+| H1-DEFAULT-PUBLIC-TABLE | RT-H1REG040 | VR-H1REG040 | REP-H1REG040 | ART-RECORD-H1REG040 | `e357c9d5defa77bbf226f1ededc2dfab58ad20edf7a08852b8b60b825417a04b` | `e357c9d5defa77bbf226f1ededc2dfab58ad20edf7a08852b8b60b825417a04b` | SUCCESS |
+| H1-DEFAULT-PUBLIC-TYPE | RT-H1REG041 | VR-H1REG041 | REP-H1REG041 | ART-RECORD-H1REG041 | `1fac81568215a5423dd657a32800c6a838373dd5e13256d4646b935194552e7c` | `1fac81568215a5423dd657a32800c6a838373dd5e13256d4646b935194552e7c` | SUCCESS |
+| H1-MIGRATION-LEDGER | RT-H1RESTORE001 | VR-H1RESTORE001 | REP-H1RESTORE001 | ART-RECORD-H1RESTORE001 | `b49dbafba00886626a05da284a6ff7cb5e435f2adfb93dba283143b3c06a1453` | `85434a3469b73f984e4951ddd721bf8f5ce99270f349120e9b7fb839aa62d78b` | SUCCESS |
+| H1-HISTORICAL-BYTES | RT-H1RESTORE003 | VR-H1RESTORE003 | REP-H1RESTORE003 | ART-RECORD-H1RESTORE003 | `5620f569e1a202fadabb2b1bb1dcde3c01a603624a78e253425b60ea3a2bb40f` | `61331375aba9a0b7b873a8257e7c5cd70982294152a64426882e5db568958e54` | SUCCESS |
+| H1-RESTORE-A | RT-H1RESTOREA | VR-H1RESTOREA | REP-H1RESTOREA | ART-RECORD-H1RESTOREA | `6adb3847a723105aae0e378374703f974cf4152b4d7d000761ac08b1222694ba` | `4add629f20ab1d2e60885d3249fddfd1904953412954f5be5702b4eaf16f0c65` | SUCCESS |
+| H1-RESTORE-B | RT-H1RESTOREB | VR-H1RESTOREB | REP-H1RESTOREB | ART-RECORD-H1RESTOREB | `6bf7f9387e1233c28b13f8b9d524e396a74fb795e95f78933e5262fbe25dac22` | `8b5a4c874166eb5e33bc339b9d7e80dc12e1b71f90da9b3fc7680356343d19d4` | SUCCESS |
+| H1-RESTORE-C | RT-H1RESTOREC | VR-H1RESTOREC | REP-H1RESTOREC | ART-RECORD-H1RESTOREC | `a1ca78d530d796e52ac7dc924ca072f58d15659bb7cb35418b39250c26383ab6` | `bf533e969ce32f89b4afe1a238e36b93de001888c69fef5cafc356e59b621b84` | SUCCESS |
+| H1-RESTORE-D | RT-H1RESTORED | VR-H1RESTORED | REP-H1RESTORED | ART-RECORD-H1RESTORED | `8320bcf490dca7aa3221ef91fbb42c67b89613a2ad59fa582c983dde399e9831` | `14c00df973068629c4ea145c967cbebd77e14fd8a5d3e3955402faf1b3862b54` | EXPECTED_FAILURE |
+| H1-RESTORE-E | RT-H1RESTOREE | VR-H1RESTOREE | REP-H1RESTOREE | ART-RECORD-H1RESTOREE | `1a5d6e5cf9e66ba8d78fb207a077cad0991f0ea8220c5b8dc71302b4cbb3aed9` | `30bbefafe93b2ae43bd280dff5103b96a7af82f9a091798c22771e306a1712ac` | EXPECTED_FAILURE |
+| H1-RESTORE-F | RT-H1RESTOREF | VR-H1RESTOREF | REP-H1RESTOREF | ART-RECORD-H1RESTOREF | `aed7ac2820e7497a608de08827c19b8b64bcb1c5e45d00227064feb177327cfa` | `82c83aed7956727cfe06bc072dbb4140c33b75eb0223761b1877a2ea62e890c5` | EXPECTED_FAILURE |
+| H1-RESTORE-G | RT-H1RESTOREG | VR-H1RESTOREG | REP-H1RESTOREG | ART-RECORD-H1RESTOREG | `664647b30f0d9194816fbbea015b0052cc8fe812ac55978f21b9d833c7d80fad` | `1e2031d8b2e907e2bcbe0a85bf6711155216731029e10ef811dddfc892806d77` | EXPECTED_FAILURE |
+| H1-RESTORE-H | RT-H1RESTOREH | VR-H1RESTOREH | REP-H1RESTOREH | ART-RECORD-H1RESTOREH | `a79a72f04ff6aef42badf8878ff244e31e91a420e8bcf89b816de0664b0a507a` | `f797506e6d1015a28c665fe21292b21386da02b89bd18ffe0b6734139c13ac0f` | EXPECTED_FAILURE |
+| H1-RESTORE-I | RT-H1RESTOREI | VR-H1RESTOREI | REP-H1RESTOREI | ART-RECORD-H1RESTOREI | `becb53798487fd937f16ceff5001dae963c47b81b579301c399bc3390b3f14c0` | `4e5e5bbb6244b80165d6cbfa5ac228bc90ff71b7915063d3a394cef4bf491ef9` | EXPECTED_FAILURE |
+| H1-RESTORE-J | RT-H1RESTOREJ | VR-H1RESTOREJ | REP-H1RESTOREJ | ART-RECORD-H1RESTOREJ | `8999ce0d426943899d469d0d9a31367f5cf83e08022dbf8edfa7859e806294f1` | `f94a66ca2813f34a0dc693f586290792f816dff99a984f23c1d1dcf6028bf472` | EXPECTED_FAILURE |
+| H1-ROLE-LOGIN | RT-H1ROLE001 | VR-H1ROLE001 | REP-H1ROLE001 | ART-RECORD-H1ROLE001 | `6c0982d4946c3dae01bf1a0a1fd59d28c561995d5313817cf15cf939a41dece2` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-SUPERUSER | RT-H1ROLE002 | VR-H1ROLE002 | REP-H1ROLE002 | ART-RECORD-H1ROLE002 | `2504f7541711944b718345051f4b45ffb1b0582f5ea7a704488574ec1462dcc8` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-INHERIT | RT-H1ROLE003 | VR-H1ROLE003 | REP-H1ROLE003 | ART-RECORD-H1ROLE003 | `45952c64cd6ba53e930ab346346da294f5020378b46170b0b2be7e8a497f2e0a` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-CREATEDB | RT-H1ROLE004 | VR-H1ROLE004 | REP-H1ROLE004 | ART-RECORD-H1ROLE004 | `69ea98d64f20241ea933c091fb9439266809af474507514fd55756cad2344028` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-CREATEROLE | RT-H1ROLE005 | VR-H1ROLE005 | REP-H1ROLE005 | ART-RECORD-H1ROLE005 | `75b49badd45cb5fc000c610ccfe9696da19bd9b36f10c978d428e7e941564689` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-REPLICATION | RT-H1ROLE006 | VR-H1ROLE006 | REP-H1ROLE006 | ART-RECORD-H1ROLE006 | `a7cb904c7bf2b20f7834be45bc66d0905e330377047b32bf3956c8f21e9a7231` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-BYPASSRLS | RT-H1ROLE007 | VR-H1ROLE007 | REP-H1ROLE007 | ART-RECORD-H1ROLE007 | `8c2b256913556dc19e12a12a13be1795aac7db4ebef93b9751a93d5e5470c89f` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-CONNLIMIT | RT-H1ROLE008 | VR-H1ROLE008 | REP-H1ROLE008 | ART-RECORD-H1ROLE008 | `e2885486b5819caa6b3fe52ca0b420ef3b20d51644c605e7d7601bcee39393f8` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-PASSWORD | RT-H1ROLE009 | VR-H1ROLE009 | REP-H1ROLE009 | ART-RECORD-H1ROLE009 | `f51275ddd53276bab89681a0ead8f2ecd779a869a5013c749bb9ad3847c32c5e` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-VALIDITY | RT-H1ROLE010 | VR-H1ROLE010 | REP-H1ROLE010 | ART-RECORD-H1ROLE010 | `1ca67abb1578c50cc53f6b05d1209bf94c5a263ad5c0809dc4dd5957819ddb49` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-ROLE-CONFIG | RT-H1ROLE011 | VR-H1ROLE011 | REP-H1ROLE011 | ART-RECORD-H1ROLE011 | `708ac030afcc864747734d790491e02cbb18e3eb0806549ba3351eb258f6c049` | `60525fa3933a614f61194f00fb0d946f894c34bb35af2752cab6a9a30768ff0c` | EXPECTED_FAILURE |
+| H1-FIXED-TRANSITIONS | RT-H1SQL001 | VR-H1SQL001 | REP-H1SQL001 | ART-RECORD-H1SQL001 | `947b5dfe9e0b123cae351bfe1edf50516a7592b67059c41f7b078ab02c3d22c3` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |
+| H1-SUPPORTING-DEFINERS | RT-H1SQL002 | VR-H1SQL002 | REP-H1SQL002 | ART-RECORD-H1SQL002 | `ac2d6919fbc8cd6734fe7e862b6ec985c776a2cdc38669ac5512541db3135d0d` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |
+| H1-CONTEXT-LIFECYCLE | RT-H1SQL003 | VR-H1SQL003 | REP-H1SQL003 | ART-RECORD-H1SQL003 | `2e725c50bfa8e283d600777f7255acc8eef08f9bc7681a4f8697a364927e3a2f` | `96daaf85e22796abc5ef6937995d8e88069077cfd7af6ea4d9875a132fa8aa1e` | EXPECTED_FAILURE |
+| H1-RECURSIVE-TRIGGER | RT-H1SQL004 | VR-H1SQL004 | REP-H1SQL004 | ART-RECORD-H1SQL004 | `62bf4e614ffc7bd761bc56ac8d196a2905a4a1ec3d2b352a32458ca353fbfdc4` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-REPLAY-ENABLE-EXACT | RT-H1SQL005A | VR-H1SQL005A | REP-H1SQL005A | ART-RECORD-H1SQL005A | `4556c2982e0372bdb1291e1e27303461df37c96c3844ff8b0c0310d3a1d7d419` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |
+| H1-REPLAY-ENABLE-CONFLICT | RT-H1SQL005B | VR-H1SQL005B | REP-H1SQL005B | ART-RECORD-H1SQL005B | `52fce9301d9bf96358075a5e3fb0c08413ede872c523b8779191bf4148dda7a2` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-REPLAY-DISABLE-EXACT | RT-H1SQL006A | VR-H1SQL006A | REP-H1SQL006A | ART-RECORD-H1SQL006A | `fa74f9452a2b8e588c6a79ce46c92804c6330513749726f646649f73f7030575` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |
+| H1-REPLAY-DISABLE-CONFLICT | RT-H1SQL006B | VR-H1SQL006B | REP-H1SQL006B | ART-RECORD-H1SQL006B | `7ffdb527e602e82ccaa44309f1da1d625907c36f9ac19d8931ef5a5e74dbdda7` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-REPLAY-ACQUIRE-EXACT | RT-H1SQL007A | VR-H1SQL007A | REP-H1SQL007A | ART-RECORD-H1SQL007A | `b90f62740d49ed5e22210bf3bb5ed742aebfc5362ef36affc5bc2a5e7e480778` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |
+| H1-REPLAY-ACQUIRE-CONFLICT | RT-H1SQL007B | VR-H1SQL007B | REP-H1SQL007B | ART-RECORD-H1SQL007B | `6ea902f59c37adcf6dcf8d583a6b11b68db10656b437ee4a47a4bbaa33f0abed` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-REPLAY-ACQUIRE-CORRUPT | RT-H1SQL007C | VR-H1SQL007C | REP-H1SQL007C | ART-RECORD-H1SQL007C | `131e458b46519cf70889380a6fc68fee0fc263a9722be91b01cd6c839acca725` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-CANONICAL-FIVE-LEVELS | RT-H1SQL008 | VR-H1SQL008 | REP-H1SQL008 | ART-RECORD-H1SQL008 | `2c3e2a3e092f259a7f0e7ea3fb8d891417ff41ffe48a589a128df6fff8e55d6d` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-POST-COMPLETION | RT-H1SQL009 | VR-H1SQL009 | REP-H1SQL009 | ART-RECORD-H1SQL009 | `07574ecccc61ce4613a09fbd595b5c70c59d7c045daf6eaaaa2862057236677b` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | EXPECTED_FAILURE |
+| H1-INERTNESS | RT-H1SQL010 | VR-H1SQL010 | REP-H1SQL010 | ART-RECORD-H1SQL010 | `a241894ff5ae779cd9d02cd2ac9a2b72e710d506579e6c62abfaa8fd280ccd17` | `c60afee43c788d1a5989a178dab2cf117c5ef46f8090c2ce1818d1be9e0fa84d` | SUCCESS |

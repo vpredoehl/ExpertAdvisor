@@ -1,0 +1,53 @@
+Phase 4D Step 2 — Recommendation Campaign Review (Read-Only)
+
+Reasoning level: High
+
+GOAL
+
+Implement the second step of Phase 4D by adding a read-only campaign
+review layer on top of the deterministic campaign planner completed in
+Step 1.
+
+BOUNDARIES
+
+This step remains strictly advisory.
+
+It must NOT: - create campaign rows - create proposal rows - create
+experiment rows - activate or queue experiments - modify scheduler
+state - change recommendation workflow state - write to PostgreSQL -
+introduce migrations
+
+OBJECTIVES
+
+1.  Add a campaign review service that consumes the deterministic
+    campaign plan.
+2.  Produce a structured review describing:
+    -   overall campaign summary
+    -   selected recommendations
+    -   excluded recommendations with explicit reasons
+    -   duplicate detection
+    -   parameter-family diversity
+    -   symbol and horizon coverage
+    -   deterministic ordering verification
+    -   canonical campaign identity
+3.  Add CLI support to display campaign review information.
+4.  Reuse existing Phase 4C workflow evidence and Phase 4D planner
+    outputs.
+5.  Keep all operations read-only and deterministic.
+6.  Add comprehensive unit and repository tests.
+7.  Update Phase 4D documentation.
+
+VERIFICATION
+
+-   Release build succeeds.
+-   Existing tests pass.
+-   New campaign review tests pass.
+-   Repository tests pass against a disposable PostgreSQL database.
+-   No database mutations occur.
+-   No scheduler behavior changes.
+
+SUCCESS CRITERIA
+
+Campaign review provides a deterministic explanation of what would be
+included in a future campaign while preserving strict read-only
+behavior.

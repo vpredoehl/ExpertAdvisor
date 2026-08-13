@@ -18,6 +18,17 @@
 
 using std::setw;
 
+extern "C" bool LstmRuntimeDiagnosticLoggingEnabled() __attribute__((weak_import));
+
+namespace
+{
+bool RuntimeDiagnosticLoggingEnabled()
+{
+    return (LstmRuntimeDiagnosticLoggingEnabled == nullptr) ||
+           LstmRuntimeDiagnosticLoggingEnabled();
+}
+}
+
 std::ostream& operator<<(std::ostream& o, Window w)
 {
     for (const auto& f : w)
@@ -65,9 +76,17 @@ std::ostream& operator<<(std::ostream& o, Window w)
 
 void Tensor::Add(Feature f)
 {
+    static size_t s_featureRangeGuardDiagCount = 0;
+    constexpr size_t kFeatureRangeGuardDiagLimit = 50;
+    constexpr float kMinRealisticFxRangeRaw = 1.0e-4f; // 1 pip floor for 15m FX bars
+
     // Reduce reallocations by reserving capacity in chunks
     if (ds.size() == ds.capacity()) ds.reserve(ds.size() + 4096);
+    if (raw_open.size() == raw_open.capacity())     raw_open.reserve(raw_open.size() + 4096);
     if (raw_close.size() == raw_close.capacity())   raw_close.reserve(raw_close.size() + 4096);
+    if (raw_high.size() == raw_high.capacity())     raw_high.reserve(raw_high.size() + 4096);
+    if (raw_low.size() == raw_low.capacity())       raw_low.reserve(raw_low.size() + 4096);
+    if (raw_time.size() == raw_time.capacity())     raw_time.reserve(raw_time.size() + 4096);
 
     FeatureMatrix fm(1, feature_size);
 
@@ -77,7 +96,18 @@ void Tensor::Add(Feature f)
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
+        raw_open.push_back(f.open);
         raw_close.push_back(f.close);
+        raw_high.push_back(f.high);
+        raw_low.push_back(f.low);
+        raw_time.push_back(f.time);
+
+        // Initialize EMA baselines on first sample
+        has_ema = true;
+        ema8 = f.close;
+        ema21 = f.close;
+        ema50 = f.close;
+
         return;
     }
 
@@ -99,15 +129,143 @@ void Tensor::Add(Feature f)
 
     const float range =  h - l;
     p[5] = range;
-    
+
+    // Range expansion: (high - low) / avg_range, use rolling mean of raw ranges
+    const float raw_range = f.high - f.low;
+    const float avg_range = rangeMean.update(raw_range);
+    const float range_expansion = (avg_range > 1e-12f ? raw_range / avg_range : 0.0f);
+    p[31] = range_expansion;
+
+    // Candle body strength: (close - open) / (high - low) in scaled log space
+    const float body_strength = (range != 0.0f ? (c - o) / range : 0.0f);
+    p[30] = body_strength;
+
     const float denom = std::max(range, 1e-6f);
+
+    // Update EMAs on raw close
+    if (!has_ema) {
+        has_ema = true;
+        ema8 = prev_close;
+        ema21 = prev_close;
+        ema50 = prev_close;
+    }
+    const float ema8_prev  = ema8;
+    const float ema21_prev = ema21;
+    const float ema50_prev = ema50;
+
+    const float alpha8 = 2.0f / (8.0f + 1.0f);
+    const float alpha21 = 2.0f / (21.0f + 1.0f);
+    const float alpha50 = 2.0f / (50.0f + 1.0f);
+    ema8  = alpha8  * f.close + (1.0f - alpha8)  * ema8;
+    ema21 = alpha21 * f.close + (1.0f - alpha21) * ema21;
+    ema50 = alpha50 * f.close + (1.0f - alpha50) * ema50;
+
+    // Update ATR(14) on raw prices
+    const float tr = std::max({ f.high - f.low, std::fabs(f.high - prev_close), std::fabs(f.low - prev_close) });
+    const float alphaATR = 1.0f / 14.0f;
+    if (!has_atr) { has_atr = true; atr14 = tr; }
+    else { atr14 = alphaATR * tr + (1.0f - alphaATR) * atr14; }
 
     const float upper_wick = (h - std::max(o, c)) / denom;
     p[12] = upper_wick;
 
     const float lower_wick = (std::min(o, c) - l) / denom;
     p[13] = lower_wick;
-        
+
+    // EMA-derived features: normalized distance (scaled log space) by current candle range
+    const float ema8_s  = std::log(ema8  / ref) * kFeatureScale;
+    const float ema21_s = std::log(ema21 / ref) * kFeatureScale;
+    const float ema50_s = std::log(ema50 / ref) * kFeatureScale;
+    const float denom_range_old = std::max(range, 1e-6f);
+    const float typical_raw_range = std::max(std::max(avg_range, atr14), 0.0f);
+    const float fallback_raw_range = std::max(kMinRealisticFxRangeRaw, 0.25f * typical_raw_range);
+    const float denom_range =
+        (std::isfinite(ref) && ref > 0.0f)
+            ? std::max(denom_range_old,
+                       std::fabs(std::log((ref + fallback_raw_range) / ref) * kFeatureScale))
+            : denom_range_old;
+    const float col14_before = (c - ema8_s)  / denom_range_old;
+    const float col15_before = (c - ema21_s) / denom_range_old;
+    const float col16_before = (c - ema50_s) / denom_range_old;
+    const float col17_before = (ema8_s  - ema21_s) / denom_range_old;
+    const float col18_before = (ema21_s - ema50_s) / denom_range_old;
+    const float col14_after = (c - ema8_s)  / denom_range;
+    const float col15_after = (c - ema21_s) / denom_range;
+    const float col16_after = (c - ema50_s) / denom_range;
+    const float col17_after = (ema8_s  - ema21_s) / denom_range;
+    const float col18_after = (ema21_s - ema50_s) / denom_range;
+    p[14] = col14_after;
+    p[15] = col15_after;
+    p[16] = col16_after;
+
+    // EMA slope (log space) normalized by current candle range
+    const float slopeLog8  = std::log(std::max(ema8,  1e-12f) / std::max(ema8_prev,  1e-12f)) * kFeatureScale;
+    const float slopeLog21 = std::log(std::max(ema21, 1e-12f) / std::max(ema21_prev, 1e-12f)) * kFeatureScale;
+    const float slopeLog50 = std::log(std::max(ema50, 1e-12f) / std::max(ema50_prev, 1e-12f)) * kFeatureScale;
+    const float col24_before = slopeLog8  / denom_range_old;
+    const float col25_before = slopeLog21 / denom_range_old;
+    const float col26_before = slopeLog50 / denom_range_old;
+    const float col24_after = slopeLog8  / denom_range;
+    const float col25_after = slopeLog21 / denom_range;
+    const float col26_after = slopeLog50 / denom_range;
+    p[24] = col24_after;
+    p[25] = col25_after;
+    p[26] = col26_after;
+
+    // EMA spread features normalized by current candle range (scaled log space)
+    p[17] = col17_after;
+    p[18] = col18_after;
+
+    const bool featureRangeGuardTriggered = denom_range > denom_range_old;
+    if (featureRangeGuardTriggered &&
+        RuntimeDiagnosticLoggingEnabled() &&
+        s_featureRangeGuardDiagCount < kFeatureRangeGuardDiagLimit)
+    {
+        std::cout << "DIAG_FEATURE_RANGE_GUARD"
+                  << ",row=" << ds.size()
+                  << ",dt=" << f.time
+                  << ",range=" << range
+                  << ",denom_range_old=" << denom_range_old
+                  << ",denom_range_new=" << denom_range
+                  << ",avg_range_raw=" << avg_range
+                  << ",atr14_raw=" << atr14
+                  << ",fallback_raw_range=" << fallback_raw_range
+                  << ",cols=14|15|16|17|18|24|25|26"
+                  << ",before=14:" << col14_before
+                  << "|15:" << col15_before
+                  << "|16:" << col16_before
+                  << "|17:" << col17_before
+                  << "|18:" << col18_before
+                  << "|24:" << col24_before
+                  << "|25:" << col25_before
+                  << "|26:" << col26_before
+                  << ",after=14:" << col14_after
+                  << "|15:" << col15_after
+                  << "|16:" << col16_after
+                  << "|17:" << col17_after
+                  << "|18:" << col18_after
+                  << "|24:" << col24_after
+                  << "|25:" << col25_after
+                  << "|26:" << col26_after
+                  << std::endl;
+        ++s_featureRangeGuardDiagCount;
+    }
+
+    // ATR-normalized EMA distance features in raw price space
+    const float denom_atr = std::max(atr14, 1e-12f);
+    p[19] = (f.close - ema8)  / denom_atr;
+    p[20] = (f.close - ema21) / denom_atr;
+    p[21] = (f.close - ema50) / denom_atr;
+
+    // ATR-normalized EMA spread features in raw price space
+    p[22] = (ema8  - ema21) / denom_atr;
+    p[23] = (ema21 - ema50) / denom_atr;
+
+    // EMA slope in raw price space normalized by ATR
+    p[27] = (ema8  - ema8_prev)  / denom_atr;
+    p[28] = (ema21 - ema21_prev) / denom_atr;
+    p[29] = (ema50 - ema50_prev) / denom_atr;
+
     // Rolling volatility of log returns over lookback
     double sum = 0.0, sumsq = 0.0;
     size_t count = 0;
@@ -179,7 +337,11 @@ void Tensor::Add(Feature f)
     
     prev_close = f.close;
     ds.push_back(std::move(fm));
+    raw_open.push_back(f.open);
     raw_close.push_back(f.close);
+    raw_high.push_back(f.high);
+    raw_low.push_back(f.low);
+    raw_time.push_back(f.time);
 }
 
 float Tensor::RawCloseAtIterator(DataSet::const_iterator it) const
@@ -194,3 +356,50 @@ float Tensor::RawCloseAtIterator(DataSet::const_iterator it) const
     return raw_close[idx];
 }
 
+float Tensor::RawHighAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawHighAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_high.size(), "RawHighAtIterator: index out of raw_high bounds");
+#endif
+    return raw_high[idx];
+}
+
+float Tensor::RawLowAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawLowAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_low.size(), "RawLowAtIterator: index out of raw_low bounds");
+#endif
+    return raw_low[idx];
+}
+
+float Tensor::RawOpenAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawOpenAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_open.size(), "RawOpenAtIterator: index out of raw_open bounds");
+#endif
+    return raw_open[idx];
+}
+
+PriceTP Tensor::RawTimeAtIterator(DataSet::const_iterator it) const
+{
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(it >= ds.cbegin() && it < ds.cend(), "RawTimeAtIterator: iterator out of bounds");
+#endif
+    size_t idx = static_cast<size_t>(it - ds.cbegin());
+#if LSTM_TRAINING_ASSERTS
+    LSTM_ASSERT(idx < raw_time.size(), "RawTimeAtIterator: index out of raw_time bounds");
+#endif
+    return raw_time[idx];
+}

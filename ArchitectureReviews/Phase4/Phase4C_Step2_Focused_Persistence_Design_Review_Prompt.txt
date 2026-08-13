@@ -1,0 +1,338 @@
+PHASE 4C STEP 2 — FOCUSED PERSISTENCE DESIGN REVIEW AND HARDENING
+
+Use high reasoning.
+
+REPOSITORY AND BRANCH
+
+Work in the current ExpertAdvisor repository and current branch.
+
+The working tree contains the uncommitted Phase 4C Step 2 implementation.
+
+Before making changes:
+
+1. Run `git status --short`.
+2. Record the current HEAD commit.
+3. Confirm the uncommitted diff is the Phase 4C Step 2 durable conversion-proposal persistence implementation.
+4. Do not commit.
+5. Do not start, stop, pause, resume, retry, cancel, queue, or otherwise alter any experiment or scheduler process.
+6. Do not run the scheduler.
+7. Do not modify the active LSTM database.
+8. Do not modify the tracked database backup.
+9. Do not investigate the prior `child_exit_code_127` incident.
+10. Do not redesign unrelated recommendation, scheduler, or experiment-lifecycle code.
+
+GOAL
+
+Perform a focused design review and hardening pass of the current uncommitted Phase 4C Step 2 implementation.
+
+Concentrate exclusively on:
+
+- persistence correctness;
+- schema correctness;
+- exact duplicate semantics;
+- hash-collision handling;
+- transactional and concurrency behavior;
+- immutability;
+- round-trip fidelity;
+- PostgreSQL practicality;
+- long-term maintainability.
+
+Do not broaden the phase.
+
+Phase 4C Step 2 must remain persistence-only.
+
+It must not:
+
+- create experiments;
+- queue work;
+- alter experiment state;
+- contact or modify the scheduler;
+- add automatic conversion;
+- infer authorization from ranking;
+- add operational execution commands.
+
+PRIMARY REVIEW QUESTION
+
+Determine whether the current `(conversion_identity_hash, conversion_hash_collision_ordinal)` design is genuinely necessary and correct, or whether a simpler design can satisfy all requirements safely.
+
+Review the design from first principles.
+
+Canonical conversion text is authoritative.
+
+The hash is only an accelerator.
+
+The implementation must guarantee:
+
+1. exact canonical duplicate detection;
+2. one durable row for concurrent identical inserts;
+3. distinct rows for different canonical texts with the same hash;
+4. no false duplicate due to hash collision;
+5. no dependence on hash uniqueness;
+6. practical PostgreSQL indexing;
+7. deterministic behavior;
+8. understandable long-term maintenance.
+
+DESIGN OPTIONS TO EVALUATE
+
+Evaluate at least these approaches against PostgreSQL behavior and project requirements:
+
+1. Unique constraint directly on full canonical text.
+2. Unique constraint on `(hash, canonical_text)`.
+3. Unique constraint on a PostgreSQL-native digest plus exact text comparison.
+4. Current `(hash, collision_ordinal)` approach with advisory locking.
+5. A separate collision-bucket or canonical-identity table.
+6. Any simpler project-consistent alternative.
+
+For each option, consider:
+
+- PostgreSQL btree index tuple-size limits;
+- TOAST behavior;
+- text equality semantics;
+- index support;
+- concurrency;
+- deadlock risk;
+- transaction isolation;
+- lock scope;
+- collision correctness;
+- migration complexity;
+- operational clarity;
+- testability;
+- future schema evolution.
+
+Do not assume the current design is wrong.
+
+Do not preserve it merely because it is already implemented.
+
+Choose the simplest design that is demonstrably correct and maintainable.
+
+REVIEW THE CURRENT IMPLEMENTATION
+
+Inspect the actual diff, including:
+
+- `Database/migrations/036_experiment_recommendation_conversion_proposal.sql`
+- `Sources/ExperimentRecommendationConversionRepository.hpp`
+- `Sources/ExperimentRecommendationConversionRepository.cpp`
+- `Sources/ExperimentRecommendationConversion.hpp`
+- `Sources/ExperimentRecommendationConversion.cpp`
+- `Tests/ExperimentRecommendationConversionRepositoryTests.cpp`
+- `Tests/ExperimentRecommendationConversionMigrationTests.sql`
+- `Tests/ExperimentRecommendationConversionTests.cpp`
+- `ExpertAdvisor.xcodeproj/project.pbxproj`
+- Phase 4C documentation
+- Volume VIII
+- related existing recommendation repositories and migrations
+
+Also inspect PostgreSQL primary documentation or installed local documentation when needed to verify:
+
+- btree entry-size limitations;
+- hash index behavior;
+- advisory-lock semantics;
+- uniqueness behavior;
+- text comparison;
+- transaction behavior.
+
+Do not use unsupported assumptions.
+
+FOCUSED CORRECTNESS CHECKS
+
+Review and verify:
+
+1. Exact canonical equality is always checked before returning `existing_identical`.
+2. Hash equality alone can never collapse different canonical texts.
+3. Concurrent identical requests cannot create two rows.
+4. Concurrent same-hash but different-canonical requests remain distinct.
+5. Advisory-lock key derivation cannot create correctness dependence on a non-authoritative hash.
+6. Collision ordinal allocation cannot race.
+7. Retrying after a unique violation cannot return an inconsistent row.
+8. Canonical lookup remains practical at expected row counts.
+9. Long canonical text does not cause invalid or oversized index tuples.
+10. Repository mapping reconstructs every persisted field exactly.
+11. Nullable invocation fields round-trip correctly.
+12. Repository validation does not duplicate Step 1 eligibility logic.
+13. Repository validation does reject structurally inconsistent persistence input.
+14. Persisted rows cannot be updated or deleted by the runtime role.
+15. Foreign keys cannot cascade-delete audit history.
+16. No trigger or hidden path mutates experiment or recommendation state.
+17. Ranking metadata remains advisory and excluded from identity.
+18. The migration remains idempotent.
+19. The schema is compatible with existing migration conventions.
+20. Error outcomes are stable and unambiguous.
+
+HASH-COLLISION REVIEW
+
+Pay particular attention to the current collision workflow:
+
+- transaction-scoped advisory lock by hash bucket;
+- exact canonical lookup;
+- collision detection;
+- `max(collision_ordinal) + 1`;
+- unique `(hash, collision_ordinal)` constraint;
+- canonical hash index;
+- retry after unique violation.
+
+Determine whether this produces correct results for:
+
+1. two identical concurrent inserts;
+2. two distinct same-hash concurrent inserts;
+3. three or more colliding canonicals;
+4. a transaction rollback after ordinal allocation;
+5. lock interruption or connection failure;
+6. a stale or manually corrupted row;
+7. inconsistent ranking metadata on an identical canonical identity;
+8. different persisted structural fields attached to the same canonical identity.
+
+If the current design is retained, document why it is safer or more practical than simpler alternatives.
+
+If simplified, update schema, repository, tests, and documentation consistently.
+
+SCOPE OF CHANGES
+
+Make changes only when the review finds a concrete issue or a clearly superior simplification.
+
+Allowed fixes include:
+
+- simplifying the uniqueness design;
+- correcting lock behavior;
+- correcting collision handling;
+- correcting transaction ordering;
+- correcting duplicate lookup;
+- correcting validation;
+- correcting migration constraints or indexes;
+- correcting round-trip mapping;
+- correcting tests;
+- correcting misleading documentation.
+
+Do not:
+
+- add a CLI;
+- add a service unless required to fix a concrete defect;
+- add experiment creation;
+- add queueing;
+- change scheduler code;
+- change recommendation ranking logic;
+- change Step 1 conversion eligibility semantics without a concrete defect;
+- expand Phase 4C scope.
+
+TEST REQUIREMENTS
+
+Add or update tests to cover the chosen design.
+
+At minimum, cover:
+
+1. exact duplicate retry;
+2. concurrent identical inserts;
+3. concurrent same-hash distinct-canonical inserts;
+4. three same-hash distinct canonicals;
+5. rollback safety;
+6. exact canonical mismatch under same hash;
+7. persisted-field mismatch under same canonical;
+8. ranking-only metadata difference;
+9. all nullable invocation fields;
+10. migration idempotency;
+11. runtime immutability;
+12. restrictive foreign keys;
+13. no experiment mutation;
+14. lookup by ID;
+15. lookup by exact identity;
+16. list by recommendation;
+17. list by source experiment;
+18. invalid structural input;
+19. long canonical text near the supported limit;
+20. canonical text exceeding the supported limit.
+
+Use an isolated non-LSTM PostgreSQL database only.
+
+Never fall back to the active LSTM database.
+
+ENVIRONMENT HANDLING
+
+The prior implementation session could not execute PostgreSQL integration tests in its sandbox and later encountered a Metal toolchain issue.
+
+For this review:
+
+1. Compile all pure and repository tests with strict warnings.
+2. Run PostgreSQL tests if an isolated database is available.
+3. If database execution is still blocked by the environment, do not weaken or skip test code.
+4. Report the exact blocked condition.
+5. Do not connect to the active LSTM database.
+6. Do not download toolchains or change unrelated build settings.
+7. LSTM Release is the required build target.
+8. Debug is optional and should not be run unless useful.
+
+BUILD AND VERIFICATION
+
+Required:
+
+1. `git diff --check`
+2. `plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj`
+3. strict C++20 compilation with:
+   `-Wall -Wextra -Wpedantic -Werror`
+4. directly affected Phase 4A, 4B, and 4C tests
+5. repository test compilation
+6. isolated PostgreSQL integration tests when environment permits
+7. clean `LSTM Release` build
+8. confirmation that new repository sources remain in the Release target
+
+Do not launch the application.
+
+DOCUMENTATION
+
+Update documentation only if the review changes or clarifies the design.
+
+Documentation must state clearly:
+
+- authoritative identity source;
+- duplicate semantics;
+- collision semantics;
+- concurrency mechanism;
+- why the chosen index/constraint design is safe;
+- why persistence is not execution;
+- why ranking remains advisory;
+- deferred work.
+
+FINAL REPORT
+
+Report:
+
+1. Initial and final `git status --short`.
+2. Starting and ending HEAD commit.
+3. Files reviewed.
+4. Files changed.
+5. Defects or design issues found.
+6. Whether the collision-ordinal design was retained, simplified, or replaced.
+7. Alternatives considered.
+8. Final chosen schema and uniqueness strategy.
+9. Exact duplicate behavior.
+10. Same-hash/different-canonical behavior.
+11. Concurrency and lock behavior.
+12. Rollback and retry behavior.
+13. Indexing and PostgreSQL size considerations.
+14. Round-trip guarantees.
+15. Tests compiled and executed.
+16. PostgreSQL integration-test environment and result.
+17. LSTM Release build result.
+18. Confirmation that no active database was accessed.
+19. Confirmation that no experiment state changed.
+20. Confirmation that the scheduler remained stopped.
+21. Confirmation that no scheduler or child-launch code changed.
+22. Remaining risks or deferred work.
+23. Final verdict:
+    - PASS
+    - PASS WITH FIXES
+    - FAIL
+
+Do not commit the changes.
+
+REASONING
+
+The Phase 4C Step 2 implementation appears architecturally disciplined and remains within the intended persistence-only boundary.
+
+The main unresolved question is not whether the feature belongs in Phase 4C, but whether the chosen duplicate and collision design is the simplest correct PostgreSQL implementation.
+
+Canonical text is authoritative, while the application hash is only an accelerator. The persistence layer must therefore handle exact duplicates, real or synthetic hash collisions, and concurrent insertion without relying on hash uniqueness.
+
+The current collision-ordinal design may be appropriate because PostgreSQL btree indexes cannot safely store arbitrarily large canonical text keys. However, it introduces advisory locks, bucket-local ordinal allocation, additional schema state, and more complex retry behavior.
+
+A focused review should therefore determine whether that complexity is necessary, verify that it is fully correct under concurrency and rollback, and simplify it if a safer and more maintainable design exists.
+
+This review intentionally excludes experiment creation, queueing, scheduler behavior, CLI orchestration, and all other later Phase 4C work.

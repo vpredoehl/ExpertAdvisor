@@ -1,0 +1,441 @@
+Using High reasoning, implement Phase 4D Step 5: read-only campaign handoff and downstream status projection.
+
+GOAL
+
+Add a deterministic, read-only Phase 4D status layer that projects the current Phase 4C lifecycle state of every proposal created or reused by one persisted campaign materialization.
+
+This step must let an operator answer:
+
+- Was the approved campaign materialized completely?
+- Which exact Phase 4C proposals belong to it?
+- Which proposals are still awaiting Phase 4C review?
+- Which have been approved or rejected?
+- Which have been executed?
+- Which have been activated?
+- Are any expected downstream records missing, duplicated, contradictory, or inconsistent with the immutable materialization manifest?
+
+The implementation must remain advisory and observational. It must not advance any Phase 4C or experiment workflow state.
+
+STARTING POINT
+
+Start from the committed Phase 4D Step 4 implementation at:
+
+cc67811
+
+Before making changes, confirm:
+
+```bash
+git status --short
+git rev-parse HEAD
+git log -1 --oneline
+```
+
+The working tree must be clean. Do not continue if unrelated uncommitted changes are present.
+
+CONTEXT
+
+Phase 4D Step 4 now:
+
+- accepts one explicit approved campaign;
+- reconstructs authoritative approval, plan, review, ranking, and recommendation evidence;
+- creates or reuses the exact ordered Phase 4C conversion proposals;
+- persists one immutable materialization manifest;
+- persists immutable ordered materialization-member links;
+- supports exact replay;
+- performs first-write work atomically;
+- does not create experiments;
+- does not review, execute, or activate Phase 4C proposals;
+- does not contact the scheduler or workers.
+
+Phase 4D Step 5 must build only a read-only handoff/status projection over that durable evidence.
+
+PHASE BOUNDARY
+
+Step 5 may:
+
+- load one persisted campaign materialization;
+- load its ordered member links;
+- load the linked Phase 4C conversion proposals;
+- load the authoritative latest Phase 4C proposal-review state;
+- load any Phase 4C execution state;
+- load any Phase 4C activation state;
+- derive deterministic per-member and aggregate status;
+- detect and report malformed or contradictory downstream evidence;
+- expose read-only CLI show/list/status commands;
+- add pure and disposable-database tests;
+- document the handoff model and deferred work.
+
+Step 5 must not:
+
+- create or modify campaign materializations;
+- create or modify Phase 4C proposals;
+- create Phase 4C review decisions;
+- approve or reject proposals;
+- execute proposals;
+- activate conversions;
+- create or modify experiments;
+- queue, resume, retry, pause, cancel, or continue experiments;
+- contact, start, stop, signal, or reconfigure the scheduler;
+- start workers;
+- add background scans, polling, automatic progression, or automatic repair;
+- infer an approval or execution decision;
+- silently repair inconsistent evidence;
+- silently omit malformed members;
+- introduce campaign-level execution semantics.
+
+DESIGN REQUIREMENTS
+
+1. Authoritative source
+
+The immutable Phase 4D materialization manifest and its ordered member rows are the authoritative campaign membership.
+
+Do not reconstruct campaign membership from current rankings, recommendations, proposals, reviews, executions, activations, or experiments.
+
+Do not rerun campaign planning.
+
+Do not reinterpret the original approval.
+
+2. Deterministic member projection
+
+For every materialization member, derive one deterministic status record containing at minimum:
+
+- materialization ID;
+- approval ID;
+- materialization identity hash;
+- member ordinal;
+- ranking member ID;
+- recommendation ID;
+- source experiment ID;
+- ranking position;
+- Phase 4C proposal ID;
+- proposal identity hash;
+- proposal-review status;
+- proposal-review decision ID when present;
+- execution status;
+- execution ID when present;
+- activation status;
+- activation ID when present;
+- integrity status;
+- deterministic diagnostic code when inconsistent.
+
+Preserve manifest member order exactly.
+
+3. Aggregate campaign status
+
+Derive aggregate counts at minimum for:
+
+- total members;
+- proposals present;
+- proposals awaiting review;
+- proposals approved;
+- proposals rejected;
+- proposals with no authoritative review;
+- executions present;
+- activations present;
+- integrity failures.
+
+Derive one deterministic campaign handoff state from the exact member set. Use a small explicit enum rather than free-form text.
+
+A reasonable state model is:
+
+- awaiting_phase4c_review
+- partially_reviewed
+- review_rejected
+- ready_for_phase4c_execution
+- partially_executed
+- ready_for_phase4c_activation
+- partially_activated
+- fully_activated
+- inconsistent
+
+Refine names only where existing Phase 4C terminology requires it. Document precedence rules precisely.
+
+The state must be observational only. It is not authorization.
+
+4. Latest-event semantics
+
+Where Phase 4C uses append-only review history, select the authoritative latest event using the established repository convention.
+
+Do not join all historical review rows in a way that duplicates a proposal.
+
+Do not use timestamps as a tie-breaker when an authoritative monotonic event ID exists.
+
+5. Integrity validation
+
+Detect at minimum:
+
+- missing linked proposal;
+- proposal ID that no longer matches persisted proposal canonical identity;
+- proposal recommendation/source experiment mismatch;
+- multiple contradictory authoritative review records;
+- execution without an approved authoritative review;
+- activation without execution;
+- activation linked to the wrong execution or proposal;
+- downstream record identity mismatch;
+- duplicate downstream records where uniqueness should hold;
+- missing materialization members relative to the manifest count;
+- non-contiguous or reordered member ordinals;
+- unsupported persisted contract version.
+
+Fail closed for the detailed show command when immutable campaign evidence itself is malformed.
+
+For downstream lifecycle inconsistencies, return deterministic `inconsistent` status and diagnostics rather than mutating or repairing data.
+
+6. Domain, repository, and service layering
+
+Add narrowly scoped types, preferably named consistently with the existing codebase, such as:
+
+- `ExperimentRecommendationCampaignHandoff`
+- `ExperimentRecommendationCampaignHandoffRepository`
+- `ExperimentRecommendationCampaignHandoffService`
+
+The domain layer must own:
+
+- status enums;
+- aggregate-state derivation;
+- validation;
+- deterministic ordering;
+- diagnostic-code definitions.
+
+The repository layer must own:
+
+- SQL;
+- row mapping;
+- authoritative latest-review loading;
+- proposal/execution/activation joins or batched loading.
+
+The service layer must own:
+
+- transaction scope for one consistent read snapshot;
+- orchestration;
+- error classification;
+- CLI output.
+
+`ExperimentScheduler.cpp` must contain only top-level argument parsing and dispatch.
+
+7. Read consistency
+
+Use one read-only PostgreSQL transaction for each show/status request so the materialization, member, review, execution, and activation evidence is observed consistently.
+
+Do not acquire scheduler, experiment, recommendation, proposal, or campaign advisory locks.
+
+Do not use `FOR UPDATE`.
+
+8. CLI
+
+Add explicit commands consistent with existing conventions. At minimum:
+
+```text
+--show-recommendation-campaign-handoff=ID
+--list-recommendation-campaign-handoffs
+```
+
+Support separated forms where existing CLI conventions support them.
+
+For list, support a bounded explicit limit using the existing style.
+
+The show command must print:
+
+- one deterministic campaign summary row;
+- one deterministic row per materialization member in member-ordinal order;
+- explicit read-only safety fields.
+
+Machine-readable output must clearly include:
+
+```text
+read_only=true
+campaign_materializations_created=false
+conversion_proposals_created=false
+conversion_reviews_created=false
+conversion_executions_created=false
+conversion_activations_created=false
+experiments_created=false
+scheduler_started=false
+workers_started=false
+```
+
+Use stable escaping through the existing machine-text helper.
+
+Parser errors must occur before database access.
+
+The new commands must be mutually exclusive with scheduler and write commands.
+
+9. Schema
+
+Prefer no new migration if this feature can be derived entirely from existing immutable and Phase 4C lifecycle tables.
+
+Do not persist cached aggregate status merely for convenience.
+
+Only add a migration if a concrete integrity or queryability defect makes it necessary. If so, explain why a read-only projection cannot safely operate without it.
+
+10. Tests
+
+Add pure tests for:
+
+- aggregate-state precedence;
+- zero-member rejection;
+- deterministic member order;
+- all-awaiting-review;
+- partial review;
+- rejection precedence;
+- all approved and ready for execution;
+- partial execution;
+- all executed and ready for activation;
+- partial activation;
+- full activation;
+- inconsistent evidence precedence;
+- unsupported contract version;
+- malformed member ordinals.
+
+Add disposable PostgreSQL repository/service tests covering:
+
+- exact ordered member loading;
+- latest review event selected from append-only history;
+- no review;
+- approved review;
+- rejected review;
+- execution after approval;
+- activation after execution;
+- execution without approval reported inconsistent;
+- activation without execution reported inconsistent;
+- proposal canonical mismatch reported inconsistent;
+- malformed immutable manifest rejected;
+- deterministic repeated output;
+- list ordering and limits;
+- read-only transaction behavior;
+- no sequence advancement;
+- no new rows in materialization, proposal, review, execution, activation, or experiment tables.
+
+Rebuild and run directly relevant Phase 4C and Phase 4D regressions from current source.
+
+11. Documentation
+
+Add a focused Phase 4D Step 5 document and update architecture documentation.
+
+State explicitly:
+
+- campaign handoff status is a projection, not persisted authority;
+- materialization membership remains authoritative;
+- current Phase 4C lifecycle evidence is observational;
+- the command does not approve, execute, activate, or repair;
+- `ready_for_*` means only that observed prerequisites appear satisfied;
+- execution and activation remain explicit Phase 4C operations;
+- scheduler and experiment workflows remain outside this step;
+- automatic campaign progression remains deferred.
+
+IMPLEMENTATION METHOD
+
+1. Inspect the current Phase 4C review, execution, and activation domains and repositories before defining status semantics.
+
+2. Inspect the committed Step 4 manifest/member loading code and reuse it where appropriate without weakening validation.
+
+3. Record the existing uniqueness and provenance guarantees from migrations 036 through 041.
+
+4. Trace these examples before coding:
+
+- all proposals newly materialized and unreviewed;
+- one approved and one unreviewed;
+- one rejected;
+- all approved but unexecuted;
+- some executed;
+- all executed but unactivated;
+- some activated;
+- all activated;
+- execution without approval;
+- activation without execution;
+- proposal identity mismatch.
+
+5. Keep SQL deterministic and indexed. Avoid one query per member when a bounded join or batched load is clearer.
+
+6. Do not modify existing scheduler behavior.
+
+VERIFICATION
+
+Run:
+
+```bash
+git diff --check
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+```
+
+Compile new C++ with:
+
+```text
+-std=c++20 -Wall -Wextra -Wpedantic -Werror
+```
+
+Run new pure tests three consecutive times.
+
+Build repository/service tests from current source and run them three consecutive times against an explicitly disposable non-production PostgreSQL database.
+
+Run directly relevant rebuilt regressions for:
+
+- Phase 4C proposal repository;
+- Phase 4C proposal review;
+- Phase 4C execution;
+- Phase 4C activation;
+- Phase 4C workflow;
+- Phase 4D planning;
+- Phase 4D review;
+- Phase 4D approval;
+- Phase 4D materialization.
+
+Run parser-only CLI checks using an isolated build.
+
+Run an isolated Release build:
+
+```bash
+xcodebuild \
+  -project ExpertAdvisor.xcodeproj \
+  -scheme "LSTM Release" \
+  -configuration Release \
+  -derivedDataPath /tmp/ExpertAdvisorPhase4DStep5DerivedData \
+  clean build \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+Do not launch the scheduler or workers.
+
+Do not connect to or modify the production LSTM database.
+
+Do not commit or push.
+
+FINAL REPORT
+
+Provide:
+
+1. Implementation summary.
+2. Exact files changed.
+3. Domain status model and precedence rules.
+4. Repository query strategy.
+5. Integrity diagnostics implemented.
+6. CLI commands and representative output.
+7. Tests added.
+8. Exact verification commands and results.
+9. Disposable PostgreSQL result.
+10. Release build result.
+11. Confirmation that no experiment, proposal, review, execution, activation, scheduler, or worker state was modified.
+12. Remaining risks and deferred work.
+13. Final `git status --short`.
+14. Final HEAD.
+
+Do not commit or push.
+
+
+REASONING
+
+Phase 4D Step 4 completes the write-side handoff from an approved campaign into exact Phase 4C proposals. The safest next increment is not automatic review or execution. It is deterministic visibility into what happened after that handoff.
+
+Without Step 5, an operator can inspect the materialization and inspect individual Phase 4C records, but there is no campaign-level answer to whether the whole approved set is awaiting review, partially reviewed, ready for execution, partially executed, ready for activation, or fully activated. That gap encourages ad-hoc SQL and makes inconsistencies harder to detect.
+
+A read-only projection is the correct next boundary because it:
+
+- preserves explicit human-controlled Phase 4C review, execution, and activation;
+- adds no scheduler or experiment risk;
+- treats the immutable materialization manifest as authoritative membership;
+- exposes incomplete or contradictory downstream evidence rather than repairing it;
+- provides the observability needed before considering any later campaign-level progression command;
+- avoids persisting derived state that could become stale;
+- exercises and validates the links between Phase 4D materialization and existing Phase 4C lifecycle records.
+
+This step should be completed and reviewed before any campaign-level command is allowed to approve, execute, activate, or automatically advance materialized proposals.

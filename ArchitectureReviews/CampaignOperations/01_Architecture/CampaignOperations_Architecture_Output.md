@@ -1,0 +1,658 @@
+Reading prompt from stdin...
+OpenAI Codex v0.145.0
+--------
+workdir: /Volumes/Developer SSD/ExpertAdvisor
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f89e9-56ac-7783-bb06-4a7fc6cfef79
+--------
+user
+Using High reasoning, perform a complete architectural design for the new Campaign Operations subsystem.
+
+GOAL
+
+Design the architecture that follows the completed Phase 6 governance work.
+
+Do not implement code.
+
+Do not modify existing production behavior.
+
+Do not redesign completed Phases 4–6.
+
+Treat all completed authority chains as fixed architecture.
+
+BACKGROUND
+
+The repository currently provides:
+
+Planning
+→ Review
+→ Approval
+→ Materialization
+→ Execution
+→ Follow-up Review
+→ Governance
+
+The governance chain is complete.
+
+The next architectural concern is long-lived campaign operations.
+
+Campaign Operations must remain a separate subsystem and must not transfer policy authority into the scheduler.
+
+OBJECTIVES
+
+Design the complete Campaign Operations architecture, including:
+
+• subsystem responsibilities
+• ownership boundaries
+• lifecycle state machine
+• operational entities
+• database model
+• repository interfaces
+• service layer responsibilities
+• scheduler interaction contract
+• operator interaction
+• reconciliation
+• restart recovery
+• audit requirements
+• budgeting concepts
+• reservation concepts
+• execution requests
+• completion semantics
+• cancellation semantics
+• deterministic replay
+• failure recovery
+• concurrency model
+• transactional boundaries
+• privilege model
+
+Clearly identify:
+
+• what belongs inside Campaign Operations
+• what remains inside the scheduler
+• what remains inside recommendation governance
+• what belongs nowhere
+
+REQUIREMENTS
+
+Do not implement code.
+
+Do not create migrations.
+
+Do not design CLI commands.
+
+Do not invent APIs unless required to explain architecture.
+
+Do not redesign existing repository components.
+
+Do not introduce automatic experiment creation.
+
+Do not introduce autonomous decision making.
+
+Do not change completed authority boundaries.
+
+Produce:
+
+1. Executive summary.
+2. Architectural rationale.
+3. Complete subsystem decomposition.
+4. State machine.
+5. Component interaction diagrams (textual).
+6. Data ownership.
+7. Transaction boundaries.
+8. Failure recovery model.
+9. Concurrency analysis.
+10. Security / privilege analysis.
+11. ADR recommendations.
+12. Recommended implementation phases.
+13. Risks.
+14. Open architectural questions.
+
+The deliverable should be an architecture document suitable for implementation planning.
+
+codex
+I’ll ground the design in the repository’s existing Phase 4–6 authority chains, schemas, and workflow terminology before drafting it. I’ll keep this strictly read-only: no code, migrations, CLI design, or repository edits.
+  → Map existing Phase 4–6 architecture, entities, workflows, and scheduler boundaries
+  • Derive Campaign Operations ownership, lifecycle, persistence, and interaction contracts
+  • Validate design against authority, concurrency, recovery, and audit constraints
+  • Deliver implementation-planning architecture document with ADRs, phases, risks, and open questions
+exec
+/bin/bash -lc "pwd && rg --files -g 'AGENTS.md' -g '*.md' -g '*.hpp' -g '*.h' -g '*.cpp' -g '*.mm' -g '*.sql' -g '*.xcodeproj/**' | sed -n '1,240p'" in /Volumes/Developer SSD/ExpertAdvisor
+ succeeded in 0ms:
+/Volumes/Developer SSD/ExpertAdvisor
+LSTM/ExperimentMetaAnalyzer.cpp
+LSTM/main.cpp
+LSTM/Tensor.cpp
+LSTM/LSTM.cpp
+meta_analysis_report.md
+MetaNN/MetaNN/facilities/_.h
+MetaNN/MetaNN/facilities/var_type_dict.h
+MetaNN/MetaNN/facilities/cont_metafuns/_.h
+MetaNN/MetaNN/facilities/cont_metafuns/set.h
+MetaNN/MetaNN/facilities/cont_metafuns/helpers.h
+MetaNN/MetaNN/facilities/cont_metafuns/value_sequential.h
+MetaNN/MetaNN/facilities/cont_metafuns/sequential.h
+MetaNN/MetaNN/facilities/cont_metafuns/multi_map.h
+MetaNN/MetaNN/facilities/cont_metafuns/map.h
+MetaNN/MetaNN/facilities/type_id.h
+MetaNN/MetaNN/facilities/null_param.h
+MetaNN/MetaNN/facilities/traits.h
+MetaNN/MetaNN/data/_.h
+MetaNN/MetaNN/data/bias_vector.h
+MetaNN/readme.md
+MetaNN/MetaNN/data/facilities/category_tags.h
+MetaNN/readme_eng.md
+MetaNN/MetaNN/data/facilities/continuous_memory.h
+MetaNN/MetaNN/data/facilities/allocators.h
+MetaNN/MetaNN/data/facilities/continuous_memory_metal.mm
+MetaNN/MetaNN/data/facilities/device_tags.h
+MetaNN/MetaNN/data/facilities/shape.h
+MetaNN/MetaNN/data/facilities/lower_access.h
+MetaNN/MetaNN/data/facilities/traits.h
+MetaNN/MetaNN/data/tensor.h
+MetaNN/MetaNN/data/batch/batch_sequence.h
+MetaNN/MetaNN/data/dynamic.h
+MetaNN/MetaNN/data/trivial_tensor.h
+MetaNN/MetaNN/data/scalable_tensor.h
+MetaNN/MetaNN/data/zero_tensor.h
+MetaNN/MetaNN/model/_.h
+MetaNN/MetaNN/model/facilities/weight_buffer.h
+MetaNN/Tests/OtherTests/facilities/test_map.cpp
+MetaNN/Tests/OtherTests/facilities/test_set.cpp
+MetaNN/Tests/OtherTests/facilities/test_multi_map.cpp
+MetaNN/Tests/OtherTests/facilities/test_sequential.cpp
+MetaNN/Tests/OtherTests/main.cpp
+MetaNN/Tests/OtherTests/model/_.h
+MetaNN/MetaNN/model/param_initializer/_.h
+MetaNN/MetaNN/model/param_initializer/uniform_filler.h
+MetaNN/MetaNN/model/param_initializer/var_scale_filler.h
+MetaNN/MetaNN/model/param_initializer/constant_filler.h
+MetaNN/Tests/OtherTests/model/param_initializer/test_uniform_filler.cpp
+MetaNN/Tests/OtherTests/model/param_initializer/test_param_initializer.cpp
+MetaNN/Tests/OtherTests/model/param_initializer/test_var_scale_filler.cpp
+MetaNN/Tests/OtherTests/model/param_initializer/test_gaussian_filler.cpp
+MetaNN/Tests/OtherTests/model/param_initializer/test_constant_filler.cpp
+MetaNN/Tests/OtherTests/model/param_initializer/param_initializer.cpp
+MetaNN/MetaNN/model/param_initializer/facilities/policies.h
+MetaNN/MetaNN/model/param_initializer/facilities/fill_with_spec_dist.h
+MetaNN/MetaNN/model/param_initializer/param_initializer.h
+MetaNN/MetaNN/model/param_initializer/gaussian_filler.h
+MetaNN/MetaNN/data_copy/metal_copy.mm
+MetaNN/MetaNN/data_copy/metal_copy.h
+MetaNN/MetaNN/data_copy/data_copy.h
+AGENTS.md
+MetaNN/MetaNN/model/weight_cont/_.h
+MetaNN/MetaNN/model/weight_cont/grad_collector.h
+MetaNN/MetaNN/model/weight_cont/load_buffer.h
+MetaNN/Tests/OtherTests/policies/_.h
+MetaNN/Tests/OtherTests/policies/test_policy_operations.cpp
+MetaNN/MetaNN/metal/metal_add.h
+MetaNN/MetaNN/metal/metal_add.mm
+MetaNN/MetaNN/metal/metal_matmul.h
+MetaNN/MetaNN/metal/metal_matmul.mm
+MetaNN/MetalSwiftTest/main.mm
+MetaNN/MetaNN/evaluate/eval_handle.h
+MetaNN/MetaNN/evaluate/eval_plan.h
+MetaNN/MetaNN/evaluate/eval_buffer.h
+MetaNN/MetaNN/evaluate/eval_dispatcher.h
+MetaNN/MetaNN/evaluate/eval_item.h
+MetaNN/MetaNN/evaluate/eval_group.h
+MetaNN/MetaNN/meta_nn.h
+MetaNN/Tests/DataOpTest/main.cpp
+MetaNN/Tests/data_gen.h
+MetaNN/Tests/calculate_tags.h
+MetaNN/MetaNN/policies/_.h
+MetaNN/MetaNN/policies/policy_container.h
+MetaNN/MetaNN/policies/policy_macro_begin.h
+MetaNN/MetaNN/policies/policy_macro_end.h
+MetaNN/MetaNN/policies/policy_operations.h
+meta_analysis_dashboard.md
+MetaNN/MetaNN/layers/_.h
+MetaNN/Tests/DataOpTest/data/_.h
+MetaNN/Tests/DataOpTest/data/test_tensor.cpp
+MetaNN/Tests/DataOpTest/data/facilities/_.h
+MetaNN/Tests/DataOpTest/data/facilities/test_shape.cpp
+MetaNN/Tests/DataOpTest/data/test_bias_vector.cpp
+MetaNN/Tests/DataOpTest/data/test_zero_tensor.cpp
+MetaNN/Tests/DataOpTest/data/test_scalar.cpp
+MetaNN/Tests/DataOpTest/data/test_scalable_tensor.cpp
+MetaNN/Tests/DataOpTest/data/test_trivial_tensor.cpp
+MetaNN/Tests/DataOpTest/data/test_dynamic.cpp
+MetaNN/Tests/LayerTest/main.cpp
+MetaNN/MetaNN/layers/facilities/_.h
+MetaNN/MetaNN/layers/facilities/layer_in_map.h
+MetaNN/MetaNN/layers/facilities/interface_fun.h
+MetaNN/MetaNN/layers/facilities/policies.h
+MetaNN/MetaNN/layers/facilities/make_layer.h
+MetaNN/MetaNN/layers/facilities/traits.h
+Database/README.md
+MetaNN/Tests/DataOpTest/operation/_.h
+docs/architecture/VOLUME_TEMPLATE.md
+docs/architecture/Volume_III_Label_Generation.md
+docs/architecture/Volume_X_Research_Automation.md
+docs/architecture/Volume_XI_Scheduler.md
+docs/architecture/Volume_VI_Inference_Evaluation.md
+docs/architecture/Volume_XII_Database.md
+docs/architecture/Volume_VII_Experiment_Lifecycle.md
+docs/architecture/README.md
+docs/architecture/Volume_II_Data_Pipeline.md
+docs/architecture/Volume_I_Foundation.md
+docs/architecture/Volume_IX_Trading_Profitability.md
+ExpertAdvisor.xcodeproj/xcshareddata/xcschemes/LSTM Release.xcscheme
+ExpertAdvisor.xcodeproj/xcshareddata/xcschemes/LSTM Debug.xcscheme
+MetaNN/Tests/LayerTest/composite/test_weight_layer.cpp
+MetaNN/Tests/LayerTest/composite/test_linear_layer.cpp
+MetaNN/Tests/LayerTest/composite/_.h
+MetaNN/Tests/LayerTest/composite/test_compose_kenrel.cpp
+MetaNN/Tests/LayerTest/composite/test_bias_layer.cpp
+MetaNN/Tests/LayerTest/composite/test_single_layer_perceptron.cpp
+MetaNN/Tests/DataOpTest/operation/tensor/_.h
+MetaNN/Tests/DataOpTest/operation/tensor/test_dot.cpp
+MetaNN/Tests/DataOpTest/operation/tensor/test_slice.cpp
+MetaNN/Tests/DataOpTest/operation/tensor/test_reshape.cpp
+MetaNN/Tests/DataOpTest/operation/tensor/test_tile.cpp
+MetaNN/Tests/DataOpTest/operation/tensor/test_permute.cpp
+MetaNN/MetaNN/layers/composite/_.h
+MetaNN/MetaNN/layers/composite/bias_layer.h
+MetaNN/MetaNN/layers/composite/compose_kernel.h
+MetaNN/MetaNN/layers/composite/linear_layer.h
+MetaNN/MetaNN/layers/composite/weight_layer.h
+MetaNN/MetaNN/layers/composite/single_layer_perceptron.h
+docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md
+docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md
+docs/architecture/adr/ADR-0006-phase-6a-follow-up-proposal.md
+docs/architecture/adr/README.md
+docs/architecture/adr/ADR-0001-postgresql-source-of-truth.md
+docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md
+docs/architecture/adr/ADR-0007-phase-6b-follow-up-proposal-persistence.md
+docs/architecture/adr/ADR_TEMPLATE.md
+docs/architecture/adr/ADR-0002-deterministic-experiment-identity.md
+docs/architecture/adr/ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md
+docs/architecture/adr/ADR-0008-phase-6c-follow-up-proposal-administrative-review.md
+docs/architecture/Volume_V_Training_Engine.md
+docs/architecture/Volume_VIII_Recommendation_Engine.md
+docs/architecture/Volume_IV_Model_Architecture.md
+Database/migrations/029_experiment_recommendation_source_rank_enforcement.sql
+Database/migrations/010_schema_migrations_runtime_read.sql
+Database/migrations/007_experiment_meta_analysis.sql
+Database/migrations/009_experiment_run_metadata.sql
+Database/migrations/039_experiment_recommendation_conversion_activation.sql
+Database/migrations/005_experiment_scheduler.sql
+Database/migrations/018_checkpoint_inference_result_scope.sql
+Database/migrations/040_experiment_recommendation_campaign_approval.sql
+Database/migrations/043_experiment_recommendation_campaign_follow_up_proposal_review.sql
+Database/migrations/024_continuation_sequence_and_worker_attempt_hardening.sql
+Database/migrations/035_experiment_recommendation_ranking.sql
+Database/migrations/033_experiment_recommendation_review_permissions.sql
+Database/migrations/014_checkpoint_stop_and_eval.sql
+Database/migrations/042_experiment_recommendation_campaign_follow_up_proposal.sql
+Database/migrations/023_continuation_policy_target_sequence.sql
+Database/migrations/028_experiment_recommendation_scoring.sql
+Database/migrations/004_inference_eval_result.sql
+Database/migrations/038_experiment_recommendation_conversion_execution.sql
+Database/migrations/030_experiment_recommendation_source_rank_transition_enforcement.sql
+Database/migrations/027_experiment_recommendation_hardening.sql
+Database/migrations/037_experiment_recommendation_conversion_review.sql
+Database/migrations/008_experiment_paused_status.sql
+Database/migrations/015_checkpoint_infer_phase1.sql
+Database/migrations/019_checkpoint_policy_hardening.sql
+Database/migrations/020_experiment_continuation_policy.sql
+Database/migrations/022_continuation_policy_identity_bound.sql
+Database/migrations/013_model_parent_model_id.sql
+Database/migrations/021_continuation_policy_inheritance.sql
+Database/migrations/031_experiment_recommendation_scan_provenance_enforcement.sql
+Database/migrations/006_experiment_analysis.sql
+Database/migrations/044_experiment_recommendation_campaign_follow_up_proposal_ratification.sql
+Database/migrations/036_experiment_recommendation_conversion_proposal.sql
+Database/migrations/026_experiment_recommendation_persistence.sql
+Database/migrations/011_experiment_live_progress.sql
+Database/migrations/034_experiment_recommendation_evaluation.sql
+Database/migrations/032_experiment_recommendation_review.sql
+Database/migrations/012_model_experiment_id.sql
+Database/migrations/017_checkpoint_policy.sql
+Database/migrations/016_checkpoint_analysis_scope.sql
+Database/migrations/041_experiment_recommendation_campaign_materialization.sql
+Tests/ExperimentRecommendationCampaignStatusRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignLaunchRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalReviewTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalRatificationRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignApprovalMigrationTests.sql
+Tests/ExperimentRecommendationCampaignLaunchTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignExecutionRepositoryTests.cpp
+Tests/ExperimentRecommendationPersistenceTests.cpp
+Tests/ExperimentRecommendationCampaignOutcomePolicyTests.cpp
+Tests/ExperimentRecommendationCampaignProposalReviewRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionActivationMigrationTests.sql
+Tests/SchedulerChildStatusTests.cpp
+Tests/ExperimentRecommendationCampaignHandoffTests.cpp
+MetaNN/Tests/LayerTest/recurrent/_.h
+MetaNN/Tests/LayerTest/recurrent/test_recurrent_layer.cpp
+MetaNN/Tests/LayerTest/recurrent/test_gru.cpp
+MetaNN/Tests/DataOpTest/operation/math/_.h
+MetaNN/Tests/DataOpTest/operation/math/test_acos.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_negative.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_asin.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_add.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_divide.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_tanh.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_abs.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_acosh.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_substract.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_cos.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_sin.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_exp.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_tan.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_sigmoid.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_asinh.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_multiply.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_reduce_sum.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_sign.cpp
+MetaNN/Tests/DataOpTest/operation/math/test_square.cpp
+MetaNN/Tests/DataOpTest/operation/others/_.h
+MetaNN/Tests/DataOpTest/operation/others/test_interpolate.cpp
+MetaNN/MetaNN/layers/math/_.h
+Sources/ContinuationPolicy.cpp
+Sources/ExperimentRecommendationCampaignExecution.cpp
+Sources/ExperimentRecommendationCampaignStatus.hpp
+Sources/ExperimentRecommendationCampaignHandoffRepository.cpp
+Sources/ExperimentRecommendationConversionExecutionRepository.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReview.hpp
+Sources/ExperimentRecommendationCampaignMaterializationService.cpp
+Sources/ExperimentRecommendationConversionProposalReviewRepository.cpp
+
+exec
+/bin/bash -lc "rg --files Sources Tests Database docs | rg '(Campaign|campaign|Recommendation|recommendation|Scheduler|scheduler|FollowUp|follow_up|Govern|govern|Continuation|continuation)' | sort" in /Volumes/Developer SSD/ExpertAdvisor
+ succeeded in 0ms:
+Database/migrations/005_experiment_scheduler.sql
+Database/migrations/020_experiment_continuation_policy.sql
+Database/migrations/021_continuation_policy_inheritance.sql
+Database/migrations/022_continuation_policy_identity_bound.sql
+Database/migrations/023_continuation_policy_target_sequence.sql
+Database/migrations/024_continuation_sequence_and_worker_attempt_hardening.sql
+Database/migrations/026_experiment_recommendation_persistence.sql
+Database/migrations/027_experiment_recommendation_hardening.sql
+Database/migrations/028_experiment_recommendation_scoring.sql
+Database/migrations/029_experiment_recommendation_source_rank_enforcement.sql
+Database/migrations/030_experiment_recommendation_source_rank_transition_enforcement.sql
+Database/migrations/031_experiment_recommendation_scan_provenance_enforcement.sql
+Database/migrations/032_experiment_recommendation_review.sql
+Database/migrations/033_experiment_recommendation_review_permissions.sql
+Database/migrations/034_experiment_recommendation_evaluation.sql
+Database/migrations/035_experiment_recommendation_ranking.sql
+Database/migrations/036_experiment_recommendation_conversion_proposal.sql
+Database/migrations/037_experiment_recommendation_conversion_review.sql
+Database/migrations/038_experiment_recommendation_conversion_execution.sql
+Database/migrations/039_experiment_recommendation_conversion_activation.sql
+Database/migrations/040_experiment_recommendation_campaign_approval.sql
+Database/migrations/041_experiment_recommendation_campaign_materialization.sql
+Database/migrations/042_experiment_recommendation_campaign_follow_up_proposal.sql
+Database/migrations/043_experiment_recommendation_campaign_follow_up_proposal_review.sql
+Database/migrations/044_experiment_recommendation_campaign_follow_up_proposal_ratification.sql
+Sources/ContinuationPolicy.cpp
+Sources/ContinuationPolicy.hpp
+Sources/ContinuationPolicyInheritance.cpp
+Sources/ContinuationPolicyInheritance.hpp
+Sources/ContinuationPolicyPersistence.cpp
+Sources/ContinuationPolicyPersistence.hpp
+Sources/ExperimentRecommendation.cpp
+Sources/ExperimentRecommendation.hpp
+Sources/ExperimentRecommendationCampaignActivation.cpp
+Sources/ExperimentRecommendationCampaignActivation.hpp
+Sources/ExperimentRecommendationCampaignActivationRepository.cpp
+Sources/ExperimentRecommendationCampaignActivationRepository.hpp
+Sources/ExperimentRecommendationCampaignActivationService.cpp
+Sources/ExperimentRecommendationCampaignActivationService.hpp
+Sources/ExperimentRecommendationCampaignApproval.cpp
+Sources/ExperimentRecommendationCampaignApproval.hpp
+Sources/ExperimentRecommendationCampaignApprovalRepository.cpp
+Sources/ExperimentRecommendationCampaignApprovalRepository.hpp
+Sources/ExperimentRecommendationCampaignApprovalService.cpp
+Sources/ExperimentRecommendationCampaignApprovalService.hpp
+Sources/ExperimentRecommendationCampaignExecution.cpp
+Sources/ExperimentRecommendationCampaignExecution.hpp
+Sources/ExperimentRecommendationCampaignExecutionRepository.cpp
+Sources/ExperimentRecommendationCampaignExecutionRepository.hpp
+Sources/ExperimentRecommendationCampaignExecutionService.cpp
+Sources/ExperimentRecommendationCampaignExecutionService.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposal.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposal.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalPreview.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalPreview.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRatification.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRatification.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRatificationRepository.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRatificationRepository.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRatificationService.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRatificationService.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalRepository.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReview.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReview.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.hpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp
+Sources/ExperimentRecommendationCampaignFollowUpProposalReviewRepository.hpp
+Sources/ExperimentRecommendationCampaignHandoff.cpp
+Sources/ExperimentRecommendationCampaignHandoff.hpp
+Sources/ExperimentRecommendationCampaignHandoffRepository.cpp
+Sources/ExperimentRecommendationCampaignHandoffRepository.hpp
+Sources/ExperimentRecommendationCampaignHandoffService.cpp
+Sources/ExperimentRecommendationCampaignHandoffService.hpp
+Sources/ExperimentRecommendationCampaignLaunch.cpp
+Sources/ExperimentRecommendationCampaignLaunch.hpp
+Sources/ExperimentRecommendationCampaignLaunchRepository.cpp
+Sources/ExperimentRecommendationCampaignLaunchRepository.hpp
+Sources/ExperimentRecommendationCampaignLaunchService.cpp
+Sources/ExperimentRecommendationCampaignLaunchService.hpp
+Sources/ExperimentRecommendationCampaignMaterialization.cpp
+Sources/ExperimentRecommendationCampaignMaterialization.hpp
+Sources/ExperimentRecommendationCampaignMaterializationRepository.cpp
+Sources/ExperimentRecommendationCampaignMaterializationRepository.hpp
+Sources/ExperimentRecommendationCampaignMaterializationService.cpp
+Sources/ExperimentRecommendationCampaignMaterializationService.hpp
+Sources/ExperimentRecommendationCampaignOutcomeAssessment.cpp
+Sources/ExperimentRecommendationCampaignOutcomeAssessment.hpp
+Sources/ExperimentRecommendationCampaignOutcomeAssessmentRepository.cpp
+Sources/ExperimentRecommendationCampaignOutcomeAssessmentRepository.hpp
+Sources/ExperimentRecommendationCampaignOutcomeAssessmentService.cpp
+Sources/ExperimentRecommendationCampaignOutcomeAssessmentService.hpp
+Sources/ExperimentRecommendationCampaignOutcomePolicy.cpp
+Sources/ExperimentRecommendationCampaignOutcomePolicy.hpp
+Sources/ExperimentRecommendationCampaignPlanning.cpp
+Sources/ExperimentRecommendationCampaignPlanning.hpp
+Sources/ExperimentRecommendationCampaignPlanningRepository.cpp
+Sources/ExperimentRecommendationCampaignPlanningRepository.hpp
+Sources/ExperimentRecommendationCampaignPlanningService.cpp
+Sources/ExperimentRecommendationCampaignPlanningService.hpp
+Sources/ExperimentRecommendationCampaignProposalReview.cpp
+Sources/ExperimentRecommendationCampaignProposalReview.hpp
+Sources/ExperimentRecommendationCampaignProposalReviewRepository.cpp
+Sources/ExperimentRecommendationCampaignProposalReviewRepository.hpp
+Sources/ExperimentRecommendationCampaignProposalReviewService.cpp
+Sources/ExperimentRecommendationCampaignProposalReviewService.hpp
+Sources/ExperimentRecommendationCampaignReview.cpp
+Sources/ExperimentRecommendationCampaignReview.hpp
+Sources/ExperimentRecommendationCampaignReviewService.cpp
+Sources/ExperimentRecommendationCampaignReviewService.hpp
+Sources/ExperimentRecommendationCampaignStatus.cpp
+Sources/ExperimentRecommendationCampaignStatus.hpp
+Sources/ExperimentRecommendationCampaignStatusRepository.cpp
+Sources/ExperimentRecommendationCampaignStatusRepository.hpp
+Sources/ExperimentRecommendationCampaignStatusService.cpp
+Sources/ExperimentRecommendationCampaignStatusService.hpp
+Sources/ExperimentRecommendationCandidateGenerator.cpp
+Sources/ExperimentRecommendationCandidateGenerator.hpp
+Sources/ExperimentRecommendationConversion.cpp
+Sources/ExperimentRecommendationConversion.hpp
+Sources/ExperimentRecommendationConversionActivation.cpp
+Sources/ExperimentRecommendationConversionActivation.hpp
+Sources/ExperimentRecommendationConversionActivationRepository.cpp
+Sources/ExperimentRecommendationConversionActivationRepository.hpp
+Sources/ExperimentRecommendationConversionActivationService.cpp
+Sources/ExperimentRecommendationConversionActivationService.hpp
+Sources/ExperimentRecommendationConversionExecutionRepository.cpp
+Sources/ExperimentRecommendationConversionExecutionRepository.hpp
+Sources/ExperimentRecommendationConversionExecutionService.cpp
+Sources/ExperimentRecommendationConversionExecutionService.hpp
+Sources/ExperimentRecommendationConversionProposalReview.cpp
+Sources/ExperimentRecommendationConversionProposalReview.hpp
+Sources/ExperimentRecommendationConversionProposalReviewRepository.cpp
+Sources/ExperimentRecommendationConversionProposalReviewRepository.hpp
+Sources/ExperimentRecommendationConversionProposalReviewService.cpp
+Sources/ExperimentRecommendationConversionProposalReviewService.hpp
+Sources/ExperimentRecommendationConversionRepository.cpp
+Sources/ExperimentRecommendationConversionRepository.hpp
+Sources/ExperimentRecommendationConversionWorkflow.cpp
+Sources/ExperimentRecommendationConversionWorkflow.hpp
+Sources/ExperimentRecommendationConversionWorkflowRepository.cpp
+Sources/ExperimentRecommendationConversionWorkflowRepository.hpp
+Sources/ExperimentRecommendationConversionWorkflowService.cpp
+Sources/ExperimentRecommendationConversionWorkflowService.hpp
+Sources/ExperimentRecommendationEvaluation.cpp
+Sources/ExperimentRecommendationEvaluation.hpp
+Sources/ExperimentRecommendationEvaluationRepository.cpp
+Sources/ExperimentRecommendationEvaluationRepository.hpp
+Sources/ExperimentRecommendationEvaluationService.cpp
+Sources/ExperimentRecommendationEvaluationService.hpp
+Sources/ExperimentRecommendationRanking.cpp
+Sources/ExperimentRecommendationRanking.hpp
+Sources/ExperimentRecommendationRankingRepository.cpp
+Sources/ExperimentRecommendationRankingRepository.hpp
+Sources/ExperimentRecommendationRankingService.cpp
+Sources/ExperimentRecommendationRankingService.hpp
+Sources/ExperimentRecommendationRepository.cpp
+Sources/ExperimentRecommendationRepository.hpp
+Sources/ExperimentRecommendationReview.cpp
+Sources/ExperimentRecommendationReview.hpp
+Sources/ExperimentRecommendationScoring.cpp
+Sources/ExperimentRecommendationScoring.hpp
+Sources/ExperimentRecommendationScoringService.cpp
+Sources/ExperimentRecommendationService.cpp
+Sources/ExperimentRecommendationService.hpp
+Sources/ExperimentScheduler.cpp
+Sources/SchedulerChildStatus.hpp
+Tests/ContinuationPolicyInheritanceTests.cpp
+Tests/ContinuationPolicyPersistenceTests.cpp
+Tests/ExperimentRecommendationCampaignActivationRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignActivationTests.cpp
+Tests/ExperimentRecommendationCampaignApprovalMigrationTests.sql
+Tests/ExperimentRecommendationCampaignApprovalRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignApprovalTests.cpp
+Tests/ExperimentRecommendationCampaignExecutionRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignExecutionTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalMigrationTests.sql
+Tests/ExperimentRecommendationCampaignFollowUpProposalRatificationMigrationTests.sql
+Tests/ExperimentRecommendationCampaignFollowUpProposalRatificationRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalRatificationTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql
+Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalReviewTests.cpp
+Tests/ExperimentRecommendationCampaignFollowUpProposalTests.cpp
+Tests/ExperimentRecommendationCampaignHandoffRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignHandoffTests.cpp
+Tests/ExperimentRecommendationCampaignLaunchRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignLaunchTests.cpp
+Tests/ExperimentRecommendationCampaignMaterializationMigrationTests.sql
+Tests/ExperimentRecommendationCampaignMaterializationRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignMaterializationTests.cpp
+Tests/ExperimentRecommendationCampaignOutcomeAssessmentIntegrationTests.cpp
+Tests/ExperimentRecommendationCampaignOutcomeAssessmentTests.cpp
+Tests/ExperimentRecommendationCampaignOutcomePolicyTests.cpp
+Tests/ExperimentRecommendationCampaignPlanningRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignPlanningTests.cpp
+Tests/ExperimentRecommendationCampaignProposalReviewRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignProposalReviewTests.cpp
+Tests/ExperimentRecommendationCampaignReviewTests.cpp
+Tests/ExperimentRecommendationCampaignStatusRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignStatusTests.cpp
+Tests/ExperimentRecommendationCandidateGeneratorTests.cpp
+Tests/ExperimentRecommendationConversionActivationMigrationTests.sql
+Tests/ExperimentRecommendationConversionActivationRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionActivationTests.cpp
+Tests/ExperimentRecommendationConversionExecutionMigrationTests.sql
+Tests/ExperimentRecommendationConversionExecutionRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionMigrationTests.sql
+Tests/ExperimentRecommendationConversionProposalReviewMigrationTests.sql
+Tests/ExperimentRecommendationConversionProposalReviewRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionProposalReviewTests.cpp
+Tests/ExperimentRecommendationConversionRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionTests.cpp
+Tests/ExperimentRecommendationConversionWorkflowRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionWorkflowTests.cpp
+Tests/ExperimentRecommendationEvaluationMigrationTests.sql
+Tests/ExperimentRecommendationEvaluationRepositoryTests.cpp
+Tests/ExperimentRecommendationEvaluationTests.cpp
+Tests/ExperimentRecommendationPersistenceTests.cpp
+Tests/ExperimentRecommendationRankingMigrationTests.sql
+Tests/ExperimentRecommendationRankingRepositoryTests.cpp
+Tests/ExperimentRecommendationRankingTests.cpp
+Tests/ExperimentRecommendationRepositoryTests.cpp
+Tests/ExperimentRecommendationReviewMigrationTests.sql
+Tests/ExperimentRecommendationReviewRepositoryTests.cpp
+Tests/ExperimentRecommendationReviewTests.cpp
+Tests/ExperimentRecommendationScoringMigrationTests.sql
+Tests/ExperimentRecommendationScoringRepositoryTests.cpp
+Tests/ExperimentRecommendationScoringTests.cpp
+Tests/ExperimentRecommendationServiceTests.cpp
+Tests/ExperimentRecommendationTests.cpp
+Tests/SchedulerChildStatusTests.cpp
+docs/Phase4AExperimentRecommendationFoundation.rst
+docs/Phase4AExperimentRecommendationPersistence.rst
+docs/Phase4AExperimentRecommendationReview.rst
+docs/Phase4AExperimentRecommendationScoring.rst
+docs/Phase4BExperimentRecommendationEvaluation.rst
+docs/Phase4BExperimentRecommendationRanking.rst
+docs/Phase4CExperimentRecommendationConversion.rst
+docs/Phase4CExperimentRecommendationConversionActivation.rst
+docs/Phase4CExperimentRecommendationConversionExecution.rst
+docs/Phase4CExperimentRecommendationConversionPersistence.rst
+docs/Phase4CExperimentRecommendationConversionProposalReview.rst
+docs/Phase4CExperimentRecommendationConversionWorkflow.rst
+docs/Phase4DExperimentRecommendationCampaignApproval.rst
+docs/Phase4DExperimentRecommendationCampaignHandoff.rst
+docs/Phase4DExperimentRecommendationCampaignMaterialization.rst
+docs/Phase4DExperimentRecommendationCampaignPlanning.rst
+docs/Phase4DExperimentRecommendationCampaignProposalReview.rst
+docs/Phase4DExperimentRecommendationCampaignReview.rst
+docs/Phase5ExperimentRecommendationCampaignActivation.rst
+docs/Phase5ExperimentRecommendationCampaignExecution.rst
+docs/Phase5ExperimentRecommendationCampaignLaunch.rst
+docs/Phase5ExperimentRecommendationCampaignOutcomeAssessment.rst
+docs/Phase5ExperimentRecommendationCampaignStatus.rst
+docs/Phase6ARecommendationCampaignFollowUpProposal.rst
+docs/Phase6BRecommendationCampaignFollowUpProposalPersistence.rst
+docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst
+docs/Phase6DRecommendationCampaignFollowUpProposalRatification.rst
+docs/architecture/Volume_VIII_Recommendation_Engine.md
+docs/architecture/Volume_XI_Scheduler.md
+docs/architecture/adr/ADR-0003-advisory-recommendation-evaluation.md
+docs/architecture/adr/ADR-0004-scheduler-ownership-boundaries.md
+docs/architecture/adr/ADR-0005-manual-recommendation-conversion.md
+docs/architecture/adr/ADR-0009-phase-6d-follow-up-proposal-governance-ratification.md
+
+time: command terminated abnormally
+       23.56 real         0.66 user         1.14 sys
+           147062784  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               61270  page reclaims
+               12329  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 398  messages sent
+                5162  messages received
+                  26  signals received
+                2199  voluntary context switches
+               40308  involuntary context switches
+          7893238807  instructions retired
+          4854616510  cycles elapsed
+           119080760  peak memory footprint
+time: signal: Invalid argument

@@ -1,0 +1,235 @@
+Using High reasoning, perform a focused pre-staging regression verification of the current entirely unstaged Phase 5 Step 4 implementation and the shared Phase 4C repository helpers modified during its independent review.
+
+GOAL
+
+Determine whether the current unstaged tree is safe to stage after the Step 4 review introduced additive changes to shared Phase 4C proposal, execution, and workflow repository code.
+
+Do not redesign Phase 5.
+Do not implement Phase 5 Step 5.
+Do not add features.
+Do not stage, commit, push, pull, fetch, merge, rebase, reset, switch branches, or open a pull request.
+Do not clean the build.
+Do not interrupt, signal, poll through Step 4, or otherwise affect the running scheduler.
+Do not use the active LSTM database.
+
+EXPECTED REPOSITORY STATE
+
+Branch:
+phase5
+
+HEAD:
+05383ad35f8f3561fcae37b482f2530da6d3d804
+
+Expected commit:
+05383ad Phase 5 Step 3: Add atomic campaign launch
+
+All Phase 5 Step 4 implementation and review corrections should remain unstaged.
+
+BASELINE
+
+Before testing, run and report:
+
+git branch --show-current
+git rev-parse HEAD
+git log -1 --oneline
+git status --short
+git diff --check
+git diff --cached --check
+git diff --stat
+git diff --cached --stat
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+
+Confirm the scheduler PID and full command without changing it:
+
+ps -axo pid=,command= | grep '[L]STM_Release.*--schedule-experiments'
+
+SHARED PRODUCTION FILES REQUIRING REGRESSION COVERAGE
+
+Sources/ExperimentRecommendationConversionRepository.cpp
+Sources/ExperimentRecommendationConversionRepository.hpp
+Sources/ExperimentRecommendationConversionExecutionRepository.cpp
+Sources/ExperimentRecommendationConversionExecutionRepository.hpp
+Sources/ExperimentRecommendationConversionWorkflowRepository.cpp
+Sources/ExperimentRecommendationConversionWorkflowRepository.hpp
+
+The changes are intended to be additive:
+
+1. bounded transaction-scoped exact-ID proposal loading;
+2. shared exposure of the existing canonical execution identity builder;
+3. preservation of exact execution and activation cardinalities in the workflow projection.
+
+Verify that existing Phase 4C and Phase 5 Steps 1–3 behavior is unchanged.
+
+REQUIRED TEST DISCOVERY
+
+Inspect the repository’s actual test names, source files, build commands, and conventions. Do not invent unavailable targets.
+
+Locate and run applicable existing suites covering:
+
+1. recommendation conversion proposal repository;
+2. recommendation conversion execution repository;
+3. recommendation conversion workflow repository;
+4. Phase 5 campaign execution;
+5. Phase 5 campaign activation;
+6. Phase 5 atomic campaign launch;
+7. PostgreSQL repository/integration variants where present;
+8. shared canonical-identity tests affected by the exposed execution identity function.
+
+Likely relevant files include:
+
+Tests/ExperimentRecommendationConversionRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionExecutionRepositoryTests.cpp
+Tests/ExperimentRecommendationConversionWorkflowRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignExecutionTests.cpp
+Tests/ExperimentRecommendationCampaignExecutionRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignActivationTests.cpp
+Tests/ExperimentRecommendationCampaignActivationRepositoryTests.cpp
+Tests/ExperimentRecommendationCampaignLaunchTests.cpp
+Tests/ExperimentRecommendationCampaignLaunchRepositoryTests.cpp
+
+Use actual repository files and commands if names differ.
+
+STEP 4 FINAL-SOURCE VERIFICATION
+
+From the exact final current sources, rerun:
+
+1. strict C++20 compilation with -Wall -Wextra -Wpedantic -Werror;
+2. the pure Step 4 status suite;
+3. the Step 4 PostgreSQL repository/CLI/snapshot suite three complete times, each with a new uniquely named positively allowlisted disposable database;
+4. both Release CLI forms:
+   --recommendation-campaign-status=ID
+   --recommendation-campaign-status ID
+5. the repeatable-read concurrent snapshot test;
+6. runtime read privilege and materialization immutability checks;
+7. read-only, lock-free, and no-sequence-advancement checks;
+8. parser rejection for --yes, --dry-run, missing ID, zero, negative ID, malformed ID, overflow, duplicate command, and conflicting standalone command.
+
+DATABASE SAFETY
+
+Before every database suite:
+
+1. require explicit database name, host, and port;
+2. confirm the database does not exist;
+3. create it explicitly;
+4. verify SELECT current_database() exactly matches;
+5. use isolated schemas;
+6. use owner and runtime roles according to production privileges;
+7. use bounded statement and lock timeouts;
+8. use isolated DerivedData;
+9. never connect to active LSTM.
+
+After every suite, including failure paths:
+
+1. remove every generated test schema;
+2. drop the disposable database;
+3. confirm it no longer exists.
+
+Use three distinct final Step 4 database names satisfying the harness allowlist, such as:
+
+expertadvisor_phase5_step4_test_prestage_01
+expertadvisor_phase5_step4_test_prestage_02
+expertadvisor_phase5_step4_test_prestage_03
+
+RELEASE BUILD
+
+Perform an incremental isolated Release build after shared-regression suites and before final Step 4 CLI passes.
+
+Do not clean.
+
+KNOWN PORT LIMITATION
+
+The production connection builder reportedly cannot direct the Release CLI subprocess to a non-default PostgreSQL port, so the Step 4 harness rejects Release CLI verification when the explicit port is not 5432.
+
+Verify this directly from production code.
+
+Treat fail-closed behavior as acceptable for this review only when:
+
+1. host and port must be explicit;
+2. non-5432 is rejected before launching the Release subprocess;
+3. no silent fallback can occur;
+4. the limitation is reported as a remaining non-blocking constraint.
+
+Do not broaden production connection behavior during this task.
+
+COMPLETION-SEMANTICS REGRESSION
+
+The review changed Step 4 completion semantics so a recommendation-conversion experiment persisted as completed/done is inconsistent unless it has:
+
+1. a configured final inference range;
+2. the exact completed final inference row selected by scheduler predicates;
+3. completed final analysis for current last_model_id.
+
+Verify against production conversion and scheduler code and affected tests.
+
+Confirm:
+
+1. recommendation-conversion execution always creates the required inference configuration;
+2. successful scheduler completion advances through final inference and final analysis;
+3. the status projection does not accidentally apply this requirement to unrelated experiment origins;
+4. no valid Phase 4C or Phase 5 Steps 1–3 workflow is newly rejected;
+5. existing launch/execution/activation tests pass unchanged.
+
+CHANGES DURING VERIFICATION
+
+Default: make no changes.
+
+Only change code if a test proves a concrete regression, compilation error, unsafe test behavior, or incorrect documentation caused by the current unstaged diff.
+
+Keep corrections narrow, add focused coverage, rerun directly affected suites, and leave everything unstaged.
+
+FINAL CHECKS
+
+Run:
+
+git diff --check
+git diff --cached --check
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+git status --short
+ps -axo pid=,command= | grep '[L]STM_Release.*--schedule-experiments'
+
+Confirm:
+
+1. scheduler PID and command unchanged;
+2. no files staged;
+3. no disposable databases remain;
+4. no generated Step 4 schemas remain;
+5. no test/build processes remain;
+6. active LSTM was never used.
+
+FINAL RESPONSE
+
+Begin with findings ordered by severity.
+
+For each finding include severity, file and line, defect, failure scenario, smallest correction, and verification.
+
+Then report:
+
+- whether changes were made;
+- files changed;
+- branch and HEAD;
+- exact test suites discovered;
+- exact commands run;
+- shared Phase 4C regression results;
+- Phase 5 Steps 1–3 regression results;
+- strict compilation result;
+- isolated Release build result;
+- Step 4 pure-suite result;
+- all three final Step 4 PostgreSQL suite results;
+- both CLI-form results;
+- concurrency snapshot result;
+- privilege and immutability result;
+- read-only and sequence-preservation result;
+- parser-negative results;
+- completion-semantics assessment;
+- non-default-port limitation assessment;
+- disposable database cleanup;
+- scheduler preservation;
+- remaining risks;
+- readiness to stage: yes or no;
+- final git status --short.
+
+If no concrete regression remains, explicitly state:
+
+“No concrete regression was identified. The complete current Phase 5 Step 4 diff is ready to stage.”
+
+Stop after the focused pre-staging regression verification.

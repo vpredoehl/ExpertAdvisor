@@ -1,0 +1,621 @@
+Phase 4D Step 4 — Approved Recommendation Campaign Materialization
+
+Reasoning level: High
+
+CONTEXT
+
+Phase 4D Step 3 has been implemented, reviewed, hardened, committed, and pushed.
+
+The working tree is clean.
+
+Step 3 records one immutable human approval or rejection for one exact deterministic Phase 4D campaign review. It does not execute the campaign, create conversion proposals, create experiments, activate anything, start the scheduler, or launch workers.
+
+The next safe increment is Phase 4D Step 4.
+
+GOAL
+
+Implement explicit, deterministic, transaction-safe materialization of one approved recommendation campaign into the existing Phase 4C conversion-proposal workflow.
+
+Step 4 should convert the selected members of one exact approved Phase 4D campaign review into immutable Phase 4C conversion proposals and persist immutable campaign-materialization evidence linking:
+
+- the exact campaign approval;
+- the exact reconstructed campaign plan and review;
+- each selected campaign member;
+- the corresponding Phase 4C conversion proposal;
+- the deterministic materialization result.
+
+This step must reuse the existing Phase 4C proposal domain, canonical identity, repository, validation, and persistence behavior wherever possible.
+
+Do not redesign Phase 4C.
+
+Do not bypass Phase 4C review, execution, or activation controls.
+
+Do not directly create experiments.
+
+Do not implement automatic scheduling or background execution.
+
+PRIMARY SAFETY PRINCIPLE
+
+A Phase 4D campaign approval authorizes creation of the bounded set of Phase 4C conversion proposals represented by the exact approved campaign review—nothing more.
+
+Approval must not imply:
+
+- conversion review approval;
+- conversion execution;
+- conversion activation;
+- experiment creation;
+- experiment queueing;
+- scheduler activity;
+- worker activity.
+
+PHASE BOUNDARY
+
+Phase 4D Step 4 may:
+
+- load one persisted Phase 4D campaign approval by explicit ID;
+- require that its decision is `approved`;
+- reconstruct the exact authoritative ranking snapshot, campaign plan, and campaign review inside one PostgreSQL transaction;
+- verify that the reconstructed review canonical identity and hash match the persisted approval evidence exactly;
+- enumerate only the deterministically selected campaign members;
+- construct the corresponding existing Phase 4C conversion proposals;
+- persist missing proposals idempotently through the existing Phase 4C repository/service boundary;
+- persist one immutable campaign-materialization manifest and immutable per-member linkage rows;
+- return existing-identical evidence on exact replay;
+- expose read-only show/list inspection commands.
+
+Step 4 must not:
+
+- create experiment rows;
+- execute Phase 4C conversions;
+- approve or review Phase 4C proposals;
+- create Phase 4C execution or activation records;
+- modify experiments;
+- modify ranking snapshots;
+- modify campaign plans, reviews, or approvals;
+- replace or update historical campaign materialization;
+- infer approval;
+- accept rejected approval evidence;
+- accept stale or mismatched approval evidence;
+- start or signal the scheduler;
+- start workers;
+- queue, resume, retry, pause, cancel, or continue experiments;
+- add automatic scans;
+- run materialization without an explicit operator command;
+- silently skip selected members;
+- silently add non-selected members.
+
+IMPLEMENTATION DIRECTION
+
+Follow existing Phase 4A–4D conventions and inspect the current committed code before choosing exact names or APIs.
+
+Prefer a narrow implementation consisting of:
+
+1. Immutable domain model
+
+Add a versioned Phase 4D campaign-materialization domain model representing one exact materialization request/result.
+
+The canonical identity should bind every semantically relevant field, including at minimum:
+
+- materialization contract version;
+- campaign approval ID;
+- campaign approval canonical identity and hash;
+- ranking snapshot ID and authoritative identity;
+- planning policy canonical identity and hash;
+- planning scope canonical identity;
+- campaign plan canonical identity and hash;
+- campaign review canonical identity and hash;
+- approval decision;
+- approval reviewer identity;
+- approval reason text;
+- deterministic selected-member count;
+- deterministic ordered selected-member identities;
+- corresponding Phase 4C conversion-proposal canonical identities and hashes;
+- materialization operator identity;
+- materialization reason text.
+
+Use length-framed variable strings and locale-independent formatting.
+
+Do not include database timestamps in semantic identity.
+
+Canonical text must remain authoritative; hashes are accelerators only.
+
+2. Explicit operator metadata
+
+Require explicit materialization metadata such as:
+
+- `--campaign-approval-id=ID`
+- `--campaign-materialized-by=IDENTITY`
+- `--campaign-materialization-reason=TEXT`
+
+Do not infer operator identity from the shell, OS username, database role, environment, Git identity, or approval reviewer.
+
+Normalize and validate operator identity and reason consistently with Step 3 reviewer/reason validation.
+
+3. Exact stale-evidence reconstruction
+
+Within one PostgreSQL transaction:
+
+- load the approval by explicit ID;
+- reject missing approval;
+- reject `rejected` decisions;
+- load the authoritative ranking snapshot and Phase 4C evidence;
+- reconstruct the Step 1 campaign plan;
+- reconstruct and validate the Step 2 campaign review;
+- reconstruct the Step 3 approval evidence;
+- verify all persisted canonical text, hashes, summary counts, ordering flags, decision, reviewer, and reason;
+- ensure the exact reconstructed review is still the review authorized by the approval;
+- abort before proposal creation on any mismatch.
+
+Do not trust persisted hashes without validating canonical text.
+
+4. Proposal construction
+
+For each selected campaign member, construct exactly one Phase 4C conversion proposal using the existing Phase 4C proposal contract.
+
+Do not create a parallel proposal type unless existing architecture makes reuse impossible.
+
+The proposal content must be derived deterministically from the selected campaign member and authoritative source recommendation evidence.
+
+Do not copy only IDs when the existing Phase 4C proposal identity requires complete canonical provenance.
+
+Preserve deterministic campaign ordering in the manifest, even if Phase 4C proposal storage has its own identity/order semantics.
+
+5. Transaction and atomicity
+
+The entire operation must be atomic.
+
+Use one PostgreSQL transaction for:
+
+- approval validation;
+- reconstruction;
+- proposal lookup/insertion;
+- campaign-materialization manifest insertion;
+- per-member linkage insertion.
+
+Either all selected members are represented and linked, or nothing is committed.
+
+No partial campaign materialization is allowed.
+
+A failure on member N must roll back proposals and link rows newly created earlier in the same transaction.
+
+Pre-existing identical Phase 4C proposals may be reused, but the manifest must link them explicitly and report reuse accurately.
+
+6. Idempotency and conflict behavior
+
+Intended semantics:
+
+- one immutable materialization per exact approved campaign;
+- exact semantic replay returns the existing manifest;
+- concurrent identical requests converge to one manifest and one linkage set;
+- changed materialization operator conflicts;
+- changed materialization reason conflicts;
+- changed selected-member set conflicts;
+- changed proposal provenance conflicts;
+- changed approval evidence conflicts;
+- rejected approval cannot be materialized;
+- zero-selection approved campaigns should be impossible because Step 3 prohibits them, but fail closed if malformed persisted data is encountered.
+
+Use exact canonical comparison, not hash equality alone.
+
+Follow existing collision-ordinal/advisory-lock conventions where appropriate.
+
+Locks must be transaction-scoped and narrowly keyed.
+
+Do not use a global lock.
+
+7. Persistence schema
+
+Add the next migration, expected to be migration 041 unless the repository now contains another migration.
+
+Prefer:
+
+- one append-only campaign-materialization manifest table;
+- one append-only campaign-materialization-member table linking ordered selected members to Phase 4C conversion proposals.
+
+The schema should enforce as much inexpensive consistency as reasonably possible:
+
+Manifest considerations:
+
+- generated positive primary key;
+- restrictive foreign key to campaign approval;
+- fixed contract version;
+- approved decision only;
+- positive selected-member count;
+- canonical/hash syntax and size checks;
+- bytewise collation for canonical identity text;
+- unique collision bucket/ordinal or equivalent existing convention;
+- immutable generated timestamp;
+- no UPDATE or DELETE path for runtime.
+
+Member considerations:
+
+- restrictive foreign key to manifest;
+- restrictive foreign key to Phase 4C conversion proposal;
+- zero- or one-based deterministic member ordinal, consistently documented;
+- selected-member canonical identity and hash;
+- proposal canonical identity and hash;
+- uniqueness on `(materialization_id, member_ordinal)`;
+- uniqueness preventing duplicate selected-member linkage within one materialization;
+- uniqueness preventing duplicate proposal linkage within one materialization unless existing Phase 4C semantics justify otherwise;
+- count consistency verified by repository/service and tests.
+
+Do not use cascading deletes.
+
+Do not add triggers that mutate prior workflow tables or experiments.
+
+8. Runtime privileges
+
+Use least privilege.
+
+The runtime role may receive only what is required for:
+
+- SELECT;
+- column-limited INSERT;
+- required sequence USAGE.
+
+It must not receive:
+
+- UPDATE;
+- DELETE;
+- TRUNCATE;
+- ability to supply generated IDs;
+- ability to supply generated timestamps;
+- ability to alter prior Phase 4C or Phase 4D evidence.
+
+Review PUBLIC privileges explicitly.
+
+9. Repository/service layering
+
+Keep responsibilities clear:
+
+Domain:
+- canonical construction;
+- validation;
+- semantic equality.
+
+Repository:
+- SQL persistence and mapping;
+- exact lookup;
+- deterministic list/show;
+- no hidden transaction commit.
+
+Service:
+- transaction ownership;
+- authoritative reconstruction;
+- approval validation;
+- proposal construction orchestration;
+- all-or-nothing materialization;
+- outcome classification.
+
+Avoid putting campaign-domain construction logic into `ExperimentScheduler.cpp`.
+
+Add transaction-base overloads to existing repositories only where needed and preserve existing connection-overload behavior exactly.
+
+10. CLI
+
+Add an explicit write command, using the repository's established naming conventions, such as:
+
+```bash
+LSTM_Release \
+  --materialize-recommendation-campaign \
+  --campaign-approval-id=123 \
+  --campaign-materialized-by='operator@example' \
+  --campaign-materialization-reason='Create bounded Phase 4C proposals.'
+```
+
+Add read-only commands such as:
+
+```bash
+LSTM_Release --show-recommendation-campaign-materialization=ID
+
+LSTM_Release --list-recommendation-campaign-materializations \
+  [--campaign-approval-id=ID] \
+  [--campaign-materialization-limit=N]
+```
+
+Also provide a way to inspect ordered member linkages for one manifest, either as part of show output or a dedicated read-only command.
+
+CLI requirements:
+
+- support separated and `--option=value` forms consistently;
+- reject orphan metadata;
+- reject missing metadata;
+- reject invalid IDs;
+- reject mutually exclusive top-level commands;
+- bound list limits;
+- never dereference missing optionals;
+- never fall through to scheduler execution;
+- parser errors must occur before database access;
+- no interactive confirmation unless existing write-command conventions require it.
+
+11. Machine-readable output
+
+Write output must distinguish:
+
+- `campaign_materialization_recorded=true|false`;
+- `campaign_materialization_existing_identical=true|false`;
+- materialization ID;
+- campaign approval ID;
+- selected-member count;
+- newly created Phase 4C proposal count;
+- reused existing Phase 4C proposal count;
+- linked member count;
+- conflict/stale/rejected/not-found/invalid/operational outcomes.
+
+Always state truthfully:
+
+- `conversion_proposals_created=true|false` with an exact count;
+- `conversion_reviews_created=false`;
+- `conversion_executions_created=false`;
+- `conversion_activations_created=false`;
+- `experiments_created=false`;
+- `experiments_modified=false`;
+- `scheduler_started=false`;
+- `workers_started=false`;
+- `campaign_executed=false` if the project reserves “execution” for actual conversion/experiment execution.
+
+Choose terminology carefully. If the command is called “materialize,” do not misleadingly label proposal materialization as experiment execution.
+
+Read-only output must include:
+
+- `read_only=true`;
+- deterministic field order;
+- stable escaping;
+- ordered member entries;
+- no mutation claims.
+
+12. Tests
+
+Add focused tests proving at minimum:
+
+Pure/domain:
+
+- deterministic manifest identity;
+- ordering sensitivity where intended;
+- timestamp independence;
+- operator/reason normalization;
+- control-byte and embedded-NUL rejection;
+- malformed hash rejection;
+- oversized input rejection;
+- changed approval or member provenance changes identity;
+- duplicate member detection;
+- count consistency.
+
+Migration:
+
+- table/sequence/index/constraint existence;
+- migration rerun behavior;
+- restrictive foreign keys;
+- no cascades;
+- bytewise collation;
+- hash syntax constraints;
+- runtime column-level INSERT;
+- no generated-ID/timestamp injection;
+- no UPDATE/DELETE/TRUNCATE;
+- no unintended PUBLIC privileges.
+
+Repository/integration:
+
+- successful materialization of an approved non-empty campaign;
+- rejection of rejected approval;
+- missing approval;
+- stale/malformed persisted evidence;
+- exact replay;
+- changed operator/reason conflict;
+- concurrent identical convergence;
+- atomic rollback when one selected member fails;
+- reuse of pre-existing identical Phase 4C proposal;
+- conflict on incompatible pre-existing proposal evidence;
+- complete ordered member linkage;
+- no omitted or extra members;
+- unchanged experiments and experiment timestamps;
+- unchanged Phase 4C review/execution/activation rows;
+- unchanged scheduler/worker state;
+- deterministic show/list output;
+- bounded list behavior;
+- cleanup of isolated schemas;
+- no unrelated sequence advancement.
+
+CLI:
+
+- missing required metadata;
+- orphan metadata;
+- malformed IDs;
+- command conflicts;
+- oversized list limit;
+- parser failure before DB access;
+- accurate create-vs-replay counters and booleans.
+
+13. Documentation
+
+Add a dedicated Phase 4D Step 4 document and update:
+
+- Database/README.md;
+- Phase 4D planning documentation;
+- Phase 4D review documentation;
+- Phase 4D approval documentation;
+- recommendation engine architecture documentation;
+- Xcode project membership.
+
+Document precisely:
+
+- what “materialization” means;
+- that selected members become Phase 4C conversion proposals;
+- that Phase 4C review/execution/activation is still required;
+- transaction scope;
+- stale-evidence checks;
+- exact replay and conflict semantics;
+- proposal reuse;
+- permissions;
+- no experiments;
+- no scheduler/workers;
+- test procedure;
+- deferred work.
+
+Do not claim the historical migration ledger supports empty-database bootstrap.
+
+COMPATIBILITY AND REGRESSION REQUIREMENTS
+
+Preserve all existing Phase 4A–4D behavior.
+
+In particular:
+
+- Step 1 planning remains pure/deterministic.
+- Step 2 review remains read-only.
+- Step 3 approval remains immutable and non-executing.
+- Phase 4C proposal/review/execution/activation behavior remains unchanged.
+- Existing single-proposal workflows must continue to work.
+- No scheduler behavior changes unless required only for top-level CLI routing.
+- No existing experiment state transitions may change.
+
+VERIFICATION
+
+After implementation:
+
+1. Confirm clean baseline before modifications and record the starting HEAD.
+
+2. Run:
+
+```bash
+git diff --check
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+```
+
+3. Strictly compile new pure tests with:
+
+- `-std=c++20`
+- `-Wall`
+- `-Wextra`
+- `-Wpedantic`
+- `-Werror`
+
+Use the pinned Homebrew libpqxx include path as a system include where required.
+
+4. Run new pure tests at least three consecutive times.
+
+5. Strictly rebuild all new repository tests from current source.
+
+6. Use only an explicit disposable PostgreSQL database, for example:
+
+```bash
+createdb phase4d_campaign_test 2>/dev/null || true
+```
+
+Tests must refuse the production `LSTM` database name.
+
+7. Apply migration 041 in isolated per-process schemas and verify idempotent rerun.
+
+8. Run the Step 4 repository/integration/concurrency suite repeatedly.
+
+9. Rebuild and run directly relevant Phase 4A–4D regression tests from current source, including existing Phase 4C proposal/review/execution/activation tests and Phase 4D planning/review/approval tests.
+
+10. Run CLI parser tests for all new argument forms and conflicts.
+
+11. Run a clean Release build in an isolated derived-data path so currently running scheduler/workers are not disturbed:
+
+```bash
+xcodebuild \
+  -project ExpertAdvisor.xcodeproj \
+  -scheme "LSTM Release" \
+  -configuration Release \
+  -derivedDataPath /tmp/ExpertAdvisorPhase4DStep4DerivedData \
+  clean build \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+12. Verify no application scheduler or worker was launched, stopped, signaled, or modified by testing.
+
+13. Drop only the disposable database after all tests pass.
+
+14. Confirm:
+
+- no staged changes;
+- no commit;
+- no push;
+- working tree contains only intended Step 4 changes.
+
+CHANGE POLICY
+
+Implement the smallest complete Step 4 increment.
+
+Do not opportunistically refactor unrelated code.
+
+Do not implement Phase 4D Step 5.
+
+Do not create experiments.
+
+Do not execute or activate Phase 4C conversions.
+
+Do not add scheduler automation.
+
+Do not commit or push.
+
+FINAL REPORT
+
+Provide:
+
+1. Implementation summary
+2. Starting HEAD
+3. Exact files changed
+4. Domain/canonical identity design
+5. Approval and stale-evidence validation
+6. Proposal-construction behavior
+7. Transaction and rollback behavior
+8. Idempotency/concurrency behavior
+9. Schema and privilege design
+10. CLI commands and output semantics
+11. Tests added
+12. Commands run and exact results
+13. Disposable PostgreSQL result
+14. Release build result
+15. Confirmation that experiments, scheduler, and workers were untouched
+16. Remaining risks/deferred work
+17. Final `git status --short`
+18. Final HEAD
+
+Do not commit or push.
+
+
+====================================================================================================
+
+REASONING
+
+WHY THIS IS THE NEXT STEP
+
+Phase 4D Step 3 created explicit human authorization, but it intentionally stopped before creating any downstream workflow records. The safest next increment is therefore not direct experiment creation. It is to translate the exact approved campaign into the already-established Phase 4C conversion-proposal layer.
+
+That keeps the system's authorization chain intact:
+
+ranking and evidence
+→ deterministic campaign plan
+→ deterministic campaign review
+→ explicit campaign approval
+→ bounded Phase 4C proposal materialization
+→ existing Phase 4C review
+→ existing Phase 4C execution
+→ existing Phase 4C activation
+→ eventual experiment creation/queueing only at the later authorized boundary
+
+This design has several advantages:
+
+1. It reuses the proven Phase 4C conversion workflow rather than introducing a second execution path.
+
+2. It preserves defense in depth. Campaign approval authorizes only the creation of the exact bounded proposal set; individual conversion execution and activation controls are not bypassed.
+
+3. It gives Step 4 a precise atomic contract: all selected members are linked to valid Phase 4C proposals, or none are.
+
+4. It makes retries and concurrency auditable through one immutable manifest plus ordered member linkage rows.
+
+5. It prevents semantic ambiguity around the word “execution.” The prompt deliberately prefers “materialization” because this step creates workflow proposals, not experiments or running jobs.
+
+6. It protects the currently running scheduler by requiring isolated builds, parser-only CLI validation, and explicit verification that no scheduler or worker was started, stopped, or signaled.
+
+The prompt uses High reasoning because the difficult parts are cross-layer:
+
+- reconstructing the exact approved evidence;
+- mapping every selected campaign member to the existing Phase 4C proposal canonical contract;
+- handling pre-existing identical proposals;
+- maintaining all-or-nothing behavior;
+- making exact replay and concurrent execution converge;
+- preserving strict runtime privileges;
+- proving that no experiment or scheduler side effect occurred.

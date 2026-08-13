@@ -1,0 +1,312 @@
+Using High reasoning, perform a focused Phase 4D completion audit of the recommendation-campaign subsystem after the completed and committed Step 6 implementation.
+
+REPOSITORY CONTEXT
+
+Repository:
+github.com/vpredoehl/ExpertAdvisor.git
+
+Branch:
+phase0-architecture
+
+Current Phase 4D completion commit:
+8ff8bb8 Phase 4D Step 6: Add campaign-wide proposal review
+
+GOAL
+
+Determine whether Phase 4D is complete, internally consistent, adequately verified, and ready to close before any new recommendation-engine phase or broader experiment automation work begins.
+
+This is primarily a review and verification task.
+
+Do not invent a Phase 4D Step 7.
+
+The current architecture states that Phase 4D ends after explicit atomic Phase 4C proposal review for every exact campaign materialization member. Subsequent proposal execution and activation remain the existing separately invoked Phase 4C per-recommendation manual workflow.
+
+Review the entire implemented Phase 4D chain as one governed workflow:
+
+1. deterministic read-only campaign planning
+2. deterministic read-only campaign review
+3. explicit persisted campaign approval or rejection
+4. explicit materialization of the exact approved campaign into Phase 4C conversion proposals
+5. read-only handoff observation of every exact materialized proposal
+6. explicit atomic Phase 4C review of every exact materialized proposal
+
+PRIMARY QUESTIONS
+
+Answer all of the following:
+
+1. Does the implemented Phase 4D chain match the documented architecture and phase boundaries?
+2. Are all identities, hashes, canonical forms, contract versions, exact member sets, and retry rules consistent across Steps 1–6?
+3. Is authority correctly separated among:
+   - reconstructed campaign plan
+   - reconstructed campaign review
+   - persisted campaign approval
+   - persisted campaign materialization
+   - ordinary Phase 4C proposal review decisions
+   - existing Phase 4C execution and activation records
+4. Can any Phase 4D command:
+   - create an experiment
+   - queue an experiment
+   - execute a proposal
+   - activate a proposal
+   - mutate scheduler state
+   - start workers
+   - infer operator authorization
+   - automatically progress the workflow
+5. Are all mutation commands explicit, separately invoked, safely confirmed, and transactional?
+6. Are dry-run and read-only commands truly read-only, including sequence behavior?
+7. Are exact retries idempotent and conflicting retries rejected deterministically?
+8. Are partial campaign operations impossible or rolled back atomically?
+9. Are locking order and concurrency behavior safe across overlapping campaigns and direct Phase 4C proposal-review commands?
+10. Are CLI parsing, help text, machine-readable output, documentation, tests, Xcode project membership, and repository interfaces mutually consistent?
+11. Are there any misleading claims that Phase 4D performs campaign execution or automatic campaign progression?
+12. Is Phase 4D ready to be declared complete?
+
+PHASE BOUNDARY
+
+Phase 4D must remain governed campaign orchestration only.
+
+It may:
+
+- read an explicit persisted ranking snapshot
+- inspect Phase 4C workflow evidence
+- reconstruct deterministic campaign plans and reviews
+- persist explicit campaign approval or rejection
+- materialize the exact approved member set into existing Phase 4C conversion proposals
+- inspect the exact materialized proposal handoff
+- atomically append ordinary Phase 4C review decisions for all exact materialized members
+
+It must not:
+
+- add a Phase 4D execution subsystem
+- add campaign-level execution or activation authority
+- create experiment rows
+- queue experiments
+- update experiment status or phase
+- start the scheduler
+- start workers
+- execute or activate proposals
+- automatically invoke Phase 4C execution or activation
+- infer approval from score, rank, or policy
+- add scheduler polling for recommendations or campaigns
+- redesign Phase 4C
+- begin another phase
+
+REVIEW SCOPE
+
+Inspect the actual current branch, not only the Step 6 commit.
+
+At minimum, inspect:
+
+- all Phase 4D domain, repository, service, CLI, test, and documentation files
+- the Phase 4C conversion proposal, proposal review, execution, activation, and workflow-observation components used by Phase 4D
+- PostgreSQL migrations, constraints, indexes, triggers, functions, grants, and revokes relevant to Phase 4C/4D
+- ExperimentScheduler.cpp argument detection, parsing, validation, dispatch, help, and command exclusion logic
+- ExpertAdvisor.xcodeproj/project.pbxproj
+- Database/README.md
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+- all Phase 4D step documents
+- existing tests for Steps 1–6
+- current git status and current diff
+
+ARCHITECTURE AUDIT
+
+Trace one campaign from ranking snapshot through Step 6.
+
+For each boundary, identify:
+
+- authoritative input
+- reconstructed versus persisted state
+- canonical identity
+- hash role
+- contract version
+- exact membership ownership
+- transaction owner
+- lock owner
+- retry identity
+- conflict behavior
+- machine-readable output
+- prohibited side effects
+
+Verify that later steps cannot silently substitute:
+
+- a different ranking snapshot
+- a different campaign plan
+- a different campaign review
+- a different approval
+- a changed member set
+- a different proposal
+- a different operator
+- a different reason
+- a different decision
+- a partially reviewed campaign
+
+STEP 6 FOCUSED REVIEW
+
+Closely re-review the newly committed campaign-wide proposal-review implementation.
+
+Verify:
+
+- deterministic operation canonicalization
+- deterministic Phase 4C request ID generation
+- materialization identity verification
+- exact member count and ordinal verification
+- duplicate member and duplicate proposal rejection
+- authoritative latest-review loading
+- same-decision exact-retry recognition
+- opposite-decision conflict
+- same-decision but different operator/reason/request conflict
+- rejection of partial previously satisfied member sets
+- deterministic proposal lock ordering
+- atomic all-member insertion
+- rollback on any failed member insertion
+- no nested transaction or hidden commit
+- dry-run consistent-snapshot behavior
+- no sequence advancement in dry-run
+- safe behavior when the materialization or linked proposal evidence is malformed
+- stable output for reviewed, validated, already-satisfied, invalid, failed, and conflict outcomes
+- direct Phase 4C proposal-review compatibility and concurrency behavior
+
+SHARED PHASE 4C REPOSITORY REVIEW
+
+Review the Step 6 refactor that introduced the transaction-bound proposal-review persistence primitive.
+
+Verify that:
+
+- the original public single-proposal command preserves prior behavior
+- lock acquisition remains owned by the caller
+- the transaction-bound primitive never starts or commits a transaction
+- proposal-not-found behavior remains correct
+- exact retries remain exact
+- request conflicts remain conflicts
+- list-current-reviews returns one deterministic authoritative projection per requested proposal
+- input validation and bounds are correct
+- no SQL injection or parameter-index error was introduced
+- existing Phase 4C tests still cover the old path
+
+DATABASE AND PRIVILEGE AUDIT
+
+Confirm that Step 6 correctly adds no schema object or privilege.
+
+Review the existing schema used by Steps 1–6 for:
+
+- append-only authority
+- immutable identity fields
+- exact foreign-key ownership
+- uniqueness constraints
+- authoritative greatest-ID semantics where documented
+- runtime role privileges
+- sequence privileges
+- trigger enforcement
+- migration repeatability
+
+Do not create a migration merely to make the audit appear active.
+
+TEST AUDIT
+
+Inventory existing tests and map them to the required behavior.
+
+Confirm coverage for:
+
+- pure normalization and canonicalization
+- deterministic identities
+- invalid enum safety
+- zero-member and oversized campaigns
+- identity mismatch
+- count and ordinal mismatch
+- duplicate proposal/member links
+- incomplete or inconsistent handoff evidence
+- first approve
+- first reject
+- exact retry
+- opposite decision
+- changed operator
+- changed reason
+- partial operation conflict
+- transactional rollback
+- dry-run read-only behavior
+- dry-run sequence preservation
+- unrelated experiment preservation
+- direct Phase 4C regression
+- concurrent identical campaign commands
+- concurrent conflicting campaign commands
+- overlapping campaigns
+- direct Phase 4C review racing a campaign review
+- CLI separated and equals-form parsing
+- duplicate flags
+- missing metadata
+- invalid decisions
+- --yes enforcement
+- command mutual exclusion
+- Debug and Release project membership
+
+Add tests only when a concrete coverage gap affects correctness or regression confidence.
+
+VERIFICATION
+
+Run the relevant available verification without interfering with active scheduler or experiment work.
+
+At minimum:
+
+1. git status --short
+2. git diff --check
+3. Release build
+4. focused pure Phase 4D tests
+5. focused PostgreSQL Phase 4D tests against a disposable non-production database/schema
+6. relevant Phase 4C regression tests
+7. CLI parser and help verification
+8. concurrency tests where already supported
+
+Never run destructive tests against the active LSTM database.
+
+Do not start the scheduler or workers.
+
+Do not queue, resume, pause, cancel, retry, infer, analyze, or otherwise alter real experiments.
+
+CHANGE POLICY
+
+Do not change code merely for style, naming preference, speculative abstraction, or future flexibility.
+
+Make changes only if the audit finds a concrete:
+
+- correctness defect
+- atomicity defect
+- concurrency defect
+- idempotency defect
+- authority-boundary violation
+- regression
+- missing high-value test
+- unsafe database behavior
+- misleading documentation statement
+- CLI inconsistency
+- Xcode target omission
+
+Preserve all established canonical identities and contract versions unless an actual correctness defect requires a versioned correction.
+
+Do not redesign the subsystem.
+
+Do not implement the next phase.
+
+DELIVERABLE
+
+Return:
+
+1. executive conclusion: ready or not ready to close Phase 4D
+2. findings ordered by severity, with exact file and line references
+3. full Step 1–6 authority and data-flow assessment
+4. transaction, locking, idempotency, and concurrency assessment
+5. test coverage assessment
+6. verification commands run and exact results
+7. files changed, if any, and why
+8. remaining non-blocking risks or deferred work
+9. explicit confirmation that no Phase 4D Step 7 was invented
+10. recommended commit message only if fixes were required
+
+If no concrete defect is found, make no changes and state clearly that Phase 4D is ready to close.
+
+REASONING
+
+Phase 4D now has a complete governed path from a persisted ranking snapshot to exact campaign-wide Phase 4C proposal review. The architecture explicitly ends Phase 4D at that boundary and returns subsequent execution and activation to the existing separately invoked Phase 4C workflow.
+
+The highest-value next action is therefore not another implementation step. It is a completion audit that examines Steps 1–6 as one system and verifies that authority, identity, persistence, transactions, concurrency, CLI behavior, documentation, and tests all agree.
+
+This audit reduces the risk of carrying a subtle cross-step defect into later work while avoiding scope creep, duplicate execution authority, and an unjustified Phase 4D Step 7.

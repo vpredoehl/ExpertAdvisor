@@ -1,0 +1,510 @@
+Phase 4D Step 3 — Focused Code Review and Commit Readiness Audit
+
+Reasoning level: High
+
+CONTEXT
+
+Phase 4D Step 3 has been implemented but not committed.
+
+Current committed baseline:
+
+75a3d43 Implement Phase 4D Step 2 recommendation campaign review.
+
+Step 3 adds explicit persisted campaign approval/rejection for one exact deterministic campaign review.
+
+The implementation currently includes:
+
+- immutable campaign approval domain model
+- canonical approval identity
+- exact Step 2 review reconstruction and stale-evidence matching
+- approval/rejection CLI commands
+- show/list inspection commands
+- PostgreSQL migration 040
+- append-only repository persistence
+- identical retry idempotency
+- conflicting decision/reviewer/reason rejection
+- zero-selection approval prohibition
+- zero-selection rejection support
+- runtime privilege restrictions
+- migration tests
+- pure tests
+- repository/integration tests
+- concurrency verification
+- documentation updates
+- Xcode project integration
+
+Network access to local PostgreSQL is now working.
+
+The disposable PostgreSQL repository test passed repeatedly:
+
+LSTM_TEST_DB_NAME=phase4d_campaign_test \
+  /tmp/ExperimentRecommendationCampaignApprovalRepositoryTests
+
+The clean Release build succeeded.
+
+The disposable database was dropped afterward.
+
+The attempt to apply the full historical migration ledger to a completely empty database failed at migration 012 because the pre-existing foundational model table was absent. Treat that as an existing bootstrap limitation, not a Step 3 defect, unless the current diff improperly claims empty-database bootstrap support.
+
+GOAL
+
+Perform a focused, high-reasoning code review of the complete current uncommitted Phase 4D Step 3 diff.
+
+Determine whether the implementation is:
+
+- correct
+- internally consistent
+- safe
+- deterministic
+- maintainable
+- aligned with existing Phase 4A–4D conventions
+- ready to commit
+
+Do not redesign the recommendation system.
+
+Do not implement Phase 4D Step 4.
+
+Do not add speculative features.
+
+Make changes only when the review identifies a concrete defect, missing verification, unsafe behavior, misleading output/documentation, schema inconsistency, transaction flaw, identity omission, privilege problem, or regression risk.
+
+PHASE BOUNDARY
+
+Phase 4D Step 3 may persist only immutable campaign approval/rejection evidence.
+
+It must not:
+
+- create experiment rows
+- create conversion proposals
+- create conversion executions
+- create activations
+- queue or resume work
+- modify experiment status, phase, timestamps, or worker state
+- start the scheduler
+- start workers
+- add background scans
+- execute a campaign
+- infer reviewer identity
+- infer approval from scores or rankings
+- modify prior Phase 4C workflow records
+- silently replace historical approval evidence
+
+REVIEW SCOPE
+
+Review the actual current diff, including all Step 3 implementation and hardening changes.
+
+At minimum inspect:
+
+Database:
+- Database/migrations/040_experiment_recommendation_campaign_approval.sql
+- Database/README.md
+
+Domain:
+- Sources/ExperimentRecommendationCampaignApproval.hpp
+- Sources/ExperimentRecommendationCampaignApproval.cpp
+
+Repository:
+- Sources/ExperimentRecommendationCampaignApprovalRepository.hpp
+- Sources/ExperimentRecommendationCampaignApprovalRepository.cpp
+
+Service:
+- Sources/ExperimentRecommendationCampaignApprovalService.hpp
+- Sources/ExperimentRecommendationCampaignApprovalService.cpp
+
+Planner integration:
+- Sources/ExperimentRecommendationCampaignPlanningRepository.hpp
+- Sources/ExperimentRecommendationCampaignPlanningRepository.cpp
+
+Review integration:
+- Sources/ExperimentRecommendationCampaignReview.hpp
+
+CLI:
+- Sources/ExperimentScheduler.cpp
+
+Project:
+- ExpertAdvisor.xcodeproj/project.pbxproj
+
+Tests:
+- Tests/ExperimentRecommendationCampaignApprovalTests.cpp
+- Tests/ExperimentRecommendationCampaignApprovalMigrationTests.sql
+- Tests/ExperimentRecommendationCampaignApprovalRepositoryTests.cpp
+
+Documentation:
+- docs/Phase4DExperimentRecommendationCampaignApproval.rst
+- docs/Phase4DExperimentRecommendationCampaignPlanning.rst
+- docs/Phase4DExperimentRecommendationCampaignReview.rst
+- docs/architecture/Volume_VIII_Recommendation_Engine.md
+
+CORE REVIEW QUESTIONS
+
+1. Canonical identity correctness
+
+Verify that approval identity binds every authorization-relevant field.
+
+Check for omission or ambiguity in:
+
+- approval contract version
+- ranking snapshot ID
+- ranking snapshot canonical identity and hash
+- planning policy canonical identity and hash
+- planning scope canonical identity
+- campaign plan canonical identity and hash
+- campaign review contract version
+- campaign review canonical identity and hash
+- all persisted review summary counts
+- deterministic ordering verification
+- decision
+- reviewer identity
+- reason text
+
+Confirm that:
+
+- variable strings are length-framed
+- locale-sensitive formatting is avoided
+- timestamps are excluded intentionally
+- identical semantic requests produce identical identities
+- changed authorization-relevant fields change identity
+- canonical text, not hashes alone, remains authoritative
+- malformed hashes are rejected deterministically
+- all canonical size limits are internally consistent with schema limits
+
+2. Step 2 reconstruction and stale-evidence protection
+
+Verify the service:
+
+- opens one PostgreSQL transaction
+- loads authoritative ranking/workflow evidence within that transaction
+- reconstructs the Step 1 plan
+- reconstructs and validates the Step 2 review
+- compares the caller-supplied expected review hash exactly
+- rejects mismatches before persistence
+- persists in the same transaction
+- leaves no partial evidence on failure
+
+Inspect whether the newly added transaction-base planner repository overloads preserve the exact behavior of the existing connection overloads.
+
+3. Idempotency and conflicts
+
+Verify the intended rule:
+
+- one immutable terminal decision per exact campaign-review canonical identity
+- exact semantic retry returns the existing row
+- changed decision conflicts
+- changed reviewer conflicts
+- changed reason conflicts
+- approval then rejection conflicts
+- rejection then approval conflicts
+- concurrent identical requests converge to one row
+
+Review the collision-ordinal and advisory-lock approach carefully.
+
+Check:
+
+- lock-key stability
+- hash-collision handling
+- exact canonical comparison
+- race conditions
+- uniqueness constraints
+- sequence behavior
+- behavior if two different canonical reviews share the same hash
+- behavior if duplicate canonical rows somehow already exist
+- deterministic error outcomes
+
+4. PostgreSQL schema correctness
+
+Review migration 040 for:
+
+- correct types
+- valid CHECK constraints
+- exact size constraints
+- bytewise collation where required
+- restrictive foreign key
+- idempotent rerun behavior
+- correct indexes
+- correct sequence ownership/use
+- no mutation triggers
+- least-privilege grants
+- no unintended PUBLIC privileges
+- no UPDATE, DELETE, or TRUNCATE capability for runtime
+- no ability for runtime to inject generated ID or created_at
+- compatibility with the repository INSERT and SELECT SQL
+- migration naming and numbering consistency
+
+Pay special attention to whether:
+
+- column-level INSERT privileges behave as intended
+- table-level INSERT privilege checks are correct
+- sequence privileges are sufficient but not excessive
+- canonical text columns are too large or unnecessarily duplicative
+- approval rows can become inconsistent through direct SQL despite application validation
+- persisted identity hash and canonical text can be mismatched by the runtime role
+- additional database constraints are necessary to enforce immutable consistency
+
+Do not add expensive SQL-level hash recomputation unless existing project conventions support it.
+
+5. Repository mapping and persistence
+
+Verify:
+
+- column order and mapping
+- all fields are persisted and read back
+- all persisted rows are revalidated
+- list ordering is deterministic
+- limits are bounded
+- filters are safe
+- SQL parameters are correctly typed
+- optional decision handling is correct
+- existing-identical detection is exact
+- conflicts cannot silently pass
+- failure paths do not commit
+- transaction ownership is clear
+- read-only show/list operations remain read-only
+
+Check for issues in:
+
+- `ApprovalColumns()`
+- `MapApproval()`
+- `FindByReviewCanonical()`
+- `Matches()`
+- `PersistRecommendationCampaignApproval()`
+- lookup by ID
+- lookup by review identity
+- list filtering and ordering
+
+6. CLI parsing and routing
+
+Review all argument forms:
+
+- separated options
+- `--option=value` forms
+- mutual exclusion
+- orphan option rejection
+- required metadata
+- ranking snapshot requirement
+- policy option routing
+- show/list exclusivity
+- decision filter validation
+- limit validation
+- top-level command counting
+- command dispatch
+
+Confirm there is no path that dereferences missing optionals.
+
+Confirm no approval/list/show option accidentally routes into scheduler execution.
+
+7. Output and safety claims
+
+Verify machine-readable output is truthful.
+
+For write commands:
+
+- `campaign_approval_recorded=true` only when a new row is inserted
+- identical replay reports false for new mutation
+- campaign execution false
+- proposal creation false
+- experiment creation/modification false
+- activation false
+- scheduler false
+- worker false
+
+For show/list:
+
+- `read_only=true`
+- no misleading mutation claims
+
+Check stable field naming, escaping, ordering, and exit statuses.
+
+8. Validation semantics
+
+Review:
+
+- reviewer normalization
+- reason normalization
+- ASCII control handling
+- embedded NUL handling
+- empty and oversized inputs
+- Unicode behavior
+- hash format validation
+- zero-selection policy
+- malformed enum handling
+- summary consistency validation
+
+Identify any mismatch between C++ validation and PostgreSQL CHECK constraints.
+
+9. Tests
+
+Assess whether the tests actually prove the intended behavior.
+
+Check for:
+
+- false-positive substring assertions
+- stale binaries
+- missing rebuilds
+- insufficient cleanup
+- nondeterministic concurrency assertions
+- disposable database safeguards
+- schema isolation
+- runtime-role privilege checks
+- sequence checks
+- rollback verification
+- unchanged experiment rows and timestamps
+- unchanged Phase 4C tables
+- exact persisted provenance
+- missing snapshot handling
+- malformed reviewer/reason/hash handling
+- zero-selection behavior
+- deterministic show/list output
+- bounded list behavior
+- migration rerun behavior
+
+Add or correct tests only for concrete gaps.
+
+10. Documentation accuracy
+
+Verify documentation matches code exactly regarding:
+
+- one decision per exact review
+- idempotency
+- conflict semantics
+- advisory-lock purpose
+- canonical authority
+- zero-selection policy
+- transaction boundary
+- permissions
+- no experiment execution
+- no scheduler behavior
+- migration behavior
+- disposable test procedure
+- historical empty-database bootstrap limitation
+
+Do not claim the entire migration ledger supports empty-database bootstrap.
+
+11. Maintainability and regression risk
+
+Check:
+
+- naming consistency
+- duplication
+- include ordering
+- API layering
+- unnecessary exposure of operators or helpers
+- whether defaulted `operator==` is appropriate and stable
+- whether ExperimentScheduler.cpp contains excessive domain logic
+- whether planner repository overloads are minimal and safe
+- whether both Xcode targets include the new production sources exactly once
+- whether any unrelated behavior was changed
+
+VERIFICATION
+
+After review and any justified fixes, run:
+
+1. `git diff --check`
+
+2. `plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj`
+
+3. Strict pure-test builds with:
+
+- `-std=c++20`
+- `-Wall`
+- `-Wextra`
+- `-Wpedantic`
+- `-Werror`
+
+4. Run the Step 3 pure tests at least three consecutive times.
+
+5. Strictly rebuild the Step 3 repository test from current source.
+
+Use the pinned Homebrew libpqxx include path as a system include if required so third-party warnings are not promoted to project errors.
+
+6. Create only the disposable database if absent:
+
+```bash
+createdb phase4d_campaign_test 2>/dev/null || true
+```
+
+7. Run:
+
+```bash
+LSTM_TEST_DB_NAME=phase4d_campaign_test \
+  /tmp/ExperimentRecommendationCampaignApprovalRepositoryTests
+```
+
+Run it repeatedly enough to exercise concurrency confidence.
+
+8. Rebuild and run directly relevant Phase 4A–4D repository regressions from current source, not stale `/tmp` binaries.
+
+9. Run CLI parser validation for:
+
+- missing required approval metadata
+- approve/reject mutual exclusion
+- orphan review metadata
+- malformed review hash
+- invalid decision filter
+- oversized list limit
+- show/list command conflicts
+
+10. Run a clean Release build:
+
+```bash
+xcodebuild \
+  -project ExpertAdvisor.xcodeproj \
+  -scheme "LSTM Release" \
+  -configuration Release \
+  clean build \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+11. Verify no LSTM application process was launched by testing.
+
+12. Drop `phase4d_campaign_test` only after all disposable-database tests pass.
+
+13. Confirm:
+
+- no staged changes
+- no commit
+- no push
+- HEAD remains `75a3d43` unless the user changed it externally
+
+CHANGE POLICY
+
+If no concrete defect is found:
+
+- do not modify code
+- report the implementation ready to commit
+
+If a concrete defect is found:
+
+- make the smallest targeted correction
+- add or adjust the narrowest relevant test
+- rerun affected verification
+- explain exactly why the change was necessary
+
+Do not perform opportunistic refactoring.
+
+Do not redesign the approval lifecycle.
+
+Do not implement campaign execution.
+
+FINAL REPORT
+
+Provide:
+
+1. Review verdict: ready to commit, ready after fixes, or not ready
+2. Findings ordered by severity
+3. Exact fixes made, if any
+4. Canonical identity assessment
+5. Transaction and stale-evidence assessment
+6. Idempotency/concurrency assessment
+7. Schema and privilege assessment
+8. CLI and output assessment
+9. Test-quality assessment
+10. Documentation assessment
+11. Commands run and exact results
+12. PostgreSQL disposable-database result
+13. Release build result
+14. Remaining risks or deferred work
+15. Files changed by the review
+16. Final `git status --short`
+17. Final HEAD
+
+Do not commit or push.

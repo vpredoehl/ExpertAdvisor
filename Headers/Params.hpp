@@ -9,6 +9,8 @@
 #ifndef Params_h
 #define Params_h
 
+#include <cstddef>
+
 enum class CandleTF { m15 = 0, Hour = 1, Hr4 = 2, Day = 3, Week = 4 };
 inline constexpr int time_cycle_seconds(CandleTF tc)
 {
@@ -56,23 +58,54 @@ inline constexpr int prediction_horizon_for(CandleTF tf)
 }
 
 
-constexpr auto hidden_size = 64;
-constexpr auto feature_size = 14;
-constexpr auto n_in = feature_size + hidden_size;
-constexpr auto n_out = hidden_size;
+inline constexpr std::size_t default_hidden_size = 64;
+inline constexpr std::size_t default_window_size = 64;
+inline constexpr int default_epoch_count = 60;
+inline constexpr std::size_t default_prediction_horizon = 6;
+inline constexpr float default_c_next_threshold = .0008f;
+inline constexpr std::size_t default_num_layers = 1;
+inline constexpr int default_normalization_version = 1;
+inline constexpr float default_core_lr_mult = 120.0f;
+inline constexpr float default_head_weight_lr_mult = 25.0f;
+inline constexpr float default_head_bias_lr_mult = 2.5f;
+
+inline std::size_t hidden_size = default_hidden_size;
+constexpr auto feature_size = 32;
+//constexpr auto n_in = feature_size + hidden_size;
+inline std::size_t n_out = default_hidden_size;
+constexpr size_t direction_output_size = 3;
 
 // sequence of features
 constexpr CandleTF candle_duration = CandleTF::m15; // default cycle
-constexpr auto window_size = 64;//window_size_for(candle_duration);
+inline std::size_t window_size = default_window_size;//window_size_for(candle_duration);
 constexpr auto batch_size = 256;
-constexpr auto epoch_count = 100;
-constexpr auto prediction_horizon = 16;//prediction_horizon_for(candle_duration);
+inline int epoch_count = default_epoch_count;
+inline std::size_t prediction_horizon = default_prediction_horizon;//prediction_horizon_for(candle_duration);
+inline std::size_t num_layers = default_num_layers;
+inline int normalization_version = default_normalization_version;
+inline float core_lr_mult = default_core_lr_mult;
+inline float head_weight_lr_mult = default_head_weight_lr_mult;
+inline float head_bias_lr_mult = default_head_bias_lr_mult;
 
 constexpr float kFeatureScale = 1000.0f;
-constexpr float c_next_threshold = .0008f;  //c_next_threshold_for(candle_duration);
+inline float c_next_threshold = default_c_next_threshold;  //c_next_threshold_for(candle_duration);
 
 constexpr size_t rolling_vol_lookback = 32;
 constexpr size_t rolling_ret_lookback = 32;
+// Class weights for 3-class direction loss: order (Down, Neutral, Up)
+// Adjust these to rebalance the contribution of each class to the total loss.
+constexpr float kClassWeightDown    = 1.0f;
+constexpr float kClassWeightNeutral = 1.0f;
+constexpr float kClassWeightUp      = 1.0f;
+
+// Utility to combine per-class losses using the weights above.
+// loss_total = w_up * loss_up + w_down * loss_down + w_neutral * loss_neutral
+inline constexpr float weighted_direction_loss(float lossDown, float lossNeutral, float lossUp)
+{
+    return kClassWeightDown * lossDown
+         + kClassWeightNeutral * lossNeutral
+         + kClassWeightUp * lossUp;
+}
 // Column index for close feature: c_t = log(close_t / close_{t-1})
 constexpr size_t closeCol = 1;
 
@@ -87,4 +120,3 @@ using Batch = Window;
 
 
 #endif /* Params_h */
-

@@ -1,0 +1,274 @@
+PHASE 6C REVIEW CORRECTIONS
+STAGED COMMIT REVIEW
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6C was committed as:
+
+    2e1fc63 Implement Phase 6C immutable follow-up proposal administrative review
+
+A subsequent independent review found and corrected:
+
+- locale-sensitive integer rendering in Phase 6C machine output;
+- missing migration assertions for PUBLIC privileges and trigger execution context;
+- weak presentation assertions that relied on substring matching;
+- imprecise documentation about reason validation and machine rendering.
+
+A focused review-of-review then independently verified those corrections, strengthened two tests, ran focused C++ and PostgreSQL verification, executed deliberate negative controls, completed an incremental Release build, verified arm64 architecture, and concluded:
+
+    READY TO STAGE PHASE 6C REVIEW CORRECTIONS
+
+The current intended correction set is exactly:
+
+- Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp
+- Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql
+- Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp
+- docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst
+
+The correct next step is to stage exactly those four files and perform one final staged commit review before creating the follow-up commit.
+
+This prompt is intentionally narrower than the previous reviews. It should not redo the full Phase 6C implementation review. It should verify that:
+
+1. the staged diff contains exactly the approved four-file correction set;
+2. staging did not accidentally include unrelated files;
+3. the final staged patch matches the independently reviewed worktree patch;
+4. no correction was lost, partially staged, or altered;
+5. the staged patch is internally consistent and ready to commit;
+6. no commit is created unless the reviewer is explicitly asked to do so in a later step.
+
+The review must preserve scheduler processes, production data, DerivedData, branch, and HEAD.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a focused final staged commit review of the Phase 6C review corrections on the current `phase6` branch.
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6D or any later phase.
+
+Do not add activation, execution, scheduling, queueing, worker launch, experiment creation, experiment modification, campaign-success declaration, profitability, statistical validation, or automatic approval behavior.
+
+Do not create a commit.
+
+Do not push.
+
+Do not modify files unless the staged review identifies a concrete defect in the four-file correction set. If a defect is found, fix only that defect, leave the correction unstaged, and conclude that the staged set is not ready.
+
+EXPECTED STAGED FILES
+
+The staged correction set must contain exactly:
+
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp`
+- `docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst`
+
+No other file may be staged.
+
+The worktree should contain no additional unstaged modifications to those four files after staging.
+
+REPOSITORY RULES
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do not switch branches.
+- Preserve the current `phase6` branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not push.
+- Do not stage or unstage files.
+- Preserve DerivedData.
+- Use Release builds only.
+- Do not run Clean.
+- Do not interrupt scheduler or worker processes.
+- Do not modify production database data.
+- Do not run `LSTM_Release --scheduler-status`; it is not read-only and updates scheduler-owned metadata.
+- Inspect scheduler and worker processes only with operating-system process tools.
+
+At the beginning, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git status --short`
+4. `git diff --cached --name-status`
+5. `git diff --cached --stat`
+6. `git diff --cached --check`
+7. `git diff --name-status`
+8. `git diff --stat`
+9. `git diff --check`
+
+Confirm all of the following before reviewing content:
+
+- branch is `phase6`;
+- HEAD is still `2e1fc63d77af04949090a28f67be03b4fbea7be1`;
+- exactly the four expected files are staged;
+- no unexpected file is staged;
+- none of the four expected files has an unstaged remainder;
+- no unrelated unstaged modification exists;
+- staged and unstaged whitespace checks pass.
+
+If any condition fails, report it clearly and do not alter staging.
+
+REVIEW METHOD
+
+Review the staged patch only:
+
+    git diff --cached
+
+Do not rely solely on prior review summaries.
+
+Independently compare the staged patch against:
+
+- the committed Phase 6C implementation;
+- the Phase 6C domain and presentation contracts;
+- migration 043;
+- the focused tests;
+- the Phase 6C feature documentation.
+
+Confirm the staged patch is the same logical correction set that was independently reviewed.
+
+PRESENTATION REVIEW
+
+Verify the staged production change:
+
+- uses locale-independent decimal rendering for all Phase 6C integer machine fields;
+- covers review event ID, proposal ID, review contract version, and not-found event ID;
+- preserves text percent escaping;
+- preserves field ordering;
+- preserves all explicit negative authority fields;
+- does not alter canonical identity, persistence, repository behavior, or database state;
+- does not introduce unrelated formatting changes.
+
+MIGRATION TEST REVIEW
+
+Verify the staged SQL test changes:
+
+- inspect the actual trigger function through the trigger relationship;
+- verify the function belongs to the current schema;
+- assert no PUBLIC execution privilege;
+- assert `SECURITY INVOKER`;
+- assert the exact hardened quoted `search_path`;
+- assert no PUBLIC sequence privilege;
+- use PostgreSQL catalog and ACL APIs correctly;
+- remain compatible with migration 043;
+- contain no production migration change.
+
+PRESENTATION TEST REVIEW
+
+Verify the staged C++ test changes:
+
+- use a valid hostile locale facet;
+- prove the pre-fix locale behavior would corrupt comma-delimited output;
+- compare complete machine records rather than permissive substrings;
+- cover integer rendering, field ordering, escaping, timestamp rendering, all negative authority fields, and final newline;
+- compare the complete not-found record;
+- avoid environment-dependent assumptions;
+- contain no production scheduler or database dependency outside the disposable test harness.
+
+DOCUMENTATION REVIEW
+
+Verify the staged documentation:
+
+- describes reason validation exactly as implemented;
+- does not claim full Unicode whitespace classification or normalization;
+- accurately states locale-independent decimal rendering;
+- accurately states percent escaping of delimiter-bearing and non-ASCII bytes;
+- preserves Phase 6C's non-authorizing boundary.
+
+AUTHORITY AND SCOPE AUDIT
+
+Search the staged diff for any accidental addition of:
+
+- activation authority;
+- execution authority;
+- follow-up authorization;
+- queueing;
+- scheduling;
+- scheduler signaling;
+- worker launch;
+- experiment creation or modification;
+- success declaration;
+- profitability;
+- statistical validation;
+- automatic approval.
+
+Distinguish safety declarations and tests from actual capabilities.
+
+Confirm no scheduler source, CLI source, migration source, repository source, or domain source is staged.
+
+VERIFICATION
+
+Because this is a final staged commit review, avoid unnecessarily repeating the full prior regression suite.
+
+Run:
+
+1. `git diff --cached --check`
+2. `git diff --check`
+3. focused Phase 6C pure contract test if its existing executable or exact prior compile command is readily available;
+4. focused Phase 6C repository/presentation test if its existing executable or exact prior compile command is readily available;
+5. Phase 6C migration assertions against a disposable database only if the exact prior harness is readily available;
+6. `plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj`
+7. `xcodebuild -list -project ExpertAdvisor.xcodeproj`
+8. incremental Release build only if any source changed after the previous successful review or if staged content differs from the reviewed patch;
+9. executable arm64 architecture verification if a Release build is run.
+
+Do not apply migration 043 to production.
+
+Do not run scheduler status.
+
+Do not modify or signal running scheduler or worker processes.
+
+If no files changed after the prior successful verification and the staged patch exactly matches the reviewed worktree patch, it is acceptable to rely on the prior successful focused tests and Release build while still performing all Git, patch, project, and scope checks in this review. State that reliance explicitly rather than claiming tests were rerun.
+
+FINAL WORKTREE AUDIT
+
+At the end, confirm:
+
+- branch remains `phase6`;
+- HEAD remains `2e1fc63d77af04949090a28f67be03b4fbea7be1`;
+- no commit was created;
+- no push occurred;
+- exactly the four expected files remain staged;
+- no staged file changed during review;
+- no unexpected unstaged file was created or modified;
+- DerivedData was preserved;
+- no scheduler or worker process was interrupted;
+- `LSTM_Release --scheduler-status` was not run;
+- production database was not modified.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Findings ordered by severity.
+3. Exact staged-file inventory.
+4. Staged presentation correction assessment.
+5. Staged migration-test assessment.
+6. Staged presentation-test assessment.
+7. Staged documentation assessment.
+8. Authority-boundary and scope assessment.
+9. Verification performed.
+10. Prior verification relied upon, if any.
+11. Worktree and index audit.
+12. Remaining risks or unverified assumptions.
+13. `git status --short`.
+14. `git diff --cached --stat`.
+15. `git diff --stat`.
+16. Recommended commit message.
+17. Recommendation on whether the staged corrections are ready to commit.
+
+Conclude with exactly one of:
+
+READY TO COMMIT PHASE 6C REVIEW CORRECTIONS
+
+or
+
+NOT READY TO COMMIT PHASE 6C REVIEW CORRECTIONS

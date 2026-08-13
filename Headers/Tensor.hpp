@@ -12,6 +12,7 @@
 #include <array>
 #include <vector>
 #include <list>
+#include <deque>
 #include <ranges>
 #include <iostream>
 
@@ -46,7 +47,20 @@ class Tensor
     float prev_close = 0.0f;
     string table;
     DataSet ds;
+    std::vector<float> raw_open;
     std::vector<float> raw_close;
+    std::vector<float> raw_high;
+    std::vector<float> raw_low;
+    std::vector<PriceTP> raw_time;
+    RollingMean rangeMean{rolling_vol_lookback};
+    // EMA state for various periods
+    bool has_ema = false;
+    float ema8 = 0.0f;
+    float ema21 = 0.0f;
+    float ema50 = 0.0f;
+    // ATR state
+    bool has_atr = false;
+    float atr14 = 0.0f;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
@@ -84,11 +98,13 @@ public:
 
     
     Tensor(string name) : table { name }    {}
+    const string& TableName() const { return table; }
     
     void Add(Feature f);
     
     DataSet::const_iterator begin() const  { return ds.cbegin(); }
     DataSet::const_iterator end() const { return ds.cend(); }
+    size_t RowCount() const { return ds.size(); }
     
     auto GetWindow(DataSet::const_iterator iter) const -> Window
     {
@@ -111,6 +127,10 @@ public:
     }
 
     float RawCloseAtIterator(DataSet::const_iterator it) const;
+    float RawHighAtIterator(DataSet::const_iterator it) const;
+    float RawLowAtIterator(DataSet::const_iterator it) const;
+    float RawOpenAtIterator(DataSet::const_iterator it) const;
+    PriceTP RawTimeAtIterator(DataSet::const_iterator it) const;
 
 };
 
@@ -129,4 +149,3 @@ void printMatrix(const char* name, const Mat& mat)
 }
 
 #endif /* Tensor_hpp */
-

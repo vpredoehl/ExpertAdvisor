@@ -1,0 +1,581 @@
+Using High reasoning, implement Phase 4B Step 1: the deterministic advisory recommendation evaluation foundation for the LSTM Research Platform.
+
+ARCHITECTURE AUTHORITY
+
+This implementation must conform to the permanent architecture documentation already committed under:
+
+docs/architecture/
+
+The primary governing references are:
+
+- Volume I — Foundation and Engineering Constitution
+- Volume VIII — Recommendation Engine
+- ADR-0001 — PostgreSQL as the durable source of truth
+- ADR-0002 — Deterministic experiment identity
+- ADR-0003 — Advisory recommendation evaluation
+- ADR-0004 — Scheduler ownership boundaries
+
+If the current implementation, this prompt, and the architecture appear inconsistent, stop and identify the conflict before changing runtime behavior.
+
+GOAL
+
+Implement the first Phase 4B increment that adds a deterministic, explainable, persisted advisory evaluation layer over existing Phase 4A recommendations.
+
+This step must remain strictly advisory.
+
+It may evaluate, classify, score, explain, and persist recommendation evaluation evidence.
+
+It must not approve recommendations, create experiments, queue experiments, alter experiment lifecycle state, change scheduler behavior, or interfere with running or pending work.
+
+CURRENT PHASE BOUNDARY
+
+Phase 4A already provides recommendation identity, candidate generation, persistence, duplicate handling, scoring/review foundations, and explicit advisory boundaries as documented in the existing Phase 4 files and Volume VIII.
+
+Phase 4B Step 1 should introduce the evaluation foundation only.
+
+Do not implement later Phase 4B approval, conversion, queueing, or automation behavior.
+
+ALLOWED CAPABILITIES
+
+This step may:
+
+- read persisted recommendations
+- read persisted recommendation scans
+- read completed experiment evidence
+- read inference and analysis evidence
+- evaluate recommendation eligibility
+- classify blocked, duplicate, stale, incomplete, or advisory-ready recommendations
+- calculate deterministic score components supported by persisted evidence
+- calculate a deterministic advisory total score
+- generate stable explanation data
+- persist evaluation runs and evaluation results
+- expose explicit CLI commands for evaluation and inspection
+- support dry-run evaluation
+- emit stable human-readable and machine-readable output
+- add additive PostgreSQL migrations
+- add repository, service, domain, CLI, tests, and documentation needed for this step
+
+FORBIDDEN CAPABILITIES
+
+This step must not:
+
+- approve recommendations
+- reject recommendations automatically
+- expire recommendations automatically
+- convert recommendations into experiments
+- create experiment rows
+- queue experiments
+- resume, retry, pause, cancel, or reprioritize experiments
+- update experiment status or phase
+- modify scheduler worker limits
+- enter scheduler polling
+- change continuation policy behavior
+- change checkpoint policy behavior
+- mutate model rows
+- mutate inference or analysis evidence
+- run training
+- run inference
+- run analysis
+- stop or restart the scheduler
+- stop or restart PostgreSQL
+- signal worker processes
+- alter active experiment state
+- add profitability metrics that are not already persisted
+- introduce opaque machine-learning-based recommendation ranking
+
+OPERATIONAL SAFETY
+
+Assume the scheduler and experiments may be active.
+
+All implementation and verification must avoid interference with live work.
+
+Do not:
+
+- connect tests to the live LSTM database unless provably read-only
+- run integration commands that queue or launch work
+- hold locks on scheduler-owned experiment rows
+- use SELECT FOR UPDATE on active experiment, model, inference, analysis, checkpoint, continuation, or scheduler-owned rows for advisory evaluation
+- perform long-running schema changes
+- run destructive migrations
+- run full integration tests without first inspecting their behavior
+
+Use isolated test schemas or disposable databases for write tests.
+
+Use short transactions.
+
+Prefer read-only snapshots for evidence loading.
+
+PRIMARY DELIVERABLE
+
+Create a cohesive recommendation evaluation subsystem with:
+
+1. Pure deterministic evaluation policy.
+2. Typed evaluation inputs and outputs.
+3. Persisted evaluation runs.
+4. Persisted per-recommendation evaluation results.
+5. Persisted score components.
+6. Stable advisory classifications.
+7. Stable explanations and reason codes.
+8. CLI evaluation and inspection commands.
+9. Dry-run behavior.
+10. Tests proving no experiment or scheduler mutation.
+
+DOMAIN MODEL
+
+Introduce explicit typed concepts equivalent to:
+
+RecommendationEvaluationPolicy
+RecommendationEvaluationRun
+RecommendationEvaluationInput
+RecommendationEvaluationResult
+RecommendationScoreComponent
+RecommendationEligibility
+RecommendationEvaluationDisposition
+RecommendationEvaluationExplanation
+
+Exact names may follow existing project conventions.
+
+The domain layer must remain pure and free of PostgreSQL, CLI parsing, scheduler interaction, and hidden I/O.
+
+EVALUATION STATES
+
+Define stable advisory states such as:
+
+- eligible
+- advisory_ready
+- insufficient_evidence
+- blocked_active_duplicate
+- blocked_pending_duplicate
+- completed_duplicate
+- duplicate_recommendation
+- stale_source_evidence
+- unsupported_recommendation_family
+- invalid_persisted_evidence
+
+Use only states justified by current behavior and persisted evidence.
+
+Do not silently discard blocked or duplicate recommendations.
+
+Every evaluated recommendation must remain inspectable.
+
+SCORING POLICY
+
+Implement a deterministic, explicit, versioned scoring policy.
+
+Use only currently persisted evidence.
+
+Potential components may include:
+
+- source leader score
+- source inference accuracy
+- evidence completeness
+- checkpoint stability
+- continuation evidence
+- class-balance quality
+- neutral-prediction penalty
+- novelty
+- active conflict penalty
+- duplicate penalty
+- uncertainty penalty
+- recommendation-family priority
+
+Do not include a component merely because it sounds useful.
+
+A component may be implemented only when:
+
+- its source evidence is persisted
+- its meaning is documented
+- its normalization is deterministic
+- missing-data behavior is defined
+- its weight is explicit
+- it can be explained in output
+- tests can verify it
+
+Do not fabricate profitability, profit factor, Sharpe ratio, drawdown, trading costs, or expected return.
+
+Profitability is explicitly outside this step.
+
+NUMERIC RULES
+
+All score calculations must:
+
+- reject NaN and infinity
+- use locale-independent numeric parsing and formatting
+- define stable numeric precision
+- define normalization ranges
+- define bounds
+- define missing-data handling
+- avoid dependence on row order
+- avoid dependence on wall-clock time unless a captured evaluation timestamp is explicitly part of run identity
+- produce deterministic totals
+
+Stable tie-breaking for any ordered output must not use insertion order.
+
+PERSISTENCE
+
+Add only additive migrations.
+
+Prefer new tables owned by the recommendation subsystem.
+
+A suitable schema may include concepts equivalent to:
+
+recommendation_evaluation_run
+recommendation_evaluation_result
+recommendation_evaluation_component
+
+Exact table names must follow current repository conventions.
+
+Persist enough information to reconstruct:
+
+- evaluation run identity
+- scoring policy version
+- evaluator version
+- recommendation identity
+- source scan
+- source evidence references
+- eligibility state
+- blocking or duplicate reason
+- each score component
+- each component weight
+- normalized component value
+- component contribution
+- missing-evidence indicators
+- final advisory score
+- stable explanation
+- created timestamp
+- deterministic ordering metadata where required
+
+CONSTRAINTS
+
+Require appropriate:
+
+- primary keys
+- foreign keys
+- unique constraints
+- check constraints
+- indexes
+- ownership rules
+- append-only or immutable behavior where consistent with current architecture
+
+Do not add triggers that modify experiment rows.
+
+Do not add cascading deletes that can destroy experiment evidence.
+
+Migrations must be safe to inspect while the scheduler is running.
+
+Do not automatically apply migrations to the live database during this task unless the environment is explicitly isolated.
+
+IDENTITY AND IDEMPOTENCY
+
+Evaluation identity must be versioned and deterministic.
+
+It should include, as applicable:
+
+- recommendation identity
+- scoring policy version
+- evaluator version
+- evidence snapshot or evidence watermark identity
+- relevant policy identity
+
+Repeated evaluation with identical authoritative inputs must be idempotent.
+
+A changed scoring policy version must create distinguishable historical evidence.
+
+Do not overwrite prior evaluation history silently.
+
+Canonical serialization must define:
+
+- field order
+- null representation
+- numeric formatting
+- collection ordering
+- version prefix
+
+Hashes may accelerate lookup but must not replace canonical comparison where collisions matter.
+
+REPOSITORY RESPONSIBILITIES
+
+Repository classes own:
+
+- SQL
+- typed row mapping
+- existence and duplicate queries
+- transaction-bound inserts
+- idempotent lookup
+- result/component loading
+- pagination or bounded lists
+- database error mapping
+
+Repositories must not own scoring formulas or recommendation policy.
+
+Raw pqxx rows must not escape repository boundaries.
+
+SERVICE RESPONSIBILITIES
+
+Service classes own:
+
+- loading evaluation evidence
+- validating evidence completeness
+- selecting the evaluation policy
+- invoking pure evaluation logic
+- classifying eligibility
+- orchestrating persistence
+- handling dry-run
+- producing structured results
+- preserving transaction boundaries
+- mapping repository conflicts into stable service outcomes
+
+The service must not launch scheduler work or mutate experiments.
+
+CLI
+
+Add explicit opt-in commands consistent with current CLI style.
+
+The interface should support operations equivalent to:
+
+- evaluate recommendations for a scan
+- evaluate one recommendation
+- list evaluation results
+- inspect one evaluation result
+- explain score components
+- dry-run evaluation
+- stable machine-readable output
+
+Exact flag names should follow current naming conventions.
+
+All evaluation commands must state or expose that:
+
+- no experiment was created
+- no experiment was queued
+- no scheduler state was changed
+
+Dry-run must perform no persistence.
+
+MACHINE-READABLE OUTPUT
+
+Machine-readable output must use:
+
+- stable event names
+- stable field names
+- deterministic field ordering where current conventions require it
+- explicit nulls
+- stable reason codes
+- safe escaping
+- no unescaped control characters
+- no ambiguity between zero, missing, blocked, and failed
+
+Include fields equivalent to:
+
+- evaluation_run_id
+- recommendation_id
+- recommendation_semantic_identity
+- scoring_policy_version
+- evaluator_version
+- eligibility
+- disposition
+- final_score
+- component_count
+- missing_evidence_count
+- block_reason
+- explanation
+- persisted
+- experiment_created=false
+- experiment_queued=false
+- scheduler_modified=false
+
+HUMAN-READABLE OUTPUT
+
+Human output should clearly show:
+
+- recommendation ID
+- symbol
+- horizon
+- family
+- source experiment/evidence
+- evaluation status
+- final advisory score
+- major positive components
+- penalties
+- missing evidence
+- duplicate/block state
+- explanation
+- explicit advisory-only disclaimer
+
+TESTING
+
+Add focused tests for:
+
+Pure domain:
+
+- deterministic score components
+- deterministic total score
+- normalization
+- bounds
+- missing evidence
+- invalid numeric input
+- stable reason codes
+- stable explanation
+- deterministic ordering
+- policy version identity
+
+Repository:
+
+- evaluation run insert/load
+- result insert/load
+- component insert/load
+- uniqueness
+- foreign keys
+- constraints
+- append-only behavior where applicable
+- idempotent retry
+- conflicting retry
+- rollback after partial failure
+- pagination/bounds
+
+Service:
+
+- evaluate one recommendation
+- evaluate a scan
+- dry-run non-persistence
+- blocked active duplicate
+- blocked pending duplicate
+- completed duplicate
+- insufficient evidence
+- stale evidence
+- malformed evidence
+- zero recommendations
+- all blocked
+- mixed eligible and blocked
+- repeated identical evaluation
+- changed policy version
+- structured error mapping
+
+Concurrency:
+
+- two identical evaluation requests
+- same recommendation and policy
+- unrelated recommendations
+- conflicting persisted results
+- exactly one authoritative result for one idempotency identity
+
+CLI:
+
+- argument parsing
+- mutual exclusion
+- dry-run
+- machine-output stability
+- human-output disclaimer
+- safe escaping
+- no implicit scheduler command
+- no experiment creation flags accepted
+
+REGRESSION SAFETY
+
+Add regression tests proving evaluation does not insert or update any experiment row.
+
+Capture before/after values for scheduler-owned fields including:
+
+- status
+- phase
+- current_epoch
+- target_epochs
+- worker_pid
+- current_operation
+- continuation fields
+- checkpoint policy fields
+
+Also prove no model, inference, analysis, checkpoint, or continuation evidence row is modified.
+
+Do not use real experiment IDs for destructive test fixtures.
+
+DOCUMENTATION
+
+Update the relevant implementation documentation and architecture references only where necessary.
+
+Do not rewrite Volume I or redesign Volume VIII.
+
+Document:
+
+- scoring policy version
+- implemented components
+- normalization
+- missing-data behavior
+- evaluation identity
+- schema
+- CLI
+- dry-run
+- advisory boundary
+- no-profitability limitation
+- operational safety
+- deferred later steps
+
+If implementation reveals an architectural conflict, do not silently alter architecture. Report it and propose the smallest ADR or volume correction required.
+
+IMPLEMENTATION DISCIPLINE
+
+Before editing:
+
+1. Inspect current branch and git status.
+2. Inspect existing Phase 4 recommendation code and migrations.
+3. Inspect Volume I, Volume VIII, and ADR-0001 through ADR-0004.
+4. Identify current repository/service/CLI conventions.
+5. Identify existing test database behavior.
+6. Identify commands that could affect the live scheduler.
+
+Preserve unrelated worktree changes.
+
+Do not use `git add .`.
+
+Do not commit, push, merge, or open a PR unless explicitly requested.
+
+Do not perform broad refactors.
+
+Do not move scoring logic into ExperimentScheduler.cpp.
+
+Do not duplicate existing semantic identity logic.
+
+Do not redefine Phase 4A duplicate semantics.
+
+ACCEPTANCE CRITERIA
+
+This step is complete only when:
+
+- evaluation is deterministic
+- score components are explainable
+- missing-data behavior is explicit
+- evaluation history is versioned
+- persistence is idempotent
+- dry-run performs no writes
+- CLI output is stable
+- blocked and duplicate recommendations remain inspectable
+- no experiment or scheduler state is changed
+- no profitability metric is fabricated
+- tests pass in an isolated environment
+- documentation matches actual implementation
+- the architecture boundary remains intact
+
+FINAL RESPONSE
+
+At completion provide:
+
+1. Architecture conformance summary.
+2. Files changed.
+3. Schema changes.
+4. Domain types added.
+5. Repository changes.
+6. Service changes.
+7. CLI commands and examples.
+8. Scoring components actually implemented.
+9. Components deliberately omitted and why.
+10. Test commands and results.
+11. Operational safety verification.
+12. Remaining Phase 4B work.
+13. Suggested commit message.
+
+REASONING
+
+Phase 4B should begin by creating a trustworthy advisory evaluation foundation, not by granting execution authority.
+
+The project already has experiment evidence, recommendation identity, persistence, duplicate handling, and a permanent architecture framework. The next safe increment is to transform persisted recommendations into deterministic, versioned, explainable evaluation evidence while preserving strict separation between recommendation analysis and experiment execution.
+
+This step gives future ranking, approval, profitability integration, and controlled automation a reliable evidence layer. It also allows the platform to evaluate recommendations while current experiments continue uninterrupted.

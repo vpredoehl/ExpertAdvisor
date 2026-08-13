@@ -1,0 +1,321 @@
+Use model_reasoning_effort="xhigh".
+
+Implement Phase 6A only.
+
+This is the first implementation increment after the Phase 6 architecture readiness review concluded:
+
+READY TO BEGIN PHASE 6
+
+Phase 6A must define the contract and implement one pure, database-free, immutable builder for a follow-up proposal derived from the exact Phase 5A assessment and Phase 5C policy decision.
+
+Do not implement later Phase 6 steps.
+
+REPOSITORY SAFETY
+
+- Do NOT pull, fetch, merge, rebase, reset, or switch branches.
+- Work only from the current local checkout.
+- Preserve the current branch, HEAD, unrelated worktree changes, and DerivedData.
+- Do not create a commit or stage files.
+- Perform an Xcode Release build only. Do not perform a Debug build.
+- Expected baseline: branch phase5; HEAD includes committed Phase 5 Step 5c; worktree initially clean.
+
+Before editing, capture branch, HEAD, git status, staged files, repository guidance, and Xcode project state.
+
+PHASE 6A GOAL
+
+Add one pure, immutable Phase 6A domain contract that builds a deterministic follow-up proposal from:
+
+1. one exact immutable Phase 5A campaign outcome assessment;
+2. one exact immutable Phase 5C campaign outcome policy decision;
+3. no database, CLI, scheduler, operator approval, or execution authority.
+
+The object is only an advisory candidate for later operator review. It is not an approval, activation, execution request, experiment, recommendation campaign, Phase 4D campaign materialization, scheduler work item, follow-up authorization, profitability evidence, statistical-significance evidence, or declaration of campaign success.
+
+ENTITY NAME
+
+Use:
+
+    RecommendationCampaignFollowUpProposal
+
+Use that name consistently unless a concrete existing naming conflict requires a narrowly better alternative. Do not use a generic Materialization name that could be confused with Phase 4D.
+
+PHASE BOUNDARY
+
+Phase 6A must remain pure, immutable, deterministic, database-free, read-only, non-persistent, advisory, non-authoritative, non-approving, non-activating, non-executing, and non-scheduler-aware.
+
+It must not:
+
+- include pqxx;
+- add SQL, migration, repository, service, CLI, formatter, or preview command;
+- modify ExperimentScheduler.cpp;
+- create or mutate experiments, recommendations, campaigns, or scheduler state;
+- queue work or launch workers;
+- persist operator review;
+- approve, reject, activate, execute, or authorize follow-up;
+- call Phase 4C or Phase 5 execution/activation/launch;
+- consume Step 5B formatted output;
+- reopen scientific evidence;
+- recompute metrics or deltas;
+- reproduce Step 5C eligibility logic.
+
+UPSTREAM CONTRACTS
+
+Treat these as immutable upstream inputs:
+
+- Phase 5A assessment contract version 2;
+- Phase 5C policy contract version 1;
+- Phase 5C policy decision contract version 1.
+
+Consume their public immutable typed values. Do not modify Phase 5A, 5B, or 5C unless an actual compile-time defect makes the downstream module impossible.
+
+The builder must verify:
+
+1. supported assessment contract;
+2. supported policy contract;
+3. supported policy-decision contract;
+4. decision embedded assessment version equals supplied assessment version;
+5. decision embedded assessment canonical text exactly equals supplied assessment canonical text;
+6. decision embedded assessment hash equals supplied assessment hash;
+7. campaign identities match exactly;
+8. materialization identities match exactly;
+9. ordered member identities match exactly;
+10. member counts match;
+11. the decision remains explicitly non-authorizing;
+12. the decision is eligible only for operator review.
+
+Fail closed on every mismatch. Never use hash equality alone where canonical text is available.
+
+ELIGIBILITY RULE
+
+Build only when:
+
+    followUpEligibility == EligibleForOperatorReview
+
+and:
+
+    followUpAuthorized == false
+
+and the campaign interpretation is favorable.
+
+Do not recalculate eligibility. Trust only the validated immutable Step 5C decision after exact identity alignment.
+
+Refuse neutral, unfavorable, mixed, inconclusive, insufficient, noneligible, unsupported-version, and identity-mismatched inputs with stable explicit reasons.
+
+DOMAIN MODEL
+
+Create an immutable contract with compile-time safety semantics equivalent to:
+
+- readOnly = true
+- databaseFree = true
+- persistent = false
+- advisory = true
+- authoritative = false
+- approved = false
+- activated = false
+- executionAuthorized = false
+- followUpAuthorized = false
+- schedulerWork = false
+- declaresCampaignSuccess = false
+
+Suggested types:
+
+- RecommendationCampaignFollowUpProposalIdentity
+- RecommendationCampaignFollowUpProposalMember
+- RecommendationCampaignFollowUpProposalSummary
+- RecommendationCampaignFollowUpProposal
+- a narrow builder function
+- an input type only if genuinely needed
+
+Use private construction and a builder pattern consistent with Phase 5A and 5C.
+
+Bind and expose at minimum:
+
+- Phase 6A proposal contract version;
+- exact assessment version, canonical text, and hash;
+- exact policy version, canonical text, and hash;
+- exact policy-decision version, canonical text, and hash;
+- complete campaign identity;
+- complete materialization identity;
+- ordered exact member identities;
+- member count;
+- Step 5C evidence sufficiency;
+- Step 5C campaign interpretation;
+- Step 5C follow-up eligibility;
+- explicit non-authorization flags;
+- stable proposal provenance/reasons where useful;
+- deterministic proposal identity.
+
+Do not duplicate the full Step 5A evidence or Step 5C metric truth tables unless required for unambiguous identity or later review provenance. Prefer exact upstream canonical bindings.
+
+CANONICAL IDENTITY
+
+Define proposal contract version 1.
+
+Canonical identity must be deterministic, locale-independent, versioned, unambiguous, stable under upstream canonical ordering, invariant to observedAt, and sensitive to every behaviorally relevant upstream identity.
+
+Canonical text is authoritative. Hash is only a tagged accelerator. Use the existing hash helper.
+
+Length-frame embedded canonical strings and delimiter-capable text.
+
+Bind:
+
+- proposal contract version;
+- all safety semantics;
+- assessment version/canonical/hash;
+- policy version/canonical/hash;
+- decision version/canonical/hash;
+- campaign approval ID/canonical/hash;
+- materialization ID, approval linkage, contract version, member count, canonical/hash;
+- ordered members including expectedExperimentId;
+- evidence sufficiency;
+- campaign interpretation;
+- follow-up eligibility;
+- followUpAuthorized=false;
+- approved=false;
+- activated=false;
+- executionAuthorized=false;
+- schedulerWork=false;
+- declaresCampaignSuccess=false.
+
+Exclude observedAt, time, PID, CLI formatting, repository metadata, and future approval/activation state.
+
+Define and document a conservative maximum Phase 6A canonical-text size suitable for later persistence planning. Reject overflow before construction.
+
+VALIDATION
+
+Use immutable typed construction wherever possible.
+
+If malformed version/canonical tests require a seam, add only a narrow plain-data validation view or internal validation function that is side-effect free, non-capability-bearing, shared by production and tests, and faithful to production conversion.
+
+Do not use const_cast, raw-memory mutation, ABI assumptions, placement tricks, undefined behavior, or weakened Phase 5 constructors.
+
+REFUSAL REASONS
+
+Use stable reasons such as:
+
+- assessment_contract_unsupported
+- policy_contract_unsupported
+- policy_decision_contract_unsupported
+- assessment_identity_mismatch
+- campaign_identity_mismatch
+- materialization_identity_mismatch
+- member_identity_mismatch
+- decision_not_eligible_for_operator_review
+- favorable_campaign_interpretation_required
+- follow_up_authorization_must_be_false
+- proposal_canonical_size_exceeded
+
+Do not silently return an empty proposal. Prefer fail-closed explicit exceptions consistent with neighboring domain code.
+
+TESTING
+
+Add focused pure Phase 6A tests. Reuse existing Step 5 fixtures/builders; do not copy the Step 5A or Step 5C truth tables.
+
+Required coverage:
+
+1. Eligible favorable campaign produces a proposal.
+2. Compile-time and runtime proof of every non-authority safety flag.
+3. Fixed literal golden proposal canonical text.
+4. Fixed literal golden proposal hash.
+5. Expected hash is not computed from the expected canonical literal.
+6. Exact assessment/decision alignment.
+7. Campaign mismatch rejection.
+8. Materialization mismatch rejection.
+9. Ordered member mismatch rejection.
+10. Assessment canonical mismatch rejection.
+11. Assessment hash mismatch rejection.
+12. Policy canonical/hash mismatch where safely testable.
+13. Decision canonical/hash mismatch where safely testable.
+14. Neutral refusal.
+15. Unfavorable refusal.
+16. Mixed refusal.
+17. Inconclusive refusal.
+18. Insufficient-evidence refusal.
+19. Proof Phase 6A does not recalculate Step 5C eligibility.
+20. Input-order invariance through upstream canonicalization.
+21. Locale independence.
+22. observedAt invariance.
+23. Changed assessment evidence changes identity.
+24. Changed policy changes identity.
+25. Changed decision identity changes identity.
+26. Safe inherited negative-zero/nonfinite behavior.
+27. Canonical-size boundary acceptance and rejection.
+28. Unsupported versions through a safe seam if necessary.
+29. No public default construction of identity or proposal.
+30. No public malformed identity construction path.
+
+Run focused ASan and UBSan.
+
+DOCUMENTATION AND ADR
+
+Create a focused Phase 6A document covering purpose, entity name, inputs, immutable output, identity grammar, eligibility prerequisite, alignment validation, canonical-size limit, explicit non-authority, non-goals, and future Phase 6 boundaries.
+
+Update Volume VIII only as needed.
+
+Create one focused ADR establishing:
+
+- distinct entity name;
+- canonical text as authoritative;
+- exact binding to assessment v2, policy v1, and decision v1;
+- eligibility is not approval or authorization;
+- no persistence or scheduler authority;
+- persistence, review, activation, and execution remain separate later steps.
+
+Do not authorize Phase 6B-6F.
+
+PROJECT INTEGRATION
+
+Add Phase 6A source/header to both existing Xcode build targets consistently. Add a focused standalone C++ test. Do not introduce Swift, Objective-C++, XCTest, or restructure the project.
+
+VERIFICATION
+
+Run:
+
+1. Phase 6A focused tests.
+2. Phase 6A ASan.
+3. Phase 6A UBSan.
+4. Phase 5A assessment tests.
+5. Phase 5B integration/reporting tests.
+6. Phase 5C policy tests.
+7. Relevant Phase 4D materialization tests.
+8. Relevant Phase 5 campaign-status tests.
+9. git diff --check.
+10. git diff --cached --check.
+11. Whitespace checks for untracked Phase 6A files.
+12. Xcode project validation.
+13. Incremental Release build only:
+
+    xcodebuild -project ExpertAdvisor.xcodeproj       -scheme "LSTM Release"       -configuration Release       -destination "platform=macOS,arch=arm64"       build
+
+Do not run Debug or clean DerivedData. Treat the existing LLVM22.xctoolchain Info.plist warning as environmental only if unchanged and non-fatal.
+
+WORKTREE SAFETY
+
+At completion confirm branch and HEAD unchanged, no commit, nothing staged, no unrelated changes, no prohibited repository operation, and list every changed/untracked file.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Exact Phase 6A contract.
+3. Naming rationale.
+4. Dependency and boundary assessment.
+5. Identity grammar and canonical-size rationale.
+6. Validation and refusal semantics.
+7. Test coverage.
+8. Documentation and ADR changes.
+9. Verification results.
+10. Worktree safety audit.
+11. Remaining risks.
+12. Exact verdict.
+
+Conclude with exactly one of:
+
+READY FOR INDEPENDENT REVIEW
+
+or
+
+NOT READY FOR INDEPENDENT REVIEW
+
+If not ready, distinguish mandatory corrections from optional improvements.

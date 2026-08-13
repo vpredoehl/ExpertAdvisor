@@ -1,0 +1,59 @@
+Use model_reasoning_effort=“xhigh”.
+
+Implement Phase 6B only.
+
+Phase 6A has been independently reviewed and committed.
+
+Objective
+
+Implement the operator preview and persistence layer while preserving
+the authority boundaries established by Phase 6A.
+
+Phase 6B responsibilities
+
+-   Persist immutable RecommendationCampaignFollowUpProposal objects.
+-   Introduce a repository and schema dedicated to Phase 6 follow-up
+    proposals.
+-   Support read-only preview of persisted proposals.
+-   Preserve proposal identity exactly as produced by Phase 6A.
+-   Do not approve, activate, execute, queue, or schedule proposals.
+
+Out of scope
+
+-   No operator approval.
+-   No activation.
+-   No execution.
+-   No scheduler integration.
+-   No experiment creation.
+-   No follow-up authorization.
+
+Repository constraints
+
+-   No pull/fetch/merge/rebase/reset.
+-   Preserve HEAD.
+-   No commits.
+-   Release build only.
+
+Tests
+
+Cover round-trip persistence, duplicate identities, canonical/hash
+preservation, immutable reload, preview, malformed persistence
+rejection.
+
+Verification
+
+Run focused Phase 6B tests, Phase 6A regression, Phase 5A/B/C
+regression, relevant Phase 4D tests, Release build, git diff –check.
+
+Deliverable
+
+Provide executive summary, schema, repository design, preview design,
+identity preservation, tests, verification, worktree audit, risks.
+
+Conclude with exactly one of:
+
+READY FOR INDEPENDENT REVIEW
+
+or
+
+NOT READY FOR INDEPENDENT REVIEW

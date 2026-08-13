@@ -1,0 +1,240 @@
+Use model_reasoning_effort="xhigh".
+
+You are implementing Phase 5 Step 5b in the current local checkout.
+
+This is a focused implementation task that builds on the completed and independently reviewed Phase 5 Step 5a campaign outcome-assessment domain model.
+
+Repository and execution rules
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do NOT switch branches.
+- Work only from the current local checkout.
+- Preserve the current branch and existing unrelated worktree changes.
+- Do not create a commit.
+- Do not clean DerivedData.
+- Use the existing DerivedData for incremental verification.
+- Perform an Xcode Release build only.
+- Do not perform a Debug build.
+
+Primary objective
+
+Implement the next coherent Phase 5 Step 5b integration layer that assembles authoritative campaign, materialization, lifecycle, provenance, source-scientific, and result-scientific evidence and feeds it into the pure Step 5a function:
+
+BuildRecommendationCampaignOutcomeAssessment(...)
+
+Step 5b must integrate Step 5a without weakening its domain boundaries.
+
+Required discovery before editing
+
+1. Inspect the current Phase 5, Phase 4C, and Phase 4D architecture and documentation.
+2. Trace the authoritative persisted identities and loaders for:
+   - campaign approval
+   - campaign materialization
+   - materialization members
+   - conversion proposal/review/execution/activation
+   - experiment lifecycle/status
+   - source model and source analysis evidence
+   - result model and result analysis evidence
+3. Identify the established repository/service/CLI conventions used by nearby Phase 5 commands.
+4. Determine the smallest correct Step 5b scope from the existing architecture and naming patterns.
+5. Reuse existing authoritative loaders and validators rather than duplicating their rules.
+
+Mandatory Step 5a review obligations
+
+The independent Step 5a review identified two Step 5b integration obligations. Implement them explicitly:
+
+1. Populate the Step 5a materialization input with the persisted campaign-approval canonical identity hash that belongs to the materialization.
+
+2. Propagate known upstream workflow or lifecycle inconsistency through RecommendationCampaignOutcomeAssessmentMemberEvidence::inputConsistency rather than attempting to reconstruct, erase, or silently normalize that inconsistency.
+
+Do not bypass either obligation.
+
+Functional requirements
+
+Step 5b must:
+
+- load one exact persisted recommendation-campaign materialization;
+- preserve exact persisted member ordinal and member identity;
+- preserve exact source experiment, recommendation, ranking-member, proposal, and expected downstream experiment identity;
+- bind the campaign approval and materialization using their authoritative canonical texts and hashes;
+- derive lifecycle evidence from the authoritative Phase 5 campaign-status/workflow evidence rather than inventing a second lifecycle classifier;
+- preserve known upstream inconsistency as explicit input consistency;
+- gather source and result scientific evidence through existing authoritative model/analysis relationships;
+- retain incomplete or malformed downstream scientific evidence when Step 5a is designed to diagnose it;
+- fail only when top-level campaign/materialization/member identity is untrustworthy or when an existing authoritative loader requires failure;
+- produce deterministic member ordering and deterministic output;
+- remain read-only;
+- avoid campaign-success policy;
+- avoid follow-up authorization;
+- avoid scheduler, worker, queueing, activation, retry, or experiment mutation behavior.
+
+Scientific evidence requirements
+
+Use the existing project definitions and persisted records. Do not invent replacement metrics or recompute authoritative values differently.
+
+At minimum, determine whether the available authoritative evidence supports:
+
+- inference accuracy;
+- leader score;
+- any other already-persisted metric that Step 5a can safely carry by stable metric identity.
+
+For every included metric:
+
+- use a stable canonical metric identity;
+- preserve missing values as missing;
+- select NumericDelta only when source and result values are semantically comparable;
+- select Unsupported when a value may be carried but a numeric delta is not scientifically valid;
+- bind the exact comparison context used by Step 5a:
+  - symbol
+  - prediction horizon
+  - threshold
+  - window size
+  - label definition
+  - inference range
+
+Do not compare values across changed contexts as though they were directly comparable.
+
+Architecture requirements
+
+Prefer the established project structure, likely consisting of narrowly scoped repository/service/CLI pieces if that matches nearby Phase 5 conventions.
+
+Keep:
+
+- database access out of the Step 5a domain module;
+- SQL and row mapping in repository code;
+- orchestration in a service or command layer;
+- formatting separate from authoritative assessment construction;
+- immutable Step 5a outputs builder-controlled.
+
+Do not add a new persistence table for the assessment unless the existing architecture explicitly requires it. Step 5a defines a point-in-time, non-persistent assessment.
+
+Do not modify:
+
+- LSTM architecture
+- training math
+- inference math
+- optimizer behavior
+- feature engineering
+- label generation
+- model serialization
+- leader_score calculation
+- experiment selection
+- scheduler queue selection
+- worker behavior
+- continuation policy
+- Phase 5 Steps 1-4 behavior
+
+Database and transaction requirements
+
+- The operation must be read-only.
+- Use one consistent database snapshot for the complete assessment.
+- Follow the repository's established read-only transaction isolation convention.
+- Do not acquire write locks or advisory locks unless the existing read-only evidence loader already requires one and the architecture clearly justifies it.
+- Do not insert, update, delete, activate, queue, retry, or launch anything.
+- Do not add or modify database schema unless existing checked-in architecture unambiguously requires a migration for Step 5b. If no migration is required, state that explicitly.
+
+CLI and output
+
+If the established Phase 5 architecture calls for a CLI surface, add one narrowly scoped command following existing parser, conflict-detection, confirmation, output, and percent-encoding conventions.
+
+A read-only command must not require --yes.
+
+The output must:
+
+- identify the materialization and assessment contract versions;
+- include assessment canonical hash;
+- include aggregate outcome and summary counts;
+- include one deterministic member row per materialized ordinal;
+- expose lifecycle, consistency, outcome, diagnostics, provenance, comparisons, and relevant source/result values;
+- use explicit nulls for missing optional values;
+- remain machine-parseable and deterministic;
+- avoid declaring that the campaign succeeded beyond the exact Step 5a aggregate classification.
+
+Do not invent a CLI name blindly. First inspect current naming conventions and choose the most consistent name.
+
+Testing requirements
+
+Add focused tests covering at least:
+
+- exact campaign/materialization identity propagation;
+- persisted campaign-approval identity hash propagation;
+- deterministic member ordering;
+- consistent lifecycle mapping;
+- known upstream inconsistency propagation through inputConsistency;
+- successful comparable source/result evidence;
+- context-changed result evidence;
+- missing source metric;
+- missing result metric;
+- missing result model or analysis identity;
+- mismatched expected/result experiment identity;
+- duplicate expected experiment identity across members;
+- duplicate result experiment, model, and typed-result identities;
+- proposal-only or non-terminal member;
+- failed member;
+- cancelled member;
+- unknown or malformed lifecycle evidence;
+- one-snapshot read-only behavior;
+- CLI parsing and command conflicts if a CLI is added;
+- deterministic output and percent encoding if output is added;
+- no database writes.
+
+Use repository-backed tests where the new behavior depends on SQL mapping or transaction semantics. Use pure tests for service and formatting behavior where possible.
+
+Verification
+
+After implementation:
+
+1. Run all focused Step 5b tests.
+2. Re-run the Step 5a outcome-assessment tests.
+3. Run affected Phase 5 campaign-status and nearby campaign workflow regressions.
+4. Run AddressSanitizer and UndefinedBehaviorSanitizer where supported for pure C++ tests.
+5. Run database-backed tests required by the new repository behavior.
+6. Run tracked and untracked whitespace checks.
+7. Perform an incremental Xcode Release build only:
+
+   xcodebuild -project ExpertAdvisor.xcodeproj \
+     -scheme "LSTM Release" \
+     -configuration Release \
+     -destination "platform=macOS,arch=arm64" \
+     build
+
+Do not clean and do not use a fresh DerivedData directory unless the existing one is unusable. If it is unusable, explain the concrete reason before using an alternative.
+
+Worktree safety
+
+Before editing, record the current branch, HEAD, and worktree status.
+
+At the end:
+
+- identify every file you modified;
+- identify any unrelated pre-existing or concurrently appearing changes;
+- do not modify or stage unrelated files;
+- do not create a commit.
+
+Completion report
+
+Provide:
+
+- discovered Step 5b architectural scope;
+- implementation summary;
+- identity and provenance flow;
+- lifecycle and inconsistency mapping;
+- scientific metric mapping;
+- database transaction behavior;
+- CLI and output contract, if added;
+- files modified;
+- tests executed and results;
+- sanitizer results;
+- Release build result;
+- remaining concerns;
+- explicit recommendation:
+
+READY FOR INDEPENDENT REVIEW
+
+or
+
+NOT READY FOR INDEPENDENT REVIEW

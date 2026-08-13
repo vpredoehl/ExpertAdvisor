@@ -1,0 +1,10 @@
+version	relative_path	policy	purpose	opaque
+h1-directory-policy-v1	.	expected_root	disposable evidence root	false
+h1-directory-policy-v1	final-assurance	expected_directory	retained final-assurance raw execution logs	false
+h1-directory-policy-v1	mutation-records	expected_directory	retained targeted negative-case records	false
+h1-directory-policy-v1	raw-acl-origin	expected_directory	retained raw ACL catalog captures	false
+h1-directory-policy-v1	raw-lock	expected_directory	retained raw lock catalog captures	false
+h1-directory-policy-v1	runtime-artifacts	expected_directory	retained runtime evidence artifacts	false
+h1-directory-policy-v1	data	disposable_workspace	PostgreSQL data directory owned by disposable cluster	true
+h1-directory-policy-v1	s	disposable_workspace	PostgreSQL Unix-socket directory owned by disposable cluster	true
+h1-directory-policy-v1	restore	disposable_workspace	disposable restore staging directory	true

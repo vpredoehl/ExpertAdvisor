@@ -1,0 +1,58 @@
+PHASE 4C STEP 4 — FOCUSED IMPLEMENTATION
+
+GOAL
+
+Implement the next phase after durable manual review: manual conversion
+execution of an explicitly approved conversion proposal.
+
+PHASE BOUNDARY
+
+Step 4 is responsible only for converting an already-approved proposal
+into a new experiment record. It must not automatically execute
+anything.
+
+Requirements
+
+-   Require proposal disposition = approved.
+-   Revalidate proposal integrity before conversion.
+-   Create exactly one experiment from a proposal.
+-   Make conversion idempotent using a durable conversion record or
+    equivalent.
+-   Prevent duplicate experiment creation under concurrent requests.
+-   Preserve complete provenance linking: recommendation → proposal →
+    review history → experiment.
+-   Reject pending_review and rejected proposals.
+-   Reject repeated conversions with deterministic replay.
+-   Do not add scheduler automation or background processing.
+-   Do not change Phase 3 continuation behavior.
+-   Do not change recommendation ranking or proposal generation.
+
+Review and implement using existing repository conventions, migrations,
+transaction boundaries, CLI patterns, tests, and documentation.
+
+DELIVERABLES
+
+1.  Database migration.
+2.  Repository.
+3.  Service.
+4.  CLI commands.
+5.  Tests (migration, repository, CLI).
+6.  Documentation.
+7.  Xcode project integration.
+8.  Build verification.
+9.  No commit.
+
+REASONING
+
+Phase 4C Step 3 established durable human approval without execution.
+Step 4 is intentionally separated so that approval and execution remain
+distinct audit events.
+
+The implementation should make conversion transactional, deterministic,
+and idempotent. A proposal should produce at most one experiment, even
+under retries or concurrent requests. Provenance must remain complete so
+future analysis can trace every experiment back to the originating
+recommendation, proposal, and review decision.
+
+Scheduler behavior must remain unchanged. Experiment execution continues
+to be a separate operational concern after successful manual conversion.

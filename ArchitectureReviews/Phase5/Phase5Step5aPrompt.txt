@@ -1,0 +1,281 @@
+Using xhigh reasoning, implement Phase 5 Step 5a only.
+
+This is the first implementation increment of the Recommendation Campaign Outcome Assessment feature.
+
+Repository state
+
+Expected branch:
+phase5
+
+Expected worktree:
+clean
+
+Begin by verifying:
+
+git branch --show-current
+git rev-parse HEAD
+git status --short
+git diff --check
+git diff --cached --check
+
+If the repository is not clean, stop and report why.
+
+Do not fetch.
+Do not pull.
+Do not merge.
+Do not rebase.
+Do not switch branches.
+
+Purpose
+
+Implement only the pure domain contract and deterministic assessment model.
+
+Do NOT implement:
+
+- PostgreSQL repository access
+- CLI parsing
+- scheduler integration
+- worker interaction
+- service layer
+- persistence
+- documentation beyond comments required for the new types
+
+Architecture
+
+This feature is a read-only assessment.
+
+It compares:
+
+frozen recommendation evidence
+
+↓
+
+exact materialized experiment
+
+↓
+
+final experiment analysis evidence
+
+↓
+
+deterministic comparison
+
+It does NOT:
+
+- evaluate recommendation policy
+- determine whether the recommendation was scientifically good
+- decide whether another experiment should be run
+- score campaigns
+- modify database state
+- communicate with the scheduler
+- infer process liveness
+- persist assessment results
+
+Terminology
+
+Use the term:
+
+Recommendation Campaign Outcome Assessment
+
+Do not use simply "Outcome" for externally visible names.
+
+Future CLI (not implemented in this step) will be:
+
+--recommendation-campaign-outcome-assessment
+
+Domain requirements
+
+Design immutable domain structures representing:
+
+assessment identity
+
+campaign identity
+
+materialization identity
+
+member identity
+
+source evidence
+
+result evidence
+
+comparison context
+
+comparison classification
+
+assessment summary
+
+member assessment
+
+Define explicit comparison classifications including at minimum:
+
+Comparable
+
+ContextChanged
+
+MissingSourceEvidence
+
+MissingResultEvidence
+
+ResultNotTerminal
+
+MetricUnavailable
+
+UnsupportedComparison
+
+Requirements
+
+Every comparison must be deterministic.
+
+A comparison is Comparable only if all scientifically relevant context matches.
+
+At minimum compare:
+
+symbol
+
+prediction horizon
+
+threshold
+
+window size
+
+label definition
+
+metric identity
+
+inference range
+
+If any differ:
+
+classification becomes ContextChanged
+
+no numeric delta is produced
+
+Delta values are optional.
+
+Never compute a delta when contexts differ.
+
+Metric identities
+
+Metrics are identified by both:
+
+metric name
+
+metric value
+
+Never compare metrics solely because both contain floating-point values.
+
+Example:
+
+infer_accuracy
+
+leader_score
+
+validation_accuracy
+
+must never be mixed.
+
+Assessment semantics
+
+Assessment is:
+
+read-only
+
+point-in-time
+
+non-persistent
+
+non-authoritative
+
+The assessment does not declare a campaign successful or unsuccessful.
+
+It reports only evidence.
+
+Testing
+
+Add comprehensive pure unit tests covering:
+
+identical contexts
+
+different symbols
+
+different horizons
+
+different thresholds
+
+different metric names
+
+missing source evidence
+
+missing result evidence
+
+non-terminal result
+
+unsupported comparisons
+
+deterministic equality
+
+deterministic ordering
+
+null delta generation
+
+context mismatch
+
+No PostgreSQL tests.
+
+No scheduler tests.
+
+No CLI tests.
+
+No integration tests.
+
+No filesystem access.
+
+Constraints
+
+No database schema changes.
+
+No repository changes.
+
+No services.
+
+No CLI.
+
+No scheduler.
+
+No process inspection.
+
+No documentation edits except comments directly associated with new types.
+
+Deliverables
+
+Implement:
+
+pure domain types
+
+comparison rules
+
+comparison classification
+
+deterministic assessment model
+
+unit tests
+
+Do not proceed beyond Step 5a.
+
+Leave all edits unstaged.
+
+Final report
+
+Report:
+
+files added
+
+files modified
+
+test coverage
+
+remaining work for Step 5b
+
+Do not implement Step 5b.
+

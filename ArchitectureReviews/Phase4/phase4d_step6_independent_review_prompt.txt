@@ -1,0 +1,450 @@
+Using High reasoning, perform a focused independent code review of the current uncommitted Phase 4D Step 6 implementation.
+
+GOAL
+
+Review the actual current uncommitted Phase 4D Step 6 changes for correctness, architectural consistency, regression risk, concurrency safety, transaction safety, idempotence, maintainability, test sufficiency, documentation accuracy, and readiness to commit.
+
+Phase 4D Step 6 is intended to provide one explicit operator-driven campaign-level convenience that applies a single approve or reject decision atomically to every exact Phase 4C conversion proposal belonging to one persisted Phase 4D campaign materialization.
+
+This must remain an orchestration layer over the existing authoritative Phase 4C proposal-review model. It must not introduce a second review authority, execute proposals, activate conversions, create experiments, queue experiments, modify experiment state, or interact with the scheduler or workers.
+
+REVIEW MODE
+
+This is an independent review, not an implementation task.
+
+Do not redesign the recommendation subsystem.
+
+Do not invent new Phase 4 features.
+
+Do not make changes unless the review identifies a concrete defect, missing verification, misleading documentation, unsafe test behavior, or inconsistency between domain, repository, service, CLI, tests, project configuration, schema assumptions, and documented behavior.
+
+If changes are required:
+
+- make only the smallest justified correction;
+- explain each correction;
+- rerun the directly affected verification;
+- do not commit, push, or stage files.
+
+FIRST: ESTABLISH THE EXACT BASELINE
+
+Run and record:
+
+git status --short
+git rev-parse HEAD
+git log -1 --oneline
+git diff --stat
+git diff --check
+
+Confirm that HEAD is still the committed Phase 4D Step 5 baseline and that the working tree contains the uncommitted Step 6 implementation.
+
+Inspect the complete current diff, not merely the implementation summary.
+
+At minimum inspect:
+
+- all new Phase 4D Step 6 domain files;
+- all new repository and service files;
+- changes to the Phase 4C proposal-review repository;
+- CLI parsing, validation, dispatch, help text, and command-conflict logic;
+- Xcode project integration;
+- all new pure and PostgreSQL tests;
+- all changed Phase 4D and architecture documentation;
+- the authoritative Step 4 materialization validator/repository;
+- the Step 5 handoff repository/service and workflow projection;
+- the existing Phase 4C proposal-review, execution, activation, and workflow rules;
+- relevant schema definitions and constraints.
+
+PHASE BOUNDARY TO VERIFY
+
+The implementation may:
+
+- load one persisted campaign materialization;
+- use only its persisted materialization-member rows as membership authority;
+- validate the complete immutable campaign;
+- accept exactly approve or reject;
+- persist ordinary Phase 4C review rows;
+- attach one normalized operator and reason to all generated rows;
+- provide deterministic identity, idempotence, diagnostics, dry-run, and machine-readable output;
+- make Step 5 immediately reflect the resulting Phase 4C review state.
+
+It must not:
+
+- execute proposals;
+- activate conversions;
+- create experiments;
+- queue experiments;
+- alter experiment status, phase, timestamps, worker fields, or checkpoint state;
+- start, signal, query for control purposes, or otherwise affect the scheduler or workers;
+- infer campaign membership from recommendations, rankings, symbols, horizons, policy output, or current proposal queries;
+- modify Step 4 manifests or members;
+- perform subset review;
+- automatically progress after review;
+- overwrite or delete review history;
+- reinterpret authoritative Phase 4C review semantics;
+- repair malformed evidence.
+
+CORE REVIEW QUESTIONS
+
+1. DOCUMENTED RESPONSIBILITY
+
+Verify that the committed roadmap and architecture support this Step 6 responsibility and do not assign a materially different responsibility to Step 6.
+
+Confirm that the documentation accurately describes what was implemented and does not overstate campaign execution or broader progression.
+
+2. MEMBERSHIP AUTHORITY
+
+Verify that membership comes exclusively from:
+
+- experiment_recommendation_campaign_materialization
+- experiment_recommendation_campaign_materialization_member
+
+Confirm that exact persisted conversion_proposal_id values are used and that output preserves persisted member ordinal order.
+
+Look for any accidental inference from:
+
+- recommendation_id;
+- source_experiment_id;
+- ranking membership;
+- proposal attributes;
+- current recommendation queries;
+- symbol/horizon matching;
+- Step 5 formatted output.
+
+3. STEP 4 VALIDATION REUSE
+
+Verify that the write and dry-run paths use the authoritative Step 4 materialization loader/validator sufficiently to detect:
+
+- malformed manifests;
+- unsupported versions;
+- count mismatches;
+- ordinal gaps or reordering;
+- duplicate member IDs;
+- duplicate proposal links;
+- identity/hash mismatches;
+- proposal provenance mismatches;
+- incomplete materializations.
+
+Confirm no weaker duplicate validation was introduced in parallel.
+
+4. PHASE 4C REVIEW AUTHORITY
+
+Verify that:
+
+- every inserted row is an ordinary Phase 4C review row;
+- the existing greatest-review-decision-primary-key rule remains authoritative;
+- no new Phase 4D review disposition or mutable campaign review status was introduced;
+- existing Phase 4C show/history commands can observe the rows;
+- Step 5 derives its state from the same authoritative evidence.
+
+5. WORKFLOW ELIGIBILITY
+
+Examine this especially carefully.
+
+Determine whether checking that Step 5 handoff integrity is “consistent” is sufficient to establish that every proposal is still eligible for a new review decision.
+
+Explicitly verify behavior for proposals that are:
+
+- unreviewed;
+- already approved;
+- already rejected;
+- reviewed by an unrelated request with the same decision;
+- executed;
+- activated;
+- linked to an experiment;
+- partially progressed;
+- supported by malformed or contradictory workflow evidence.
+
+Confirm that Step 6 cannot append a new authoritative review after execution or activation where existing Phase 4C rules forbid that.
+
+Do not rely on an informal assumption that execution necessarily implies a prior review; trace the actual repository and service invariants.
+
+6. TRANSACTIONAL ATOMICITY
+
+Verify that one actual review command uses exactly one write transaction.
+
+Confirm:
+
+- all members are validated before the first insert;
+- all inserts occur within the same transaction;
+- any failure rolls back every inserted review row;
+- no nested transaction exists;
+- no helper commits unexpectedly;
+- the new transaction-bound Phase 4C persistence primitive preserves existing single-review behavior;
+- read-only dry-run uses no write transaction or side-effecting lock;
+- no sequence is advanced during dry-run.
+
+Inspect the refactoring of PersistRecommendationConversionProposalReviewDecision closely for regressions in the original single-proposal command.
+
+7. CONCURRENCY AND LOCKING
+
+Verify that the lock strategy is correct and sufficient.
+
+Confirm:
+
+- only exact proposal-review locks are acquired;
+- lock order is deterministic;
+- duplicate proposal IDs are rejected before locking ambiguously;
+- concurrent same-operation requests converge safely;
+- concurrent opposite decisions cannot both report success;
+- no lost-update window exists between materialization load, lock acquisition, workflow reload, plan construction, and insert;
+- no deadlock-prone interaction was introduced with existing Phase 4C review, execution, or activation commands;
+- no scheduler or experiment locks are acquired;
+- a materialization cannot change underneath the operation in a way that invalidates assumptions.
+
+State whether the current isolation level is appropriate.
+
+8. IDEMPOTENCE AND REQUEST IDENTITY
+
+Review the deterministic operation identity and generated Phase 4C request ID.
+
+Confirm that canonical identity includes all semantically relevant immutable inputs:
+
+- materialization identity;
+- decision;
+- normalized operator;
+- normalized reason;
+- contract/version.
+
+Confirm it excludes nondeterministic data such as timestamps, sequence IDs, locale-sensitive formatting, pointer values, or unordered iteration.
+
+Verify:
+
+- exact repeat returns already_satisfied and inserts zero rows;
+- opposite decision conflicts;
+- unrelated same-decision reviews conflict;
+- a mixture of exact satisfied and unreviewed members fails closed;
+- malformed review history fails closed;
+- previous history is not mutated;
+- the request ID fits existing length and uniqueness constraints;
+- collision or ambiguity risk is acceptably bounded and documented.
+
+Evaluate whether the lack of a campaign-operation table still provides sufficient reconstructability and retry proof.
+
+9. DOMAIN VALIDATION AND ENUM SAFETY
+
+Check request normalization and pure-plan invariants.
+
+Explicitly test or reason about invalid enum values supplied by a non-CLI caller.
+
+Inspect error paths that call:
+
+RecommendationConversionProposalReviewDecisionText(request.decision)
+
+Ensure exception formatting cannot throw a second exception while handling an invalid request.
+
+Confirm impossible aggregate states cannot be constructed silently.
+
+10. CLI PARSER AND DISPATCH
+
+Verify:
+
+- both --option value and --option=value forms;
+- positive materialization IDs only;
+- strict approve|reject parsing;
+- required nonblank operator and reason;
+- duplicate-form rejection;
+- metadata-without-command rejection;
+- --yes required only for actual writes;
+- dry-run does not require --yes;
+- conflicts with scheduler commands;
+- conflicts with every other standalone recommendation/campaign command;
+- parser failures occur before connection-string/database dispatch;
+- command is dispatched exactly once;
+- help text matches actual syntax and safety behavior.
+
+Check that the command name does not collide semantically with existing read-only campaign review or campaign approval commands.
+
+11. MACHINE-READABLE OUTPUT
+
+Verify deterministic summary and member row ordering.
+
+Check all success, dry-run, already-satisfied, invalid, conflict, and runtime-failure paths.
+
+Confirm that every terminal row includes accurate safety fields:
+
+- read_only;
+- dry_run;
+- campaign_reviews_created;
+- phase4c_review_decisions_created;
+- proposals_executed=false;
+- proposals_activated=false;
+- experiments_created=false;
+- experiments_queued=false;
+- experiment_status_changed=false;
+- scheduler_started=false;
+- workers_started=false;
+- automatic_progression=false.
+
+Review these specific concerns:
+
+- whether read_only should be true for dry-run and false for writes;
+- whether result=validated loses important distinction between ready and already_satisfied dry runs;
+- whether conflict and error rows report known materialization/member counts accurately;
+- whether materialization_identity_hash and campaign_operation_identity_hash are correctly labeled and populated;
+- whether optional IDs consistently use null;
+- whether variable text is percent encoded using the production helper;
+- whether error output can itself fail.
+
+12. SCHEMA-CHECK COMPLETENESS
+
+Verify that RecommendationCampaignProposalReviewSchemasExist(), which delegates to the Step 5 handoff schema check, covers every table, column, sequence, constraint, and operation used by Step 6.
+
+Confirm that existing databases missing any required Phase 4C or Step 4 structure fail safely and clearly.
+
+13. TEST SUFFICIENCY AND SAFETY
+
+Review both new test files critically.
+
+Verify pure coverage for:
+
+- approve and reject;
+- invalid decision enum, not merely invalid parser text;
+- zero/negative IDs;
+- blank operator/reason;
+- canonical identity determinism;
+- member ordering;
+- duplicate IDs and proposal links;
+- count/hash/version mismatches;
+- malformed reviews;
+- exact retry;
+- partial retry;
+- opposite and unrelated same-decision conflicts;
+- deterministic diagnostic order and deduplication;
+- member safety bound.
+
+Verify PostgreSQL coverage for:
+
+- atomic approval and rejection;
+- ordinary Phase 4C rows;
+- Step 5 state changes;
+- exact persisted membership only;
+- no recommendation-ID inference;
+- missing proposal;
+- provenance mismatch;
+- malformed manifest;
+- malformed workflow evidence;
+- executed and activated proposal review refusal where required;
+- exact retry;
+- opposite and unrelated same-decision conflicts;
+- concurrent same and opposite requests;
+- injected failure rollback;
+- no partial review rows;
+- dry-run no rows and no sequence advancement;
+- multiple materialization isolation;
+- parser-before-database behavior;
+- active LSTM refusal;
+- cleanup and database deletion.
+
+Strengthen the experiment-safety test if necessary by inserting at least one pre-existing experiment row, recording all relevant fields/timestamps, running Step 6, and proving that the row is unchanged. Merely asserting that zero experiment rows were created is not sufficient proof of non-mutation.
+
+Also verify that tests never rely on or modify the active LSTM database and that disposable database/schema cleanup occurs on every failure path.
+
+14. REGRESSION RISK IN SHARED PHASE 4C CODE
+
+The Step 6 implementation modifies the existing Phase 4C proposal-review repository.
+
+Review carefully for changes in:
+
+- commit ownership;
+- exception behavior;
+- not-found behavior;
+- request-conflict behavior;
+- locking order;
+- query ordering;
+- connection/transaction lifecycle;
+- existing CLI outputs;
+- single-proposal idempotence;
+- list limits and duplicate input handling.
+
+Run the pre-existing proposal-review tests independently of the new campaign tests.
+
+15. PROJECT AND DOCUMENTATION CONSISTENCY
+
+Verify:
+
+- every new source file is included in the correct targets exactly once;
+- no duplicate Xcode build entries;
+- headers and source paths are correct;
+- architecture version and status are internally consistent;
+- changed Step 4 and Step 5 documentation no longer claims Step 6 is deferred;
+- documentation clearly distinguishes proposal review from campaign execution;
+- Database/README accurately states that no migration or privilege change is required;
+- no unrelated documentation was rewritten.
+
+REQUIRED VERIFICATION
+
+Use a unique disposable PostgreSQL database. Never connect tests to the active LSTM database.
+
+Confirm the database is absent before creation, create it explicitly, run affected tests, verify test-schema cleanup, drop the database, and confirm deletion.
+
+At minimum run:
+
+- the new pure Step 6 suite;
+- the new PostgreSQL Step 6 suite;
+- existing Phase 4C proposal-review pure and repository suites;
+- existing conversion execution, activation, and workflow suites;
+- Step 4 materialization suites;
+- Step 5 handoff suites;
+- relevant campaign planning/review/approval suites;
+- parser-before-database checks;
+- active-LSTM refusal test;
+- deterministic/retry tests more than once.
+
+Run:
+
+git diff --check
+
+and:
+
+plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj
+
+Perform an isolated clean Release build without touching the normal DerivedData directory:
+
+xcodebuild \
+  -project ExpertAdvisor.xcodeproj \
+  -scheme "LSTM Release" \
+  -configuration Release \
+  -derivedDataPath /tmp/ExpertAdvisorPhase4DStep6ReviewDerivedData \
+  clean build \
+  CODE_SIGNING_ALLOWED=NO
+
+Do not run concurrent xcodebuild processes against the same derived-data path.
+
+SCHEDULER AND ACTIVE-JOB SAFETY
+
+Do not:
+
+- launch the scheduler;
+- start pending jobs;
+- signal workers;
+- run queue/resume/retry/pause/cancel/continue/infer/analyze/schedule commands;
+- modify active experiment rows;
+- use the active LSTM database as a test target;
+- clean the user's normal DerivedData directory.
+
+FINAL REVIEW RESPONSE
+
+Provide:
+
+1. exact baseline and current HEAD;
+2. concise description of what Step 6 implements;
+3. findings ordered by severity, with file and line references;
+4. explicit analysis of workflow eligibility after review/execution/activation;
+5. explicit analysis of transaction and concurrency correctness;
+6. explicit analysis of idempotence and deterministic identity;
+7. explicit analysis of shared Phase 4C regression risk;
+8. explicit analysis of CLI and machine-output correctness;
+9. test gaps found and any narrowly justified test hardening;
+10. changes made, if any, and why;
+11. commands run and exact results;
+12. disposable database name, creation, isolation, cleanup, drop, and confirmed deletion;
+13. isolated clean Release build result;
+14. git diff --check and project-file lint result;
+15. final git status and final HEAD;
+16. explicit statement that no commit, push, staging, scheduler action, worker action, active-database test, proposal execution, activation, experiment creation, queueing, or experiment mutation occurred;
+17. final verdict using exactly one of:
+
+- READY TO COMMIT
+- READY AFTER FIXES
+- NOT READY
+
+Do not claim readiness merely because the build and tests pass. Base the verdict on the reviewed correctness of the actual current diff.

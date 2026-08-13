@@ -1,0 +1,18 @@
+{
+  "deployment_identity": "com.expertadvisor.campaign-operations-h4.production",
+  "deployment_execution_identity": "expertadvisor-h4",
+  "target_database_identity": "expertadvisor-production-postgresql",
+  "target_environment": "production",
+  "postgresql_login_identity": "REPLACE_WITH_MANAGER_LOGIN",
+  "executable_path": "/opt/expertadvisor/LSTM_Release",
+  "executable_sha256": "REPLACE_WITH_EXACT_64_HEX_SHA256",
+  "connection_environment_file": "/Library/Application Support/ExpertAdvisor/campaign-operations-h4.connection.env",
+  "limit": 10,
+  "normal_interval_seconds": 60,
+  "backoff_seconds": [5, 15, 60],
+  "retry_budget": 3,
+  "graceful_drain_timeout_seconds": 300,
+  "state_directory": "/Library/Application Support/ExpertAdvisor/campaign-operations-h4-state",
+  "log_directory": "/var/log/expertadvisor/campaign-operations-h4",
+  "log_retention_policy": "managed-by-reviewed-deployment-logrotate-policy"
+}

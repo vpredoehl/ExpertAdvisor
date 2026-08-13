@@ -1,6 +1,41 @@
-DerivedData/*
+# Xcode build products
+DerivedData/
 Build/*
 ratedata.gaincapital.com
 *.swp
 xcuserdata/
+*.txt
+*.plpgsql
+.derived-data-log*
+# Generated analysis output
+*.csv
+*_results.csv
+experiment_logs/
+nohup.out
+scheduler.log
+# PostgreSQL database backup dumps. Manifests may be tracked intentionally.
+Database/backups/*.dump
+!Database/backups/LSTM_latest.dump
 
+# Generated reports
+experiment_reports/
+meta_analysis_dashboard.md
+meta_analysis_report.md
+review_backups/*
+# Track architecture review artifacts
+!ArchitectureReviews/
+!ArchitectureReviews/**/
+!ArchitectureReviews/**/*.txt
+
+*_Transcript.txt
+
+# Generated inputs, outputs, logs, and temporary files for this focused review.
+/GlobalCancel_StrandedPendingCheckpoint_*
+/vi
+
+screenlog.*
+
+
+# Python bytecode/cache
+__pycache__/
+*.py[cod]

@@ -1,0 +1,54 @@
+Using High reasoning, perform a focused architectural recommendation for
+the next evolution of the Phase 6 workflow.
+
+GOAL
+
+Do NOT implement Phase 6E.
+
+Instead, determine what the next authoritative phase SHOULD be based on
+the existing repository architecture and completed Phase 6A–6D work.
+
+BACKGROUND
+
+Phase 6D has completed independent review.
+
+The repository intentionally ends at governance ratification.
+
+Previous readiness analysis concluded there is no accepted repository
+definition for Phase 6E and correctly declined implementation.
+
+TASK
+
+Review the repository and recommend the next architectural increment.
+
+Your deliverable should include:
+
+1.  The next recommended phase name.
+2.  The problem it solves.
+3.  Why it belongs after Phase 6D.
+4.  Authority boundaries.
+5.  State-machine changes.
+6.  Ownership model.
+7.  Transaction boundaries.
+8.  Concurrency considerations.
+9.  Replay and determinism requirements.
+10. Scheduler interaction (if any).
+11. Separation-of-duties implications.
+12. Risks.
+13. Alternatives considered.
+14. A recommended implementation sequence.
+15. Whether an ADR should precede implementation.
+
+REQUIREMENTS
+
+-   Do not implement code.
+-   Do not modify the repository.
+-   Do not invent behavior inconsistent with existing ADRs.
+-   Prefer extending established architectural patterns.
+-   If multiple reasonable directions exist, compare them and recommend
+    one.
+
+OUTPUT
+
+Produce a detailed architectural recommendation suitable for review
+before beginning the next implementation phase.

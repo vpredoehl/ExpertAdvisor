@@ -1,0 +1,392 @@
+PHASE 6C REVIEW CORRECTIONS
+POST-COMMIT VERIFICATION REVIEW
+PROMPT AND REASONING
+
+REASONING
+
+Phase 6C was originally committed as:
+
+    2e1fc63 Implement Phase 6C immutable follow-up proposal administrative review
+
+A subsequent independent review and review-of-review produced a focused four-file correction set addressing:
+
+- locale-sensitive integer rendering in Phase 6C machine output;
+- migration assertions for PUBLIC privileges and trigger execution context;
+- hostile-locale and complete-record presentation coverage;
+- documentation precision for reason validation and machine rendering.
+
+Those corrections were committed as:
+
+    9238f11 Harden Phase 6C review presentation and verification
+
+The commit was then pushed to the `github` remote on branch `phase6`.
+
+The worktree is currently clean.
+
+Because the corrections were committed before the planned staged commit review, the correct next step is a narrowly scoped post-commit verification review of commit `9238f11` against its parent `2e1fc63`.
+
+This review should confirm that:
+
+1. commit `9238f11` contains exactly the intended four-file correction set;
+2. no unrelated file or behavior entered the commit;
+3. the committed patch matches the independently reviewed correction delta;
+4. the production locale fix is complete and minimal;
+5. the strengthened tests are correct and not falsely permissive;
+6. the documentation matches the committed implementation;
+7. branch, HEAD, worktree, index, scheduler processes, production data, and DerivedData remain undisturbed.
+
+This is not a new Phase 6 implementation pass.
+
+It must not redesign Phase 6, add Phase 6D behavior, or repeat broad regression work without a concrete reason.
+
+The desired result is either:
+
+- confirmation that commit `9238f11` is a sound, complete, properly scoped correction commit; or
+- identification and correction of a concrete defect introduced by that commit, with the new fix left uncommitted for separate review.
+
+COPY THE PROMPT BELOW INTO CODEX EXEC
+
+
+Use model_reasoning_effort="xhigh".
+
+Perform a focused post-commit verification review of commit:
+
+    9238f11
+
+on the current `phase6` branch.
+
+Compare it directly against its parent:
+
+    2e1fc63
+
+Do not redesign Phase 6.
+
+Do not implement Phase 6D or any later phase.
+
+Do not add CLI integration, activation, execution, scheduling, queueing, worker launch, experiment creation, experiment modification, campaign-success declaration, profitability, statistical validation, automatic review, or automatic approval behavior.
+
+Do not amend, reset, rebase, revert, cherry-pick, squash, or otherwise rewrite commit history.
+
+Do not create a new commit.
+
+Do not push.
+
+Make changes only if this review identifies a concrete defect introduced by commit `9238f11`. If a defect is found, correct only that defect, leave the correction unstaged and uncommitted, and conclude that the commit requires a follow-up fix.
+
+EXPECTED COMMIT SCOPE
+
+Commit `9238f11` should modify exactly:
+
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql`
+- `Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp`
+- `docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst`
+
+No other file should be part of the commit.
+
+REPOSITORY RULES
+
+- Do NOT pull.
+- Do NOT fetch.
+- Do NOT merge.
+- Do NOT rebase.
+- Do NOT reset.
+- Do not switch branches.
+- Preserve the current `phase6` branch.
+- Preserve HEAD.
+- Do not create commits.
+- Do not push.
+- Do not stage or unstage files.
+- Preserve DerivedData.
+- Use Release builds only.
+- Do not run Clean.
+- Do not modify unrelated files.
+- Do not interrupt scheduler or worker processes.
+- Do not modify production database data.
+- Do not run `LSTM_Release --scheduler-status`; it is write-capable and updates scheduler-owned metadata.
+- Inspect scheduler and worker processes only through operating-system process tools.
+
+At the beginning, record:
+
+1. `git branch --show-current`
+2. `git rev-parse HEAD`
+3. `git log -2 --oneline --decorate`
+4. `git status --short`
+5. `git diff --cached --name-status`
+6. `git diff --name-status`
+7. `git show --name-status --stat --summary 9238f11`
+8. `git diff --check 2e1fc63 9238f11`
+9. `git diff --cached --check`
+10. `git diff --check`
+
+Confirm before reviewing content:
+
+- branch is `phase6`;
+- HEAD is `9238f11` or resolves to that commit;
+- parent is `2e1fc63`;
+- worktree is clean;
+- index is clean;
+- the commit changes exactly the four expected files;
+- no unrelated file entered the commit;
+- all whitespace checks pass.
+
+If any condition fails, report the discrepancy clearly before continuing.
+
+PRIMARY REVIEW METHOD
+
+Review only the committed delta:
+
+    git diff 2e1fc63 9238f11 -- \
+      Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.cpp \
+      Tests/ExperimentRecommendationCampaignFollowUpProposalReviewMigrationTests.sql \
+      Tests/ExperimentRecommendationCampaignFollowUpProposalReviewRepositoryTests.cpp \
+      docs/Phase6CRecommendationCampaignFollowUpProposalReview.rst
+
+Also inspect the complete committed versions of those four files and the directly relevant unchanged implementation:
+
+- `Database/migrations/043_experiment_recommendation_campaign_follow_up_proposal_review.sql`
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReview.cpp`
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReview.hpp`
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewRepository.cpp`
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewRepository.hpp`
+- `Sources/ExperimentRecommendationCampaignFollowUpProposalReviewPresentation.hpp`
+
+Use prior review outputs as supporting evidence only:
+
+- `Phase6C_IndependentReview_and_Corrections_Output.txt`
+- `Phase6C_ReviewOfReview_Corrections_Output.txt`
+
+Do not trust their conclusions without independently confirming the committed patch.
+
+COMMIT-INTEGRITY REVIEW
+
+Verify that commit `9238f11`:
+
+- contains exactly one coherent correction set;
+- has no unrelated source, project, migration, scheduler, CLI, database, or documentation changes;
+- preserves the intended file modes;
+- preserves line endings and repository formatting;
+- has an accurate commit message;
+- is based directly on `2e1fc63`;
+- does not hide additional changes through rename, mode, binary, or whitespace-only behavior.
+
+Inspect:
+
+- `git show --raw --summary 9238f11`
+- `git show --numstat 9238f11`
+- `git show --format=fuller --no-ext-diff 9238f11`
+- `git diff --word-diff=plain 2e1fc63 9238f11` where useful.
+
+PRESENTATION CORRECTION REVIEW
+
+Verify the committed production change:
+
+- replaces locale-sensitive stream insertion for every Phase 6C integer machine field;
+- covers:
+  - review event ID;
+  - follow-up proposal ID;
+  - review contract version;
+  - not-found review event ID;
+- uses locale-independent decimal rendering;
+- behaves correctly for signed values;
+- preserves ordinary output under the classic locale;
+- preserves text percent escaping;
+- preserves field order and delimiters;
+- preserves every explicit negative-authority field;
+- does not alter canonical identity;
+- does not alter persistence or repository behavior;
+- does not alter transaction behavior;
+- does not introduce unrelated formatting or allocation concerns material to this path.
+
+Search the entire Phase 6C presentation implementation for any remaining locale-sensitive integer insertion.
+
+Do not expand the correction into a broad presentation refactor unless a concrete defect in commit `9238f11` requires it.
+
+MIGRATION TEST REVIEW
+
+Verify the committed migration-test changes:
+
+- identify the actual trigger function through `pg_trigger.tgfoid`;
+- require the expected current-schema function identity;
+- avoid unqualified `regprocedure` ambiguity;
+- correctly inspect PUBLIC function privileges;
+- correctly inspect PUBLIC sequence privileges;
+- use `acldefault('f', ...)` for functions;
+- use `acldefault('S', ...)` for sequences;
+- correctly recognize PUBLIC as ACL grantee `0`;
+- require `SECURITY INVOKER`;
+- require the exact hardened `search_path`;
+- correctly handle quoted schema identifiers;
+- remain compatible with migration 043;
+- fail if any tested privilege or execution-context safeguard regresses;
+- contain no production migration modification.
+
+Pay attention to PostgreSQL catalog semantics, object identity, array formatting, schema quoting, and project-supported PostgreSQL behavior.
+
+PRESENTATION TEST REVIEW
+
+Verify the committed C++ test changes:
+
+- use a valid `std::numpunct<char>` facet;
+- transfer locale facet ownership correctly;
+- deterministically trigger grouping under supported standard-library behavior;
+- would fail against the pre-correction implementation;
+- pass because the production correction is locale-independent;
+- compare complete machine records rather than loose fragments;
+- verify:
+  - all integer fields;
+  - exact field ordering;
+  - commas and equals delimiters;
+  - percent escaping;
+  - newline escaping;
+  - UTF-8 byte escaping;
+  - timestamp rendering;
+  - every negative-authority field;
+  - trailing newline;
+  - complete not-found output;
+- avoid substring false positives;
+- avoid machine-locale, timezone, scheduler, or production-data dependence;
+- remain isolated to the disposable test harness.
+
+DOCUMENTATION REVIEW
+
+Verify the committed documentation accurately states:
+
+- reviewer byte limits and permitted characters;
+- reason byte limits;
+- valid UTF-8 requirement;
+- exact ASCII space, tab, carriage-return, and line-feed handling;
+- NUL and control-byte rejection;
+- exact reason preservation;
+- locale-independent decimal rendering;
+- percent escaping of delimiter-bearing and non-ASCII payload bytes.
+
+Confirm it does not overclaim:
+
+- Unicode whitespace classification;
+- normalization;
+- authorization;
+- activation;
+- execution;
+- scheduling;
+- queueing;
+- worker behavior;
+- profitability;
+- statistical validation;
+- automatic approval.
+
+AUTHORITY-BOUNDARY AUDIT
+
+Search the committed delta for:
+
+- activation;
+- execution;
+- authorization;
+- queue;
+- schedule;
+- scheduler;
+- worker;
+- experiment INSERT, UPDATE, or DELETE;
+- campaign success;
+- profitability;
+- statistical validation;
+- automatic review or approval.
+
+Distinguish negative safety statements and tests from actual capabilities.
+
+Confirm commit `9238f11` adds no authority and modifies no scheduler, CLI, migration, domain, repository, or workflow source outside the one presentation file.
+
+VERIFICATION
+
+Because the correction set already passed two focused reviews, deliberate PostgreSQL negative controls, a pure contract test, a repository/presentation test, and an incremental Release build, do not repeat broad regressions without cause.
+
+Run at minimum:
+
+1. `git diff --check 2e1fc63 9238f11`
+2. `git diff --cached --check`
+3. `git diff --check`
+4. compile and run the focused Phase 6C pure contract test if its exact command is readily available;
+5. compile and run the focused Phase 6C repository/presentation test if its exact command is readily available;
+6. run the Phase 6C migration assertions against a disposable database only if the prior exact harness is readily available;
+7. `plutil -lint ExpertAdvisor.xcodeproj/project.pbxproj`
+8. `xcodebuild -list -project ExpertAdvisor.xcodeproj`
+9. run an incremental Release build only if:
+   - a defect is corrected during this review;
+   - the committed patch differs from the previously verified patch;
+   - or a concrete build concern is found;
+10. verify executable arm64 architecture if a Release build is run.
+
+It is acceptable to rely on prior successful focused tests and Release build when:
+
+- the committed patch exactly matches the reviewed correction patch;
+- no file has changed since that verification;
+- the worktree is clean;
+- and this review independently validates the commit contents.
+
+State such reliance explicitly.
+
+DATABASE SAFETY
+
+Any database test must use a disposable database only.
+
+Before database execution:
+
+- require `LSTM_TEST_DB_NAME`;
+- reject `LSTM`;
+- verify the configured database name is disposable;
+- inspect active scheduler and worker processes using OS process tools only;
+- do not run `--scheduler-status`;
+- do not signal, stop, pause, resume, or otherwise alter any process.
+
+Do not apply migration 043 to production.
+
+Remove disposable schemas and databases created by this review.
+
+FINAL AUDIT
+
+At the end, confirm:
+
+- branch remains `phase6`;
+- HEAD remains `9238f11`;
+- parent remains `2e1fc63`;
+- no commit was created;
+- no history was rewritten;
+- no push occurred;
+- worktree remains clean unless a concrete defect was corrected;
+- index remains clean;
+- no unexpected file was modified;
+- DerivedData was preserved;
+- no scheduler or worker process was interrupted;
+- `LSTM_Release --scheduler-status` was not run;
+- production database was not modified.
+
+DELIVERABLE
+
+Provide:
+
+1. Executive summary.
+2. Findings ordered by severity.
+3. Commit-integrity assessment.
+4. Exact committed-file inventory.
+5. Presentation correction assessment.
+6. Migration-test assessment.
+7. Presentation-test assessment.
+8. Documentation assessment.
+9. Authority-boundary and scope assessment.
+10. Verification performed.
+11. Prior verification relied upon, if any.
+12. Database and scheduler safety assessment.
+13. Remaining risks or unverified assumptions.
+14. Any changes made during this review and why.
+15. Exact final `git status --short`.
+16. Exact final `git diff --cached --stat`.
+17. Exact final `git diff --stat`.
+18. Recommendation on whether commit `9238f11` is accepted as the final Phase 6C correction commit.
+
+Conclude with exactly one of:
+
+POST-COMMIT VERIFICATION PASSED FOR 9238F11
+
+or
+
+POST-COMMIT VERIFICATION FAILED FOR 9238F11

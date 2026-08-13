@@ -1,0 +1,41 @@
+Campaign Operations Phase H Post-Deployment Verification
+========================================================
+
+timestamp_utc=2026-08-11T13:44:38Z
+git_branch=campaign-operations
+git_head=e9caef68cbb36079a0ba260de4f6b79477a3eda3
+
+LIVE MIGRATION LEDGER 055-058
+-----------------------------
+ version |                           filename                            |                             checksum                             
+---------+---------------------------------------------------------------+------------------------------------------------------------------
+ 055     | 055_campaign_operations_production_admission_foundation.sql   | 1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe
+ 056     | 056_campaign_operations_h2_privilege_deployment_contract.sql  | 45e8a9524fdacf40dd774aecb70f9ebeaa6fc6d4b8a30ac552b4b6354cde68fe
+ 057     | 057_campaign_operations_h2_production_bind_state_contract.sql | d0b9339fdac2366addf2ea5b322ca5a7cd08de39d35a38833d46692a5533399b
+ 058     | 058_campaign_operations_h3_manager_run_once.sql               | 983404ae310131af3ac42a7b0f3ac19f4a33597023518dc59e201d28d25385c9
+(4 rows)
+
+
+CHECKED-IN MIGRATION SHA256
+--------------------------
+1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe  Database/migrations/055_campaign_operations_production_admission_foundation.sql
+45e8a9524fdacf40dd774aecb70f9ebeaa6fc6d4b8a30ac552b4b6354cde68fe  Database/migrations/056_campaign_operations_h2_privilege_deployment_contract.sql
+d0b9339fdac2366addf2ea5b322ca5a7cd08de39d35a38833d46692a5533399b  Database/migrations/057_campaign_operations_h2_production_bind_state_contract.sql
+983404ae310131af3ac42a7b0f3ac19f4a33597023518dc59e201d28d25385c9  Database/migrations/058_campaign_operations_h3_manager_run_once.sql
+
+H2 MANIFEST VALIDATION
+----------------------
+H2_MANIFEST_OK migration_checksum=45e8a9524fdacf40dd774aecb70f9ebeaa6fc6d4b8a30ac552b4b6354cde68fe manifest_checksum=84cd683d167d0f165af5b88c3fd9765ba0390b03a562e88fac4f52e7959b7482 set_checksum=5e04338d3d66b6fbb1e6302291855f89901be7efa91ecc7df31e35b5ad96f85a
+
+H2 DEPLOYMENT AUDIT
+-------------------
+H2_MANIFEST_OK migration_checksum=45e8a9524fdacf40dd774aecb70f9ebeaa6fc6d4b8a30ac552b4b6354cde68fe manifest_checksum=84cd683d167d0f165af5b88c3fd9765ba0390b03a562e88fac4f52e7959b7482 set_checksum=5e04338d3d66b6fbb1e6302291855f89901be7efa91ecc7df31e35b5ad96f85a
+H2_DEPLOYMENT_AUDIT_OK stage=post-upgrade audit_version=h2-deployment-audit-v1 h1_checksum=1b13d3a64336d7cbd55c935396ec42c4c06320105677829f0cf405733e5715fe h2_checksum=45e8a9524fdacf40dd774aecb70f9ebeaa6fc6d4b8a30ac552b4b6354cde68fe h2_bind_checksum=d0b9339fdac2366addf2ea5b322ca5a7cd08de39d35a38833d46692a5533399b
+
+GIT DIFF CHECK
+--------------
+PASS
+
+POST-DEPLOYMENT VERIFICATION RESULT
+-----------------------------------
+PASS

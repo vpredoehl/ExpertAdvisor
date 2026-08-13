@@ -1,0 +1,257 @@
+Using xhigh reasoning, define the next coherent Phase 5 step for the ExpertAdvisor recommendation-campaign subsystem after Phase 5 Step 4.
+
+This is an architecture and implementation-planning task only.
+
+Do not modify files.
+Do not stage, commit, push, pull, fetch, merge, rebase, reset, switch branches, or open a pull request.
+Do not build or run tests unless a lightweight read-only source inspection genuinely requires it.
+Do not connect to PostgreSQL.
+Do not use or modify the active LSTM database.
+Do not signal, poll, stop, restart, or otherwise affect the scheduler or workers.
+Do not implement Phase 5 Step 5.
+
+REPOSITORY STATE
+
+Expected branch:
+phase5
+
+Expected HEAD:
+8b9939e
+
+Expected commit:
+Phase 5 Step 4: Add recommendation campaign operational status
+
+Begin by verifying:
+
+git branch --show-current
+git rev-parse HEAD
+git log -1 --oneline
+git status --short
+git diff --check
+git diff --cached --check
+
+If branch or HEAD differs, report the difference and continue read-only. Do not alter repository state.
+
+CURRENT IMPLEMENTED CAMPAIGN PATH
+
+Phase 4D provides:
+
+1. deterministic read-only campaign planning;
+2. deterministic read-only campaign review;
+3. explicit persisted approval/rejection;
+4. exact approved-campaign materialization into Phase 4C proposals;
+5. read-only campaign handoff;
+6. explicit atomic campaign-wide Phase 4C proposal review.
+
+Phase 5 provides:
+
+1. atomic execution of exact materialized members into paused experiments;
+2. atomic activation of exact executed members into pending/train;
+3. atomic execution-and-activation launch;
+4. repeatable-read, read-only operational status across exact campaign membership and downstream experiment/result evidence.
+
+The existing scheduler independently processes ordinary pending experiments.
+
+AUTHORITATIVE SOURCES TO INSPECT
+
+At minimum inspect:
+
+docs/Phase4DExperimentRecommendationCampaignHandoff.rst
+docs/Phase5ExperimentRecommendationCampaignExecution.rst
+docs/Phase5ExperimentRecommendationCampaignActivation.rst
+docs/Phase5ExperimentRecommendationCampaignLaunch.rst
+docs/Phase5ExperimentRecommendationCampaignStatus.rst
+docs/architecture/Volume_VIII_Recommendation_Engine.md
+
+Relevant production and test code for:
+
+- campaign materialization;
+- campaign review;
+- campaign execution;
+- campaign activation;
+- campaign launch;
+- campaign operational status;
+- Phase 4C conversion workflow;
+- scheduler experiment lifecycle and operational controls;
+- continuation automation;
+- recommendation/campaign CLI dispatch and conflict validation.
+
+GOAL
+
+Recommend exactly one next Phase 5 step that provides real operational or research value and forms a coherent, bounded extension of Steps 1–4.
+
+Do not assume that “Step 5” must be autonomous campaign management.
+
+Evaluate candidate directions such as:
+
+1. explicit campaign-wide pause, resume, cancel, retry, or stop controls;
+2. an explicit campaign reconciliation or repair command;
+3. persisted campaign lifecycle authority;
+4. scheduler-aware campaign monitoring or admission control;
+5. bounded automatic campaign progression;
+6. campaign completion/failure summary persistence;
+7. no additional Phase 5 step yet, with a recommendation to move to another project phase.
+
+These are candidates, not requirements.
+
+ARCHITECTURAL CONSTRAINTS
+
+Preserve existing authority boundaries unless the selected step explicitly and convincingly justifies changing one.
+
+Do not casually introduce:
+
+- hidden automation;
+- background scans;
+- automatic proposal review;
+- automatic campaign approval;
+- automatic experiment creation outside existing Phase 4C primitives;
+- a second experiment lifecycle authority;
+- duplicated scheduler state;
+- mutable campaign membership;
+- profitability claims;
+- score-based authorization;
+- process-liveness inference from persisted worker_pid;
+- unbounded database scans;
+- scheduler polling from read-only status code;
+- broad locks over unrelated campaigns or experiments.
+
+Any proposed mutation must be:
+
+- explicit;
+- separately confirmed where destructive or lifecycle-changing;
+- transactionally bounded;
+- idempotent or fail-closed;
+- auditable;
+- limited to exact immutable materialized membership;
+- compatible with existing per-experiment operational controls;
+- safe under partial progress and concurrent scheduler activity.
+
+ANALYSIS REQUIRED
+
+1. Reconstruct the exact current authority and data-flow boundaries.
+
+2. Identify the most important operational gap remaining after Step 4.
+
+3. Compare at least four plausible next-step candidates.
+
+For each candidate report:
+
+- user value;
+- architectural fit;
+- required schema changes;
+- scheduler coupling;
+- concurrency and locking risk;
+- interaction with partially progressed campaigns;
+- interaction with terminal, failed, cancelled, paused, and inconsistent members;
+- idempotency/retry semantics;
+- implementation size;
+- test burden;
+- risk of creating duplicate lifecycle authority;
+- whether it should be Phase 5, deferred, or rejected.
+
+4. Select one preferred next step.
+
+The preferred step must have a narrow one-sentence purpose and a clear reason it is more valuable than the alternatives.
+
+5. Define the complete proposed contract:
+
+- command name and both accepted CLI forms;
+- required IDs and options;
+- confirmation behavior;
+- dry-run behavior, if appropriate;
+- exact membership authority;
+- eligibility rules;
+- per-member outcomes;
+- aggregate outcomes;
+- transaction boundaries;
+- locking order;
+- concurrency behavior;
+- retry and duplicate behavior;
+- failure and rollback semantics;
+- scheduler interaction;
+- worker interaction;
+- process-liveness boundary;
+- database schema/migration requirements;
+- runtime privileges;
+- machine-readable output;
+- documentation changes;
+- explicit non-goals.
+
+6. Determine whether the step should be:
+
+- one implementation step;
+- split into multiple smaller steps;
+- preceded by a schema-only or pure-domain step;
+- postponed until additional experiment evidence exists.
+
+7. Produce an implementation sequence with independently reviewable increments.
+
+For every increment include:
+
+- exact goal;
+- likely files to add;
+- likely files to modify;
+- domain/repository/service/CLI boundaries;
+- tests required;
+- database safety requirements;
+- regression suites required;
+- completion criteria;
+- proposed commit message.
+
+8. Identify all unresolved questions. Resolve them from current code and documentation wherever possible. Only leave questions unresolved when the repository genuinely supplies no answer.
+
+9. State whether implementation should begin now.
+
+Do not recommend implementation merely to keep the scheduler busy. The next step must provide durable value.
+
+REQUIRED FINAL RESPONSE
+
+Use this structure:
+
+## Repository state
+
+## Current Phase 5 boundary
+
+## Remaining operational gap
+
+## Candidate comparison
+
+Use a concise comparison table.
+
+## Recommended Phase 5 Step 5
+
+Include:
+
+- title;
+- one-sentence purpose;
+- why this direction wins;
+- why it belongs in Phase 5;
+- why it is safe to implement now.
+
+## Proposed contract
+
+## Transaction and concurrency model
+
+## Scheduler and worker boundary
+
+## Schema and privilege impact
+
+## CLI and machine output
+
+## Test and regression plan
+
+## Implementation increments
+
+## Deferred and rejected alternatives
+
+## Remaining risks and unresolved questions
+
+## Recommendation
+
+End with exactly one of:
+
+“Proceed with Phase 5 Step 5 implementation planning.”
+
+“Do not add Phase 5 Step 5 yet; move to <specific next activity>.”
+
+Do not edit the repository.

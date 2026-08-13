@@ -1,0 +1,71 @@
+PHASE 5 IMPLEMENTATION PROMPT
+
+Using High reasoning, pull the latest HEAD on the current Phase 5
+branch.
+
+GOAL
+
+Begin Phase 5 by implementing the first operational capabilities that
+build on the completed Phase 4 recommendation campaign workflow without
+redesigning or bypassing it.
+
+Phase 4 is complete and establishes the authoritative chain:
+
+Planning → Review → Approval → Materialization → Handoff → Campaign-wide
+Phase 4C proposal review
+
+Execution, activation, experiment creation, scheduler control, and
+experiment lifecycle remain authoritative Phase 4C responsibilities.
+
+OBJECTIVES
+
+1.  Review the completed Phase 4 architecture before implementing
+    anything.
+2.  Identify the highest-value operational feature that naturally
+    follows Phase 4 without expanding into future campaign-management
+    (Phase 4E) concepts.
+3.  Produce a concise implementation plan before coding.
+4.  Implement only that first Phase 5 increment.
+5.  Preserve backward compatibility and all existing contracts.
+
+PHASE BOUNDARIES
+
+Do not redesign the recommendation engine.
+
+Do not change: - LSTM architecture - training or inference mathematics -
+optimizer - feature engineering - label generation - experiment
+scheduler selection logic - Phase 4 canonical identities - Phase 4
+contract versions - proposal review authority
+
+Do not invent campaign scheduling, budgeting, forecasting, replay,
+archival, analytics, or other future Phase 4E capabilities.
+
+If existing APIs or repositories require small refactoring to support
+Phase 5, keep those changes minimal and fully covered by tests.
+
+REQUIRED VERIFICATION
+
+-   Review existing documentation and architecture.
+-   Update documentation only where necessary.
+-   Add pure and PostgreSQL tests for new behavior.
+-   Verify no regression of existing Phase 4 tests.
+-   Perform an isolated clean Release build.
+-   Do not touch the active LSTM database.
+-   Do not launch or interact with the scheduler or workers.
+
+DELIVERABLE
+
+Return: 1. Phase 5 implementation plan. 2. Why this is the correct first
+increment. 3. Files changed. 4. Tests added. 5. Verification performed.
+6. Remaining Phase 5 roadmap (high level only). 7. Suggested commit
+message.
+
+REASONING
+
+Phase 4 established a complete, authoritative recommendation-to-review
+workflow. Phase 5 should build operational capabilities on that stable
+foundation while deliberately avoiding campaign-management features
+planned for a later Phase 4E. The first increment should provide
+meaningful user value, preserve architectural boundaries, minimize
+regression risk, and leave room for future expansion without introducing
+duplicate authority or premature orchestration.

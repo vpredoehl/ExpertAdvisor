@@ -1,0 +1,13 @@
+control_version	control_id	control_kind	source_path	normative_requirement
+h1-final-assurance-control-v1	H1-ASSURANCE-ACL-MUTATIONS	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-CHECKSUM	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-DETERMINISM	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-FULL-PIPELINE	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-GRAPH-MUTATIONS	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-LOCK-MUTATIONS	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-MANIFEST-MUTATIONS	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-PARSER-CLASSIFICATION	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-RELEASE-BUILD	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-RESTORE	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-STRICT-COMPILE	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
+h1-final-assurance-control-v1	H1-ASSURANCE-WORKTREE	final_assurance	Tests/CampaignOperationsPhaseH1FinalAssuranceTests.sh	false
