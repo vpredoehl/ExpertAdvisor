@@ -6207,6 +6207,84 @@ int main()
 
         const OperationalCampaign campaign =
             InsertMaterialization(owner, schema, 41, 3);
+        const std::string creatorConnectionString = connectionString +
+            " options='-c search_path=" + schema +
+            " -c role=campaign_operations_campaign_creator'";
+        {
+            pqxx::connection creator{creatorConnectionString};
+            const auto admitted = AdmitOperationalCampaign(
+                creator, {41, "admitter@example.test",
+                    "Admit the exact persisted Phase 4D materialization."});
+            assert(admitted.outcome == PersistOutcome::recorded);
+            assert(admitted.persisted.campaign == campaign);
+            const auto replay = AdmitOperationalCampaign(
+                creator, {41, "different.admitter",
+                    "Exact admission replay returns the existing campaign."});
+            assert(replay.outcome == PersistOutcome::existingIdentical);
+            assert(replay.persisted.campaignId ==
+                admitted.persisted.campaignId);
+        }
+        assert(CountRows(owner, schema, "campaign_operations_campaign") == 1);
+        assert(CountRows(owner, schema,
+                   "campaign_operations_audit_reference_event") == 1);
+        assert(CountRows(owner, schema,
+                   "campaign_operations_budget_ledger_entry") == 0);
+        assert(CountRows(owner, schema,
+                   "campaign_operations_reservation") == 0);
+        assert(CountRows(owner, schema,
+                   "campaign_operations_operational_request") == 0);
+        {
+            std::ostringstream output;
+            std::ostringstream errors;
+            assert(RunOperationalCampaignAdmissionCommand(
+                       creatorConnectionString,
+                       {41, "command.admitter",
+                           "Verify deterministic admission output."},
+                       output, errors) == 0);
+            assert(errors.str().empty());
+            assert(output.str().find(
+                       "operational_campaign_id=") != std::string::npos);
+            assert(output.str().find(
+                       "recommendation_campaign_materialization_id=41") !=
+                std::string::npos);
+            assert(output.str().find("disposition=existing_identical") !=
+                std::string::npos);
+        }
+        {
+            pqxx::connection creator{creatorConnectionString};
+            bool missing = false;
+            try
+            {
+                (void)AdmitOperationalCampaign(
+                    creator, {999999, "admitter@example.test",
+                        "Reject a nonexistent materialization."});
+            }
+            catch (const Error& error)
+            {
+                missing = error.code() == ErrorCode::invalidMaterialization &&
+                    std::string(error.what()) ==
+                        "campaign_operations_materialization_not_found";
+            }
+            assert(missing);
+        }
+        const std::string budgetConnectionString = connectionString +
+            " options='-c search_path=" + schema +
+            " -c role=campaign_operations_budget_administrator'";
+        {
+            pqxx::connection budget{budgetConnectionString};
+            bool denied = false;
+            try
+            {
+                (void)AdmitOperationalCampaign(
+                    budget, {41, "unauthorized.admitter",
+                        "Creator capability is required even for replay."});
+            }
+            catch (const Error& error)
+            {
+                denied = error.code() == ErrorCode::authorizationDenied;
+            }
+            assert(denied);
+        }
         {
             pqxx::work transaction{owner};
             SetSearchPath(transaction, schema);

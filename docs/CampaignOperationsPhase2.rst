@@ -30,6 +30,62 @@ must separately review and grant the appropriate role to the principal used
 for a command. Budget administration and request acceptance remain separate
 capabilities. Both are enforced even for an idempotent replay.
 
+The ordinary ``pqxx`` connection is not a Phase 2 principal. A reviewed
+pre-Phase-H LOGIN must be selected with
+``CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER``; that setting is used only by the
+Campaign Operations pre-Phase-H command family, with no ``pqxx`` fallback.
+``LSTM_DB_USER`` does not select this principal.
+The command preflight rejects superusers and any principal that inherits a
+Phase-H production capability.
+The deployment LOGIN may receive the two Phase 2 NOLOGIN capabilities when
+both budget administration and request acceptance are intentionally operated
+by that reviewed service. It must not be a Phase-H production LOGIN.
+
+The same reviewed ``campaign_operations_pre_phase_h_login`` is also the
+deployment principal for explicit campaign admission. Grant it exactly the
+``campaign_operations_campaign_creator`` capability in addition to the two
+Phase 2 capabilities; do not grant any Phase-H production capability. The
+runtime requires that principal through
+``CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER`` and enforces the creator boundary
+on both first creation and exact replay.
+
+The deployment grant is:
+
+.. code-block:: sql
+
+   GRANT campaign_operations_campaign_creator
+   TO campaign_operations_pre_phase_h_login;
+
+Campaign admission
+------------------
+
+Admission is the explicit handoff from Recommendation Governance's immutable
+Phase 4D materialization to Campaign Operations' immutable operational
+campaign. The input is always the recommendation campaign materialization ID,
+not an operational campaign ID:
+
+.. code-block:: console
+
+   LSTM_Release \
+     --campaign-operations-admit MATERIALIZATION_ID \
+     --campaign-operations-actor ACTOR \
+     --campaign-operations-reason REASON \
+     --yes
+
+The command reloads and validates the complete durable materialization, builds
+the canonical V1 operational campaign with
+``phase4d_materialization_v1``, ``dispatch_full_materialization``, and
+``complete_materialization``, and persists it through the Campaign Operations
+repository. Exact replay reports ``existing_identical``; a changed binding is
+rejected. Admission creates no budget, reservation, request, dispatch,
+experiment, activation, or scheduler activity.
+
+The intended progression is: materialization -> explicit operational campaign
+admission -> budget grant -> request acceptance -> production admission and
+dispatch. These IDs remain distinct: the materialization ID is the upstream
+Recommendation Governance identity, while the operational campaign ID is the
+Campaign Operations identity created by admission.
+
 Budget operations
 -----------------
 

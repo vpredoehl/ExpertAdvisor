@@ -1,5 +1,7 @@
 #include "CampaignOperationsService.hpp"
 
+#include "ExperimentRecommendationCampaignMaterializationRepository.hpp"
+
 #include <chrono>
 #include <iomanip>
 #include <limits>
@@ -142,6 +144,46 @@ ValidateOperationalRequestAcceptanceRequest(
     (void)Reason(request.reason);
     if (request.expiresAt) (void)UtcTimestamp(*request.expiresAt);
     return request;
+}
+
+OperationalCampaignAdmissionRequest ValidateOperationalCampaignAdmissionRequest(
+    const OperationalCampaignAdmissionRequest& request)
+{
+    if (request.materializationId <= 0)
+        throw Error(ErrorCode::invalidMaterialization,
+            "campaign_operations_materialization_id_invalid");
+    (void)ActorIdentity(request.actorIdentity);
+    (void)Reason(request.reason);
+    return request;
+}
+
+PersistResult<PersistedOperationalCampaign> AdmitOperationalCampaign(
+    pqxx::connection& connection,
+    const OperationalCampaignAdmissionRequest& request)
+{
+    const auto validated =
+        ValidateOperationalCampaignAdmissionRequest(request);
+    pqxx::work transaction{connection};
+    if (!SchemaExists(transaction) ||
+        !EA::ExperimentRecommendation::
+            RecommendationCampaignMaterializationSchemaExists(transaction))
+        throw Error(ErrorCode::persistenceCorruption,
+            "campaign_operations_materialization_schema_required");
+    const auto materialization =
+        EA::ExperimentRecommendation::FindRecommendationCampaignMaterialization(
+            transaction, validated.materializationId);
+    if (!materialization)
+        throw Error(ErrorCode::invalidMaterialization,
+            "campaign_operations_materialization_not_found");
+    const OperationalCampaign campaign = BuildOperationalCampaign(
+        materialization->materializationId, materialization->contractVersion,
+        materialization->identityCanonical, materialization->identityHash,
+        materialization->selectedMemberCount);
+    auto result = PersistOperationalCampaign(
+        transaction, campaign, ActorIdentity(validated.actorIdentity),
+        Reason(validated.reason));
+    transaction.commit();
+    return result;
 }
 
 PersistResult<PersistedBudgetLedgerEntry> AdministerCampaignBudget(
@@ -393,6 +435,34 @@ int RunCampaignOperationalRequestAcceptanceCommand(
                << '\n';
         return 0;
     }, errors, "CAMPAIGN_OPERATIONS_REQUEST");
+}
+
+int RunOperationalCampaignAdmissionCommand(
+    const std::string& connectionString,
+    const OperationalCampaignAdmissionRequest& request,
+    std::ostream& output, std::ostream& errors)
+{
+    return RunCommandWithRetry([&]
+    {
+        pqxx::connection connection{connectionString};
+        const auto result = AdmitOperationalCampaign(connection, request);
+        output << "CAMPAIGN_OPERATIONS_ADMISSION"
+               << ",operational_campaign_id="
+               << result.persisted.campaignId.value()
+               << ",recommendation_campaign_materialization_id="
+               << result.persisted.campaign.materializationId
+               << ",disposition="
+               << CampaignOperationsMachineText(ToText(result.outcome))
+               << ",campaign_identity_hash="
+               << CampaignOperationsMachineText(
+                      result.persisted.campaign.identity.hash())
+               << ",materialization_identity_hash="
+               << CampaignOperationsMachineText(
+                      result.persisted.campaign.materializationIdentityHash)
+               << ",member_count=" << result.persisted.campaign.memberCount
+               << '\n';
+        return 0;
+    }, errors, "CAMPAIGN_OPERATIONS_ADMISSION");
 }
 
 int RunCampaignBudgetStatusCommand(const std::string& connectionString,

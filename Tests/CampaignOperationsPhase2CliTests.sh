@@ -46,6 +46,34 @@ expect_invalid "Campaign Operations mutation requires --yes" \
     --campaign-operations-budget-value 1 \
     --campaign-operations-actor operator \
     --campaign-operations-reason reason
+expect_invalid "Campaign Operations mutation requires --yes" \
+    --campaign-operations-admit 1 \
+    --campaign-operations-actor operator \
+    --campaign-operations-reason reason
+
+dispatch_output="$temporary_directory/dispatch-output"
+dispatch_status=0
+env -u CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER "$binary" \
+    --campaign-operations-admit 1 \
+    --campaign-operations-actor operator \
+    --campaign-operations-reason reason --yes \
+    >"$dispatch_output" 2>&1 || dispatch_status=$?
+if [[ $dispatch_status -ne 1 ]] || \
+   ! rg -Fq -- \
+       "missing required Campaign Operations pre-Phase-H principal environment variable" \
+       "$dispatch_output"; then
+    echo "valid Campaign Operations admission did not reach its dispatcher" >&2
+    echo "status=$dispatch_status" >&2
+    sed -n '1,20p' "$dispatch_output" >&2
+    exit 1
+fi
+
+expect_invalid "Campaign Operations mutation requires --campaign-operations-actor and --campaign-operations-reason" \
+    --campaign-operations-admit 1 --yes
+expect_invalid "--dry-run is not valid for durable Campaign Operations mutations" \
+    --campaign-operations-admit 1 \
+    --campaign-operations-actor operator \
+    --campaign-operations-reason reason --dry-run --yes
 expect_invalid "--dry-run is not valid for durable Campaign Operations mutations" \
     --campaign-operations-budget-amend 1 \
     --campaign-operations-expected-budget-version 1 \
@@ -101,7 +129,7 @@ expect_invalid "Campaign Operations metadata requires an authorized mutation or 
     --campaign-operations-reason reason
 
 for command in \
-    budget-grant budget-amend budget-revoke budget-supersede \
+    admit budget-grant budget-amend budget-revoke budget-supersede \
     accept-request budget-status request-status
 do
     expect_invalid "duplicate --campaign-operations-$command" \
@@ -121,6 +149,7 @@ done
 help_output="$temporary_directory/help"
 "$binary" --help >"$help_output"
 rg -Fq -- "--campaign-operations-budget-value UNITS" "$help_output"
+rg -Fq -- "--campaign-operations-admit MATERIALIZATION_ID" "$help_output"
 rg -Fq -- "--campaign-operations-budget-revoke CAMPAIGN_ID --campaign-operations-expected-budget-version N --campaign-operations-actor ACTOR" "$help_output"
 
 echo "Campaign Operations Phase 2 CLI parser tests passed"

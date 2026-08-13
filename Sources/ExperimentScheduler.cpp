@@ -264,6 +264,7 @@ struct SchedulerOptions
     std::optional<long long> campaignOperationsBudgetAmendCampaignId;
     std::optional<long long> campaignOperationsBudgetRevokeCampaignId;
     std::optional<long long> campaignOperationsBudgetSupersedeCampaignId;
+    std::optional<long long> campaignOperationsAdmitMaterializationId;
     std::optional<long long> campaignOperationsAcceptRequestCampaignId;
     std::optional<long long> campaignOperationsBudgetStatusCampaignId;
     std::optional<long long> campaignOperationsRequestStatusRequestId;
@@ -1035,6 +1036,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--campaign-operations-budget-amend" ||
             arg == "--campaign-operations-budget-revoke" ||
             arg == "--campaign-operations-budget-supersede" ||
+            arg == "--campaign-operations-admit" ||
             arg == "--campaign-operations-accept-request" ||
             arg == "--campaign-operations-budget-status" ||
             arg == "--campaign-operations-request-status" ||
@@ -1287,6 +1289,47 @@ std::string CampaignOperationsProductionConnectionString(
                GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1")) +
            " gssencmode=disable user=" + LibpqConnectionValue(principal) +
            " dbname=" + LibpqConnectionValue(GetEnvOrDefault("LSTM_DB_NAME", "LSTM"));
+}
+
+std::string CampaignOperationsPrePhaseHConnectionString()
+{
+    const char* principal = std::getenv(
+        "CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER");
+    if (principal == nullptr || *principal == '\0')
+        throw std::runtime_error(
+            "missing required Campaign Operations pre-Phase-H principal "
+            "environment variable CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER");
+
+    // Pre-Phase-H capability assignment is a reviewed deployment concern.
+    // It is intentionally separate from both the generic pqxx connection and
+    // every Phase-H production-principal environment variable.
+    return "hostaddr=" + LibpqConnectionValue(
+               GetEnvOrDefault("LSTM_DB_HOST", "127.0.0.1")) +
+           " gssencmode=disable user=" + LibpqConnectionValue(principal) +
+           " dbname=" + LibpqConnectionValue(GetEnvOrDefault("LSTM_DB_NAME", "LSTM"));
+}
+
+void ValidateCampaignOperationsPrePhaseHPrincipal(
+    const std::string& connectionString)
+{
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    const bool prohibited = transaction.exec(
+        "SELECT rolsuper OR EXISTS ("
+        "SELECT 1 FROM pg_roles production_role WHERE "
+        "production_role.rolname = ANY(ARRAY["
+        "'campaign_operations_production_enabler',"
+        "'campaign_operations_production_disabler',"
+        "'campaign_operations_production_dispatcher',"
+        "'campaign_operations_production_dispatch_service',"
+        "'campaign_operations_production_phase5_transactional',"
+        "'campaign_operations_production_reader',"
+        "'campaign_operations_scheduler_protocol_evidence_reader']) "
+        "AND pg_has_role(current_user, production_role.rolname, 'MEMBER')) "
+        "FROM pg_roles WHERE rolname = current_user;").one_row()[0].as<bool>();
+    if (prohibited)
+        throw std::runtime_error(
+            "campaign_operations_pre_phase_h_principal_invalid");
 }
 
 std::string CurrentLocalFilenameTimestamp()
@@ -2288,6 +2331,15 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 throw std::invalid_argument(
                     "duplicate --campaign-operations-budget-supersede");
             options.campaignOperationsBudgetSupersedeCampaignId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-operations-admit")
+        {
+            if (options.campaignOperationsAdmitMaterializationId)
+                throw std::invalid_argument(
+                    "duplicate --campaign-operations-admit");
+            options.campaignOperationsAdmitMaterializationId =
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
         }
@@ -3599,6 +3651,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.campaignOperationsBudgetSupersedeCampaignId.has_value()
              ? 1
              : 0) +
+        (options.campaignOperationsAdmitMaterializationId.has_value()
+             ? 1
+             : 0) +
         (options.campaignOperationsAcceptRequestCampaignId.has_value()
              ? 1
              : 0) +
@@ -4134,6 +4189,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsBudgetAmendCampaignId.has_value() ||
         options.campaignOperationsBudgetRevokeCampaignId.has_value() ||
         options.campaignOperationsBudgetSupersedeCampaignId.has_value();
+    const bool campaignOperationsAdmissionMutation =
+        options.campaignOperationsAdmitMaterializationId.has_value();
     const bool campaignOperationsRequestMutation =
         options.campaignOperationsAcceptRequestCampaignId.has_value();
     const bool campaignOperationsControlMutation =
@@ -4151,6 +4208,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         options.campaignOperationsManagerRunOnceLimit.has_value();
     const bool campaignOperationsMutation =
         campaignOperationsBudgetMutation ||
+        campaignOperationsAdmissionMutation ||
         campaignOperationsRequestMutation ||
         campaignOperationsControlMutation ||
         campaignOperationsCompletionMutation ||
@@ -4293,6 +4351,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         request.reason = *options.campaignOperationsReason;
         (void)EA::CampaignOperations::
             ValidateBudgetAdministrationRequest(request);
+    }
+    if (campaignOperationsAdmissionMutation)
+    {
+        EA::CampaignOperations::OperationalCampaignAdmissionRequest request;
+        request.materializationId =
+            *options.campaignOperationsAdmitMaterializationId;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        (void)EA::CampaignOperations::
+            ValidateOperationalCampaignAdmissionRequest(request);
     }
     if (campaignOperationsRequestMutation)
     {
@@ -22768,6 +22836,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "the exact persisted source and result scientific evidence. It "
         << "persists nothing and authorizes no follow-up.\n"
         << "Usage: " << exe
+        << " --campaign-operations-admit MATERIALIZATION_ID "
+        << "--campaign-operations-actor ACTOR "
+        << "--campaign-operations-reason REASON --yes\n"
+        << "Campaign Operations admission explicitly binds one exact, "
+        << "validated Phase 4D recommendation campaign materialization to "
+        << "one immutable operational campaign. It grants no budget, "
+        << "accepts no request, dispatches nothing, and changes no experiment "
+        << "or scheduler state.\n"
+        << "Usage: " << exe
         << " --campaign-operations-budget-grant CAMPAIGN_ID | "
         << "--campaign-operations-budget-amend CAMPAIGN_ID | "
         << "--campaign-operations-budget-supersede CAMPAIGN_ID "
@@ -22994,10 +23071,22 @@ int RunCampaignOperationsCommand(const SchedulerOptions& options)
                         existingIdentical ? 0 : 2;
     }
 
-    // Pre-Phase-H Campaign Operations commands intentionally retain the
-    // generic runtime connection and therefore cannot acquire production
-    // capability merely by being invoked from this command family.
-    const std::string connectionString = LstmDbConnectionString();
+    // Pre-Phase-H commands require a separately reviewed deployment LOGIN for
+    // their Phase 2 capability roles. Production-capable or superuser
+    // principals are rejected before any Campaign Operations workflow opens.
+    const std::string connectionString =
+        CampaignOperationsPrePhaseHConnectionString();
+    ValidateCampaignOperationsPrePhaseHPrincipal(connectionString);
+    if (options.campaignOperationsAdmitMaterializationId)
+    {
+        EA::CampaignOperations::OperationalCampaignAdmissionRequest request;
+        request.materializationId =
+            *options.campaignOperationsAdmitMaterializationId;
+        request.actorIdentity = *options.campaignOperationsActor;
+        request.reason = *options.campaignOperationsReason;
+        return EA::CampaignOperations::RunOperationalCampaignAdmissionCommand(
+            connectionString, request, std::cout, std::cerr);
+    }
     if (options.campaignOperationsCompletionStatusCampaignId)
         return EA::CampaignOperations::RunCampaignCompletionStatusCommand(
             connectionString,
@@ -23843,6 +23932,7 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             options.campaignOperationsBudgetAmendCampaignId ||
             options.campaignOperationsBudgetRevokeCampaignId ||
             options.campaignOperationsBudgetSupersedeCampaignId ||
+            options.campaignOperationsAdmitMaterializationId ||
             options.campaignOperationsAcceptRequestCampaignId ||
             options.campaignOperationsBudgetStatusCampaignId ||
             options.campaignOperationsRequestStatusRequestId ||

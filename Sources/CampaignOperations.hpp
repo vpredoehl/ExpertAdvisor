@@ -14,6 +14,8 @@ inline constexpr int kCampaignOperationsActionContractVersion = 1;
 inline constexpr int kCampaignOperationsScopeContractVersion = 1;
 inline constexpr char kCampaignOperationsAuthorizationRole[] =
     "campaign_operations_authorizer";
+inline constexpr char kCampaignOperationsCampaignCreatorRole[] =
+    "campaign_operations_campaign_creator";
 inline constexpr std::size_t kCampaignOperationsActorMaximumBytes = 128U;
 inline constexpr std::size_t kCampaignOperationsReasonMaximumBytes = 4096U;
 inline constexpr std::size_t kCampaignOperationsCanonicalMaximumBytes =

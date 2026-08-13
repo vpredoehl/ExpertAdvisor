@@ -511,6 +511,7 @@ PersistResult<PersistedOperationalCampaign> PersistOperationalCampaign(
     const OperationalCampaign& campaign, const ActorIdentity& actor,
     const Reason& reason)
 {
+    RequireCapability(transaction, kCampaignOperationsCampaignCreatorRole);
     ValidateOperationalCampaign(campaign);
     transaction.exec(
         "SELECT pg_advisory_xact_lock(hashtextextended($1,"
@@ -548,7 +549,7 @@ PersistResult<PersistedOperationalCampaign> PersistOperationalCampaign(
                                      .as<long long>();
     InsertAudit(transaction, OperationalCampaignId(campaignId), std::nullopt,
         std::nullopt, "campaign_created", actor,
-        "campaign_operations_campaign_creator", reason, std::nullopt, 1);
+        kCampaignOperationsCampaignCreatorRole, reason, std::nullopt, 1);
     auto persisted = FindOperationalCampaign(
         transaction, OperationalCampaignId(campaignId));
     if (!persisted)

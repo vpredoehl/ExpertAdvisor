@@ -16,6 +16,13 @@ inline constexpr char kCampaignOperationsBudgetAdministratorRole[] =
 inline constexpr char kCampaignOperationsRequestAcceptorRole[] =
     "campaign_operations_request_acceptor";
 
+struct OperationalCampaignAdmissionRequest
+{
+    long long materializationId = 0;
+    std::string actorIdentity;
+    std::string reason;
+};
+
 struct BudgetAdministrationRequest
 {
     long long campaignId = 0;
@@ -52,6 +59,12 @@ BudgetAdministrationRequest ValidateBudgetAdministrationRequest(
 OperationalRequestAcceptanceRequest
 ValidateOperationalRequestAcceptanceRequest(
     const OperationalRequestAcceptanceRequest& request);
+OperationalCampaignAdmissionRequest ValidateOperationalCampaignAdmissionRequest(
+    const OperationalCampaignAdmissionRequest& request);
+
+PersistResult<PersistedOperationalCampaign> AdmitOperationalCampaign(
+    pqxx::connection& connection,
+    const OperationalCampaignAdmissionRequest& request);
 
 PersistResult<PersistedBudgetLedgerEntry> AdministerCampaignBudget(
     pqxx::connection& connection,
@@ -72,6 +85,10 @@ int RunCampaignBudgetAdministrationCommand(
 int RunCampaignOperationalRequestAcceptanceCommand(
     const std::string& connectionString,
     const OperationalRequestAcceptanceRequest& request,
+    std::ostream& output, std::ostream& errors);
+int RunOperationalCampaignAdmissionCommand(
+    const std::string& connectionString,
+    const OperationalCampaignAdmissionRequest& request,
     std::ostream& output, std::ostream& errors);
 int RunCampaignBudgetStatusCommand(const std::string& connectionString,
     OperationalCampaignId campaignId, std::ostream& output,

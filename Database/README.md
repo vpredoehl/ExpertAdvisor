@@ -110,6 +110,28 @@ Recommendation conversion and campaign-approval history is created by:
   durable ready requests, acquisition events, accounting/status views,
   same-transaction audit completeness, and separate disabled-by-default budget
   administrator and request acceptor roles; no dispatch or lifecycle authority
+- `062_campaign_operations_pre_phase_h_view_access.sql`: restores the explicit
+  `SELECT` required by the NOLOGIN owner of the Phase 2 status views after H1
+  seals the operational-request table; it creates no LOGIN or capability grant
+- `063_campaign_operations_h1_owner_read_acl_reconciliation.sql`: restores the
+  four explicit H1-relation `SELECT` tuples required by the existing
+  `campaign_operations_owner` SECURITY DEFINER read paths. H1 ownership,
+  ordinary-role isolation, and all mutation ACLs remain unchanged.
+
+Campaign Operations deployment also requires an explicit, separately reviewed
+pre-Phase-H LOGIN selected with `CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER`.
+For the admission path, grant the existing
+`campaign_operations_pre_phase_h_login` exactly these three NOLOGIN
+capabilities:
+
+- `campaign_operations_campaign_creator`
+- `campaign_operations_budget_administrator`
+- `campaign_operations_request_acceptor`
+
+Do not grant that LOGIN any Phase-H production capability. Admission is the
+only path that creates an operational campaign from an existing recommendation
+campaign materialization; it is an explicit mutation and does not create
+budget, request, dispatch, experiment, or scheduler state.
 
 These append-only tables record manually prepared proposals and their explicit
 operator review decisions. An approval is administrative evidence for possible

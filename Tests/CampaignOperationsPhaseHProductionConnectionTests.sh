@@ -34,7 +34,14 @@ rg -q 'CAMPAIGN_OPERATIONS_PRODUCTION_ENABLER_DB_USER' <<<"$enable_route"
 rg -q 'CAMPAIGN_OPERATIONS_PRODUCTION_DISABLER_DB_USER' <<<"$disable_route"
 rg -q 'CAMPAIGN_OPERATIONS_PRODUCTION_MANAGER_DB_USER' <<<"$dispatch_route"
 rg -q 'CAMPAIGN_OPERATIONS_PRODUCTION_DISPATCH_SERVICE_DB_USER' <<<"$dispatch_route"
-rg -q 'const std::string connectionString = LstmDbConnectionString' <<<"$command_body"
+rg -q 'CampaignOperationsPrePhaseHConnectionString' <<<"$command_body"
+rg -q 'ValidateCampaignOperationsPrePhaseHPrincipal' <<<"$command_body"
+rg -q 'CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER' "$source_file"
+rg -q 'campaignOperationsAdmitMaterializationId' "$source_file"
+rg -q 'RunOperationalCampaignAdmissionCommand' "$source_file"
+rg -q 'kCampaignOperationsCampaignCreatorRole' "$repo_root/Sources/CampaignOperationsRepository.cpp"
+rg -q 'campaign_operations_pre_phase_h_principal_invalid' "$source_file"
+rg -q 'missing required Campaign Operations pre-Phase-H principal' "$source_file"
 
 # Migration 056 deliberately contains no LOGIN creation or pqxx capability
 # grant.  The H2 deployment audit remains the runtime proof of its absence.
