@@ -1554,6 +1554,8 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
                           << std::endl;
                 LSTM_ASSERT(false, "PredictNextDirectionProbs: non-finite feature detected before LSTM");
             }
+
+            dst[c] = std::clamp(v, -10.0f, 10.0f);
         }
 
         if (capturePhase2Window)
@@ -1578,10 +1580,10 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
                   << ",model_feature_cols=" << modelFeatureCount
                   << ",feature_uses_future_values=0"
                   << std::endl;
-        std::cout << "DIAG_NORM_WARN"
-                  << ",kind=classification_inference_prelstm_unsanitized"
+        std::cout << "DIAG_NORM_PRELSTM_PARITY"
+                  << ",kind=classification_inference_prelstm_clamped"
                   << ",training_clamp=10"
-                  << ",classification_inference_clamp=0"
+                  << ",classification_inference_clamp=10"
                   << std::endl;
         PrintPhase2MatrixDiagnostics("DIAG_FEATURE_INFER_DIRECTION_PRELSTM",
                                      "DIAG_FEATURE_WARN",
