@@ -44,6 +44,7 @@
 #include "FxPriceSanity.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
 #include "Donchian20Mode.hpp"
+#include "ModelInputContract.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -77,6 +78,9 @@ constexpr size_t BaselineReturnFeatureCount =
     static_cast<size_t>(LSTM_RET_HORIZON_4) +
     static_cast<size_t>(LSTM_RET_HORIZON_8) +
     static_cast<size_t>(LSTM_RET_HORIZON_16);
+
+static_assert(BaselineReturnFeatureCount == EA::kModelReturnFeatureCount,
+              "runtime return-feature contract must contain four columns");
 
 const char* GateStateModeLabel()
 {
@@ -4398,12 +4402,10 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.toDate = range.second;
 
     {
-        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
-            throw std::runtime_error("resume requires valid model_meta");
-        cfg.modelInputWidth = static_cast<int>(std::llround(vals[1]));
-        cfg.modelHiddenSize = static_cast<size_t>(std::llround(vals[2]));
+        const auto modelMeta =
+            DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+        cfg.modelInputWidth = static_cast<int>(modelMeta.inputWidth);
+        cfg.modelHiddenSize = modelMeta.hiddenSize;
     }
 
     {
@@ -4748,11 +4750,21 @@ const char* TrainConfigMetaFieldMapping()
     return "schema_version,prediction_horizon,threshold_logret,window_size,label_rule_id,class_weight_down,class_weight_neutral,class_weight_up,num_layers,normalization_version,epochs_trained,core_lr_mult,head_weight_lr_mult,head_bias_lr_mult";
 }
 
-size_t RuntimeModelInputWidth(const Tensor& tensor)
+size_t RuntimeTensorFeatureWidth(const Tensor& tensor)
 {
-    const size_t baseFeatureCount = (tensor.begin() != tensor.end())
+    return (tensor.begin() != tensor.end())
         ? static_cast<size_t>((*tensor.begin()).Shape()[1])
         : 0;
+}
+
+size_t RuntimeModelInputWidth(
+    const Tensor& tensor,
+    std::optional<std::size_t> persistedModelInputWidth = std::nullopt)
+{
+    const size_t baseFeatureCount = RuntimeTensorFeatureWidth(tensor);
+    if (persistedModelInputWidth.has_value())
+        return EA::ResolveModelInputContract(*persistedModelInputWidth,
+                                             baseFeatureCount).modelInputWidth;
     return baseFeatureCount + BaselineReturnFeatureCount;
 }
 
@@ -5006,42 +5018,35 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
 
     try
     {
-        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+        const auto modelMeta =
+            DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+        const int modelInputWidth = static_cast<int>(modelMeta.inputWidth);
+        const int modelHiddenSize = static_cast<int>(modelMeta.hiddenSize);
+        const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(
+            tensor, modelMeta.inputWidth));
+        const int runtimeHiddenSize = static_cast<int>(hidden_size);
+        bool sectionMatches = true;
+        if (modelMeta.schemaVersion != 1)
         {
-            printMismatch("model_meta_shape", std::to_string(dims.n_rows) + "x" + std::to_string(dims.n_cols), "1x3");
+            printMismatch("model_meta_schema_version", modelMeta.schemaVersion, 1);
+            sectionMatches = false;
         }
-        else
+        if (modelInputWidth != runtimeInputWidth)
         {
-            bool sectionMatches = true;
-            const int schemaVersion = static_cast<int>(vals[0]);
-            const int modelInputWidth = static_cast<int>(vals[1]);
-            const int modelHiddenSize = static_cast<int>(vals[2]);
-            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
-            const int runtimeHiddenSize = static_cast<int>(hidden_size);
-
-            if (schemaVersion != 1)
-            {
-                printMismatch("model_meta_schema_version", schemaVersion, 1);
-                sectionMatches = false;
-            }
-            if (modelInputWidth != runtimeInputWidth)
-            {
-                printMismatch("feature_count", modelInputWidth, runtimeInputWidth);
-                sectionMatches = false;
-            }
-            if (modelHiddenSize != runtimeHiddenSize)
-            {
-                printMismatch("hidden_size", modelHiddenSize, runtimeHiddenSize);
-                sectionMatches = false;
-            }
-            modelMetaMatches = sectionMatches;
+            printMismatch("feature_count", modelInputWidth, runtimeInputWidth);
+            sectionMatches = false;
         }
+        if (modelHiddenSize != runtimeHiddenSize)
+        {
+            printMismatch("hidden_size", modelHiddenSize, runtimeHiddenSize);
+            sectionMatches = false;
+        }
+        modelMetaMatches = sectionMatches;
     }
-    catch (const std::exception&)
+    catch (const std::exception& error)
     {
-        // Older models may not have model_meta.
+        if (hasModelMeta)
+            printMismatch("model_meta", error.what(), "supported persisted model");
     }
 
     try
@@ -5548,15 +5553,10 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
         throw std::runtime_error("unsupported persisted num_layers; this binary supports only 1");
 
     {
-        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
-            throw std::runtime_error("model_meta missing required 1x3 inference fields");
-        const int schemaVersion = static_cast<int>(std::llround(vals[0]));
-        if (schemaVersion != 1)
-            throw std::runtime_error("unsupported model_meta schema_version");
-        cfg.modelInputWidth = static_cast<int>(std::llround(vals[1]));
-        cfg.modelHiddenSize = static_cast<size_t>(std::llround(vals[2]));
+        const auto modelMeta =
+            DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+        cfg.modelInputWidth = static_cast<int>(modelMeta.inputWidth);
+        cfg.modelHiddenSize = modelMeta.hiddenSize;
         cfg.hasModelMeta = true;
     }
 
@@ -5671,6 +5671,7 @@ struct InferAllCandidate
 {
     long long modelId = -1;
     std::string name;
+    std::size_t modelInputWidth = 0;
     std::optional<size_t> completedEpochs;
     bool legacyMissingSymbol = false;
     bool metadataGap = false;
@@ -5905,10 +5906,12 @@ struct InferenceEvaluationResult
 EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
                                       float initialLongTerm,
                                       float initialShortTerm,
-                                      EA::LSTM::TargetType targetType)
+                                      EA::LSTM::TargetType targetType,
+                                      std::optional<std::size_t> modelInputWidth = std::nullopt)
 {
     ScopedDiagnosticCoutSilencer silence;
-    return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType };
+    return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType,
+                      modelInputWidth };
 }
 
 InferenceIdentity BuildInferenceIdentity(long long modelId,
@@ -6400,22 +6403,14 @@ bool InferAllCandidateCompatible(pqxx::work& w,
     {
         try
         {
-            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-            if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
-            {
-                return invalidMetadata("model_meta", "invalid_shape");
-            }
-            const int schemaVersion = static_cast<int>(std::llround(vals[0]));
-            const int modelInputWidth = static_cast<int>(std::llround(vals[1]));
-            const int modelHiddenSize = static_cast<int>(std::llround(vals[2]));
-            if (schemaVersion != 1)
-                return configMismatch("model_meta_schema_version", 1, schemaVersion);
-            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
-            if (modelInputWidth != runtimeInputWidth)
-                return configMismatch("feature_count", runtimeInputWidth, modelInputWidth);
-            if (modelHiddenSize != static_cast<int>(hidden_size))
-                return configMismatch("hidden_size", hidden_size, modelHiddenSize);
+            const auto modelMeta =
+                DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+            const auto inputContract = EA::ResolveModelInputContract(
+                modelMeta.inputWidth,
+                RuntimeTensorFeatureWidth(tensor));
+            candidate.modelInputWidth = inputContract.modelInputWidth;
+            if (modelMeta.hiddenSize != static_cast<std::size_t>(hidden_size))
+                return configMismatch("hidden_size", hidden_size, modelMeta.hiddenSize);
         }
         catch (const std::exception& e)
         {
@@ -6423,7 +6418,30 @@ bool InferAllCandidateCompatible(pqxx::work& w,
         }
     }
     else
+    {
+        // Legacy infer-all candidates may predate model_meta.  Preserve the
+        // existing metadata-gap inclusion only when the parameter matrix
+        // itself yields one of the supported structural widths.
+        try
+        {
+            const auto paramDims =
+                DBIO::PgModelIO::loadParameterDims(w, modelId, "param");
+            if (paramDims.n_rows <= 0 || paramDims.n_cols <= 0 ||
+                paramDims.n_cols % 4 != 0 ||
+                paramDims.n_rows <= paramDims.n_cols / 4)
+                return invalidMetadata("param", "invalid_lstm_gate_matrix_shape");
+            candidate.modelInputWidth = static_cast<std::size_t>(
+                paramDims.n_rows - paramDims.n_cols / 4);
+            (void)EA::ResolveModelInputContract(
+                candidate.modelInputWidth,
+                RuntimeTensorFeatureWidth(tensor));
+        }
+        catch (const std::exception& e)
+        {
+            return invalidMetadata("model_meta", e.what());
+        }
         candidate.metadataGap = true;
+    }
 
     try
     {
@@ -6638,7 +6656,8 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                         << " reason=metadata_gap_included"
                         << std::endl;
 
-    EA::LSTM lstm = CreateLstmForRuntimeLogLevel(tensor, 1, 0, requestedTargetType);
+    EA::LSTM lstm = CreateLstmForRuntimeLogLevel(
+        tensor, 1, 0, requestedTargetType, candidate.modelInputWidth);
     PrintRuntimeLrConfig(lstm);
     DiagnosticOut() << "DIAG_LSTM_BINDING"
                     << ",table=" << rawPriceTableName
@@ -7254,28 +7273,25 @@ int main(int argc, const char * argv[])
             DiagnosticOut() << "Candlestick query: " << query << "\n";
             DiagnosticOut() << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
-            if (resumeConfig.has_value())
+            const std::optional<std::size_t> persistedModelInputWidth =
+                resumeConfig.has_value()
+                    ? std::optional<std::size_t>{static_cast<std::size_t>(resumeConfig->modelInputWidth)}
+                    : (inferenceConfig.has_value()
+                           ? std::optional<std::size_t>{static_cast<std::size_t>(inferenceConfig->modelInputWidth)}
+                           : std::nullopt);
+            if (persistedModelInputWidth.has_value())
             {
-                const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
-                if (runtimeInputWidth != resumeConfig->modelInputWidth)
+                try
                 {
-                    std::cout << "MODEL_CONFIG_MISMATCH"
-                              << ",field=feature_count"
-                              << ",model=" << resumeConfig->modelInputWidth
-                              << ",runtime=" << runtimeInputWidth
-                              << std::endl;
-                    return 1;
+                    (void)RuntimeModelInputWidth(t, persistedModelInputWidth);
                 }
-            }
-            if (inferenceConfig.has_value())
-            {
-                const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
-                if (runtimeInputWidth != inferenceConfig->modelInputWidth)
+                catch (const std::exception& error)
                 {
                     std::cout << "MODEL_CONFIG_MISMATCH"
                               << ",field=feature_count"
-                              << ",model=" << inferenceConfig->modelInputWidth
-                              << ",runtime=" << runtimeInputWidth
+                              << ",model=" << *persistedModelInputWidth
+                              << ",runtime=" << RuntimeModelInputWidth(t)
+                              << ",diagnostic=" << error.what()
                               << std::endl;
                     return 1;
                 }
@@ -7295,7 +7311,8 @@ int main(int argc, const char * argv[])
                                             t,
                                             requestedTargetType,
                                             inferenceConfig);
-            EA::LSTM l = CreateLstmForRuntimeLogLevel(t, 1, 0, requestedTargetType);
+            EA::LSTM l = CreateLstmForRuntimeLogLevel(
+                t, 1, 0, requestedTargetType, persistedModelInputWidth);
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;

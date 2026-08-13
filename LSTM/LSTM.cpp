@@ -29,6 +29,7 @@
 #include "MatrixUtils.hpp"
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
+#include "ModelInputContract.hpp"
 #include <MetaNN/data_copy/data_copy.h>
 #include <MetaNN/metal/metal_matmul.h>
 
@@ -537,6 +538,16 @@ constexpr size_t kReturnFeatureCount =
     static_cast<size_t>(LSTM_RET_HORIZON_4) +
     static_cast<size_t>(LSTM_RET_HORIZON_8) +
     static_cast<size_t>(LSTM_RET_HORIZON_16);
+
+static_assert(kReturnFeatureCount == EA::kModelReturnFeatureCount,
+              "LSTM return-feature contract must contain four columns");
+
+size_t TensorFeatureCount(const Tensor& tensor)
+{
+    return (tensor.begin() != tensor.end())
+        ? static_cast<size_t>((*tensor.begin()).Shape()[1])
+        : 0;
+}
 
 #ifndef MINI_BATCH_WINDOWS
 #define MINI_BATCH_WINDOWS 512
@@ -1509,12 +1520,17 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
 
     auto ww = hoistWindowWeights();
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
-    const size_t baseFeatureCount = (w.begin() != w.end()) ? static_cast<size_t>((*w.begin()).Shape()[1]) : 0;
+    const size_t physicalTensorFeatureCount = (w.begin() != w.end())
+        ? static_cast<size_t>((*w.begin()).Shape()[1])
+        : 0;
     const size_t modelFeatureCount = static_cast<size_t>(n_in);
+    const auto inputContract = EA::ResolveModelInputContract(
+        modelFeatureCount, physicalTensorFeatureCount);
+    const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
 #if LSTM_TRAINING_ASSERTS
-    LSTM_ASSERT(modelFeatureCount == baseFeatureCount + kReturnFeatureCount,
-                "PredictNextDirectionProbs: model input width must equal base features + enabled return features");
+    LSTM_ASSERT(modelFeatureCount == modelTensorFeatureCount + kReturnFeatureCount,
+                "PredictNextDirectionProbs: model input contract width mismatch");
 #endif
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> model_row(1, modelFeatureCount);
     static bool s_printed_phase2_infer_direction_diag = false;
@@ -1531,10 +1547,11 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
         auto lowDst = MetaNN::LowerAccess(model_row);
         float* dst = lowDst.MutableRawMemory();
 
-        std::memcpy(dst, src, baseFeatureCount * sizeof(float));
+        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract);
         if (useReturnFeatures)
         {
-            const size_t appended = AppendMultiHorizonReturnFeatures(w, rowIdx, dst, baseFeatureCount);
+            const size_t appended = AppendMultiHorizonReturnFeatures(
+                w, rowIdx, dst, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextDirectionProbs: appended return feature count mismatch");
@@ -1575,7 +1592,8 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
     {
         std::cout << "DIAG_FEATURE_CONFIG"
                   << ",phase=inference_direction"
-                  << ",base_feature_cols=" << baseFeatureCount
+                  << ",physical_tensor_feature_cols=" << physicalTensorFeatureCount
+                  << ",base_feature_cols=" << modelTensorFeatureCount
                   << ",appended_return_feature_cols=" << kReturnFeatureCount
                   << ",model_feature_cols=" << modelFeatureCount
                   << ",feature_uses_future_values=0"
@@ -3027,24 +3045,31 @@ inline void EA::LSTM::mergeGateAccumulators(const GateAccumulators& A,
     writeBias(d_bias_accum, 3*H, A.db_o);
 }
 
-EA::LSTM::LSTM(const Tensor& tt, float lt, float st, TargetType explicitTargetType)
+EA::LSTM::LSTM(const Tensor& tt,
+               float lt,
+               float st,
+               TargetType explicitTargetType,
+               std::optional<std::size_t> modelInputWidth)
   : t{ tt },
-    n_in { (tt.begin() != tt.end()) ? static_cast<int>((*tt.begin()).Shape()[1] + kReturnFeatureCount) : static_cast<int>(kReturnFeatureCount) },
+    n_in { static_cast<int>(EA::ResolveModelInputContract(
+        modelInputWidth.value_or(TensorFeatureCount(tt) + kReturnFeatureCount),
+        TensorFeatureCount(tt)).modelInputWidth) },
     targetType { explicitTargetType },
     param  { static_cast<size_t>(n_in), 4 * n_out } // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out];
 {
-    const size_t baseFeatureCount = (tt.begin() != tt.end())
-        ? static_cast<size_t>((*tt.begin()).Shape()[1])
-        : 0;
+    const size_t baseFeatureCount = TensorFeatureCount(tt);
+    const auto inputContract = EA::ResolveModelInputContract(
+        static_cast<size_t>(n_in), baseFeatureCount);
 
 #if LSTM_TRAINING_ASSERTS
     LSTM_ASSERT(baseFeatureCount > 0, "LSTM ctor: input tensor must contain at least one feature column");
 #endif
 
-    // Model input width must match the actual per-timestep feature width.
-    // We append enabled multi-horizon return features in CalculateBatch/PredictNext*,
-    // so reserve kReturnFeatureCount additional input columns here.
-    // n_in = static_cast<int>(baseFeatureCount + kReturnFeatureCount);
+    // The persisted model contract may intentionally project the current
+    // tensor's physical columns (legacy n_in=36 projects 34 to 32).
+    LSTM_ASSERT(inputContract.modelInputWidth ==
+                    inputContract.tensorFeatureCount + kReturnFeatureCount,
+                "LSTM ctor: model input contract width mismatch");
 
     // Rebuild all size-dependent tensors from the resolved runtime input width.
     param = EAMatrix(static_cast<size_t>(n_in + hidden_size), static_cast<size_t>(4 * n_out));
@@ -3266,19 +3291,25 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     // instead of repeatedly materializing overlapping windows via GetWindow().
     const size_t batchRows = static_cast<size_t>(batch.end() - batch.begin());
     const size_t batchGlobalStartIdx = static_cast<size_t>(batch.begin() - t.begin());
-    const size_t baseFeatureCount = (batchRows > 0) ? static_cast<size_t>((*batch.begin()).Shape()[1]) : 0;
+    const size_t physicalTensorFeatureCount = (batchRows > 0)
+        ? static_cast<size_t>((*batch.begin()).Shape()[1])
+        : 0;
     const size_t modelFeatureCount = static_cast<size_t>(n_in);
+    const auto inputContract = EA::ResolveModelInputContract(
+        modelFeatureCount, physicalTensorFeatureCount);
+    const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
 #if LSTM_TRAINING_ASSERTS
-    if (modelFeatureCount != baseFeatureCount + kReturnFeatureCount)
+    if (modelFeatureCount != modelTensorFeatureCount + kReturnFeatureCount)
     {
         std::cout << "DEBUG n_in=" << modelFeatureCount
-                  << " baseFeatureCount=" << baseFeatureCount
+                  << " physicalTensorFeatureCount=" << physicalTensorFeatureCount
+                  << " modelTensorFeatureCount=" << modelTensorFeatureCount
                   << " kReturnFeatureCount=" << kReturnFeatureCount
                   << " closeCol=" << closeCol
                   << " batchRows=" << batchRows
                   << std::endl;
-        LSTM_ASSERT(false, "CalculateBatch: model input width must equal base features + enabled return features");
+        LSTM_ASSERT(false, "CalculateBatch: model input contract width mismatch");
     }
 #endif
     const size_t featureCount = modelFeatureCount;
@@ -3287,7 +3318,8 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
     {
         std::cout << "DIAG_FEATURE_CONFIG"
                   << ",phase=train"
-                  << ",base_feature_cols=" << baseFeatureCount
+                  << ",physical_tensor_feature_cols=" << physicalTensorFeatureCount
+                  << ",base_feature_cols=" << modelTensorFeatureCount
                   << ",appended_return_feature_cols=" << kReturnFeatureCount
                   << ",model_feature_cols=" << modelFeatureCount
                   << ",feature_uses_future_values=0"
@@ -3303,11 +3335,12 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             const float* src = lowRow.RawMemory();
             float* dstRow = dst + r * featureCount;
 
-            std::memcpy(dstRow, src, baseFeatureCount * sizeof(float));
+            EA::CopyTensorFeaturesForModelInput(dstRow, src, inputContract);
 
             if (useReturnFeatures)
             {
-                const size_t appended = AppendMultiHorizonReturnFeatures(batch, r, dstRow, baseFeatureCount);
+                const size_t appended = AppendMultiHorizonReturnFeatures(
+                    batch, r, dstRow, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
                 LSTM_ASSERT(appended == kReturnFeatureCount,
                             "CalculateBatch: appended return feature count mismatch");
@@ -7246,12 +7279,17 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
-    const size_t baseFeatureCount = (w.begin() != w.end()) ? static_cast<size_t>((*w.begin()).Shape()[1]) : 0;
+    const size_t physicalTensorFeatureCount = (w.begin() != w.end())
+        ? static_cast<size_t>((*w.begin()).Shape()[1])
+        : 0;
     const size_t modelFeatureCount = static_cast<size_t>(n_in);
+    const auto inputContract = EA::ResolveModelInputContract(
+        modelFeatureCount, physicalTensorFeatureCount);
+    const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
 #if LSTM_TRAINING_ASSERTS
-    LSTM_ASSERT(modelFeatureCount == baseFeatureCount + kReturnFeatureCount,
-                "PredictNextReturn: model input width must equal base features + enabled return features");
+    LSTM_ASSERT(modelFeatureCount == modelTensorFeatureCount + kReturnFeatureCount,
+                "PredictNextReturn: model input contract width mismatch");
 #endif
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> model_row(1, modelFeatureCount);
 
@@ -7265,10 +7303,11 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         auto lowDst = MetaNN::LowerAccess(model_row);
         float* dst = lowDst.MutableRawMemory();
 
-        std::memcpy(dst, src, baseFeatureCount * sizeof(float));
+        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract);
         if (useReturnFeatures)
         {
-            const size_t appended = AppendMultiHorizonReturnFeatures(w, rowIdx, dst, baseFeatureCount);
+            const size_t appended = AppendMultiHorizonReturnFeatures(
+                w, rowIdx, dst, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextReturn: appended return feature count mismatch");
@@ -7333,12 +7372,17 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
     // Prepare views and concat buffer
     auto ww = hoistWindowWeights();
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> xh_concat_row(1, static_cast<size_t>(n_in + hidden_size));
-    const size_t baseFeatureCount = (w.begin() != w.end()) ? static_cast<size_t>((*w.begin()).Shape()[1]) : 0;
+    const size_t physicalTensorFeatureCount = (w.begin() != w.end())
+        ? static_cast<size_t>((*w.begin()).Shape()[1])
+        : 0;
     const size_t modelFeatureCount = static_cast<size_t>(n_in);
+    const auto inputContract = EA::ResolveModelInputContract(
+        modelFeatureCount, physicalTensorFeatureCount);
+    const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
 #if LSTM_TRAINING_ASSERTS
-    LSTM_ASSERT(modelFeatureCount == baseFeatureCount + kReturnFeatureCount,
-                "PredictNextClose: model input width must equal base features + enabled return features");
+    LSTM_ASSERT(modelFeatureCount == modelTensorFeatureCount + kReturnFeatureCount,
+                "PredictNextRelativeMove: model input contract width mismatch");
 #endif
     MetaNN::Matrix<float, MetaNN::DeviceTags::Metal> model_row(1, modelFeatureCount);
 
@@ -7352,10 +7396,11 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         auto lowDst = MetaNN::LowerAccess(model_row);
         float* dst = lowDst.MutableRawMemory();
 
-        std::memcpy(dst, src, baseFeatureCount * sizeof(float));
+        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract);
         if (useReturnFeatures)
         {
-            const size_t appended = AppendMultiHorizonReturnFeatures(w, rowIdx, dst, baseFeatureCount);
+            const size_t appended = AppendMultiHorizonReturnFeatures(
+                w, rowIdx, dst, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextClose: appended return feature count mismatch");

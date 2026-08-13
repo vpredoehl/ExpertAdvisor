@@ -141,7 +141,9 @@ public:
     size_t completedEpochs = 0;
     static bool suppressPhase3HiddenGeometryDiagnostics;
     
-    LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0, TargetType explicitTargetType = TargetType::UpNeutralDownReturn);
+    LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0,
+         TargetType explicitTargetType = TargetType::UpNeutralDownReturn,
+         std::optional<std::size_t> modelInputWidth = std::nullopt);
 
     inline void InitializeBiasWithForgetGateOffset(float forgetBiasOffset)
     {
@@ -157,6 +159,7 @@ public:
     LSTM() = delete;
     
     void SetLearningRate(float lr) { learning_rate = lr; }
+    int InputFeatureCount() const { return n_in; }
     const ::Tensor* BoundTensorAddress() const { return &t; }
     
     std::tuple<float, size_t, size_t> CalculateBatch(const Window, unsigned short);

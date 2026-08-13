@@ -8,6 +8,11 @@
 #include "PricePoint.hpp"
 #include "Tensor.hpp"
 
+extern "C" bool LstmRuntimeDiagnosticLoggingEnabled()
+{
+    return false;
+}
+
 namespace
 {
 void AssertNear(float actual, float expected)

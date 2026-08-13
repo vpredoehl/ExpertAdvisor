@@ -14,6 +14,7 @@
 #include "LSTM.hpp"
 #include "CanonicalSymbol.hpp"
 #include "Donchian20Mode.hpp"
+#include "ModelInputContract.hpp"
 
 
 #pragma clang diagnostic push
@@ -75,6 +76,13 @@ inline std::string toPgArrayLiteral(const std::vector<double>& vals)
 // Save a MetaNN matrix into the `matrix` table via replace_parameter
 class PgModelIO {
 public:
+
+    struct PersistedModelMeta
+    {
+        int schemaVersion = 0;
+        std::size_t inputWidth = 0;
+        std::size_t hiddenSize = 0;
+    };
     static constexpr int kTrainConfigMetaSchemaVersion = 1;
     static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
     static constexpr int kTrainConfigMetaFieldCount = 8;
@@ -393,34 +401,66 @@ private:
 
 public:
 
+    struct ParamDims { int n_rows; int n_cols; };
+
+    // Load model_meta and prove that its structural width agrees with the
+    // persisted input parameter matrix.  model_meta is written from that
+    // matrix by saveModelMeta, so this is the persisted model contract.
+    static PersistedModelMeta loadRequiredModelMeta(pqxx::work& w,
+                                                    long long modelId)
+    {
+        const auto dims = loadParameterDims(w, modelId, "model_meta");
+        const auto vals = loadParameterValues(w, modelId, "model_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+            throw std::runtime_error("model_meta has invalid shape; expected 1x3");
+
+        const int schemaVersion = static_cast<int>(std::llround(vals[0]));
+        const double inputWidthValue = vals[1];
+        const double hiddenSizeValue = vals[2];
+        if (schemaVersion != 1 ||
+            !std::isfinite(inputWidthValue) ||
+            !std::isfinite(hiddenSizeValue) ||
+            std::llround(inputWidthValue) != inputWidthValue ||
+            std::llround(hiddenSizeValue) != hiddenSizeValue ||
+            inputWidthValue <= 0.0 || hiddenSizeValue <= 0.0)
+            throw std::runtime_error("model_meta has invalid schema or dimensions");
+
+        const std::size_t inputWidth = static_cast<std::size_t>(inputWidthValue);
+        const std::size_t hiddenSize = static_cast<std::size_t>(hiddenSizeValue);
+        (void)EA::ContractForModelInputWidth(inputWidth);
+
+        const auto paramDims = loadParameterDims(w, modelId, "param");
+        if (paramDims.n_rows <= 0 || paramDims.n_cols <= 0 ||
+            paramDims.n_cols % 4 != 0 ||
+            static_cast<std::size_t>(paramDims.n_cols / 4) != hiddenSize ||
+            paramDims.n_rows <= paramDims.n_cols / 4)
+            throw std::runtime_error("param has invalid LSTM gate-matrix shape");
+
+        const std::size_t parameterInputWidth =
+            static_cast<std::size_t>(paramDims.n_rows - paramDims.n_cols / 4);
+        if (parameterInputWidth != inputWidth)
+            throw std::runtime_error(
+                "MODEL_META_PARAMETER_SHAPE_MISMATCH,model_meta_n_in=" +
+                std::to_string(inputWidth) + ",param_n_in=" +
+                std::to_string(parameterInputWidth));
+
+        return {schemaVersion, inputWidth, hiddenSize};
+    }
+
     // Try to load minimal model metadata and validate against current parameter shapes
     static bool tryLoadModelMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
     {
         try {
-            auto dims = loadParameterDims(w, modelId, "model_meta");
-            if (dims.n_rows != 1 || dims.n_cols != 3) return false;
-            auto vals = loadParameterValues(w, modelId, "model_meta");
-            if (vals.size() != 3) return false;
-
-            const int schemaVersion = static_cast<int>(vals[0]);
-            if (schemaVersion != 1) throw std::runtime_error("model_meta: unsupported schemaVersion");
-
-            // Derive from current param
+            const auto meta = loadRequiredModelMeta(w, modelId);
             const size_t rows = lstm.param.Shape()[0];
             const size_t cols = lstm.param.Shape()[1];
+            if (cols % 4 != 0 || rows <= cols / 4) return false;
             const size_t hidden_size = cols / 4;
             const size_t n_in = rows - hidden_size;
-
-            const int n_in_db = static_cast<int>(vals[1]);
-            const int h_db    = static_cast<int>(vals[2]);
-            if (n_in_db != static_cast<int>(n_in) || h_db != static_cast<int>(hidden_size))
-                throw std::runtime_error("model_meta mismatch: n_in/hidden_size differ from persisted values");
-            return true;
+            return meta.inputWidth == n_in && meta.hiddenSize == hidden_size;
         }
         catch (...) { return false;   }
     }
-
-    struct ParamDims { int n_rows; int n_cols; };
 
     static ParamDims loadParameterDims(pqxx::work& w,
                                        long long modelId,
@@ -469,7 +509,26 @@ public:
         try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
         try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
         (void)tryLoadTargetMeta(w, modelId, lstm);
-        (void)tryLoadModelMeta(w, modelId, lstm);
+
+        const size_t rows = lstm.param.Shape()[0];
+        const size_t cols = lstm.param.Shape()[1];
+        if (cols == 0 || cols % 4 != 0 || rows <= cols / 4 ||
+            rows - cols / 4 != static_cast<size_t>(lstm.InputFeatureCount()))
+            throw std::runtime_error(
+                "MODEL_PARAMETER_SHAPE_MISMATCH,loaded_n_in=" +
+                std::to_string(rows > cols / 4 ? rows - cols / 4 : 0) +
+                ",runtime_n_in=" + std::to_string(lstm.InputFeatureCount()));
+
+        try
+        {
+            (void)loadRequiredModelMeta(w, modelId);
+        }
+        catch (const std::exception& error)
+        {
+            if (std::string{error.what()}.find("No entries for parameter: model_meta") ==
+                std::string::npos)
+                throw;
+        }
     }
 
     static bool tryLoadTargetMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)

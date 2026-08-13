@@ -14621,15 +14621,23 @@ bool TransitionAfterTrainModelAvailable(pqxx::work& w,
 
 void RequeueTrainOrphanFromCheckpoint(pqxx::work& w,
                                       const ExperimentRow& experiment,
-                                      const QueueResumeMeta& meta)
+                                      const QueueResumeMeta& meta,
+                                      const std::optional<long long>&
+                                          workerAttemptId = std::nullopt)
 {
-    w.exec_params(
+    pqxx::result updated = w.exec_params(
         "UPDATE experiment "
         "SET status = 'pending', phase = 'train', last_model_id = $1, resume_model_id = $1, "
         "exit_code = NULL, error_message = NULL, updated_at = updated_at "
-        "WHERE experiment_id = $2;",
+        "WHERE experiment_id = $2 "
+        "AND ($3::bigint IS NULL OR "
+        "active_scheduler_worker_attempt_id=$3);",
         meta.modelId,
-        experiment.experimentId);
+        experiment.experimentId,
+        workerAttemptId);
+    if (workerAttemptId)
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            updated, "requeue_train_orphan_exact_attempt");
     std::cout << "SCHEDULER_ORPHAN_RECOVERED"
               << ",experiment_id=" << experiment.experimentId
               << ",resume_model_id=" << meta.modelId
@@ -14641,7 +14649,9 @@ void RequeueTrainOrphanFromCheckpoint(pqxx::work& w,
 
 bool RecoverTrainOrphanFromModel(pqxx::work& w,
                                  const ExperimentRow& experiment,
-                                 long long modelId)
+                                 long long modelId,
+                                 const std::optional<long long>&
+                                     workerAttemptId = std::nullopt)
 {
     const std::optional<QueueResumeMeta> meta = TryLoadRecoverableModelMeta(w, modelId);
     if (!meta.has_value())
@@ -14670,10 +14680,12 @@ bool RecoverTrainOrphanFromModel(pqxx::work& w,
                   << ",target_epochs=" << experiment.targetEpochs
                   << ",next_phase=" << (experiment.inferStart.has_value() && experiment.inferEnd.has_value() ? "infer" : "none")
                   << std::endl;
-        return TransitionAfterTrainModelAvailable(w, experiment, modelId, 0, "train");
+        return TransitionAfterTrainModelAvailable(
+            w, experiment, modelId, 0, "train", workerAttemptId);
     }
 
-    RequeueTrainOrphanFromCheckpoint(w, experiment, *meta);
+    RequeueTrainOrphanFromCheckpoint(
+        w, experiment, *meta, workerAttemptId);
     return true;
 }
 
@@ -15938,12 +15950,10 @@ int RecoverOrphanedRunningExperiments(
                     if (modelId)
                     {
                         completedEvidence =
-                            TransitionAfterTrainModelAvailable(
+                            RecoverTrainOrphanFromModel(
                                 transaction,
                                 experiment,
                                 *modelId,
-                                0,
-                                "train",
                                 attemptId);
                     }
                 }
@@ -18911,9 +18921,18 @@ int RunScheduler(SchedulerOptions options)
         std::cout << "SCHEDULER_DRY_RUN=1" << std::endl;
     if (options.recoverOrphansOnly)
     {
-        std::cout << "SCHEDULER_ORPHAN_RECOVERY_DONE"
-                  << ",recovered_or_failed=" << recoveryCount
-                  << std::endl;
+        if (options.dryRun)
+        {
+            std::cout << "SCHEDULER_ORPHAN_RECOVERY_SKIPPED"
+                      << ",dry_run=1,reason=durable_reconciliation_disabled"
+                      << std::endl;
+        }
+        else
+        {
+            std::cout << "SCHEDULER_ORPHAN_RECOVERY_DONE"
+                      << ",recovered_or_failed=" << recoveryCount
+                      << std::endl;
+        }
         std::cout << "SCHEDULER_STOP"
                   << ",exit_code=0"
                   << std::endl;
