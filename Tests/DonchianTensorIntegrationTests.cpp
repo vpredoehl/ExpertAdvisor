@@ -128,6 +128,24 @@ void TestCurrentBarHighLowCannotAffectDonchian()
         normal.second,
         std::log(currentClose / 95.0f) * kFeatureScale);
 }
+
+void TestZeroAblationPreservesWidthAndPositions()
+{
+    Tensor tensor("donchian_tensor_integration_zero_ablation",
+                  Donchian20Mode::ZeroAblation);
+    PopulateIdenticalPriorHistory(tensor);
+    tensor.Add(MakeFeature(donchian_lookback, 99.75f, 100.0f, 101.0f, 99.0f));
+
+    auto it = tensor.end();
+    --it;
+    auto low = MetaNN::LowerAccess(*it);
+    const float* p = low.RawMemory();
+    assert(tensor.GetDonchian20Mode() == Donchian20Mode::ZeroAblation);
+    assert(feature_size == 34);
+    assert(p[donchianUpCol] == 0.0f);
+    assert(p[donchianDownCol] == 0.0f);
+    assert(p[0] != 0.0f);
+}
 }
 
 int main()
@@ -138,6 +156,7 @@ int main()
     static_assert(donchian_lookback == 20);
 
     TestCurrentBarHighLowCannotAffectDonchian();
+    TestZeroAblationPreservesWidthAndPositions();
 
     return 0;
 }

@@ -540,7 +540,7 @@ std::string EffectiveExperimentConfigurationCanonicalText(
             "recommendation_identity_invalid_numeric_configuration");
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "experiment_recommendation_semantic_configuration_v3"
+    out << "experiment_recommendation_semantic_configuration_v4"
         << ";symbol=" << symbol
         << ";prediction_horizon=" << configuration.predictionHorizon
         << ";label_threshold="
@@ -555,7 +555,9 @@ std::string EffectiveExperimentConfigurationCanonicalText(
         << ";infer_start_date=" << OptionalDateText(
             configuration.inferStartDate)
         << ";infer_end_date=" << OptionalDateText(
-            configuration.inferEndDate);
+            configuration.inferEndDate)
+        << ";donchian20_mode=" << Donchian20ModeText(
+            configuration.donchian20Mode);
     return out.str();
 }
 

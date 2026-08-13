@@ -35,7 +35,6 @@ void ValidateImmutableInput(const RecommendationCampaignHandoffInput& input)
         throw std::invalid_argument(
             "recommendation_campaign_handoff_materialization_invalid");
 
-    std::set<long long> rankingMembers;
     std::set<long long> proposals;
     for (std::size_t index = 0; index < input.members.size(); ++index)
     {
@@ -50,7 +49,6 @@ void ValidateImmutableInput(const RecommendationCampaignHandoffInput& input)
             member.proposalIdentityCanonical.empty() ||
             member.proposalIdentityHash != RecommendationCanonicalHash(
                 member.proposalIdentityCanonical) ||
-            !rankingMembers.insert(member.rankingMemberId).second ||
             !proposals.insert(member.conversionProposalId).second)
             throw std::invalid_argument(
                 "recommendation_campaign_handoff_materialization_member_invalid");

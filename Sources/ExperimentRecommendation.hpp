@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "Donchian20Mode.hpp"
+
 namespace EA::ExperimentRecommendation
 {
 
@@ -77,6 +79,7 @@ struct EffectiveExperimentConfiguration
     std::string trainEndDate;
     std::optional<std::string> inferStartDate;
     std::optional<std::string> inferEndDate;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
 };
 
 // Invocation identity is deliberately distinct from semantic configuration

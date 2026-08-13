@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "DonchianFeatures.hpp"
+#include "Donchian20Mode.hpp"
 
 constexpr float kTestFeatureScale = 1000.0f;
 
@@ -16,6 +17,13 @@ void AssertNear(float actual, float expected)
 
 int main()
 {
+    assert(ParseDonchian20Mode("enabled") == Donchian20Mode::Enabled);
+    assert(ParseDonchian20Mode("zero_ablation") == Donchian20Mode::ZeroAblation);
+    assert(std::string{Donchian20ModeText(kDefaultDonchian20Mode)} == "enabled");
+    bool invalidRejected = false;
+    try { (void)ParseDonchian20Mode("invalid"); }
+    catch (const std::invalid_argument&) { invalidRejected = true; }
+    assert(invalidRejected);
     static_assert(legacy_feature_size == 32);
     static_assert(feature_size == 34);
     static_assert(donchianUpCol == 32);

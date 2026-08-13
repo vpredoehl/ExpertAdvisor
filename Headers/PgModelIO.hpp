@@ -13,6 +13,7 @@
 
 #include "LSTM.hpp"
 #include "CanonicalSymbol.hpp"
+#include "Donchian20Mode.hpp"
 
 
 #pragma clang diagnostic push
@@ -147,7 +148,8 @@ public:
                         const EA::LSTM& lstm,
                         const std::string& symbol = {},
                         const std::string& fromDate = {},
-                        const std::string& toDate = {})
+                        const std::string& toDate = {},
+                        Donchian20Mode donchian20Mode = kDefaultDonchian20Mode)
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -159,11 +161,36 @@ public:
         saveModelMeta(w, modelId, lstm);
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
+        saveDonchian20ModeMeta(w, modelId, donchian20Mode);
         if (symbol.empty())
             throw std::runtime_error("saveAll requires a canonical training symbol");
         saveTrainSymbolMeta(w, modelId, symbol);
         if (!fromDate.empty() || !toDate.empty())
             saveTrainRangeMeta(w, modelId, fromDate, toDate);
+    }
+
+    static void saveDonchian20ModeMeta(pqxx::work& w,
+                                       long long modelId,
+                                       Donchian20Mode mode)
+    {
+        saveAsciiMeta(w, modelId, "donchian20_mode_meta", Donchian20ModeText(mode));
+    }
+
+    static Donchian20Mode loadDonchian20ModeMeta(pqxx::work& w,
+                                                 long long modelId)
+    {
+        try
+        {
+            return ParseDonchian20Mode(
+                decodeAsciiMeta(w, modelId, "donchian20_mode_meta"));
+        }
+        catch (const std::exception& error)
+        {
+            if (std::string{error.what()}.find("No entries for parameter") !=
+                std::string::npos)
+                return kDefaultDonchian20Mode;
+            throw;
+        }
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:

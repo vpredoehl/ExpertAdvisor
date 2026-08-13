@@ -512,20 +512,12 @@ int main()
     malformedEvidence = evidenceWithDistinctSecondMember();
     malformedEvidence.members[1].rankingMemberId =
         malformedEvidence.members[0].rankingMemberId;
-    AssertInvalidArgument([&]
-    {
-        ValidateRecommendationCampaignOutcomePolicyEvidence(
-            malformedEvidence);
-    });
+    ValidateRecommendationCampaignOutcomePolicyEvidence(malformedEvidence);
 
     malformedEvidence = evidenceWithDistinctSecondMember();
     malformedEvidence.members[1].recommendationId =
         malformedEvidence.members[0].recommendationId;
-    AssertInvalidArgument([&]
-    {
-        ValidateRecommendationCampaignOutcomePolicyEvidence(
-            malformedEvidence);
-    });
+    ValidateRecommendationCampaignOutcomePolicyEvidence(malformedEvidence);
 
     malformedEvidence = evidenceWithDistinctSecondMember();
     malformedEvidence.members[1].proposalId =

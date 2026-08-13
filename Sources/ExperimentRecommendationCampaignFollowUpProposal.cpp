@@ -303,8 +303,6 @@ void ValidateRecommendationCampaignFollowUpProposalInput(
     if (view.assessmentMembers != view.decisionMembers)
         throw std::invalid_argument("member_identity_mismatch");
     std::set<long long> materializationMemberIds;
-    std::set<long long> rankingMemberIds;
-    std::set<long long> recommendationIds;
     std::set<long long> proposalIds;
     for (std::size_t index = 0; index < assessmentMemberCount; ++index)
     {
@@ -317,8 +315,6 @@ void ValidateRecommendationCampaignFollowUpProposalInput(
                 *member.expectedExperimentId <= 0) ||
             !materializationMemberIds
                  .insert(member.materializationMemberId).second ||
-            !rankingMemberIds.insert(member.rankingMemberId).second ||
-            !recommendationIds.insert(member.recommendationId).second ||
             !proposalIds.insert(member.proposalId).second)
             throw std::invalid_argument("member_identity_mismatch");
     }

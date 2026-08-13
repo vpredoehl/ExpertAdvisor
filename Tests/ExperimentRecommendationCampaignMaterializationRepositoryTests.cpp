@@ -1,5 +1,7 @@
 #include "../Sources/ExperimentRecommendationCampaignMaterializationRepository.hpp"
 #include "../Sources/ExperimentRecommendationCampaignMaterializationService.hpp"
+#include "../Sources/ExperimentRecommendationConversionExecutionRepository.hpp"
+#include "../Sources/ExperimentRecommendationConversionProposalReviewRepository.hpp"
 
 #include "../Sources/ExperimentRecommendation.hpp"
 
@@ -88,18 +90,26 @@ RecommendationCampaignCandidateInput Candidate()
 
 struct Fixture
 {
+    long long campaignApprovalId = 42;
     RecommendationCampaignPlan plan;
     RecommendationCampaignApprovalEvidence approval;
     ProposedExperimentSpecification proposal;
+    std::vector<ProposedExperimentSpecification> proposals;
     std::string recommendationSemanticCanonical;
     RecommendationCampaignMaterializationEvidence materialization;
 };
 
-Fixture BuildFixture()
+Fixture BuildFixture(
+    bool paired = false,
+    long long campaignApprovalId = 42)
 {
     Fixture fixture;
+    fixture.campaignApprovalId = campaignApprovalId;
     RecommendationCampaignPlanInput input;
     input.policy = Policy();
+    if (paired)
+        input.policy.donchian20Arms = {
+            Donchian20Mode::Enabled, Donchian20Mode::ZeroAblation};
     input.scope.rankingSnapshotId = 7;
     input.rankingSnapshotIdentityCanonical = "materialization-snapshot";
     input.rankingSnapshotIdentityHash = RecommendationCanonicalHash(
@@ -165,16 +175,26 @@ Fixture BuildFixture()
     conversion.mutations.push_back({
         "core_lr_mult", CanonicalRecommendationDouble(1.0),
         CanonicalRecommendationDouble(1.1)});
-    const auto result = BuildProposedExperimentSpecification(conversion);
-    assert(result.eligibility.eligible && result.proposal);
-    fixture.proposal = *result.proposal;
+    for (const auto& candidate : fixture.plan.candidates)
+    {
+        if (candidate.decision != RecommendationCampaignDecision::include)
+            continue;
+        auto armConversion = conversion;
+        armConversion.campaignDonchian20Mode =
+            candidate.input.campaignDonchian20Mode;
+        const auto result = BuildProposedExperimentSpecification(armConversion);
+        assert(result.eligibility.eligible && result.proposal);
+        fixture.proposals.push_back(*result.proposal);
+    }
+    assert(!fixture.proposals.empty());
+    fixture.proposal = fixture.proposals.front();
     fixture.recommendationSemanticCanonical =
         BuildRecommendationCandidateIdentity(
             fixture.proposal.proposedInvocation.configuration).canonicalText;
-    RecommendationCampaignMaterializationRequest request{
-        42, "operator", "Materialize exact proposal set."};
     fixture.materialization = BuildRecommendationCampaignMaterializationEvidence(
-        request, fixture.approval, fixture.plan, {fixture.proposal});
+        RecommendationCampaignMaterializationRequest{
+            campaignApprovalId, "operator", "Materialize exact proposal set."},
+        fixture.approval, fixture.plan, fixture.proposals);
     return fixture;
 }
 
@@ -184,9 +204,10 @@ void InsertApproval(pqxx::transaction_base& tx, const Fixture& fixture)
     const auto& s = e.summary;
     tx.exec(
         "INSERT INTO experiment_recommendation_campaign_approval VALUES("
-        "42,1,7,$1,$2,$3,$4,$5,$6,$7,1,$8,$9,0,$10,$11,$12,$13,$14,$15,$16,"
-        "$17,$18,$19,$20,true,'approved',$21,$22,$23,$24,now());",
-        pqxx::params{e.rankingSnapshotIdentityCanonical,
+        "$1,1,7,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,0,$11,$12,$13,$14,$15,$16,$17,"
+        "$18,$19,$20,$21,true,'approved',$22,$23,$24,$25,now());",
+        pqxx::params{fixture.campaignApprovalId,
+            e.rankingSnapshotIdentityCanonical,
             e.rankingSnapshotIdentityHash,e.planningPolicyCanonical,
             e.planningPolicyHash,e.planningScopeCanonical,
             e.campaignPlanIdentityCanonical,e.campaignPlanIdentityHash,
@@ -247,9 +268,15 @@ int main()
     if (!configured || !SafeDatabase(configured)) return 2;
     const std::string database = configured;
     const std::string user = std::getenv("USER") ? std::getenv("USER") : "vjp";
+    const std::string host = std::getenv("LSTM_TEST_DB_HOST")
+        ? std::getenv("LSTM_TEST_DB_HOST") : "127.0.0.1";
+    const std::string port = std::getenv("LSTM_TEST_DB_PORT")
+        ? std::getenv("LSTM_TEST_DB_PORT") : "5432";
     const std::string schema = "phase4d_materialization_" + std::to_string(getpid());
-    const std::string ownerString = "host=127.0.0.1 dbname=" + database + " user=" + user;
-    const std::string runtimeString = "host=127.0.0.1 dbname=" + database +
+    const std::string ownerString = "host=" + host + " port=" + port +
+        " dbname=" + database + " user=" + user;
+    const std::string runtimeString = "host=" + host + " port=" + port +
+        " dbname=" + database +
         " user=pqxx options='-c search_path=" + schema + "'";
     pqxx::connection owner{ownerString};
     const Fixture fixture = BuildFixture();
@@ -260,13 +287,28 @@ int main()
         setup.exec("SET LOCAL search_path TO " + setup.quote_name(schema));
         setup.exec("CREATE TABLE model(model_id bigint PRIMARY KEY);"
                    "CREATE TABLE experiment("
-                   "experiment_id bigint PRIMARY KEY,symbol text,"
+                   "experiment_id bigserial PRIMARY KEY,symbol text,"
                    "prediction_horizon integer,c_next_threshold double precision,"
                    "core_lr_mult double precision,head_lr_mult double precision,"
                    "target_epochs integer,checkpoint_interval integer,"
                    "train_start timestamptz,train_end timestamptz,"
                    "infer_start timestamptz,infer_end timestamptz,"
-                   "resume_model_id bigint);"
+                   "resume_model_id bigint,"
+                   "duplicate_nonce bigint NOT NULL DEFAULT 0,"
+                   "status text NOT NULL DEFAULT 'paused',"
+                   "phase text NOT NULL DEFAULT 'train',"
+                   "invocation_mode text,updated_at timestamptz NOT NULL DEFAULT now(),"
+                   "donchian20_mode text NOT NULL DEFAULT 'enabled' CHECK "
+                   "(donchian20_mode IN ('enabled','zero_ablation')));"
+                   "CREATE UNIQUE INDEX experiment_unique_identity_uidx ON experiment("
+                   "symbol,prediction_horizon,c_next_threshold,"
+                   "coalesce(core_lr_mult,'-infinity'::double precision),"
+                   "coalesce(head_lr_mult,'-infinity'::double precision),"
+                   "target_epochs,checkpoint_interval,train_start,train_end,"
+                   "coalesce(infer_start,'-infinity'::timestamptz),"
+                   "coalesce(infer_end,'-infinity'::timestamptz),"
+                   "coalesce(resume_model_id,-1),donchian20_mode,duplicate_nonce) "
+                   "WHERE status<>'cancelled';"
                    "CREATE TABLE experiment_recommendation("
                    "recommendation_id bigint PRIMARY KEY,status text,"
                    "source_experiment_id bigint,"
@@ -309,19 +351,17 @@ int main()
                    "action text,resulting_status text,"
                    "recommendation_semantic_canonical text,"
                    "recommendation_semantic_hash text,source_experiment_id bigint);"
-                   "CREATE TABLE experiment_recommendation_conversion_review_decision("
-                   "recommendation_conversion_review_decision_id bigint PRIMARY KEY);"
-                   "CREATE TABLE experiment_recommendation_conversion_execution("
-                   "recommendation_conversion_execution_id bigint PRIMARY KEY);"
-                   "CREATE TABLE experiment_recommendation_conversion_activation("
-                   "recommendation_conversion_activation_id bigint PRIMARY KEY);"
                    "INSERT INTO experiment_recommendation_ranking_snapshot VALUES(7);"
                    "GRANT USAGE ON SCHEMA " + setup.quote_name(schema) + " TO pqxx;"
                    "GRANT SELECT ON ALL TABLES IN SCHEMA " + setup.quote_name(schema) + " TO pqxx;");
         setup.exec(
-            "INSERT INTO experiment VALUES(501,'eurusd',12,0.001,1.0,1.0,"
+            "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,"
+            "c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,"
+            "checkpoint_interval,train_start,train_end,infer_start,infer_end,"
+            "resume_model_id) VALUES(501,'eurusd',12,0.001,1.0,1.0,"
             "120,20,'2026-01-01 00:00:00 America/Chicago',"
             "'2026-02-01 00:00:00 America/Chicago',NULL,NULL,NULL);");
+        setup.exec("SELECT setval('experiment_experiment_id_seq',501,true);");
         setup.exec(
             "INSERT INTO experiment_recommendation VALUES("
             "1,'approved',501,$1,$2,$3,$4,'core_lr_mult',$5,$6);",
@@ -361,10 +401,16 @@ int main()
             "101,7,81,1,1,$1,'advisory_ready',501);",
             pqxx::params{fixture.proposal.recommendationSemanticHash});
         setup.exec(ReadFile("Database/migrations/036_experiment_recommendation_conversion_proposal.sql"));
+        setup.exec(ReadFile("Database/migrations/037_experiment_recommendation_conversion_review.sql"));
+        setup.exec(ReadFile("Database/migrations/038_experiment_recommendation_conversion_execution.sql"));
+        setup.exec(ReadFile("Database/migrations/039_experiment_recommendation_conversion_activation.sql"));
         setup.exec(ReadFile("Database/migrations/040_experiment_recommendation_campaign_approval.sql"));
         setup.exec(ReadFile("Database/migrations/041_experiment_recommendation_campaign_materialization.sql"));
         setup.exec(ReadFile("Database/migrations/041_experiment_recommendation_campaign_materialization.sql"));
+        setup.exec(ReadFile("Database/migrations/061_campaign_materialization_donchian20_arms.sql"));
         setup.exec(ReadFile("Tests/ExperimentRecommendationCampaignMaterializationMigrationTests.sql"));
+        setup.exec("GRANT SELECT,INSERT,UPDATE,DELETE ON experiment TO pqxx;"
+                   "GRANT USAGE,SELECT ON SEQUENCE experiment_experiment_id_seq TO pqxx;");
         InsertApproval(setup, fixture);
         setup.commit();
 
@@ -590,6 +636,92 @@ int main()
             assert(verify.exec("SELECT count(*) FROM experiment_recommendation_conversion_proposal;").one_row()[0].as<int>() == 1);
             assert(verify.exec("SELECT count(*) FROM experiment_recommendation_campaign_materialization;").one_row()[0].as<int>() == 1);
             assert(verify.exec("SELECT count(*) FROM experiment_recommendation_campaign_materialization_member;").one_row()[0].as<int>() == 1);
+        }
+
+        // Controlled paired-arm campaign origin: one ranked scientific
+        // candidate expands into two explicit proposals and two paused
+        // experiments. No scheduler or worker is involved in this proof.
+        const Fixture paired = BuildFixture(true, 43);
+        {
+            pqxx::work tx{owner};
+            tx.exec("SET LOCAL search_path TO " + tx.quote_name(schema));
+            InsertApproval(tx, paired);
+            tx.commit();
+        }
+        PersistedRecommendationCampaignMaterialization pairedPersisted;
+        {
+            pqxx::work tx{runtime};
+            const auto result = PersistRecommendationCampaignMaterialization(
+                tx, paired.materialization);
+            assert(result.outcome ==
+                   RecommendationCampaignMaterializationPersistOutcome::recorded);
+            assert(result.materialization.selectedMemberCount == 2);
+            assert(result.materialization.members.size() == 2);
+            assert(result.newlyCreatedProposalCount == 2 ||
+                   result.newlyCreatedProposalCount == 1);
+            pairedPersisted = result.materialization;
+            tx.commit();
+        }
+        {
+            pqxx::work tx{runtime};
+            const auto replay = PersistRecommendationCampaignMaterialization(
+                tx, paired.materialization);
+            assert(replay.outcome ==
+                   RecommendationCampaignMaterializationPersistOutcome::existingIdentical);
+            assert(replay.materialization.materializationId ==
+                   pairedPersisted.materializationId);
+            assert(replay.materialization.members.size() == 2);
+            tx.commit();
+        }
+        assert(paired.proposals.size() == 2);
+        assert(paired.proposals[0].proposedInvocation.configuration.donchian20Mode ==
+               Donchian20Mode::Enabled);
+        assert(paired.proposals[1].proposedInvocation.configuration.donchian20Mode ==
+               Donchian20Mode::ZeroAblation);
+        assert(paired.proposals[0].conversionIdentityCanonical !=
+               paired.proposals[1].conversionIdentityCanonical);
+        assert(paired.proposals[0].proposedInvocation.configuration.symbol ==
+               paired.proposals[1].proposedInvocation.configuration.symbol);
+        assert(paired.proposals[0].proposedInvocation.configuration.predictionHorizon ==
+               paired.proposals[1].proposedInvocation.configuration.predictionHorizon);
+        assert(paired.proposals[0].proposedInvocation.configuration.coreLrMult ==
+               paired.proposals[1].proposedInvocation.configuration.coreLrMult);
+        assert(paired.proposals[0].proposedInvocation.configuration.headLrMult ==
+               paired.proposals[1].proposedInvocation.configuration.headLrMult);
+        for (const auto& member : pairedPersisted.members)
+        {
+            const auto review = RecordRecommendationConversionProposalReviewDecision(
+                runtime,
+                RecommendationConversionProposalReviewRequest{
+                    member.conversionProposalId,
+                    RecommendationConversionProposalReviewDecision::approve,
+                    "paired-arm-review-" + std::to_string(member.memberOrdinal),
+                    std::string{"paired-arm-test"},
+                    std::string{"Approve exact paired Donchian arm."}});
+            assert(review.decision);
+            const auto execution =
+                ExecuteApprovedRecommendationConversionProposal(
+                    runtime, member.conversionProposalId);
+            assert(execution.outcome ==
+                   RecommendationConversionExecutionOutcome::created);
+            assert(execution.execution);
+        }
+        {
+            pqxx::read_transaction verify{owner};
+            verify.exec("SET LOCAL search_path TO " + verify.quote_name(schema));
+            const auto modes = verify.exec(
+                "SELECT donchian20_mode FROM experiment "
+                "WHERE experiment_id > 501 ORDER BY donchian20_mode;");
+            assert(modes.size() == 2);
+            assert(modes[0][0].as<std::string>() == "enabled");
+            assert(modes[1][0].as<std::string>() == "zero_ablation");
+            assert(verify.exec(
+                "SELECT count(*) FROM experiment "
+                "WHERE experiment_id > 501 AND status='paused' AND phase='train';")
+                .one_row()[0].as<int>() == 2);
+            assert(verify.exec(
+                "SELECT count(*) FROM experiment_recommendation_conversion_execution;")
+                .one_row()[0].as<int>() == 2);
         }
     }
     catch (...)

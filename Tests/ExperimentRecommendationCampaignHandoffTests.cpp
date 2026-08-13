@@ -230,7 +230,8 @@ int main()
     ExpectInvalid(invalid);
     invalid = Input(Proposal(1), Proposal(2));
     invalid.members[1].rankingMemberId = invalid.members[0].rankingMemberId;
-    ExpectInvalid(invalid);
+    const auto paired = BuildRecommendationCampaignHandoff(invalid);
+    assert(paired.summary.totalMembers == 2);
     invalid = Input(Proposal(1), Proposal(2));
     invalid.members[1].conversionProposalId =
         invalid.members[0].conversionProposalId;

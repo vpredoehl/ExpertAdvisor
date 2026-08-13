@@ -146,7 +146,6 @@ RecommendationCampaignLaunchPlan BuildRecommendationCampaignLaunchPlan(
         activationMembers = ActivationMembersByOrdinal(*input.activationPlan);
 
     std::set<long long> materializationMemberIds;
-    std::set<long long> rankingMemberIds;
     std::set<long long> proposalIds;
     for (std::size_t index = 0; index < input.members.size(); ++index)
     {
@@ -162,7 +161,6 @@ RecommendationCampaignLaunchPlan BuildRecommendationCampaignLaunchPlan(
             execution.proposalId != identity.proposalId ||
             !materializationMemberIds.insert(
                 identity.materializationMemberId).second ||
-            !rankingMemberIds.insert(identity.rankingMemberId).second ||
             !proposalIds.insert(identity.proposalId).second)
             throw std::invalid_argument("campaign_launch_member_identity_invalid");
 

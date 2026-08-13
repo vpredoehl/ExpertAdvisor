@@ -1084,8 +1084,6 @@ struct RecommendationCampaignOutcomeAssessmentBuilder
         });
 
         std::set<long long> materializationMemberIds;
-        std::set<long long> rankingMemberIds;
-        std::set<long long> recommendationIds;
         std::set<long long> proposalIds;
         std::vector<WorkingMember> working;
         working.reserve(ordered.size());
@@ -1095,10 +1093,6 @@ struct RecommendationCampaignOutcomeAssessmentBuilder
             if (evidence.identity.memberOrdinal != static_cast<int>(index) + 1 ||
                 !materializationMemberIds
                      .insert(evidence.identity.materializationMemberId)
-                     .second ||
-                !rankingMemberIds.insert(evidence.identity.rankingMemberId)
-                     .second ||
-                !recommendationIds.insert(evidence.identity.recommendationId)
                      .second ||
                 !proposalIds.insert(evidence.identity.proposalId).second)
                 throw std::invalid_argument(

@@ -84,6 +84,11 @@ void PrintCandidate(
            << RecommendationMachineText(value.recommendationSemanticHash)
            << ",recommendation_invocation_hash="
            << RecommendationMachineText(value.recommendationInvocationHash)
+           << ",campaign_donchian20_arm="
+           << RecommendationMachineText(
+                  value.campaignDonchian20Mode
+                      ? Donchian20ModeText(*value.campaignDonchian20Mode)
+                      : "preserve")
            << ",leader_score=" << Number(value.leaderScore)
            << ",inference_accuracy=" << Number(value.inferenceAccuracy)
            << ",predicted_neutral_proportion="

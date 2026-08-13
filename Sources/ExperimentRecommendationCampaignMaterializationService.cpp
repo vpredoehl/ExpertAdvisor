@@ -225,7 +225,8 @@ int RunMaterializeRecommendationCampaignCommand(
             auto conversionRequest = LoadRecommendationCampaignConversionRequest(
                 transaction, scope.rankingSnapshotId,
                 candidate.input.rankingMemberId,
-                candidate.input.recommendationId);
+                candidate.input.recommendationId,
+                candidate.input.campaignDonchian20Mode);
             const auto conversion = BuildProposedExperimentSpecification(
                 conversionRequest);
             if (!conversion.eligibility.eligible || !conversion.proposal)

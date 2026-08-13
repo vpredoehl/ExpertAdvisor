@@ -229,8 +229,15 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
         invocation.Remaining());
 
     CanonicalReader configuration{semantic};
-    configuration.Expect(
-        "experiment_recommendation_semantic_configuration_v3;symbol=");
+    const bool legacySemantic =
+        configuration.Remaining().starts_with(
+            "experiment_recommendation_semantic_configuration_v3;");
+    if (legacySemantic)
+        configuration.Expect(
+            "experiment_recommendation_semantic_configuration_v3;symbol=");
+    else
+        configuration.Expect(
+            "experiment_recommendation_semantic_configuration_v4;symbol=");
     ExperimentInvocationConfiguration parsed;
     parsed.configuration.symbol = std::string{
         configuration.ReadUntil(";prediction_horizon=")};
@@ -250,13 +257,23 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
         std::string{configuration.ReadUntil(";infer_start_date=")});
     parsed.configuration.inferStartDate = ParseOptionalCanonicalDate(
         configuration.ReadUntil(";infer_end_date="));
-    parsed.configuration.inferEndDate = ParseOptionalCanonicalDate(
-        configuration.Remaining());
+    if (legacySemantic)
+    {
+        parsed.configuration.inferEndDate = ParseOptionalCanonicalDate(
+            configuration.Remaining());
+    }
+    else
+    {
+        parsed.configuration.inferEndDate = ParseOptionalCanonicalDate(
+            configuration.ReadUntil(";donchian20_mode="));
+        parsed.configuration.donchian20Mode = ParseDonchian20Mode(
+            std::string{configuration.Remaining()});
+    }
     parsed.checkpointInterval = checkpointInterval;
     parsed.resumeModelId = resumeModelId;
 
     const auto validated = BuildRecommendationInvocationIdentity(parsed);
-    if (validated.canonicalText != canonical)
+    if (!legacySemantic && validated.canonicalText != canonical)
         throw std::invalid_argument(
             "campaign_outcome_assessment_source_invocation_invalid");
     return validated.invocation;

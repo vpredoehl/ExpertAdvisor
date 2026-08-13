@@ -74,6 +74,23 @@ std::string ProposalColumns()
         "created_at::text AS created_at";
 }
 
+Donchian20Mode ParseProposedInvocationDonchian20Mode(
+    const std::string& canonical)
+{
+    constexpr std::string_view marker = ";donchian20_mode=";
+    const std::size_t begin = canonical.find(marker);
+    if (begin == std::string::npos)
+        return Donchian20Mode::Enabled;
+    const std::size_t valueBegin = begin + marker.size();
+    const std::size_t end = canonical.find(';', valueBegin);
+    if (end == valueBegin)
+        throw std::invalid_argument(
+            "invalid_persisted_recommendation_conversion_mode");
+    return ParseDonchian20Mode(canonical.substr(
+        valueBegin, end == std::string::npos
+            ? std::string::npos : end - valueBegin));
+}
+
 PersistedRecommendationConversionProposal MapProposal(const pqxx::row& row)
 {
     PersistedRecommendationConversionProposal persisted;
@@ -124,6 +141,9 @@ PersistedRecommendationConversionProposal MapProposal(const pqxx::row& row)
         OptionalValue<std::string>(row, "proposed_infer_start_date");
     proposal.proposedInvocation.configuration.inferEndDate =
         OptionalValue<std::string>(row, "proposed_infer_end_date");
+    proposal.proposedInvocation.configuration.donchian20Mode =
+        ParseProposedInvocationDonchian20Mode(
+            row["proposed_invocation_canonical"].as<std::string>());
     proposal.proposedInvocation.checkpointInterval =
         row["proposed_checkpoint_interval"].as<int>();
     proposal.proposedInvocation.resumeModelId =

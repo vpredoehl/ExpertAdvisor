@@ -18,6 +18,7 @@
 
 #include "Params.hpp"
 #include "LSTM.hpp"   // for LSTM_TRAINING_ASSERTS
+#include "Donchian20Mode.hpp"
 
 using std::string;
 using std::list;
@@ -61,6 +62,7 @@ class Tensor
     // ATR state
     bool has_atr = false;
     float atr14 = 0.0f;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
@@ -97,8 +99,10 @@ public:
     }
 
     
-    Tensor(string name) : table { name }    {}
+    Tensor(string name, Donchian20Mode mode = kDefaultDonchian20Mode)
+        : table { name }, donchian20Mode { mode } {}
     const string& TableName() const { return table; }
+    Donchian20Mode GetDonchian20Mode() const { return donchian20Mode; }
     
     void Add(Feature f);
     

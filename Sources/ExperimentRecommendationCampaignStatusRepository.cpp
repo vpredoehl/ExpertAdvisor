@@ -64,7 +64,7 @@ SELECT e.experiment_id,e.symbol,e.prediction_horizon,e.status,e.phase,
        e.started_at::text AS started_at,e.completed_at::text AS completed_at,
        e.exit_code,e.error_message,e.last_model_id,e.invocation_mode,
        e.duplicate_nonce,e.c_next_threshold,e.core_lr_mult,e.head_lr_mult,
-       e.checkpoint_interval,
+       e.checkpoint_interval,e.donchian20_mode,
        to_char(e.train_start AT TIME ZONE )SQL"} +
         "$" + std::to_string(timeZoneParameter) +
         R"SQL(,'YYYY-MM-DD') AS train_start,
@@ -187,6 +187,8 @@ WHERE e.experiment_id IN ()SQL" + placeholders.str() +
         invocation.configuration.trainEndDate = row["train_end"].as<std::string>();
         invocation.configuration.inferStartDate = OptionalText(row, "infer_start");
         invocation.configuration.inferEndDate = OptionalText(row, "infer_end");
+        invocation.configuration.donchian20Mode = ParseDonchian20Mode(
+            row["donchian20_mode"].as<std::string>());
         invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
         invocation.resumeModelId = OptionalValue<long long>(row, "resume_model_id");
         value.invocationIdentityCanonical =

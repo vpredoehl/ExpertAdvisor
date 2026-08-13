@@ -178,7 +178,6 @@ BuildRecommendationCampaignMaterializationEvidence(
     evidence.operatorIdentity = normalized.operatorIdentity;
     evidence.reasonText = normalized.reasonText;
     evidence.selectedMemberCount = static_cast<int>(selected.size());
-    std::set<long long> rankingMembers;
     std::set<std::string> proposalCanonicals;
     for (std::size_t index = 0; index < selected.size(); ++index)
     {
@@ -186,11 +185,15 @@ BuildRecommendationCampaignMaterializationEvidence(
         const auto& proposal = proposals[index];
         if (candidate.input.recommendationId != proposal.recommendationId ||
             candidate.input.sourceExperimentId != proposal.sourceExperimentId ||
-            !rankingMembers.insert(candidate.input.rankingMemberId).second ||
             !proposalCanonicals.insert(
                 proposal.conversionIdentityCanonical).second)
             throw std::invalid_argument(
                 "recommendation_campaign_materialization_member_invalid");
+        if (candidate.input.campaignDonchian20Mode &&
+            proposal.proposedInvocation.configuration.donchian20Mode !=
+                *candidate.input.campaignDonchian20Mode)
+            throw std::invalid_argument(
+                "recommendation_campaign_materialization_donchian20_arm_mismatch");
         RecommendationCampaignMaterializationSelectedMember member;
         member.memberOrdinal = static_cast<int>(index) + 1;
         member.rankingMemberId = candidate.input.rankingMemberId;
@@ -241,7 +244,6 @@ void ValidateRecommendationCampaignMaterializationEvidence(
             "recommendation_campaign_materialization_evidence_invalid");
     ValidateRecommendationCampaignApprovalEvidence(evidence.approval);
     std::set<int> ordinals;
-    std::set<long long> rankingMembers;
     std::set<std::string> proposalCanonicals;
     for (const auto& member : evidence.members)
     {
@@ -257,7 +259,6 @@ void ValidateRecommendationCampaignMaterializationEvidence(
             member.proposal.conversionIdentityHash != RecommendationCanonicalHash(
                 member.proposal.conversionIdentityCanonical) ||
             !ordinals.insert(member.memberOrdinal).second ||
-            !rankingMembers.insert(member.rankingMemberId).second ||
             !proposalCanonicals.insert(
                 member.proposal.conversionIdentityCanonical).second)
             throw std::invalid_argument(

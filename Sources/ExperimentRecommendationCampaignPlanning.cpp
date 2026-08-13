@@ -54,6 +54,52 @@ std::string OptionalFramedText(const std::optional<std::string>& value)
     return value ? LengthText(*value) : "NULL";
 }
 
+std::vector<Donchian20Mode> NormalizeDonchian20Arms(
+    const std::vector<Donchian20Mode>& arms)
+{
+    std::vector<Donchian20Mode> normalized = arms;
+    if (normalized.size() > 2)
+        throw std::invalid_argument(
+            "recommendation_campaign_donchian20_arms_invalid");
+    for (const Donchian20Mode mode : normalized)
+    {
+        if (mode != Donchian20Mode::Enabled &&
+            mode != Donchian20Mode::ZeroAblation)
+            throw std::invalid_argument(
+                "recommendation_campaign_donchian20_arms_invalid");
+    }
+    std::sort(normalized.begin(), normalized.end(),
+              [](Donchian20Mode left, Donchian20Mode right)
+              { return static_cast<int>(left) < static_cast<int>(right); });
+    if (std::adjacent_find(normalized.begin(), normalized.end()) !=
+        normalized.end())
+        throw std::invalid_argument(
+            "recommendation_campaign_donchian20_arms_duplicate");
+    return normalized;
+}
+
+std::string CampaignArmText(
+    const std::optional<Donchian20Mode>& mode)
+{
+    return mode ? Donchian20ModeText(*mode) : "preserve";
+}
+
+std::string CampaignCandidateIdentityKey(
+    const RecommendationCampaignCandidateInput& candidate)
+{
+    return candidate.recommendationInvocationCanonical +
+        ";campaign_donchian20_arm=" + CampaignArmText(
+        candidate.campaignDonchian20Mode);
+}
+
+std::string CampaignSourceSelectionKey(
+    const RecommendationCampaignCandidateInput& candidate)
+{
+    return std::to_string(candidate.sourceExperimentId) +
+        ";campaign_donchian20_arm=" + CampaignArmText(
+            candidate.campaignDonchian20Mode);
+}
+
 class CanonicalReader
 {
 public:
@@ -349,6 +395,8 @@ std::string CandidateEvidenceCanonicalText(
         << LengthText(candidate.recommendationInvocationCanonical)
         << ";invocation_hash="
         << LengthText(candidate.recommendationInvocationHash)
+        << ";campaign_donchian20_arm="
+        << CampaignArmText(candidate.campaignDonchian20Mode)
         << ";persisted_provenance_valid="
         << (candidate.persistedProvenanceValid ? 1 : 0)
         << ";workflow_count=" << candidate.workflows.size();
@@ -487,6 +535,51 @@ std::string PlanIdentityCanonicalText(
 
 } // namespace
 
+std::vector<Donchian20Mode> ParseRecommendationCampaignDonchian20Arms(
+    const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument(
+            "recommendation_campaign_donchian20_arms_empty");
+    std::vector<Donchian20Mode> arms;
+    std::size_t begin = 0;
+    while (begin <= value.size())
+    {
+        const std::size_t end = value.find(':', begin);
+        const std::string item = value.substr(
+            begin, end == std::string::npos ? std::string::npos : end - begin);
+        if (item.empty())
+            throw std::invalid_argument(
+                "recommendation_campaign_donchian20_arms_empty");
+        try
+        {
+            arms.push_back(ParseDonchian20Mode(item));
+        }
+        catch (const std::invalid_argument&)
+        {
+            throw std::invalid_argument(
+                "recommendation_campaign_donchian20_arm_invalid");
+        }
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return NormalizeDonchian20Arms(arms);
+}
+
+std::string RecommendationCampaignDonchian20ArmsCanonicalText(
+    const std::vector<Donchian20Mode>& arms)
+{
+    const auto normalized = NormalizeDonchian20Arms(arms);
+    if (normalized.empty()) return "preserve";
+    std::ostringstream out;
+    for (std::size_t index = 0; index < normalized.size(); ++index)
+    {
+        if (index != 0) out << ':';
+        out << Donchian20ModeText(normalized[index]);
+    }
+    return out.str();
+}
+
 std::optional<std::string> ValidateRecommendationCampaignPlanningPolicy(
     const RecommendationCampaignPlanningPolicy& policy)
 {
@@ -522,6 +615,19 @@ std::optional<std::string> ValidateRecommendationCampaignPlanningPolicy(
         "ranking_global_ordinal_then_recommendation_id_then_ranking_member_id_"
         "then_canonical_evidence")
         return "recommendation_campaign_tie_breaking_unsupported";
+    if (policy.canonicalVersion != 1 &&
+        policy.canonicalVersion != kRecommendationCampaignPlanningPolicyCanonicalVersion)
+        return "recommendation_campaign_policy_canonical_version_unsupported";
+    try
+    {
+        (void)NormalizeDonchian20Arms(policy.donchian20Arms);
+    }
+    catch (const std::invalid_argument& error)
+    {
+        return error.what();
+    }
+    if (policy.canonicalVersion == 1 && !policy.donchian20Arms.empty())
+        return "recommendation_campaign_policy_canonical_version_unsupported";
     return std::nullopt;
 }
 
@@ -532,7 +638,8 @@ std::string RecommendationCampaignPlanningPolicyCanonicalText(
         throw std::invalid_argument(*error);
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "experiment_recommendation_campaign_planning_policy_v1"
+    out << "experiment_recommendation_campaign_planning_policy_v"
+        << policy.canonicalVersion
         << ";contract_version=" << policy.contractVersion
         << ";enabled=" << (policy.enabled ? 1 : 0)
         << ";maximum_selected=" << policy.maximumSelectedRecommendations
@@ -563,6 +670,11 @@ std::string RecommendationCampaignPlanningPolicyCanonicalText(
         << ";inconsistent_excludes="
         << (policy.inconsistentWorkflowsAlwaysExclude ? 1 : 0)
         << ";tie_breaking=" << LengthText(policy.tieBreaking);
+    if (policy.canonicalVersion >=
+        kRecommendationCampaignPlanningPolicyCanonicalVersion)
+        out << ";donchian20_arms="
+            << RecommendationCampaignDonchian20ArmsCanonicalText(
+                   policy.donchian20Arms);
     return out.str();
 }
 
@@ -579,7 +691,18 @@ ParseRecommendationCampaignPlanningPolicyCanonicalText(
 {
     CanonicalReader reader{canonical};
     RecommendationCampaignPlanningPolicy policy;
-    reader.Expect("experiment_recommendation_campaign_planning_policy_v1;");
+    if (canonical.starts_with(
+            "experiment_recommendation_campaign_planning_policy_v1;"))
+    {
+        policy.canonicalVersion = 1;
+        reader.Expect("experiment_recommendation_campaign_planning_policy_v1;");
+    }
+    else
+    {
+        policy.canonicalVersion =
+            kRecommendationCampaignPlanningPolicyCanonicalVersion;
+        reader.Expect("experiment_recommendation_campaign_planning_policy_v2;");
+    }
     reader.Expect("contract_version=");
     policy.contractVersion = ParseInt(reader.Token());
     reader.Expect(";enabled=");
@@ -614,6 +737,15 @@ ParseRecommendationCampaignPlanningPolicyCanonicalText(
     policy.inconsistentWorkflowsAlwaysExclude = ParseBool(reader.Token());
     reader.Expect(";tie_breaking=");
     policy.tieBreaking = reader.Framed();
+    if (policy.canonicalVersion >=
+        kRecommendationCampaignPlanningPolicyCanonicalVersion)
+    {
+        reader.Expect(";donchian20_arms=");
+        const std::string arms = reader.Token();
+        policy.donchian20Arms = arms == "preserve"
+            ? std::vector<Donchian20Mode>{}
+            : ParseRecommendationCampaignDonchian20Arms(arms);
+    }
     if (!reader.AtEnd() ||
         RecommendationCampaignPlanningPolicyCanonicalText(policy) != canonical)
         throw std::invalid_argument(
@@ -775,7 +907,26 @@ RecommendationCampaignPlan PlanRecommendationCampaign(
         input.scope);
     plan.generatedAt = input.generatedAt;
 
-    std::vector<RecommendationCampaignCandidateInput> ordered = input.candidates;
+    std::vector<RecommendationCampaignCandidateInput> ordered;
+    const auto requestedArms = NormalizeDonchian20Arms(
+        input.policy.donchian20Arms);
+    if (requestedArms.empty())
+        ordered = input.candidates;
+    else
+    {
+        ordered.reserve(input.candidates.size() * requestedArms.size());
+        for (const auto& source : input.candidates)
+            for (const Donchian20Mode arm : requestedArms)
+            {
+                auto candidate = source;
+                candidate.campaignDonchian20Mode = arm;
+                ordered.push_back(std::move(candidate));
+            }
+    }
+    if (ordered.size() >
+        static_cast<std::size_t>(kMaximumRecommendationCampaignCandidates))
+        throw std::invalid_argument(
+            "recommendation_campaign_input_limit_exceeded");
     for (auto& candidate : ordered)
         std::sort(
             candidate.workflows.begin(), candidate.workflows.end(),
@@ -803,7 +954,7 @@ RecommendationCampaignPlan PlanRecommendationCampaign(
     std::set<std::string> selectedInvocationCanonicals;
     std::map<std::string, int> symbolCounts;
     std::map<int, int> horizonCounts;
-    std::map<long long, int> sourceCounts;
+    std::map<std::string, int> sourceCounts;
 
     for (std::size_t index = 0; index < ordered.size(); ++index)
     {
@@ -870,10 +1021,11 @@ RecommendationCampaignPlan PlanRecommendationCampaign(
         if (candidate.reasons.empty())
         {
             if (selectedInvocationCanonicals.contains(
-                    candidate.input.recommendationInvocationCanonical))
+                    CampaignCandidateIdentityKey(candidate.input)))
                 AddReason(candidate, RecommendationCampaignReason::
                           duplicateConversionIdentity);
-            const int sourceCount = sourceCounts[candidate.input.sourceExperimentId];
+            const int sourceCount = sourceCounts[CampaignSourceSelectionKey(
+                candidate.input)];
             if (input.policy.maximumPerSourceExperiment && sourceCount > 0 &&
                 *input.policy.maximumPerSourceExperiment == 1)
                 AddReason(candidate, RecommendationCampaignReason::
@@ -904,10 +1056,10 @@ RecommendationCampaignPlan PlanRecommendationCampaign(
             candidate.reasons.push_back(RecommendationCampaignReason::selected);
             ++plan.summary.selectedCount;
             selectedInvocationCanonicals.insert(
-                candidate.input.recommendationInvocationCanonical);
+                CampaignCandidateIdentityKey(candidate.input));
             ++symbolCounts[candidate.input.symbol];
             ++horizonCounts[candidate.input.predictionHorizon];
-            ++sourceCounts[candidate.input.sourceExperimentId];
+            ++sourceCounts[CampaignSourceSelectionKey(candidate.input)];
         }
         else
         {

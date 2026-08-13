@@ -23,6 +23,7 @@ struct RecommendationCampaignReviewCandidate
     std::string symbol;
     int predictionHorizon = 0;
     std::string family;
+    std::optional<Donchian20Mode> campaignDonchian20Mode;
     std::vector<RecommendationCampaignReason> reasons;
     bool duplicate = false;
     std::optional<std::string> duplicateIdentityHash;

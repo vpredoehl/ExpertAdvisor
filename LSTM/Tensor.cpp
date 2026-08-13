@@ -135,8 +135,16 @@ void Tensor::Add(Feature f)
     // this point, so the current bar cannot affect either extrema.
     const auto [donchianUp, donchianDown] = ComputeCausalDonchian20(
         raw_high, raw_low, f.close, kFeatureScale);
-    p[donchianUpCol] = donchianUp;
-    p[donchianDownCol] = donchianDown;
+    if (donchian20Mode == Donchian20Mode::Enabled)
+    {
+        p[donchianUpCol] = donchianUp;
+        p[donchianDownCol] = donchianDown;
+    }
+    else
+    {
+        p[donchianUpCol] = 0.0f;
+        p[donchianDownCol] = 0.0f;
+    }
 
     // Range expansion: (high - low) / avg_range, use rolling mean of raw ranges
     const float raw_range = f.high - f.low;

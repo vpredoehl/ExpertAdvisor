@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Donchian20Mode.hpp"
 #include "ExperimentRecommendationConversionWorkflow.hpp"
 
 #include <optional>
@@ -10,6 +11,7 @@ namespace EA::ExperimentRecommendation
 {
 
 inline constexpr int kRecommendationCampaignPlanContractVersion = 1;
+inline constexpr int kRecommendationCampaignPlanningPolicyCanonicalVersion = 2;
 inline constexpr int kDefaultRecommendationCampaignMaximumSelected = 10;
 inline constexpr int kDefaultRecommendationCampaignMaximumCandidates = 100;
 inline constexpr int kMaximumRecommendationCampaignCandidates = 1000;
@@ -36,6 +38,13 @@ struct RecommendationCampaignPlanningPolicy
     std::string tieBreaking =
         "ranking_global_ordinal_then_recommendation_id_then_ranking_member_id_"
         "then_canonical_evidence";
+    // Empty preserves the source recommendation's mode. A non-empty value
+    // explicitly requests one arm or the deterministic enabled/zero-ablation
+    // pair.
+    std::vector<Donchian20Mode> donchian20Arms;
+    // Version 1 is retained only when reconstructing an older persisted
+    // campaign policy that predates the arm field.
+    int canonicalVersion = kRecommendationCampaignPlanningPolicyCanonicalVersion;
     int contractVersion = kRecommendationCampaignPlanContractVersion;
 };
 
@@ -45,6 +54,10 @@ std::string RecommendationCampaignPlanningPolicyCanonicalText(
     const RecommendationCampaignPlanningPolicy& policy);
 std::string RecommendationCampaignPlanningPolicyHash(
     const RecommendationCampaignPlanningPolicy& policy);
+std::vector<Donchian20Mode> ParseRecommendationCampaignDonchian20Arms(
+    const std::string& value);
+std::string RecommendationCampaignDonchian20ArmsCanonicalText(
+    const std::vector<Donchian20Mode>& arms);
 RecommendationCampaignPlanningPolicy
 ParseRecommendationCampaignPlanningPolicyCanonicalText(
     const std::string& canonical);
@@ -113,6 +126,7 @@ struct RecommendationCampaignCandidateInput
     std::string recommendationSemanticHash;
     std::string recommendationInvocationCanonical;
     std::string recommendationInvocationHash;
+    std::optional<Donchian20Mode> campaignDonchian20Mode;
     bool persistedProvenanceValid = true;
     std::vector<RecommendationCampaignWorkflowEvidence> workflows;
 };

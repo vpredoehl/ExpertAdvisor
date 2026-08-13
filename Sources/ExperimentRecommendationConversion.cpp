@@ -167,6 +167,7 @@ std::size_t SemanticDifferenceCount(
     differences += lhs.trainEndDate != rhs.trainEndDate;
     differences += lhs.inferStartDate != rhs.inferStartDate;
     differences += lhs.inferEndDate != rhs.inferEndDate;
+    differences += lhs.donchian20Mode != rhs.donchian20Mode;
     return differences;
 }
 
@@ -462,9 +463,49 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
 
     ExperimentInvocationConfiguration proposedInvocation = sourceIdentity.invocation;
     ApplyMutation(*parameter, parsed, proposedInvocation.configuration);
+    RecommendationInvocationIdentity baseProposedIdentity;
+    try
+    {
+        baseProposedIdentity = BuildRecommendationInvocationIdentity(
+            proposedInvocation);
+    }
+    catch (const std::exception&)
+    {
+        return Rejected(
+            RecommendationConversionReason::proposedValueOutsideAllowedRange);
+    }
+    const RecommendationCandidateIdentity baseProposedSemanticIdentity =
+        BuildRecommendationCandidateIdentity(
+            baseProposedIdentity.invocation.configuration);
+    if (request.recommendationSemanticCanonical !=
+            baseProposedSemanticIdentity.canonicalText ||
+        request.recommendationSemanticHash != baseProposedSemanticIdentity.hash ||
+        request.recommendationInvocationCanonical !=
+            baseProposedIdentity.canonicalText ||
+        request.recommendationInvocationHash != baseProposedIdentity.hash)
+        return Rejected(RecommendationConversionReason::inconsistentProvenance);
+
+    const bool campaignArmChangesMode = request.campaignDonchian20Mode &&
+        *request.campaignDonchian20Mode !=
+            sourceIdentity.invocation.configuration.donchian20Mode;
+    if (request.campaignDonchian20Mode)
+    {
+        try
+        {
+            (void)Donchian20ModeText(*request.campaignDonchian20Mode);
+        }
+        catch (const std::invalid_argument&)
+        {
+            return Rejected(RecommendationConversionReason::inconsistentProvenance);
+        }
+        proposedInvocation.configuration.donchian20Mode =
+            *request.campaignDonchian20Mode;
+    }
+    const std::size_t expectedSemanticDifferences =
+        1 + (campaignArmChangesMode ? 1 : 0);
     if (SemanticDifferenceCount(
             sourceIdentity.invocation.configuration,
-            proposedInvocation.configuration) != 1)
+            proposedInvocation.configuration) != expectedSemanticDifferences)
         return Rejected(
             RecommendationConversionReason::multipleMutationsDetected);
 
@@ -482,14 +523,6 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     const RecommendationCandidateIdentity proposedSemanticIdentity =
         BuildRecommendationCandidateIdentity(
             proposedIdentity.invocation.configuration);
-    if (request.recommendationSemanticCanonical !=
-            proposedSemanticIdentity.canonicalText ||
-        request.recommendationSemanticHash != proposedSemanticIdentity.hash ||
-        request.recommendationInvocationCanonical !=
-            proposedIdentity.canonicalText ||
-        request.recommendationInvocationHash != proposedIdentity.hash)
-        return Rejected(RecommendationConversionReason::inconsistentProvenance);
-
     const std::string identityCanonical = ConversionIdentityCanonical(
         request, *parameter, *actualSourceValue,
         mutation.proposedValueCanonical, sourceIdentity.canonicalText,

@@ -58,6 +58,8 @@ ExperimentInvocationConfiguration MapExperimentInvocation(
         OptionalValue<std::string>(row, name("infer_start_date").c_str());
     invocation.configuration.inferEndDate =
         OptionalValue<std::string>(row, name("infer_end_date").c_str());
+    invocation.configuration.donchian20Mode = ParseDonchian20Mode(
+        row[name("donchian20_mode")].as<std::string>());
     invocation.checkpointInterval =
         row[name("checkpoint_interval")].as<int>();
     invocation.resumeModelId =
@@ -418,6 +420,7 @@ std::vector<RecommendationSourceLoadResult> LoadRecommendationSources(
         "e.c_next_threshold AS source_label_threshold, "
         "e.core_lr_mult AS source_core_lr_mult, e.head_lr_mult AS source_head_lr_mult, "
         "e.target_epochs AS source_target_epochs, e.checkpoint_interval AS source_checkpoint_interval, "
+        "e.donchian20_mode AS source_donchian20_mode, "
         "to_char(e.train_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS source_train_start_date, "
         "to_char(e.train_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS source_train_end_date, "
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS source_infer_start_date, "
@@ -508,6 +511,7 @@ ExperimentDuplicateMatch FindExperimentDuplicate(
         "e.c_next_threshold AS candidate_label_threshold, e.core_lr_mult AS candidate_core_lr_mult, "
         "e.head_lr_mult AS candidate_head_lr_mult, e.target_epochs AS candidate_target_epochs, "
         "e.checkpoint_interval AS candidate_checkpoint_interval, "
+        "e.donchian20_mode AS candidate_donchian20_mode, "
         "to_char(e.train_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS candidate_train_start_date, "
         "to_char(e.train_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS candidate_train_end_date, "
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_start_date, "

@@ -91,6 +91,7 @@ RecommendationCampaignReviewCandidate ReviewCandidate(
     value.symbol = candidate.input.symbol;
     value.predictionHorizon = candidate.input.predictionHorizon;
     value.family = candidate.input.family;
+    value.campaignDonchian20Mode = candidate.input.campaignDonchian20Mode;
     value.reasons = candidate.reasons;
     return value;
 }
@@ -163,6 +164,10 @@ std::string ReviewIdentityCanonicalText(
                    ";symbol=" + LengthText(value.symbol) +
                    ";horizon=" + std::to_string(value.predictionHorizon) +
                    ";family=" + LengthText(value.family) +
+                   ";campaign_donchian20_arm=" +
+                   (value.campaignDonchian20Mode
+                        ? Donchian20ModeText(*value.campaignDonchian20Mode)
+                        : "preserve") +
                    ";duplicate=" + (value.duplicate ? "1" : "0") +
                    ";duplicate_hash=" +
                    (value.duplicateIdentityHash
@@ -252,7 +257,12 @@ RecommendationCampaignReview ReviewRecommendationCampaignPlan(
         const auto& candidate = plan.candidates[index];
         all.push_back(ReviewCandidate(candidate));
         if (!candidate.input.recommendationInvocationCanonical.empty())
-            duplicateMembers[candidate.input.recommendationInvocationCanonical]
+            duplicateMembers[
+                candidate.input.recommendationInvocationCanonical +
+                ";campaign_donchian20_arm=" +
+                (candidate.input.campaignDonchian20Mode
+                     ? Donchian20ModeText(*candidate.input.campaignDonchian20Mode)
+                     : "preserve")]
                 .push_back(index);
         const bool selected = IsSelected(candidate);
         auto count = [selected](auto& counts)

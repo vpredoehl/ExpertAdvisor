@@ -346,9 +346,51 @@ int main()
 
     const auto canonical = RecommendationCampaignPlanningPolicyCanonicalText(
         Policy());
-    assert(canonical.find("experiment_recommendation_campaign_planning_policy_v1") == 0);
+    assert(canonical.find("experiment_recommendation_campaign_planning_policy_v2") == 0);
+    assert(canonical.find(";donchian20_arms=preserve") != std::string::npos);
     assert(RecommendationCampaignPlanningPolicyHash(Policy()) ==
            RecommendationCanonicalHash(canonical));
+    const std::string legacyCanonical =
+        canonical.substr(0, canonical.find("_v2")) + "_v1" +
+        canonical.substr(canonical.find(";contract_version="));
+    const std::size_t legacyArmField = legacyCanonical.find(
+        ";donchian20_arms=preserve");
+    assert(legacyArmField != std::string::npos);
+    const auto legacyPolicy =
+        ParseRecommendationCampaignPlanningPolicyCanonicalText(
+            legacyCanonical.substr(0, legacyArmField));
+    assert(legacyPolicy.canonicalVersion == 1);
+    assert(legacyPolicy.donchian20Arms.empty());
+    assert(RecommendationCampaignPlanningPolicyCanonicalText(legacyPolicy) ==
+           legacyCanonical.substr(0, legacyArmField));
+
+    assert(ParseRecommendationCampaignDonchian20Arms("enabled") ==
+           std::vector<Donchian20Mode>{Donchian20Mode::Enabled});
+    const std::vector<Donchian20Mode> expectedPairedArms{
+        Donchian20Mode::Enabled, Donchian20Mode::ZeroAblation};
+    assert((ParseRecommendationCampaignDonchian20Arms(
+                "zero_ablation:enabled") == expectedPairedArms));
+    bool invalidArms = false;
+    try { (void)ParseRecommendationCampaignDonchian20Arms("enabled:enabled"); }
+    catch (const std::invalid_argument&) { invalidArms = true; }
+    assert(invalidArms);
+    invalidArms = false;
+    try { (void)ParseRecommendationCampaignDonchian20Arms(""); }
+    catch (const std::invalid_argument&) { invalidArms = true; }
+    assert(invalidArms);
+    policy = Policy();
+    policy.donchian20Arms = {
+        Donchian20Mode::Enabled, Donchian20Mode::ZeroAblation};
+    const auto paired = MakePlan(policy, {Candidate(1, 1)});
+    assert(paired.summary.candidateCount == 2);
+    assert(paired.summary.selectedCount == 2);
+    assert(paired.candidates[0].input.campaignDonchian20Mode ==
+           Donchian20Mode::Enabled);
+    assert(paired.candidates[1].input.campaignDonchian20Mode ==
+           Donchian20Mode::ZeroAblation);
+    assert(paired.candidates[0].input.recommendationInvocationCanonical ==
+           paired.candidates[1].input.recommendationInvocationCanonical);
+    assert(paired.identityHash != MakePlan(Policy(), {Candidate(1, 1)}).identityHash);
 
     const auto first = MakePlan(Policy(), {Candidate(2, 2), Candidate(1, 1)});
     const auto second = MakePlan(Policy(), {Candidate(1, 1), Candidate(2, 2)});

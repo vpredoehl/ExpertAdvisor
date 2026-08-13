@@ -78,7 +78,8 @@ LoadRecommendationCampaignConversionRequest(
     pqxx::transaction_base& transaction,
     long long rankingSnapshotId,
     long long rankingMemberId,
-    long long recommendationId);
+    long long recommendationId,
+    std::optional<Donchian20Mode> campaignDonchian20Mode = std::nullopt);
 
 RecommendationCampaignMaterializationPersistResult
 PersistRecommendationCampaignMaterialization(

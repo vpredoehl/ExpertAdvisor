@@ -71,6 +71,7 @@
 #include "SchedulerOwnershipRepository.hpp"
 #include "SupportedSymbols.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
+#include "Donchian20Mode.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -299,6 +300,7 @@ struct SchedulerOptions
     EA::ExperimentRecommendation::RecommendationCampaignPlanningScope
         campaignPlanningScope;
     bool campaignPolicyOptionSpecified = false;
+    bool campaignDonchian20ArmsSpecified = false;
     std::optional<long long> requeueAnalysisExperimentId;
     std::optional<long long> requeueInferenceExperimentId;
     std::optional<std::pair<long long, int>> stopAfterCheckpoint;
@@ -356,6 +358,7 @@ struct SchedulerOptions
     std::optional<double> cNextThreshold;
     std::optional<double> coreLrMult;
     std::optional<double> headLrMult;
+    std::optional<Donchian20Mode> donchian20Mode;
     std::optional<int> targetEpochs;
     std::optional<int> epochs;
     int checkpointInterval = 20;
@@ -395,6 +398,7 @@ struct QueueResumeMeta
     int completedEpochs = 0;
     std::optional<double> coreLrMult;
     std::optional<double> headLrMult;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
 };
 
 struct SchedulerLeaseSnapshot
@@ -440,6 +444,7 @@ struct ExperimentRow
     std::optional<std::string> trainLogPath;
     std::optional<std::string> inferLogPath;
     std::optional<std::string> analysisLogPath;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
 };
 
 struct ChildResult
@@ -2595,6 +2600,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
             options.campaignPolicyOptionSpecified = true;
         }
+        else if (arg == "--campaign-donchian20-arms")
+        {
+            if (options.campaignDonchian20ArmsSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-donchian20-arms");
+            options.campaignPlanningPolicy.donchian20Arms =
+                EA::ExperimentRecommendation::
+                    ParseRecommendationCampaignDonchian20Arms(
+                        RequireNextArg(argc, argv, i, arg));
+            options.campaignDonchian20ArmsSpecified = true;
+            options.campaignPolicyOptionSpecified = true;
+        }
         else if (arg == "--campaign-min-leader-score")
         {
             options.campaignPlanningPolicy.minimumLeaderScore =
@@ -2733,6 +2750,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.epochs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--checkpoint-interval")
             options.checkpointInterval = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--donchian20-mode")
+            options.donchian20Mode = ParseDonchian20Mode(
+                RequireNextArg(argc, argv, i, arg));
         else if (arg == "--train-start")
             options.trainStart = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--train-end")
@@ -2787,6 +2807,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.epochs = ParsePositiveInt("--epochs", value);
         else if (SplitOptionWithValue(arg, "--checkpoint-interval", value))
             options.checkpointInterval = ParsePositiveInt("--checkpoint-interval", value);
+        else if (SplitOptionWithValue(arg, "--donchian20-mode", value))
+            options.donchian20Mode = ParseDonchian20Mode(value);
         else if (SplitOptionWithValue(arg, "--train-start", value))
             options.trainStart = value;
         else if (SplitOptionWithValue(arg, "--train-end", value))
@@ -3131,6 +3153,18 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         {
             options.campaignPlanningScope.horizon =
                 ParsePositiveInt("--campaign-horizon", value);
+            options.campaignPolicyOptionSpecified = true;
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-donchian20-arms", value))
+        {
+            if (options.campaignDonchian20ArmsSpecified)
+                throw std::invalid_argument(
+                    "duplicate --campaign-donchian20-arms");
+            options.campaignPlanningPolicy.donchian20Arms =
+                EA::ExperimentRecommendation::
+                    ParseRecommendationCampaignDonchian20Arms(value);
+            options.campaignDonchian20ArmsSpecified = true;
             options.campaignPolicyOptionSpecified = true;
         }
         else if (SplitOptionWithValue(
@@ -4559,6 +4593,7 @@ QueueResumeMeta LoadQueueResumeMeta(pqxx::work& w, long long modelId)
 
     QueueResumeMeta meta;
     meta.modelId = modelId;
+    meta.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
     meta.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     meta.predictionHorizon = static_cast<int>(std::llround(vals[1]));
     meta.threshold = vals[2];
@@ -4580,6 +4615,7 @@ void PrintQueueResumeMeta(const char* marker,
               << ",symbol=" << meta.symbol
               << ",prediction_horizon=" << meta.predictionHorizon
               << ",threshold=" << FormatDouble(meta.threshold)
+              << ",donchian20_mode=" << Donchian20ModeText(meta.donchian20Mode)
               << ",completed_epochs=" << meta.completedEpochs
               << ",target_epochs=" << targetEpochs
               << ",train_start=" << meta.trainStart
@@ -4648,6 +4684,14 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
                                 meta.modelId,
                                 "model=" + meta.trainEnd + ";runtime=" + *options.trainEnd);
     }
+    if (options.donchian20Mode.has_value() &&
+        *options.donchian20Mode != meta.donchian20Mode)
+    {
+        ThrowQueueResumeInvalid(
+            "donchian20_mode_mismatch", meta.modelId,
+            "model=" + std::string{Donchian20ModeText(meta.donchian20Mode)} +
+            ";runtime=" + Donchian20ModeText(*options.donchian20Mode));
+    }
 
     options.symbol = meta.symbol;
     options.predictionHorizon = meta.predictionHorizon;
@@ -4656,6 +4700,7 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
     options.trainEnd = meta.trainEnd;
     options.coreLrMult = meta.coreLrMult;
     options.headLrMult = meta.headLrMult;
+    options.donchian20Mode = meta.donchian20Mode;
 
     PrintQueueResumeMeta("QUEUE_RESUME_MODEL", meta, *options.targetEpochs);
 }
@@ -5727,6 +5772,8 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << "::timestamptz"
         << " AND infer_end IS NOT DISTINCT FROM " << SqlNullable(w, options.inferEnd)
         << "::timestamptz"
+        << " AND donchian20_mode = " << w.quote(
+            Donchian20ModeText(options.donchian20Mode.value_or(kDefaultDonchian20Mode)))
         << " AND resume_model_id IS NOT DISTINCT FROM " << SqlNullable(w, options.resumeModelId)
         << " AND status <> 'cancelled'";
     return sql.str();
@@ -5741,6 +5788,8 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND prediction_horizon = " << *options.predictionHorizon
         << " AND target_epochs = " << *options.targetEpochs
         << " AND c_next_threshold = " << FormatDouble(*options.cNextThreshold)
+        << " AND donchian20_mode = " << w.quote(
+            Donchian20ModeText(options.donchian20Mode.value_or(kDefaultDonchian20Mode)))
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -5759,6 +5808,9 @@ long long InsertExperimentRecord(pqxx::work& w,
                                         long long duplicateNonce)
 {
     const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
+    const bool hasDonchian20Mode = ColumnExists(w, "experiment", "donchian20_mode");
+    if (!hasDonchian20Mode)
+        throw std::runtime_error("Donchian-20 mode migration required; run ./migrate_lstm_db.sh");
     const bool hasCheckpointInferEnabled = ColumnExists(w, "experiment", "checkpoint_infer_enabled");
     const bool hasOpportunisticCheckpointInfer = ColumnExists(w, "experiment", "opportunistic_checkpoint_infer");
     const bool hasCheckpointInferMinEpoch = ColumnExists(w, "experiment", "checkpoint_infer_min_epoch");
@@ -5794,6 +5846,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
+    sql << ", donchian20_mode";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -5834,7 +5887,8 @@ long long InsertExperimentRecord(pqxx::work& w,
         << SqlNullable(w, options.inferEnd) << "::timestamptz,"
         << SqlNullable(w, options.resumeModelId) << ","
         << duplicateNonce << ","
-        << "'pending','train',now()";
+        << "'pending','train',now(),"
+        << w.quote(Donchian20ModeText(options.donchian20Mode.value_or(kDefaultDonchian20Mode)));
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -5884,6 +5938,8 @@ int EnqueueExperiment(const SchedulerOptions& options)
                   << ",c_next_threshold=" << FormatDouble(*options.cNextThreshold)
                   << ",core_lr_mult=" << (options.coreLrMult.has_value() ? FormatDouble(*options.coreLrMult) : "NULL")
                   << ",head_lr_mult=" << (options.headLrMult.has_value() ? FormatDouble(*options.headLrMult) : "NULL")
+                  << ",donchian20_mode=" << Donchian20ModeText(
+                      options.donchian20Mode.value_or(kDefaultDonchian20Mode))
                   << ",target_epochs=" << *options.targetEpochs
                   << ",checkpoint_interval=" << options.checkpointInterval
                   << ",train_start=" << *options.trainStart
@@ -5935,6 +5991,8 @@ int EnqueueExperiment(const SchedulerOptions& options)
 SchedulerOptions ApplyQueueDefaults(SchedulerOptions options)
 {
     const QueueDefaults defaults;
+    if (!options.donchian20Mode.has_value())
+        options.donchian20Mode = kDefaultDonchian20Mode;
     if (!options.cNextThreshold.has_value())
         options.cNextThreshold = defaults.threshold;
     if (!options.coreLrMult.has_value())
@@ -6007,6 +6065,8 @@ void PrintQueueConfig(const char* marker,
               << ",threshold=" << FormatDouble(*options.cNextThreshold)
               << ",core_lr=" << (options.coreLrMult.has_value() ? FormatDouble(*options.coreLrMult) : "NULL")
               << ",head_lr=" << (options.headLrMult.has_value() ? FormatDouble(*options.headLrMult) : "NULL")
+              << ",donchian20_mode=" << Donchian20ModeText(
+                  options.donchian20Mode.value_or(kDefaultDonchian20Mode))
               << ",checkpoint_interval=" << options.checkpointInterval
               << ",checkpoint_infer=" << (options.queueCheckpointInfer ? "1" : "0")
               << ",checkpoint_infer_min_epoch="
@@ -6488,6 +6548,7 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     experiment.trainLogPath = OptionalStringCell(row, 14);
     experiment.inferLogPath = OptionalStringCell(row, 15);
     experiment.analysisLogPath = OptionalStringCell(row, 16);
+    experiment.donchian20Mode = ParseDonchian20Mode(row[17].as<std::string>());
     return experiment;
 }
 
@@ -6500,7 +6561,8 @@ std::vector<ExperimentRow> LoadPendingExperiments(
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
+        "donchian20_mode "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 ";
     if (cancellationOnly)
@@ -6525,7 +6587,7 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, phase, worker_pid, "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, donchian20_mode, phase, worker_pid, "
         "extract(epoch from COALESCE(worker_started_at, updated_at))::double precision "
         "FROM experiment "
         "WHERE status = 'running' "
@@ -6536,9 +6598,9 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
     for (const auto& row : rows)
         experiments.push_back(RunningExperimentState{
             RowToExperiment(row),
-            row[17].as<std::string>(),
-            row[18].is_null() ? std::nullopt : std::optional<int>{row[18].as<int>()},
-            row[19].as<double>()});
+            row[18].as<std::string>(),
+            row[19].is_null() ? std::nullopt : std::optional<int>{row[19].as<int>()},
+            row[20].as<double>()});
     return experiments;
 }
 
@@ -8752,6 +8814,8 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--log-level", "summary");
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
     AddCliOption(argv, "--new-model-name", BaseModelName(experiment));
+    AddCliOption(argv, "--donchian20-mode",
+                 Donchian20ModeText(experiment.donchian20Mode));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
     AddLstmProfileOptions(argv, options);
 
@@ -8790,6 +8854,8 @@ std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(*experiment.lastModelId));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
+    AddCliOption(argv, "--donchian20-mode",
+                 Donchian20ModeText(experiment.donchian20Mode));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, experiment.inferStart->substr(0, 10));
@@ -8835,6 +8901,8 @@ std::vector<std::string> BuildCheckpointEvalInferCommand(const SchedulerOptions&
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(eval.checkpointModelId));
     AddCliOption(argv, "--scheduler-checkpoint-eval-id", std::to_string(eval.checkpointEvalId));
+    AddCliOption(argv, "--donchian20-mode",
+                 Donchian20ModeText(eval.experiment.donchian20Mode));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, eval.experiment.inferStart->substr(0, 10));
@@ -13886,7 +13954,7 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
             "target_epochs,checkpoint_interval,train_start::text,"
             "train_end::text,infer_start::text,infer_end::text,"
             "last_model_id,resume_model_id,train_log_path,"
-            "infer_log_path,analysis_log_path "
+            "infer_log_path,analysis_log_path,donchian20_mode "
             "FROM experiment WHERE experiment_id=$1 "
             "AND status='running' AND phase='analyze' "
             "AND active_scheduler_worker_attempt_id=$2;",
@@ -15756,7 +15824,7 @@ int RecoverOrphanedRunningExperiments(
                 "train_start::text,train_end::text,"
                 "infer_start::text,infer_end::text,last_model_id,"
                 "resume_model_id,train_log_path,infer_log_path,"
-                "analysis_log_path "
+                "analysis_log_path,donchian20_mode "
                 "FROM experiment WHERE experiment_id=$1;",
                 experimentId);
             if (experimentRows.size() == 1)
@@ -16019,7 +16087,7 @@ void PersistObservedExperimentChild(pqxx::work& w,
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
+        "e.donchian20_mode,e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
         "r.cancellation_mode,e.cancel_after_checkpoint_epoch "
         "FROM experiment e LEFT JOIN experiment_admin_request r "
         "ON r.request_id=e.cancellation_request_id "
@@ -16031,23 +16099,23 @@ void PersistObservedExperimentChild(pqxx::work& w,
         return;
 
     ExperimentRow experiment = RowToExperiment(rows[0]);
-    const std::string status = rows[0][17].as<std::string>();
-    const std::string phase = rows[0][18].as<std::string>();
-    const std::optional<int> workerPid = rows[0][19].is_null()
+    const std::string status = rows[0][18].as<std::string>();
+    const std::string phase = rows[0][19].as<std::string>();
+    const std::optional<int> workerPid = rows[0][20].is_null()
         ? std::nullopt
-        : std::optional<int>{rows[0][19].as<int>()};
+        : std::optional<int>{rows[0][20].as<int>()};
     const std::optional<long long> cancellationRequestId =
-        rows[0][20].is_null()
-            ? std::nullopt
-            : std::optional<long long>{rows[0][20].as<long long>()};
-    const std::optional<std::string> cancellationMode =
         rows[0][21].is_null()
             ? std::nullopt
-            : std::optional<std::string>{rows[0][21].as<std::string>()};
-    const std::optional<int> cancellationCheckpoint =
+            : std::optional<long long>{rows[0][21].as<long long>()};
+    const std::optional<std::string> cancellationMode =
         rows[0][22].is_null()
             ? std::nullopt
-            : std::optional<int>{rows[0][22].as<int>()};
+            : std::optional<std::string>{rows[0][22].as<std::string>()};
+    const std::optional<int> cancellationCheckpoint =
+        rows[0][23].is_null()
+            ? std::nullopt
+            : std::optional<int>{rows[0][23].as<int>()};
     const std::string error = ObservedChildError(child, exitCode, signalNumber, coreDumped);
 
     if (status != "running" || phase != child.phase ||
@@ -19395,7 +19463,7 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
         << "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         << "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         << "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        << "status, phase,worker_pid,worker_process_group_id,"
+        << "donchian20_mode,status, phase,worker_pid,worker_process_group_id,"
         << "worker_executable,worker_command_line,"
         << "worker_process_start_identity,"
         << "active_scheduler_worker_attempt_id "
@@ -19410,21 +19478,21 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
 
     SchedulerStopExperiment result;
     result.experiment = RowToExperiment(rows[0]);
-    result.status = rows[0][17].as<std::string>();
-    result.phase = rows[0][18].as<std::string>();
+    result.status = rows[0][18].as<std::string>();
+    result.phase = rows[0][19].as<std::string>();
     result.worker.experimentId = result.experiment.experimentId;
     result.worker.phase = result.phase;
     result.worker.lifecycleStatus = result.status;
-    if (!rows[0][19].is_null())
-        result.worker.pid = rows[0][19].as<int>();
     if (!rows[0][20].is_null())
-        result.worker.processGroupId = rows[0][20].as<int>();
-    result.worker.executable = OptionalStringCell(rows[0], 21);
-    result.worker.commandLine = OptionalStringCell(rows[0], 22);
+        result.worker.pid = rows[0][20].as<int>();
+    if (!rows[0][21].is_null())
+        result.worker.processGroupId = rows[0][21].as<int>();
+    result.worker.executable = OptionalStringCell(rows[0], 22);
+    result.worker.commandLine = OptionalStringCell(rows[0], 23);
     result.worker.processStartIdentity =
-        OptionalStringCell(rows[0], 23);
+        OptionalStringCell(rows[0], 24);
     result.activeWorkerAttemptId =
-        OptionalLongLongCell(rows[0], 24);
+        OptionalLongLongCell(rows[0], 25);
     result.worker.workerAttemptId =
         result.activeWorkerAttemptId;
     result.worker.workerKind = "experiment";
@@ -19439,7 +19507,7 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "status, phase,worker_pid,worker_process_group_id,"
+        "donchian20_mode,status, phase,worker_pid,worker_process_group_id,"
         "worker_executable,worker_command_line,"
         "worker_process_start_identity,"
         "active_scheduler_worker_attempt_id "
@@ -19453,22 +19521,22 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
     {
         SchedulerStopExperiment item;
         item.experiment = RowToExperiment(row);
-        item.status = row[17].as<std::string>();
-        item.phase = row[18].as<std::string>();
+        item.status = row[18].as<std::string>();
+        item.phase = row[19].as<std::string>();
         item.worker.experimentId =
             item.experiment.experimentId;
         item.worker.phase = item.phase;
         item.worker.lifecycleStatus = item.status;
-        if (!row[19].is_null())
-            item.worker.pid = row[19].as<int>();
         if (!row[20].is_null())
-            item.worker.processGroupId = row[20].as<int>();
-        item.worker.executable = OptionalStringCell(row, 21);
-        item.worker.commandLine = OptionalStringCell(row, 22);
+            item.worker.pid = row[20].as<int>();
+        if (!row[21].is_null())
+            item.worker.processGroupId = row[21].as<int>();
+        item.worker.executable = OptionalStringCell(row, 22);
+        item.worker.commandLine = OptionalStringCell(row, 23);
         item.worker.processStartIdentity =
-            OptionalStringCell(row, 23);
+            OptionalStringCell(row, 24);
         item.activeWorkerAttemptId =
-            OptionalLongLongCell(row, 24);
+            OptionalLongLongCell(row, 25);
         item.worker.workerAttemptId =
             item.activeWorkerAttemptId;
         item.worker.workerKind = "experiment";
@@ -22599,6 +22667,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--campaign-ranking-snapshot=ID "
         << "[--campaign-limit=N] [--campaign-candidate-limit=N] "
         << "[--campaign-symbol=SYMBOL] [--campaign-horizon=N] "
+        << "[--campaign-donchian20-arms=enabled|zero_ablation|enabled:zero_ablation] "
         << "[--campaign-min-leader-score=VALUE] "
         << "[--campaign-min-inference-accuracy=VALUE] "
         << "[--campaign-max-neutral-proportion=VALUE] "

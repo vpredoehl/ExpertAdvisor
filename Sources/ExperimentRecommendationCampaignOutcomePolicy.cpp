@@ -707,8 +707,6 @@ void ValidateRecommendationCampaignOutcomePolicyEvidence(
             "recommendation_campaign_outcome_policy_assessment_shape_invalid");
 
     std::set<long long> materializationMemberIds;
-    std::set<long long> rankingMemberIds;
-    std::set<long long> recommendationIds;
     std::set<long long> proposalIds;
     for (std::size_t index = 0; index < view.members.size(); ++index)
     {
@@ -721,8 +719,6 @@ void ValidateRecommendationCampaignOutcomePolicyEvidence(
                 *member.expectedExperimentId <= 0) ||
             !materializationMemberIds
                  .insert(member.materializationMemberId).second ||
-            !rankingMemberIds.insert(member.rankingMemberId).second ||
-            !recommendationIds.insert(member.recommendationId).second ||
             !proposalIds.insert(member.proposalId).second)
             throw std::invalid_argument(
                 "recommendation_campaign_outcome_policy_member_identity_set_invalid");

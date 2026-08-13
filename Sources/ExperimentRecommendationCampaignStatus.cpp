@@ -407,7 +407,6 @@ RecommendationCampaignStatusSnapshot BuildRecommendationCampaignStatusSnapshot(
         });
     std::set<long long> memberIds;
     std::set<long long> proposalIds;
-    std::set<long long> rankingIds;
     result.members.reserve(input.members.size());
     for (std::size_t index = 0; index < input.members.size(); ++index)
     {
@@ -417,8 +416,7 @@ RecommendationCampaignStatusSnapshot BuildRecommendationCampaignStatusSnapshot(
             member.sourceExperimentId <= 0 || member.rankingMemberId <= 0 ||
             member.proposalId <= 0 ||
             !memberIds.insert(member.materializationMemberId).second ||
-            !proposalIds.insert(member.proposalId).second ||
-            !rankingIds.insert(member.rankingMemberId).second)
+            !proposalIds.insert(member.proposalId).second)
             throw std::invalid_argument("campaign_status_materialization_members_invalid");
         result.members.push_back(ClassifyMember(member));
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Donchian20Mode.hpp"
 #include "ExperimentRecommendationCandidateGenerator.hpp"
 #include "ExperimentRecommendationRanking.hpp"
 #include "ExperimentRecommendationReview.hpp"
@@ -122,6 +123,9 @@ struct RecommendationConversionRequest
     RecommendationConversionScoreEvidence score;
     std::optional<RecommendationConversionRankingProvenance> ranking;
     ExperimentInvocationConfiguration sourceInvocation;
+    // Campaign planning may explicitly select a Donchian arm. When absent,
+    // conversion preserves the source invocation mode exactly.
+    std::optional<Donchian20Mode> campaignDonchian20Mode;
     std::vector<RecommendationConversionMutation> mutations;
     // Canonical text is authoritative; hashes alone cannot prove a duplicate.
     std::vector<std::string> existingConversionCanonicals;
