@@ -51,6 +51,9 @@ migration="$repo_root/Database/migrations/055_campaign_operations_production_adm
 expected_checksum="$(shasum -a 256 "$migration" | awk '{print $1}')"
 h2_migration="$repo_root/Database/migrations/056_campaign_operations_h2_privilege_deployment_contract.sql"
 h2_expected_checksum="$(shasum -a 256 "$h2_migration" | awk '{print $1}')"
+h8_migration="$repo_root/Database/migrations/059_campaign_operations_direct_sql_readiness_boundary.sql"
+h8_expected_checksum="$(shasum -a 256 "$h8_migration" | awk '{print $1}')"
+h1_post064_composition_authority="$repo_root/Database/manifests/post064_campaign_operations_h1_acl_composition_authority.tsv"
 psql_target=(-X -qAt -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -h "$audit_host" -p "$audit_port"
     -U "$audit_user" "$audit_database")
 
@@ -170,6 +173,7 @@ if [[ "$stage" == "pre-upgrade" ]]; then
 fi
 
 h2_deployment_installed=""
+h1_post064_later_acl_authority_verified="false"
 if [[ "$stage" == "post-upgrade" ]]; then
     h2_deployment_installed="$(psql "${psql_target[@]}" -At -c \
         "SELECT EXISTS (SELECT 1 FROM public.schema_migrations
@@ -182,6 +186,15 @@ if [[ "$stage" == "post-upgrade" ]]; then
         audit_failure 42501 H2A004 "migration-056" "$stage" \
             "post-upgrade role-graph delegation requires H2 / migration-056 authority"
     fi
+    h1_post064_later_acl_authority_verified="$(psql "${psql_target[@]}" -At -c \
+        "SELECT EXISTS (SELECT 1 FROM public.schema_migrations
+          WHERE version='056' AND filename=
+            '056_campaign_operations_h2_privilege_deployment_contract.sql'
+            AND checksum='$h2_expected_checksum')
+          AND EXISTS (SELECT 1 FROM public.schema_migrations
+          WHERE version='059' AND filename=
+            '059_campaign_operations_direct_sql_readiness_boundary.sql'
+            AND checksum='$h8_expected_checksum')")"
 fi
 
 if [[ "$stage" == "pre-enablement" ||
@@ -430,6 +443,16 @@ SQL
                $10 == "campaign_operations_request_acceptor") &&
               $11 == "EXECUTE")')"
     fi
+    # The immutable 055 manifest remains the base contract.  This exact,
+    # reviewable authority set composes only proven predecessor (A) tuples and,
+    # after both ledger-bound later authorities and H2 validation succeed, the
+    # proven later (B1) tuples.  It cannot accept an arbitrary matching pattern.
+    composition_filter=("$repo_root/Scripts/CampaignOperationsH1Post064AclProvenance.py"
+        filter-findings "$h1_post064_composition_authority")
+    if [[ "$h1_post064_later_acl_authority_verified" == "t" ]]; then
+        composition_filter+=(--allow-b1)
+    fi
+    acl_findings="$(printf '%s\n' "$acl_findings" | python3 "${composition_filter[@]}")"
     if [[ -n "$acl_findings" ]]; then
         printf '%s\n' "$acl_findings" >&2
         if rg -q '^H1A007\|' <<<"$acl_findings"; then

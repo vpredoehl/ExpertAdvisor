@@ -49,7 +49,8 @@ for migration in "$repo_root"/Database/migrations/*.sql; do
   filename="$(basename "$migration")"
   version="${filename%%_*}"
   [[ "$version" != "$filename" ]] || version="${filename%.sql}"
-  [[ "$version" != "056" && "$version" != "057" && "$version" != "059" ]] || continue
+  [[ "$version" != "056" && "$version" != "057" && "$version" != "059" &&
+     "$version" != "065" ]] || continue
   checksum="$(shasum -a 256 "$migration" | awk '{print $1}')"
   psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
     "INSERT INTO schema_migrations(version,filename,checksum)
@@ -58,17 +59,43 @@ for migration in "$repo_root"/Database/migrations/*.sql; do
        checksum=EXCLUDED.checksum;"
 done
 
+# Reconstruct the eighteen production residual tuples before the real runner
+# reaches the forward remediation.  These are direct ACLs only: the test does
+# not change ownership, default ACLs, or membership.
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" <<'SQL'
+GRANT USAGE ON SCHEMA public TO pqxx;
+GRANT SELECT, USAGE ON SEQUENCE
+    public.campaign_operations_dispatch__dispatch_audit_reference_even_seq,
+    public.campaign_operations_dispatch_attempt_dispatch_attempt_id_seq,
+    public.campaign_operations_operational_requ_operational_request_id_seq
+TO pqxx;
+GRANT SELECT ON TABLE
+    public.campaign_operations_dispatch_attempt,
+    public.campaign_operations_dispatch_audit_reference_event,
+    public.schema_migrations,
+    public.campaign_operations_production_readiness_v1,
+    public.campaign_operations_production_status_v1
+TO pqxx;
+REVOKE UPDATE (
+    request_state, state_version, lease_token_hash, lease_expires_at,
+    dispatcher_identity, updated_at)
+ON TABLE public.campaign_operations_operational_request
+FROM campaign_operations_owner;
+SQL
+
 # Migration 056 is installed by the repository's actual runner.
 LSTM_DB_HOST="$cluster_socket" \
 LSTM_DB_NAME="$database" \
 LSTM_DB_ADMIN_USER=campaign_manager_login \
   bash "$repo_root/migrate_lstm_db.sh" | tee "$tmp_root/migration-runner.log"
 rg -q 'MIGRATION_APPLY,version=056,' "$tmp_root/migration-runner.log"
+rg -q 'MIGRATION_APPLY,version=065,' "$tmp_root/migration-runner.log"
 LSTM_DB_HOST="$cluster_socket" \
 LSTM_DB_NAME="$database" \
 LSTM_DB_ADMIN_USER=campaign_manager_login \
   bash "$repo_root/migrate_lstm_db.sh" | tee "$tmp_root/migration-replay.log"
 rg -q 'MIGRATION_SKIP,version=056,' "$tmp_root/migration-replay.log"
+rg -q 'MIGRATION_SKIP,version=065,' "$tmp_root/migration-replay.log"
 
 after_055="$(shasum -a 256 "$repo_root/Database/migrations/055_campaign_operations_production_admission_foundation.sql" | awk '{print $1}')"
 [[ "$before_055" == "$after_055" ]]
@@ -82,7 +109,55 @@ ledger_057="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
   "SELECT version||'|'||filename||'|'||checksum FROM schema_migrations WHERE version='057'")"
 expected_057="057|$(basename "$repo_root"/Database/migrations/057_*.sql)|$(shasum -a 256 "$repo_root"/Database/migrations/057_*.sql | awk '{print $1}')"
 [[ "$ledger_057" == "$expected_057" ]]
-echo "H2_MIGRATION_RUNNER_OK ledger_055_to_057=PASS replay_noop=PASS 055_unchanged=PASS"
+ledger_065="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
+  "SELECT version||'|'||filename||'|'||checksum FROM schema_migrations WHERE version='065'")"
+expected_065="065|$(basename "$repo_root"/Database/migrations/065_*.sql)|$(shasum -a 256 "$repo_root"/Database/migrations/065_*.sql | awk '{print $1}')"
+[[ "$ledger_065" == "$expected_065" ]]
+residual_acl_count="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" <<'SQL'
+WITH pqxx_acl AS (
+  SELECT 1
+  FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+  WHERE n.nspname='public' AND a.grantee='pqxx'::regrole AND a.privilege_type='USAGE'
+  UNION ALL
+  SELECT 1
+  FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+  WHERE c.oid = ANY (ARRAY[
+    'public.campaign_operations_dispatch__dispatch_audit_reference_even_seq'::regclass,
+    'public.campaign_operations_dispatch_attempt_dispatch_attempt_id_seq'::regclass,
+    'public.campaign_operations_operational_requ_operational_request_id_seq'::regclass])
+    AND a.grantee='pqxx'::regrole AND a.privilege_type IN ('SELECT','USAGE')
+  UNION ALL
+  SELECT 1
+  FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+  WHERE c.oid = ANY (ARRAY[
+    'public.campaign_operations_dispatch_attempt'::regclass,
+    'public.campaign_operations_dispatch_audit_reference_event'::regclass,
+    'public.schema_migrations'::regclass,
+    'public.campaign_operations_production_readiness_v1'::regclass,
+    'public.campaign_operations_production_status_v1'::regclass])
+    AND a.grantee='pqxx'::regrole AND a.privilege_type='SELECT'
+), owner_update AS (
+  SELECT expected.column_name
+  FROM (VALUES ('dispatcher_identity'), ('lease_expires_at'), ('lease_token_hash'),
+               ('request_state'), ('state_version'), ('updated_at')) expected(column_name)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+    WHERE att.attrelid='public.campaign_operations_operational_request'::regclass
+      AND att.attname=expected.column_name AND a.grantee='campaign_operations_owner'::regrole
+      AND a.privilege_type='UPDATE' AND NOT a.is_grantable))
+SELECT (SELECT count(*) FROM pqxx_acl) || '|' || (SELECT count(*) FROM owner_update);
+SQL
+)"
+[[ "$residual_acl_count" == "0|0" ]]
+echo "H2_MIGRATION_RUNNER_OK ledger_055_to_065=PASS residual_acl_12_revoked=PASS owner_update_6_restored=PASS replay_noop=PASS 055_unchanged=PASS"
+
+# The preserved schema-055 fixture carries a forward 064 ledger placeholder.
+# Materialize the corresponding compatibility grants and external LOGIN before
+# the deployment wrapper validates the exact 064 overlay.
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  "CREATE ROLE campaign_operations_pre_phase_h_login LOGIN INHERIT;"
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" \
+  -f "$repo_root/Database/migrations/064_campaign_operations_pre_phase_h_helper_acl_reconciliation.sql"
 
 # Deployment-time membership is outside migrations. These synthetic LOGINs
 # exactly match the accepted ADR-0019C identities.
@@ -175,6 +250,43 @@ rg -q 'H2_DEPLOYMENT_AUDIT_OK stage=post-upgrade' \
 rg -q 'H1_DEPLOYMENT_AUDIT_V1_OK stage=post-upgrade' \
   "$tmp_root/h1-post-upgrade-h2.log"
 
+# The correction does not teach the post-064 authority to accept pqxx, and it
+# does not hide a required frozen-055 owner UPDATE tuple.  Exercise both audit
+# difference directions after the normal corrected-state control passes.
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  'GRANT USAGE ON SCHEMA public TO pqxx;'
+if "$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+    --stage post-upgrade --host "$cluster_socket" --port 5432 \
+    --user campaign_manager_login --database "$database" \
+    >"$tmp_root/h1-post065-extra-pqxx.log" 2>&1; then
+  cat "$tmp_root/h1-post065-extra-pqxx.log" >&2
+  echo "post-064 authority accepted an unauthorized pqxx schema ACL" >&2
+  exit 1
+fi
+rg -q 'H1A006.*exact-explicit-ACL-tuple-matrix-mismatch' \
+  "$tmp_root/h1-post065-extra-pqxx.log"
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  'REVOKE USAGE ON SCHEMA public FROM pqxx;'
+
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  'REVOKE UPDATE (dispatcher_identity) ON TABLE public.campaign_operations_operational_request FROM campaign_operations_owner;'
+if "$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+    --stage post-upgrade --host "$cluster_socket" --port 5432 \
+    --user campaign_manager_login --database "$database" \
+    >"$tmp_root/h1-post065-missing-owner-update.log" 2>&1; then
+  cat "$tmp_root/h1-post065-missing-owner-update.log" >&2
+  echo "post-064 authority accepted a missing frozen-055 owner UPDATE tuple" >&2
+  exit 1
+fi
+rg -q 'H1A006.*exact-explicit-ACL-tuple-matrix-mismatch' \
+  "$tmp_root/h1-post065-missing-owner-update.log"
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  'GRANT UPDATE (dispatcher_identity) ON TABLE public.campaign_operations_operational_request TO campaign_operations_owner;'
+"$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+  --stage post-upgrade --host "$cluster_socket" --port 5432 \
+  --user campaign_manager_login --database "$database" >/dev/null
+echo "H1_POST065_ACL_REMEDIATION unauthorized_extra=FAIL_CLOSED missing_055_tuple=FAIL_CLOSED restored_state=PASS"
+
 # The same ordinary deployment graph must fail closed when H2 authority is
 # absent. Remove only the disposable target's exact 056 ledger row, prove the
 # deterministic gate, and restore that row before the remaining H2 checks.
@@ -194,9 +306,9 @@ rg -q 'SQLSTATE=42501 diagnostic=H2A004 .*object=migration-056 .*stage=post-upgr
   "$tmp_root/h1-post-upgrade-without-h2.log"
 rg -q 'post-upgrade role-graph delegation requires H2 / migration-056 authority' \
   "$tmp_root/h1-post-upgrade-without-h2.log"
-psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -v h2_ledger_checksum="$h2_ledger_checksum" -c \
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
   "INSERT INTO schema_migrations(version,filename,checksum)
-   VALUES ('056','056_campaign_operations_h2_privilege_deployment_contract.sql',:'h2_ledger_checksum');"
+   VALUES ('056','056_campaign_operations_h2_privilege_deployment_contract.sql','$h2_ledger_checksum');"
 echo "H1_POST_UPGRADE_AUTHORITY_GATE absent_056=FAIL_CLOSED present_056=DELEGATED_AND_VALIDATED"
 
 # H1 remains historical authority.  Its post-H1 pre-enablement stage is a
