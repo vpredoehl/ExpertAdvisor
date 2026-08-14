@@ -87,29 +87,70 @@ initdb -D "$cluster_data" -U campaign_manager_login \
 pg_ctl -D "$cluster_data" -o "-F -h '' -k $cluster_socket" \
     -w start >/dev/null
 target=(-h "$cluster_socket" -p 5432 -U campaign_manager_login)
-createdb "${target[@]}" "$database"
 
-# pg_dump excludes cluster-global roles.  Recreate only the inert prerequisite
-# roles before restoring the schema's authoritative campaign_operations_owner
-# assignments; migrations 053-055 create and harden additional capabilities.
-psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" <<'SQL'
-CREATE ROLE pqxx NOLOGIN;
-CREATE ROLE vjp NOLOGIN;
-CREATE ROLE campaign_operations_owner NOLOGIN;
-CREATE ROLE campaign_operations_campaign_creator NOLOGIN;
-CREATE ROLE campaign_operations_authorizer NOLOGIN;
-CREATE ROLE campaign_operations_auditor NOLOGIN;
-CREATE ROLE campaign_operations_reader NOLOGIN;
-CREATE ROLE campaign_operations_budget_administrator NOLOGIN;
-CREATE ROLE campaign_operations_request_acceptor NOLOGIN;
-CREATE ROLE campaign_operations_dispatcher NOLOGIN;
-CREATE ROLE campaign_operations_phase5_transactional NOLOGIN;
-CREATE ROLE experiment_lifecycle_cancellation_owner NOLOGIN;
+# pg_dump excludes cluster-global roles.  Recreate only the inert predecessor
+# roles required to restore schema 049 and run migrations 050-054.  Migration
+# 053 creates experiment_lifecycle_cancellation_owner and migration 055 owns
+# its own H1 authority roles, so neither is pre-created here.
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 postgres <<'SQL'
+CREATE ROLE pqxx NOLOGIN NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE
+  NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE vjp NOLOGIN NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE
+  NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_owner NOLOGIN NOSUPERUSER INHERIT NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_campaign_creator NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_authorizer NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_auditor NOLOGIN NOSUPERUSER INHERIT NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_reader NOLOGIN NOSUPERUSER INHERIT NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_budget_administrator NOLOGIN NOSUPERUSER
+  INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_request_acceptor NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_dispatcher NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_phase5_transactional NOLOGIN NOSUPERUSER
+  INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
 SQL
+createdb "${target[@]}" -O vjp "$database"
 # Seed exclusively from the repository-owned schema-049 backup.  The H1
 # assurance suite must never inspect or clone the live production database.
+schema_049_dump="$repo_root/Database/backups/LSTM_schema_049.dump"
+schema_049_metadata="$repo_root/Database/backups/LSTM_schema_049.dump.json"
+python3 - "$schema_049_metadata" <<'PY' || {
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    metadata = json.load(handle)
+expected = {
+    "schema_version": "049",
+    "git_commit": "939e126",
+    "created_at": "2026-07-31T03:19:28Z",
+}
+if any(metadata.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+PY
+  echo "H1 schema fixture metadata is not the required schema-049 predecessor" >&2
+  exit 1
+}
+[[ "$(shasum -a 256 "$schema_049_dump" | awk '{print $1}')" == \
+  "ebcfa55680f4db5fb136527ceff1039f97a139fcdcbd4574186ef341655fac31" ]] || {
+  echo "H1 schema fixture digest does not match the immutable schema-049 backup" >&2
+  exit 1
+}
 pg_restore --schema-only --no-privileges \
-    --file=- "$repo_root/Database/backups/LSTM_latest.dump" |
+    --file=- "$schema_049_dump" |
     psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database"
 
 for prerequisite_migration in \
@@ -117,9 +158,16 @@ for prerequisite_migration in \
     051_scheduler_ownership_and_worker_attempts.sql \
     052_scheduler_protocol_and_exact_attempt_hardening.sql
 do
-    psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 "$database" \
+    psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 "$database" -c 'SET ROLE vjp' \
       -f "$repo_root/Database/migrations/$prerequisite_migration"
 done
+
+[[ "$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
+  "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='public.experiment_scheduler_protocol'::regclass")" == \
+  "vjp" ]] || {
+  echo "schema-049 prerequisite migration did not preserve vjp ownership of experiment_scheduler_protocol" >&2
+  exit 1
+}
 
 psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" <<'SQL'
 SET session_replication_role = replica;
@@ -1643,6 +1691,7 @@ SQL
 workflow_lock_test="$cluster_root/CampaignOperationsPhaseH1WorkflowLockTests"
 workflow_lock_adapters="$cluster_root/CampaignOperationsPhaseH1WorkflowAdapters.o"
 clang++ -std=c++20 -Wall -Wextra -Werror -Dmain=H1WorkflowAdapterUnusedMain \
+  -DCAMPAIGN_OPERATIONS_USE_PRODUCTION_MATERIALIZATION_REPOSITORY \
   -I "$repo_root/Sources" -I "$repo_root/Headers" \
   -I /opt/homebrew/opt/libpqxx@7.10.1/include \
   -I /opt/homebrew/opt/libpq/include -c \
@@ -1660,6 +1709,13 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
   "$repo_root/Sources/CampaignOperationsCompletion.cpp" \
   "$repo_root/Sources/CampaignOperationsRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsService.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignMaterializationRepository.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignMaterialization.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationEvaluation.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationScoring.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignApproval.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignReview.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignPlanning.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsManager.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchService.cpp" \
@@ -2376,6 +2432,7 @@ emit_runtime_result H1-HYDRATION H1CPP001 repository-hydration EXPECTED_FAILURE 
 broad_repository_test="$(mktemp -t CampaignOperationsRepositoryTestsH1)"
 createdb "${target[@]}" -T template0 -O campaign_manager_login "$broad_database"
 clang++ -std=c++20 -Wall -Wextra -Werror \
+  -DCAMPAIGN_OPERATIONS_USE_PRODUCTION_MATERIALIZATION_REPOSITORY \
   -I "$repo_root/Sources" -I "$repo_root/Headers" \
   -I /opt/homebrew/opt/libpqxx@7.10.1/include \
   -I /opt/homebrew/opt/libpq/include \
@@ -2387,6 +2444,14 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
   "$repo_root/Sources/CampaignOperationsProductionAdmission.cpp" \
   "$repo_root/Sources/CampaignOperationsRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsService.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignMaterializationRepository.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignMaterialization.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationEvaluation.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationScoring.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignApproval.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignReview.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationCampaignPlanning.cpp" \
+  "$repo_root/Sources/ExperimentRecommendationReview.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchRepository.cpp" \
   "$repo_root/Sources/CampaignOperationsManager.cpp" \
   "$repo_root/Sources/CampaignOperationsDispatchService.cpp" \

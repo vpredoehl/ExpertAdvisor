@@ -171,12 +171,11 @@ fi
 
 h2_deployment_installed=""
 if [[ "$stage" == "post-upgrade" ]]; then
-    h2_deployment_installed="$(psql "${psql_target[@]}" \
-        -v h2_checksum="$h2_expected_checksum" -At -c \
+    h2_deployment_installed="$(psql "${psql_target[@]}" -At -c \
         "SELECT EXISTS (SELECT 1 FROM public.schema_migrations
           WHERE version='056' AND filename=
             '056_campaign_operations_h2_privilege_deployment_contract.sql'
-            AND checksum=:'h2_checksum')")"
+            AND checksum='$h2_expected_checksum')")"
     if [[ "$h2_deployment_installed" != "t" ]] &&
        rg -q '^graph:' <<<"$role_findings" &&
        ! rg -q '^graph:.*campaign_operations_h1_boundary_authority' <<<"$role_findings"; then

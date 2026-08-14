@@ -303,8 +303,9 @@ PersistedRecommendationCampaignFollowUpProposalRatification::
 {
 }
 
-// The focused repository test supplies functional upstream read adapters.
-// Production links the established repositories.
+// The focused repository test supplies functional upstream read adapters when
+// its hand-written link command does not include the production repository.
+#ifndef CAMPAIGN_OPERATIONS_USE_PRODUCTION_MATERIALIZATION_REPOSITORY
 std::optional<PersistedRecommendationCampaignMaterialization>
 FindRecommendationCampaignMaterialization(
     pqxx::transaction_base& transaction, long long materializationId)
@@ -386,6 +387,7 @@ ListRecommendationCampaignMaterializations(
     // link-time surface without granting that unrelated behavior authority.
     return {};
 }
+#endif
 
 std::optional<PersistedRecommendationCampaignFollowUpProposalRatification>
 FindRecommendationCampaignFollowUpProposalRatification(
@@ -6293,7 +6295,7 @@ int main()
             const auto recorded = PersistOperationalCampaign(transaction,
                 campaign, ActorIdentity("creator@example.test"),
                 Reason("Create exact Phase 4D operational envelope."));
-            assert(recorded.outcome == PersistOutcome::recorded);
+            assert(recorded.outcome == PersistOutcome::existingIdentical);
             assert(recorded.persisted.campaign == campaign);
             assert(InitialAdministrativeState(recorded.persisted.campaign) ==
                 AdministrativeCampaignState::awaitingOperationalAuthorization);

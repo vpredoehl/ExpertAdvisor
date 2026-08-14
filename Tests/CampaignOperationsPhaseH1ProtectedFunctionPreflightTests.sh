@@ -115,30 +115,75 @@ initdb -D "$cluster_data" -U campaign_manager_login \
 pg_ctl -D "$cluster_data" -o "-F -h '' -k $cluster_socket" \
   -w start >/dev/null
 target=(-h "$cluster_socket" -p 5432 -U campaign_manager_login)
-createdb "${target[@]}" schema054
 
-psql "${target[@]}" -q -v ON_ERROR_STOP=1 schema054 <<'SQL'
-CREATE ROLE pqxx NOLOGIN;
-CREATE ROLE vjp NOLOGIN;
-CREATE ROLE campaign_operations_owner NOLOGIN;
-CREATE ROLE campaign_operations_campaign_creator NOLOGIN;
-CREATE ROLE campaign_operations_authorizer NOLOGIN;
-CREATE ROLE campaign_operations_auditor NOLOGIN;
-CREATE ROLE campaign_operations_reader NOLOGIN;
-CREATE ROLE campaign_operations_budget_administrator NOLOGIN;
-CREATE ROLE campaign_operations_request_acceptor NOLOGIN;
-CREATE ROLE campaign_operations_dispatcher NOLOGIN;
-CREATE ROLE campaign_operations_phase5_transactional NOLOGIN;
-CREATE ROLE experiment_lifecycle_cancellation_owner NOLOGIN;
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 postgres <<'SQL'
+CREATE ROLE pqxx NOLOGIN NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE
+  NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE vjp NOLOGIN NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE
+  NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_owner NOLOGIN NOSUPERUSER INHERIT NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_campaign_creator NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_authorizer NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_auditor NOLOGIN NOSUPERUSER INHERIT NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_reader NOLOGIN NOSUPERUSER INHERIT NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD NULL;
+CREATE ROLE campaign_operations_budget_administrator NOLOGIN NOSUPERUSER
+  INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_request_acceptor NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_dispatcher NOLOGIN NOSUPERUSER INHERIT
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
+CREATE ROLE campaign_operations_phase5_transactional NOLOGIN NOSUPERUSER
+  INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1
+  PASSWORD NULL;
 SQL
+createdb "${target[@]}" -O vjp schema054
 
+schema_049_dump="$repo_root/Database/backups/LSTM_schema_049.dump"
+schema_049_metadata="$repo_root/Database/backups/LSTM_schema_049.dump.json"
+python3 - "$schema_049_metadata" <<'PY' || {
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    metadata = json.load(handle)
+expected = {
+    "schema_version": "049",
+    "git_commit": "939e126",
+    "created_at": "2026-07-31T03:19:28Z",
+}
+if any(metadata.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+PY
+  echo "H1 protected-function fixture metadata is not the required schema-049 predecessor" >&2
+  exit 1
+}
+[[ "$(shasum -a 256 "$schema_049_dump" | awk '{print $1}')" == \
+  "ebcfa55680f4db5fb136527ceff1039f97a139fcdcbd4574186ef341655fac31" ]] || {
+  echo "H1 protected-function fixture digest does not match the immutable schema-049 backup" >&2
+  exit 1
+}
 pg_restore --schema-only --no-privileges --file=- \
-  "$repo_root/Database/backups/LSTM_latest.dump" |
+  "$schema_049_dump" |
   psql "${target[@]}" -q -v ON_ERROR_STOP=1 schema054
 for prerequisite_migration in \
   050_experiment_current_operation_canonicalization.sql \
   051_scheduler_ownership_and_worker_attempts.sql \
-  052_scheduler_protocol_and_exact_attempt_hardening.sql \
+  052_scheduler_protocol_and_exact_attempt_hardening.sql
+do
+  psql "${target[@]}" -q -1 -v ON_ERROR_STOP=1 schema054 -c 'SET ROLE vjp' \
+    -f "$repo_root/Database/migrations/$prerequisite_migration"
+done
+for prerequisite_migration in \
   053_campaign_operations_controls_cancellation_reconciliation.sql \
   054_campaign_operations_completion_and_audit.sql
 do
