@@ -1,5 +1,11 @@
 #include "CampaignOperationsProductionAdmissionService.hpp"
 
+#if defined(__has_include)
+#if __has_include("GeneratedBuildProvenance.hpp")
+#include "GeneratedBuildProvenance.hpp"
+#endif
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -167,20 +173,20 @@ std::optional<std::string> ExecutableSha256(const std::string& path)
     return "sha256:" + digest;
 }
 
-std::optional<std::string> CommandOutput(const std::string& command)
+std::optional<std::string> EmbeddedSourceCommit()
 {
-    FILE* pipe = ::popen(command.c_str(), "r");
-    if (!pipe) return std::nullopt;
-    std::array<char, 256> buffer{};
-    std::ostringstream output;
-    while (::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe))
-        output << buffer.data();
-    if (::pclose(pipe) != 0) return std::nullopt;
-    std::string result = output.str();
-    while (!result.empty() && std::isspace(
-        static_cast<unsigned char>(result.back())))
-        result.pop_back();
-    return result;
+#if defined(EXPERTADVISOR_SOURCE_COMMIT)
+    const std::string sourceCommit = EXPERTADVISOR_SOURCE_COMMIT;
+    if (sourceCommit.size() == 40U &&
+        std::all_of(sourceCommit.begin(), sourceCommit.end(),
+            [](unsigned char character)
+            {
+                return (character >= '0' && character <= '9') ||
+                    (character >= 'a' && character <= 'f');
+            }))
+        return sourceCommit;
+#endif
+    return std::nullopt;
 }
 
 ProductionMutationResult MutationResult(
@@ -442,10 +448,7 @@ ProductionMutationResult RunProductionMutation(
 std::optional<ManagerBuildContract> CaptureActualManagerBuildContract(
     const std::string& executablePath)
 {
-    const auto sourceCommit = CommandOutput(
-        "git rev-parse HEAD 2>/dev/null");
-    const auto sourceStatus = CommandOutput(
-        "git status --porcelain 2>/dev/null");
+    const auto sourceCommit = EmbeddedSourceCommit();
     const auto executableSha256 = ExecutableSha256(executablePath);
 #if defined(__clang_version__)
     const std::string compilerContract = __clang_version__;
@@ -457,9 +460,7 @@ std::optional<ManagerBuildContract> CaptureActualManagerBuildContract(
 #if !defined(NDEBUG)
     return std::nullopt;
 #endif
-    if (!sourceCommit || sourceCommit->size() != 40U || !sourceStatus ||
-        !sourceStatus->empty() || compilerContract.empty() ||
-        !executableSha256)
+    if (!sourceCommit || compilerContract.empty() || !executableSha256)
         return std::nullopt;
     try
     {

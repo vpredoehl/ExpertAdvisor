@@ -840,6 +840,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0A1000122F70000100AAA001 /* Build configuration list for PBXNativeTarget "LSTM Release" */;
 			buildPhases = (
+				0A10000A2F70000100AAA002 /* Generate build provenance */,
 				0A10000E2F70000100AAA001 /* Sources */,
 				0A10000C2F70000100AAA001 /* Frameworks */,
 				0A10000D2F70000100AAA001 /* CopyFiles */,
@@ -856,6 +857,26 @@
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		0A10000A2F70000100AAA002 /* Generate build provenance */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
+			);
+			name = "Generate build provenance";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py\" --repository-root \"$(PROJECT_DIR)\" --output \"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp\" --configuration \"$(CONFIGURATION)\"";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXProject section */
 		084505512047962100A0B88F /* Project object */ = {
@@ -1490,7 +1511,10 @@
 					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					/opt/homebrew/opt/libpq/include,
 				);
-				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Headers";
+				USER_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Headers",
+					"$(DERIVED_FILE_DIR)",
+				);
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
 			};
 			name = Debug;
@@ -1553,7 +1577,10 @@
 					"/opt/homebrew/opt/libpqxx@7.10.1/include",
 					/opt/homebrew/opt/libpq/include,
 				);
-				USER_HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Headers";
+				USER_HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Headers",
+					"$(DERIVED_FILE_DIR)",
+				);
 				Xanalyzer = "-I/usr/local/Toolchains/LLVM9.0.0.xctoolchain/usr/include/c++/v1/";
 			};
 			name = Release;

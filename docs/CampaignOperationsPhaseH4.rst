@@ -56,6 +56,14 @@ separate reviewed macOS execution identity and is compared to
 ``log_retention_policy`` is a mandatory reviewed external rotation/retention
 reference; H4 itself does not delete or rotate evidence.
 
+The manager's production build identity is self-describing. Release builds
+embed the exact lowercase 40-hex source commit during the Xcode build from a
+clean checkout; Release provenance generation fails closed for a dirty tree.
+At runtime the manager does not require a Git checkout, repository access, a
+particular current working directory, or invocation of ``git``. Missing or
+malformed embedded provenance remains unavailable and therefore blocks H1/H4
+authorization.
+
 The Manager login is not permitted to execute the corrected migration-059
 service function or the raw production V2 transition. The distinct dispatch
 service LOGIN performs that sealed database-side readiness authorization only
