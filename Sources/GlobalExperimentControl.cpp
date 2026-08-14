@@ -3017,6 +3017,250 @@ SignalOutcome CancelWorker(const ManagedWorker& worker,
         SignalAuthorization{});
 }
 
+namespace
+{
+
+bool IsReconcilableExperimentWorker(const std::string& workerKind,
+                                   const std::string& phase,
+                                   const std::string& capacityClass)
+{
+    return workerKind == "experiment" &&
+           (phase == "train" || phase == "infer" || phase == "analyze") &&
+           capacityClass == phase;
+}
+
+void PrintWorkerAttemptReconciliationResult(
+    std::ostream& output,
+    const char* outcome,
+    const EA::SchedulerOwnership::ExactAttemptSnapshot* exact,
+    const ValidatedWorker* validated,
+    const std::string& proposedState,
+    const std::string& reason)
+{
+    const bool eligible = std::string{outcome} == "eligible" ||
+                          std::string{outcome} == "applied";
+    output << "WORKER_ATTEMPT_RECONCILIATION"
+           << ",outcome=" << outcome
+           << ",worker_attempt_id="
+           << (exact ? std::to_string(exact->workerAttemptId) : "unknown")
+           << ",experiment_id="
+           << (exact ? std::to_string(exact->experimentId) : "unknown")
+           << ",worker_kind=" << (exact ? exact->workerKind : "unknown")
+           << ",phase=" << (exact ? exact->lifecyclePhase : "unknown")
+           << ",current_lifecycle_state="
+           << (exact ? exact->lifecycleState : "unknown")
+           << ",proposed_lifecycle_state=" << proposedState
+           << ",durable_pid=" << (exact && exact->workerPid
+               ? std::to_string(*exact->workerPid) : "NULL")
+           << ",durable_pgid=" << (exact && exact->processGroupId
+               ? std::to_string(*exact->processGroupId) : "NULL")
+           << ",live_pid=" << (validated
+               ? std::to_string(validated->observation.pid) : "NULL")
+           << ",live_pgid=" << (validated
+               ? std::to_string(validated->observation.processGroupId) : "NULL")
+           << ",process_start_identity_result="
+           << (validated && validated->identity == IdentityResult::Validated
+               ? "matched" : "not_matched")
+           << ",executable_identity_result="
+           << (validated && validated->identity == IdentityResult::Validated
+               ? "matched" : "not_matched")
+           << ",command_identity_result="
+           << (validated && validated->identity == IdentityResult::Validated
+               ? "matched" : "not_matched")
+           << ",lifecycle_binding_result="
+           << (exact ? "matched" : "not_matched")
+           << ",eligible=" << (eligible ? "true" : "false")
+           << ",reason=" << reason << std::endl;
+}
+
+int RunWorkerAttemptReconciliationCommandImpl(
+    const std::string& connectionString,
+    const WorkerAttemptReconciliationCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    if (command.workerAttemptId <= 0)
+    {
+        error << "WORKER_ATTEMPT_RECONCILIATION_REJECTED"
+              << ",reason=worker_attempt_id_required" << std::endl;
+        return 2;
+    }
+    if (!command.dryRun && !command.confirmed)
+    {
+        error << "WORKER_ATTEMPT_RECONCILIATION_REJECTED"
+              << ",worker_attempt_id=" << command.workerAttemptId
+              << ",reason=administrative_write_requires_yes" << std::endl;
+        return 2;
+    }
+
+    try
+    {
+        pqxx::connection connection{connectionString};
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION READ WRITE;");
+        EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(transaction);
+
+        // Coordinate with scheduler transactions without claiming or
+        // refreshing scheduler ownership. Historical attempt fence identity
+        // remains an exact predicate; this command cannot dispatch work.
+        AcquireCoordinationLock(transaction);
+        const pqxx::result candidate = transaction.exec_params(
+            "SELECT worker_attempt_id,experiment_id,checkpoint_eval_id,"
+            "worker_kind,lifecycle_phase,capacity_class,"
+            "scheduler_invocation_id,scheduler_fencing_token "
+            "FROM experiment_scheduler_worker_attempt "
+            "WHERE worker_attempt_id=$1 FOR UPDATE;",
+            command.workerAttemptId);
+        if (candidate.size() != 1)
+        {
+            PrintWorkerAttemptReconciliationResult(
+                output, "rejected", nullptr, nullptr, "observed",
+                "worker_attempt_not_found");
+            transaction.commit();
+            return 1;
+        }
+
+        EA::SchedulerOwnership::ExactAttemptExpectation expected;
+        expected.workerAttemptId = candidate[0][0].as<long long>();
+        expected.experimentId = candidate[0][1].as<long long>();
+        if (!candidate[0][2].is_null())
+            expected.checkpointEvalId = candidate[0][2].as<long long>();
+        expected.workerKind = candidate[0][3].as<std::string>();
+        expected.lifecyclePhase = candidate[0][4].as<std::string>();
+        expected.capacityClass = candidate[0][5].as<std::string>();
+        if (!candidate[0][6].is_null())
+            expected.schedulerInvocationId = candidate[0][6].as<std::string>();
+        if (!candidate[0][7].is_null())
+            expected.schedulerFencingToken = candidate[0][7].as<long long>();
+        expected.requiredLifecycleState = "identity_ambiguous";
+        expected.requireCompleteProcessIdentity = true;
+
+        const auto exact = EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            transaction, expected, true);
+        if (!exact || exact->checkpointEvalId ||
+            !IsReconcilableExperimentWorker(
+                expected.workerKind, expected.lifecyclePhase,
+                expected.capacityClass) ||
+            exact->commandIdentity !=
+                "experiment:" + std::to_string(expected.experimentId) +
+                    ":" + expected.lifecyclePhase)
+        {
+            PrintWorkerAttemptReconciliationResult(
+                output, "rejected", exact ? &*exact : nullptr, nullptr,
+                "observed", "exact_ambiguous_attempt_verification_failed");
+            transaction.commit();
+            return 1;
+        }
+
+        ManagedWorker worker;
+        worker.workerAttemptId = exact->workerAttemptId;
+        worker.workerKind = exact->workerKind;
+        worker.capacityClass = exact->capacityClass;
+        worker.attemptLifecycleState = exact->lifecycleState;
+        worker.launchAttemptIdentity = exact->launchAttemptIdentity;
+        worker.experimentId = exact->experimentId;
+        worker.phase = exact->lifecyclePhase;
+        worker.lifecycleStatus = exact->lifecycleStatus;
+        worker.pid = *exact->workerPid;
+        worker.processGroupId = exact->processGroupId;
+        worker.processStartIdentity = exact->processStartIdentity;
+        worker.executable = exact->canonicalExecutablePath;
+        worker.commandLine = exact->commandLine;
+
+        // Observe immediately before the locked guarded transition. This
+        // command never calls any ProcessOperations signalling method.
+        const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
+        if (validated.identity != IdentityResult::Validated)
+        {
+            PrintWorkerAttemptReconciliationResult(
+                output, "rejected", &*exact, &validated, "observed",
+                "live_process_identity_verification_failed:" + validated.detail);
+            transaction.commit();
+            return 1;
+        }
+
+        PrintWorkerAttemptReconciliationResult(
+            output, command.dryRun ? "eligible" : "applying", &*exact,
+            &validated, "observed", "exact_identity_verified");
+        if (command.dryRun)
+        {
+            transaction.commit();
+            return 0;
+        }
+
+        const pqxx::result transitioned = transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt a SET "
+            "lifecycle_state='observed',"
+            "reconciliation_result='valid_process_observed',"
+            "diagnostic='exact_attempt_reconciled_by_administrator',"
+            "last_observed_at=clock_timestamp() "
+            "FROM experiment e "
+            "WHERE a.worker_attempt_id=$1 AND a.lifecycle_state='identity_ambiguous' "
+            "AND a.experiment_id=$2 AND a.checkpoint_eval_id IS NULL "
+            "AND a.worker_kind=$3 AND a.lifecycle_phase=$4 AND a.capacity_class=$5 "
+            "AND a.scheduler_invocation_id IS NOT DISTINCT FROM $6 "
+            "AND a.scheduler_fencing_token IS NOT DISTINCT FROM $7 "
+            "AND a.worker_pid=$8 AND a.worker_process_group_id=$9 "
+            "AND a.worker_process_start_identity=$10 "
+            "AND a.canonical_executable_path=$11 AND a.command_line=$12 "
+            "AND a.command_identity=$13 "
+            "AND e.experiment_id=a.experiment_id "
+            "AND e.active_scheduler_worker_attempt_id=a.worker_attempt_id "
+            "AND e.status='running' AND e.phase=$4 "
+            "AND e.worker_pid=a.worker_pid "
+            "AND e.worker_process_group_id=a.worker_process_group_id "
+            "AND e.worker_process_start_identity=a.worker_process_start_identity "
+            "AND e.worker_executable=a.canonical_executable_path "
+            "AND e.worker_command_line=a.command_line "
+            "RETURNING a.worker_attempt_id;",
+            exact->workerAttemptId, exact->experimentId, exact->workerKind,
+            exact->lifecyclePhase, exact->capacityClass,
+            exact->schedulerInvocationId, exact->schedulerFencingToken,
+            *exact->workerPid, *exact->processGroupId,
+            *exact->processStartIdentity, *exact->canonicalExecutablePath,
+            *exact->commandLine, exact->commandIdentity);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            transitioned, "reconcile_exact_identity_ambiguous_attempt");
+        PrintWorkerAttemptReconciliationResult(
+            output, "applied", &*exact, &validated, "observed",
+            "exact_identity_verified");
+        transaction.commit();
+        return 0;
+    }
+    catch (const std::exception& exception)
+    {
+        error << "WORKER_ATTEMPT_RECONCILIATION_ERROR"
+              << ",worker_attempt_id=" << command.workerAttemptId
+              << ",error=" << exception.what() << std::endl;
+        return 2;
+    }
+}
+
+} // namespace
+
+int RunWorkerAttemptReconciliationCommand(
+    const std::string& connectionString,
+    const WorkerAttemptReconciliationCommand& command,
+    std::ostream& output,
+    std::ostream& error)
+{
+    std::unique_ptr<ProcessOperations> processes = CreateNativeProcessOperations();
+    return RunWorkerAttemptReconciliationCommandImpl(
+        connectionString, command, output, error, *processes);
+}
+
+int RunWorkerAttemptReconciliationCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const WorkerAttemptReconciliationCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    return RunWorkerAttemptReconciliationCommandImpl(
+        connectionString, command, output, error, processes);
+}
+
 void AcquireCoordinationLock(pqxx::transaction_base& transaction)
 {
     transaction.exec_params(

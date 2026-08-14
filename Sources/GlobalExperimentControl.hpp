@@ -299,6 +299,29 @@ struct ExperimentResumeCommand
     std::optional<std::string> requesterIdentity;
 };
 
+// A deliberately narrow, non-scheduler administrative bridge for an exact
+// externally executing experiment-worker attempt whose prior observation was
+// inconclusive.  It never signals a process or changes an experiment row.
+struct WorkerAttemptReconciliationCommand
+{
+    long long workerAttemptId = -1;
+    bool dryRun = false;
+    bool confirmed = false;
+};
+
+int RunWorkerAttemptReconciliationCommand(
+    const std::string& connectionString,
+    const WorkerAttemptReconciliationCommand& command,
+    std::ostream& output,
+    std::ostream& error);
+
+int RunWorkerAttemptReconciliationCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const WorkerAttemptReconciliationCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes);
+
 // Preserves lifecycle-paused resume behavior and adds an audited selective
 // release path for a running worker suspended by the current global pause.
 int RunExperimentResumeCommand(const std::string& connectionString,

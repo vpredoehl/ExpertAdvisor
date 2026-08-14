@@ -477,6 +477,7 @@ launch_worker() {
     local kind="$1"
     local experiment_id="$2"
     local checkpoint_eval_id="${3:-}"
+    local worker_attempt_id="${4:-}"
     local worker_link="${test_dir}/LSTM_Release_${kind}"
     local ready="${test_dir}/${kind}.ready"
     local identity="" pid="" pgid="" start="" executable="" command=""
@@ -494,6 +495,9 @@ launch_worker() {
             args+=(--infer --scheduler-checkpoint-eval-id="${checkpoint_eval_id}")
             ;;
     esac
+    if [[ -n "${worker_attempt_id}" ]]; then
+        args+=(--scheduler-worker-attempt-id="${worker_attempt_id}")
+    fi
     "${worker_link}" "${args[@]}" 9>"${ready}" &
     pid=$!
     for _ in {1..100}; do
@@ -1532,5 +1536,78 @@ test "$(psql -X -At -d "${test_db}" -c \
 test "$(psql -X -At -d "${test_db}" -c \
     "SELECT count(*) FROM experiment_scheduler_worker_attempt
      WHERE experiment_id=920066")" = "2"
+
+# Exact-attempt administrative reconciliation is intentionally narrower than
+# scheduler recovery: it accepts only the one identity_ambiguous attempt whose
+# locked experiment binding and live process evidence all still agree. It does
+# not signal the disposable worker.
+reconcile_attempt_id=990051
+launch_worker train 930001 "" "${reconcile_attempt_id}"
+reconcile_index=$((${#worker_pids[@]} - 1))
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -v attempt_id="${reconcile_attempt_id}" \
+    -v pid="${worker_pids[${reconcile_index}]}" \
+    -v pgid="${worker_pgids[${reconcile_index}]}" \
+    -v start="${worker_starts[${reconcile_index}]}" \
+    -v executable="${worker_executables[${reconcile_index}]}" <<'SQL'
+SELECT set_config('expertadvisor.scheduler_protocol_generation','52',false);
+INSERT INTO experiment(
+    experiment_id,symbol,prediction_horizon,c_next_threshold,target_epochs,
+    train_start,train_end,status,phase,current_operation,worker_pid,
+    worker_process_group_id,worker_process_start_identity,worker_executable,
+    worker_command_line,worker_started_at,duplicate_nonce
+) VALUES(
+    930001,'reconcilefixture',4,0.0008,20,'2020-01-01','2021-01-01',
+    'running','train','train',:pid,:pgid,:'start',:'executable',
+    :'executable'||' --managed-test-worker --self-session '
+      ||'--scheduler-experiment-id=930001 --train '
+      ||'--scheduler-worker-attempt-id=990051',clock_timestamp(),930001
+);
+INSERT INTO experiment_scheduler_worker_attempt(
+    worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
+    lifecycle_phase,capacity_class,ownership_origin,lifecycle_state,
+    worker_pid,worker_process_group_id,worker_process_start_identity,
+    canonical_executable_path,command_line,command_identity,reserved_at,
+    spawned_at,registered_at
+) SELECT :attempt_id,'test:reconcile:990051',930001,'experiment','train',
+    'train','scheduler_launch','identity_ambiguous',worker_pid,
+    worker_process_group_id,worker_process_start_identity,worker_executable,
+    worker_command_line,'experiment:930001:train',worker_started_at,
+    worker_started_at,worker_started_at
+  FROM experiment WHERE experiment_id=930001;
+UPDATE experiment SET active_scheduler_worker_attempt_id=:attempt_id
+WHERE experiment_id=930001;
+SQL
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --reconcile-worker-attempt="${reconcile_attempt_id}" --dry-run \
+    >"${test_dir}/reconcile-dry-run.out" 2>&1
+grep -q 'WORKER_ATTEMPT_RECONCILIATION,outcome=eligible' \
+    "${test_dir}/reconcile-dry-run.out"
+test "$(psql -X -At -d "${test_db}" -c \
+    "SELECT lifecycle_state FROM experiment_scheduler_worker_attempt
+     WHERE worker_attempt_id=${reconcile_attempt_id}")" = "identity_ambiguous"
+process_identity_matches "${reconcile_index}"
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --reconcile-worker-attempt="${reconcile_attempt_id}" --yes \
+    >"${test_dir}/reconcile-apply.out" 2>&1
+grep -q 'WORKER_ATTEMPT_RECONCILIATION,outcome=applied' \
+    "${test_dir}/reconcile-apply.out"
+test "$(psql -X -At -d "${test_db}" -c \
+    "SELECT lifecycle_state FROM experiment_scheduler_worker_attempt
+     WHERE worker_attempt_id=${reconcile_attempt_id}")" = "observed"
+process_identity_matches "${reconcile_index}"
+
+# A state other than the one explicitly authorized source state is rejected;
+# it is not treated as an idempotent administrative rewrite.
+set +e
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --reconcile-worker-attempt="${reconcile_attempt_id}" --dry-run \
+    >"${test_dir}/reconcile-nonambiguous.out" 2>&1
+reconcile_nonambiguous_status=$?
+set -e
+test "${reconcile_nonambiguous_status}" = "1"
+grep -q 'exact_ambiguous_attempt_verification_failed' \
+    "${test_dir}/reconcile-nonambiguous.out"
+process_identity_matches "${reconcile_index}"
 
 printf '%s\n' "SchedulerOwnershipProcessIntegrationTests passed"

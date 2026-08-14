@@ -104,6 +104,7 @@ struct SchedulerOptions
     std::optional<long long> modelInfoModelId;
     std::optional<long long> statusExperimentId;
     std::optional<long long> stopExperimentId;
+    std::optional<long long> reconcileWorkerAttemptId;
     bool stopAllExperiments = false;
     bool pauseAllExperiments = false;
     bool resumeAllExperiments = false;
@@ -902,6 +903,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--list-experiment-lineage" ||
             arg == "--include-parent-models" ||
             arg == "--stop-experiment" ||
+            arg == "--reconcile-worker-attempt" ||
             arg == "--stop-all-experiments" ||
             arg == "--pause-all-experiments" ||
             arg == "--resume-all-experiments" ||
@@ -1106,6 +1108,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--analyze-experiment=", 0) == 0 ||
             arg.rfind("--experiment-id=", 0) == 0 ||
             arg.rfind("--stop-experiment=", 0) == 0 ||
+            arg.rfind("--reconcile-worker-attempt=", 0) == 0 ||
             arg.rfind("--pause-experiment=", 0) == 0 ||
             arg.rfind("--resume-experiment=", 0) == 0 ||
             arg.rfind("--cancel-experiment=", 0) == 0 ||
@@ -1846,6 +1849,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.analyzeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--stop-experiment")
             options.stopExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--reconcile-worker-attempt")
+            options.reconcileWorkerAttemptId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--stop-all-experiments")
             options.stopAllExperiments = true;
         else if (arg == "--pause-all-experiments")
@@ -2908,6 +2914,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.analyzeExperimentId = ParsePositiveLongLong("--analyze-experiment", value);
         else if (SplitOptionWithValue(arg, "--stop-experiment", value))
             options.stopExperimentId = ParsePositiveLongLong("--stop-experiment", value);
+        else if (SplitOptionWithValue(arg, "--reconcile-worker-attempt", value))
+            options.reconcileWorkerAttemptId = ParsePositiveLongLong(
+                "--reconcile-worker-attempt", value);
         else if (SplitOptionWithValue(arg, "--pause-experiment", value))
             options.pauseExperimentId = ParsePositiveLongLong("--pause-experiment", value);
         else if (SplitOptionWithValue(arg, "--resume-experiment", value))
@@ -3557,6 +3566,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.listExperimentModelsId.has_value() ? 1 : 0) +
         (options.listExperimentLineageId.has_value() ? 1 : 0) +
         (options.stopExperimentId.has_value() ? 1 : 0) +
+        (options.reconcileWorkerAttemptId.has_value() ? 1 : 0) +
         (options.stopAllExperiments ? 1 : 0) +
         (options.pauseAllExperiments ? 1 : 0) +
         (options.resumeAllExperiments ? 1 : 0) +
@@ -4549,6 +4559,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     if (globalControlCommandCount > 0 && !options.dryRun && !options.yes)
         throw std::invalid_argument(
             "global experiment control writes require --yes");
+    if (options.reconcileWorkerAttemptId.has_value() &&
+        !options.dryRun && !options.yes)
+    {
+        throw std::invalid_argument(
+            "--reconcile-worker-attempt requires --dry-run or --yes");
+    }
     if (options.completeSchedulerProtocolCutover &&
         (!options.yes || options.dryRun))
     {
@@ -22974,6 +22990,10 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --stop-experiment=ID | --stop-all-experiments [--dry-run] [--yes] [--force]\n"
         << "Usage: " << exe
+        << " --reconcile-worker-attempt=WORKER_ATTEMPT_ID [--dry-run | --yes]\n"
+        << "Reconciles only an exact identity_ambiguous experiment-worker attempt after "
+        << "locked lifecycle and live process identity verification; it never signals or dispatches work.\n"
+        << "Usage: " << exe
         << " --analyze-experiment=EXPERIMENT_ID | --analyze-completed-experiments | "
         << "--print-experiment-leaderboard [--leaderboard-symbol=SYMBOL] "
         << "[--leaderboard-horizon=N] [--leaderboard-limit=N]\n"
@@ -23935,6 +23955,15 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return CompleteSchedulerProtocolCutover(options);
         if (options.stopExperimentId.has_value() || options.stopAllExperiments)
             return RunStopExperimentCommand(options);
+        if (options.reconcileWorkerAttemptId.has_value())
+        {
+            EA::GlobalExperimentControl::WorkerAttemptReconciliationCommand command;
+            command.workerAttemptId = *options.reconcileWorkerAttemptId;
+            command.dryRun = options.dryRun;
+            command.confirmed = options.yes;
+            return EA::GlobalExperimentControl::RunWorkerAttemptReconciliationCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
         if (options.retryCheckpointEvalId.has_value())
             return RunRetryCheckpointEvalCommand(options);
         if (options.evaluateCheckpointPolicyEvalId.has_value())

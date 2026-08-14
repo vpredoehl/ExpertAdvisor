@@ -55,6 +55,10 @@ struct ExactAttemptExpectation
     std::string capacityClass;
     std::optional<std::string> schedulerInvocationId;
     std::optional<long long> schedulerFencingToken;
+    // Most callers intentionally reject identity_ambiguous attempts.  The
+    // reconciliation command is the sole caller that supplies this explicit
+    // source-state fence before it may inspect and restore one.
+    std::optional<std::string> requiredLifecycleState;
     bool requireSignalable = false;
     bool requireCompleteProcessIdentity = false;
     bool allowTerminalLifecycle = false;
@@ -215,9 +219,12 @@ inline std::optional<ExactAttemptSnapshot> LockAndVerifyExactActiveAttempt(
          snapshot.schedulerInvocationId != expected.schedulerInvocationId) ||
         (expected.schedulerFencingToken &&
          snapshot.schedulerFencingToken != expected.schedulerFencingToken) ||
+        (expected.requiredLifecycleState &&
+         snapshot.lifecycleState != *expected.requiredLifecycleState) ||
         (expected.requireSignalable &&
          !IsSignalableAttemptState(snapshot.lifecycleState)) ||
-        snapshot.lifecycleState == "identity_ambiguous")
+        (!expected.requiredLifecycleState &&
+         snapshot.lifecycleState == "identity_ambiguous"))
     {
         return std::nullopt;
     }
