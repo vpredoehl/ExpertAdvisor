@@ -2,8 +2,12 @@
 #include <cassert>
 #include <cerrno>
 #include <csignal>
+#include <filesystem>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <optional>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -56,6 +60,100 @@ public:
     int CallerPid() const override { return callerPid; }
     int CallerProcessGroupId() const override { return callerGroup; }
 };
+
+class FakeNativeObservationBackend final
+    : public NativeProcessObservationBackend
+{
+public:
+    bool exists = true;
+    int existenceError = 0;
+    std::vector<std::optional<std::string>> startIdentities{
+        "1700000000:123456", "1700000000:123456"};
+    int startError = 0;
+    NativeProcessStatus status{
+        1200,
+        1200,
+        "T",
+        "/bin/sh --train --scheduler-experiment-id=42"};
+    int statusError = 0;
+    std::optional<std::string> procPidPath{"/bin/sh"};
+    int procPidPathError = 0;
+    std::optional<std::string> kernelExecutablePath;
+    int kernelExecutablePathError = 0;
+
+    bool ProcessExists(int, int& errorNumber) override
+    {
+        errorNumber = existenceError;
+        return exists;
+    }
+
+    std::optional<std::string> ReadStartIdentity(
+        int,
+        int& errorNumber) override
+    {
+        errorNumber = startError;
+        if (startReadCount >= startIdentities.size())
+            return std::nullopt;
+        return startIdentities[startReadCount++];
+    }
+
+    std::optional<NativeProcessStatus> ReadStatus(
+        int,
+        int& errorNumber) override
+    {
+        errorNumber = statusError;
+        if (statusError != 0)
+            return std::nullopt;
+        return status;
+    }
+
+    std::optional<std::string> ReadProcPidPath(
+        int,
+        int& errorNumber) override
+    {
+        errorNumber = procPidPathError;
+        return procPidPath;
+    }
+
+    std::optional<std::string> ReadKernelExecutablePath(
+        int,
+        int& errorNumber) override
+    {
+        errorNumber = kernelExecutablePathError;
+        return kernelExecutablePath;
+    }
+
+private:
+    size_t startReadCount = 0;
+};
+
+ManagedWorker NativeWorker(const std::string& executable,
+                           const std::string& command)
+{
+    ManagedWorker worker;
+    worker.experimentId = 42;
+    worker.phase = "train";
+    worker.lifecycleStatus = "running";
+    worker.pid = 1200;
+    worker.processGroupId = 1200;
+    worker.processStartIdentity = "1700000000:123456";
+    worker.executable = executable;
+    worker.commandLine = command;
+    return worker;
+}
+
+std::string CreateExecutablePathContainingSpaces()
+{
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path() /
+        ("ea native observe " + std::to_string(::getpid()));
+    const std::filesystem::path executable = directory / "LSTM Release";
+    std::filesystem::create_directories(directory);
+    std::filesystem::copy_file(
+        "/bin/sh", executable,
+        std::filesystem::copy_options::overwrite_existing);
+    return std::filesystem::canonical(executable).string();
+}
 
 ManagedWorker Worker(long long experimentId = 42,
                      const std::string& phase = "train")
@@ -193,6 +291,144 @@ int main()
     ManagedWorker worker = Worker();
     assert(ValidateManagedWorker(worker, processes).identity ==
            IdentityResult::Validated);
+
+    // Native inspection keeps the proc_pidpath success path unchanged.
+    {
+        const std::string executable = "/bin/sh";
+        const std::string command =
+            executable + " --train --scheduler-experiment-id=42";
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = command;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        assert(ValidateManagedWorker(
+                   NativeWorker(executable, command), *native)
+                   .identity == IdentityResult::Validated);
+    }
+
+    // proc_pidpath ENOENT may occur for a live SIGSTOP process. The fallback
+    // accepts only the kernel-recorded exec path, so no ps/argv token parsing
+    // is involved even when the canonical path contains spaces.
+    const std::string spacedExecutable = CreateExecutablePathContainingSpaces();
+    const std::string spacedCommand =
+        spacedExecutable + " --train --scheduler-experiment-id=42";
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand;
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        assert(ValidateManagedWorker(
+                   NativeWorker(spacedExecutable, spacedCommand), *native)
+                   .identity == IdentityResult::Validated);
+    }
+
+    // A changed start identity is PID-reuse evidence and fails before the
+    // observer can mark inspection successful.
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand;
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        backend->startIdentities = {
+            "1700000000:123456", "1700000001:654321"};
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        const ValidatedWorker validation =
+            ValidateManagedWorker(NativeWorker(spacedExecutable, spacedCommand),
+                                  *native);
+        assert(validation.identity == IdentityResult::InspectionFailed);
+        assert(!validation.observation.inspectionSucceeded);
+    }
+
+    // The fallback remains subject to exact canonical executable, command,
+    // PGID, and scheduler-worker-attempt checks.
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand;
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        assert(ValidateManagedWorker(
+                   NativeWorker("/bin/sh", spacedCommand), *native)
+                   .identity == IdentityResult::IdentityValidationFailed);
+    }
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine =
+            spacedExecutable + " --train --scheduler-experiment-id=420";
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        assert(ValidateManagedWorker(
+                   NativeWorker(spacedExecutable, spacedCommand), *native)
+                   .identity == IdentityResult::IdentityValidationFailed);
+    }
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand;
+        backend->status.processGroupId = 1201;
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        assert(ValidateManagedWorker(
+                   NativeWorker(spacedExecutable, spacedCommand), *native)
+                   .identity == IdentityResult::IdentityValidationFailed);
+    }
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand;
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        ManagedWorker attempted = NativeWorker(spacedExecutable, spacedCommand);
+        attempted.workerAttemptId = 623;
+        assert(ValidateManagedWorker(attempted, *native).identity ==
+               IdentityResult::IdentityValidationFailed);
+    }
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand +
+            " --scheduler-worker-attempt-id=624";
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePath = spacedExecutable;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        ManagedWorker attempted = NativeWorker(
+            spacedExecutable,
+            spacedCommand + " --scheduler-worker-attempt-id=624");
+        attempted.workerAttemptId = 623;
+        assert(ValidateManagedWorker(attempted, *native).identity ==
+               IdentityResult::IdentityValidationFailed);
+    }
+    {
+        auto backend = std::make_unique<FakeNativeObservationBackend>();
+        backend->status.commandLine = spacedCommand;
+        backend->procPidPath.reset();
+        backend->procPidPathError = ENOENT;
+        backend->kernelExecutablePathError = ENOENT;
+        std::unique_ptr<ProcessOperations> native =
+            CreateNativeProcessOperationsForTesting(std::move(backend));
+        const ValidatedWorker validation =
+            ValidateManagedWorker(NativeWorker(spacedExecutable, spacedCommand),
+                                  *native);
+        assert(validation.identity == IdentityResult::InspectionFailed);
+        assert(!validation.observation.inspectionSucceeded);
+    }
+    std::filesystem::remove_all(
+        std::filesystem::path(spacedExecutable).parent_path());
 
     SignalOutcome paused = PauseWorker(worker, processes);
     assert(paused.success);

@@ -64,6 +64,40 @@ struct ProcessObservation
     std::string processStartIdentity;
 };
 
+// The native observer is intentionally factored behind this narrow interface
+// so its PID-reuse and executable-identity decisions can be tested without
+// relying on host process timing.  Production uses the macOS implementation;
+// the testing factory below is not used by scheduler/runtime callers.
+struct NativeProcessStatus
+{
+    int pid = -1;
+    int processGroupId = -1;
+    std::string state;
+    std::string commandLine;
+};
+
+class NativeProcessObservationBackend
+{
+public:
+    virtual ~NativeProcessObservationBackend() = default;
+
+    virtual bool ProcessExists(int pid, int& errorNumber) = 0;
+    virtual std::optional<std::string> ReadStartIdentity(
+        int pid,
+        int& errorNumber) = 0;
+    virtual std::optional<NativeProcessStatus> ReadStatus(
+        int pid,
+        int& errorNumber) = 0;
+    virtual std::optional<std::string> ReadProcPidPath(
+        int pid,
+        int& errorNumber) = 0;
+    // This is the kernel's exec-path record from KERN_PROCARGS2, not argv[0]
+    // or a token parsed from `ps` output.
+    virtual std::optional<std::string> ReadKernelExecutablePath(
+        int pid,
+        int& errorNumber) = 0;
+};
+
 struct ManagedWorker
 {
     std::optional<long long> workerAttemptId;
@@ -160,6 +194,8 @@ public:
 
 std::optional<std::string> ReadProcessStartIdentity(int pid);
 std::unique_ptr<ProcessOperations> CreateNativeProcessOperations();
+std::unique_ptr<ProcessOperations> CreateNativeProcessOperationsForTesting(
+    std::unique_ptr<NativeProcessObservationBackend> backend);
 
 ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
                                       ProcessOperations& processes);

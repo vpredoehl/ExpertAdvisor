@@ -14,6 +14,7 @@
 #include <libproc.h>
 #include <sstream>
 #include <stdexcept>
+#include <sys/sysctl.h>
 #include <thread>
 #include <unistd.h>
 
@@ -27,17 +28,6 @@ std::string QuoteShellPid(int pid)
     if (pid <= 0)
         throw std::invalid_argument("process id must be positive");
     return std::to_string(pid);
-}
-
-std::string FirstCommandToken(const std::string& command)
-{
-    const size_t begin = command.find_first_not_of(" \t");
-    if (begin == std::string::npos)
-        return {};
-    const size_t end = command.find_first_of(" \t", begin);
-    return command.substr(begin, end == std::string::npos
-                                     ? std::string::npos
-                                     : end - begin);
 }
 
 bool ContainsExactOptionValue(const std::string& command,
@@ -123,9 +113,158 @@ bool ContainsWorkerIdentity(const std::string& command,
     return false;
 }
 
+std::optional<std::string> CanonicalizeExecutablePath(
+    const std::string& executablePath)
+{
+    if (executablePath.empty() || executablePath.front() != '/')
+        return std::nullopt;
+    char* canonicalExecutable = ::realpath(executablePath.c_str(), nullptr);
+    if (canonicalExecutable == nullptr)
+        return std::nullopt;
+    std::string result{canonicalExecutable};
+    std::free(canonicalExecutable);
+    return result;
+}
+
+class PosixNativeProcessObservationBackend final
+    : public NativeProcessObservationBackend
+{
+public:
+    bool ProcessExists(int pid, int& errorNumber) override
+    {
+        errno = 0;
+        if (::kill(static_cast<pid_t>(pid), 0) == 0)
+        {
+            errorNumber = 0;
+            return true;
+        }
+        errorNumber = errno;
+        return false;
+    }
+
+    std::optional<std::string> ReadStartIdentity(
+        int pid,
+        int& errorNumber) override
+    {
+        errno = 0;
+        const std::optional<std::string> identity =
+            ReadProcessStartIdentity(pid);
+        errorNumber = errno;
+        return identity;
+    }
+
+    std::optional<NativeProcessStatus> ReadStatus(
+        int pid,
+        int& errorNumber) override
+    {
+        const std::string command =
+            "ps -p " + QuoteShellPid(pid) +
+            " -o pid= -o pgid= -o state= -o command=";
+        FILE* pipe = ::popen(command.c_str(), "r");
+        if (pipe == nullptr)
+        {
+            errorNumber = errno;
+            return std::nullopt;
+        }
+        char buffer[16384] = {};
+        std::string line;
+        while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+            line += buffer;
+        const int status = ::pclose(pipe);
+        if (status != 0 || line.empty())
+        {
+            errorNumber = EIO;
+            return std::nullopt;
+        }
+
+        std::istringstream input(line);
+        NativeProcessStatus observed;
+        if (!(input >> observed.pid >> observed.processGroupId >> observed.state) ||
+            observed.pid != pid)
+        {
+            errorNumber = EIO;
+            return std::nullopt;
+        }
+        std::getline(input, observed.commandLine);
+        const size_t begin = observed.commandLine.find_first_not_of(" \t");
+        if (begin != std::string::npos)
+            observed.commandLine.erase(0, begin);
+        errorNumber = 0;
+        return observed;
+    }
+
+    std::optional<std::string> ReadProcPidPath(
+        int pid,
+        int& errorNumber) override
+    {
+        char executablePath[PROC_PIDPATHINFO_MAXSIZE] = {};
+        errno = 0;
+        const int executableLength = ::proc_pidpath(
+            pid, executablePath, sizeof(executablePath));
+        if (executableLength <= 0)
+        {
+            errorNumber = errno;
+            return std::nullopt;
+        }
+        errorNumber = 0;
+        return std::string{executablePath};
+    }
+
+    std::optional<std::string> ReadKernelExecutablePath(
+        int pid,
+        int& errorNumber) override
+    {
+        int mib[] = {CTL_KERN, KERN_PROCARGS2, pid};
+        size_t size = 0;
+        errno = 0;
+        if (::sysctl(mib, 3, nullptr, &size, nullptr, 0) != 0 ||
+            size <= sizeof(int))
+        {
+            errorNumber = errno != 0 ? errno : EIO;
+            return std::nullopt;
+        }
+        std::vector<char> buffer(size, '\0');
+        errno = 0;
+        if (::sysctl(mib, 3, buffer.data(), &size, nullptr, 0) != 0 ||
+            size <= sizeof(int))
+        {
+            errorNumber = errno != 0 ? errno : EIO;
+            return std::nullopt;
+        }
+        const char* const executable = buffer.data() + sizeof(int);
+        const size_t available = size - sizeof(int);
+        const void* const terminator =
+            std::memchr(executable, '\0', available);
+        if (terminator == nullptr || executable == terminator)
+        {
+            errorNumber = EIO;
+            return std::nullopt;
+        }
+        errorNumber = 0;
+        return std::string{
+            executable,
+            static_cast<size_t>(
+                static_cast<const char*>(terminator) - executable)};
+    }
+};
+
 class PosixProcessOperations final : public ProcessOperations
 {
 public:
+    PosixProcessOperations()
+        : PosixProcessOperations(
+              std::make_unique<PosixNativeProcessObservationBackend>())
+    {
+    }
+
+    explicit PosixProcessOperations(
+        std::unique_ptr<NativeProcessObservationBackend> backend)
+        : backend_(std::move(backend))
+    {
+        if (!backend_)
+            throw std::invalid_argument("native_process_observation_backend_required");
+    }
+
     ProcessObservation Observe(int pid) override
     {
         ProcessObservation observation;
@@ -133,15 +272,15 @@ public:
         if (pid <= 0)
             return observation;
 
-        errno = 0;
-        if (::kill(static_cast<pid_t>(pid), 0) != 0)
+        int errorNumber = 0;
+        if (!backend_->ProcessExists(pid, errorNumber))
         {
-            if (errno == ESRCH)
+            if (errorNumber == ESRCH)
             {
                 observation.inspectionSucceeded = true;
                 return observation;
             }
-            if (errno == EPERM)
+            if (errorNumber == EPERM)
             {
                 observation.exists = true;
                 observation.permissionDenied = true;
@@ -151,65 +290,52 @@ public:
         }
         observation.exists = true;
         const std::optional<std::string> startIdentityBefore =
-            ReadProcessStartIdentity(pid);
+            backend_->ReadStartIdentity(pid, errorNumber);
         if (!startIdentityBefore)
         {
-            if (errno == EPERM)
+            if (errorNumber == EPERM)
                 observation.permissionDenied = true;
             return observation;
         }
 
-        const std::string command =
-            "ps -p " + QuoteShellPid(pid) +
-            " -o pid= -o pgid= -o state= -o command=";
-        FILE* pipe = ::popen(command.c_str(), "r");
-        if (pipe == nullptr)
+        const std::optional<NativeProcessStatus> status =
+            backend_->ReadStatus(pid, errorNumber);
+        if (!status || status->pid != pid)
             return observation;
-        char buffer[16384] = {};
-        std::string line;
-        while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
-            line += buffer;
-        const int status = ::pclose(pipe);
-        if (status != 0 || line.empty())
-            return observation;
-
-        std::istringstream input(line);
-        int observedPid = -1;
-        int processGroupId = -1;
-        std::string processState;
-        if (!(input >> observedPid >> processGroupId >> processState) ||
-            observedPid != pid)
-            return observation;
-        if (!processState.empty() && processState[0] == 'Z')
+        if (!status->state.empty() && status->state[0] == 'Z')
         {
             observation.exists = false;
             observation.inspectionSucceeded = true;
-            observation.processGroupId = processGroupId;
+            observation.processGroupId = status->processGroupId;
             return observation;
         }
-        std::string observedCommand;
-        std::getline(input, observedCommand);
-        const size_t begin = observedCommand.find_first_not_of(" \t");
-        if (begin != std::string::npos)
-            observedCommand.erase(0, begin);
-        observation.processGroupId = processGroupId;
+        observation.processGroupId = status->processGroupId;
         observation.stopped =
-            !processState.empty() &&
-            (processState[0] == 'T' || processState[0] == 't');
-        observation.commandLine = observedCommand;
-        char executablePath[PROC_PIDPATHINFO_MAXSIZE] = {};
-        const int executableLength = ::proc_pidpath(
-            pid, executablePath, sizeof(executablePath));
-        if (executableLength <= 0)
+            !status->state.empty() &&
+            (status->state[0] == 'T' || status->state[0] == 't');
+        observation.commandLine = status->commandLine;
+
+        std::optional<std::string> executablePath =
+            backend_->ReadProcPidPath(pid, errorNumber);
+        if (!executablePath)
+        {
+            // macOS can report ENOENT from proc_pidpath for a live stopped
+            // process. KERN_PROCARGS2 supplies the kernel-recorded exec path;
+            // it is deliberately not reconstructed from ps/argv text.
+            if (errorNumber != ENOENT)
+                return observation;
+            executablePath =
+                backend_->ReadKernelExecutablePath(pid, errorNumber);
+            if (!executablePath)
+                return observation;
+        }
+        const std::optional<std::string> canonicalExecutable =
+            CanonicalizeExecutablePath(*executablePath);
+        if (!canonicalExecutable)
             return observation;
-        char* canonicalExecutable =
-            ::realpath(executablePath, nullptr);
-        if (canonicalExecutable == nullptr)
-            return observation;
-        observation.executable = canonicalExecutable;
-        std::free(canonicalExecutable);
+        observation.executable = *canonicalExecutable;
         const std::optional<std::string> startIdentityAfter =
-            ReadProcessStartIdentity(pid);
+            backend_->ReadStartIdentity(pid, errorNumber);
         if (!startIdentityAfter ||
             *startIdentityAfter != *startIdentityBefore)
             return observation;
@@ -257,6 +383,9 @@ public:
     {
         return static_cast<int>(::getpgrp());
     }
+
+private:
+    std::unique_ptr<NativeProcessObservationBackend> backend_;
 };
 
 std::string ActionState(Action action)
@@ -2328,6 +2457,12 @@ std::unique_ptr<ProcessOperations> CreateNativeProcessOperations()
     return std::make_unique<PosixProcessOperations>();
 }
 
+std::unique_ptr<ProcessOperations> CreateNativeProcessOperationsForTesting(
+    std::unique_ptr<NativeProcessObservationBackend> backend)
+{
+    return std::make_unique<PosixProcessOperations>(std::move(backend));
+}
+
 ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
                                       ProcessOperations& processes)
 {
@@ -2391,8 +2526,17 @@ ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
         result.detail = "checkpoint_eval_identity_mismatch";
         return result;
     }
-    if (FirstCommandToken(*worker.executable) != result.observation.executable &&
-        *worker.executable != result.observation.executable)
+    if (worker.workerAttemptId &&
+        !ContainsExactOptionValue(
+            result.observation.commandLine,
+            "--scheduler-worker-attempt-id",
+            *worker.workerAttemptId))
+    {
+        result.identity = IdentityResult::IdentityValidationFailed;
+        result.detail = "worker_attempt_identity_mismatch";
+        return result;
+    }
+    if (*worker.executable != result.observation.executable)
     {
         result.identity = IdentityResult::IdentityValidationFailed;
         result.detail = "executable_identity_mismatch";
