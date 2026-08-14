@@ -3329,10 +3329,13 @@ int RunWorkerAttemptReconciliationCommandImpl(
             *exact->commandLine, exact->commandIdentity);
         EA::SchedulerOwnership::RequireAffectedExactlyOne(
             transitioned, "reconcile_exact_identity_ambiguous_attempt");
+        // The applied outcome is a post-commit observation.  If commit fails,
+        // control transfers to the error path and no applied result is
+        // emitted; the transaction destructor then aborts the mutation.
+        transaction.commit();
         PrintWorkerAttemptReconciliationResult(
             output, "applied", &*exact, &validated, "observed",
             "exact_identity_verified");
-        transaction.commit();
         return 0;
     }
     catch (const std::exception& exception)
