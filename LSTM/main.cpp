@@ -45,6 +45,7 @@
 #include "WorkerLifecycleDiagnostics.hpp"
 #include "Donchian20Mode.hpp"
 #include "ModelInputContract.hpp"
+#include "ReturnFeatureHistory.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -853,20 +854,17 @@ double ClassWeightForBaseline(int cls)
 }
 
 float BaselineLookbackLogReturn(const Tensor& tensor,
-                                DataSet::const_iterator batchBegin,
-                                size_t localRow,
+                                size_t currentGlobalPosition,
                                 size_t lookbackBars)
 {
-    if (localRow < lookbackBars)
-        return 0.0f;
-
-    const auto curIt = batchBegin + static_cast<std::ptrdiff_t>(localRow);
-    const auto prevIt = batchBegin + static_cast<std::ptrdiff_t>(localRow - lookbackBars);
-    const float curClose = tensor.RawCloseAtIterator(curIt);
-    const float prevClose = tensor.RawCloseAtIterator(prevIt);
-    if (!std::isfinite(curClose) || !std::isfinite(prevClose) || curClose <= 0.0f || prevClose <= 0.0f)
-        return 0.0f;
-    return std::log(curClose / prevClose);
+    return EA::ComputeLookbackLogReturnAtGlobalPosition(
+        currentGlobalPosition,
+        lookbackBars,
+        [&tensor](size_t globalPosition)
+        {
+            return tensor.RawCloseAtIterator(
+                tensor.begin() + static_cast<std::ptrdiff_t>(globalPosition));
+        });
 }
 
 float BaselineFeatureAt(const Tensor& tensor,
@@ -877,6 +875,7 @@ float BaselineFeatureAt(const Tensor& tensor,
 {
     const auto batchBegin = tensor.begin() + static_cast<std::ptrdiff_t>(ex.batchStart);
     const size_t localRow = ex.localStart + windowRow;
+    const size_t currentGlobalPosition = ex.globalStart + windowRow;
     LSTM_ASSERT(localRow < ex.batchRows, "BaselineFeatureAt: local row out of batch bounds");
 
     float v = 0.0f;
@@ -891,19 +890,19 @@ float BaselineFeatureAt(const Tensor& tensor,
         const size_t retCol = col - baseFeatureCount;
         size_t written = 0;
 #if LSTM_RET_HORIZON_1
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 1) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 1) * EA::LSTM::kFeatScale;
         ++written;
 #endif
 #if LSTM_RET_HORIZON_4
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 4) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 4) * EA::LSTM::kFeatScale;
         ++written;
 #endif
 #if LSTM_RET_HORIZON_8
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 8) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 8) * EA::LSTM::kFeatScale;
         ++written;
 #endif
 #if LSTM_RET_HORIZON_16
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 16) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 16) * EA::LSTM::kFeatScale;
         ++written;
 #endif
         (void)written;

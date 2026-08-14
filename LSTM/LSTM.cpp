@@ -30,6 +30,7 @@
 #include "BuildConfig.hpp"
 #include "TargetLabel.hpp"
 #include "ModelInputContract.hpp"
+#include "ReturnFeatureHistory.hpp"
 #include <MetaNN/data_copy/data_copy.h>
 #include <MetaNN/metal/metal_matmul.h>
 
@@ -1528,6 +1529,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
         modelFeatureCount, physicalTensorFeatureCount);
     const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
+    const size_t windowGlobalStartIdx = static_cast<size_t>(w.begin() - t.begin());
 #if LSTM_TRAINING_ASSERTS
     LSTM_ASSERT(modelFeatureCount == modelTensorFeatureCount + kReturnFeatureCount,
                 "PredictNextDirectionProbs: model input contract width mismatch");
@@ -1551,7 +1553,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
         if (useReturnFeatures)
         {
             const size_t appended = AppendMultiHorizonReturnFeatures(
-                w, rowIdx, dst, modelTensorFeatureCount);
+                windowGlobalStartIdx + rowIdx, dst, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextDirectionProbs: appended return feature count mismatch");
@@ -1932,49 +1934,34 @@ inline void EA::LSTM::RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t 
         std::copy(src, src + cols, dst + b * cols);
 }
 
-inline float EA::LSTM::ComputeLookbackLogReturn(const Window& batch,
-                                                size_t rowIdx,
+inline float EA::LSTM::ComputeLookbackLogReturn(size_t currentGlobalPosition,
                                                 size_t lookbackBars) const
 {
-    if (lookbackBars == 0 || rowIdx < lookbackBars)
-        return 0.0f;
-
-    const auto curIt  = batch.begin() + static_cast<std::ptrdiff_t>(rowIdx);
-    const auto prevIt = batch.begin() + static_cast<std::ptrdiff_t>(rowIdx - lookbackBars);
-
-    const float curClose  = t.RawCloseAtIterator(curIt);
-    const float prevClose = t.RawCloseAtIterator(prevIt);
-
-    if (!std::isfinite(curClose) || !std::isfinite(prevClose) || curClose <= 0.0f || prevClose <= 0.0f)
-        return 0.0f;
-
-    return std::log(curClose / prevClose);
+    return EA::ComputeLookbackLogReturnAtGlobalPosition(
+        currentGlobalPosition,
+        lookbackBars,
+        [this](size_t globalPosition)
+        {
+            return t.RawCloseAtIterator(
+                t.begin() + static_cast<std::ptrdiff_t>(globalPosition));
+        });
 }
 
-inline size_t EA::LSTM::AppendMultiHorizonReturnFeatures(const Window& batch,
-                                                         size_t rowIdx,
+inline size_t EA::LSTM::AppendMultiHorizonReturnFeatures(size_t currentGlobalPosition,
                                                          float* dst,
                                                          size_t dstOffset) const
 {
     HotspotScope hotspot("appended_return_features");
-    size_t written = 0;
-#if LSTM_RET_HORIZON_1
-    dst[dstOffset + written] = ComputeLookbackLogReturn(batch, rowIdx, 1) * EA::LSTM::kFeatScale;
-    ++written;
-#endif
-#if LSTM_RET_HORIZON_4
-    dst[dstOffset + written] = ComputeLookbackLogReturn(batch, rowIdx, 4) * EA::LSTM::kFeatScale;
-    ++written;
-#endif
-#if LSTM_RET_HORIZON_8
-    dst[dstOffset + written] = ComputeLookbackLogReturn(batch, rowIdx, 8) * EA::LSTM::kFeatScale;
-    ++written;
-#endif
-#if LSTM_RET_HORIZON_16
-    dst[dstOffset + written] = ComputeLookbackLogReturn(batch, rowIdx, 16) * EA::LSTM::kFeatScale;
-    ++written;
-#endif
-    return written;
+    return EA::AppendMultiHorizonReturnFeaturesAtGlobalPosition(
+        currentGlobalPosition,
+        dst,
+        dstOffset,
+        EA::LSTM::kFeatScale,
+        [this](size_t globalPosition)
+        {
+            return t.RawCloseAtIterator(
+                t.begin() + static_cast<std::ptrdiff_t>(globalPosition));
+        });
 }
 
 // Run gate activations and recurrent state updates through a single fused Metal
@@ -3340,7 +3327,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             if (useReturnFeatures)
             {
                 const size_t appended = AppendMultiHorizonReturnFeatures(
-                    batch, r, dstRow, modelTensorFeatureCount);
+                    batchGlobalStartIdx + r, dstRow, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
                 LSTM_ASSERT(appended == kReturnFeatureCount,
                             "CalculateBatch: appended return feature count mismatch");
@@ -7287,6 +7274,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         modelFeatureCount, physicalTensorFeatureCount);
     const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
+    const size_t windowGlobalStartIdx = static_cast<size_t>(w.begin() - t.begin());
 #if LSTM_TRAINING_ASSERTS
     LSTM_ASSERT(modelFeatureCount == modelTensorFeatureCount + kReturnFeatureCount,
                 "PredictNextReturn: model input contract width mismatch");
@@ -7307,7 +7295,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         if (useReturnFeatures)
         {
             const size_t appended = AppendMultiHorizonReturnFeatures(
-                w, rowIdx, dst, modelTensorFeatureCount);
+                windowGlobalStartIdx + rowIdx, dst, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextReturn: appended return feature count mismatch");
@@ -7380,6 +7368,7 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         modelFeatureCount, physicalTensorFeatureCount);
     const size_t modelTensorFeatureCount = inputContract.tensorFeatureCount;
     const bool useReturnFeatures = (kReturnFeatureCount > 0);
+    const size_t windowGlobalStartIdx = static_cast<size_t>(w.begin() - t.begin());
 #if LSTM_TRAINING_ASSERTS
     LSTM_ASSERT(modelFeatureCount == modelTensorFeatureCount + kReturnFeatureCount,
                 "PredictNextRelativeMove: model input contract width mismatch");
@@ -7400,7 +7389,7 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         if (useReturnFeatures)
         {
             const size_t appended = AppendMultiHorizonReturnFeatures(
-                w, rowIdx, dst, modelTensorFeatureCount);
+                windowGlobalStartIdx + rowIdx, dst, modelTensorFeatureCount);
 #if LSTM_TRAINING_ASSERTS
             LSTM_ASSERT(appended == kReturnFeatureCount,
                         "PredictNextClose: appended return feature count mismatch");
