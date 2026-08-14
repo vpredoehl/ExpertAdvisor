@@ -49,8 +49,27 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "$repo_root/Scripts/CampaignOperationsH1ManifestValidator.sh" >/dev/null
 migration="$repo_root/Database/migrations/055_campaign_operations_production_admission_foundation.sql"
 expected_checksum="$(shasum -a 256 "$migration" | awk '{print $1}')"
+h2_migration="$repo_root/Database/migrations/056_campaign_operations_h2_privilege_deployment_contract.sql"
+h2_expected_checksum="$(shasum -a 256 "$h2_migration" | awk '{print $1}')"
 psql_target=(-X -qAt -v ON_ERROR_STOP=1 -v VERBOSITY=verbose -h "$audit_host" -p "$audit_port"
     -U "$audit_user" "$audit_database")
+
+pre_phase_h_acl_correction=""
+validate_pre_phase_h_acl_overlay() {
+    pre_phase_h_acl_correction="$(psql "${psql_target[@]}" -At -c \
+        "SELECT EXISTS (SELECT 1 FROM public.schema_migrations
+          WHERE version='064' AND filename=
+            '064_campaign_operations_pre_phase_h_helper_acl_reconciliation.sql')")"
+    if [[ "$pre_phase_h_acl_correction" == "t" ]]; then
+        overlay_findings="$(psql "${psql_target[@]}" \
+            -At -f "$repo_root/Database/manifests/064_campaign_operations_pre_phase_h_acl_manifest.sql")"
+        if [[ -n "$overlay_findings" ]]; then
+            printf '%s\n' "$overlay_findings" >&2
+            audit_failure 42501 H1A006 "pre-phase-h-acl-overlay" "$stage" \
+                "pre-Phase-H compatibility ACL mismatch"
+        fi
+    fi
+}
 
 role_findings="$(psql "${psql_target[@]}" <<'SQL'
 WITH RECURSIVE expected(role_name, must_super) AS (VALUES
@@ -149,11 +168,32 @@ if [[ "$stage" == "pre-upgrade" ]]; then
     role_findings="$(printf '%s\n' "$role_findings" |
         awk '!/^missing:/' | sed '/^$/d')"
 fi
-if [[ "$stage" == "pre-enablement" ]]; then
-    # H2 alone authorizes the direct deployment LOGIN-to-capability graph.
-    # Retain H1's sealed-owner reachability check here; the H2 audit below
-    # validates the exact accepted capability tuples and rejects every other
-    # graph edge, including pqxx membership and ADMIN OPTION.
+
+h2_deployment_installed=""
+if [[ "$stage" == "post-upgrade" ]]; then
+    h2_deployment_installed="$(psql "${psql_target[@]}" \
+        -v h2_checksum="$h2_expected_checksum" -At -c \
+        "SELECT EXISTS (SELECT 1 FROM public.schema_migrations
+          WHERE version='056' AND filename=
+            '056_campaign_operations_h2_privilege_deployment_contract.sql'
+            AND checksum=:'h2_checksum')")"
+    if [[ "$h2_deployment_installed" != "t" ]] &&
+       rg -q '^graph:' <<<"$role_findings" &&
+       ! rg -q '^graph:.*campaign_operations_h1_boundary_authority' <<<"$role_findings"; then
+        audit_failure 42501 H2A004 "migration-056" "$stage" \
+            "post-upgrade role-graph delegation requires H2 / migration-056 authority"
+    fi
+fi
+
+if [[ "$stage" == "pre-enablement" ||
+      ("$stage" == "post-upgrade" && "$h2_deployment_installed" == "t") ]]; then
+    # After H2 is installed, the separately versioned H2 audit authorizes the
+    # direct deployment LOGIN-to-capability graph.  Retain H1's sealed-owner
+    # reachability check here; the H2 audit at pre-enablement validates the
+    # exact accepted capability tuples and rejects every other graph edge,
+    # including pqxx membership and ADMIN OPTION.  At post-upgrade, H1 must
+    # likewise not apply its frozen pre-H2 interpretation to those later
+    # deployment LOGINs.
     role_findings="$(printf '%s\n' "$role_findings" |
         awk '!/^graph:/ || /campaign_operations_h1_boundary_authority/' |
         sed '/^$/d')"
@@ -180,6 +220,9 @@ fi
 # union at the post-H1 stage.  Any other boundary-owned function remains a
 # closed-set mismatch.
 if [[ "$stage" == "pre-enablement" ]]; then
+    # Migration 064 has its own read-only compatibility authority.  It is not
+    # a reason to mutate, replace, or invoke the frozen 055 audit function.
+    validate_pre_phase_h_acl_overlay
     "$repo_root/Scripts/CampaignOperationsH2DeploymentAudit.sh" \
         --stage "$stage" --host "$audit_host" --port "$audit_port" \
         --user "$audit_user" --database "$audit_database"
@@ -234,6 +277,19 @@ if [[ "$stage" == "pre-enablement" ]]; then
 
     echo "H1_DEPLOYMENT_AUDIT_V1_OK stage=$stage post_h1_evolution=059-direct-sql-boundary"
     exit 0
+fi
+
+if [[ "$stage" == "post-upgrade" ]]; then
+    # A post-upgrade audit of a later deployed database must use the
+    # separately versioned H2 role-graph authority when H2 is present.  The
+    # exact ledger identity was established before any ordinary graph
+    # delegation above; boundary-authority findings were never delegated.
+    if [[ "$h2_deployment_installed" == "t" ]]; then
+        validate_pre_phase_h_acl_overlay
+        "$repo_root/Scripts/CampaignOperationsH2DeploymentAudit.sh" \
+            --stage "$stage" --host "$audit_host" --port "$audit_port" \
+            --user "$audit_user" --database "$audit_database"
+    fi
 fi
 
 if [[ "$stage" == "pre-upgrade" || "$stage" == "pre-restore" ]]; then
@@ -350,14 +406,31 @@ SQL
     fi
 elif [[ "$stage" != "pre-restore" &&
         "$stage" != "post-role-recreation" ]]; then
-    psql "${psql_target[@]}" -v audit_checksum="$expected_checksum" <<'SQL'
+    validate_pre_phase_h_acl_overlay
+    if [[ "$pre_phase_h_acl_correction" != "t" ]]; then
+        psql "${psql_target[@]}" -v audit_checksum="$expected_checksum" <<'SQL'
 BEGIN TRANSACTION READ ONLY;
 SELECT public.campaign_operations_h1_deployment_audit_v1(
     :'audit_checksum', true, false);
 COMMIT;
 SQL
+    fi
     acl_findings="$(psql "${psql_target[@]}" \
         -f "$repo_root/Database/manifests/055_campaign_operations_h1_acl_manifest.sql")"
+    if [[ "$pre_phase_h_acl_correction" == "t" ]]; then
+        # The immutable 055 manifest is the H1 base contract.  Migration 064
+        # adds exactly these two reviewed Phase A-G compatibility tuples; the
+        # overlay above validates them, and only these known base-manifest
+        # deltas are removed from the compatibility comparison.
+        acl_findings="$(printf '%s\n' "$acl_findings" | awk -F '|' '
+            !($1 == "H1A006" && $2 == "explicit_acl" &&
+              $3 == "actual_minus_expected" && $5 == "function" &&
+              $8 == "public.lock_campaign_operations_campaign(bigint)" &&
+              $9 == "campaign_operations_h1_boundary_authority" &&
+              ($10 == "campaign_operations_budget_administrator" ||
+               $10 == "campaign_operations_request_acceptor") &&
+              $11 == "EXECUTE")')"
+    fi
     if [[ -n "$acl_findings" ]]; then
         printf '%s\n' "$acl_findings" >&2
         if rg -q '^H1A007\|' <<<"$acl_findings"; then

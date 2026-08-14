@@ -163,6 +163,42 @@ echo "H2_BRIDGE_DISABLE native=record_campaign_operations_production_disable_v1 
   --stage post-upgrade --host "$cluster_socket" --port 5432 \
   --user campaign_manager_login --database "$database" | tee "$tmp_root/h2-privilege.log"
 
+# The H1 wrapper may delegate the ordinary post-H1 LOGIN graph only after the
+# exact migration-056 ledger identity is present. Its delegated H2 audit must
+# run and accept this legitimate deployed graph.
+"$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+  --stage post-upgrade --host "$cluster_socket" --port 5432 \
+  --user campaign_manager_login --database "$database" | \
+  tee "$tmp_root/h1-post-upgrade-h2.log"
+rg -q 'H2_DEPLOYMENT_AUDIT_OK stage=post-upgrade' \
+  "$tmp_root/h1-post-upgrade-h2.log"
+rg -q 'H1_DEPLOYMENT_AUDIT_V1_OK stage=post-upgrade' \
+  "$tmp_root/h1-post-upgrade-h2.log"
+
+# The same ordinary deployment graph must fail closed when H2 authority is
+# absent. Remove only the disposable target's exact 056 ledger row, prove the
+# deterministic gate, and restore that row before the remaining H2 checks.
+h2_ledger_checksum="$(psql "${target[@]}" -At -v ON_ERROR_STOP=1 "$database" -c \
+  "SELECT checksum FROM schema_migrations WHERE version='056'")"
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -c \
+  "DELETE FROM schema_migrations WHERE version='056';"
+if "$repo_root/Scripts/CampaignOperationsH1DeploymentAudit.sh" \
+    --stage post-upgrade --host "$cluster_socket" --port 5432 \
+    --user campaign_manager_login --database "$database" \
+    >"$tmp_root/h1-post-upgrade-without-h2.log" 2>&1; then
+  cat "$tmp_root/h1-post-upgrade-without-h2.log" >&2
+  echo "post-upgrade audit accepted ordinary graph without migration 056" >&2
+  exit 1
+fi
+rg -q 'SQLSTATE=42501 diagnostic=H2A004 .*object=migration-056 .*stage=post-upgrade' \
+  "$tmp_root/h1-post-upgrade-without-h2.log"
+rg -q 'post-upgrade role-graph delegation requires H2 / migration-056 authority' \
+  "$tmp_root/h1-post-upgrade-without-h2.log"
+psql "${target[@]}" -q -v ON_ERROR_STOP=1 "$database" -v h2_ledger_checksum="$h2_ledger_checksum" -c \
+  "INSERT INTO schema_migrations(version,filename,checksum)
+   VALUES ('056','056_campaign_operations_h2_privilege_deployment_contract.sql',:'h2_ledger_checksum');"
+echo "H1_POST_UPGRADE_AUTHORITY_GATE absent_056=FAIL_CLOSED present_056=DELEGATED_AND_VALIDATED"
+
 # H1 remains historical authority.  Its post-H1 pre-enablement stage is a
 # closed, ledger-bound union: H2's one readiness adapter is accepted, but it
 # was not added to the frozen 055 manifest.

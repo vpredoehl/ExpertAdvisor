@@ -117,6 +117,15 @@ Recommendation conversion and campaign-approval history is created by:
   four explicit H1-relation `SELECT` tuples required by the existing
   `campaign_operations_owner` SECURITY DEFINER read paths. H1 ownership,
   ordinary-role isolation, and all mutation ACLs remain unchanged.
+- `064_campaign_operations_pre_phase_h_helper_acl_reconciliation.sql`: restores
+  only the direct campaign-lock EXECUTE edge required by the Phase A-G budget
+  administrator and request acceptor repository paths. The H1 boundary
+  authority remains the helper owner; PUBLIC, `pqxx`, dispatcher, Phase-5,
+  and all other sealed lock-helper grants remain prohibited. Its ACL is checked
+  by the read-only compatibility overlay in
+  `manifests/064_campaign_operations_pre_phase_h_acl_manifest.sql`. Migration
+  064 does not rewrite or invoke the frozen migration-055 H1 deployment audit;
+  the overlay is the independent post-H1 acceptance contract.
 
 Campaign Operations deployment also requires an explicit, separately reviewed
 pre-Phase-H LOGIN selected with `CAMPAIGN_OPERATIONS_PRE_PHASE_H_DB_USER`.
@@ -277,9 +286,9 @@ prerequisite/provenance, budget, acquisition, and audit relationships.
 Migration 047 creates separate NOLOGIN
 ``campaign_operations_budget_administrator`` and
 ``campaign_operations_request_acceptor`` capabilities and grants neither to
-``pqxx``. Capability roles receive only the reads, column-scoped inserts,
-sequence usage, and narrow campaign-lock function needed by their workflows.
-They receive no update, delete, truncate, dispatch, scheduler, worker, or
+``pqxx``. Migration 064 reconciles the H1 deployment drift by restoring only
+the narrow campaign-lock function needed by their workflows. They receive no
+update, delete, truncate, dispatch, scheduler, worker, or
 experiment-lifecycle privilege. Assigning either capability to a deployment
 principal is a separate reviewed administrator action.
 
