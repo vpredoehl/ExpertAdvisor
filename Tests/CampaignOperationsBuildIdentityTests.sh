@@ -44,7 +44,10 @@ fi
 
 cxx="${CXX:-clang++}"
 common_flags=(-std=c++20 -Wall -Wextra -Werror
-  -I "$repo_root/Sources" -I "$repo_root/Headers")
+  -I "$repo_root/Sources"
+  -I "$repo_root/Headers"
+  -I /opt/homebrew/opt/libpqxx@7.10.1/include
+  -I /opt/homebrew/opt/libpq/include)
 sources=(
   "$repo_root/Sources/CampaignOperations.cpp"
   "$repo_root/Sources/CampaignOperationsDispatch.cpp"

@@ -45,9 +45,7 @@ int main(int argc, char** argv)
         return actual ? Fail("invalid provenance was accepted") : EXIT_SUCCESS;
 #if defined(EXPERTADVISOR_SOURCE_COMMIT)
     const std::string embeddedCommit = EXPERTADVISOR_SOURCE_COMMIT;
-#else
-    return Fail("valid provenance header was not available to the test");
-#endif
+
     if (!actual || actual->sourceCommit != embeddedCommit ||
         embeddedCommit.size() != 40U)
         return Fail("valid embedded provenance was not captured");
@@ -63,6 +61,10 @@ int main(int argc, char** argv)
         std::to_string(actual->compilerContract.size()) + ":" +
         actual->compilerContract + ";executable_sha256=" +
         actual->executableSha256 + ";build_contract_version=1";
+
     return actual->identity.canonicalText() == expectedCanonical ?
         EXIT_SUCCESS : Fail("manager build contract v1 bytes changed");
+#else
+    return Fail("valid provenance header was not available to the test");
+#endif
 }
