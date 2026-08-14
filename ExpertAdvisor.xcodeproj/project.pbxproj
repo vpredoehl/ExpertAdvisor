@@ -867,6 +867,7 @@
 			);
 			inputPaths = (
 				"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py",
+				"$(PROJECT_DIR)/.git",
 			);
 			name = "Generate build provenance";
 			outputPaths = (
@@ -874,7 +875,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "/usr/bin/python3 \"$(PROJECT_DIR)/Scripts/GenerateBuildProvenance.py\" --repository-root \"$(PROJECT_DIR)\" --output \"$(DERIVED_FILE_DIR)/GeneratedBuildProvenance.hpp\" --configuration \"$(CONFIGURATION)\"";
+			shellScript = "/usr/bin/python3 \"$PROJECT_DIR/Scripts/GenerateBuildProvenance.py\" --repository-root \"$PROJECT_DIR\" --output \"$DERIVED_FILE_DIR/GeneratedBuildProvenance.hpp\" --configuration \"$CONFIGURATION\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1536,6 +1537,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 47QSNDWH88;
 				ENABLE_TESTABILITY = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				EXECUTABLE_NAME = "$(PRODUCT_NAME)";
 				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
 				GCC_OPTIMIZATION_LEVEL = 3;
