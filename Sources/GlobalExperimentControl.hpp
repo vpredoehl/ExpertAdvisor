@@ -301,7 +301,8 @@ struct ExperimentResumeCommand
 
 // A deliberately narrow, non-scheduler administrative bridge for an exact
 // externally executing experiment-worker attempt whose prior observation was
-// inconclusive.  It never signals a process or changes an experiment row.
+// inconclusive. It never signals a process; a positively absent worker may be
+// terminalized together with its still-bound lifecycle row.
 struct WorkerAttemptReconciliationCommand
 {
     long long workerAttemptId = -1;

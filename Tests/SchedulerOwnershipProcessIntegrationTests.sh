@@ -1549,7 +1549,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -v pid="${worker_pids[${reconcile_index}]}" \
     -v pgid="${worker_pgids[${reconcile_index}]}" \
     -v start="${worker_starts[${reconcile_index}]}" \
-    -v executable="${worker_executables[${reconcile_index}]}" <<'SQL'
+    -v executable="${worker_executables[${reconcile_index}]}" \
+    -v worker_link="${test_dir}/LSTM_Release_train" <<'SQL'
 SELECT set_config('expertadvisor.scheduler_protocol_generation','52',false);
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,target_epochs,
@@ -1559,8 +1560,8 @@ INSERT INTO experiment(
 ) VALUES(
     930001,'reconcilefixture',4,0.0008,20,'2020-01-01','2021-01-01',
     'running','train','train',:pid,:pgid,:'start',:'executable',
-    :'executable'||' --managed-test-worker --self-session '
-      ||'--scheduler-experiment-id=930001 --train '
+    :'worker_link'||' --managed-test-worker --self-session '
+      ||'--scheduler-experiment-id=930001 --ready-fd=9 --train '
       ||'--scheduler-worker-attempt-id=990051',clock_timestamp(),930001
 );
 INSERT INTO experiment_scheduler_worker_attempt(
@@ -1596,6 +1597,90 @@ test "$(psql -X -At -d "${test_db}" -c \
     "SELECT lifecycle_state FROM experiment_scheduler_worker_attempt
      WHERE worker_attempt_id=${reconcile_attempt_id}")" = "observed"
 process_identity_matches "${reconcile_index}"
+
+# Exact-attempt reconciliation has a separate, positive-absence branch.
+absent_reconcile_attempt_id=990052
+launch_worker train 930002 "" "${absent_reconcile_attempt_id}"
+absent_reconcile_index=$((${#worker_pids[@]} - 1))
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -v attempt_id="${absent_reconcile_attempt_id}" \
+    -v pid="${worker_pids[${absent_reconcile_index}]}" \
+    -v pgid="${worker_pgids[${absent_reconcile_index}]}" \
+    -v start="${worker_starts[${absent_reconcile_index}]}" \
+    -v executable="${worker_executables[${absent_reconcile_index}]}" \
+    -v worker_link="${test_dir}/LSTM_Release_train" <<'SQL'
+SELECT set_config('expertadvisor.scheduler_protocol_generation','52',false);
+INSERT INTO experiment(
+    experiment_id,symbol,prediction_horizon,c_next_threshold,target_epochs,
+    train_start,train_end,status,phase,current_operation,worker_pid,
+    worker_process_group_id,worker_process_start_identity,worker_executable,
+    worker_command_line,worker_started_at,duplicate_nonce
+) VALUES(
+    930002,'absentreconcilefixture',4,0.0008,20,'2020-01-01','2021-01-01',
+    'running','train','train',:pid,:pgid,:'start',:'executable',
+    :'worker_link'||' --managed-test-worker --self-session '
+      ||'--scheduler-experiment-id=930002 --ready-fd=9 --train '
+      ||'--scheduler-worker-attempt-id=990052',clock_timestamp(),930002
+);
+INSERT INTO experiment_scheduler_worker_attempt(
+    worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
+    lifecycle_phase,capacity_class,ownership_origin,lifecycle_state,
+    worker_pid,worker_process_group_id,worker_process_start_identity,
+    canonical_executable_path,command_line,command_identity,reserved_at,
+    spawned_at,registered_at
+) SELECT :attempt_id,'test:reconcile:990052',930002,'experiment','train',
+    'train','scheduler_launch','identity_ambiguous',worker_pid,
+    worker_process_group_id,worker_process_start_identity,worker_executable,
+    worker_command_line,'experiment:930002:train',worker_started_at,
+    worker_started_at,worker_started_at
+  FROM experiment WHERE experiment_id=930002;
+UPDATE experiment SET active_scheduler_worker_attempt_id=:attempt_id
+WHERE experiment_id=930002;
+SQL
+process_identity_matches "${absent_reconcile_index}"
+kill -TERM -- "-${worker_pgids[${absent_reconcile_index}]}"
+wait "${worker_pids[${absent_reconcile_index}]}"
+test -z "$(ps -p "${worker_pids[${absent_reconcile_index}]}" -o pid=)"
+absent_before="$(psql -X -At -d "${test_db}" -c "SELECT a.lifecycle_state||':'||COALESCE(a.reconciliation_result,'NULL')||':'||e.status||':'||(e.active_scheduler_worker_attempt_id IS NOT NULL)::text FROM experiment_scheduler_worker_attempt a JOIN experiment e ON e.experiment_id=a.experiment_id WHERE a.worker_attempt_id=${absent_reconcile_attempt_id}")"
+test "${absent_before}" = "identity_ambiguous:NULL:running:true"
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" --reconcile-worker-attempt="${absent_reconcile_attempt_id}" --dry-run >"${test_dir}/reconcile-absent-dry-run.out" 2>&1
+grep -q 'WORKER_ATTEMPT_RECONCILIATION,outcome=eligible,worker_attempt_id=990052' "${test_dir}/reconcile-absent-dry-run.out"
+grep -q 'process_presence=absent' "${test_dir}/reconcile-absent-dry-run.out"
+grep -q 'proposed_lifecycle_state=failed' "${test_dir}/reconcile-absent-dry-run.out"
+grep -q 'reason=exact_process_absent_no_result' "${test_dir}/reconcile-absent-dry-run.out"
+test "${absent_before}" = "$(psql -X -At -d "${test_db}" -c "SELECT a.lifecycle_state||':'||COALESCE(a.reconciliation_result,'NULL')||':'||e.status||':'||(e.active_scheduler_worker_attempt_id IS NOT NULL)::text FROM experiment_scheduler_worker_attempt a JOIN experiment e ON e.experiment_id=a.experiment_id WHERE a.worker_attempt_id=${absent_reconcile_attempt_id}")"
+
+# A stale lifecycle identity is rejected before either guarded mutation; it
+# must not produce a false applied result or a partial terminalization.
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE experiment SET worker_command_line=worker_command_line || ' --stale'
+     WHERE experiment_id=930002"
+set +e
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --reconcile-worker-attempt="${absent_reconcile_attempt_id}" --yes \
+    >"${test_dir}/reconcile-absent-stale.out" 2>&1
+absent_stale_result=$?
+set -e
+test "${absent_stale_result}" = "1"
+grep -q 'outcome=rejected' "${test_dir}/reconcile-absent-stale.out"
+grep -q 'exact_ambiguous_attempt_verification_failed' \
+    "${test_dir}/reconcile-absent-stale.out"
+! grep -q 'outcome=applied' "${test_dir}/reconcile-absent-stale.out"
+test "$(psql -X -At -d "${test_db}" -c \
+    "SELECT a.lifecycle_state||':'||COALESCE(a.reconciliation_result,'NULL')||':'||e.status||':'||(e.active_scheduler_worker_attempt_id IS NULL)::text
+     FROM experiment_scheduler_worker_attempt a JOIN experiment e ON e.experiment_id=a.experiment_id
+     WHERE a.worker_attempt_id=${absent_reconcile_attempt_id}")" = \
+    "identity_ambiguous:NULL:running:false"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE experiment SET worker_command_line=replace(worker_command_line, ' --stale', '')
+     WHERE experiment_id=930002"
+
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" --reconcile-worker-attempt="${absent_reconcile_attempt_id}" --yes >"${test_dir}/reconcile-absent-apply.out" 2>&1
+test "$(awk '/outcome=applying/{print NR; exit}' "${test_dir}/reconcile-absent-apply.out")" -lt \
+    "$(awk '/outcome=applied/{print NR; exit}' "${test_dir}/reconcile-absent-apply.out")"
+grep -q 'WORKER_ATTEMPT_RECONCILIATION,outcome=applied,worker_attempt_id=990052' "${test_dir}/reconcile-absent-apply.out"
+test "$(psql -X -At -d "${test_db}" -c "SELECT a.lifecycle_state||':'||(a.completed_at IS NOT NULL)::text||':'||a.exit_code||':'||a.reconciliation_result||':'||a.diagnostic||':'||e.status||':'||e.phase||':'||(e.worker_pid IS NULL)::text||':'||(e.worker_process_group_id IS NULL)::text||':'||(e.active_scheduler_worker_attempt_id IS NULL)::text||':'||(e.completed_at IS NOT NULL)::text||':'||e.exit_code||':'||e.error_message FROM experiment_scheduler_worker_attempt a JOIN experiment e ON e.experiment_id=a.experiment_id WHERE a.worker_attempt_id=${absent_reconcile_attempt_id}")" = "failed:true:-1:process_missing_no_result:exact_process_identity_absent_no_result:failed:train:true:true:true:true:-1:worker_process_missing_no_result"
+test "$(psql -X -At -d "${test_db}" -c "SELECT a.lifecycle_state||':'||COALESCE(a.reconciliation_result,'NULL')||':'||e.status||':'||(e.active_scheduler_worker_attempt_id IS NOT NULL)::text FROM experiment_scheduler_worker_attempt a JOIN experiment e ON e.experiment_id=a.experiment_id WHERE a.worker_attempt_id=${reconcile_attempt_id}")" = "observed:valid_process_observed:running:true"
 
 # A state other than the one explicitly authorized source state is rejected;
 # it is not treated as an idempotent administrative rewrite.

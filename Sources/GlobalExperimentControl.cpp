@@ -3054,19 +3054,36 @@ void PrintWorkerAttemptReconciliationResult(
                ? std::to_string(*exact->workerPid) : "NULL")
            << ",durable_pgid=" << (exact && exact->processGroupId
                ? std::to_string(*exact->processGroupId) : "NULL")
+           << ",process_presence=" << (validated
+               ? (validated->identity == IdentityResult::ProcessMissing
+                      ? "absent"
+                      : (validated->observation.exists ? "live" : "unknown"))
+               : "unknown")
            << ",live_pid=" << (validated
-               ? std::to_string(validated->observation.pid) : "NULL")
+               ? (validated->observation.exists
+                      ? std::to_string(validated->observation.pid)
+                      : "NULL")
+               : "NULL")
            << ",live_pgid=" << (validated
-               ? std::to_string(validated->observation.processGroupId) : "NULL")
+               ? (validated->observation.exists
+                      ? std::to_string(validated->observation.processGroupId)
+                      : "NULL")
+               : "NULL")
            << ",process_start_identity_result="
-           << (validated && validated->identity == IdentityResult::Validated
-               ? "matched" : "not_matched")
+           << (validated && validated->identity == IdentityResult::ProcessMissing
+               ? "not_required_absent"
+               : (validated && validated->identity == IdentityResult::Validated
+                      ? "matched" : "not_matched"))
            << ",executable_identity_result="
-           << (validated && validated->identity == IdentityResult::Validated
-               ? "matched" : "not_matched")
+           << (validated && validated->identity == IdentityResult::ProcessMissing
+               ? "not_required_absent"
+               : (validated && validated->identity == IdentityResult::Validated
+                      ? "matched" : "not_matched"))
            << ",command_identity_result="
-           << (validated && validated->identity == IdentityResult::Validated
-               ? "matched" : "not_matched")
+           << (validated && validated->identity == IdentityResult::ProcessMissing
+               ? "not_required_absent"
+               : (validated && validated->identity == IdentityResult::Validated
+                      ? "matched" : "not_matched"))
            << ",lifecycle_binding_result="
            << (exact ? "matched" : "not_matched")
            << ",eligible=" << (eligible ? "true" : "false")
@@ -3171,6 +3188,96 @@ int RunWorkerAttemptReconciliationCommandImpl(
         // Observe immediately before the locked guarded transition. This
         // command never calls any ProcessOperations signalling method.
         const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
+        if (validated.identity == IdentityResult::ProcessMissing &&
+            validated.observation.inspectionSucceeded &&
+            !validated.observation.permissionDenied)
+        {
+            // ProcessMissing is admitted only after Observe positively proved
+            // absence (inspectionSucceeded=true). All other incomplete or
+            // uncertain observations remain on the fail-closed live path
+            // below. The existing scheduler orphan contract defines the
+            // no-result terminal outcome for this exact case.
+            constexpr const char* kAbsentReason =
+                "exact_process_absent_no_result";
+            PrintWorkerAttemptReconciliationResult(
+                output, command.dryRun ? "eligible" : "applying", &*exact,
+                &validated, "failed", kAbsentReason);
+            if (command.dryRun)
+            {
+                transaction.commit();
+                return 0;
+            }
+
+            const pqxx::result terminalized = transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt a SET "
+                "lifecycle_state='failed',"
+                "completed_at=clock_timestamp(),"
+                "last_observed_at=clock_timestamp(),"
+                "exit_code=-1,"
+                "reconciliation_result='process_missing_no_result',"
+                "diagnostic='exact_process_identity_absent_no_result' "
+                "WHERE a.worker_attempt_id=$1 "
+                "AND a.experiment_id=$2 AND a.checkpoint_eval_id IS NULL "
+                "AND a.worker_kind=$3 AND a.lifecycle_phase=$4 "
+                "AND a.capacity_class=$5 "
+                "AND a.lifecycle_state='identity_ambiguous' "
+                "AND a.scheduler_invocation_id IS NOT DISTINCT FROM $6 "
+                "AND a.scheduler_fencing_token IS NOT DISTINCT FROM $7 "
+                "AND a.worker_pid=$8 AND a.worker_process_group_id=$9 "
+                "AND a.worker_process_start_identity=$10 "
+                "AND a.canonical_executable_path=$11 "
+                "AND a.command_line=$12 AND a.command_identity=$13 "
+                "AND EXISTS ("
+                " SELECT 1 FROM experiment e "
+                " WHERE e.experiment_id=$2 "
+                " AND e.active_scheduler_worker_attempt_id=$1 "
+                " AND e.status='running' AND e.phase=$4 "
+                " AND e.worker_pid=$8 "
+                " AND e.worker_process_group_id=$9 "
+                " AND e.worker_process_start_identity=$10 "
+                " AND e.worker_executable=$11 "
+                " AND e.worker_command_line=$12) "
+                "RETURNING a.worker_attempt_id;",
+                exact->workerAttemptId, exact->experimentId,
+                exact->workerKind, exact->lifecyclePhase,
+                exact->capacityClass, exact->schedulerInvocationId,
+                exact->schedulerFencingToken, *exact->workerPid,
+                *exact->processGroupId, *exact->processStartIdentity,
+                *exact->canonicalExecutablePath, *exact->commandLine,
+                exact->commandIdentity);
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                terminalized,
+                "terminalize_exact_absent_worker_attempt");
+
+            const pqxx::result failedLifecycle = transaction.exec_params(
+                "UPDATE experiment SET status='failed',"
+                "worker_pid=NULL,worker_process_group_id=NULL,"
+                "completed_at=clock_timestamp(),exit_code=-1,"
+                "error_message='worker_process_missing_no_result',"
+                "active_scheduler_worker_attempt_id=NULL,"
+                "updated_at=clock_timestamp() "
+                "WHERE experiment_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "AND status='running' AND phase=$3 "
+                "AND worker_pid=$4 "
+                "AND worker_process_group_id=$5 "
+                "AND worker_process_start_identity=$6 "
+                "AND worker_executable=$7 "
+                "AND worker_command_line=$8 "
+                "RETURNING experiment_id;",
+                exact->experimentId, exact->workerAttemptId,
+                exact->lifecyclePhase, *exact->workerPid,
+                *exact->processGroupId, *exact->processStartIdentity,
+                *exact->canonicalExecutablePath, *exact->commandLine);
+            EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                failedLifecycle,
+                "clear_exact_absent_worker_lifecycle_binding");
+            transaction.commit();
+            PrintWorkerAttemptReconciliationResult(
+                output, "applied", &*exact, &validated, "failed",
+                kAbsentReason);
+            return 0;
+        }
         if (validated.identity != IdentityResult::Validated)
         {
             PrintWorkerAttemptReconciliationResult(
