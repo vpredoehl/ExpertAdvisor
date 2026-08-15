@@ -96,6 +96,20 @@ public:
         for (size_t i = 0; i < n; ++i)  f(GetBatchClamped(i));
     }
 
+    // Iterate output batches beginning at a logical interval boundary while
+    // retaining earlier Tensor rows solely as feature warmup history.
+    template <class Func>
+    void ForEachBatchFrom(size_t startIndex, Func&& f) const
+    {
+        if (startIndex > ds.size()) startIndex = ds.size();
+        for (size_t first = startIndex; first < ds.size(); first += batch_size)
+        {
+            const size_t last = std::min(first + batch_size, ds.size());
+            f(std::ranges::subrange(ds.cbegin() + static_cast<std::ptrdiff_t>(first),
+                                    ds.cbegin() + static_cast<std::ptrdiff_t>(last)));
+        }
+    }
+
     
     Tensor(string name) : table { name }    {}
     const string& TableName() const { return table; }

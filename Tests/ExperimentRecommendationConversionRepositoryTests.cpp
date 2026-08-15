@@ -1,4 +1,5 @@
 #include "../Sources/ExperimentRecommendationConversionRepository.hpp"
+#include <exception>
 
 #include <cassert>
 #include <atomic>

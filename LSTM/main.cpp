@@ -43,6 +43,8 @@
 #include "ExperimentCurrentOperation.hpp"
 #include "FxPriceSanity.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
+#include "ReturnFeatureHistory.hpp"
+#include "FeatureWarmupScope.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -848,20 +850,17 @@ double ClassWeightForBaseline(int cls)
 }
 
 float BaselineLookbackLogReturn(const Tensor& tensor,
-                                DataSet::const_iterator batchBegin,
-                                size_t localRow,
+                                size_t currentGlobalPosition,
                                 size_t lookbackBars)
 {
-    if (localRow < lookbackBars)
-        return 0.0f;
-
-    const auto curIt = batchBegin + static_cast<std::ptrdiff_t>(localRow);
-    const auto prevIt = batchBegin + static_cast<std::ptrdiff_t>(localRow - lookbackBars);
-    const float curClose = tensor.RawCloseAtIterator(curIt);
-    const float prevClose = tensor.RawCloseAtIterator(prevIt);
-    if (!std::isfinite(curClose) || !std::isfinite(prevClose) || curClose <= 0.0f || prevClose <= 0.0f)
-        return 0.0f;
-    return std::log(curClose / prevClose);
+    return EA::ComputeLookbackLogReturnAtGlobalPosition(
+        currentGlobalPosition,
+        lookbackBars,
+        [&tensor](size_t globalPosition)
+        {
+            return tensor.RawCloseAtIterator(
+                tensor.begin() + static_cast<std::ptrdiff_t>(globalPosition));
+        });
 }
 
 float BaselineFeatureAt(const Tensor& tensor,
@@ -872,6 +871,7 @@ float BaselineFeatureAt(const Tensor& tensor,
 {
     const auto batchBegin = tensor.begin() + static_cast<std::ptrdiff_t>(ex.batchStart);
     const size_t localRow = ex.localStart + windowRow;
+    const size_t currentGlobalPosition = ex.globalStart + windowRow;
     LSTM_ASSERT(localRow < ex.batchRows, "BaselineFeatureAt: local row out of batch bounds");
 
     float v = 0.0f;
@@ -886,19 +886,19 @@ float BaselineFeatureAt(const Tensor& tensor,
         const size_t retCol = col - baseFeatureCount;
         size_t written = 0;
 #if LSTM_RET_HORIZON_1
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 1) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 1) * EA::LSTM::kFeatScale;
         ++written;
 #endif
 #if LSTM_RET_HORIZON_4
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 4) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 4) * EA::LSTM::kFeatScale;
         ++written;
 #endif
 #if LSTM_RET_HORIZON_8
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 8) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 8) * EA::LSTM::kFeatScale;
         ++written;
 #endif
 #if LSTM_RET_HORIZON_16
-        if (retCol == written) v = BaselineLookbackLogReturn(tensor, batchBegin, localRow, 16) * EA::LSTM::kFeatScale;
+        if (retCol == written) v = BaselineLookbackLogReturn(tensor, currentGlobalPosition, 16) * EA::LSTM::kFeatScale;
         ++written;
 #endif
         (void)written;
@@ -3783,6 +3783,7 @@ struct LaunchArgs
     std::optional<double> coreLrMult;
     std::optional<double> headWeightLrMult;
     std::optional<double> headBiasLrMult;
+    std::optional<EA::FeatureWarmupScope> featureWarmupScope;
     std::optional<int> checkpointEvery;
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> schedulerCheckpointEvalId;
@@ -3988,6 +3989,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--checkpoint-every requires a value");
             parsed.checkpointEvery = ParseNonNegativeIntArg("--checkpoint-every", argv[++i]);
         }
+        else if (arg == "--feature-warmup-scope")
+        {
+            if (parsed.featureWarmupScope.has_value())
+                throw std::invalid_argument("--feature-warmup-scope specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--feature-warmup-scope requires a value");
+            parsed.featureWarmupScope = EA::ParseFeatureWarmupScope(argv[++i]);
+        }
         else if (arg == "--infer-start-after-model-id")
         {
             if (parsed.inferStartAfterModelId.has_value())
@@ -4112,6 +4121,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.checkpointEvery.has_value())
                     throw std::invalid_argument("--checkpoint-every specified more than once");
                 parsed.checkpointEvery = ParseNonNegativeIntArg("--checkpoint-every", value);
+            }
+            else if (SplitOptionWithValue(arg, "--feature-warmup-scope", value))
+            {
+                if (parsed.featureWarmupScope.has_value())
+                    throw std::invalid_argument("--feature-warmup-scope specified more than once");
+                parsed.featureWarmupScope = EA::ParseFeatureWarmupScope(value);
             }
             else if (SplitOptionWithValue(arg, "--infer-start-after-model-id", value))
             {
@@ -4338,6 +4353,8 @@ struct ResumeCheckpointConfig
     EA::LSTM::TargetType targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
     size_t completedEpoch = 0;
     size_t optimizerUpdateCount = 0;
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::FeatureWarmupScope::LegacyColdBoundary;
 };
 
 TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
@@ -4373,6 +4390,8 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.sourceModelId = modelId;
     cfg.trainConfig = LoadRequiredTrainConfigMetaForResume(w, modelId);
     cfg.completedEpoch = cfg.trainConfig.epochsTrained.value_or(0);
+    cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
+        w, modelId);
     cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     PrintDatabaseModelSymbol(modelId, cfg.symbol);
     const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
@@ -4621,7 +4640,8 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                                      const std::string& rawPriceTableName,
                                                      const std::string& fromDate,
                                                      const std::string& toDate,
-                                                     EA::LSTM& lstm)
+                                                     EA::LSTM& lstm,
+                                                     EA::FeatureWarmupScope featureWarmupScope)
 {
     if (!launchArgs.checkpointEvery.has_value() || *launchArgs.checkpointEvery <= 0)
         return std::nullopt;
@@ -4665,7 +4685,9 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                      "periodic training checkpoint",
                                      launchArgs.schedulerExperimentId,
                                      ParentModelIdForResume(resumeConfig));
-    DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm, rawPriceTableName, fromDate, toDate);
+    DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm,
+                             rawPriceTableName, fromDate, toDate,
+                             featureWarmupScope);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
               << " epoch=" << completedEpoch
@@ -5211,6 +5233,8 @@ struct PersistedInferenceConfig
     int modelInputWidth = 0;
     size_t modelHiddenSize = 0;
     EA::LSTM::TargetType targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::FeatureWarmupScope::LegacyColdBoundary;
 };
 
 template <typename T>
@@ -5431,6 +5455,13 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
     PersistedInferenceConfig cfg;
     cfg.modelId = modelId;
     cfg.modelName = ModelNameForId(w, modelId);
+    cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
+        w, modelId);
+    if (launchArgs.featureWarmupScope.has_value() &&
+        *launchArgs.featureWarmupScope != cfg.featureWarmupScope)
+    {
+        throw std::runtime_error("feature_warmup_scope_mismatch");
+    }
 
     std::optional<std::string> databaseSymbol;
     try
@@ -6082,6 +6113,7 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                                                  const LaunchArgs& launchArgs,
                                                  EA::LSTM& lstm,
                                                  const Tensor& tensor,
+                                                 size_t logicalOutputStartIndex,
                                                  const std::optional<long long>& loadedModelId,
                                                  const std::string& loadSource,
                                                  EA::LSTM::TargetType requestedTargetType,
@@ -6121,7 +6153,7 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
 
     {
         ScopedDiagnosticCoutSilencer silence;
-        tensor.ForEachBatch([&](auto b)
+        tensor.ForEachBatchFrom(logicalOutputStartIndex, [&](auto b)
         {
             const auto predictionStats = ProcessBatchPredict(lstm, tensor, b);
             totalCorrectLog += predictionStats.correctLog;
@@ -6523,6 +6555,7 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                                     const std::string& fromDate,
                                     const std::string& toDate,
                                     const Tensor& tensor,
+                                    size_t logicalOutputStartIndex,
                                     EA::LSTM::TargetType requestedTargetType)
 {
     if (LogSummary())
@@ -6567,6 +6600,7 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                                launchArgs,
                                lstm,
                                tensor,
+                               logicalOutputStartIndex,
                                std::optional<long long>{candidate.modelId},
                                "--infer-all",
                                requestedTargetType,
@@ -6600,6 +6634,7 @@ int RunInferAllForSymbol(pqxx::work& w,
                          const std::string& fromDate,
                          const std::string& toDate,
                          const Tensor& tensor,
+                         size_t logicalOutputStartIndex,
                          EA::LSTM::TargetType requestedTargetType,
                          const std::optional<PersistedInferenceConfig>& inferenceConfig)
 {
@@ -6718,6 +6753,7 @@ int RunInferAllForSymbol(pqxx::work& w,
                                                       fromDate,
                                                       toDate,
                                                       tensor,
+                                                      logicalOutputStartIndex,
                                                       requestedTargetType);
             PersistCompletedInferenceResult(w, identity, row);
             summaries.push_back(row);
@@ -6978,6 +7014,8 @@ int main(int argc, const char * argv[])
     pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
     w_LSTM.exec("SET TRANSACTION READ WRITE;");
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
+    EA::FeatureWarmupScope featureWarmupScope =
+        launchArgs.featureWarmupScope.value_or(EA::kDefaultFeatureWarmupScope);
     std::optional<ResumeCheckpointConfig> resumeConfig;
     std::optional<SchedulerInferencePersistenceContext> schedulerInferenceContext;
 
@@ -6986,7 +7024,12 @@ int main(int argc, const char * argv[])
         try
         {
             resumeConfig = LoadResumeCheckpointConfig(w_LSTM, *launchArgs.resumeModelId);
+            if (launchArgs.featureWarmupScope.has_value() &&
+                *launchArgs.featureWarmupScope !=
+                    resumeConfig->featureWarmupScope)
+                throw std::runtime_error("feature_warmup_scope_mismatch");
             ApplyResumeRuntimeConfig(*resumeConfig, *launchArgs.targetEpochs);
+            featureWarmupScope = resumeConfig->featureWarmupScope;
             fromDate = resumeConfig->fromDate;
             toDate = resumeConfig->toDate;
             std::cout << "RESUME_LOAD_MODEL_ID=" << *launchArgs.resumeModelId << std::endl;
@@ -7027,6 +7070,7 @@ int main(int argc, const char * argv[])
                                                                    launchArgs,
                                                                    availableSymbols);
                     ApplyPersistedInferenceRuntimeConfig(*inferenceConfig);
+                    featureWarmupScope = inferenceConfig->featureWarmupScope;
                     PrintResolvedInferenceConfig(*inferenceConfig);
                 }
                 catch (const std::exception& e)
@@ -7131,14 +7175,43 @@ int main(int argc, const char * argv[])
                             << ",available_count=" << availableSymbols.size()
                             << std::endl;
 
-            std::string query = "select * from candlestick('" + rawPriceTableName + "', 15, 'minute', '" + fromDate + "', '" + toDate + "') order by dt;";
+            const bool fullHistoryWarmup =
+                featureWarmupScope == EA::FeatureWarmupScope::FullHistoryWarmup;
+            const std::string queryStart = fullHistoryWarmup
+                ? EA::kTensorFeatureHistoryQueryStart
+                : fromDate;
+            const std::string sourceQuery =
+                "select * from candlestick(" + w_forex.quote(rawPriceTableName) +
+                ", 15, 'minute', " +
+                w_forex.quote(queryStart) + ", " +
+                w_forex.quote(toDate) + ") order by dt;";
+            const std::string warmupCountQuery = fullHistoryWarmup
+                ?
+                "select count(*) from candlestick(" + w_forex.quote(rawPriceTableName) +
+                ", 15, 'minute', " +
+                w_forex.quote(EA::kTensorFeatureHistoryQueryStart) + ", " +
+                w_forex.quote(toDate) + ") where dt < " +
+                w_forex.quote(fromDate) + ";"
+                : "SELECT 0;";
+            const size_t logicalOutputStartIndex =
+                w_forex.exec1(warmupCountQuery)[0].as<size_t>();
+            std::string query = sourceQuery;
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
             Tensor t{ rawPriceTableName };
             
             DiagnosticOut() << "Candlestick query: " << query << "\n";
+            DiagnosticOut() << "FEATURE_WARMUP_SCOPE"
+                            << ",mode=" << EA::FeatureWarmupScopeText(featureWarmupScope)
+                            << ",source_start=" << queryStart
+                            << ",output_start=" << fromDate
+                            << ",output_end=" << toDate
+                            << ",warmup_rows=" << logicalOutputStartIndex
+                            << std::endl;
             DiagnosticOut() << "Building tensor for table: " << rawPriceTableName << std::endl;
             while (csb != cse) t.Add(*csb++);
+            if (logicalOutputStartIndex > t.RowCount())
+                throw std::runtime_error("feature warmup query returned more rows than the source tensor");
             if (resumeConfig.has_value())
             {
                 const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
@@ -7178,6 +7251,7 @@ int main(int argc, const char * argv[])
                                             fromDate,
                                             toDate,
                                             t,
+                                            logicalOutputStartIndex,
                                             requestedTargetType,
                                             inferenceConfig);
             EA::LSTM l = CreateLstmForRuntimeLogLevel(t, 1, 0, requestedTargetType);
@@ -7269,6 +7343,7 @@ int main(int argc, const char * argv[])
                                            launchArgs,
                                            l,
                                            t,
+                                           logicalOutputStartIndex,
                                            loadedModelId,
                                            loadSource,
                                            requestedTargetType,
@@ -7356,7 +7431,7 @@ int main(int argc, const char * argv[])
                 bool checkpointStopReached = false;
                 for(auto e = startEpoch; e < epoch_count; e++)
                 {
-                    t.ForEachBatch( [&](auto b)
+                    t.ForEachBatchFrom(logicalOutputStartIndex, [&](auto b)
                                    {
                         auto l2 = [](const auto& m){
                             // Ensure we operate on a concrete, materialized matrix to avoid stale/lazy views
@@ -7419,7 +7494,8 @@ int main(int argc, const char * argv[])
                                                     rawPriceTableName,
                                                     fromDate,
                                                     toDate,
-                                                    l);
+                                                    l,
+                                                    featureWarmupScope);
                     if (checkpointModelId.has_value())
                     {
                         QueueCheckpointInferenceIfEligible(launchArgs.schedulerExperimentId,
@@ -7539,7 +7615,9 @@ int main(int argc, const char * argv[])
                             std::cout << "Created new model_id=" << modelId << std::endl;
                         }
 
-                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l, rawPriceTableName, fromDate, toDate);
+                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l,
+                                              rawPriceTableName, fromDate, toDate,
+                                              featureWarmupScope);
                     w_LSTM.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())

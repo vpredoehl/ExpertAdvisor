@@ -1,6 +1,7 @@
 #include "../Sources/ExperimentRecommendationConversionExecutionRepository.hpp"
 #include "../Sources/ExperimentRecommendationConversionExecutionService.hpp"
 #include "../Sources/ExperimentRecommendationConversionProposalReviewRepository.hpp"
+#include <exception>
 
 #include <barrier>
 #include <cassert>
@@ -166,6 +167,8 @@ int main()
                 "target_epochs integer NOT NULL,checkpoint_interval integer NOT NULL,"
                 "train_start timestamptz NOT NULL,train_end timestamptz NOT NULL,"
                 "infer_start timestamptz,infer_end timestamptz,resume_model_id bigint,"
+                "donchian20_mode text NOT NULL DEFAULT 'enabled',"
+                "feature_warmup_scope text NOT NULL DEFAULT 'legacy_cold_boundary',"
                 "duplicate_nonce bigint NOT NULL DEFAULT 0,status text NOT NULL,"
                 "phase text NOT NULL,invocation_mode text,updated_at timestamptz NOT NULL DEFAULT now(),"
                 "worker_pid integer,current_operation text,current_epoch integer,marker text);"
@@ -176,7 +179,8 @@ int main()
                 "checkpoint_interval,train_start,train_end,"
                 "coalesce(infer_start,'-infinity'::timestamptz),"
                 "coalesce(infer_end,'-infinity'::timestamptz),"
-                "coalesce(resume_model_id,-1),duplicate_nonce) WHERE status<>'cancelled';"
+                "coalesce(resume_model_id,-1),donchian20_mode,"
+                "feature_warmup_scope,duplicate_nonce) WHERE status<>'cancelled';"
                 "CREATE TABLE model(model_id bigint PRIMARY KEY,marker text NOT NULL);"
                 "CREATE TABLE experiment_recommendation("
                 "recommendation_id bigint PRIMARY KEY,source_experiment_id bigint NOT NULL "

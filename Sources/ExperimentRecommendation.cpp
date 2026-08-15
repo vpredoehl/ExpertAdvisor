@@ -459,11 +459,94 @@ RecommendationSemanticConfigurationVersionFromCanonicalText(
         "experiment_recommendation_semantic_configuration_v3;";
     constexpr std::string_view kV4 =
         "experiment_recommendation_semantic_configuration_v4;";
+    constexpr std::string_view kV5 =
+        "experiment_recommendation_semantic_configuration_v5;";
     if (canonicalText.starts_with(kV3))
         return RecommendationSemanticConfigurationVersion::v3;
     if (canonicalText.starts_with(kV4))
         return RecommendationSemanticConfigurationVersion::v4;
+    if (canonicalText.starts_with(kV5))
+        return RecommendationSemanticConfigurationVersion::v5;
     return std::nullopt;
+}
+
+std::string RecommendationSemanticConfigurationFromInvocationCanonicalText(
+    const std::string& canonicalText)
+{
+    constexpr std::string_view kPrefix =
+        "experiment_recommendation_invocation_v2;";
+    constexpr std::string_view kLengthField =
+        "semantic_configuration_length=";
+    constexpr std::string_view kSemanticField =
+        ";semantic_configuration=";
+
+    if (!canonicalText.starts_with(kPrefix))
+        throw std::invalid_argument(
+            "unsupported_recommendation_invocation_configuration_version");
+
+    const std::size_t lengthStart = kPrefix.size();
+    if (canonicalText.compare(
+            lengthStart, kLengthField.size(), kLengthField) != 0)
+        throw std::invalid_argument(
+            "invalid_recommendation_invocation_semantic_configuration_length");
+
+    const std::size_t lengthValueStart =
+        lengthStart + kLengthField.size();
+    const std::size_t semanticFieldStart =
+        canonicalText.find(kSemanticField, lengthValueStart);
+    if (semanticFieldStart == std::string::npos)
+        throw std::invalid_argument(
+            "invalid_recommendation_invocation_semantic_configuration");
+
+    const std::string lengthText = canonicalText.substr(
+        lengthValueStart, semanticFieldStart - lengthValueStart);
+    if (lengthText.empty() ||
+        !std::all_of(lengthText.begin(), lengthText.end(),
+                     [](unsigned char c) { return std::isdigit(c); }))
+        throw std::invalid_argument(
+            "invalid_recommendation_invocation_semantic_configuration_length");
+
+    std::size_t semanticLength = 0;
+    try
+    {
+        semanticLength = static_cast<std::size_t>(std::stoull(lengthText));
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument(
+            "invalid_recommendation_invocation_semantic_configuration_length");
+    }
+
+    const std::size_t semanticStart =
+        semanticFieldStart + kSemanticField.size();
+    if (semanticLength > canonicalText.size() - semanticStart)
+        throw std::invalid_argument(
+            "invalid_recommendation_invocation_semantic_configuration_length");
+
+    return canonicalText.substr(semanticStart, semanticLength);
+}
+
+FeatureWarmupScope RecommendationFeatureWarmupScopeFromCanonicalText(
+    const std::string& canonicalText)
+{
+    const auto version =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(canonicalText);
+    if (!version)
+        throw std::invalid_argument(
+            "unsupported_recommendation_semantic_configuration_version");
+    if (*version != RecommendationSemanticConfigurationVersion::v5)
+        return FeatureWarmupScope::LegacyColdBoundary;
+    constexpr std::string_view kField = ";feature_warmup_scope=";
+    const std::size_t fieldStart = canonicalText.rfind(kField);
+    if (fieldStart == std::string::npos ||
+        fieldStart + kField.size() >= canonicalText.size())
+        throw std::invalid_argument(
+            "recommendation_semantic_configuration_v5_missing_feature_warmup_scope");
+    const std::string value = canonicalText.substr(fieldStart + kField.size());
+    if (value.find(';') != std::string::npos)
+        throw std::invalid_argument(
+            "recommendation_semantic_configuration_v5_invalid_feature_warmup_scope");
+    return ParseFeatureWarmupScope(value);
 }
 
 std::string RecommendationPolicyCanonicalText(
@@ -556,8 +639,11 @@ std::string EffectiveExperimentConfigurationCanonicalText(
             "recommendation_identity_invalid_numeric_configuration");
     std::ostringstream out;
     out.imbue(std::locale::classic());
+    const int versionNumber =
+        version == RecommendationSemanticConfigurationVersion::v3 ? 3 :
+        version == RecommendationSemanticConfigurationVersion::v4 ? 4 : 5;
     out << "experiment_recommendation_semantic_configuration_v"
-        << (version == RecommendationSemanticConfigurationVersion::v3 ? 3 : 4)
+        << versionNumber
         << ";symbol=" << symbol
         << ";prediction_horizon=" << configuration.predictionHorizon
         << ";label_threshold="
@@ -573,9 +659,12 @@ std::string EffectiveExperimentConfigurationCanonicalText(
             configuration.inferStartDate)
         << ";infer_end_date=" << OptionalDateText(
             configuration.inferEndDate);
-    if (version == RecommendationSemanticConfigurationVersion::v4)
+    if (version != RecommendationSemanticConfigurationVersion::v3)
         out << ";donchian20_mode=" << Donchian20ModeText(
             configuration.donchian20Mode);
+    if (version == RecommendationSemanticConfigurationVersion::v5)
+        out << ";feature_warmup_scope=" << FeatureWarmupScopeText(
+            configuration.featureWarmupScope);
     return out.str();
 }
 

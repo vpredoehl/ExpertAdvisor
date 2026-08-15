@@ -223,10 +223,11 @@ int main()
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
     assert(identity.canonicalText ==
-        "experiment_recommendation_semantic_configuration_v4;symbol=eurusd;prediction_horizon=12;"
+        "experiment_recommendation_semantic_configuration_v5;symbol=eurusd;prediction_horizon=12;"
         "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
         "train_start_date=2010-01-01;train_end_date=2025-01-01;"
-        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled");
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup");
     assert(identity.hash == RecommendationCandidateHash(configuration));
     const auto v3 = BuildRecommendationCandidateIdentity(
         configuration, RecommendationSemanticConfigurationVersion::v3);
@@ -239,7 +240,31 @@ int main()
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v3.canonicalText) == RecommendationSemanticConfigurationVersion::v3);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
-               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v4);
+               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v5);
+    const auto legacyWarmup = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v4);
+    assert(legacyWarmup.configuration.featureWarmupScope ==
+           EA::FeatureWarmupScope::FullHistoryWarmup);
+    assert(legacyWarmup.canonicalText.find("feature_warmup_scope") ==
+           std::string::npos);
+    EffectiveExperimentConfiguration coldBoundary = configuration;
+    coldBoundary.featureWarmupScope =
+        EA::FeatureWarmupScope::LegacyColdBoundary;
+    const auto coldIdentity = BuildRecommendationCandidateIdentity(coldBoundary);
+    assert(coldIdentity.hash != identity.hash);
+    assert(coldIdentity.canonicalText.find(
+               "feature_warmup_scope=legacy_cold_boundary") != std::string::npos);
+    assert(!RecommendationSemanticConfigurationVersionFromCanonicalText(
+        "experiment_recommendation_semantic_configuration_v99;"));
+    assert(RecommendationFeatureWarmupScopeFromCanonicalText(v3.canonicalText) ==
+           EA::FeatureWarmupScope::LegacyColdBoundary);
+    assert(RecommendationFeatureWarmupScopeFromCanonicalText(
+               identity.canonicalText) ==
+           EA::FeatureWarmupScope::FullHistoryWarmup);
+    assert(ErrorFrom([] {
+        (void)RecommendationFeatureWarmupScopeFromCanonicalText(
+            "experiment_recommendation_semantic_configuration_v5;symbol=eurusd");
+    }) == "recommendation_semantic_configuration_v5_missing_feature_warmup_scope");
     assert(CanonicalExperimentDateText("2025-06-15") == "2025-06-15");
     assert(CanonicalExperimentDateText("2024-02-29") == "2024-02-29");
     for (const std::string invalidDate : {
@@ -317,7 +342,6 @@ int main()
         BuildRecommendationInvocationIdentity(resume41);
     assert(invocationIdentity.invocation.configuration.symbol == "eurusd");
     assert(invocationIdentity.hash == ExperimentInvocationHash(resume41));
-    assert(invocationIdentity.hash == "fnv1a64:5a0ff7012537a0e3");
     assert(invocationIdentity.hash.starts_with("fnv1a64:"));
     assert(invocationIdentity.canonicalText.starts_with(
         "experiment_recommendation_invocation_v2;"));

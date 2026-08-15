@@ -13,6 +13,7 @@
 
 #include "LSTM.hpp"
 #include "CanonicalSymbol.hpp"
+#include "FeatureWarmupScope.hpp"
 
 
 #pragma clang diagnostic push
@@ -147,7 +148,9 @@ public:
                         const EA::LSTM& lstm,
                         const std::string& symbol = {},
                         const std::string& fromDate = {},
-                        const std::string& toDate = {})
+                        const std::string& toDate = {},
+                        EA::FeatureWarmupScope featureWarmupScope =
+                            EA::kDefaultFeatureWarmupScope)
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -159,6 +162,7 @@ public:
         saveModelMeta(w, modelId, lstm);
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
+        saveFeatureWarmupScopeMeta(w, modelId, featureWarmupScope);
         if (symbol.empty())
             throw std::runtime_error("saveAll requires a canonical training symbol");
         saveTrainSymbolMeta(w, modelId, symbol);
@@ -263,6 +267,31 @@ public:
                 p[i] = static_cast<float>(static_cast<unsigned char>(canonicalSymbol[i]));
         }
         saveParameter(w, modelId, "train_symbol_meta", meta);
+    }
+
+    static void saveFeatureWarmupScopeMeta(
+        pqxx::work& w,
+        long long modelId,
+        EA::FeatureWarmupScope scope)
+    {
+        saveAsciiMeta(w, modelId, "feature_warmup_scope_meta",
+                      EA::FeatureWarmupScopeText(scope));
+    }
+
+    // The absence of this metadata is itself durable historical evidence:
+    // models persisted before migration 067 used cold logical boundaries.
+    static EA::FeatureWarmupScope loadFeatureWarmupScopeMeta(
+        pqxx::work& w,
+        long long modelId)
+    {
+        const pqxx::result exists = w.exec_params(
+            "SELECT 1 FROM matrix WHERE model_id=$1 "
+            "AND param_name='feature_warmup_scope_meta' LIMIT 1;",
+            modelId);
+        if (exists.empty())
+            return EA::FeatureWarmupScope::LegacyColdBoundary;
+        return EA::ParseFeatureWarmupScope(
+            decodeAsciiMeta(w, modelId, "feature_warmup_scope_meta"));
     }
 
     static std::string decodeTrainSymbolMeta(pqxx::work& w, long long modelId)

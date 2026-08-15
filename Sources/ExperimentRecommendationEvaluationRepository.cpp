@@ -55,6 +55,8 @@ EffectiveExperimentConfiguration MapExperimentConfiguration(
         row, "candidate_infer_start_date");
     value.inferEndDate = OptionalValue<std::string>(
         row, "candidate_infer_end_date");
+    value.featureWarmupScope = ParseFeatureWarmupScope(
+        row["candidate_feature_warmup_scope"].as<std::string>());
     return value;
 }
 
@@ -69,7 +71,8 @@ std::vector<RecommendationEvaluationExperimentConflict> FindConflicts(
         "candidate_prediction_horizon,candidate_label_threshold,"
         "candidate_core_lr_mult,candidate_head_lr_mult,candidate_target_epochs,"
         "candidate_train_start_date,candidate_train_end_date,"
-        "candidate_infer_start_date,candidate_infer_end_date FROM ("
+        "candidate_infer_start_date,candidate_infer_end_date,"
+        "candidate_feature_warmup_scope FROM ("
         "SELECT e.experiment_id,e.status AS candidate_status,"
         "e.symbol AS candidate_symbol,e.prediction_horizon AS candidate_prediction_horizon,"
         "e.c_next_threshold AS candidate_label_threshold,"
@@ -78,7 +81,8 @@ std::vector<RecommendationEvaluationExperimentConflict> FindConflicts(
         "to_char(e.train_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS candidate_train_start_date,"
         "to_char(e.train_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS candidate_train_end_date,"
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_start_date,"
-        "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_end_date "
+        "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_end_date,"
+        "e.feature_warmup_scope AS candidate_feature_warmup_scope "
         "FROM experiment e WHERE lower(btrim(e.symbol))=lower(btrim($1)) "
         "AND e.prediction_horizon=$2 AND e.status IN ('pending','running','paused','completed')"
         ") candidates ORDER BY experiment_id ASC;",

@@ -283,11 +283,6 @@ private:
     void zeroGateAccumulators(GateAccumulators& A, size_t rows, size_t H) const;
     void RepeatRowsInto(EAMatrix& out, const EAMatrix& row, size_t B) const;
     auto BuildBatchAtTimestepDirect(const WindowBatch& wb, size_t tstep, LSTMBatchProfile*) -> EAMatrix;
-    float ComputeLookbackLogReturn(const Window& batch, size_t rowIdx, size_t lookbackBars) const;
-    size_t AppendMultiHorizonReturnFeatures(const Window& batch,
-                                            size_t rowIdx,
-                                            float* dst,
-                                            size_t dstOffset) const;
     
     // Batched helpers
     EAMatrix RepeatRows(const EAMatrix& row, size_t B) const;

@@ -58,6 +58,8 @@ ExperimentInvocationConfiguration MapExperimentInvocation(
         OptionalValue<std::string>(row, name("infer_start_date").c_str());
     invocation.configuration.inferEndDate =
         OptionalValue<std::string>(row, name("infer_end_date").c_str());
+    invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
+        row[name("feature_warmup_scope")].as<std::string>());
     invocation.checkpointInterval =
         row[name("checkpoint_interval")].as<int>();
     invocation.resumeModelId =
@@ -422,7 +424,9 @@ std::vector<RecommendationSourceLoadResult> LoadRecommendationSources(
         "to_char(e.train_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') AS source_train_end_date, "
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS source_infer_start_date, "
         "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS source_infer_end_date, "
-        "e.resume_model_id AS source_resume_model_id, e.last_model_id AS source_model_id, "
+        "e.resume_model_id AS source_resume_model_id, "
+        "e.feature_warmup_scope AS source_feature_warmup_scope, "
+        "e.last_model_id AS source_model_id, "
         "((e.train_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_start AT TIME ZONE 'America/Chicago') "
         " AND (e.train_end AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_end AT TIME ZONE 'America/Chicago') "
         " AND (e.infer_start IS NULL OR (e.infer_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.infer_start AT TIME ZONE 'America/Chicago')) "
@@ -513,6 +517,7 @@ ExperimentDuplicateMatch FindExperimentDuplicate(
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_start_date, "
         "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_end_date, "
         "e.resume_model_id AS candidate_resume_model_id, "
+        "e.feature_warmup_scope AS candidate_feature_warmup_scope, "
         "((e.train_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_start AT TIME ZONE 'America/Chicago') "
         " AND (e.train_end AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_end AT TIME ZONE 'America/Chicago') "
         " AND (e.infer_start IS NULL OR (e.infer_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.infer_start AT TIME ZONE 'America/Chicago')) "

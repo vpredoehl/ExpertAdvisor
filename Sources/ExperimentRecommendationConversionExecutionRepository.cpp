@@ -111,7 +111,7 @@ ExperimentInvocationConfiguration LoadExperimentInvocation(
         "to_char(train_end AT TIME ZONE $2,'YYYY-MM-DD') AS train_end,"
         "to_char(infer_start AT TIME ZONE $2,'YYYY-MM-DD') AS infer_start,"
         "to_char(infer_end AT TIME ZONE $2,'YYYY-MM-DD') AS infer_end,"
-        "resume_model_id FROM experiment WHERE experiment_id=$1;",
+        "resume_model_id,feature_warmup_scope FROM experiment WHERE experiment_id=$1;",
         pqxx::params{experimentId, kRecommendationDateTimeZone});
     if (rows.empty())
         throw std::runtime_error(
@@ -143,6 +143,8 @@ ExperimentInvocationConfiguration LoadExperimentInvocation(
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
     if (!row["resume_model_id"].is_null())
         invocation.resumeModelId = row["resume_model_id"].as<long long>();
+    invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
+        row["feature_warmup_scope"].as<std::string>());
     return invocation;
 }
 
@@ -185,6 +187,7 @@ long long InsertPausedExperiment(
         "INSERT INTO experiment (symbol,prediction_horizon,c_next_threshold,"
         "core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,"
         "train_start,train_end,infer_start,infer_end,resume_model_id,"
+        "feature_warmup_scope,"
         "duplicate_nonce,status,phase,invocation_mode,updated_at) VALUES ("
         "$1,$2,$3,$4,$5,$6,$7,"
         "($8::date::timestamp AT TIME ZONE $13),"
@@ -193,7 +196,7 @@ long long InsertPausedExperiment(
         "($10::date::timestamp AT TIME ZONE $13) END,"
         "CASE WHEN $11::text IS NULL THEN NULL ELSE "
         "($11::date::timestamp AT TIME ZONE $13) END,"
-        "$12,0,'paused','train','recommendation_conversion',now()) "
+        "$12,$14,0,'paused','train','recommendation_conversion',now()) "
         "RETURNING experiment_id;",
         pqxx::params{
             configuration.symbol, configuration.predictionHorizon,
@@ -202,7 +205,8 @@ long long InsertPausedExperiment(
             invocation.checkpointInterval, configuration.trainStartDate,
             configuration.trainEndDate, configuration.inferStartDate,
             configuration.inferEndDate, invocation.resumeModelId,
-            kRecommendationDateTimeZone})
+            kRecommendationDateTimeZone,
+            FeatureWarmupScopeText(configuration.featureWarmupScope)})
         .one_row()[0].as<long long>();
 }
 

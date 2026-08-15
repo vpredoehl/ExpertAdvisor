@@ -79,6 +79,7 @@ std::size_t SemanticDifferenceCount(
     differences += lhs.trainEndDate != rhs.trainEndDate;
     differences += lhs.inferStartDate != rhs.inferStartDate;
     differences += lhs.inferEndDate != rhs.inferEndDate;
+    differences += lhs.featureWarmupScope != rhs.featureWarmupScope;
     return differences;
 }
 

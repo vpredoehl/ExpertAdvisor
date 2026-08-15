@@ -71,6 +71,7 @@
 #include "SchedulerOwnershipRepository.hpp"
 #include "SupportedSymbols.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
+#include "FeatureWarmupScope.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -356,6 +357,9 @@ struct SchedulerOptions
     std::optional<double> cNextThreshold;
     std::optional<double> coreLrMult;
     std::optional<double> headLrMult;
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::kDefaultFeatureWarmupScope;
+    bool featureWarmupScopeSpecified = false;
     std::optional<int> targetEpochs;
     std::optional<int> epochs;
     int checkpointInterval = 20;
@@ -395,6 +399,8 @@ struct QueueResumeMeta
     int completedEpochs = 0;
     std::optional<double> coreLrMult;
     std::optional<double> headLrMult;
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::FeatureWarmupScope::LegacyColdBoundary;
 };
 
 struct SchedulerLeaseSnapshot
@@ -440,6 +446,8 @@ struct ExperimentRow
     std::optional<std::string> trainLogPath;
     std::optional<std::string> inferLogPath;
     std::optional<std::string> analysisLogPath;
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::FeatureWarmupScope::LegacyColdBoundary;
 };
 
 struct ChildResult
@@ -2733,6 +2741,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.epochs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--checkpoint-interval")
             options.checkpointInterval = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--feature-warmup-scope")
+        {
+            options.featureWarmupScope = EA::ParseFeatureWarmupScope(
+                RequireNextArg(argc, argv, i, arg));
+            options.featureWarmupScopeSpecified = true;
+        }
         else if (arg == "--train-start")
             options.trainStart = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--train-end")
@@ -2787,6 +2801,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.epochs = ParsePositiveInt("--epochs", value);
         else if (SplitOptionWithValue(arg, "--checkpoint-interval", value))
             options.checkpointInterval = ParsePositiveInt("--checkpoint-interval", value);
+        else if (SplitOptionWithValue(arg, "--feature-warmup-scope", value))
+        {
+            options.featureWarmupScope = EA::ParseFeatureWarmupScope(value);
+            options.featureWarmupScopeSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--train-start", value))
             options.trainStart = value;
         else if (SplitOptionWithValue(arg, "--train-end", value))
@@ -4561,6 +4580,8 @@ QueueResumeMeta LoadQueueResumeMeta(pqxx::work& w, long long modelId)
 
     QueueResumeMeta meta;
     meta.modelId = modelId;
+    meta.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
+        w, modelId);
     meta.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     meta.predictionHorizon = static_cast<int>(std::llround(vals[1]));
     meta.threshold = vals[2];
@@ -4582,6 +4603,8 @@ void PrintQueueResumeMeta(const char* marker,
               << ",symbol=" << meta.symbol
               << ",prediction_horizon=" << meta.predictionHorizon
               << ",threshold=" << FormatDouble(meta.threshold)
+              << ",feature_warmup_scope="
+              << EA::FeatureWarmupScopeText(meta.featureWarmupScope)
               << ",completed_epochs=" << meta.completedEpochs
               << ",target_epochs=" << targetEpochs
               << ",train_start=" << meta.trainStart
@@ -4650,6 +4673,15 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
                                 meta.modelId,
                                 "model=" + meta.trainEnd + ";runtime=" + *options.trainEnd);
     }
+    if (options.featureWarmupScopeSpecified &&
+        options.featureWarmupScope != meta.featureWarmupScope)
+    {
+        ThrowQueueResumeInvalid(
+            "feature_warmup_scope_mismatch", meta.modelId,
+            "model=" + std::string{EA::FeatureWarmupScopeText(
+                meta.featureWarmupScope)} + ";runtime=" +
+                EA::FeatureWarmupScopeText(options.featureWarmupScope));
+    }
 
     options.symbol = meta.symbol;
     options.predictionHorizon = meta.predictionHorizon;
@@ -4658,6 +4690,7 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
     options.trainEnd = meta.trainEnd;
     options.coreLrMult = meta.coreLrMult;
     options.headLrMult = meta.headLrMult;
+    options.featureWarmupScope = meta.featureWarmupScope;
 
     PrintQueueResumeMeta("QUEUE_RESUME_MODEL", meta, *options.targetEpochs);
 }
@@ -5729,6 +5762,8 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << "::timestamptz"
         << " AND infer_end IS NOT DISTINCT FROM " << SqlNullable(w, options.inferEnd)
         << "::timestamptz"
+        << " AND feature_warmup_scope = " << w.quote(
+            EA::FeatureWarmupScopeText(options.featureWarmupScope))
         << " AND resume_model_id IS NOT DISTINCT FROM " << SqlNullable(w, options.resumeModelId)
         << " AND status <> 'cancelled'";
     return sql.str();
@@ -5743,6 +5778,8 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND prediction_horizon = " << *options.predictionHorizon
         << " AND target_epochs = " << *options.targetEpochs
         << " AND c_next_threshold = " << FormatDouble(*options.cNextThreshold)
+        << " AND feature_warmup_scope = " << w.quote(
+            EA::FeatureWarmupScopeText(options.featureWarmupScope))
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -5761,6 +5798,11 @@ long long InsertExperimentRecord(pqxx::work& w,
                                         long long duplicateNonce)
 {
     const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
+    const bool hasFeatureWarmupScope =
+        ColumnExists(w, "experiment", "feature_warmup_scope");
+    if (!hasFeatureWarmupScope)
+        throw std::runtime_error(
+            "feature warmup scope migration required; run ./migrate_lstm_db.sh");
     const bool hasCheckpointInferEnabled = ColumnExists(w, "experiment", "checkpoint_infer_enabled");
     const bool hasOpportunisticCheckpointInfer = ColumnExists(w, "experiment", "opportunistic_checkpoint_infer");
     const bool hasCheckpointInferMinEpoch = ColumnExists(w, "experiment", "checkpoint_infer_min_epoch");
@@ -5795,7 +5837,8 @@ long long InsertExperimentRecord(pqxx::work& w,
     sql << "INSERT INTO experiment ("
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
-        << "resume_model_id, duplicate_nonce, status, phase, updated_at";
+        << "resume_model_id, duplicate_nonce, status, phase, updated_at, "
+        << "feature_warmup_scope";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -5836,7 +5879,8 @@ long long InsertExperimentRecord(pqxx::work& w,
         << SqlNullable(w, options.inferEnd) << "::timestamptz,"
         << SqlNullable(w, options.resumeModelId) << ","
         << duplicateNonce << ","
-        << "'pending','train',now()";
+        << "'pending','train',now(),"
+        << w.quote(EA::FeatureWarmupScopeText(options.featureWarmupScope));
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -6490,6 +6534,9 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     experiment.trainLogPath = OptionalStringCell(row, 14);
     experiment.inferLogPath = OptionalStringCell(row, 15);
     experiment.analysisLogPath = OptionalStringCell(row, 16);
+    if (row.size() > 17)
+        experiment.featureWarmupScope = EA::ParseFeatureWarmupScope(
+            row[17].as<std::string>());
     return experiment;
 }
 
@@ -6502,7 +6549,7 @@ std::vector<ExperimentRow> LoadPendingExperiments(
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, feature_warmup_scope "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 ";
     if (cancellationOnly)
@@ -6527,7 +6574,7 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, phase, worker_pid, "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, feature_warmup_scope, phase, worker_pid, "
         "extract(epoch from COALESCE(worker_started_at, updated_at))::double precision "
         "FROM experiment "
         "WHERE status = 'running' "
@@ -6538,9 +6585,9 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
     for (const auto& row : rows)
         experiments.push_back(RunningExperimentState{
             RowToExperiment(row),
-            row[17].as<std::string>(),
-            row[18].is_null() ? std::nullopt : std::optional<int>{row[18].as<int>()},
-            row[19].as<double>()});
+            row[18].as<std::string>(),
+            row[19].is_null() ? std::nullopt : std::optional<int>{row[19].as<int>()},
+            row[20].as<double>()});
     return experiments;
 }
 
@@ -8755,6 +8802,8 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--checkpoint-every", std::to_string(experiment.checkpointInterval));
     AddCliOption(argv, "--new-model-name", BaseModelName(experiment));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
+    AddCliOption(argv, "--feature-warmup-scope",
+                 EA::FeatureWarmupScopeText(experiment.featureWarmupScope));
     AddLstmProfileOptions(argv, options);
 
     const std::optional<long long> resumeFrom =
@@ -8792,6 +8841,8 @@ std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(*experiment.lastModelId));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
+    AddCliOption(argv, "--feature-warmup-scope",
+                 EA::FeatureWarmupScopeText(experiment.featureWarmupScope));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, experiment.inferStart->substr(0, 10));
@@ -8837,6 +8888,8 @@ std::vector<std::string> BuildCheckpointEvalInferCommand(const SchedulerOptions&
     AddCliFlag(argv, "--infer");
     AddCliOption(argv, "--model", std::to_string(eval.checkpointModelId));
     AddCliOption(argv, "--scheduler-checkpoint-eval-id", std::to_string(eval.checkpointEvalId));
+    AddCliOption(argv, "--feature-warmup-scope",
+                 EA::FeatureWarmupScopeText(eval.experiment.featureWarmupScope));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, eval.experiment.inferStart->substr(0, 10));
@@ -8991,11 +9044,13 @@ CheckpointEvalRow RowToCheckpointEval(const pqxx::row& row)
     eval.experiment.lastModelId = eval.checkpointModelId;
     eval.experiment.resumeModelId = OptionalLongLongCell(row, 20);
     eval.experiment.trainLogPath = OptionalStringCell(row, 21);
-    eval.inferStartedEpoch = row[22].is_null() ? 0.0 : row[22].as<double>();
+    eval.experiment.featureWarmupScope = EA::ParseFeatureWarmupScope(
+        row[22].as<std::string>());
+    eval.inferStartedEpoch = row[23].is_null() ? 0.0 : row[23].as<double>();
     eval.experiment.inferLogPath = eval.inferLogPath;
     eval.experiment.analysisLogPath = eval.analysisLogPath;
-    if (row.size() > 23 && !row[23].is_null())
-        eval.cancellationRequestId = row[23].as<long long>();
+    if (row.size() > 24 && !row[24].is_null())
+        eval.cancellationRequestId = row[24].as<long long>();
     return eval;
 }
 
@@ -9011,7 +9066,7 @@ std::vector<CheckpointEvalRow> LoadCheckpointEvalRows(pqxx::work& w,
         "e.experiment_id, e.symbol, e.prediction_horizon, e.c_next_threshold, "
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
-        "e.resume_model_id, e.train_log_path, "
+        "e.resume_model_id, e.train_log_path, e.feature_warmup_scope, "
         "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision, "
         "ce.cancellation_request_id "
         "FROM experiment_checkpoint_eval ce "
@@ -9040,7 +9095,7 @@ std::optional<CheckpointEvalRow> LoadCheckpointEvalById(pqxx::work& w,
         "e.experiment_id, e.symbol, e.prediction_horizon, e.c_next_threshold, "
         "e.core_lr_mult, e.head_lr_mult, e.target_epochs, e.checkpoint_interval, "
         "e.train_start::text, e.train_end::text, e.infer_start::text, e.infer_end::text, "
-        "e.resume_model_id, e.train_log_path, "
+        "e.resume_model_id, e.train_log_path, e.feature_warmup_scope, "
         "extract(epoch from COALESCE(ce.infer_started_at, ce.started_at, ce.updated_at))::double precision, "
         "ce.cancellation_request_id "
         "FROM experiment_checkpoint_eval ce "
@@ -13888,7 +13943,7 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
             "target_epochs,checkpoint_interval,train_start::text,"
             "train_end::text,infer_start::text,infer_end::text,"
             "last_model_id,resume_model_id,train_log_path,"
-            "infer_log_path,analysis_log_path "
+            "infer_log_path,analysis_log_path,feature_warmup_scope "
             "FROM experiment WHERE experiment_id=$1 "
             "AND status='running' AND phase='analyze' "
             "AND active_scheduler_worker_attempt_id=$2;",
@@ -15758,7 +15813,7 @@ int RecoverOrphanedRunningExperiments(
                 "train_start::text,train_end::text,"
                 "infer_start::text,infer_end::text,last_model_id,"
                 "resume_model_id,train_log_path,infer_log_path,"
-                "analysis_log_path "
+                "analysis_log_path,feature_warmup_scope "
                 "FROM experiment WHERE experiment_id=$1;",
                 experimentId);
             if (experimentRows.size() == 1)
@@ -16021,7 +16076,7 @@ void PersistObservedExperimentChild(pqxx::work& w,
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
+        "e.feature_warmup_scope,e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
         "r.cancellation_mode,e.cancel_after_checkpoint_epoch "
         "FROM experiment e LEFT JOIN experiment_admin_request r "
         "ON r.request_id=e.cancellation_request_id "
@@ -16033,23 +16088,23 @@ void PersistObservedExperimentChild(pqxx::work& w,
         return;
 
     ExperimentRow experiment = RowToExperiment(rows[0]);
-    const std::string status = rows[0][17].as<std::string>();
-    const std::string phase = rows[0][18].as<std::string>();
-    const std::optional<int> workerPid = rows[0][19].is_null()
+    const std::string status = rows[0][18].as<std::string>();
+    const std::string phase = rows[0][19].as<std::string>();
+    const std::optional<int> workerPid = rows[0][20].is_null()
         ? std::nullopt
-        : std::optional<int>{rows[0][19].as<int>()};
+        : std::optional<int>{rows[0][20].as<int>()};
     const std::optional<long long> cancellationRequestId =
-        rows[0][20].is_null()
-            ? std::nullopt
-            : std::optional<long long>{rows[0][20].as<long long>()};
-    const std::optional<std::string> cancellationMode =
         rows[0][21].is_null()
             ? std::nullopt
-            : std::optional<std::string>{rows[0][21].as<std::string>()};
-    const std::optional<int> cancellationCheckpoint =
+            : std::optional<long long>{rows[0][21].as<long long>()};
+    const std::optional<std::string> cancellationMode =
         rows[0][22].is_null()
             ? std::nullopt
-            : std::optional<int>{rows[0][22].as<int>()};
+            : std::optional<std::string>{rows[0][22].as<std::string>()};
+    const std::optional<int> cancellationCheckpoint =
+        rows[0][23].is_null()
+            ? std::nullopt
+            : std::optional<int>{rows[0][23].as<int>()};
     const std::string error = ObservedChildError(child, exitCode, signalNumber, coreDumped);
 
     if (status != "running" || phase != child.phase ||
@@ -19397,7 +19452,7 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
         << "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         << "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         << "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        << "status, phase,worker_pid,worker_process_group_id,"
+        << "feature_warmup_scope,status, phase,worker_pid,worker_process_group_id,"
         << "worker_executable,worker_command_line,"
         << "worker_process_start_identity,"
         << "active_scheduler_worker_attempt_id "
@@ -19412,21 +19467,21 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
 
     SchedulerStopExperiment result;
     result.experiment = RowToExperiment(rows[0]);
-    result.status = rows[0][17].as<std::string>();
-    result.phase = rows[0][18].as<std::string>();
+    result.status = rows[0][18].as<std::string>();
+    result.phase = rows[0][19].as<std::string>();
     result.worker.experimentId = result.experiment.experimentId;
     result.worker.phase = result.phase;
     result.worker.lifecycleStatus = result.status;
-    if (!rows[0][19].is_null())
-        result.worker.pid = rows[0][19].as<int>();
     if (!rows[0][20].is_null())
-        result.worker.processGroupId = rows[0][20].as<int>();
-    result.worker.executable = OptionalStringCell(rows[0], 21);
-    result.worker.commandLine = OptionalStringCell(rows[0], 22);
+        result.worker.pid = rows[0][20].as<int>();
+    if (!rows[0][21].is_null())
+        result.worker.processGroupId = rows[0][21].as<int>();
+    result.worker.executable = OptionalStringCell(rows[0], 22);
+    result.worker.commandLine = OptionalStringCell(rows[0], 23);
     result.worker.processStartIdentity =
-        OptionalStringCell(rows[0], 23);
+        OptionalStringCell(rows[0], 24);
     result.activeWorkerAttemptId =
-        OptionalLongLongCell(rows[0], 24);
+        OptionalLongLongCell(rows[0], 25);
     result.worker.workerAttemptId =
         result.activeWorkerAttemptId;
     result.worker.workerKind = "experiment";
@@ -19441,7 +19496,7 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "status, phase,worker_pid,worker_process_group_id,"
+        "feature_warmup_scope,status, phase,worker_pid,worker_process_group_id,"
         "worker_executable,worker_command_line,"
         "worker_process_start_identity,"
         "active_scheduler_worker_attempt_id "
@@ -19455,22 +19510,22 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
     {
         SchedulerStopExperiment item;
         item.experiment = RowToExperiment(row);
-        item.status = row[17].as<std::string>();
-        item.phase = row[18].as<std::string>();
+        item.status = row[18].as<std::string>();
+        item.phase = row[19].as<std::string>();
         item.worker.experimentId =
             item.experiment.experimentId;
         item.worker.phase = item.phase;
         item.worker.lifecycleStatus = item.status;
-        if (!row[19].is_null())
-            item.worker.pid = row[19].as<int>();
         if (!row[20].is_null())
-            item.worker.processGroupId = row[20].as<int>();
-        item.worker.executable = OptionalStringCell(row, 21);
-        item.worker.commandLine = OptionalStringCell(row, 22);
+            item.worker.pid = row[20].as<int>();
+        if (!row[21].is_null())
+            item.worker.processGroupId = row[21].as<int>();
+        item.worker.executable = OptionalStringCell(row, 22);
+        item.worker.commandLine = OptionalStringCell(row, 23);
         item.worker.processStartIdentity =
-            OptionalStringCell(row, 23);
+            OptionalStringCell(row, 24);
         item.activeWorkerAttemptId =
-            OptionalLongLongCell(row, 24);
+            OptionalLongLongCell(row, 25);
         item.worker.workerAttemptId =
             item.activeWorkerAttemptId;
         item.worker.workerKind = "experiment";

@@ -97,8 +97,10 @@ struct Fixture
 
 Fixture BuildFixture(
     RecommendationSemanticConfigurationVersion semanticVersion =
-        RecommendationSemanticConfigurationVersion::v4,
-    Donchian20Mode donchian20Mode = Donchian20Mode::Enabled)
+        RecommendationSemanticConfigurationVersion::v5,
+    Donchian20Mode donchian20Mode = Donchian20Mode::Enabled,
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::FeatureWarmupScope::FullHistoryWarmup)
 {
     Fixture fixture;
     RecommendationCampaignPlanInput input;
@@ -156,6 +158,7 @@ Fixture BuildFixture(
     conversion.sourceInvocation.configuration.trainStartDate = "2026-01-01";
     conversion.sourceInvocation.configuration.trainEndDate = "2026-02-01";
     conversion.sourceInvocation.configuration.donchian20Mode = donchian20Mode;
+    conversion.sourceInvocation.configuration.featureWarmupScope = featureWarmupScope;
     conversion.sourceInvocation.checkpointInterval = 20;
     auto proposed = conversion.sourceInvocation;
     proposed.configuration.coreLrMult = 1.1;
@@ -262,12 +265,14 @@ int main()
         RecommendationSemanticConfigurationVersion::v3,
         Donchian20Mode::ZeroAblation);
     assert(fixture.recommendationSemanticCanonical.find(
-               "experiment_recommendation_semantic_configuration_v4;") == 0);
+               "experiment_recommendation_semantic_configuration_v5;") == 0);
     assert(fixture.recommendationSemanticCanonical.find(
                ";donchian20_mode=enabled") != std::string::npos);
+    assert(fixture.recommendationSemanticCanonical.find(
+               ";feature_warmup_scope=full_history_warmup") != std::string::npos);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                fixture.recommendationSemanticCanonical) ==
-           RecommendationSemanticConfigurationVersion::v4);
+           RecommendationSemanticConfigurationVersion::v5);
     assert(historicalV3.recommendationSemanticCanonical.find(
                "experiment_recommendation_semantic_configuration_v3;") == 0);
     assert(historicalV3.recommendationSemanticCanonical.find(
@@ -290,7 +295,7 @@ int main()
                    "target_epochs integer,checkpoint_interval integer,"
                    "train_start timestamptz,train_end timestamptz,"
                    "infer_start timestamptz,infer_end timestamptz,"
-                   "resume_model_id bigint,donchian20_mode text);"
+                   "resume_model_id bigint,donchian20_mode text,feature_warmup_scope text);"
                    "CREATE TABLE experiment_recommendation("
                    "recommendation_id bigint PRIMARY KEY,status text,"
                    "source_experiment_id bigint,"
@@ -345,7 +350,8 @@ int main()
         setup.exec(
             "INSERT INTO experiment VALUES(501,'eurusd',12,0.001,1.0,1.0,"
             "120,20,'2026-01-01 00:00:00 America/Chicago',"
-            "'2026-02-01 00:00:00 America/Chicago',NULL,NULL,NULL,'enabled');");
+            "'2026-02-01 00:00:00 America/Chicago',NULL,NULL,NULL,'enabled',"
+            "'full_history_warmup');");
         setup.exec(
             "INSERT INTO experiment_recommendation VALUES("
             "1,'approved',501,$1,$2,$3,$4,'core_lr_mult',$5,$6);",
@@ -415,6 +421,8 @@ int main()
                    "2026-01-01");
             assert(conversionRequest.sourceInvocation.configuration.donchian20Mode ==
                    Donchian20Mode::Enabled);
+            assert(conversionRequest.sourceInvocation.configuration.featureWarmupScope ==
+                   EA::FeatureWarmupScope::FullHistoryWarmup);
         }
         {
             pqxx::work mutate{owner};
@@ -485,6 +493,9 @@ int main()
             assert(conversion.eligibility.eligible && conversion.proposal);
             assert(conversion.proposal->proposedInvocationCanonical.find(
                 "donchian20_mode") == std::string::npos);
+            assert(conversion.proposal->proposedInvocation.configuration.
+                       featureWarmupScope ==
+                   EA::FeatureWarmupScope::LegacyColdBoundary);
 
             pqxx::work restore{owner};
             restore.exec("SET LOCAL search_path TO " +
