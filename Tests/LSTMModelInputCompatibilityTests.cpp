@@ -9,10 +9,13 @@ int main()
 {
     static_assert(legacy_feature_size == 32);
     static_assert(donchian_feature_size == 34);
-    static_assert(feature_size == 36);
+    static_assert(session_phase_feature_size == 36);
+    static_assert(relativeTickVolumeCol == 36);
+    static_assert(feature_size == 37);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
-    static_assert(EA::kCurrentModelInputWidth == 40);
+    static_assert(EA::kSessionPhaseModelInputWidth == 40);
+    static_assert(EA::kCurrentModelInputWidth == 41);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -48,28 +51,43 @@ int main()
     for (std::size_t i = donchian_feature_size; i < donchianInput.size(); ++i)
         assert(donchianInput[i] == -1.0f);
 
-    // Current persisted model includes the appended UTC session-phase pair.
-    const auto current = EA::ResolveModelInputContract(
+    // Session-phase-era persisted models do not include the later relative
+    // tick-volume column in their learned input projection.
+    const auto sessionPhase = EA::ResolveModelInputContract(
         40, physicalTensor.size());
+    assert(sessionPhase.tensorFeatureCount == session_phase_feature_size);
+    std::vector<float> sessionPhaseInput(40, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(sessionPhaseInput.data(),
+                                        physicalTensor.data(), sessionPhase);
+    for (std::size_t i = 0; i < session_phase_feature_size; ++i)
+        assert(sessionPhaseInput[i] == physicalTensor[i]);
+    assert(sessionPhaseInput[sessionPhaseSinCol] == physicalTensor[sessionPhaseSinCol]);
+    assert(sessionPhaseInput[sessionPhaseCosCol] == physicalTensor[sessionPhaseCosCol]);
+
+    // Current persisted models include the appended relative tick-volume
+    // column, while the four return channels remain outside the Tensor prefix.
+    const auto current = EA::ResolveModelInputContract(
+        41, physicalTensor.size());
     assert(current.tensorFeatureCount == feature_size);
-    std::vector<float> currentInput(40, -1.0f);
+    std::vector<float> currentInput(41, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentInput.data(),
                                         physicalTensor.data(), current);
     for (std::size_t i = 0; i < feature_size; ++i)
         assert(currentInput[i] == physicalTensor[i]);
     assert(currentInput[sessionPhaseSinCol] == physicalTensor[sessionPhaseSinCol]);
     assert(currentInput[sessionPhaseCosCol] == physicalTensor[sessionPhaseCosCol]);
+    assert(currentInput[relativeTickVolumeCol] == physicalTensor[relativeTickVolumeCol]);
 
     bool unsupportedRejected = false;
     try
     {
-        (void)EA::ResolveModelInputContract(37, physicalTensor.size());
+        (void)EA::ResolveModelInputContract(39, physicalTensor.size());
     }
     catch (const std::exception& error)
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=37,supported=36:38:40";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41";
     }
     assert(unsupportedRejected);
 

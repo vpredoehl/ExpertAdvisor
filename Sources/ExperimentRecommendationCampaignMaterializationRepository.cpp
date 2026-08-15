@@ -430,14 +430,16 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
         FeatureWarmupScope::LegacyColdBoundary;
     if (*semanticVersion == RecommendationSemanticConfigurationVersion::v5 ||
         *semanticVersion == RecommendationSemanticConfigurationVersion::v6 ||
-        *semanticVersion == RecommendationSemanticConfigurationVersion::v7)
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v7 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v8)
         invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
             row["feature_warmup_scope"].as<std::string>());
     // Versions preceding configurable lookback retain the closed 20-bar
     // definition.  v6 and later make the persisted value part of exact
     // provenance.
     if (*semanticVersion == RecommendationSemanticConfigurationVersion::v6 ||
-        *semanticVersion == RecommendationSemanticConfigurationVersion::v7)
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v7 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v8)
         invocation.configuration.donchianLookback = ParseDonchianLookback(
             row["donchian_lookback"].as<std::string>());
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();

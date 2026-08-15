@@ -87,10 +87,11 @@ std::array<float, kModelWidth> BuildInferenceRow(const Tensor& tensor,
 
 void TestUtcPhaseFormulaAndPeriodicity()
 {
-    static_assert(feature_size == 36);
+    static_assert(feature_size == 37);
     static_assert(sessionPhaseSinCol == 34);
     static_assert(sessionPhaseCosCol == 35);
-    static_assert(EA::kCurrentModelInputWidth == 40);
+    static_assert(relativeTickVolumeCol == 36);
+    static_assert(EA::kCurrentModelInputWidth == 41);
 
     const PriceTP midnight{};
     const std::array<std::pair<long long, std::pair<float, float>>, 4> quarters{{

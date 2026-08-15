@@ -465,6 +465,8 @@ RecommendationSemanticConfigurationVersionFromCanonicalText(
         "experiment_recommendation_semantic_configuration_v6;";
     constexpr std::string_view kV7 =
         "experiment_recommendation_semantic_configuration_v7;";
+    constexpr std::string_view kV8 =
+        "experiment_recommendation_semantic_configuration_v8;";
     if (canonicalText.starts_with(kV3))
         return RecommendationSemanticConfigurationVersion::v3;
     if (canonicalText.starts_with(kV4))
@@ -475,6 +477,8 @@ RecommendationSemanticConfigurationVersionFromCanonicalText(
         return RecommendationSemanticConfigurationVersion::v6;
     if (canonicalText.starts_with(kV7))
         return RecommendationSemanticConfigurationVersion::v7;
+    if (canonicalText.starts_with(kV8))
+        return RecommendationSemanticConfigurationVersion::v8;
     return std::nullopt;
 }
 
@@ -527,7 +531,8 @@ FeatureWarmupScope RecommendationFeatureWarmupScopeFromCanonicalText(
             "unsupported_recommendation_semantic_configuration_version");
     if (*version != RecommendationSemanticConfigurationVersion::v5 &&
         *version != RecommendationSemanticConfigurationVersion::v6 &&
-        *version != RecommendationSemanticConfigurationVersion::v7)
+        *version != RecommendationSemanticConfigurationVersion::v7 &&
+        *version != RecommendationSemanticConfigurationVersion::v8)
         return FeatureWarmupScope::LegacyColdBoundary;
     constexpr std::string_view kField = ";feature_warmup_scope=";
     const std::size_t fieldStart = canonicalText.rfind(kField);
@@ -571,7 +576,8 @@ std::size_t RecommendationDonchianLookbackFromCanonicalText(
         throw std::invalid_argument(
             "unsupported_recommendation_semantic_configuration_version");
     if (*version != RecommendationSemanticConfigurationVersion::v6 &&
-        *version != RecommendationSemanticConfigurationVersion::v7)
+        *version != RecommendationSemanticConfigurationVersion::v7 &&
+        *version != RecommendationSemanticConfigurationVersion::v8)
         return kDefaultDonchianLookback;
     constexpr std::string_view kField = ";donchian_lookback=";
     const std::size_t fieldStart = canonicalText.find(kField);
@@ -678,7 +684,8 @@ std::string EffectiveExperimentConfigurationCanonicalText(
         version == RecommendationSemanticConfigurationVersion::v3 ? 3 :
         version == RecommendationSemanticConfigurationVersion::v4 ? 4 :
         version == RecommendationSemanticConfigurationVersion::v5 ? 5 :
-        version == RecommendationSemanticConfigurationVersion::v6 ? 6 : 7;
+        version == RecommendationSemanticConfigurationVersion::v6 ? 6 :
+        version == RecommendationSemanticConfigurationVersion::v7 ? 7 : 8;
     out << "experiment_recommendation_semantic_configuration_v"
         << versionNumber
         << ";symbol=" << symbol
@@ -699,11 +706,13 @@ std::string EffectiveExperimentConfigurationCanonicalText(
         out << ";donchian20_mode=" << Donchian20ModeText(configuration.donchian20Mode);
     if (version == RecommendationSemanticConfigurationVersion::v5 ||
         version == RecommendationSemanticConfigurationVersion::v6 ||
-        version == RecommendationSemanticConfigurationVersion::v7)
+        version == RecommendationSemanticConfigurationVersion::v7 ||
+        version == RecommendationSemanticConfigurationVersion::v8)
         out << ";feature_warmup_scope=" << FeatureWarmupScopeText(
             configuration.featureWarmupScope);
     if (version == RecommendationSemanticConfigurationVersion::v6 ||
-        version == RecommendationSemanticConfigurationVersion::v7)
+        version == RecommendationSemanticConfigurationVersion::v7 ||
+        version == RecommendationSemanticConfigurationVersion::v8)
         out << ";donchian_lookback="
             << ValidateDonchianLookback(configuration.donchianLookback);
     return out.str();

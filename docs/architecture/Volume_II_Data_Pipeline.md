@@ -1,8 +1,8 @@
 # Volume II — Data Pipeline
 
 Status: Foundation outline
-Version: 0.1.0
-Last revised: 2026-07-15
+Version: 0.1.1
+Last revised: 2026-08-15
 
 ## 1. Purpose
 
@@ -81,6 +81,22 @@ ordered feature names. A Git commit alone is insufficient.
 Timestamps, symbols, ordering, duplicates, missing values, and finite numeric
 domains require explicit policy. Legacy data lacking snapshot identity may be
 usable for compatible research but MUST NOT be claimed as exact replay.
+
+### 5.4 Implemented LSTM relative tick-volume feature
+
+The canonical LSTM base-feature layout is append-only. Column 36 is the fixed
+causal 32-bar relative tick-volume feature:
+
+``log((vol_t + 1) / (mean(vol_(t-32)..vol_(t-1)) + 1))``.
+
+The reference uses up to 32 completed predecessor observations, excluding the
+current completed bar. The bootstrap row is zero; partial predecessor history
+is used as-is; and zero, invalid, or non-finite direct inputs have a finite,
+deterministic fallback. The active `candlestick` source's `vol` field is the
+authoritative tick-volume input. The fixed lookback is not an experiment
+parameter. Historical base prefixes and their model input widths remain 32/36,
+34/38, and 36/40; the current 37-column base tensor maps to `n_in=41` after
+the existing four appended return channels.
 
 ## 6. Transactions
 
@@ -187,4 +203,5 @@ and compatibility before implementation.
 
 | Version | Date | Change | ADR |
 |---|---|---|---|
+| 0.1.1 | 2026-08-15 | Recorded the fixed causal 32-bar relative tick-volume feature and 37/41 input contract. | — |
 | 0.1.0 | 2026-07-15 | Established the data-pipeline architecture outline. | — |

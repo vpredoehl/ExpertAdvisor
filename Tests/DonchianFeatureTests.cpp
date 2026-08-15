@@ -25,10 +25,10 @@ int main()
     catch (const std::invalid_argument&) { invalidRejected = true; }
     assert(invalidRejected);
     static_assert(legacy_feature_size == 32);
-    static_assert(feature_size == 34);
+    static_assert(donchian_feature_size == 34);
     static_assert(donchianUpCol == 32);
     static_assert(donchianDownCol == 33);
-    constexpr size_t effectiveModelWidth = feature_size + 4;
+    constexpr size_t effectiveModelWidth = donchian_feature_size + 4;
     static_assert(effectiveModelWidth == 38);
 
     std::vector<float> highs{101.0f, 103.0f, 102.0f};

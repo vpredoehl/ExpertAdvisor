@@ -32,6 +32,10 @@ struct Feature
 {
     float open, close, high, low;
     PriceTP time;
+    // Aggregated source tick volume (`candlestick.vol`). It follows `time`
+    // to preserve existing aggregate initialization of the OHLC/timestamp
+    // prefix in callers and tests.
+    float tickVolume = 0.0f;
 };
 
 std::istream& operator>>(std::istream&, PriceTP&);

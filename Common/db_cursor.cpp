@@ -215,6 +215,7 @@ bool db_input_iterator<Feature>::ReadPP()
     const std::string closeText = r[0]["close"].c_str();
     const std::string highText = r[0]["high"].c_str();
     const std::string lowText = r[0]["low"].c_str();
+    const std::string volumeText = r[0]["vol"].c_str();
 
     Feature parsed {};
     const bool dtOk = ParseTimestampStrict(dtText.c_str(), parsed.time);
@@ -222,7 +223,9 @@ bool db_input_iterator<Feature>::ReadPP()
     const bool closeOk = ParseFloatStrict(closeText.c_str(), parsed.close);
     const bool highOk = ParseFloatStrict(highText.c_str(), parsed.high);
     const bool lowOk = ParseFloatStrict(lowText.c_str(), parsed.low);
-    const bool parseOk = dtOk && openOk && closeOk && highOk && lowOk;
+    const bool volumeOk = ParseFloatStrict(volumeText.c_str(), parsed.tickVolume) &&
+        parsed.tickVolume >= 0.0f;
+    const bool parseOk = dtOk && openOk && closeOk && highOk && lowOk && volumeOk;
 
     pp = parsed;
 
@@ -238,11 +241,13 @@ bool db_input_iterator<Feature>::ReadPP()
             << ",close_ok=" << static_cast<int>(closeOk)
             << ",high_ok=" << static_cast<int>(highOk)
             << ",low_ok=" << static_cast<int>(lowOk)
+            << ",volume_ok=" << static_cast<int>(volumeOk)
             << ",dt_text=" << dtText
             << ",open_text=" << openText
             << ",close_text=" << closeText
             << ",high_text=" << highText
             << ",low_text=" << lowText
+            << ",volume_text=" << volumeText
             << ",query=" << cur->queryText
             << std::endl;
             ++cur->parseFailDiagCount;

@@ -223,12 +223,22 @@ int main()
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
     assert(identity.canonicalText ==
-        "experiment_recommendation_semantic_configuration_v7;symbol=eurusd;prediction_horizon=12;"
+        "experiment_recommendation_semantic_configuration_v8;symbol=eurusd;prediction_horizon=12;"
         "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
         "train_start_date=2010-01-01;train_end_date=2025-01-01;"
         "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
         "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
     assert(identity.hash == RecommendationCandidateHash(configuration));
+    const auto v7 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v7);
+    assert(v7.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v7;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
+    assert(identity.canonicalText != v7.canonicalText);
+    assert(identity.hash != v7.hash);
     const auto v6 = BuildRecommendationCandidateIdentity(
         configuration, RecommendationSemanticConfigurationVersion::v6);
     assert(v6.canonicalText ==
@@ -251,7 +261,9 @@ int main()
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v3.canonicalText) == RecommendationSemanticConfigurationVersion::v3);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
-               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v7);
+               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v8);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v7.canonicalText) == RecommendationSemanticConfigurationVersion::v7);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v6.canonicalText) == RecommendationSemanticConfigurationVersion::v6);
     const auto v5 = BuildRecommendationCandidateIdentity(
@@ -278,11 +290,14 @@ int main()
            EA::FeatureWarmupScope::FullHistoryWarmup);
     assert(RecommendationFeatureWarmupScopeFromCanonicalText(v6.canonicalText) ==
            EA::FeatureWarmupScope::FullHistoryWarmup);
+    assert(RecommendationFeatureWarmupScopeFromCanonicalText(v7.canonicalText) ==
+           EA::FeatureWarmupScope::FullHistoryWarmup);
     assert(RecommendationFeatureWarmupScopeFromCanonicalText(identity.canonicalText) ==
            EA::FeatureWarmupScope::FullHistoryWarmup);
     assert(RecommendationDonchianLookbackFromCanonicalText(v4.canonicalText) == 20);
     assert(RecommendationDonchianLookbackFromCanonicalText(v5.canonicalText) == 20);
     assert(RecommendationDonchianLookbackFromCanonicalText(v6.canonicalText) == 20);
+    assert(RecommendationDonchianLookbackFromCanonicalText(v7.canonicalText) == 20);
     assert(RecommendationDonchianLookbackFromCanonicalText(identity.canonicalText) == 20);
     EffectiveExperimentConfiguration cold = configuration;
     cold.featureWarmupScope = EA::FeatureWarmupScope::LegacyColdBoundary;

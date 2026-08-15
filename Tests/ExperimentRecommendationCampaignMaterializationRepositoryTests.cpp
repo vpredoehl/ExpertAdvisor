@@ -103,7 +103,7 @@ Fixture BuildFixture(
     bool paired = false,
     long long campaignApprovalId = 42,
     RecommendationSemanticConfigurationVersion semanticVersion =
-        RecommendationSemanticConfigurationVersion::v7,
+        RecommendationSemanticConfigurationVersion::v8,
     Donchian20Mode donchian20Mode = Donchian20Mode::Enabled,
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::FullHistoryWarmup)
@@ -292,7 +292,7 @@ int main()
         false, 42, RecommendationSemanticConfigurationVersion::v3,
         Donchian20Mode::ZeroAblation);
     assert(fixture.recommendationSemanticCanonical.find(
-               "experiment_recommendation_semantic_configuration_v7;") == 0);
+               "experiment_recommendation_semantic_configuration_v8;") == 0);
     assert(fixture.recommendationSemanticCanonical.find(
                ";donchian20_mode=enabled") != std::string::npos);
     assert(fixture.recommendationSemanticCanonical.find(
@@ -300,8 +300,8 @@ int main()
     assert(fixture.recommendationSemanticCanonical.find(
                ";donchian_lookback=20") != std::string::npos);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
-               fixture.recommendationSemanticCanonical) ==
-           RecommendationSemanticConfigurationVersion::v7);
+           fixture.recommendationSemanticCanonical) ==
+           RecommendationSemanticConfigurationVersion::v8);
     assert(historicalV3.recommendationSemanticCanonical.find(
                "experiment_recommendation_semantic_configuration_v3;") == 0);
     assert(historicalV3.recommendationSemanticCanonical.find(

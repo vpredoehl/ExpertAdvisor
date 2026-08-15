@@ -451,7 +451,7 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
               << ",raw_close=1"
               << ",raw_high=1"
               << ",raw_low=1"
-              << ",raw_volume=0"
+              << ",raw_volume=1"
               << ",raw_target=0"
               << std::endl;
     DiagnosticOut() << "DIAG_FEATURE_CONFIG"
@@ -477,10 +477,6 @@ void PrintPhase2TensorDiagnostics(const EA::LSTM& l,
               << ",classification_inference_pre_lstm_clamp=0"
               << ",regression_inference_pre_lstm_nonfinite_fail=1"
               << ",regression_inference_pre_lstm_clamp=10"
-              << std::endl;
-    DiagnosticOut() << "DIAG_DATA_WARN"
-              << ",range_kind=" << rangeKind
-              << ",kind=volume_not_ingested_in_active_postgresql_path"
               << std::endl;
     DiagnosticOut() << "DIAG_DATA_WARN"
               << ",range_kind=" << rangeKind
