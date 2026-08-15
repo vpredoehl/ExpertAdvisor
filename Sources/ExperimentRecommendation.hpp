@@ -149,6 +149,8 @@ RecommendationSemanticConfigurationVersionFromCanonicalText(
     const std::string& canonicalText);
 FeatureWarmupScope RecommendationFeatureWarmupScopeFromCanonicalText(
     const std::string& canonicalText);
+Donchian20Mode RecommendationDonchian20ModeFromCanonicalText(
+    const std::string& canonicalText);
 std::string RecommendationSemanticConfigurationFromInvocationCanonicalText(
     const std::string& canonicalText);
 std::string CanonicalExperimentDateText(const std::string& value);

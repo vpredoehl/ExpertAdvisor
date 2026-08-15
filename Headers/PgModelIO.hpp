@@ -14,6 +14,8 @@
 #include "LSTM.hpp"
 #include "CanonicalSymbol.hpp"
 #include "FeatureWarmupScope.hpp"
+#include "Donchian20Mode.hpp"
+#include "ModelInputContract.hpp"
 
 
 #pragma clang diagnostic push
@@ -75,6 +77,12 @@ inline std::string toPgArrayLiteral(const std::vector<double>& vals)
 // Save a MetaNN matrix into the `matrix` table via replace_parameter
 class PgModelIO {
 public:
+    struct PersistedModelMeta
+    {
+        int schemaVersion = 0;
+        std::size_t inputWidth = 0;
+        std::size_t hiddenSize = 0;
+    };
     static constexpr int kTrainConfigMetaSchemaVersion = 1;
     static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
     static constexpr int kTrainConfigMetaFieldCount = 8;
@@ -150,7 +158,9 @@ public:
                         const std::string& fromDate = {},
                         const std::string& toDate = {},
                         EA::FeatureWarmupScope featureWarmupScope =
-                            EA::kDefaultFeatureWarmupScope)
+                            EA::kDefaultFeatureWarmupScope,
+                        Donchian20Mode donchian20Mode =
+                            kDefaultDonchian20Mode)
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -163,11 +173,34 @@ public:
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
         saveFeatureWarmupScopeMeta(w, modelId, featureWarmupScope);
+        saveDonchian20ModeMeta(w, modelId, donchian20Mode);
         if (symbol.empty())
             throw std::runtime_error("saveAll requires a canonical training symbol");
         saveTrainSymbolMeta(w, modelId, symbol);
         if (!fromDate.empty() || !toDate.empty())
             saveTrainRangeMeta(w, modelId, fromDate, toDate);
+    }
+
+    static void saveDonchian20ModeMeta(pqxx::work& w,
+                                       long long modelId,
+                                       Donchian20Mode mode)
+    {
+        saveAsciiMeta(w, modelId, "donchian20_mode_meta", Donchian20ModeText(mode));
+    }
+
+    // Missing metadata predates the feature increment. Its established
+    // contract is enabled, but a legacy n_in=36 model remains structurally
+    // projected to its 32-column prefix by ModelInputContract.
+    static Donchian20Mode loadDonchian20ModeMeta(pqxx::work& w,
+                                                 long long modelId)
+    {
+        const pqxx::result exists = w.exec_params(
+            "SELECT 1 FROM matrix WHERE model_id=$1 "
+            "AND param_name='donchian20_mode_meta' LIMIT 1;", modelId);
+        if (exists.empty())
+            return kDefaultDonchian20Mode;
+        return ParseDonchian20Mode(
+            decodeAsciiMeta(w, modelId, "donchian20_mode_meta"));
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:
@@ -395,34 +428,53 @@ private:
 
 public:
 
+    struct ParamDims { int n_rows; int n_cols; };
+
+    static PersistedModelMeta loadRequiredModelMeta(pqxx::work& w,
+                                                    long long modelId)
+    {
+        const auto dims = loadParameterDims(w, modelId, "model_meta");
+        const auto vals = loadParameterValues(w, modelId, "model_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
+            throw std::runtime_error("model_meta has invalid shape; expected 1x3");
+        const int schemaVersion = static_cast<int>(std::llround(vals[0]));
+        if (schemaVersion != 1 || !std::isfinite(vals[1]) || !std::isfinite(vals[2]) ||
+            std::llround(vals[1]) != vals[1] || std::llround(vals[2]) != vals[2] ||
+            vals[1] <= 0.0 || vals[2] <= 0.0)
+            throw std::runtime_error("model_meta has invalid schema or dimensions");
+        const std::size_t inputWidth = static_cast<std::size_t>(vals[1]);
+        const std::size_t hiddenSize = static_cast<std::size_t>(vals[2]);
+        (void)EA::ContractForModelInputWidth(inputWidth);
+
+        const auto parameterDims = loadParameterDims(w, modelId, "param");
+        if (parameterDims.n_rows <= 0 || parameterDims.n_cols <= 0 ||
+            parameterDims.n_cols % 4 != 0 ||
+            static_cast<std::size_t>(parameterDims.n_cols / 4) != hiddenSize ||
+            parameterDims.n_rows <= parameterDims.n_cols / 4)
+            throw std::runtime_error("param has invalid LSTM gate-matrix shape");
+        const std::size_t parameterInputWidth = static_cast<std::size_t>(
+            parameterDims.n_rows - parameterDims.n_cols / 4);
+        if (parameterInputWidth != inputWidth)
+            throw std::runtime_error("MODEL_META_PARAMETER_SHAPE_MISMATCH,model_meta_n_in=" +
+                                     std::to_string(inputWidth) + ",param_n_in=" +
+                                     std::to_string(parameterInputWidth));
+        return {schemaVersion, inputWidth, hiddenSize};
+    }
+
     // Try to load minimal model metadata and validate against current parameter shapes
     static bool tryLoadModelMeta(pqxx::work& w, long long modelId, const EA::LSTM& lstm)
     {
         try {
-            auto dims = loadParameterDims(w, modelId, "model_meta");
-            if (dims.n_rows != 1 || dims.n_cols != 3) return false;
-            auto vals = loadParameterValues(w, modelId, "model_meta");
-            if (vals.size() != 3) return false;
-
-            const int schemaVersion = static_cast<int>(vals[0]);
-            if (schemaVersion != 1) throw std::runtime_error("model_meta: unsupported schemaVersion");
-
-            // Derive from current param
+            const auto meta = loadRequiredModelMeta(w, modelId);
             const size_t rows = lstm.param.Shape()[0];
             const size_t cols = lstm.param.Shape()[1];
+            if (cols % 4 != 0 || rows <= cols / 4) return false;
             const size_t hidden_size = cols / 4;
             const size_t n_in = rows - hidden_size;
-
-            const int n_in_db = static_cast<int>(vals[1]);
-            const int h_db    = static_cast<int>(vals[2]);
-            if (n_in_db != static_cast<int>(n_in) || h_db != static_cast<int>(hidden_size))
-                throw std::runtime_error("model_meta mismatch: n_in/hidden_size differ from persisted values");
-            return true;
+            return meta.inputWidth == n_in && meta.hiddenSize == hidden_size;
         }
         catch (...) { return false;   }
     }
-
-    struct ParamDims { int n_rows; int n_cols; };
 
     static ParamDims loadParameterDims(pqxx::work& w,
                                        long long modelId,
@@ -471,7 +523,23 @@ public:
         try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
         try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
         (void)tryLoadTargetMeta(w, modelId, lstm);
-        (void)tryLoadModelMeta(w, modelId, lstm);
+        const size_t rows = lstm.param.Shape()[0];
+        const size_t cols = lstm.param.Shape()[1];
+        if (cols == 0 || cols % 4 != 0 || rows <= cols / 4 ||
+            rows - cols / 4 != static_cast<size_t>(lstm.InputFeatureCount()))
+            throw std::runtime_error("MODEL_PARAMETER_SHAPE_MISMATCH,loaded_n_in=" +
+                std::to_string(rows > cols / 4 ? rows - cols / 4 : 0) +
+                ",runtime_n_in=" + std::to_string(lstm.InputFeatureCount()));
+        try
+        {
+            (void)loadRequiredModelMeta(w, modelId);
+        }
+        catch (const std::exception& error)
+        {
+            if (std::string{error.what()}.find("No entries for parameter: model_meta") ==
+                std::string::npos)
+                throw;
+        }
     }
 
     static bool tryLoadTargetMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)

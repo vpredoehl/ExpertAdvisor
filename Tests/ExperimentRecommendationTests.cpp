@@ -309,6 +309,8 @@ int main()
     AssertIdentityChange(configuration,
         [](auto& value) { value.inferEndDate = "2026-01-02"; });
     AssertIdentityChange(configuration,
+        [](auto& value) { value.donchian20Mode = Donchian20Mode::ZeroAblation; });
+    AssertIdentityChange(configuration,
         [](auto& value) { value.coreLrMult.reset(); });
     AssertIdentityChange(configuration,
         [](auto& value) { value.inferStartDate.reset(); });

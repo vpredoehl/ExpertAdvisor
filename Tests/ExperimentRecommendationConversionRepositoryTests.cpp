@@ -46,6 +46,7 @@ ExperimentInvocationConfiguration SourceInvocation()
     invocation.configuration.trainEndDate = "2025-01-01";
     invocation.configuration.inferStartDate = "2025-01-01";
     invocation.configuration.inferEndDate = "2026-01-01";
+    invocation.configuration.donchian20Mode = Donchian20Mode::ZeroAblation;
     invocation.checkpointInterval = 15;
     invocation.resumeModelId = 77;
     return invocation;

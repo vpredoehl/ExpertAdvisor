@@ -15,6 +15,7 @@
 #include "Tensor.hpp"
 #include "LSTM.hpp"
 #include "PricePoint.hpp"
+#include "DonchianFeatures.hpp"
 
 using std::setw;
 
@@ -129,6 +130,21 @@ void Tensor::Add(Feature f)
 
     const float range =  h - l;
     p[5] = range;
+
+    // raw_high/raw_low contain only completed prior bars until this method
+    // appends the current observation at its end.
+    const auto [donchianUp, donchianDown] = ComputeCausalDonchian20(
+        raw_high, raw_low, f.close, kFeatureScale);
+    if (donchian20Mode == Donchian20Mode::Enabled)
+    {
+        p[donchianUpCol] = donchianUp;
+        p[donchianDownCol] = donchianDown;
+    }
+    else
+    {
+        p[donchianUpCol] = 0.0f;
+        p[donchianDownCol] = 0.0f;
+    }
 
     // Range expansion: (high - low) / avg_range, use rolling mean of raw ranges
     const float raw_range = f.high - f.low;

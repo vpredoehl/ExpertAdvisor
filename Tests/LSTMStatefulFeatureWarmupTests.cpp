@@ -19,7 +19,7 @@ extern "C" bool LstmRuntimeDiagnosticLoggingEnabled()
 namespace
 {
 
-constexpr std::size_t kBaseFeatureCount = 32;
+constexpr std::size_t kBaseFeatureCount = feature_size;
 constexpr std::size_t kModelFeatureCount =
     kBaseFeatureCount + EA::kMultiHorizonReturnLookbacks.size();
 
@@ -90,9 +90,10 @@ void AssertByteIdentical(const void* lhs, const void* rhs, std::size_t size)
 
 int main()
 {
+    static_assert(feature_size == 34);
     static_assert(feature_size == kBaseFeatureCount);
     static_assert(EA::kMultiHorizonReturnLookbacks.size() == 4);
-    static_assert(kModelFeatureCount == 36);
+    static_assert(kModelFeatureCount == 38);
 
     const auto source = MakeSourceRows(512);
     constexpr std::size_t requestedStart = 160;
@@ -115,9 +116,14 @@ int main()
     // row to zero instead of using predecessor source history.
     const Tensor coldBoundaryQuery = BuildTensor(source, requestedStart);
     const auto coldAtBoundary = BaseFeaturesAt(coldBoundaryQuery, 0);
-    for (const std::size_t column : {6u, 7u, 14u, 15u, 16u, 17u, 18u,
-                                     19u, 20u, 21u, 22u, 23u, 24u, 25u,
-                                     26u, 27u, 28u, 29u, 31u})
+    for (const std::size_t column : {std::size_t{6}, std::size_t{7},
+                                     std::size_t{14}, std::size_t{15}, std::size_t{16},
+                                     std::size_t{17}, std::size_t{18}, std::size_t{19},
+                                     std::size_t{20}, std::size_t{21}, std::size_t{22},
+                                     std::size_t{23}, std::size_t{24}, std::size_t{25},
+                                     std::size_t{26}, std::size_t{27}, std::size_t{28},
+                                     std::size_t{29}, std::size_t{31},
+                                     donchianUpCol, donchianDownCol})
     {
         assert(wideAtBoundary.at(column) != coldAtBoundary.at(column));
     }

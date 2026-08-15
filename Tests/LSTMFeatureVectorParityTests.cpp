@@ -6,12 +6,13 @@
 #include <vector>
 
 #include "ReturnFeatureHistory.hpp"
+#include "FeatureLayout.hpp"
 
 namespace
 {
 
 constexpr std::size_t kReturnFeatureCount = EA::kMultiHorizonReturnLookbacks.size();
-constexpr std::size_t kTensorFeatureCount = 32;
+constexpr std::size_t kTensorFeatureCount = feature_size;
 constexpr std::size_t kModelInputWidth = kTensorFeatureCount + kReturnFeatureCount;
 constexpr std::size_t kWindowRows = 64;
 
@@ -82,9 +83,9 @@ float ReturnAt(const FeatureWindow& window, std::size_t row, std::size_t horizon
 
 int main()
 {
-    static_assert(kTensorFeatureCount == 32);
     static_assert(kReturnFeatureCount == 4);
-    static_assert(kModelInputWidth == 36);
+    static_assert(kTensorFeatureCount == 34);
+    static_assert(kModelInputWidth == 38);
 
     constexpr std::size_t sourceRowCount = 256;
     std::vector<Ohlc> marketRows(sourceRowCount);

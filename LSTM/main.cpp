@@ -45,6 +45,8 @@
 #include "WorkerLifecycleDiagnostics.hpp"
 #include "ReturnFeatureHistory.hpp"
 #include "FeatureWarmupScope.hpp"
+#include "Donchian20Mode.hpp"
+#include "ModelInputContract.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -3784,6 +3786,7 @@ struct LaunchArgs
     std::optional<double> headWeightLrMult;
     std::optional<double> headBiasLrMult;
     std::optional<EA::FeatureWarmupScope> featureWarmupScope;
+    std::optional<Donchian20Mode> donchian20Mode;
     std::optional<int> checkpointEvery;
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> schedulerCheckpointEvalId;
@@ -3997,6 +4000,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--feature-warmup-scope requires a value");
             parsed.featureWarmupScope = EA::ParseFeatureWarmupScope(argv[++i]);
         }
+        else if (arg == "--donchian20-mode")
+        {
+            if (parsed.donchian20Mode.has_value())
+                throw std::invalid_argument("--donchian20-mode specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--donchian20-mode requires enabled or zero_ablation");
+            parsed.donchian20Mode = ParseDonchian20Mode(argv[++i]);
+        }
         else if (arg == "--infer-start-after-model-id")
         {
             if (parsed.inferStartAfterModelId.has_value())
@@ -4127,6 +4138,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.featureWarmupScope.has_value())
                     throw std::invalid_argument("--feature-warmup-scope specified more than once");
                 parsed.featureWarmupScope = EA::ParseFeatureWarmupScope(value);
+            }
+            else if (SplitOptionWithValue(arg, "--donchian20-mode", value))
+            {
+                if (parsed.donchian20Mode.has_value())
+                    throw std::invalid_argument("--donchian20-mode specified more than once");
+                parsed.donchian20Mode = ParseDonchian20Mode(value);
             }
             else if (SplitOptionWithValue(arg, "--infer-start-after-model-id", value))
             {
@@ -4355,6 +4372,7 @@ struct ResumeCheckpointConfig
     size_t optimizerUpdateCount = 0;
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::LegacyColdBoundary;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
 };
 
 TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
@@ -4392,6 +4410,7 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.completedEpoch = cfg.trainConfig.epochsTrained.value_or(0);
     cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
         w, modelId);
+    cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
     cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     PrintDatabaseModelSymbol(modelId, cfg.symbol);
     const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
@@ -4399,12 +4418,9 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.toDate = range.second;
 
     {
-        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
-            throw std::runtime_error("resume requires valid model_meta");
-        cfg.modelInputWidth = static_cast<int>(std::llround(vals[1]));
-        cfg.modelHiddenSize = static_cast<size_t>(std::llround(vals[2]));
+        const auto modelMeta = DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+        cfg.modelInputWidth = static_cast<int>(modelMeta.inputWidth);
+        cfg.modelHiddenSize = modelMeta.hiddenSize;
     }
 
     {
@@ -4476,6 +4492,60 @@ void PrintRuntimeConfig()
               << ",head_weight_lr_mult=" << head_weight_lr_mult
               << ",head_bias_lr_mult=" << head_bias_lr_mult
               << std::endl;
+}
+
+Donchian20Mode LoadExperimentDonchian20Mode(pqxx::work& w,
+                                            long long experimentId)
+{
+    const pqxx::result rows = w.exec_params(
+        "SELECT donchian20_mode FROM experiment WHERE experiment_id=$1;", experimentId);
+    if (rows.empty())
+        throw std::runtime_error("experiment_not_found_for_donchian20_mode");
+    return ParseDonchian20Mode(rows[0][0].as<std::string>());
+}
+
+void ValidateSchedulerDonchian20Mode(pqxx::work& w,
+                                     const LaunchArgs& launchArgs,
+                                     Donchian20Mode runtimeMode)
+{
+    std::optional<long long> experimentId = launchArgs.schedulerExperimentId;
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        const pqxx::result rows = w.exec_params(
+            "SELECT COALESCE(parent_experiment_id, experiment_id) "
+            "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty())
+            throw std::runtime_error("checkpoint_eval_not_found_for_donchian20_mode");
+        experimentId = rows[0][0].as<long long>();
+    }
+    if (!experimentId.has_value())
+        return;
+    const Donchian20Mode persistedMode =
+        LoadExperimentDonchian20Mode(w, *experimentId);
+    if (persistedMode != runtimeMode)
+        throw std::runtime_error(std::string{"scheduler experiment Donchian-20 mode mismatch: persisted="} +
+                                 Donchian20ModeText(persistedMode) + ", runtime=" +
+                                 Donchian20ModeText(runtimeMode));
+}
+
+std::optional<Donchian20Mode> LoadSchedulerDonchian20Mode(
+    pqxx::work& w,
+    const LaunchArgs& launchArgs)
+{
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        const pqxx::result rows = w.exec_params(
+            "SELECT COALESCE(parent_experiment_id, experiment_id) "
+            "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty())
+            throw std::runtime_error("checkpoint_eval_not_found_for_donchian20_mode");
+        return LoadExperimentDonchian20Mode(w, rows[0][0].as<long long>());
+    }
+    if (launchArgs.schedulerExperimentId.has_value())
+        return LoadExperimentDonchian20Mode(w, *launchArgs.schedulerExperimentId);
+    return std::nullopt;
 }
 
 const char* TargetTypeName(EA::LSTM::TargetType targetType)
@@ -4641,7 +4711,8 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                                      const std::string& fromDate,
                                                      const std::string& toDate,
                                                      EA::LSTM& lstm,
-                                                     EA::FeatureWarmupScope featureWarmupScope)
+                                                     EA::FeatureWarmupScope featureWarmupScope,
+                                                     Donchian20Mode donchian20Mode)
 {
     if (!launchArgs.checkpointEvery.has_value() || *launchArgs.checkpointEvery <= 0)
         return std::nullopt;
@@ -4687,7 +4758,7 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                      ParentModelIdForResume(resumeConfig));
     DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm,
                              rawPriceTableName, fromDate, toDate,
-                             featureWarmupScope);
+                             featureWarmupScope, donchian20Mode);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
               << " epoch=" << completedEpoch
@@ -4714,10 +4785,22 @@ const char* TrainConfigMetaFieldMapping()
 
 size_t RuntimeModelInputWidth(const Tensor& tensor)
 {
-    const size_t baseFeatureCount = (tensor.begin() != tensor.end())
-        ? static_cast<size_t>((*tensor.begin()).Shape()[1])
-        : 0;
-    return baseFeatureCount + BaselineReturnFeatureCount;
+    const size_t physicalTensorFeatureCount = (tensor.begin() != tensor.end())
+        ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
+    return EA::ResolveModelInputContract(
+        physicalTensorFeatureCount + BaselineReturnFeatureCount,
+        physicalTensorFeatureCount).modelInputWidth;
+}
+
+size_t RuntimeModelInputWidth(const Tensor& tensor,
+                              std::optional<std::size_t> modelInputWidth)
+{
+    if (!modelInputWidth.has_value())
+        return RuntimeModelInputWidth(tensor);
+    const size_t physicalTensorFeatureCount = (tensor.begin() != tensor.end())
+        ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
+    return EA::ResolveModelInputContract(*modelInputWidth,
+                                         physicalTensorFeatureCount).modelInputWidth;
 }
 
 std::string JoinStrings(const std::vector<std::string>& values, const char* separator)
@@ -4978,7 +5061,9 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             const int schemaVersion = static_cast<int>(vals[0]);
             const int modelInputWidth = static_cast<int>(vals[1]);
             const int modelHiddenSize = static_cast<int>(vals[2]);
-            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
+            const size_t physicalTensorFeatureCount =
+                (tensor.begin() != tensor.end())
+                    ? static_cast<size_t>((*tensor.begin()).Shape()[1]) : 0;
             const int runtimeHiddenSize = static_cast<int>(hidden_size);
 
             if (schemaVersion != 1)
@@ -4986,9 +5071,19 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
                 printMismatch("model_meta_schema_version", schemaVersion, 1);
                 sectionMatches = false;
             }
-            if (modelInputWidth != runtimeInputWidth)
+            try
             {
-                printMismatch("feature_count", modelInputWidth, runtimeInputWidth);
+                const auto contract = EA::ResolveModelInputContract(
+                    static_cast<size_t>(modelInputWidth), physicalTensorFeatureCount);
+                if (contract.modelInputWidth != static_cast<size_t>(modelInputWidth))
+                {
+                    printMismatch("feature_count", modelInputWidth, contract.modelInputWidth);
+                    sectionMatches = false;
+                }
+            }
+            catch (const std::exception& error)
+            {
+                printMismatch("feature_count", modelInputWidth, error.what());
                 sectionMatches = false;
             }
             if (modelHiddenSize != runtimeHiddenSize)
@@ -5235,6 +5330,7 @@ struct PersistedInferenceConfig
     EA::LSTM::TargetType targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::LegacyColdBoundary;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
 };
 
 template <typename T>
@@ -5501,17 +5597,12 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
         throw std::runtime_error("unsupported persisted num_layers; this binary supports only 1");
 
     {
-        auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-        if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
-            throw std::runtime_error("model_meta missing required 1x3 inference fields");
-        const int schemaVersion = static_cast<int>(std::llround(vals[0]));
-        if (schemaVersion != 1)
-            throw std::runtime_error("unsupported model_meta schema_version");
-        cfg.modelInputWidth = static_cast<int>(std::llround(vals[1]));
-        cfg.modelHiddenSize = static_cast<size_t>(std::llround(vals[2]));
+        const auto modelMeta = DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+        cfg.modelInputWidth = static_cast<int>(modelMeta.inputWidth);
+        cfg.modelHiddenSize = modelMeta.hiddenSize;
         cfg.hasModelMeta = true;
     }
+    cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
 
     try
     {
@@ -5575,6 +5666,7 @@ void PrintResolvedInferenceConfig(const PersistedInferenceConfig& cfg)
               << ",window_size=" << cfg.trainConfig.windowSize
               << ",target_type=" << TargetTypeName(cfg.targetType)
               << ",label_rule_id=" << cfg.trainConfig.labelRuleId
+              << ",donchian20_mode=" << Donchian20ModeText(cfg.donchian20Mode)
               << ",source=persisted_model"
               << std::endl;
 }
@@ -5621,6 +5713,7 @@ struct InferAllCandidate
 {
     long long modelId = -1;
     std::string name;
+    std::size_t modelInputWidth = 0;
     std::optional<size_t> completedEpochs;
     bool legacyMissingSymbol = false;
     bool metadataGap = false;
@@ -5855,10 +5948,12 @@ struct InferenceEvaluationResult
 EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
                                       float initialLongTerm,
                                       float initialShortTerm,
-                                      EA::LSTM::TargetType targetType)
+                                      EA::LSTM::TargetType targetType,
+                                      std::optional<std::size_t> modelInputWidth = std::nullopt)
 {
     ScopedDiagnosticCoutSilencer silence;
-    return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType };
+    return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType,
+                      modelInputWidth };
 }
 
 InferenceIdentity BuildInferenceIdentity(long long modelId,
@@ -6351,22 +6446,15 @@ bool InferAllCandidateCompatible(pqxx::work& w,
     {
         try
         {
-            auto dims = DBIO::PgModelIO::loadParameterDims(w, modelId, "model_meta");
-            auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "model_meta");
-            if (dims.n_rows != 1 || dims.n_cols != 3 || vals.size() != 3)
-            {
-                return invalidMetadata("model_meta", "invalid_shape");
-            }
-            const int schemaVersion = static_cast<int>(std::llround(vals[0]));
-            const int modelInputWidth = static_cast<int>(std::llround(vals[1]));
-            const int modelHiddenSize = static_cast<int>(std::llround(vals[2]));
-            if (schemaVersion != 1)
-                return configMismatch("model_meta_schema_version", 1, schemaVersion);
-            const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(tensor));
-            if (modelInputWidth != runtimeInputWidth)
-                return configMismatch("feature_count", runtimeInputWidth, modelInputWidth);
-            if (modelHiddenSize != static_cast<int>(hidden_size))
-                return configMismatch("hidden_size", hidden_size, modelHiddenSize);
+            const auto modelMeta = DBIO::PgModelIO::loadRequiredModelMeta(w, modelId);
+            const std::size_t physicalTensorFeatureCount =
+                (tensor.begin() != tensor.end())
+                    ? static_cast<std::size_t>((*tensor.begin()).Shape()[1]) : 0;
+            (void)EA::ResolveModelInputContract(modelMeta.inputWidth,
+                                                physicalTensorFeatureCount);
+            candidate.modelInputWidth = modelMeta.inputWidth;
+            if (modelMeta.hiddenSize != hidden_size)
+                return configMismatch("hidden_size", hidden_size, modelMeta.hiddenSize);
         }
         catch (const std::exception& e)
         {
@@ -6576,7 +6664,8 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                         << " reason=metadata_gap_included"
                         << std::endl;
 
-    EA::LSTM lstm = CreateLstmForRuntimeLogLevel(tensor, 1, 0, requestedTargetType);
+    EA::LSTM lstm = CreateLstmForRuntimeLogLevel(
+        tensor, 1, 0, requestedTargetType, candidate.modelInputWidth);
     PrintRuntimeLrConfig(lstm);
     DiagnosticOut() << "DIAG_LSTM_BINDING"
                     << ",table=" << rawPriceTableName
@@ -7105,6 +7194,28 @@ int main(int argc, const char * argv[])
                 toDate);
         }
 
+        Donchian20Mode runtimeDonchian20Mode = kDefaultDonchian20Mode;
+        if (resumeConfig.has_value())
+            runtimeDonchian20Mode = resumeConfig->donchian20Mode;
+        else if (inferenceConfig.has_value())
+            runtimeDonchian20Mode = inferenceConfig->donchian20Mode;
+        else if (gRuntimeInferenceMode && launchArgs.modelId.has_value())
+            runtimeDonchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(
+                w_LSTM, *launchArgs.modelId);
+        else if (const auto schedulerMode =
+                     LoadSchedulerDonchian20Mode(w_LSTM, launchArgs))
+            runtimeDonchian20Mode = *schedulerMode;
+        else if (launchArgs.donchian20Mode.has_value())
+            runtimeDonchian20Mode = *launchArgs.donchian20Mode;
+
+        if (launchArgs.donchian20Mode.has_value() &&
+            *launchArgs.donchian20Mode != runtimeDonchian20Mode)
+            throw std::runtime_error(
+                std::string{"Donchian-20 mode mismatch: persisted="} +
+                Donchian20ModeText(runtimeDonchian20Mode) + ", runtime=" +
+                Donchian20ModeText(*launchArgs.donchian20Mode));
+        ValidateSchedulerDonchian20Mode(w_LSTM, launchArgs, runtimeDonchian20Mode);
+
         DiagnosticOut() << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
         DiagnosticOut() << "window_size=" << window_size << '\n';
         DiagnosticOut() << "prediction_horizon=" << prediction_horizon << '\n';
@@ -7198,7 +7309,7 @@ int main(int argc, const char * argv[])
             std::string query = sourceQuery;
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
-            Tensor t{ rawPriceTableName };
+            Tensor t{ rawPriceTableName, runtimeDonchian20Mode };
             
             DiagnosticOut() << "Candlestick query: " << query << "\n";
             DiagnosticOut() << "FEATURE_WARMUP_SCOPE"
@@ -7212,28 +7323,25 @@ int main(int argc, const char * argv[])
             while (csb != cse) t.Add(*csb++);
             if (logicalOutputStartIndex > t.RowCount())
                 throw std::runtime_error("feature warmup query returned more rows than the source tensor");
-            if (resumeConfig.has_value())
+            const std::optional<std::size_t> persistedModelInputWidth =
+                resumeConfig.has_value()
+                    ? std::optional<std::size_t>{static_cast<std::size_t>(resumeConfig->modelInputWidth)}
+                    : (inferenceConfig.has_value()
+                           ? std::optional<std::size_t>{static_cast<std::size_t>(inferenceConfig->modelInputWidth)}
+                           : std::nullopt);
+            if (persistedModelInputWidth.has_value())
             {
-                const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
-                if (runtimeInputWidth != resumeConfig->modelInputWidth)
+                try
                 {
-                    std::cout << "MODEL_CONFIG_MISMATCH"
-                              << ",field=feature_count"
-                              << ",model=" << resumeConfig->modelInputWidth
-                              << ",runtime=" << runtimeInputWidth
-                              << std::endl;
-                    return 1;
+                    (void)RuntimeModelInputWidth(t, persistedModelInputWidth);
                 }
-            }
-            if (inferenceConfig.has_value())
-            {
-                const int runtimeInputWidth = static_cast<int>(RuntimeModelInputWidth(t));
-                if (runtimeInputWidth != inferenceConfig->modelInputWidth)
+                catch (const std::exception& error)
                 {
                     std::cout << "MODEL_CONFIG_MISMATCH"
                               << ",field=feature_count"
-                              << ",model=" << inferenceConfig->modelInputWidth
-                              << ",runtime=" << runtimeInputWidth
+                              << ",model=" << *persistedModelInputWidth
+                              << ",runtime=" << RuntimeModelInputWidth(t)
+                              << ",diagnostic=" << error.what()
                               << std::endl;
                     return 1;
                 }
@@ -7254,7 +7362,8 @@ int main(int argc, const char * argv[])
                                             logicalOutputStartIndex,
                                             requestedTargetType,
                                             inferenceConfig);
-            EA::LSTM l = CreateLstmForRuntimeLogLevel(t, 1, 0, requestedTargetType);
+            EA::LSTM l = CreateLstmForRuntimeLogLevel(
+                t, 1, 0, requestedTargetType, persistedModelInputWidth);
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
@@ -7307,6 +7416,13 @@ int main(int argc, const char * argv[])
                         l.completedEpochs = resumeConfig->completedEpoch;
                         std::cout << "RESUME_OPTIMIZER_STATE_RESTORED=1" << std::endl;
                     }
+                    const Donchian20Mode modelMode =
+                        DBIO::PgModelIO::loadDonchian20ModeMeta(w_LSTM, modelIdToLoad);
+                    if (modelMode != runtimeDonchian20Mode)
+                        throw std::runtime_error(
+                            std::string{"model/runtime Donchian-20 mode mismatch: model="} +
+                            Donchian20ModeText(modelMode) + ", runtime=" +
+                            Donchian20ModeText(runtimeDonchian20Mode));
                     loadedModelId = modelIdToLoad;
                     startedFromScratch = false;
                     DiagnosticOut() << "Loaded model_id=" << *loadedModelId
@@ -7495,7 +7611,8 @@ int main(int argc, const char * argv[])
                                                     fromDate,
                                                     toDate,
                                                     l,
-                                                    featureWarmupScope);
+                                                    featureWarmupScope,
+                                                    runtimeDonchian20Mode);
                     if (checkpointModelId.has_value())
                     {
                         QueueCheckpointInferenceIfEligible(launchArgs.schedulerExperimentId,
@@ -7617,7 +7734,8 @@ int main(int argc, const char * argv[])
 
                     DBIO::PgModelIO::saveAll(w_LSTM, modelId, l,
                                               rawPriceTableName, fromDate, toDate,
-                                              featureWarmupScope);
+                                              featureWarmupScope,
+                                              runtimeDonchian20Mode);
                     w_LSTM.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())

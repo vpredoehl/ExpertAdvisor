@@ -549,6 +549,29 @@ FeatureWarmupScope RecommendationFeatureWarmupScopeFromCanonicalText(
     return ParseFeatureWarmupScope(value);
 }
 
+Donchian20Mode RecommendationDonchian20ModeFromCanonicalText(
+    const std::string& canonicalText)
+{
+    const auto version =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(canonicalText);
+    if (!version)
+        throw std::invalid_argument(
+            "unsupported_recommendation_semantic_configuration_version");
+    if (*version == RecommendationSemanticConfigurationVersion::v3)
+        return kDefaultDonchian20Mode;
+    constexpr std::string_view kField = ";donchian20_mode=";
+    const std::size_t fieldStart = canonicalText.find(kField);
+    if (fieldStart == std::string::npos ||
+        fieldStart + kField.size() >= canonicalText.size())
+        throw std::invalid_argument(
+            "recommendation_semantic_configuration_missing_donchian20_mode");
+    const std::size_t valueStart = fieldStart + kField.size();
+    const std::size_t valueEnd = canonicalText.find(';', valueStart);
+    return ParseDonchian20Mode(canonicalText.substr(
+        valueStart, valueEnd == std::string::npos
+                        ? std::string::npos : valueEnd - valueStart));
+}
+
 std::string RecommendationPolicyCanonicalText(
     const RecommendationPolicy& policy)
 {

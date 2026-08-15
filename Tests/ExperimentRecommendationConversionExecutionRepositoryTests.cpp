@@ -53,7 +53,10 @@ ExperimentInvocationConfiguration SourceInvocation()
     return invocation;
 }
 
-ProposedExperimentSpecification Proposal(double proposed, int variant)
+ProposedExperimentSpecification Proposal(
+    double proposed,
+    int variant,
+    Donchian20Mode donchian20Mode = Donchian20Mode::Enabled)
 {
     RecommendationConversionRequest request;
     request.recommendationExists = true;
@@ -62,6 +65,7 @@ ProposedExperimentSpecification Proposal(double proposed, int variant)
     request.sourceExperimentId = 17;
     request.recommendationSourceExperimentId = 17;
     request.sourceInvocation = SourceInvocation();
+    request.sourceInvocation.configuration.donchian20Mode = donchian20Mode;
     request.mutations.push_back(
         {kCoreLrMult, "1", CanonicalRecommendationDouble(proposed)});
     request.reviewAuthorization.present = true;
@@ -216,7 +220,7 @@ int main()
         pqxx::connection runtime{runtimeConnectionString};
         assert(RecommendationConversionExecutionSchemaExists(runtime));
         const auto firstProposal = PersistRecommendationConversionProposal(
-            runtime, Proposal(1.25, 1));
+            runtime, Proposal(1.25, 1, Donchian20Mode::ZeroAblation));
         const long long firstId = firstProposal.persisted.proposalId;
 
         const auto missing = ExecuteApprovedRecommendationConversionProposal(
@@ -325,7 +329,8 @@ int main()
             verify.exec("SET LOCAL search_path TO " + verify.quote_name(schema) + ";");
             const pqxx::row row = verify.exec(
                 "SELECT status,phase,worker_pid,current_operation,current_epoch,"
-                "invocation_mode,marker FROM experiment WHERE experiment_id=$1;",
+                "invocation_mode,marker,donchian20_mode,feature_warmup_scope "
+                "FROM experiment WHERE experiment_id=$1;",
                 pqxx::params{created.execution->experimentId}).one_row();
             assert(row["status"].as<std::string>() == "paused");
             assert(row["phase"].as<std::string>() == "train");
@@ -335,6 +340,10 @@ int main()
             assert(row["invocation_mode"].as<std::string>() ==
                    "recommendation_conversion");
             assert(row["marker"].is_null());
+            assert(row["donchian20_mode"].as<std::string>() ==
+                   "zero_ablation");
+            assert(row["feature_warmup_scope"].as<std::string>() ==
+                   "full_history_warmup");
         }
 
         // A later review reversal does not duplicate or erase a completed
@@ -397,7 +406,7 @@ int main()
         // A distinct proposal for an already represented invocation fails
         // atomically rather than linking unrelated existing work.
         const auto conflictingProposal = PersistRecommendationConversionProposal(
-            runtime, Proposal(1.25, 99));
+            runtime, Proposal(1.25, 99, Donchian20Mode::ZeroAblation));
         (void)RecordRecommendationConversionProposalReviewDecision(
             runtime,
             Review(conflictingProposal.persisted.proposalId,

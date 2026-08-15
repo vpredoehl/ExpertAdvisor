@@ -132,10 +132,13 @@ PersistedRecommendationConversionProposal MapProposal(const pqxx::row& row)
         row["source_invocation_canonical"].as<std::string>();
     proposal.proposedInvocationCanonical =
         row["proposed_invocation_canonical"].as<std::string>();
+    const std::string semanticCanonical =
+        RecommendationSemanticConfigurationFromInvocationCanonicalText(
+            proposal.proposedInvocationCanonical);
+    proposal.proposedInvocation.configuration.donchian20Mode =
+        RecommendationDonchian20ModeFromCanonicalText(semanticCanonical);
     proposal.proposedInvocation.configuration.featureWarmupScope =
-        RecommendationFeatureWarmupScopeFromCanonicalText(
-            RecommendationSemanticConfigurationFromInvocationCanonicalText(
-                proposal.proposedInvocationCanonical));
+        RecommendationFeatureWarmupScopeFromCanonicalText(semanticCanonical);
     proposal.conversionIdentityCanonical =
         row["conversion_identity_canonical"].as<std::string>();
     proposal.conversionIdentityHash =
