@@ -15,6 +15,7 @@
 #include "CanonicalSymbol.hpp"
 #include "FeatureWarmupScope.hpp"
 #include "Donchian20Mode.hpp"
+#include "DonchianLookback.hpp"
 #include "ModelInputContract.hpp"
 
 
@@ -160,7 +161,9 @@ public:
                         EA::FeatureWarmupScope featureWarmupScope =
                             EA::kDefaultFeatureWarmupScope,
                         Donchian20Mode donchian20Mode =
-                            kDefaultDonchian20Mode)
+                            kDefaultDonchian20Mode,
+                        std::size_t donchianLookback =
+                            kDefaultDonchianLookback)
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -174,6 +177,7 @@ public:
         saveOptimizerMeta(w, modelId, lstm);
         saveFeatureWarmupScopeMeta(w, modelId, featureWarmupScope);
         saveDonchian20ModeMeta(w, modelId, donchian20Mode);
+        saveDonchianLookbackMeta(w, modelId, donchianLookback);
         if (symbol.empty())
             throw std::runtime_error("saveAll requires a canonical training symbol");
         saveTrainSymbolMeta(w, modelId, symbol);
@@ -201,6 +205,28 @@ public:
             return kDefaultDonchian20Mode;
         return ParseDonchian20Mode(
             decodeAsciiMeta(w, modelId, "donchian20_mode_meta"));
+    }
+
+    static void saveDonchianLookbackMeta(pqxx::work& w,
+                                         long long modelId,
+                                         std::size_t lookback)
+    {
+        saveAsciiMeta(w, modelId, "donchian_lookback_meta",
+                      std::to_string(ValidateDonchianLookback(lookback)));
+    }
+
+    // Missing metadata predates the configurable lookback increment and
+    // therefore carries the closed Donchian-20 definition.
+    static std::size_t loadDonchianLookbackMeta(pqxx::work& w,
+                                                long long modelId)
+    {
+        const pqxx::result exists = w.exec_params(
+            "SELECT 1 FROM matrix WHERE model_id=$1 "
+            "AND param_name='donchian_lookback_meta' LIMIT 1;", modelId);
+        if (exists.empty())
+            return kDefaultDonchianLookback;
+        return ParseDonchianLookback(
+            decodeAsciiMeta(w, modelId, "donchian_lookback_meta"));
     }
 
     // Save target mapping metadata as a 1x6 matrix in order:

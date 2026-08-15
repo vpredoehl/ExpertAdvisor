@@ -133,8 +133,8 @@ void Tensor::Add(Feature f)
 
     // raw_high/raw_low contain only completed prior bars until this method
     // appends the current observation at its end.
-    const auto [donchianUp, donchianDown] = ComputeCausalDonchian20(
-        raw_high, raw_low, f.close, kFeatureScale);
+    const auto [donchianUp, donchianDown] = ComputeCausalDonchian(
+        raw_high, raw_low, f.close, kFeatureScale, donchianLookback);
     if (donchian20Mode == Donchian20Mode::Enabled)
     {
         p[donchianUpCol] = donchianUp;

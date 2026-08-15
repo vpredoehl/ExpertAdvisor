@@ -97,7 +97,7 @@ struct Fixture
 
 Fixture BuildFixture(
     RecommendationSemanticConfigurationVersion semanticVersion =
-        RecommendationSemanticConfigurationVersion::v5,
+        RecommendationSemanticConfigurationVersion::v6,
     Donchian20Mode donchian20Mode = Donchian20Mode::Enabled,
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::FullHistoryWarmup)
@@ -265,14 +265,16 @@ int main()
         RecommendationSemanticConfigurationVersion::v3,
         Donchian20Mode::ZeroAblation);
     assert(fixture.recommendationSemanticCanonical.find(
-               "experiment_recommendation_semantic_configuration_v5;") == 0);
+               "experiment_recommendation_semantic_configuration_v6;") == 0);
     assert(fixture.recommendationSemanticCanonical.find(
                ";donchian20_mode=enabled") != std::string::npos);
     assert(fixture.recommendationSemanticCanonical.find(
                ";feature_warmup_scope=full_history_warmup") != std::string::npos);
+    assert(fixture.recommendationSemanticCanonical.find(
+               ";donchian_lookback=20") != std::string::npos);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                fixture.recommendationSemanticCanonical) ==
-           RecommendationSemanticConfigurationVersion::v5);
+           RecommendationSemanticConfigurationVersion::v6);
     assert(historicalV3.recommendationSemanticCanonical.find(
                "experiment_recommendation_semantic_configuration_v3;") == 0);
     assert(historicalV3.recommendationSemanticCanonical.find(
@@ -295,7 +297,7 @@ int main()
                    "target_epochs integer,checkpoint_interval integer,"
                    "train_start timestamptz,train_end timestamptz,"
                    "infer_start timestamptz,infer_end timestamptz,"
-                   "resume_model_id bigint,donchian20_mode text,feature_warmup_scope text);"
+                   "resume_model_id bigint,donchian20_mode text,donchian_lookback integer,feature_warmup_scope text);"
                    "CREATE TABLE experiment_recommendation("
                    "recommendation_id bigint PRIMARY KEY,status text,"
                    "source_experiment_id bigint,"
@@ -351,7 +353,7 @@ int main()
             "INSERT INTO experiment VALUES(501,'eurusd',12,0.001,1.0,1.0,"
             "120,20,'2026-01-01 00:00:00 America/Chicago',"
             "'2026-02-01 00:00:00 America/Chicago',NULL,NULL,NULL,'enabled',"
-            "'full_history_warmup');");
+            "20,'full_history_warmup');");
         setup.exec(
             "INSERT INTO experiment_recommendation VALUES("
             "1,'approved',501,$1,$2,$3,$4,'core_lr_mult',$5,$6);",

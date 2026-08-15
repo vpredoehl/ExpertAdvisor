@@ -137,6 +137,8 @@ PersistedRecommendationConversionProposal MapProposal(const pqxx::row& row)
             proposal.proposedInvocationCanonical);
     proposal.proposedInvocation.configuration.donchian20Mode =
         RecommendationDonchian20ModeFromCanonicalText(semanticCanonical);
+    proposal.proposedInvocation.configuration.donchianLookback =
+        RecommendationDonchianLookbackFromCanonicalText(semanticCanonical);
     proposal.proposedInvocation.configuration.featureWarmupScope =
         RecommendationFeatureWarmupScopeFromCanonicalText(semanticCanonical);
     proposal.conversionIdentityCanonical =

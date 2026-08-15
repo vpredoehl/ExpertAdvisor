@@ -57,6 +57,8 @@ EffectiveExperimentConfiguration MapExperimentConfiguration(
         row, "candidate_infer_end_date");
     value.donchian20Mode = ParseDonchian20Mode(
         row["candidate_donchian20_mode"].as<std::string>());
+    value.donchianLookback = ParseDonchianLookback(
+        row["candidate_donchian_lookback"].as<std::string>());
     value.featureWarmupScope = ParseFeatureWarmupScope(
         row["candidate_feature_warmup_scope"].as<std::string>());
     return value;
@@ -75,6 +77,7 @@ std::vector<RecommendationEvaluationExperimentConflict> FindConflicts(
         "candidate_train_start_date,candidate_train_end_date,"
         "candidate_infer_start_date,candidate_infer_end_date,"
         "candidate_donchian20_mode,"
+        "candidate_donchian_lookback,"
         "candidate_feature_warmup_scope FROM ("
         "SELECT e.experiment_id,e.status AS candidate_status,"
         "e.symbol AS candidate_symbol,e.prediction_horizon AS candidate_prediction_horizon,"
@@ -86,6 +89,7 @@ std::vector<RecommendationEvaluationExperimentConflict> FindConflicts(
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_start_date,"
         "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_end_date,"
         "e.donchian20_mode AS candidate_donchian20_mode,"
+        "e.donchian_lookback AS candidate_donchian_lookback,"
         "e.feature_warmup_scope AS candidate_feature_warmup_scope "
         "FROM experiment e WHERE lower(btrim(e.symbol))=lower(btrim($1)) "
         "AND e.prediction_horizon=$2 AND e.status IN ('pending','running','paused','completed')"

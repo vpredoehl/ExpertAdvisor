@@ -249,7 +249,7 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
         "s.score_status,s.scoring_policy_canonical,s.scoring_policy_hash,"
         "sr.status AS score_run_status,e.symbol,e.prediction_horizon,"
         "e.c_next_threshold,e.core_lr_mult,e.head_lr_mult,e.target_epochs,"
-        "e.checkpoint_interval,e.donchian20_mode,e.feature_warmup_scope,"
+        "e.checkpoint_interval,e.donchian20_mode,e.donchian_lookback,e.feature_warmup_scope,"
         "to_char(e.train_start AT TIME ZONE 'America/Chicago',"
         "'YYYY-MM-DD') AS train_start_date,"
         "to_char(e.train_end AT TIME ZONE 'America/Chicago',"
@@ -437,9 +437,15 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
     // legacy interpretation; only v5 carries an explicit scope.
     invocation.configuration.featureWarmupScope =
         FeatureWarmupScope::LegacyColdBoundary;
-    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v5)
+    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v5 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v6)
         invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
             row["feature_warmup_scope"].as<std::string>());
+    // Versions preceding configurable lookback retain the closed 20-bar
+    // definition.  v6 makes the persisted value part of exact provenance.
+    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v6)
+        invocation.configuration.donchianLookback = ParseDonchianLookback(
+            row["donchian_lookback"].as<std::string>());
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
     invocation.resumeModelId = OptionalValue<long long>(row, "resume_model_id");
     request.mutations.push_back({

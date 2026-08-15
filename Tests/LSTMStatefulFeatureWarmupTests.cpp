@@ -46,9 +46,10 @@ std::vector<Feature> MakeSourceRows(std::size_t count)
 }
 
 Tensor BuildTensor(const std::vector<Feature>& rows,
-                   std::size_t sourceBegin = 0)
+                   std::size_t sourceBegin = 0,
+                   std::size_t donchianLookback = kDefaultDonchianLookback)
 {
-    Tensor tensor{"warmup-test"};
+    Tensor tensor{"warmup-test", kDefaultDonchian20Mode, donchianLookback};
     for (std::size_t i = sourceBegin; i < rows.size(); ++i)
         tensor.Add(rows.at(i));
     return tensor;
@@ -148,6 +149,15 @@ int main()
     const auto rebuiltAtBoundary = AssembleModelInputAt(rebuiltWiderQuery, requestedStart);
     AssertByteIdentical(narrowTrainAtBoundary.data(), rebuiltAtBoundary.data(),
                         rebuiltAtBoundary.size() * sizeof(float));
+
+    // Full-history warmup is parameterized: a short lookback still uses
+    // exactly its completed predecessors at the boundary, not a hardcoded 20.
+    const Tensor shortWarm = BuildTensor(source, 0, 3);
+    const Tensor shortCold = BuildTensor(source, requestedStart, 3);
+    const auto shortWarmBoundary = BaseFeaturesAt(shortWarm, requestedStart);
+    const auto shortColdBoundary = BaseFeaturesAt(shortCold, 0);
+    assert(shortWarmBoundary[donchianUpCol] != shortColdBoundary[donchianUpCol] ||
+           shortWarmBoundary[donchianDownCol] != shortColdBoundary[donchianDownCol]);
 
     return 0;
 }

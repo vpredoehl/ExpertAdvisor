@@ -172,6 +172,7 @@ int main()
                 "train_start timestamptz NOT NULL,train_end timestamptz NOT NULL,"
                 "infer_start timestamptz,infer_end timestamptz,resume_model_id bigint,"
                 "donchian20_mode text NOT NULL DEFAULT 'enabled',"
+                "donchian_lookback integer NOT NULL DEFAULT 20,"
                 "feature_warmup_scope text NOT NULL DEFAULT 'legacy_cold_boundary',"
                 "duplicate_nonce bigint NOT NULL DEFAULT 0,status text NOT NULL,"
                 "phase text NOT NULL,invocation_mode text,updated_at timestamptz NOT NULL DEFAULT now(),"
@@ -183,7 +184,7 @@ int main()
                 "checkpoint_interval,train_start,train_end,"
                 "coalesce(infer_start,'-infinity'::timestamptz),"
                 "coalesce(infer_end,'-infinity'::timestamptz),"
-                "coalesce(resume_model_id,-1),donchian20_mode,"
+                "coalesce(resume_model_id,-1),donchian20_mode,donchian_lookback,"
                 "feature_warmup_scope,duplicate_nonce) WHERE status<>'cancelled';"
                 "CREATE TABLE model(model_id bigint PRIMARY KEY,marker text NOT NULL);"
                 "CREATE TABLE experiment_recommendation("
@@ -329,7 +330,7 @@ int main()
             verify.exec("SET LOCAL search_path TO " + verify.quote_name(schema) + ";");
             const pqxx::row row = verify.exec(
                 "SELECT status,phase,worker_pid,current_operation,current_epoch,"
-                "invocation_mode,marker,donchian20_mode,feature_warmup_scope "
+                "invocation_mode,marker,donchian20_mode,donchian_lookback,feature_warmup_scope "
                 "FROM experiment WHERE experiment_id=$1;",
                 pqxx::params{created.execution->experimentId}).one_row();
             assert(row["status"].as<std::string>() == "paused");
@@ -342,6 +343,7 @@ int main()
             assert(row["marker"].is_null());
             assert(row["donchian20_mode"].as<std::string>() ==
                    "zero_ablation");
+            assert(row["donchian_lookback"].as<int>() == 20);
             assert(row["feature_warmup_scope"].as<std::string>() ==
                    "full_history_warmup");
         }

@@ -52,9 +52,10 @@ std::vector<Feature> MakeBars(std::size_t count)
     return bars;
 }
 
-Tensor Build(const std::vector<Feature>& bars, Donchian20Mode mode)
+Tensor Build(const std::vector<Feature>& bars, Donchian20Mode mode,
+             std::size_t lookback = kDefaultDonchianLookback)
 {
-    Tensor tensor{"donchian20-test", mode};
+    Tensor tensor{"donchian20-test", mode, lookback};
     for (const Feature& bar : bars)
         tensor.Add(bar);
     return tensor;
@@ -106,6 +107,28 @@ void TestFormulaCausalityAndRollingWindow()
     const auto startup = ComputeCausalDonchian20({101.0f}, {99.0f}, 100.0f, kFeatureScale);
     AssertNear(startup.first, std::log(100.0f / 101.0f) * kFeatureScale);
     AssertNear(startup.second, std::log(100.0f / 99.0f) * kFeatureScale);
+
+    // Independently constructed lookbacks prove configuration changes the
+    // selected predecessor set: 3 expires the oldest extreme, while 21 keeps it.
+    const std::vector<float> variedHighs{180.0f, 101.0f, 102.0f, 103.0f, 104.0f};
+    const std::vector<float> variedLows{80.0f, 99.0f, 98.0f, 97.0f, 96.0f};
+    const auto shortWindow = ComputeCausalDonchian(
+        variedHighs, variedLows, 100.0f, kFeatureScale, 3);
+    const auto compatibility20 = ComputeCausalDonchian(
+        variedHighs, variedLows, 100.0f, kFeatureScale, 20);
+    const auto longWindow = ComputeCausalDonchian(
+        variedHighs, variedLows, 100.0f, kFeatureScale, 21);
+    AssertNear(shortWindow.first, std::log(100.0f / 104.0f) * kFeatureScale);
+    AssertNear(shortWindow.second, std::log(100.0f / 96.0f) * kFeatureScale);
+    AssertNear(compatibility20.first, std::log(100.0f / 180.0f) * kFeatureScale);
+    AssertNear(longWindow.first, compatibility20.first);
+    assert(shortWindow.first != compatibility20.first);
+    assert(shortWindow.second != compatibility20.second);
+
+    bool rejected = false;
+    try { (void)ComputeCausalDonchian(highs, lows, 100.0f, kFeatureScale, 0); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
 }
 
 void TestTensorModesParityAndNoFutureLeakage()
@@ -113,11 +136,15 @@ void TestTensorModesParityAndNoFutureLeakage()
     const auto bars = MakeBars(96);
     const Tensor enabled = Build(bars, Donchian20Mode::Enabled);
     const Tensor ablated = Build(bars, Donchian20Mode::ZeroAblation);
+    const Tensor shortEnabled = Build(bars, Donchian20Mode::Enabled, 3);
     constexpr std::size_t t = 48;
     const auto enabledRow = AssembleProductionRow(enabled, t);
     const auto ablatedRow = AssembleProductionRow(ablated, t);
     assert(enabledRow[donchianUpCol] != 0.0f);
     assert(enabledRow[donchianDownCol] != 0.0f);
+    const auto shortRow = AssembleProductionRow(shortEnabled, t);
+    assert(shortRow[donchianUpCol] != enabledRow[donchianUpCol] ||
+           shortRow[donchianDownCol] != enabledRow[donchianDownCol]);
     for (std::size_t col = 0; col < kModelWidth; ++col)
     {
         if (col == donchianUpCol || col == donchianDownCol)

@@ -46,6 +46,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "FeatureWarmupScope.hpp"
 #include "Donchian20Mode.hpp"
+#include "DonchianLookback.hpp"
 #include "ModelInputContract.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
@@ -3787,6 +3788,7 @@ struct LaunchArgs
     std::optional<double> headBiasLrMult;
     std::optional<EA::FeatureWarmupScope> featureWarmupScope;
     std::optional<Donchian20Mode> donchian20Mode;
+    std::optional<std::size_t> donchianLookback;
     std::optional<int> checkpointEvery;
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> schedulerCheckpointEvalId;
@@ -4008,6 +4010,14 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 throw std::invalid_argument("--donchian20-mode requires enabled or zero_ablation");
             parsed.donchian20Mode = ParseDonchian20Mode(argv[++i]);
         }
+        else if (arg == "--donchian-lookback")
+        {
+            if (parsed.donchianLookback.has_value())
+                throw std::invalid_argument("--donchian-lookback specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument("--donchian-lookback requires a positive integer");
+            parsed.donchianLookback = ParseDonchianLookback(argv[++i]);
+        }
         else if (arg == "--infer-start-after-model-id")
         {
             if (parsed.inferStartAfterModelId.has_value())
@@ -4144,6 +4154,12 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 if (parsed.donchian20Mode.has_value())
                     throw std::invalid_argument("--donchian20-mode specified more than once");
                 parsed.donchian20Mode = ParseDonchian20Mode(value);
+            }
+            else if (SplitOptionWithValue(arg, "--donchian-lookback", value))
+            {
+                if (parsed.donchianLookback.has_value())
+                    throw std::invalid_argument("--donchian-lookback specified more than once");
+                parsed.donchianLookback = ParseDonchianLookback(value);
             }
             else if (SplitOptionWithValue(arg, "--infer-start-after-model-id", value))
             {
@@ -4373,6 +4389,7 @@ struct ResumeCheckpointConfig
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::LegacyColdBoundary;
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
+    std::size_t donchianLookback = kDefaultDonchianLookback;
 };
 
 TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
@@ -4411,6 +4428,7 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
         w, modelId);
     cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
+    cfg.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
     cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     PrintDatabaseModelSymbol(modelId, cfg.symbol);
     const auto range = DBIO::PgModelIO::decodeTrainRangeMeta(w, modelId);
@@ -4504,6 +4522,16 @@ Donchian20Mode LoadExperimentDonchian20Mode(pqxx::work& w,
     return ParseDonchian20Mode(rows[0][0].as<std::string>());
 }
 
+std::size_t LoadExperimentDonchianLookback(pqxx::work& w,
+                                           long long experimentId)
+{
+    const pqxx::result rows = w.exec_params(
+        "SELECT donchian_lookback FROM experiment WHERE experiment_id=$1;", experimentId);
+    if (rows.empty())
+        throw std::runtime_error("experiment_not_found_for_donchian_lookback");
+    return ParseDonchianLookback(rows[0][0].as<std::string>());
+}
+
 void ValidateSchedulerDonchian20Mode(pqxx::work& w,
                                      const LaunchArgs& launchArgs,
                                      Donchian20Mode runtimeMode)
@@ -4529,6 +4557,26 @@ void ValidateSchedulerDonchian20Mode(pqxx::work& w,
                                  Donchian20ModeText(runtimeMode));
 }
 
+void ValidateSchedulerDonchianLookback(pqxx::work& w,
+                                       const LaunchArgs& launchArgs,
+                                       std::size_t runtimeLookback)
+{
+    std::optional<long long> experimentId = launchArgs.schedulerExperimentId;
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        const pqxx::result rows = w.exec_params(
+            "SELECT COALESCE(parent_experiment_id, experiment_id) "
+            "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty())
+            throw std::runtime_error("checkpoint_eval_not_found_for_donchian_lookback");
+        experimentId = rows[0][0].as<long long>();
+    }
+    if (experimentId.has_value() &&
+        LoadExperimentDonchianLookback(w, *experimentId) != runtimeLookback)
+        throw std::runtime_error("scheduler experiment Donchian lookback mismatch");
+}
+
 std::optional<Donchian20Mode> LoadSchedulerDonchian20Mode(
     pqxx::work& w,
     const LaunchArgs& launchArgs)
@@ -4545,6 +4593,24 @@ std::optional<Donchian20Mode> LoadSchedulerDonchian20Mode(
     }
     if (launchArgs.schedulerExperimentId.has_value())
         return LoadExperimentDonchian20Mode(w, *launchArgs.schedulerExperimentId);
+    return std::nullopt;
+}
+
+std::optional<std::size_t> LoadSchedulerDonchianLookback(
+    pqxx::work& w, const LaunchArgs& launchArgs)
+{
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        const pqxx::result rows = w.exec_params(
+            "SELECT COALESCE(parent_experiment_id, experiment_id) "
+            "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty())
+            throw std::runtime_error("checkpoint_eval_not_found_for_donchian_lookback");
+        return LoadExperimentDonchianLookback(w, rows[0][0].as<long long>());
+    }
+    if (launchArgs.schedulerExperimentId.has_value())
+        return LoadExperimentDonchianLookback(w, *launchArgs.schedulerExperimentId);
     return std::nullopt;
 }
 
@@ -4712,7 +4778,8 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                                      const std::string& toDate,
                                                      EA::LSTM& lstm,
                                                      EA::FeatureWarmupScope featureWarmupScope,
-                                                     Donchian20Mode donchian20Mode)
+                                                     Donchian20Mode donchian20Mode,
+                                                     std::size_t donchianLookback)
 {
     if (!launchArgs.checkpointEvery.has_value() || *launchArgs.checkpointEvery <= 0)
         return std::nullopt;
@@ -4758,7 +4825,7 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                      ParentModelIdForResume(resumeConfig));
     DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm,
                              rawPriceTableName, fromDate, toDate,
-                             featureWarmupScope, donchian20Mode);
+                             featureWarmupScope, donchian20Mode, donchianLookback);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
               << " epoch=" << completedEpoch
@@ -5331,6 +5398,7 @@ struct PersistedInferenceConfig
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::LegacyColdBoundary;
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
+    std::size_t donchianLookback = kDefaultDonchianLookback;
 };
 
 template <typename T>
@@ -5603,6 +5671,7 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
         cfg.hasModelMeta = true;
     }
     cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
+    cfg.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
 
     try
     {
@@ -5667,6 +5736,7 @@ void PrintResolvedInferenceConfig(const PersistedInferenceConfig& cfg)
               << ",target_type=" << TargetTypeName(cfg.targetType)
               << ",label_rule_id=" << cfg.trainConfig.labelRuleId
               << ",donchian20_mode=" << Donchian20ModeText(cfg.donchian20Mode)
+              << ",donchian_lookback=" << cfg.donchianLookback
               << ",source=persisted_model"
               << std::endl;
 }
@@ -7085,7 +7155,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--donchian-lookback=<positive N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
@@ -7195,18 +7265,41 @@ int main(int argc, const char * argv[])
         }
 
         Donchian20Mode runtimeDonchian20Mode = kDefaultDonchian20Mode;
+        std::size_t runtimeDonchianLookback = kDefaultDonchianLookback;
         if (resumeConfig.has_value())
+        {
             runtimeDonchian20Mode = resumeConfig->donchian20Mode;
+            runtimeDonchianLookback = resumeConfig->donchianLookback;
+        }
         else if (inferenceConfig.has_value())
+        {
             runtimeDonchian20Mode = inferenceConfig->donchian20Mode;
+            runtimeDonchianLookback = inferenceConfig->donchianLookback;
+        }
         else if (gRuntimeInferenceMode && launchArgs.modelId.has_value())
+        {
             runtimeDonchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(
                 w_LSTM, *launchArgs.modelId);
+            runtimeDonchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(
+                w_LSTM, *launchArgs.modelId);
+        }
         else if (const auto schedulerMode =
                      LoadSchedulerDonchian20Mode(w_LSTM, launchArgs))
+        {
             runtimeDonchian20Mode = *schedulerMode;
+            runtimeDonchianLookback = *LoadSchedulerDonchianLookback(w_LSTM, launchArgs);
+        }
         else if (launchArgs.donchian20Mode.has_value())
             runtimeDonchian20Mode = *launchArgs.donchian20Mode;
+        if (launchArgs.donchianLookback.has_value() &&
+            !resumeConfig.has_value() && !inferenceConfig.has_value() &&
+            !(gRuntimeInferenceMode && launchArgs.modelId.has_value()) &&
+            !launchArgs.schedulerExperimentId.has_value() &&
+            !launchArgs.schedulerCheckpointEvalId.has_value())
+            runtimeDonchianLookback = *launchArgs.donchianLookback;
+        if (launchArgs.donchianLookback.has_value() &&
+            *launchArgs.donchianLookback != runtimeDonchianLookback)
+            throw std::runtime_error("Donchian lookback mismatch: persisted/runtime");
 
         if (launchArgs.donchian20Mode.has_value() &&
             *launchArgs.donchian20Mode != runtimeDonchian20Mode)
@@ -7215,6 +7308,7 @@ int main(int argc, const char * argv[])
                 Donchian20ModeText(runtimeDonchian20Mode) + ", runtime=" +
                 Donchian20ModeText(*launchArgs.donchian20Mode));
         ValidateSchedulerDonchian20Mode(w_LSTM, launchArgs, runtimeDonchian20Mode);
+        ValidateSchedulerDonchianLookback(w_LSTM, launchArgs, runtimeDonchianLookback);
 
         DiagnosticOut() << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
         DiagnosticOut() << "window_size=" << window_size << '\n';
@@ -7309,7 +7403,7 @@ int main(int argc, const char * argv[])
             std::string query = sourceQuery;
             db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
             db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
-            Tensor t{ rawPriceTableName, runtimeDonchian20Mode };
+            Tensor t{ rawPriceTableName, runtimeDonchian20Mode, runtimeDonchianLookback };
             
             DiagnosticOut() << "Candlestick query: " << query << "\n";
             DiagnosticOut() << "FEATURE_WARMUP_SCOPE"
@@ -7612,7 +7706,8 @@ int main(int argc, const char * argv[])
                                                     toDate,
                                                     l,
                                                     featureWarmupScope,
-                                                    runtimeDonchian20Mode);
+                                                    runtimeDonchian20Mode,
+                                                    runtimeDonchianLookback);
                     if (checkpointModelId.has_value())
                     {
                         QueueCheckpointInferenceIfEligible(launchArgs.schedulerExperimentId,
@@ -7735,7 +7830,8 @@ int main(int argc, const char * argv[])
                     DBIO::PgModelIO::saveAll(w_LSTM, modelId, l,
                                               rawPriceTableName, fromDate, toDate,
                                               featureWarmupScope,
-                                              runtimeDonchian20Mode);
+                                              runtimeDonchian20Mode,
+                                              runtimeDonchianLookback);
                     w_LSTM.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())

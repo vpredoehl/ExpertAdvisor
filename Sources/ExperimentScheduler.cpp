@@ -72,6 +72,7 @@
 #include "SupportedSymbols.hpp"
 #include "WorkerLifecycleDiagnostics.hpp"
 #include "FeatureWarmupScope.hpp"
+#include "DonchianLookback.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -360,6 +361,8 @@ struct SchedulerOptions
     EA::FeatureWarmupScope featureWarmupScope =
         EA::kDefaultFeatureWarmupScope;
     bool featureWarmupScopeSpecified = false;
+    std::size_t donchianLookback = kDefaultDonchianLookback;
+    bool donchianLookbackSpecified = false;
     std::optional<int> targetEpochs;
     std::optional<int> epochs;
     int checkpointInterval = 20;
@@ -401,6 +404,7 @@ struct QueueResumeMeta
     std::optional<double> headLrMult;
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::LegacyColdBoundary;
+    std::size_t donchianLookback = kDefaultDonchianLookback;
 };
 
 struct SchedulerLeaseSnapshot
@@ -448,6 +452,7 @@ struct ExperimentRow
     std::optional<std::string> analysisLogPath;
     EA::FeatureWarmupScope featureWarmupScope =
         EA::FeatureWarmupScope::LegacyColdBoundary;
+    std::size_t donchianLookback = kDefaultDonchianLookback;
 };
 
 struct ChildResult
@@ -2747,6 +2752,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 RequireNextArg(argc, argv, i, arg));
             options.featureWarmupScopeSpecified = true;
         }
+        else if (arg == "--donchian-lookback")
+        {
+            options.donchianLookback = ParseDonchianLookback(
+                RequireNextArg(argc, argv, i, arg));
+            options.donchianLookbackSpecified = true;
+        }
         else if (arg == "--train-start")
             options.trainStart = RequireNextArg(argc, argv, i, arg);
         else if (arg == "--train-end")
@@ -2805,6 +2816,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         {
             options.featureWarmupScope = EA::ParseFeatureWarmupScope(value);
             options.featureWarmupScopeSpecified = true;
+        }
+        else if (SplitOptionWithValue(arg, "--donchian-lookback", value))
+        {
+            options.donchianLookback = ParseDonchianLookback(value);
+            options.donchianLookbackSpecified = true;
         }
         else if (SplitOptionWithValue(arg, "--train-start", value))
             options.trainStart = value;
@@ -4582,6 +4598,7 @@ QueueResumeMeta LoadQueueResumeMeta(pqxx::work& w, long long modelId)
     meta.modelId = modelId;
     meta.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
         w, modelId);
+    meta.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
     meta.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     meta.predictionHorizon = static_cast<int>(std::llround(vals[1]));
     meta.threshold = vals[2];
@@ -4605,6 +4622,7 @@ void PrintQueueResumeMeta(const char* marker,
               << ",threshold=" << FormatDouble(meta.threshold)
               << ",feature_warmup_scope="
               << EA::FeatureWarmupScopeText(meta.featureWarmupScope)
+              << ",donchian_lookback=" << meta.donchianLookback
               << ",completed_epochs=" << meta.completedEpochs
               << ",target_epochs=" << targetEpochs
               << ",train_start=" << meta.trainStart
@@ -4682,6 +4700,9 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
                 meta.featureWarmupScope)} + ";runtime=" +
                 EA::FeatureWarmupScopeText(options.featureWarmupScope));
     }
+    if (options.donchianLookbackSpecified &&
+        options.donchianLookback != meta.donchianLookback)
+        ThrowQueueResumeInvalid("donchian_lookback_mismatch", meta.modelId);
 
     options.symbol = meta.symbol;
     options.predictionHorizon = meta.predictionHorizon;
@@ -4691,6 +4712,7 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
     options.coreLrMult = meta.coreLrMult;
     options.headLrMult = meta.headLrMult;
     options.featureWarmupScope = meta.featureWarmupScope;
+    options.donchianLookback = meta.donchianLookback;
 
     PrintQueueResumeMeta("QUEUE_RESUME_MODEL", meta, *options.targetEpochs);
 }
@@ -5764,6 +5786,7 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << "::timestamptz"
         << " AND feature_warmup_scope = " << w.quote(
             EA::FeatureWarmupScopeText(options.featureWarmupScope))
+        << " AND donchian_lookback = " << DonchianLookbackDatabaseValue(options.donchianLookback)
         << " AND resume_model_id IS NOT DISTINCT FROM " << SqlNullable(w, options.resumeModelId)
         << " AND status <> 'cancelled'";
     return sql.str();
@@ -5780,6 +5803,7 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND c_next_threshold = " << FormatDouble(*options.cNextThreshold)
         << " AND feature_warmup_scope = " << w.quote(
             EA::FeatureWarmupScopeText(options.featureWarmupScope))
+        << " AND donchian_lookback = " << DonchianLookbackDatabaseValue(options.donchianLookback)
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -5803,6 +5827,9 @@ long long InsertExperimentRecord(pqxx::work& w,
     if (!hasFeatureWarmupScope)
         throw std::runtime_error(
             "feature warmup scope migration required; run ./migrate_lstm_db.sh");
+    if (!ColumnExists(w, "experiment", "donchian_lookback"))
+        throw std::runtime_error(
+            "donchian lookback migration required; run ./migrate_lstm_db.sh");
     const bool hasCheckpointInferEnabled = ColumnExists(w, "experiment", "checkpoint_infer_enabled");
     const bool hasOpportunisticCheckpointInfer = ColumnExists(w, "experiment", "opportunistic_checkpoint_infer");
     const bool hasCheckpointInferMinEpoch = ColumnExists(w, "experiment", "checkpoint_infer_min_epoch");
@@ -5838,7 +5865,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at, "
-        << "feature_warmup_scope";
+        << "feature_warmup_scope, donchian_lookback";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -5880,7 +5907,8 @@ long long InsertExperimentRecord(pqxx::work& w,
         << SqlNullable(w, options.resumeModelId) << ","
         << duplicateNonce << ","
         << "'pending','train',now(),"
-        << w.quote(EA::FeatureWarmupScopeText(options.featureWarmupScope));
+        << w.quote(EA::FeatureWarmupScopeText(options.featureWarmupScope)) << ","
+        << DonchianLookbackDatabaseValue(options.donchianLookback);
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -6537,6 +6565,8 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     if (row.size() > 17)
         experiment.featureWarmupScope = EA::ParseFeatureWarmupScope(
             row[17].as<std::string>());
+    if (row.size() > 18)
+        experiment.donchianLookback = ParseDonchianLookback(row[18].as<std::string>());
     return experiment;
 }
 
@@ -6549,7 +6579,7 @@ std::vector<ExperimentRow> LoadPendingExperiments(
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, feature_warmup_scope "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, feature_warmup_scope, donchian_lookback "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 ";
     if (cancellationOnly)
@@ -8804,6 +8834,7 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
     AddCliOption(argv, "--feature-warmup-scope",
                  EA::FeatureWarmupScopeText(experiment.featureWarmupScope));
+    AddCliOption(argv, "--donchian-lookback", std::to_string(experiment.donchianLookback));
     AddLstmProfileOptions(argv, options);
 
     const std::optional<long long> resumeFrom =
@@ -8843,6 +8874,7 @@ std::vector<std::string> BuildInferCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
     AddCliOption(argv, "--feature-warmup-scope",
                  EA::FeatureWarmupScopeText(experiment.featureWarmupScope));
+    AddCliOption(argv, "--donchian-lookback", std::to_string(experiment.donchianLookback));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, experiment.inferStart->substr(0, 10));
@@ -8890,6 +8922,7 @@ std::vector<std::string> BuildCheckpointEvalInferCommand(const SchedulerOptions&
     AddCliOption(argv, "--scheduler-checkpoint-eval-id", std::to_string(eval.checkpointEvalId));
     AddCliOption(argv, "--feature-warmup-scope",
                  EA::FeatureWarmupScopeText(eval.experiment.featureWarmupScope));
+    AddCliOption(argv, "--donchian-lookback", std::to_string(eval.experiment.donchianLookback));
     AddCliOption(argv, "--log-level", "summary");
     AddLstmProfileOptions(argv, options);
     AddCliPositional(argv, eval.experiment.inferStart->substr(0, 10));
@@ -22455,6 +22488,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
     std::cout
         << "Usage: " << exe << " --queue-experiment --symbol=SYMBOL --prediction-horizon=N --target-epochs=N "
         << "[--threshold=VALUE] [--core-lr=VALUE] [--head-lr=VALUE] [--checkpoint-interval=N] "
+        << "[--donchian-lookback=N] "
         << "[--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD] "
         << "[--checkpoint-infer] [--checkpoint-infer-min-epoch=N] [--checkpoint-infer-interval=N] "
         << "[--checkpoint-policy --checkpoint-policy-min-leader-score=VALUE|--checkpoint-policy-min-infer-accuracy=VALUE|--checkpoint-policy-top-n=N]\n"
@@ -22466,6 +22500,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "--target-epochs=240 [--threshold=VALUE] [--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD]\n"
         << "Usage: " << exe << " --queue-sweep --prediction-horizon=N --target-epochs=N "
         << "[--threshold=VALUE] [--core-lr=VALUE] [--head-lr=VALUE] [--checkpoint-interval=N] "
+        << "[--donchian-lookback=N] "
         << "[--checkpoint-infer] [--checkpoint-infer-min-epoch=N] [--checkpoint-infer-interval=N] "
         << "[--checkpoint-policy --checkpoint-policy-min-leader-score=VALUE|--checkpoint-policy-min-infer-accuracy=VALUE|--checkpoint-policy-top-n=N]\n"
         << "Example: " << exe << " --queue-sweep --prediction-horizon=12 --target-epochs=240\n"
