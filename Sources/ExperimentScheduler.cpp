@@ -646,6 +646,13 @@ struct SchedulerControlExperimentRow
     std::optional<long long> resumeModelId;
     std::string symbol;
     int predictionHorizon = 0;
+    double cNextThreshold = 0.0;
+    std::optional<double> coreLrMult;
+    std::optional<double> headLrMult;
+    int targetEpochs = 0;
+    std::string trainStart;
+    std::string trainEnd;
+    Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
 };
 
 struct SchedulerStopExperiment
@@ -4720,61 +4727,75 @@ void ThrowQueueResumeInvalid(const std::string& reason,
     throw std::invalid_argument("QUEUE_RESUME_INVALID:" + reason);
 }
 
+struct QueueResumeCompatibilityRequirements
+{
+    int targetEpochs = 0;
+    std::optional<std::string> symbol;
+    std::optional<int> predictionHorizon;
+    std::optional<double> threshold;
+    std::optional<std::string> trainStart;
+    std::optional<std::string> trainEnd;
+    std::optional<double> coreLrMult;
+    std::optional<double> headLrMult;
+    std::optional<Donchian20Mode> donchian20Mode;
+};
+
+std::optional<std::string> QueueResumeCompatibilityFailure(
+    const QueueResumeMeta& meta,
+    const QueueResumeCompatibilityRequirements& requirements)
+{
+    if (requirements.targetEpochs <= meta.completedEpochs)
+        return "target_epochs_not_greater_than_completed_epoch";
+    if (requirements.symbol.has_value() &&
+        EA::CanonicalSymbol::Normalize(*requirements.symbol) != meta.symbol)
+        return "symbol_mismatch";
+    if (requirements.predictionHorizon.has_value() &&
+        *requirements.predictionHorizon != meta.predictionHorizon)
+        return "prediction_horizon_mismatch";
+    if (requirements.threshold.has_value() &&
+        std::fabs(*requirements.threshold - meta.threshold) > 1e-7)
+        return "threshold_mismatch";
+    if (requirements.trainStart.has_value() &&
+        !SameDate(*requirements.trainStart, meta.trainStart))
+        return "train_start_mismatch";
+    if (requirements.trainEnd.has_value() &&
+        !SameDate(*requirements.trainEnd, meta.trainEnd))
+        return "train_end_mismatch";
+    if (requirements.coreLrMult.has_value() &&
+        (!meta.coreLrMult.has_value() ||
+         std::fabs(*requirements.coreLrMult - *meta.coreLrMult) > 1e-7))
+        return "core_lr_mismatch";
+    if (requirements.headLrMult.has_value() &&
+        (!meta.headLrMult.has_value() ||
+         std::fabs(*requirements.headLrMult - *meta.headLrMult) > 1e-7))
+        return "head_lr_mismatch";
+    if (requirements.donchian20Mode.has_value() &&
+        *requirements.donchian20Mode != meta.donchian20Mode)
+        return "donchian20_mode_mismatch";
+    return std::nullopt;
+}
+
 void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
                                             const QueueResumeMeta& meta)
 {
     if (!options.targetEpochs.has_value())
         ThrowQueueResumeInvalid("missing_target_epochs", meta.modelId);
-    if (*options.targetEpochs <= meta.completedEpochs)
+    const QueueResumeCompatibilityRequirements requirements{
+        *options.targetEpochs,
+        options.symbol,
+        options.predictionHorizon,
+        options.cNextThreshold,
+        options.trainStart,
+        options.trainEnd,
+        std::nullopt,
+        std::nullopt,
+        options.donchian20Mode
+    };
+    if (const std::optional<std::string> failure =
+            QueueResumeCompatibilityFailure(meta, requirements);
+        failure.has_value())
     {
-        ThrowQueueResumeInvalid("target_epochs_not_greater_than_completed_epoch",
-                                meta.modelId,
-                                "completed_epochs=" + std::to_string(meta.completedEpochs) +
-                                ";target_epochs=" + std::to_string(*options.targetEpochs));
-    }
-
-    if (options.symbol.has_value() &&
-        EA::CanonicalSymbol::Normalize(*options.symbol) != meta.symbol)
-    {
-        ThrowQueueResumeInvalid("symbol_mismatch",
-                                meta.modelId,
-                                "model=" + meta.symbol + ";runtime=" + *options.symbol);
-    }
-    if (options.predictionHorizon.has_value() &&
-        *options.predictionHorizon != meta.predictionHorizon)
-    {
-        ThrowQueueResumeInvalid("prediction_horizon_mismatch",
-                                meta.modelId,
-                                "model=" + std::to_string(meta.predictionHorizon) +
-                                ";runtime=" + std::to_string(*options.predictionHorizon));
-    }
-    if (options.cNextThreshold.has_value() &&
-        std::fabs(*options.cNextThreshold - meta.threshold) > 1e-7)
-    {
-        ThrowQueueResumeInvalid("threshold_mismatch",
-                                meta.modelId,
-                                "model=" + FormatDouble(meta.threshold) +
-                                ";runtime=" + FormatDouble(*options.cNextThreshold));
-    }
-    if (options.trainStart.has_value() && !SameDate(*options.trainStart, meta.trainStart))
-    {
-        ThrowQueueResumeInvalid("train_start_mismatch",
-                                meta.modelId,
-                                "model=" + meta.trainStart + ";runtime=" + *options.trainStart);
-    }
-    if (options.trainEnd.has_value() && !SameDate(*options.trainEnd, meta.trainEnd))
-    {
-        ThrowQueueResumeInvalid("train_end_mismatch",
-                                meta.modelId,
-                                "model=" + meta.trainEnd + ";runtime=" + *options.trainEnd);
-    }
-    if (options.donchian20Mode.has_value() &&
-        *options.donchian20Mode != meta.donchian20Mode)
-    {
-        ThrowQueueResumeInvalid(
-            "donchian20_mode_mismatch", meta.modelId,
-            "model=" + std::string{Donchian20ModeText(meta.donchian20Mode)} +
-            ";runtime=" + Donchian20ModeText(*options.donchian20Mode));
+        ThrowQueueResumeInvalid(*failure, meta.modelId);
     }
 
     options.symbol = meta.symbol;
@@ -6770,7 +6791,9 @@ std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx
                                                                                    bool forUpdate)
 {
     std::ostringstream sql;
-    sql << "SELECT experiment_id, status, phase, last_model_id, resume_model_id, symbol, prediction_horizon "
+    sql << "SELECT experiment_id, status, phase, last_model_id, resume_model_id, symbol, prediction_horizon, "
+        << "c_next_threshold, core_lr_mult, head_lr_mult, target_epochs, "
+        << "train_start::text, train_end::text, donchian20_mode "
         << "FROM experiment WHERE experiment_id = " << experimentId;
     if (forUpdate)
         sql << " FOR UPDATE";
@@ -6788,6 +6811,13 @@ std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx
     row.resumeModelId = OptionalLongLongCell(rows[0], 4);
     row.symbol = rows[0][5].as<std::string>();
     row.predictionHorizon = rows[0][6].as<int>();
+    row.cNextThreshold = rows[0][7].as<double>();
+    row.coreLrMult = OptionalDoubleCell(rows[0], 8);
+    row.headLrMult = OptionalDoubleCell(rows[0], 9);
+    row.targetEpochs = rows[0][10].as<int>();
+    row.trainStart = rows[0][11].as<std::string>();
+    row.trainEnd = rows[0][12].as<std::string>();
+    row.donchian20Mode = ParseDonchian20Mode(rows[0][13].as<std::string>());
     return row;
 }
 
@@ -6805,6 +6835,139 @@ std::string RetryPhaseForExperiment(const SchedulerControlExperimentRow& row)
     if (row.phase == "done" && ControlModelId(row).has_value())
         return "analyze";
     return "train";
+}
+
+struct RetryCheckpointSelection
+{
+    std::optional<long long> previousResumeModelId;
+    std::optional<long long> selectedResumeModelId;
+    std::optional<int> selectedCompletedEpoch;
+    bool promoted = false;
+    std::string reason;
+};
+
+QueueResumeCompatibilityRequirements RetryCheckpointRequirements(
+    const SchedulerControlExperimentRow& row)
+{
+    return QueueResumeCompatibilityRequirements{
+        row.targetEpochs,
+        row.symbol,
+        row.predictionHorizon,
+        row.cNextThreshold,
+        row.trainStart,
+        row.trainEnd,
+        row.coreLrMult.value_or(default_core_lr_mult),
+        row.headLrMult.value_or(default_head_weight_lr_mult),
+        row.donchian20Mode
+    };
+}
+
+std::optional<QueueResumeMeta> TryLoadCompatibleRetryResumeMeta(
+    pqxx::work& w,
+    long long modelId,
+    const QueueResumeCompatibilityRequirements& requirements)
+{
+    try
+    {
+        if (!DBIO::PgModelIO::hasTrainingResumeState(w, modelId))
+            return std::nullopt;
+        const QueueResumeMeta meta = LoadQueueResumeMeta(w, modelId);
+        if (QueueResumeCompatibilityFailure(meta, requirements).has_value())
+            return std::nullopt;
+        return meta;
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+}
+
+RetryCheckpointSelection SelectRetryTrainingCheckpoint(
+    pqxx::work& w,
+    const SchedulerControlExperimentRow& row)
+{
+    RetryCheckpointSelection selection;
+    selection.previousResumeModelId = row.resumeModelId;
+    selection.selectedResumeModelId = row.resumeModelId;
+
+    const QueueResumeCompatibilityRequirements requirements =
+        RetryCheckpointRequirements(row);
+    const std::optional<long long> effectiveExistingResume =
+        row.resumeModelId.has_value() ? row.resumeModelId : row.lastModelId;
+    std::optional<QueueResumeMeta> existingMeta;
+    if (effectiveExistingResume.has_value())
+    {
+        existingMeta = TryLoadCompatibleRetryResumeMeta(
+            w, *effectiveExistingResume, requirements);
+    }
+    if (row.resumeModelId.has_value() && existingMeta.has_value())
+        selection.selectedCompletedEpoch = existingMeta->completedEpochs;
+
+    const pqxx::result candidates = w.exec_params(
+        "SELECT model_id FROM model "
+        "WHERE experiment_id=$1 "
+        "AND COALESCE(comment,'') ILIKE '%periodic training checkpoint%' "
+        "ORDER BY model_id DESC;",
+        row.experimentId);
+
+    std::optional<QueueResumeMeta> bestCandidate;
+    for (const auto& candidate : candidates)
+    {
+        const std::optional<QueueResumeMeta> meta =
+            TryLoadCompatibleRetryResumeMeta(
+                w, candidate[0].as<long long>(), requirements);
+        if (!meta.has_value())
+            continue;
+        if (!bestCandidate.has_value() ||
+            meta->completedEpochs > bestCandidate->completedEpochs ||
+            (meta->completedEpochs == bestCandidate->completedEpochs &&
+             meta->modelId > bestCandidate->modelId))
+        {
+            bestCandidate = meta;
+        }
+    }
+
+    if (!bestCandidate.has_value())
+    {
+        selection.reason = "no_compatible_checkpoint";
+        return selection;
+    }
+
+    if (existingMeta.has_value() &&
+        bestCandidate->completedEpochs <= existingMeta->completedEpochs)
+    {
+        selection.reason = "no_newer_compatible_checkpoint";
+        return selection;
+    }
+
+    selection.selectedResumeModelId = bestCandidate->modelId;
+    selection.selectedCompletedEpoch = bestCandidate->completedEpochs;
+    selection.promoted = row.resumeModelId != bestCandidate->modelId;
+    selection.reason = selection.promoted ? "newer_compatible_checkpoint" :
+                                            "existing_resume_already_selected";
+    return selection;
+}
+
+void PrintRetryCheckpointSelection(long long experimentId,
+                                   const RetryCheckpointSelection& selection)
+{
+    std::cout << "SCHEDULER_RETRY_CHECKPOINT_SELECTION"
+              << ",experiment_id=" << experimentId
+              << ",previous_resume_model_id="
+              << (selection.previousResumeModelId.has_value()
+                      ? std::to_string(*selection.previousResumeModelId)
+                      : "NULL")
+              << ",selected_resume_model_id="
+              << (selection.selectedResumeModelId.has_value()
+                      ? std::to_string(*selection.selectedResumeModelId)
+                      : "NULL")
+              << ",selected_completed_epoch="
+              << (selection.selectedCompletedEpoch.has_value()
+                      ? std::to_string(*selection.selectedCompletedEpoch)
+                      : "NULL")
+              << ",promotion=" << (selection.promoted ? "1" : "0")
+              << ",reason=" << selection.reason
+              << std::endl;
 }
 
 void PrintSchedulerControlAttempt(const std::string& action,
@@ -6918,7 +7081,9 @@ void ApplySchedulerControlTransition(pqxx::work& w,
                                             const std::string& action,
                                             const SchedulerControlExperimentRow& row,
                                             const std::string& newStatus,
-                                            const std::string& newPhase)
+                                            const std::string& newPhase,
+                                            const std::optional<long long>& promotedResumeModelId =
+                                                std::nullopt)
 {
     std::ostringstream sql;
     sql << "UPDATE experiment SET status = " << w.quote(newStatus)
@@ -6948,6 +7113,9 @@ void ApplySchedulerControlTransition(pqxx::work& w,
             << ", active_scheduler_worker_attempt_id = NULL"
             << ", current_operation = NULL";
     }
+
+    if (promotedResumeModelId.has_value())
+        sql << ", resume_model_id = " << *promotedResumeModelId;
 
     sql << " WHERE experiment_id = " << row.experimentId << ";";
     w.exec(sql.str());
@@ -7009,6 +7177,13 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
 
     PrintSchedulerControlTransition(*row, newStatus, newPhase);
 
+    RetryCheckpointSelection retryCheckpointSelection;
+    if (action == "retry_failed" && row->phase == "train")
+    {
+        retryCheckpointSelection = SelectRetryTrainingCheckpoint(w, *row);
+        PrintRetryCheckpointSelection(experimentId, retryCheckpointSelection);
+    }
+
     if (options.dryRun)
     {
         std::cout << "SCHEDULER_CONTROL_DRY_RUN"
@@ -7028,7 +7203,15 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
         return 0;
     }
 
-    ApplySchedulerControlTransition(w, action, *row, newStatus, newPhase);
+    ApplySchedulerControlTransition(
+        w,
+        action,
+        *row,
+        newStatus,
+        newPhase,
+        retryCheckpointSelection.promoted
+            ? retryCheckpointSelection.selectedResumeModelId
+            : std::nullopt);
     PrintSchedulerControlApplied(action, experimentId, newStatus, newPhase);
     w.commit();
     return 0;
@@ -20165,15 +20348,6 @@ std::string OptionalIntText(const std::optional<int>& value);
 std::string OptionalDoubleText(const std::optional<double>& value, int precision);
 std::string CurrentOperationForStatusJob(const SchedulerStatusJob& job);
 
-bool MatrixParamExists(pqxx::work& w, long long modelId, const std::string& paramName)
-{
-    pqxx::result rows = w.exec_params(
-        "SELECT 1 FROM matrix WHERE model_id = $1 AND param_name = $2 LIMIT 1;",
-        modelId,
-        paramName);
-    return !rows.empty();
-}
-
 std::vector<double> LoadMatrixRowValuesOrEmpty(pqxx::work& w,
                                                long long modelId,
                                                const std::string& paramName)
@@ -20389,12 +20563,15 @@ ModelInfoRecord LoadModelInfo(pqxx::work& w, long long modelId)
     info.isCheckpoint =
         info.comment.find("periodic training checkpoint") != std::string::npos ||
         std::regex_search(info.name, std::regex{R"(_epoch[0-9]+)"});
-    info.isResumable =
-        MatrixParamExists(w, modelId, "train_config_meta") &&
-        MatrixParamExists(w, modelId, "optimizer_meta") &&
-        MatrixParamExists(w, modelId, "train_symbol_meta") &&
-        MatrixParamExists(w, modelId, "param") &&
-        MatrixParamExists(w, modelId, "bias");
+    try
+    {
+        (void)LoadQueueResumeMeta(w, modelId);
+        info.isResumable = DBIO::PgModelIO::hasTrainingResumeState(w, modelId);
+    }
+    catch (const std::exception&)
+    {
+        info.isResumable = false;
+    }
 
     return info;
 }

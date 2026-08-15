@@ -83,6 +83,16 @@ public:
         std::size_t inputWidth = 0;
         std::size_t hiddenSize = 0;
     };
+
+    struct PersistedTargetMeta
+    {
+        EA::LSTM::TargetType targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+        float targetScale = 1.0f;
+        float targetBias = 0.0f;
+        bool targetUseZScore = false;
+        float targetMean = 0.0f;
+        float targetStd = 1.0f;
+    };
     static constexpr int kTrainConfigMetaSchemaVersion = 1;
     static constexpr int kLookaheadHighLowFirstHitLabelRuleId = 1;
     static constexpr int kTrainConfigMetaFieldCount = 8;
@@ -498,6 +508,130 @@ public:
         return fromFlatRowMajor<T>(vals, static_cast<size_t>(dims.n_rows), static_cast<size_t>(dims.n_cols));
     }
 
+    // Decode the persisted target contract used to choose the real training
+    // path.  Type 3 remains accepted as the legacy spelling of the current
+    // three-class direction target.
+    static PersistedTargetMeta loadRequiredTargetMeta(pqxx::work& w,
+                                                      long long modelId)
+    {
+        const auto dims = loadParameterDims(w, modelId, "target_meta");
+        const auto vals = loadParameterValues(w, modelId, "target_meta");
+        if (dims.n_rows != 1 || dims.n_cols != 6 || vals.size() != 6)
+            throw std::runtime_error("target_meta has invalid shape");
+
+        const double typeValue = vals[0];
+        if (!std::isfinite(typeValue) || std::llround(typeValue) != typeValue)
+            throw std::runtime_error("target_meta has invalid target type");
+
+        PersistedTargetMeta meta;
+        switch (std::llround(typeValue))
+        {
+            case 0: meta.targetType = EA::LSTM::TargetType::LogReturn; break;
+            case 1: meta.targetType = EA::LSTM::TargetType::PercentReturn; break;
+            case 2:
+            case 3: // legacy spelling of the three-class direction target
+                meta.targetType = EA::LSTM::TargetType::UpNeutralDownReturn;
+                break;
+            default: throw std::runtime_error("target_meta has unsupported target type");
+        }
+        meta.targetScale = static_cast<float>(vals[1]);
+        meta.targetBias = static_cast<float>(vals[2]);
+        meta.targetUseZScore = (vals[3] != 0.0);
+        meta.targetMean = static_cast<float>(vals[4]);
+        meta.targetStd = static_cast<float>(vals[5]);
+        return meta;
+    }
+
+    static void applyTargetMeta(const PersistedTargetMeta& meta, EA::LSTM& lstm)
+    {
+        lstm.targetType = meta.targetType;
+        lstm.targetScale = meta.targetScale;
+        lstm.targetBias = meta.targetBias;
+        lstm.targetUseZScore = meta.targetUseZScore;
+        lstm.targetMean = meta.targetMean;
+        lstm.targetStd = meta.targetStd;
+    }
+
+    static MatGPU<float> loadRequiredDirectionHeadMatrix(
+        pqxx::work& w,
+        long long modelId,
+        const std::string& paramName,
+        std::size_t expectedRows,
+        std::size_t expectedCols)
+    {
+        auto matrix = loadParameterMatrix<float>(w, modelId, paramName);
+        if (matrix.Shape()[0] != expectedRows || matrix.Shape()[1] != expectedCols)
+            throw std::runtime_error(
+                paramName + " has invalid shape; expected " +
+                std::to_string(expectedRows) + "x" +
+                std::to_string(expectedCols));
+        return matrix;
+    }
+
+    // Validate the persisted state that the training resume path loads after
+    // its configuration metadata has been accepted.  Keep this in sync with
+    // loadAll/loadOptimizerMeta so callers can reject a checkpoint before it
+    // is made a resume source.
+    static void validateTrainingResumeState(pqxx::work& w, long long modelId)
+    {
+        const auto modelMeta = loadRequiredModelMeta(w, modelId);
+        (void)loadParameterMatrix<float>(w, modelId, "param");
+        (void)loadParameterMatrix<float>(w, modelId, "bias");
+        (void)loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
+        (void)loadParameterMatrix<float>(w, modelId, "returnHeadBias");
+
+        const auto targetMeta = loadRequiredTargetMeta(w, modelId);
+        if (targetMeta.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+        {
+            (void)loadRequiredDirectionHeadMatrix(
+                w,
+                modelId,
+                "returnHeadDirWeight",
+                modelMeta.hiddenSize,
+                static_cast<std::size_t>(direction_output_size));
+            (void)loadRequiredDirectionHeadMatrix(
+                w,
+                modelId,
+                "returnHeadDirBias",
+                1,
+                static_cast<std::size_t>(direction_output_size));
+        }
+
+        const auto optimizerDims = loadParameterDims(w, modelId, "optimizer_meta");
+        const auto optimizerValues =
+            loadParameterValues(w, modelId, "optimizer_meta");
+        if (optimizerDims.n_rows != 1 ||
+            optimizerDims.n_cols < kOptimizerMetaFieldCount ||
+            optimizerValues.size() < static_cast<size_t>(kOptimizerMetaFieldCount))
+            throw std::runtime_error("resume requires valid optimizer_meta");
+
+        const int optimizerSchema =
+            static_cast<int>(std::llround(optimizerValues[0]));
+        const int optimizerType =
+            static_cast<int>(std::llround(optimizerValues[1]));
+        const int firstMomentBuffers =
+            static_cast<int>(std::llround(optimizerValues[3]));
+        const int secondMomentBuffers =
+            static_cast<int>(std::llround(optimizerValues[4]));
+        if (optimizerSchema != kOptimizerMetaSchemaVersion ||
+            optimizerType != kOptimizerTypeSgd ||
+            firstMomentBuffers != 0 || secondMomentBuffers != 0)
+            throw std::runtime_error("resume optimizer_meta is not supported by this binary");
+    }
+
+    static bool hasTrainingResumeState(pqxx::work& w, long long modelId)
+    {
+        try
+        {
+            validateTrainingResumeState(w, modelId);
+            return true;
+        }
+        catch (const std::exception&)
+        {
+            return false;
+        }
+    }
+
     // Load all parameters into an existing LSTM instance
     static void loadAll(pqxx::work& w, long long modelId, EA::LSTM& lstm)
     {
@@ -505,10 +639,33 @@ public:
         lstm.bias             = loadParameterMatrix<float>(w, modelId, "bias");
         lstm.returnHeadWeight = loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
         lstm.returnHeadBias   = loadParameterMatrix<float>(w, modelId, "returnHeadBias");
-        // Try to load 3-class direction head if present (backward compatible)
-        try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
-        try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
-        (void)tryLoadTargetMeta(w, modelId, lstm);
+
+        const std::optional<PersistedTargetMeta> targetMeta =
+            tryLoadTargetMeta(w, modelId, lstm);
+        if (targetMeta.has_value() &&
+            targetMeta->targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
+        {
+            const std::size_t loadedHiddenSize = lstm.param.Shape()[1] / 4;
+            lstm.returnHeadDirWeight = loadRequiredDirectionHeadMatrix(
+                w,
+                modelId,
+                "returnHeadDirWeight",
+                loadedHiddenSize,
+                static_cast<std::size_t>(direction_output_size));
+            lstm.returnHeadDirBias = loadRequiredDirectionHeadMatrix(
+                w,
+                modelId,
+                "returnHeadDirBias",
+                1,
+                static_cast<std::size_t>(direction_output_size));
+        }
+        else
+        {
+            // Directional tensors were not consumed by these target paths in
+            // historical checkpoints, so preserve their optional loading.
+            try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
+            try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
+        }
 
         const size_t rows = lstm.param.Shape()[0];
         const size_t cols = lstm.param.Shape()[1];
@@ -531,29 +688,17 @@ public:
         }
     }
 
-    static bool tryLoadTargetMeta(pqxx::work& w, long long modelId, EA::LSTM& lstm)
+    static std::optional<PersistedTargetMeta> tryLoadTargetMeta(pqxx::work& w,
+                                                                 long long modelId,
+                                                                 EA::LSTM& lstm)
     {
-        try {
-            auto dims = loadParameterDims(w, modelId, "target_meta");
-            if (dims.n_rows != 1 || dims.n_cols != 6) return false;
-            auto vals = loadParameterValues(w, modelId, "target_meta");
-            if (vals.size() != 6) return false;
-            int typeInt = static_cast<int>(vals[0]);
-            switch (typeInt) {
-                case 0: lstm.targetType = EA::LSTM::TargetType::LogReturn; break;
-                case 1: lstm.targetType = EA::LSTM::TargetType::PercentReturn; break;
-                case 2: // legacy BinaryReturn -> map to 3-class direction
-                case 3: lstm.targetType = EA::LSTM::TargetType::UpNeutralDownReturn; break;
-                default: return false; // unknown type, fail to load meta
-            }
-            lstm.targetScale = static_cast<float>(vals[1]);
-            lstm.targetBias  = static_cast<float>(vals[2]);
-            lstm.targetUseZScore = (vals[3] != 0.0);
-            lstm.targetMean  = static_cast<float>(vals[4]);
-            lstm.targetStd   = static_cast<float>(vals[5]);
-            return true;
+        try
+        {
+            const PersistedTargetMeta meta = loadRequiredTargetMeta(w, modelId);
+            applyTargetMeta(meta, lstm);
+            return meta;
         }
-        catch (...) { return false;   }
+        catch (...) { return std::nullopt; }
     }
 };
 

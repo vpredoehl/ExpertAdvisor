@@ -4389,6 +4389,8 @@ TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long mo
 
 ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long modelId)
 {
+    DBIO::PgModelIO::validateTrainingResumeState(w, modelId);
+
     ResumeCheckpointConfig cfg;
     cfg.sourceModelId = modelId;
     cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
@@ -4408,10 +4410,8 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     }
 
     {
-        auto vals = DBIO::PgModelIO::loadParameterValues(w, modelId, "target_meta");
-        if (vals.size() != 6)
-            throw std::runtime_error("resume requires valid target_meta");
-        cfg.targetType = static_cast<EA::LSTM::TargetType>(static_cast<int>(std::llround(vals[0])));
+        cfg.targetType =
+            DBIO::PgModelIO::loadRequiredTargetMeta(w, modelId).targetType;
     }
 
     auto optimizerDims = DBIO::PgModelIO::loadParameterDims(w, modelId, "optimizer_meta");
