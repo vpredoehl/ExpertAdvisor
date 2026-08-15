@@ -6939,6 +6939,13 @@ void ApplySchedulerControlTransition(pqxx::work& w,
             << ", exit_code = NULL"
             << ", error_message = NULL"
             << ", worker_pid = NULL"
+            << ", worker_process_group_id = NULL"
+            << ", worker_process_start_identity = NULL"
+            << ", worker_executable = NULL"
+            << ", worker_command_line = NULL"
+            << ", worker_control_state = 'running'"
+            << ", worker_global_pause_request_id = NULL"
+            << ", active_scheduler_worker_attempt_id = NULL"
             << ", current_operation = NULL";
     }
 
