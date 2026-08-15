@@ -77,4 +77,16 @@ int main()
     const auto lookback = ComputeCausalDonchian20(twentyOneHighs, twentyOneLows, 100.0f, kTestFeatureScale);
     AssertNear(lookback.first, std::log(100.0f / 101.0f) * kTestFeatureScale);
     AssertNear(lookback.second, std::log(100.0f / 99.0f) * kTestFeatureScale);
+
+    // Explicit runtime lookback changes only the history window; the closed
+    // ComputeCausalDonchian20 API remains exactly the 20-bar definition.
+    const auto shortLookback = ComputeCausalDonchian(
+        twentyOneHighs, twentyOneLows, 100.0f, kTestFeatureScale, 21);
+    assert(shortLookback.first != lookback.first);
+    assert(shortLookback.second != lookback.second);
+    assert(ParseDonchianLookback("20") == kDefaultDonchianLookback);
+    bool invalidLookbackRejected = false;
+    try { (void)ParseDonchianLookback("0"); }
+    catch (const std::invalid_argument&) { invalidLookbackRejected = true; }
+    assert(invalidLookbackRejected);
 }

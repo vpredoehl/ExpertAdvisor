@@ -168,6 +168,8 @@ std::size_t SemanticDifferenceCount(
     differences += lhs.inferStartDate != rhs.inferStartDate;
     differences += lhs.inferEndDate != rhs.inferEndDate;
     differences += lhs.donchian20Mode != rhs.donchian20Mode;
+    differences += lhs.donchianLookback != rhs.donchianLookback;
+    differences += lhs.featureWarmupScope != rhs.featureWarmupScope;
     return differences;
 }
 

@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "Donchian20Mode.hpp"
+#include "DonchianLookback.hpp"
+#include "FeatureWarmupScope.hpp"
 
 namespace EA::ExperimentRecommendation
 {
@@ -80,6 +82,18 @@ struct EffectiveExperimentConfiguration
     std::optional<std::string> inferStartDate;
     std::optional<std::string> inferEndDate;
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
+    std::size_t donchianLookback = kDefaultDonchianLookback;
+    FeatureWarmupScope featureWarmupScope = kDefaultFeatureWarmupScope;
+};
+
+// Persisted recommendation provenance is immutable. Version selection is
+// explicit when reconstructing historical canonical identities.
+enum class RecommendationSemanticConfigurationVersion
+{
+    v3,
+    v4,
+    v5,
+    v6
 };
 
 // Invocation identity is deliberately distinct from semantic configuration
@@ -131,19 +145,42 @@ std::string CanonicalRecommendationDouble(double value);
 // Tagged deterministic accelerator for recommendation-owned canonical text.
 // Canonical text remains authoritative and must be compared after a hash match.
 std::string RecommendationCanonicalHash(const std::string& canonicalText);
+std::optional<RecommendationSemanticConfigurationVersion>
+RecommendationSemanticConfigurationVersionFromCanonicalText(
+    const std::string& canonicalText);
+FeatureWarmupScope RecommendationFeatureWarmupScopeFromCanonicalText(
+    const std::string& canonicalText);
+Donchian20Mode RecommendationDonchian20ModeFromCanonicalText(
+    const std::string& canonicalText);
+std::size_t RecommendationDonchianLookbackFromCanonicalText(
+    const std::string& canonicalText);
+std::string RecommendationSemanticConfigurationFromInvocationCanonicalText(
+    const std::string& canonicalText);
 std::string CanonicalExperimentDateText(const std::string& value);
 std::string EffectiveExperimentConfigurationCanonicalText(
-    const EffectiveExperimentConfiguration& configuration);
+    const EffectiveExperimentConfiguration& configuration,
+    RecommendationSemanticConfigurationVersion version =
+        RecommendationSemanticConfigurationVersion::v6);
 std::string RecommendationCandidateHash(
-    const EffectiveExperimentConfiguration& configuration);
+    const EffectiveExperimentConfiguration& configuration,
+    RecommendationSemanticConfigurationVersion version =
+        RecommendationSemanticConfigurationVersion::v6);
 RecommendationCandidateIdentity BuildRecommendationCandidateIdentity(
-    const EffectiveExperimentConfiguration& configuration);
+    const EffectiveExperimentConfiguration& configuration,
+    RecommendationSemanticConfigurationVersion version =
+        RecommendationSemanticConfigurationVersion::v6);
 std::string ExperimentInvocationCanonicalText(
-    const ExperimentInvocationConfiguration& invocation);
+    const ExperimentInvocationConfiguration& invocation,
+    RecommendationSemanticConfigurationVersion version =
+        RecommendationSemanticConfigurationVersion::v6);
 std::string ExperimentInvocationHash(
-    const ExperimentInvocationConfiguration& invocation);
+    const ExperimentInvocationConfiguration& invocation,
+    RecommendationSemanticConfigurationVersion version =
+        RecommendationSemanticConfigurationVersion::v6);
 RecommendationInvocationIdentity BuildRecommendationInvocationIdentity(
-    const ExperimentInvocationConfiguration& invocation);
+    const ExperimentInvocationConfiguration& invocation,
+    RecommendationSemanticConfigurationVersion version =
+        RecommendationSemanticConfigurationVersion::v6);
 
 std::string RecommendationSourceScopeText(RecommendationSourceScope value);
 std::optional<RecommendationSourceScope> ParseRecommendationSourceScope(

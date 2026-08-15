@@ -133,8 +133,8 @@ void Tensor::Add(Feature f)
 
     // Causal Donchian-20 distances. raw_high/raw_low contain prior rows at
     // this point, so the current bar cannot affect either extrema.
-    const auto [donchianUp, donchianDown] = ComputeCausalDonchian20(
-        raw_high, raw_low, f.close, kFeatureScale);
+    const auto [donchianUp, donchianDown] = ComputeCausalDonchian(
+        raw_high, raw_low, f.close, kFeatureScale, donchianLookback);
     if (donchian20Mode == Donchian20Mode::Enabled)
     {
         p[donchianUpCol] = donchianUp;

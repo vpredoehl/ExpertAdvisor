@@ -14,6 +14,8 @@
 #include "LSTM.hpp"
 #include "CanonicalSymbol.hpp"
 #include "Donchian20Mode.hpp"
+#include "DonchianLookback.hpp"
+#include "FeatureWarmupScope.hpp"
 #include "ModelInputContract.hpp"
 
 
@@ -167,7 +169,11 @@ public:
                         const std::string& symbol = {},
                         const std::string& fromDate = {},
                         const std::string& toDate = {},
-                        Donchian20Mode donchian20Mode = kDefaultDonchian20Mode)
+                        Donchian20Mode donchian20Mode = kDefaultDonchian20Mode,
+                        EA::FeatureWarmupScope featureWarmupScope =
+                            EA::kDefaultFeatureWarmupScope,
+                        std::size_t donchianLookback =
+                            kDefaultDonchianLookback)
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -180,6 +186,8 @@ public:
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
         saveDonchian20ModeMeta(w, modelId, donchian20Mode);
+        saveFeatureWarmupScopeMeta(w, modelId, featureWarmupScope);
+        saveDonchianLookbackMeta(w, modelId, donchianLookback);
         if (symbol.empty())
             throw std::runtime_error("saveAll requires a canonical training symbol");
         saveTrainSymbolMeta(w, modelId, symbol);
@@ -207,6 +215,60 @@ public:
             if (std::string{error.what()}.find("No entries for parameter") !=
                 std::string::npos)
                 return kDefaultDonchian20Mode;
+            throw;
+        }
+    }
+
+    static void saveDonchianLookbackMeta(pqxx::work& w,
+                                         long long modelId,
+                                         std::size_t lookback)
+    {
+        saveAsciiMeta(w, modelId, "donchian_lookback_meta",
+                      std::to_string(ValidateDonchianLookback(lookback)));
+    }
+
+    // Missing metadata predates configurable lookback and means Donchian-20.
+    static std::size_t loadDonchianLookbackMeta(pqxx::work& w,
+                                                long long modelId)
+    {
+        try
+        {
+            return ParseDonchianLookback(
+                decodeAsciiMeta(w, modelId, "donchian_lookback_meta"));
+        }
+        catch (const std::exception& error)
+        {
+            if (std::string{error.what()}.find("No entries for parameter") !=
+                std::string::npos)
+                return kDefaultDonchianLookback;
+            throw;
+        }
+    }
+
+    static void saveFeatureWarmupScopeMeta(
+        pqxx::work& w,
+        long long modelId,
+        EA::FeatureWarmupScope scope)
+    {
+        saveAsciiMeta(w, modelId, "feature_warmup_scope_meta",
+                      EA::FeatureWarmupScopeText(scope));
+    }
+
+    // Missing metadata is durable evidence of the historic cold boundary.
+    static EA::FeatureWarmupScope loadFeatureWarmupScopeMeta(
+        pqxx::work& w,
+        long long modelId)
+    {
+        try
+        {
+            return EA::ParseFeatureWarmupScope(
+                decodeAsciiMeta(w, modelId, "feature_warmup_scope_meta"));
+        }
+        catch (const std::exception& error)
+        {
+            if (std::string{error.what()}.find("No entries for parameter") !=
+                std::string::npos)
+                return EA::FeatureWarmupScope::LegacyColdBoundary;
             throw;
         }
     }

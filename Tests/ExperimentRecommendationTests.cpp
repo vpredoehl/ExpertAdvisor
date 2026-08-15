@@ -223,16 +223,34 @@ int main()
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
     const std::string expectedCanonical =
-        "experiment_recommendation_semantic_configuration_v4;symbol=eurusd;"
+        "experiment_recommendation_semantic_configuration_v6;symbol=eurusd;"
         "prediction_horizon=12;label_threshold=0.001;core_lr_mult=1;"
         "head_lr_mult=5;target_epochs=120;train_start_date=2010-01-01;"
         "train_end_date=2025-01-01;infer_start_date=2025-01-01;"
-        "infer_end_date=2026-01-01;donchian20_mode=enabled";
+        "infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20";
     assert(identity.canonicalText == expectedCanonical);
     assert(identity.hash == RecommendationCandidateHash(configuration));
     assert(identity.hash == RecommendationCanonicalHash(expectedCanonical));
     assert(identity.canonicalText.starts_with(
-        "experiment_recommendation_semantic_configuration_v4;"));
+        "experiment_recommendation_semantic_configuration_v6;"));
+    const auto v4 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v4);
+    assert(v4.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v4;symbol=eurusd;"
+        "prediction_horizon=12;label_threshold=0.001;core_lr_mult=1;"
+        "head_lr_mult=5;target_epochs=120;train_start_date=2010-01-01;"
+        "train_end_date=2025-01-01;infer_start_date=2025-01-01;"
+        "infer_end_date=2026-01-01;donchian20_mode=enabled");
+    assert(RecommendationFeatureWarmupScopeFromCanonicalText(v4.canonicalText) ==
+           EA::FeatureWarmupScope::LegacyColdBoundary);
+    assert(RecommendationDonchianLookbackFromCanonicalText(v4.canonicalText) == 20);
+    EffectiveExperimentConfiguration cold = configuration;
+    cold.featureWarmupScope = EA::FeatureWarmupScope::LegacyColdBoundary;
+    assert(BuildRecommendationCandidateIdentity(cold).hash != identity.hash);
+    EffectiveExperimentConfiguration lookback10 = configuration;
+    lookback10.donchianLookback = 10;
+    assert(BuildRecommendationCandidateIdentity(lookback10).hash != identity.hash);
     EffectiveExperimentConfiguration zeroAblation = configuration;
     zeroAblation.donchian20Mode = Donchian20Mode::ZeroAblation;
     const auto zeroAblationIdentity =

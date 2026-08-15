@@ -250,7 +250,8 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
         "s.score_status,s.scoring_policy_canonical,s.scoring_policy_hash,"
         "sr.status AS score_run_status,e.symbol,e.prediction_horizon,"
         "e.c_next_threshold,e.core_lr_mult,e.head_lr_mult,e.target_epochs,"
-        "e.checkpoint_interval,e.donchian20_mode,"
+        "e.checkpoint_interval,e.donchian20_mode,e.donchian_lookback,"
+        "e.feature_warmup_scope,"
         "to_char(e.train_start AT TIME ZONE 'America/Chicago',"
         "'YYYY-MM-DD') AS train_start_date,"
         "to_char(e.train_end AT TIME ZONE 'America/Chicago',"
@@ -414,6 +415,10 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
     invocation.configuration.inferEndDate = OptionalValue<std::string>(row, "infer_end_date");
     invocation.configuration.donchian20Mode = ParseDonchian20Mode(
         row["donchian20_mode"].as<std::string>());
+    invocation.configuration.donchianLookback = ParseDonchianLookback(
+        row["donchian_lookback"].as<std::string>());
+    invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
+        row["feature_warmup_scope"].as<std::string>());
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
     invocation.resumeModelId = OptionalValue<long long>(row, "resume_model_id");
     request.campaignDonchian20Mode = campaignDonchian20Mode;
