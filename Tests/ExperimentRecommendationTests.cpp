@@ -223,12 +223,23 @@ int main()
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
     assert(identity.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v4;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled");
+    assert(identity.hash == RecommendationCandidateHash(configuration));
+    const auto v3 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v3);
+    assert(v3.canonicalText ==
         "experiment_recommendation_semantic_configuration_v3;symbol=eurusd;prediction_horizon=12;"
         "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
         "train_start_date=2010-01-01;train_end_date=2025-01-01;"
         "infer_start_date=2025-01-01;infer_end_date=2026-01-01");
-    assert(identity.hash == RecommendationCandidateHash(configuration));
-    assert(identity.hash == "fnv1a64:e55c515fcbe9a1ec");
+    assert(v3.hash == "fnv1a64:e55c515fcbe9a1ec");
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v3.canonicalText) == RecommendationSemanticConfigurationVersion::v3);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v4);
     assert(CanonicalExperimentDateText("2025-06-15") == "2025-06-15");
     assert(CanonicalExperimentDateText("2024-02-29") == "2024-02-29");
     for (const std::string invalidDate : {
@@ -306,7 +317,7 @@ int main()
         BuildRecommendationInvocationIdentity(resume41);
     assert(invocationIdentity.invocation.configuration.symbol == "eurusd");
     assert(invocationIdentity.hash == ExperimentInvocationHash(resume41));
-    assert(invocationIdentity.hash == "fnv1a64:c760e6edd2e4c425");
+    assert(invocationIdentity.hash == "fnv1a64:5a0ff7012537a0e3");
     assert(invocationIdentity.hash.starts_with("fnv1a64:"));
     assert(invocationIdentity.canonicalText.starts_with(
         "experiment_recommendation_invocation_v2;"));

@@ -451,6 +451,21 @@ std::string RecommendationCanonicalHash(const std::string& canonicalText)
     return StableRecommendationHash(canonicalText);
 }
 
+std::optional<RecommendationSemanticConfigurationVersion>
+RecommendationSemanticConfigurationVersionFromCanonicalText(
+    const std::string& canonicalText)
+{
+    constexpr std::string_view kV3 =
+        "experiment_recommendation_semantic_configuration_v3;";
+    constexpr std::string_view kV4 =
+        "experiment_recommendation_semantic_configuration_v4;";
+    if (canonicalText.starts_with(kV3))
+        return RecommendationSemanticConfigurationVersion::v3;
+    if (canonicalText.starts_with(kV4))
+        return RecommendationSemanticConfigurationVersion::v4;
+    return std::nullopt;
+}
+
 std::string RecommendationPolicyCanonicalText(
     const RecommendationPolicy& policy)
 {
@@ -523,7 +538,8 @@ std::string CanonicalExperimentDateText(const std::string& value)
 }
 
 std::string EffectiveExperimentConfigurationCanonicalText(
-    const EffectiveExperimentConfiguration& configuration)
+    const EffectiveExperimentConfiguration& configuration,
+    RecommendationSemanticConfigurationVersion version)
 {
     const std::string symbol =
         EA::CanonicalSymbol::Normalize(configuration.symbol);
@@ -540,7 +556,8 @@ std::string EffectiveExperimentConfigurationCanonicalText(
             "recommendation_identity_invalid_numeric_configuration");
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "experiment_recommendation_semantic_configuration_v3"
+    out << "experiment_recommendation_semantic_configuration_v"
+        << (version == RecommendationSemanticConfigurationVersion::v3 ? 3 : 4)
         << ";symbol=" << symbol
         << ";prediction_horizon=" << configuration.predictionHorizon
         << ";label_threshold="
@@ -556,18 +573,23 @@ std::string EffectiveExperimentConfigurationCanonicalText(
             configuration.inferStartDate)
         << ";infer_end_date=" << OptionalDateText(
             configuration.inferEndDate);
+    if (version == RecommendationSemanticConfigurationVersion::v4)
+        out << ";donchian20_mode=" << Donchian20ModeText(
+            configuration.donchian20Mode);
     return out.str();
 }
 
 std::string RecommendationCandidateHash(
-    const EffectiveExperimentConfiguration& configuration)
+    const EffectiveExperimentConfiguration& configuration,
+    RecommendationSemanticConfigurationVersion version)
 {
     return RecommendationCanonicalHash(
-        EffectiveExperimentConfigurationCanonicalText(configuration));
+        EffectiveExperimentConfigurationCanonicalText(configuration, version));
 }
 
 RecommendationCandidateIdentity BuildRecommendationCandidateIdentity(
-    const EffectiveExperimentConfiguration& configuration)
+    const EffectiveExperimentConfiguration& configuration,
+    RecommendationSemanticConfigurationVersion version)
 {
     RecommendationCandidateIdentity identity;
     identity.configuration = configuration;
@@ -584,13 +606,14 @@ RecommendationCandidateIdentity BuildRecommendationCandidateIdentity(
         identity.configuration.inferEndDate =
             CanonicalExperimentDateText(*configuration.inferEndDate);
     identity.canonicalText =
-        EffectiveExperimentConfigurationCanonicalText(identity.configuration);
+        EffectiveExperimentConfigurationCanonicalText(identity.configuration, version);
     identity.hash = RecommendationCanonicalHash(identity.canonicalText);
     return identity;
 }
 
 std::string ExperimentInvocationCanonicalText(
-    const ExperimentInvocationConfiguration& invocation)
+    const ExperimentInvocationConfiguration& invocation,
+    RecommendationSemanticConfigurationVersion version)
 {
     if (invocation.checkpointInterval <= 0)
         throw std::invalid_argument(
@@ -600,7 +623,7 @@ std::string ExperimentInvocationCanonicalText(
             "recommendation_invocation_resume_model_id_must_be_positive");
     const std::string semantic =
         EffectiveExperimentConfigurationCanonicalText(
-            invocation.configuration);
+            invocation.configuration, version);
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << "experiment_recommendation_invocation_v2"
@@ -613,22 +636,24 @@ std::string ExperimentInvocationCanonicalText(
 }
 
 std::string ExperimentInvocationHash(
-    const ExperimentInvocationConfiguration& invocation)
+    const ExperimentInvocationConfiguration& invocation,
+    RecommendationSemanticConfigurationVersion version)
 {
     return RecommendationCanonicalHash(
-        ExperimentInvocationCanonicalText(invocation));
+        ExperimentInvocationCanonicalText(invocation, version));
 }
 
 RecommendationInvocationIdentity BuildRecommendationInvocationIdentity(
-    const ExperimentInvocationConfiguration& invocation)
+    const ExperimentInvocationConfiguration& invocation,
+    RecommendationSemanticConfigurationVersion version)
 {
     RecommendationInvocationIdentity identity;
     identity.invocation = invocation;
     const RecommendationCandidateIdentity semantic =
-        BuildRecommendationCandidateIdentity(invocation.configuration);
+        BuildRecommendationCandidateIdentity(invocation.configuration, version);
     identity.invocation.configuration = semantic.configuration;
     identity.canonicalText = ExperimentInvocationCanonicalText(
-        identity.invocation);
+        identity.invocation, version);
     identity.hash = RecommendationCanonicalHash(identity.canonicalText);
     return identity;
 }

@@ -404,11 +404,17 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
         !ValidOptionalRanking(request.ranking))
         return Rejected(RecommendationConversionReason::inconsistentProvenance);
 
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(
+            request.recommendationSemanticCanonical);
+    if (!semanticVersion)
+        return Rejected(RecommendationConversionReason::inconsistentProvenance);
+
     RecommendationInvocationIdentity sourceIdentity;
     try
     {
         sourceIdentity = BuildRecommendationInvocationIdentity(
-            request.sourceInvocation);
+            request.sourceInvocation, *semanticVersion);
     }
     catch (const std::exception&)
     {
@@ -472,7 +478,7 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     try
     {
         proposedIdentity = BuildRecommendationInvocationIdentity(
-            proposedInvocation);
+            proposedInvocation, *semanticVersion);
     }
     catch (const std::exception&)
     {
@@ -481,7 +487,7 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     }
     const RecommendationCandidateIdentity proposedSemanticIdentity =
         BuildRecommendationCandidateIdentity(
-            proposedIdentity.invocation.configuration);
+            proposedIdentity.invocation.configuration, *semanticVersion);
     if (request.recommendationSemanticCanonical !=
             proposedSemanticIdentity.canonicalText ||
         request.recommendationSemanticHash != proposedSemanticIdentity.hash ||

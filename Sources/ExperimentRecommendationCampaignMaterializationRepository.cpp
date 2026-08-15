@@ -249,7 +249,7 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
         "s.score_status,s.scoring_policy_canonical,s.scoring_policy_hash,"
         "sr.status AS score_run_status,e.symbol,e.prediction_horizon,"
         "e.c_next_threshold,e.core_lr_mult,e.head_lr_mult,e.target_epochs,"
-        "e.checkpoint_interval,"
+        "e.checkpoint_interval,e.donchian20_mode,"
         "to_char(e.train_start AT TIME ZONE 'America/Chicago',"
         "'YYYY-MM-DD') AS train_start_date,"
         "to_char(e.train_end AT TIME ZONE 'America/Chicago',"
@@ -318,6 +318,12 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
     request.recommendationInvocationCanonical =
         row["invocation_configuration_canonical"].as<std::string>();
     request.recommendationInvocationHash = row["invocation_hash"].as<std::string>();
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(
+            request.recommendationSemanticCanonical);
+    if (!semanticVersion)
+        throw std::runtime_error(
+            "invalid_persisted_recommendation_semantic_configuration_version");
     if (row["ranking_bucket"].as<std::string>() != "advisory_ready" ||
         row["ranking_semantic_hash"].as<std::string>() !=
             request.recommendationSemanticHash ||
@@ -422,6 +428,11 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
     invocation.configuration.trainEndDate = row["train_end_date"].as<std::string>();
     invocation.configuration.inferStartDate = OptionalValue<std::string>(row, "infer_start_date");
     invocation.configuration.inferEndDate = OptionalValue<std::string>(row, "infer_end_date");
+    // A v4 identity makes this persisted source mode part of its exact
+    // scientific provenance.  Do not substitute the configuration default.
+    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v4)
+        invocation.configuration.donchian20Mode = ParseDonchian20Mode(
+            row["donchian20_mode"].as<std::string>());
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
     invocation.resumeModelId = OptionalValue<long long>(row, "resume_model_id");
     request.mutations.push_back({

@@ -95,7 +95,10 @@ struct Fixture
     RecommendationCampaignMaterializationEvidence materialization;
 };
 
-Fixture BuildFixture()
+Fixture BuildFixture(
+    RecommendationSemanticConfigurationVersion semanticVersion =
+        RecommendationSemanticConfigurationVersion::v4,
+    Donchian20Mode donchian20Mode = Donchian20Mode::Enabled)
 {
     Fixture fixture;
     RecommendationCampaignPlanInput input;
@@ -152,12 +155,14 @@ Fixture BuildFixture()
     conversion.sourceInvocation.configuration.targetEpochs = 120;
     conversion.sourceInvocation.configuration.trainStartDate = "2026-01-01";
     conversion.sourceInvocation.configuration.trainEndDate = "2026-02-01";
+    conversion.sourceInvocation.configuration.donchian20Mode = donchian20Mode;
     conversion.sourceInvocation.checkpointInterval = 20;
     auto proposed = conversion.sourceInvocation;
     proposed.configuration.coreLrMult = 1.1;
-    const auto invocation = BuildRecommendationInvocationIdentity(proposed);
+    const auto invocation = BuildRecommendationInvocationIdentity(
+        proposed, semanticVersion);
     const auto semantic = BuildRecommendationCandidateIdentity(
-        invocation.invocation.configuration);
+        invocation.invocation.configuration, semanticVersion);
     conversion.recommendationInvocationCanonical = invocation.canonicalText;
     conversion.recommendationInvocationHash = invocation.hash;
     conversion.recommendationSemanticCanonical = semantic.canonicalText;
@@ -170,7 +175,7 @@ Fixture BuildFixture()
     fixture.proposal = *result.proposal;
     fixture.recommendationSemanticCanonical =
         BuildRecommendationCandidateIdentity(
-            fixture.proposal.proposedInvocation.configuration).canonicalText;
+            fixture.proposal.proposedInvocation.configuration, semanticVersion).canonicalText;
     RecommendationCampaignMaterializationRequest request{
         42, "operator", "Materialize exact proposal set."};
     fixture.materialization = BuildRecommendationCampaignMaterializationEvidence(
@@ -253,6 +258,25 @@ int main()
         " user=pqxx options='-c search_path=" + schema + "'";
     pqxx::connection owner{ownerString};
     const Fixture fixture = BuildFixture();
+    const Fixture historicalV3 = BuildFixture(
+        RecommendationSemanticConfigurationVersion::v3,
+        Donchian20Mode::ZeroAblation);
+    assert(fixture.recommendationSemanticCanonical.find(
+               "experiment_recommendation_semantic_configuration_v4;") == 0);
+    assert(fixture.recommendationSemanticCanonical.find(
+               ";donchian20_mode=enabled") != std::string::npos);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               fixture.recommendationSemanticCanonical) ==
+           RecommendationSemanticConfigurationVersion::v4);
+    assert(historicalV3.recommendationSemanticCanonical.find(
+               "experiment_recommendation_semantic_configuration_v3;") == 0);
+    assert(historicalV3.recommendationSemanticCanonical.find(
+               "donchian20_mode") == std::string::npos);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               historicalV3.recommendationSemanticCanonical) ==
+           RecommendationSemanticConfigurationVersion::v3);
+    assert(historicalV3.proposal.proposedInvocationCanonical.find(
+               "donchian20_mode") == std::string::npos);
     try
     {
         pqxx::work setup{owner};
@@ -266,7 +290,7 @@ int main()
                    "target_epochs integer,checkpoint_interval integer,"
                    "train_start timestamptz,train_end timestamptz,"
                    "infer_start timestamptz,infer_end timestamptz,"
-                   "resume_model_id bigint);"
+                   "resume_model_id bigint,donchian20_mode text);"
                    "CREATE TABLE experiment_recommendation("
                    "recommendation_id bigint PRIMARY KEY,status text,"
                    "source_experiment_id bigint,"
@@ -321,7 +345,7 @@ int main()
         setup.exec(
             "INSERT INTO experiment VALUES(501,'eurusd',12,0.001,1.0,1.0,"
             "120,20,'2026-01-01 00:00:00 America/Chicago',"
-            "'2026-02-01 00:00:00 America/Chicago',NULL,NULL,NULL);");
+            "'2026-02-01 00:00:00 America/Chicago',NULL,NULL,NULL,'enabled');");
         setup.exec(
             "INSERT INTO experiment_recommendation VALUES("
             "1,'approved',501,$1,$2,$3,$4,'core_lr_mult',$5,$6);",
@@ -389,6 +413,113 @@ int main()
             assert(conversionRequest.score.finalScore == 0.85);
             assert(conversionRequest.sourceInvocation.configuration.trainStartDate ==
                    "2026-01-01");
+            assert(conversionRequest.sourceInvocation.configuration.donchian20Mode ==
+                   Donchian20Mode::Enabled);
+        }
+        {
+            pqxx::work mutate{owner};
+            mutate.exec("SET LOCAL search_path TO " +
+                mutate.quote_name(schema));
+            mutate.exec("UPDATE experiment SET donchian20_mode='zero_ablation' "
+                        "WHERE experiment_id=501;");
+            mutate.commit();
+
+            pqxx::work tx{runtime};
+            const auto conversionRequest =
+                LoadRecommendationCampaignConversionRequest(tx, 7, 101, 1);
+            const auto conversion = BuildProposedExperimentSpecification(
+                conversionRequest);
+            assert(!conversion.eligibility.eligible);
+            assert(conversion.eligibility.reason ==
+                   RecommendationConversionReason::inconsistentProvenance);
+
+            pqxx::work restore{owner};
+            restore.exec("SET LOCAL search_path TO " +
+                restore.quote_name(schema));
+            restore.exec("UPDATE experiment SET donchian20_mode='enabled' "
+                         "WHERE experiment_id=501;");
+            restore.commit();
+        }
+        {
+            // A historical v3 recommendation remains reproducible under its
+            // own persisted contract, even though the source row now carries
+            // the durable v4-only mode column.
+            pqxx::work legacy{owner};
+            legacy.exec("SET LOCAL search_path TO " + legacy.quote_name(schema));
+            legacy.exec(
+                "UPDATE experiment_recommendation SET "
+                "semantic_configuration_canonical=$1,semantic_hash=$2,"
+                "invocation_configuration_canonical=$3,invocation_hash=$4 "
+                "WHERE recommendation_id=1;",
+                pqxx::params{historicalV3.recommendationSemanticCanonical,
+                    historicalV3.proposal.recommendationSemanticHash,
+                    historicalV3.proposal.proposedInvocationCanonical,
+                    RecommendationCanonicalHash(
+                        historicalV3.proposal.proposedInvocationCanonical)});
+            legacy.exec(
+                "UPDATE experiment_recommendation_evaluation_result SET "
+                "recommendation_semantic_canonical=$1,"
+                "recommendation_semantic_hash=$2 WHERE recommendation_id=1;",
+                pqxx::params{historicalV3.recommendationSemanticCanonical,
+                    historicalV3.proposal.recommendationSemanticHash});
+            legacy.exec(
+                "UPDATE experiment_recommendation_score SET "
+                "recommendation_semantic_canonical=$1 WHERE recommendation_id=1;",
+                pqxx::params{historicalV3.recommendationSemanticCanonical});
+            legacy.exec(
+                "UPDATE experiment_recommendation_review_event SET "
+                "recommendation_semantic_canonical=$1,"
+                "recommendation_semantic_hash=$2 WHERE recommendation_id=1;",
+                pqxx::params{historicalV3.recommendationSemanticCanonical,
+                    historicalV3.proposal.recommendationSemanticHash});
+            legacy.exec(
+                "UPDATE experiment_recommendation_ranking_member SET "
+                "recommendation_semantic_hash=$1 WHERE recommendation_id=1;",
+                pqxx::params{historicalV3.proposal.recommendationSemanticHash});
+            legacy.commit();
+
+            pqxx::work tx{runtime};
+            const auto request =
+                LoadRecommendationCampaignConversionRequest(tx, 7, 101, 1);
+            const auto conversion = BuildProposedExperimentSpecification(request);
+            assert(conversion.eligibility.eligible && conversion.proposal);
+            assert(conversion.proposal->proposedInvocationCanonical.find(
+                "donchian20_mode") == std::string::npos);
+
+            pqxx::work restore{owner};
+            restore.exec("SET LOCAL search_path TO " +
+                restore.quote_name(schema));
+            restore.exec(
+                "UPDATE experiment_recommendation SET "
+                "semantic_configuration_canonical=$1,semantic_hash=$2,"
+                "invocation_configuration_canonical=$3,invocation_hash=$4 "
+                "WHERE recommendation_id=1;",
+                pqxx::params{fixture.recommendationSemanticCanonical,
+                    fixture.proposal.recommendationSemanticHash,
+                    fixture.proposal.proposedInvocationCanonical,
+                    RecommendationCanonicalHash(
+                        fixture.proposal.proposedInvocationCanonical)});
+            restore.exec(
+                "UPDATE experiment_recommendation_evaluation_result SET "
+                "recommendation_semantic_canonical=$1,"
+                "recommendation_semantic_hash=$2 WHERE recommendation_id=1;",
+                pqxx::params{fixture.recommendationSemanticCanonical,
+                    fixture.proposal.recommendationSemanticHash});
+            restore.exec(
+                "UPDATE experiment_recommendation_score SET "
+                "recommendation_semantic_canonical=$1 WHERE recommendation_id=1;",
+                pqxx::params{fixture.recommendationSemanticCanonical});
+            restore.exec(
+                "UPDATE experiment_recommendation_review_event SET "
+                "recommendation_semantic_canonical=$1,"
+                "recommendation_semantic_hash=$2 WHERE recommendation_id=1;",
+                pqxx::params{fixture.recommendationSemanticCanonical,
+                    fixture.proposal.recommendationSemanticHash});
+            restore.exec(
+                "UPDATE experiment_recommendation_ranking_member SET "
+                "recommendation_semantic_hash=$1 WHERE recommendation_id=1;",
+                pqxx::params{fixture.proposal.recommendationSemanticHash});
+            restore.commit();
         }
         {
             bool rejected = false;
