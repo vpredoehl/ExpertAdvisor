@@ -23,6 +23,9 @@
 #include <pqxx/pqxx>
 
 #include "CanonicalSymbol.hpp"
+#include "Donchian20Mode.hpp"
+#include "DonchianLookback.hpp"
+#include "FeatureWarmupScope.hpp"
 #include "RunMetadata.hpp"
 #include "SupportedSymbols.hpp"
 
@@ -1492,6 +1495,12 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
         "AND abs(core_lr_mult - " + FormatDoubleFull(rec.coreLr) + ") <= 1e-9 "
         "AND head_lr_mult IS NOT NULL "
         "AND abs(head_lr_mult - " + FormatDoubleFull(rec.headLr) + ") <= 1e-9 "
+        "AND donchian20_mode = " + w.quote(
+            Donchian20ModeText(kDefaultDonchian20Mode)) + " "
+        "AND feature_warmup_scope = " + w.quote(
+            FeatureWarmupScopeText(kDefaultFeatureWarmupScope)) + " "
+        "AND donchian_lookback = " + std::to_string(
+            DonchianLookbackDatabaseValue(kDefaultDonchianLookback)) + " "
         "ORDER BY experiment_id ASC LIMIT 1;");
     if (rows.empty())
         return std::nullopt;
@@ -1510,7 +1519,8 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
     sql << "INSERT INTO experiment ("
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
-        << "resume_model_id, duplicate_nonce, status, phase, updated_at";
+        << "resume_model_id, duplicate_nonce, status, phase, updated_at, "
+        << "donchian20_mode, feature_warmup_scope, donchian_lookback";
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataColumns(sql);
     sql << ") VALUES ("
@@ -1527,7 +1537,10 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << w.quote(kMetaRecommendationInferEnd) << "::timestamptz,"
         << "NULL,"
         << "0,"
-        << "'pending','train',now()";
+        << "'pending','train',now(),"
+        << w.quote(Donchian20ModeText(kDefaultDonchian20Mode)) << ","
+        << w.quote(FeatureWarmupScopeText(kDefaultFeatureWarmupScope)) << ","
+        << DonchianLookbackDatabaseValue(kDefaultDonchianLookback);
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
     sql << ") RETURNING experiment_id;";
