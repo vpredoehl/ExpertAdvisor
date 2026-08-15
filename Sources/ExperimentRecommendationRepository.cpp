@@ -973,6 +973,9 @@ std::vector<RecommendationScoringLoadResult> LoadRecommendationsForScoring(
     pqxx::connection& connection,
     const RecommendationScoringFilters& filters)
 {
+    if (filters.status != "proposed" && filters.status != "approved")
+        throw std::invalid_argument(
+            "recommendation_scoring_status_not_scoreable");
     pqxx::read_transaction transaction{connection};
     const pqxx::result rows = transaction.exec(
         "SELECT recommendation_id,status,source_experiment_id,"

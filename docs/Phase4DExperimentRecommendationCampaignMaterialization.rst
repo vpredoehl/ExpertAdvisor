@@ -27,6 +27,12 @@ approval, completed valid evaluation and score evidence, one supported
 mutation, and an exact source-configuration match. Campaign approval is not a
 substitute for Phase 4C eligibility.
 
+When the latest approval explicitly references a score, that exact score must
+be completed and valid. When it references no score, materialization selects
+the latest completed valid score for the same recommendation deterministically
+by score-run ID and then score ID. This supports explicit scoring after an
+immutable manual approval without rewriting review history.
+
 Identity and persistence
 ------------------------
 

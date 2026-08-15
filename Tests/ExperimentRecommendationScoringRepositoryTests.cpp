@@ -106,6 +106,79 @@ bool SourceRankInsertRejected(
     }
 }
 
+long long InsertScoringFixtureRecommendation(
+    pqxx::work& transaction,
+    long long scanId,
+    long long experimentId,
+    long long analysisId,
+    const std::string& suffix)
+{
+    return transaction.exec(
+        "INSERT INTO experiment_recommendation (recommendation_scan_id,status,"
+        "source_experiment_id,source_analysis_id,source_symbol,"
+        "source_prediction_horizon,source_leader_score,source_infer_accuracy,"
+        "source_predicted_neutral_proportion,source_evidence_count,"
+        "changed_parameter,source_value_canonical,proposed_value_canonical,"
+        "absolute_delta,relative_delta,semantic_configuration_canonical,"
+        "semantic_hash,invocation_configuration_canonical,invocation_hash,"
+        "policy_canonical,policy_hash,source_rank,generation_ordinal,"
+        "structural_rank,duplicate_type,reason) VALUES "
+        "($1,'proposed',$2,$3,'step4_scoring_fixture',12,0.75,0.70,0.30,100,"
+        "'core_lr_mult','1','1.25',0.25,0.25,$4,$5,$6,$7,"
+        "'step4_fixture_policy',$8,1,1,1,'no_duplicate','step4_fixture') "
+        "RETURNING recommendation_id;",
+        pqxx::params{
+            scanId, experimentId, analysisId,
+            "step4_fixture_semantic_" + suffix,
+            "fnv1a64:semantic_" + suffix,
+            "step4_fixture_invocation_" + suffix,
+            "fnv1a64:invocation_" + suffix,
+            "fnv1a64:policy_" + suffix})
+        .one_row()[0].as<long long>();
+}
+
+RecommendationReviewPersistResult ReviewFixtureRecommendation(
+    pqxx::connection& connection,
+    long long recommendationId,
+    RecommendationReviewAction action)
+{
+    RecommendationReviewPersistenceRequest request;
+    request.recommendationId = recommendationId;
+    request.review.action = action;
+    switch (action)
+    {
+        case RecommendationReviewAction::approve:
+            request.review.reasonCode = "operator_approved";
+            break;
+        case RecommendationReviewAction::reject:
+            request.review.reasonCode = "insufficient_evidence";
+            request.review.reasonText = "fixture rejection";
+            break;
+        case RecommendationReviewAction::expire:
+            request.review.reasonCode = "research_window_closed";
+            request.review.reasonText = "fixture expiration";
+            break;
+    }
+    request.review.reviewer = "scoring_lifecycle_fixture";
+    return ReviewRecommendation(connection, request);
+}
+
+bool ScoringLoadRejected(
+    pqxx::connection& connection,
+    RecommendationScoringFilters filters)
+{
+    try
+    {
+        (void)LoadRecommendationsForScoring(connection, filters);
+    }
+    catch (const std::invalid_argument& error)
+    {
+        return std::string{error.what()} ==
+            "recommendation_scoring_status_not_scoreable";
+    }
+    return false;
+}
+
 void VerifyLegacyRankTriggerSemantics(pqxx::work& transaction)
 {
     transaction.exec(
@@ -256,10 +329,15 @@ void VerifyLegacyRankTriggerSemantics(pqxx::work& transaction)
 }
 
 void Cleanup(pqxx::connection& connection, long long experimentId,
-             long long scanId, long long recommendationId)
+             long long scanId)
 {
     pqxx::work tx{connection};
     tx.exec("SET TRANSACTION READ WRITE;");
+    tx.exec(
+        "DELETE FROM experiment_recommendation_review_event WHERE "
+        "recommendation_id IN (SELECT recommendation_id FROM "
+        "experiment_recommendation WHERE recommendation_scan_id=$1);",
+        pqxx::params{scanId});
     tx.exec(
         "DELETE FROM experiment_recommendation_score_component WHERE "
         "recommendation_score_id IN (SELECT s.recommendation_score_id FROM "
@@ -272,7 +350,9 @@ void Cleanup(pqxx::connection& connection, long long experimentId,
         "WHERE recommendation_scan_id=$1);", pqxx::params{scanId});
     tx.exec(
         "DELETE FROM experiment_recommendation_score_run WHERE "
-        "recommendation_id_filter=$1;", pqxx::params{recommendationId});
+        "recommendation_id_filter IN (SELECT recommendation_id FROM "
+        "experiment_recommendation WHERE recommendation_scan_id=$1) "
+        "OR recommendation_scan_filter=$1;", pqxx::params{scanId});
     tx.exec("DELETE FROM experiment_recommendation WHERE recommendation_scan_id=$1;",
             pqxx::params{scanId});
     tx.exec("DELETE FROM experiment_recommendation_scan WHERE recommendation_scan_id=$1;",
@@ -292,6 +372,7 @@ int main()
         " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
     pqxx::connection connection{connectionString};
     assert(RecommendationScoringSchemaExists(connection));
+    assert(RecommendationReviewSchemaExists(connection));
     {
         pqxx::read_transaction inspect{connection};
         assert(inspect.exec(
@@ -316,6 +397,9 @@ int main()
     long long analysisId = -1;
     long long scanId = -1;
     long long recommendationId = -1;
+    long long approvedRecommendationId = -1;
+    long long rejectedRecommendationId = -1;
+    long long expiredRecommendationId = -1;
     {
         pqxx::work tx{connection};
         tx.exec("SET TRANSACTION READ WRITE;");
@@ -366,6 +450,12 @@ int main()
             "'step4_fixture_policy','fnv1a64:policy',1,1,1,'no_duplicate',"
             "'step4_fixture') RETURNING recommendation_id;",
             pqxx::params{scanId, experimentId, analysisId}).one_row()[0].as<long long>();
+        approvedRecommendationId = InsertScoringFixtureRecommendation(
+            tx, scanId, experimentId, analysisId, "approved");
+        rejectedRecommendationId = InsertScoringFixtureRecommendation(
+            tx, scanId, experimentId, analysisId, "rejected");
+        expiredRecommendationId = InsertScoringFixtureRecommendation(
+            tx, scanId, experimentId, analysisId, "expired");
         tx.exec(
             "INSERT INTO experiment_recommendation_score_run (status,"
             "scoring_policy_canonical,scoring_policy_hash,scoring_version,"
@@ -380,8 +470,23 @@ int main()
 
     try
     {
+        const auto approval = ReviewFixtureRecommendation(
+            connection, approvedRecommendationId,
+            RecommendationReviewAction::approve);
+        assert(approval.event.resultingStatus == "approved");
+        const auto rejection = ReviewFixtureRecommendation(
+            connection, rejectedRecommendationId,
+            RecommendationReviewAction::reject);
+        assert(rejection.event.resultingStatus == "rejected");
+        const auto expiration = ReviewFixtureRecommendation(
+            connection, expiredRecommendationId,
+            RecommendationReviewAction::expire);
+        assert(expiration.event.resultingStatus == "expired");
+
         std::string experimentStateBefore;
         std::string recommendationStateBefore;
+        std::string approvedRecommendationStateBefore;
+        std::vector<PersistedRecommendationReviewEvent> approvalHistoryBefore;
         {
             pqxx::read_transaction snapshot{connection};
             experimentStateBefore = snapshot.exec(
@@ -393,7 +498,37 @@ int main()
                 "SELECT status||'|'||updated_at::text FROM "
                 "experiment_recommendation WHERE recommendation_id=$1;",
                 pqxx::params{recommendationId}).one_row()[0].as<std::string>();
+            approvedRecommendationStateBefore = snapshot.exec(
+                "SELECT status||'|'||updated_at::text FROM "
+                "experiment_recommendation WHERE recommendation_id=$1;",
+                pqxx::params{approvedRecommendationId})
+                .one_row()[0].as<std::string>();
         }
+        approvalHistoryBefore = ListReviewHistoryForRecommendation(
+            connection, approvedRecommendationId);
+        assert(approvalHistoryBefore.size() == 1);
+
+        const auto proposedLoaded = LoadRecommendationsForScoring(
+            connection,
+            RecommendationScoringFilters{.recommendationId = recommendationId});
+        assert(proposedLoaded.size() == 1 && proposedLoaded.front().input);
+        assert(proposedLoaded.front().input->recommendationStatus == "proposed");
+        RecommendationScoringFilters approvedFilters;
+        approvedFilters.status = "approved";
+        approvedFilters.recommendationId = approvedRecommendationId;
+        const auto approvedLoaded = LoadRecommendationsForScoring(
+            connection, approvedFilters);
+        assert(approvedLoaded.size() == 1 && approvedLoaded.front().input);
+        assert(approvedLoaded.front().input->recommendationStatus == "approved");
+        RecommendationScoringFilters rejectedFilters;
+        rejectedFilters.status = "rejected";
+        rejectedFilters.recommendationId = rejectedRecommendationId;
+        assert(ScoringLoadRejected(connection, rejectedFilters));
+        RecommendationScoringFilters expiredFilters;
+        expiredFilters.status = "expired";
+        expiredFilters.recommendationId = expiredRecommendationId;
+        assert(ScoringLoadRejected(connection, expiredFilters));
+
         RecommendationScoreRunRequest runRequest;
         runRequest.filters.recommendationId = recommendationId;
         assert(FindRecommendationScoringPolicyHashCollision(
@@ -530,6 +665,24 @@ int main()
             RecommendationScoringFilters{.recommendationId = recommendationId});
         assert(scores.size() == 2);
 
+        RecommendationScoreRunRequest approvedRunRequest;
+        approvedRunRequest.filters = approvedFilters;
+        const long long approvedRunId = BeginRecommendationScoreRun(
+            connection, approvedRunRequest);
+        RecommendationScoreResult approvedScore = ScoreExperimentRecommendation(
+            approvedRunRequest.policy, *approvedLoaded.front().input);
+        assert(approvedScore.valid);
+        const RecommendationScorePersistResult approvedPersisted =
+            PersistRecommendationScore(
+                connection,
+                {approvedRunId,
+                 {*approvedLoaded.front().input, approvedScore, 1, 1, 1}});
+        assert(approvedPersisted.created);
+        CompleteRecommendationScoreRun(connection, approvedRunId, counters);
+        const auto approvedRun = FindRecommendationScoreRun(
+            connection, approvedRunId);
+        assert(approvedRun && approvedRun->status == "completed");
+
         const long long failedRun = BeginRecommendationScoreRun(connection, runRequest);
         FailRecommendationScoreRun(connection, failedRun, {}, "");
         const auto failed = FindRecommendationScoreRun(connection, failedRun);
@@ -556,16 +709,27 @@ int main()
             pqxx::params{experimentId}).one_row()[0].as<std::string>();
         const std::string recommendationStateAfter = snapshot.exec(
             "SELECT status||'|'||updated_at::text FROM "
+                "experiment_recommendation WHERE recommendation_id=$1;",
+                pqxx::params{recommendationId}).one_row()[0].as<std::string>();
+        const std::string approvedRecommendationStateAfter = snapshot.exec(
+            "SELECT status||'|'||updated_at::text FROM "
             "experiment_recommendation WHERE recommendation_id=$1;",
-            pqxx::params{recommendationId}).one_row()[0].as<std::string>();
+            pqxx::params{approvedRecommendationId})
+            .one_row()[0].as<std::string>();
         assert(experimentStateAfter == experimentStateBefore);
         assert(recommendationStateAfter == recommendationStateBefore);
+        assert(approvedRecommendationStateAfter == approvedRecommendationStateBefore);
+        const auto approvalHistoryAfter = ListReviewHistoryForRecommendation(
+            connection, approvedRecommendationId);
+        assert(approvalHistoryAfter.size() == approvalHistoryBefore.size());
+        assert(approvalHistoryAfter.front().recommendationReviewEventId ==
+               approvalHistoryBefore.front().recommendationReviewEventId);
     }
     catch (...)
     {
-        Cleanup(connection, experimentId, scanId, recommendationId);
+        Cleanup(connection, experimentId, scanId);
         throw;
     }
-    Cleanup(connection, experimentId, scanId, recommendationId);
+    Cleanup(connection, experimentId, scanId);
     return 0;
 }

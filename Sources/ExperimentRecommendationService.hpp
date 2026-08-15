@@ -33,6 +33,7 @@ struct RecommendationListCommandRequest
 struct RecommendationScoringCommandRequest
 {
     RecommendationScoringPolicy policy;
+    std::optional<std::string> status;
     std::optional<std::string> symbol;
     std::optional<int> predictionHorizon;
     std::optional<long long> recommendationScanId;

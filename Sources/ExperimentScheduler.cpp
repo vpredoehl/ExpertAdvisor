@@ -3628,8 +3628,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument("recommendation status and scan filters require recommendation listing, scoring, or evaluation");
     if (options.recommendationStatusFilter &&
         options.scoreExperimentRecommendations &&
-        *options.recommendationStatusFilter != "proposed")
-        throw std::invalid_argument("recommendation scoring supports only proposed status");
+        *options.recommendationStatusFilter != "proposed" &&
+        *options.recommendationStatusFilter != "approved")
+        throw std::invalid_argument(
+            "recommendation scoring supports only proposed or approved status");
     if (options.recommendationStatusFilter &&
         (options.evaluateExperimentRecommendations ||
          options.evaluateExperimentRecommendationId))
@@ -22503,7 +22505,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "[--recommendation-limit=N] | --recommendation-scan-status=ID\n"
         << "Usage: " << exe
         << " --score-experiment-recommendations [--recommendation-scoring-policy=key=value,...] "
-        << "[--recommendation-status-filter=proposed] "
+        << "[--recommendation-status-filter=proposed|approved] "
         << "[--recommendation-symbol=SYMBOL] [--recommendation-horizon=N] "
         << "[--recommendation-scan-id=ID] [--recommendation-id=ID] [--recommendation-score-limit=N]\n"
         << "Usage: " << exe
@@ -23098,6 +23100,7 @@ int RunExperimentRecommendationCommand(const SchedulerOptions& options)
             ? EA::ExperimentRecommendation::ParseRecommendationScoringPolicy(
                   *options.recommendationScoringPolicy)
             : EA::ExperimentRecommendation::RecommendationScoringPolicy{};
+        request.status = options.recommendationStatusFilter;
         request.symbol = options.recommendationSymbol;
         request.predictionHorizon = options.recommendationHorizon;
         request.recommendationScanId = options.recommendationScanId;

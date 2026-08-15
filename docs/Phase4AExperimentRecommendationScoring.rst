@@ -97,9 +97,14 @@ round-trip comparison; any mismatch fails with
 history.  Foreign keys use restrictive deletion and no score operation
 updates ``experiment`` or ``experiment_recommendation``.
 
-The service creates a run in a short transaction, loads proposed rows
+The service creates a run in a short transaction, loads scoreable rows
 read-only, scores and ranks in memory, persists each score and its components
-atomically, then finalizes the run separately.
+atomically, then finalizes the run separately.  The supported scoring
+lifecycle is exactly ``proposed`` and ``approved``: the default command scope
+is ``proposed``, and ``--recommendation-status-filter=approved`` explicitly
+scores approved rows.  ``rejected`` and ``expired`` are not scoreable and are
+rejected by the scoring command.  Status filtering never changes a
+recommendation's status or review history.
 
 Commands and deferred behavior
 ------------------------------
@@ -114,3 +119,22 @@ persisted components and include an advisory disclaimer.
 
 Approval, conversion, experiment creation, automatic score scans, and
 queueing remain deferred.
+
+Workflow order
+--------------
+
+Both of these explicit workflows are valid when the recommendation otherwise
+meets scoring and conversion prerequisites::
+
+  recommendation generation
+    -> optional/explicit scoring
+    -> manual recommendation approval
+
+  recommendation generation
+    -> manual recommendation approval
+    -> explicit scoring
+    -> Phase 4C conversion
+
+Scoring remains advisory in both orders: it does not approve, reject, expire,
+create conversion proposals or experiments, queue scheduler work, or launch
+workers.

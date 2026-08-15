@@ -115,7 +115,7 @@ int RunScoreExperimentRecommendationsCommand(
         throw std::runtime_error("recommendation_scoring_schema_unavailable");
 
     RecommendationScoringFilters filters;
-    filters.status = "proposed";
+    filters.status = request.status.value_or("proposed");
     filters.symbol = request.symbol;
     filters.predictionHorizon = request.predictionHorizon;
     filters.recommendationScanId = request.recommendationScanId;

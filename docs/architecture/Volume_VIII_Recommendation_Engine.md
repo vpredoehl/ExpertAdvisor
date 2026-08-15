@@ -303,6 +303,13 @@ backfilled and are excluded from operations requiring provenance.
 Review transitions are only proposed → approved, rejected, or expired. Review
 events are append-only to the runtime role. Approval is advisory and leaves
 `approved_experiment_id` null under Step 5.
+Explicit Phase 4A scoring is supported only for `proposed` and `approved`
+recommendations; rejected and expired terminal rows are never scoreable.
+Consequently, both `generation → optional scoring → manual approval` and
+`generation → manual approval → explicit scoring → Phase 4C conversion` are
+valid workflows when all other prerequisites hold. Scoring remains advisory
+and cannot alter review state, create experiments or conversion proposals, or
+queue or launch scheduler work.
 
 ## 6. Transactions
 

@@ -351,9 +351,16 @@ int main()
             pqxx::params{fixture.recommendationSemanticCanonical,
                 RecommendationCanonicalHash("scoring-policy")});
         setup.exec(
+            "INSERT INTO experiment_recommendation_score_run VALUES(94,'completed');");
+        setup.exec(
+            "INSERT INTO experiment_recommendation_score VALUES("
+            "95,94,1,$1,501,0.85,'scored','scoring-policy',$2);",
+            pqxx::params{fixture.recommendationSemanticCanonical,
+                RecommendationCanonicalHash("scoring-policy")});
+        setup.exec(
             "INSERT INTO experiment_recommendation_review_event VALUES("
             "90,1,92,'reject','rejected',$1,$2,501),("
-            "93,1,92,'approve','approved',$1,$2,501);",
+            "93,1,NULL,'approve','approved',$1,$2,501);",
             pqxx::params{fixture.recommendationSemanticCanonical,
                 fixture.proposal.recommendationSemanticHash});
         setup.exec(
@@ -379,6 +386,7 @@ int main()
             assert(conversion.eligibility.eligible && conversion.proposal);
             assert(conversion.proposal->recommendationId == 1);
             assert(conversion.proposal->sourceExperimentId == 501);
+            assert(conversionRequest.score.finalScore == 0.85);
             assert(conversionRequest.sourceInvocation.configuration.trainStartDate ==
                    "2026-01-01");
         }

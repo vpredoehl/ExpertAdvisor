@@ -139,6 +139,15 @@ int main()
     assert(base.valid && base.components.size() == 9);
     assert(std::isfinite(base.finalScore));
     assert(base.finalScore >= 0.0 && base.finalScore <= 1.0);
+    RecommendationScoringInput approved = Input();
+    approved.recommendationStatus = "approved";
+    assert(ScoreExperimentRecommendation(defaults, approved).valid);
+    RecommendationScoringInput rejected = Input();
+    rejected.recommendationStatus = "rejected";
+    assert(!ScoreExperimentRecommendation(defaults, rejected).valid);
+    RecommendationScoringInput expired = Input();
+    expired.recommendationStatus = "expired";
+    assert(!ScoreExperimentRecommendation(defaults, expired).valid);
 
     RecommendationScoringInput input = Input();
     input.sourceEvidenceCount = defaults.minimumEvidenceCount;

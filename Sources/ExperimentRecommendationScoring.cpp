@@ -324,7 +324,8 @@ RecommendationScoreResult ScoreExperimentRecommendation(
 {
     if (ValidateRecommendationScoringPolicy(policy))
         return InvalidResult(policy, "invalid_scoring_policy");
-    if (input.recommendationStatus != "proposed")
+    if (input.recommendationStatus != "proposed" &&
+        input.recommendationStatus != "approved")
         return InvalidResult(policy, "unsupported_recommendation_status");
     if (input.recommendationId <= 0 || input.sourceExperimentId <= 0 ||
         input.sourcePredictionHorizon <= 0 || input.sourceRankWithinGroup <= 0 ||
