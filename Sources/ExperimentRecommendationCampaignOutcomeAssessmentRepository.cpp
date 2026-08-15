@@ -228,16 +228,21 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
     const auto resumeModelId = ParseOptionalCanonicalLongLong(
         invocation.Remaining());
 
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(semantic);
+    if (!semanticVersion)
+        throw std::invalid_argument(
+            "campaign_outcome_assessment_source_invocation_invalid");
+    const int semanticVersionNumber =
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v3 ? 3 :
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v4 ? 4 :
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v5 ? 5 :
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v6 ? 6 : 7;
     CanonicalReader configuration{semantic};
-    const bool legacySemantic =
-        configuration.Remaining().starts_with(
-            "experiment_recommendation_semantic_configuration_v3;");
-    if (legacySemantic)
-        configuration.Expect(
-            "experiment_recommendation_semantic_configuration_v3;symbol=");
-    else
-        configuration.Expect(
-            "experiment_recommendation_semantic_configuration_v4;symbol=");
+    const std::string semanticPrefix =
+        "experiment_recommendation_semantic_configuration_v" +
+        std::to_string(semanticVersionNumber) + ";symbol=";
+    configuration.Expect(semanticPrefix);
     ExperimentInvocationConfiguration parsed;
     parsed.configuration.symbol = std::string{
         configuration.ReadUntil(";prediction_horizon=")};
@@ -257,7 +262,7 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
         std::string{configuration.ReadUntil(";infer_start_date=")});
     parsed.configuration.inferStartDate = ParseOptionalCanonicalDate(
         configuration.ReadUntil(";infer_end_date="));
-    if (legacySemantic)
+    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v3)
     {
         parsed.configuration.inferEndDate = ParseOptionalCanonicalDate(
             configuration.Remaining());
@@ -266,14 +271,36 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
     {
         parsed.configuration.inferEndDate = ParseOptionalCanonicalDate(
             configuration.ReadUntil(";donchian20_mode="));
-        parsed.configuration.donchian20Mode = ParseDonchian20Mode(
-            std::string{configuration.Remaining()});
+        if (*semanticVersion == RecommendationSemanticConfigurationVersion::v4)
+        {
+            // v4 ends immediately after the durable Donchian mode.
+            parsed.configuration.donchian20Mode = ParseDonchian20Mode(
+                std::string{configuration.Remaining()});
+        }
+        else
+        {
+            parsed.configuration.donchian20Mode = ParseDonchian20Mode(
+                std::string{configuration.ReadUntil(";feature_warmup_scope=")});
+            if (*semanticVersion == RecommendationSemanticConfigurationVersion::v5)
+            {
+                parsed.configuration.featureWarmupScope = ParseFeatureWarmupScope(
+                    std::string{configuration.Remaining()});
+            }
+            else
+            {
+                parsed.configuration.featureWarmupScope = ParseFeatureWarmupScope(
+                    std::string{configuration.ReadUntil(";donchian_lookback=")});
+                parsed.configuration.donchianLookback = ParseDonchianLookback(
+                    std::string{configuration.Remaining()});
+            }
+        }
     }
     parsed.checkpointInterval = checkpointInterval;
     parsed.resumeModelId = resumeModelId;
 
-    const auto validated = BuildRecommendationInvocationIdentity(parsed);
-    if (!legacySemantic && validated.canonicalText != canonical)
+    const auto validated = BuildRecommendationInvocationIdentity(
+        parsed, *semanticVersion);
+    if (validated.canonicalText != canonical)
         throw std::invalid_argument(
             "campaign_outcome_assessment_source_invocation_invalid");
     return validated.invocation;

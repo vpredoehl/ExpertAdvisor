@@ -191,12 +191,29 @@ WHERE e.experiment_id IN ()SQL" + placeholders.str() +
             row["donchian20_mode"].as<std::string>());
         invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
         invocation.resumeModelId = OptionalValue<long long>(row, "resume_model_id");
-        value.invocationIdentityCanonical =
-            BuildRecommendationInvocationIdentity(invocation).canonicalText;
         const auto expected = expectedInvocationByExperiment.find(value.experimentId);
-        value.invocationProvenanceValid =
-            expected != expectedInvocationByExperiment.end() &&
-            expected->second == value.invocationIdentityCanonical;
+        if (expected == expectedInvocationByExperiment.end())
+        {
+            value.invocationIdentityCanonical =
+                BuildRecommendationInvocationIdentity(invocation).canonicalText;
+            value.invocationProvenanceValid = false;
+        }
+        else
+        {
+            const std::string semanticCanonical =
+                RecommendationSemanticConfigurationFromInvocationCanonicalText(
+                    expected->second);
+            const auto semanticVersion =
+                RecommendationSemanticConfigurationVersionFromCanonicalText(
+                    semanticCanonical);
+            if (!semanticVersion)
+                throw std::runtime_error(
+                    "invalid_persisted_recommendation_semantic_configuration_version");
+            value.invocationIdentityCanonical =
+                BuildRecommendationInvocationIdentity(invocation, *semanticVersion).canonicalText;
+            value.invocationProvenanceValid =
+                expected->second == value.invocationIdentityCanonical;
+        }
         value.inferStartPresent = row["infer_start_present"].as<bool>();
         value.inferEndPresent = row["infer_end_present"].as<bool>();
         value.inferConfigured = row["infer_configured"].as<bool>();

@@ -194,14 +194,24 @@ void ValidateProposal(const ProposedExperimentSpecification& proposal)
         throw std::invalid_argument(
             "invalid_recommendation_conversion_proposal_text");
 
+    const std::string semanticCanonical =
+        RecommendationSemanticConfigurationFromInvocationCanonicalText(
+            proposal.proposedInvocationCanonical);
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(
+            semanticCanonical);
+    if (!semanticVersion)
+        throw std::invalid_argument(
+            "invalid_recommendation_conversion_proposal_identity");
     const RecommendationInvocationIdentity proposedIdentity =
-        BuildRecommendationInvocationIdentity(proposal.proposedInvocation);
+        BuildRecommendationInvocationIdentity(proposal.proposedInvocation,
+                                              *semanticVersion);
     if (!ValidBoundedText(
             proposedIdentity.invocation.configuration.symbol, 64) ||
         proposal.proposedInvocationCanonical != proposedIdentity.canonicalText ||
         proposal.recommendationSemanticHash !=
             BuildRecommendationCandidateIdentity(
-                proposedIdentity.invocation.configuration).hash ||
+                proposedIdentity.invocation.configuration, *semanticVersion).hash ||
         proposal.conversionIdentityHash !=
             RecommendationCanonicalHash(proposal.conversionIdentityCanonical))
         throw std::invalid_argument(

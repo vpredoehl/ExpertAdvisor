@@ -407,18 +407,6 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
         !ValidOptionalRanking(request.ranking))
         return Rejected(RecommendationConversionReason::inconsistentProvenance);
 
-    RecommendationInvocationIdentity sourceIdentity;
-    try
-    {
-        sourceIdentity = BuildRecommendationInvocationIdentity(
-            request.sourceInvocation);
-    }
-    catch (const std::exception&)
-    {
-        return Rejected(
-            RecommendationConversionReason::sourceConfigurationIncomplete);
-    }
-
     if (request.mutations.empty())
         return Rejected(RecommendationConversionReason::mutationMissing);
     if (request.mutations.size() != 1)
@@ -441,6 +429,24 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
                 RecommendationConversionReason::proposedValueOutsideAllowedRange);
         case ProposedValueValidation::valid:
             break;
+    }
+
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(
+            request.recommendationSemanticCanonical);
+    if (!semanticVersion)
+        return Rejected(RecommendationConversionReason::inconsistentProvenance);
+
+    RecommendationInvocationIdentity sourceIdentity;
+    try
+    {
+        sourceIdentity = BuildRecommendationInvocationIdentity(
+            request.sourceInvocation, *semanticVersion);
+    }
+    catch (const std::exception&)
+    {
+        return Rejected(
+            RecommendationConversionReason::sourceConfigurationIncomplete);
     }
 
     std::optional<std::string> actualSourceValue;
@@ -469,7 +475,7 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     try
     {
         baseProposedIdentity = BuildRecommendationInvocationIdentity(
-            proposedInvocation);
+            proposedInvocation, *semanticVersion);
     }
     catch (const std::exception&)
     {
@@ -478,7 +484,7 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     }
     const RecommendationCandidateIdentity baseProposedSemanticIdentity =
         BuildRecommendationCandidateIdentity(
-            baseProposedIdentity.invocation.configuration);
+            baseProposedIdentity.invocation.configuration, *semanticVersion);
     if (request.recommendationSemanticCanonical !=
             baseProposedSemanticIdentity.canonicalText ||
         request.recommendationSemanticHash != baseProposedSemanticIdentity.hash ||
@@ -515,7 +521,7 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     try
     {
         proposedIdentity = BuildRecommendationInvocationIdentity(
-            proposedInvocation);
+            proposedInvocation, *semanticVersion);
     }
     catch (const std::exception&)
     {
@@ -524,7 +530,7 @@ RecommendationConversionResult BuildProposedExperimentSpecification(
     }
     const RecommendationCandidateIdentity proposedSemanticIdentity =
         BuildRecommendationCandidateIdentity(
-            proposedIdentity.invocation.configuration);
+            proposedIdentity.invocation.configuration, *semanticVersion);
     const std::string identityCanonical = ConversionIdentityCanonical(
         request, *parameter, *actualSourceValue,
         mutation.proposedValueCanonical, sourceIdentity.canonicalText,

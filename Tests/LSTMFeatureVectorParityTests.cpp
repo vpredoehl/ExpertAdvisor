@@ -82,7 +82,8 @@ int main()
 {
     static_assert(EA::kMultiHorizonReturnLookbacks.size() == EA::kModelReturnFeatureCount);
     static_assert(EA::kLegacyModelInputWidth == 36);
-    static_assert(EA::kCurrentModelInputWidth == 38);
+    static_assert(EA::kDonchianModelInputWidth == 38);
+    static_assert(EA::kCurrentModelInputWidth == 40);
 
     constexpr std::size_t sourceRowCount = 96;
     std::vector<std::vector<float>> sourceRows(sourceRowCount,

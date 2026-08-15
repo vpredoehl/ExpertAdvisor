@@ -309,6 +309,12 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
     request.recommendationInvocationCanonical =
         row["invocation_configuration_canonical"].as<std::string>();
     request.recommendationInvocationHash = row["invocation_hash"].as<std::string>();
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(
+            request.recommendationSemanticCanonical);
+    if (!semanticVersion)
+        throw std::runtime_error(
+            "invalid_persisted_recommendation_semantic_configuration_version");
     if (row["ranking_bucket"].as<std::string>() != "advisory_ready" ||
         row["ranking_semantic_hash"].as<std::string>() !=
             request.recommendationSemanticHash ||
@@ -413,12 +419,27 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
     invocation.configuration.trainEndDate = row["train_end_date"].as<std::string>();
     invocation.configuration.inferStartDate = OptionalValue<std::string>(row, "infer_start_date");
     invocation.configuration.inferEndDate = OptionalValue<std::string>(row, "infer_end_date");
-    invocation.configuration.donchian20Mode = ParseDonchian20Mode(
-        row["donchian20_mode"].as<std::string>());
-    invocation.configuration.donchianLookback = ParseDonchianLookback(
-        row["donchian_lookback"].as<std::string>());
-    invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
-        row["feature_warmup_scope"].as<std::string>());
+    // A v4 identity makes this persisted source mode part of its exact
+    // scientific provenance.  Do not substitute the configuration default.
+    if (*semanticVersion != RecommendationSemanticConfigurationVersion::v3)
+        invocation.configuration.donchian20Mode = ParseDonchian20Mode(
+            row["donchian20_mode"].as<std::string>());
+    // v3/v4 predate this semantic dimension and therefore mean the durable
+    // legacy interpretation; only v5 and later carry an explicit scope.
+    invocation.configuration.featureWarmupScope =
+        FeatureWarmupScope::LegacyColdBoundary;
+    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v5 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v6 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v7)
+        invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
+            row["feature_warmup_scope"].as<std::string>());
+    // Versions preceding configurable lookback retain the closed 20-bar
+    // definition.  v6 and later make the persisted value part of exact
+    // provenance.
+    if (*semanticVersion == RecommendationSemanticConfigurationVersion::v6 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v7)
+        invocation.configuration.donchianLookback = ParseDonchianLookback(
+            row["donchian_lookback"].as<std::string>());
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();
     invocation.resumeModelId = OptionalValue<long long>(row, "resume_model_id");
     request.campaignDonchian20Mode = campaignDonchian20Mode;

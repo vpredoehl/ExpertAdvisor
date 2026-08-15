@@ -93,7 +93,8 @@ enum class RecommendationSemanticConfigurationVersion
     v3,
     v4,
     v5,
-    v6
+    v6,
+    v7
 };
 
 // Invocation identity is deliberately distinct from semantic configuration
@@ -160,27 +161,27 @@ std::string CanonicalExperimentDateText(const std::string& value);
 std::string EffectiveExperimentConfigurationCanonicalText(
     const EffectiveExperimentConfiguration& configuration,
     RecommendationSemanticConfigurationVersion version =
-        RecommendationSemanticConfigurationVersion::v6);
+        RecommendationSemanticConfigurationVersion::v7);
 std::string RecommendationCandidateHash(
     const EffectiveExperimentConfiguration& configuration,
     RecommendationSemanticConfigurationVersion version =
-        RecommendationSemanticConfigurationVersion::v6);
+        RecommendationSemanticConfigurationVersion::v7);
 RecommendationCandidateIdentity BuildRecommendationCandidateIdentity(
     const EffectiveExperimentConfiguration& configuration,
     RecommendationSemanticConfigurationVersion version =
-        RecommendationSemanticConfigurationVersion::v6);
+        RecommendationSemanticConfigurationVersion::v7);
 std::string ExperimentInvocationCanonicalText(
     const ExperimentInvocationConfiguration& invocation,
     RecommendationSemanticConfigurationVersion version =
-        RecommendationSemanticConfigurationVersion::v6);
+        RecommendationSemanticConfigurationVersion::v7);
 std::string ExperimentInvocationHash(
     const ExperimentInvocationConfiguration& invocation,
     RecommendationSemanticConfigurationVersion version =
-        RecommendationSemanticConfigurationVersion::v6);
+        RecommendationSemanticConfigurationVersion::v7);
 RecommendationInvocationIdentity BuildRecommendationInvocationIdentity(
     const ExperimentInvocationConfiguration& invocation,
     RecommendationSemanticConfigurationVersion version =
-        RecommendationSemanticConfigurationVersion::v6);
+        RecommendationSemanticConfigurationVersion::v7);
 
 std::string RecommendationSourceScopeText(RecommendationSourceScope value);
 std::optional<RecommendationSourceScope> ParseRecommendationSourceScope(

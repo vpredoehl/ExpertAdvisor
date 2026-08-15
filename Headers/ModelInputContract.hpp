@@ -14,6 +14,8 @@ namespace EA
 inline constexpr std::size_t kModelReturnFeatureCount = 4;
 inline constexpr std::size_t kLegacyModelInputWidth =
     legacy_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kDonchianModelInputWidth =
+    donchian_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
     feature_size + kModelReturnFeatureCount;
 
@@ -30,6 +32,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
     {
         case kLegacyModelInputWidth:
             return {modelInputWidth, legacy_feature_size, 0};
+        case kDonchianModelInputWidth:
+            return {modelInputWidth, donchian_feature_size, 0};
         case kCurrentModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
@@ -37,6 +41,7 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=" +
                 std::to_string(modelInputWidth) +
                 ",supported=" + std::to_string(kLegacyModelInputWidth) +
+                ":" + std::to_string(kDonchianModelInputWidth) +
                 ":" + std::to_string(kCurrentModelInputWidth));
     }
 }

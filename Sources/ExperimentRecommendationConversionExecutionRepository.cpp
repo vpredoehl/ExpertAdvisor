@@ -177,7 +177,14 @@ void ValidateExisting(
             "invalid_persisted_recommendation_conversion_authorization");
     const auto invocation = LoadExperimentInvocation(
         transaction, execution.experimentId);
-    if (BuildRecommendationInvocationIdentity(invocation).canonicalText !=
+    const std::string semanticCanonical =
+        RecommendationSemanticConfigurationFromInvocationCanonicalText(
+            proposal.proposal.proposedInvocationCanonical);
+    const auto semanticVersion =
+        RecommendationSemanticConfigurationVersionFromCanonicalText(
+            semanticCanonical);
+    if (!semanticVersion ||
+        BuildRecommendationInvocationIdentity(invocation, *semanticVersion).canonicalText !=
         proposal.proposal.proposedInvocationCanonical)
         throw std::runtime_error(
             "inconsistent_persisted_recommendation_conversion_experiment");

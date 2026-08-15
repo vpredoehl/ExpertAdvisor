@@ -101,7 +101,12 @@ struct Fixture
 
 Fixture BuildFixture(
     bool paired = false,
-    long long campaignApprovalId = 42)
+    long long campaignApprovalId = 42,
+    RecommendationSemanticConfigurationVersion semanticVersion =
+        RecommendationSemanticConfigurationVersion::v7,
+    Donchian20Mode donchian20Mode = Donchian20Mode::Enabled,
+    EA::FeatureWarmupScope featureWarmupScope =
+        EA::FeatureWarmupScope::FullHistoryWarmup)
 {
     Fixture fixture;
     fixture.campaignApprovalId = campaignApprovalId;
@@ -162,12 +167,15 @@ Fixture BuildFixture(
     conversion.sourceInvocation.configuration.targetEpochs = 120;
     conversion.sourceInvocation.configuration.trainStartDate = "2026-01-01";
     conversion.sourceInvocation.configuration.trainEndDate = "2026-02-01";
+    conversion.sourceInvocation.configuration.donchian20Mode = donchian20Mode;
+    conversion.sourceInvocation.configuration.featureWarmupScope = featureWarmupScope;
     conversion.sourceInvocation.checkpointInterval = 20;
     auto proposed = conversion.sourceInvocation;
     proposed.configuration.coreLrMult = 1.1;
-    const auto invocation = BuildRecommendationInvocationIdentity(proposed);
+    const auto invocation = BuildRecommendationInvocationIdentity(
+        proposed, semanticVersion);
     const auto semantic = BuildRecommendationCandidateIdentity(
-        invocation.invocation.configuration);
+        invocation.invocation.configuration, semanticVersion);
     conversion.recommendationInvocationCanonical = invocation.canonicalText;
     conversion.recommendationInvocationHash = invocation.hash;
     conversion.recommendationSemanticCanonical = semantic.canonicalText;
@@ -190,7 +198,7 @@ Fixture BuildFixture(
     fixture.proposal = fixture.proposals.front();
     fixture.recommendationSemanticCanonical =
         BuildRecommendationCandidateIdentity(
-            fixture.proposal.proposedInvocation.configuration).canonicalText;
+            fixture.proposal.proposedInvocation.configuration, semanticVersion).canonicalText;
     fixture.materialization = BuildRecommendationCampaignMaterializationEvidence(
         RecommendationCampaignMaterializationRequest{
             campaignApprovalId, "operator", "Materialize exact proposal set."},
@@ -280,6 +288,29 @@ int main()
         " user=pqxx options='-c search_path=" + schema + "'";
     pqxx::connection owner{ownerString};
     const Fixture fixture = BuildFixture();
+    const Fixture historicalV3 = BuildFixture(
+        false, 42, RecommendationSemanticConfigurationVersion::v3,
+        Donchian20Mode::ZeroAblation);
+    assert(fixture.recommendationSemanticCanonical.find(
+               "experiment_recommendation_semantic_configuration_v7;") == 0);
+    assert(fixture.recommendationSemanticCanonical.find(
+               ";donchian20_mode=enabled") != std::string::npos);
+    assert(fixture.recommendationSemanticCanonical.find(
+               ";feature_warmup_scope=full_history_warmup") != std::string::npos);
+    assert(fixture.recommendationSemanticCanonical.find(
+               ";donchian_lookback=20") != std::string::npos);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               fixture.recommendationSemanticCanonical) ==
+           RecommendationSemanticConfigurationVersion::v7);
+    assert(historicalV3.recommendationSemanticCanonical.find(
+               "experiment_recommendation_semantic_configuration_v3;") == 0);
+    assert(historicalV3.recommendationSemanticCanonical.find(
+               "donchian20_mode") == std::string::npos);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               historicalV3.recommendationSemanticCanonical) ==
+           RecommendationSemanticConfigurationVersion::v3);
+    assert(historicalV3.proposal.proposedInvocationCanonical.find(
+               "donchian20_mode") == std::string::npos);
     try
     {
         pqxx::work setup{owner};

@@ -16,6 +16,7 @@
 #include "LSTM.hpp"
 #include "PricePoint.hpp"
 #include "DonchianFeatures.hpp"
+#include "SessionPhaseFeatures.hpp"
 
 using std::setw;
 
@@ -94,6 +95,10 @@ void Tensor::Add(Feature f)
     if (!has_prev_close) {
         auto low = MetaNN::LowerAccess(fm);
         std::fill(low.MutableRawMemory(), low.MutableRawMemory() + feature_size, 0.0f);
+        const auto [sessionPhaseSin, sessionPhaseCos] =
+            ComputeUtcSessionPhase(f.time);
+        low.MutableRawMemory()[sessionPhaseSinCol] = sessionPhaseSin;
+        low.MutableRawMemory()[sessionPhaseCosCol] = sessionPhaseCos;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -337,6 +342,12 @@ void Tensor::Add(Feature f)
     float cos_t = static_cast<float>(std::cos(phase));
     p[8] = sin_t;
     p[9] = cos_t;
+
+    // True intraday phase of the canonical UTC candle timestamp. Keep the
+    // historical 15-minute-cycle channels above unchanged for old models.
+    const auto [sessionPhaseSin, sessionPhaseCos] = ComputeUtcSessionPhase(f.time);
+    p[sessionPhaseSinCol] = sessionPhaseSin;
+    p[sessionPhaseCosCol] = sessionPhaseCos;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;
