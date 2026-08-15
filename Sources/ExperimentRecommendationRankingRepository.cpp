@@ -8,6 +8,8 @@ namespace EA::ExperimentRecommendation
 namespace
 {
 
+constexpr long long kRankingSnapshotIdentityLockSeed = 5920911399378515323LL;
+
 template <typename Value>
 std::optional<Value> OptionalValue(const pqxx::row& row, const char* name)
 {
@@ -425,39 +427,26 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
             "invalid_recommendation_ranking_snapshot_identity");
     pqxx::work transaction{connection};
     transaction.exec("SET TRANSACTION READ WRITE;");
-    const pqxx::result inserted = transaction.exec(
-        "INSERT INTO experiment_recommendation_ranking_snapshot (status,"
-        "ranking_snapshot_identity_canonical,ranking_snapshot_identity_hash,"
-        "ranking_policy_canonical,ranking_policy_hash,ranking_version,scope_type,"
-        "scope_canonical,scope_hash,evaluation_run_filter,recommendation_scan_filter,"
-        "symbol_filter,horizon_filter,family_filter,requested_limit,"
-        "source_membership_canonical,source_membership_hash) VALUES ('running',"
-        "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) "
-        "ON CONFLICT (ranking_snapshot_identity_canonical) DO NOTHING "
-        "RETURNING recommendation_ranking_snapshot_id,status;",
+    // A lock-key collision merely serializes work. Exact canonical comparison
+    // after the bounded hash lookup remains authoritative.
+    transaction.exec(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,$2));",
         pqxx::params{request.snapshotIdentityCanonical,
-            request.snapshotIdentityHash, policyCanonical, policyHash,
-            request.policy.rankingVersion,
-            RecommendationRankingScopeTypeText(request.scope.type), scopeCanonical,
-            scopeHash, request.scope.evaluationRunId,
-            request.scope.recommendationScanId, request.scope.symbol,
-            request.scope.horizon, request.scope.family, request.limit,
-            request.membershipCanonical, request.membershipHash});
+                     kRankingSnapshotIdentityLockSeed});
+    const pqxx::result existingRows = transaction.exec(
+        "SELECT " + SnapshotColumns() +
+        " FROM experiment_recommendation_ranking_snapshot "
+        "WHERE ranking_snapshot_identity_hash=$1 "
+        "AND ranking_snapshot_identity_canonical=$2;",
+        pqxx::params{request.snapshotIdentityHash,
+                     request.snapshotIdentityCanonical});
     RecommendationRankingSnapshotBeginResult result;
-    if (!inserted.empty())
+    if (!existingRows.empty())
     {
-        result.snapshotId = inserted.one_row()[0].as<long long>();
-        result.status = inserted.one_row()[1].as<std::string>();
-        result.created = true;
-    }
-    else
-    {
-        const pqxx::row row = transaction.exec(
-            "SELECT " + SnapshotColumns() +
-            " FROM experiment_recommendation_ranking_snapshot "
-            "WHERE ranking_snapshot_identity_canonical=$1;",
-            pqxx::params{request.snapshotIdentityCanonical}).one_row();
-        const PersistedRecommendationRankingSnapshot existing = MapSnapshot(row);
+        if (existingRows.size() != 1)
+            throw std::runtime_error("recommendation_ranking_snapshot_identity_duplicate");
+        const PersistedRecommendationRankingSnapshot existing =
+            MapSnapshot(existingRows.one_row());
         if (existing.snapshotIdentityHash != request.snapshotIdentityHash ||
             existing.rankingPolicyCanonical != policyCanonical ||
             existing.rankingPolicyHash != policyHash ||
@@ -469,6 +458,30 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
             throw std::runtime_error("recommendation_ranking_snapshot_retry_mismatch");
         result.snapshotId = existing.snapshotId;
         result.status = existing.status;
+    }
+    else
+    {
+        const pqxx::row row = transaction.exec(
+        "INSERT INTO experiment_recommendation_ranking_snapshot (status,"
+        "ranking_snapshot_identity_canonical,ranking_snapshot_identity_hash,"
+        "ranking_policy_canonical,ranking_policy_hash,ranking_version,scope_type,"
+        "scope_canonical,scope_hash,evaluation_run_filter,recommendation_scan_filter,"
+        "symbol_filter,horizon_filter,family_filter,requested_limit,"
+        "source_membership_canonical,source_membership_hash) VALUES ('running',"
+        "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) "
+        "RETURNING recommendation_ranking_snapshot_id,status;",
+        pqxx::params{request.snapshotIdentityCanonical,
+            request.snapshotIdentityHash, policyCanonical, policyHash,
+            request.policy.rankingVersion,
+            RecommendationRankingScopeTypeText(request.scope.type), scopeCanonical,
+            scopeHash, request.scope.evaluationRunId,
+            request.scope.recommendationScanId, request.scope.symbol,
+            request.scope.horizon, request.scope.family, request.limit,
+            request.membershipCanonical, request.membershipHash})
+            .one_row();
+        result.snapshotId = row[0].as<long long>();
+        result.status = row[1].as<std::string>();
+        result.created = true;
     }
     transaction.commit();
     return result;

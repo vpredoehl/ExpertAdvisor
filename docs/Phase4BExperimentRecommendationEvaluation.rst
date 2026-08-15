@@ -135,8 +135,18 @@ same failed service request reports ``recommendation_evaluation_run_failed``
 without changing the partial history.  A changed authoritative input or policy
 has a different run identity and creates separate history.
 
-Concurrent identical requests converge on the unique authoritative run
-canonical text.  Result uniqueness is scoped to run plus recommendation.
+Concurrent identical requests take a short transaction advisory lock derived
+from the complete canonical identity, use the bounded persisted hash as a
+candidate lookup, and then compare the complete canonical text exactly.
+The canonical text remains authoritative and is stored unchanged; the hash is
+never accepted as semantic equality.  A hash collision can only serialize two
+requests briefly, after which distinct canonical identities persist as
+distinct rows.  This avoids PostgreSQL B-tree tuple-size limits for broad
+evidence snapshots.  Result uniqueness is scoped to run plus recommendation;
+the repository applies the same hash-lookup and exact-canonical-conflict check
+for result identities.  Ranking snapshots use the same collision-safe bounded
+strategy because their membership canonical can embed large evaluation
+identities.
 Completion is idempotent only for identical counters.  No advisory evaluation
 uses ``SELECT FOR UPDATE`` on experiment-owned evidence.  Result persistence
 holds a short ``FOR SHARE`` lock only on its evaluation-run row so a lifecycle

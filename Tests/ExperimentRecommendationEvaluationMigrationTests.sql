@@ -18,6 +18,8 @@ CREATE TABLE experiment_recommendation (
 
 \ir ../Database/migrations/034_experiment_recommendation_evaluation.sql
 \ir ../Database/migrations/034_experiment_recommendation_evaluation.sql
+\ir ../Database/migrations/066_phase4b_canonical_identity_btree_scale.sql
+\ir ../Database/migrations/066_phase4b_canonical_identity_btree_scale.sql
 
 DO $$
 DECLARE
@@ -69,6 +71,22 @@ BEGIN
           AND confrelid = 'model'::regclass
           AND contype = 'f') THEN
         RAISE EXCEPTION 'evaluation_source_model_foreign_key_missing';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid IN (
+            'experiment_recommendation_evaluation_run'::regclass,
+            'experiment_recommendation_evaluation_result'::regclass)
+          AND conname IN (
+            'experiment_recommendation_evaluation_run_identity_uidx',
+            'experiment_recommendation_evaluation_result_identity_uidx')) THEN
+        RAISE EXCEPTION 'unsafe_evaluation_canonical_btree_constraint_present';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname=current_schema()
+          AND indexname='experiment_recommendation_evaluation_result_hash_idx') THEN
+        RAISE EXCEPTION 'evaluation_hash_lookup_index_missing';
     END IF;
 END $$;
 

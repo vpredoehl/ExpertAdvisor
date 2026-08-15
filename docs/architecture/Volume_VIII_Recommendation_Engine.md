@@ -357,20 +357,25 @@ closed and leave no partial event.
 ### 7.1 Conflict domain
 
 Generation conflicts on semantic configuration plus policy; scoring retries on
-score run plus recommendation; evaluation conflicts on canonical evaluation-run
-identity and evaluation run plus recommendation; ranking conflicts on canonical
-snapshot identity and snapshot plus evaluation result; review conflicts on one
-recommendation row.
+score run plus recommendation; evaluation conflicts on exact canonical
+evaluation-run identity and evaluation run plus recommendation; ranking
+conflicts on exact canonical snapshot identity and snapshot plus evaluation
+result; review conflicts on one recommendation row. Evaluation and ranking use
+their bounded hashes only to find candidates; hash equality alone is never
+identity equality.
 
 ### 7.2 Locking and serialization
 
 Generation uses a transaction advisory key plus canonical rechecks and active
 uniqueness. Scoring uses uniqueness and complete retry comparison. Evaluation
-uses a short shared lock on its own run row while inserting an atomic result;
-it does not lock experiment evidence. Review uses `SELECT ... FOR UPDATE` and
-one-event uniqueness. Ranking serializes identical member verification with a
-short `FOR UPDATE` lock on its ranking-owned snapshot. Unrelated snapshots and
-unrelated work remain concurrent.
+and ranking derive short advisory keys from their complete canonical identities,
+look up bounded hashes, and recheck exact canonical text before reuse; a
+lock-key or persisted-hash collision only serializes work and never merges
+identities. Evaluation uses a short shared lock on its own run row while
+inserting an atomic result; it does not lock experiment evidence. Review uses
+`SELECT ... FOR UPDATE` and one-event uniqueness. Ranking serializes identical
+member verification with a short `FOR UPDATE` lock on its ranking-owned
+snapshot. Unrelated snapshots and unrelated work remain concurrent.
 
 ### 7.3 Winner, loser, and retry outcomes
 

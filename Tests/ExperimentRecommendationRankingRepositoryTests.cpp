@@ -180,6 +180,8 @@ int main()
                 "Database/migrations/034_experiment_recommendation_evaluation.sql"));
             setup.exec(ReadFile(
                 "Database/migrations/035_experiment_recommendation_ranking.sql"));
+            setup.exec(ReadFile(
+                "Database/migrations/066_phase4b_canonical_identity_btree_scale.sql"));
             setup.exec("GRANT USAGE ON SCHEMA " + setup.quote_name(schema) +
                        " TO pqxx;");
             setup.exec("GRANT SELECT ON experiment,model,"
@@ -593,6 +595,45 @@ int main()
                          pqxx::params{boundedRunId});
             fixture.commit();
         }
+
+        // A broad membership can legitimately embed more than 42 KiB of
+        // canonical evaluation identities. Persist it without placing the
+        // authoritative snapshot canonical in a B-tree key.
+        std::ostringstream largeMembershipStream;
+        largeMembershipStream << "experiment_recommendation_ranking_membership_v1;count="
+                              << kMaximumRecommendationRankingInputs;
+        for (int index = 0; index < kMaximumRecommendationRankingInputs; ++index)
+        {
+            const std::string ordinal = std::to_string(index);
+            const std::string memberIdentity =
+                "large_member_" + std::string(4U - ordinal.size(), '0') +
+                ordinal + ":" +
+                std::string(64, 'x');
+            largeMembershipStream << ";member[" << index
+                                  << "].evaluation_identity="
+                                  << memberIdentity.size() << ':'
+                                  << memberIdentity
+                                  << ";member[" << index
+                                  << "].evaluation_result_id=" << index + 1;
+        }
+        const std::string largeMembership = largeMembershipStream.str();
+        const std::string largeSnapshotIdentity =
+            RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
+                RecommendationRankingPolicy{}, globalScope, 100,
+                largeMembership);
+        assert(largeSnapshotIdentity.size() > 42U * 1024U);
+        const RecommendationRankingSnapshotRequest largeSnapshotRequest{
+            RecommendationRankingPolicy{}, globalScope, 100,
+            largeSnapshotIdentity,
+            RecommendationRankingCanonicalHash(largeSnapshotIdentity),
+            largeMembership, RecommendationRankingCanonicalHash(largeMembership)};
+        const auto largeSnapshot = BeginOrFindRecommendationRankingSnapshot(
+            runtime, largeSnapshotRequest);
+        assert(largeSnapshot.created);
+        const auto largeSnapshotRetry = BeginOrFindRecommendationRankingSnapshot(
+            runtime, largeSnapshotRequest);
+        assert(!largeSnapshotRetry.created &&
+               largeSnapshotRetry.snapshotId == largeSnapshot.snapshotId);
 
         assert(before == SourceDigest(ownerConnection, schema));
     }

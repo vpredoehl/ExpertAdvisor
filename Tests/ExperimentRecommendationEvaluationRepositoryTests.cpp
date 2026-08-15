@@ -163,6 +163,8 @@ int main()
             "semantic_hash text NOT NULL,invocation_configuration_canonical text NOT NULL,"
             "policy_canonical text NOT NULL,policy_hash text NOT NULL,duplicate_type text NOT NULL);");
         setup.exec(ReadFile("Database/migrations/034_experiment_recommendation_evaluation.sql"));
+        setup.exec(ReadFile(
+            "Database/migrations/066_phase4b_canonical_identity_btree_scale.sql"));
         setup.exec("GRANT USAGE ON SCHEMA " + setup.quote_name(schema) + " TO pqxx;");
         setup.exec("GRANT SELECT ON experiment,model,inference_eval_result,"
                    "experiment_analysis_result,experiment_checkpoint_eval,"
@@ -489,9 +491,10 @@ int main()
                 runtime, {conflictRun.evaluationRunId,
                           additionalLoaded->input, secondConflictResult});
         }
-        catch (const pqxx::unique_violation& error)
+        catch (const std::runtime_error& error)
         {
-            duplicateIdentityRejected = error.sqlstate() == "23505";
+            duplicateIdentityRejected = std::string{error.what()} ==
+                "recommendation_evaluation_identity_conflict";
         }
         assert(duplicateIdentityRejected);
 
@@ -602,6 +605,77 @@ int main()
         failedCounters.evaluationErrors = 1;
         FailRecommendationEvaluationRun(runtime, atomicRun.evaluationRunId,
             failedCounters, "intentional_atomicity_fixture");
+
+        // Large complete canonical evidence is persisted verbatim. The
+        // supplied hash is deliberately shared by two distinct canonicals to
+        // prove it is only a lookup accelerator.
+        RecommendationEvaluationRunRequest largeRunRequest;
+        largeRunRequest.policy = {};
+        largeRunRequest.filters = filters;
+        largeRunRequest.runIdentityCanonical =
+            "large_run_identity:" + std::string(43 * 1024, 'r');
+        largeRunRequest.runIdentityHash = "fnv1a64:forced_run_collision";
+        largeRunRequest.evidenceSnapshotCanonical =
+            "large_snapshot:" + std::string(43 * 1024, 's');
+        largeRunRequest.evidenceSnapshotHash = "fnv1a64:large_snapshot";
+        std::barrier largeRunStart{3};
+        const auto beginLargeRun = [&] {
+            pqxx::connection concurrentConnection{runtimeConnectionString};
+            largeRunStart.arrive_and_wait();
+            return BeginOrFindRecommendationEvaluationRun(
+                concurrentConnection, largeRunRequest);
+        };
+        auto firstLargeRun = std::async(std::launch::async, beginLargeRun);
+        auto secondLargeRun = std::async(std::launch::async, beginLargeRun);
+        largeRunStart.arrive_and_wait();
+        const auto firstLargeResult = firstLargeRun.get();
+        const auto secondLargeResult = secondLargeRun.get();
+        assert(firstLargeResult.evaluationRunId == secondLargeResult.evaluationRunId);
+        assert(firstLargeResult.created != secondLargeResult.created);
+        const auto exactLargeRetry = BeginOrFindRecommendationEvaluationRun(
+            runtime, largeRunRequest);
+        assert(!exactLargeRetry.created &&
+               exactLargeRetry.evaluationRunId == firstLargeResult.evaluationRunId);
+
+        auto collisionRunRequest = largeRunRequest;
+        collisionRunRequest.runIdentityCanonical += "_distinct";
+        collisionRunRequest.evidenceSnapshotCanonical += "_distinct";
+        const auto collisionRun = BeginOrFindRecommendationEvaluationRun(
+            runtime, collisionRunRequest);
+        assert(collisionRun.created &&
+               collisionRun.evaluationRunId != firstLargeResult.evaluationRunId);
+
+        auto largeIdentityResult = RankRecommendationEvaluations({
+            EvaluateExperimentRecommendation({}, loadedReady->input)}).front();
+        largeIdentityResult.evaluationIdentityCanonical =
+            "large_evaluation_identity:" + std::string(43 * 1024, 'e');
+        largeIdentityResult.evaluationIdentityHash =
+            "fnv1a64:forced_evaluation_collision";
+        const auto persistedLargeIdentity = PersistRecommendationEvaluation(
+            runtime, {firstLargeResult.evaluationRunId, loadedReady->input,
+                      largeIdentityResult});
+        assert(persistedLargeIdentity.created);
+        const auto exactLargeIdentityRetry = PersistRecommendationEvaluation(
+            runtime, {firstLargeResult.evaluationRunId, loadedReady->input,
+                      largeIdentityResult});
+        assert(!exactLargeIdentityRetry.created &&
+               exactLargeIdentityRetry.evaluationResultId ==
+                   persistedLargeIdentity.evaluationResultId);
+
+        auto differentLargeIdentity = RankRecommendationEvaluations({
+            EvaluateExperimentRecommendation({}, additionalLoaded->input)}).front();
+        differentLargeIdentity.rankingOrdinal = 2;
+        differentLargeIdentity.evaluationIdentityCanonical =
+            largeIdentityResult.evaluationIdentityCanonical + "_distinct";
+        differentLargeIdentity.evaluationIdentityHash =
+            largeIdentityResult.evaluationIdentityHash;
+        const auto persistedDifferentLargeIdentity =
+            PersistRecommendationEvaluation(
+                runtime, {firstLargeResult.evaluationRunId,
+                          additionalLoaded->input, differentLargeIdentity});
+        assert(persistedDifferentLargeIdentity.created &&
+               persistedDifferentLargeIdentity.evaluationResultId !=
+                   persistedLargeIdentity.evaluationResultId);
         assert(Snapshot(ownerConnection, schema) == before);
     }
     catch (...)

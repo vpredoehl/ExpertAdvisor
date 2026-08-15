@@ -24,6 +24,8 @@ CREATE TABLE experiment_recommendation (
 \ir ../Database/migrations/034_experiment_recommendation_evaluation.sql
 \ir ../Database/migrations/035_experiment_recommendation_ranking.sql
 \ir ../Database/migrations/035_experiment_recommendation_ranking.sql
+\ir ../Database/migrations/066_phase4b_canonical_identity_btree_scale.sql
+\ir ../Database/migrations/066_phase4b_canonical_identity_btree_scale.sql
 GRANT USAGE ON SCHEMA phase4b_ranking_migration_test TO pqxx;
 GRANT SELECT ON experiment_recommendation,
     experiment_recommendation_evaluation_result TO pqxx;

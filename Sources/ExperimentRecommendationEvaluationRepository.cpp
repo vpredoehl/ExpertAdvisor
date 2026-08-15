@@ -12,6 +12,8 @@ namespace
 {
 
 constexpr int kMaximumEvaluationLimit = 1000;
+constexpr long long kEvaluationRunIdentityLockSeed = 5920911399378515321LL;
+constexpr long long kEvaluationResultIdentityLockSeed = 5920911399378515322LL;
 
 template <typename Value>
 std::optional<Value> OptionalValue(const pqxx::row& row, const char* name)
@@ -325,7 +327,36 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
         throw std::invalid_argument("invalid_recommendation_evaluation_run_request");
     pqxx::work transaction{connection};
     transaction.exec("SET TRANSACTION READ WRITE;");
-    const pqxx::result inserted = transaction.exec(
+    // This lock is derived from complete canonical text. A lock-key collision
+    // can only serialize unrelated calls; it can never establish identity.
+    transaction.exec(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,$2));",
+        pqxx::params{request.runIdentityCanonical,
+                     kEvaluationRunIdentityLockSeed});
+    const pqxx::result existing = transaction.exec(
+        "SELECT recommendation_evaluation_run_id,status,"
+        "evaluation_run_identity_hash,evidence_snapshot_canonical "
+        "FROM experiment_recommendation_evaluation_run "
+        "WHERE evaluation_run_identity_hash=$1 "
+        "AND evaluation_run_identity_canonical=$2;",
+        pqxx::params{request.runIdentityHash, request.runIdentityCanonical});
+    RecommendationEvaluationRunBeginResult result;
+    if (!existing.empty())
+    {
+        if (existing.size() != 1)
+            throw std::runtime_error("recommendation_evaluation_run_identity_duplicate");
+        const pqxx::row row = existing.one_row();
+        if (row["evaluation_run_identity_hash"].as<std::string>() !=
+                request.runIdentityHash ||
+            row["evidence_snapshot_canonical"].as<std::string>() !=
+                request.evidenceSnapshotCanonical)
+            throw std::runtime_error("recommendation_evaluation_run_retry_mismatch");
+        result.evaluationRunId = row["recommendation_evaluation_run_id"].as<long long>();
+        result.status = row["status"].as<std::string>();
+    }
+    else
+    {
+        const pqxx::row row = transaction.exec(
         "INSERT INTO experiment_recommendation_evaluation_run (status,"
         "evaluation_run_identity_canonical,evaluation_run_identity_hash,"
         "evaluation_policy_canonical,evaluation_policy_hash,evaluation_version,"
@@ -333,7 +364,6 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
         "scoring_version,recommendation_scan_filter,recommendation_id_filter,"
         "requested_limit,evidence_snapshot_canonical,evidence_snapshot_hash) "
         "VALUES ('running',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) "
-        "ON CONFLICT (evaluation_run_identity_canonical) DO NOTHING "
         "RETURNING recommendation_evaluation_run_id,status;",
         pqxx::params{request.runIdentityCanonical, request.runIdentityHash,
             RecommendationEvaluationPolicyCanonicalText(request.policy),
@@ -344,29 +374,11 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
             request.policy.scoringPolicy.scoringVersion,
             request.filters.recommendationScanId,
             request.filters.recommendationId, request.filters.limit,
-            request.evidenceSnapshotCanonical, request.evidenceSnapshotHash});
-    RecommendationEvaluationRunBeginResult result;
-    if (!inserted.empty())
-    {
-        result.evaluationRunId = inserted.one_row()[0].as<long long>();
-        result.status = inserted.one_row()[1].as<std::string>();
+            request.evidenceSnapshotCanonical, request.evidenceSnapshotHash})
+            .one_row();
+        result.evaluationRunId = row[0].as<long long>();
+        result.status = row[1].as<std::string>();
         result.created = true;
-    }
-    else
-    {
-        const pqxx::row row = transaction.exec(
-            "SELECT recommendation_evaluation_run_id,status,"
-            "evaluation_run_identity_hash,evidence_snapshot_canonical "
-            "FROM experiment_recommendation_evaluation_run "
-            "WHERE evaluation_run_identity_canonical=$1;",
-            pqxx::params{request.runIdentityCanonical}).one_row();
-        if (row["evaluation_run_identity_hash"].as<std::string>() !=
-                request.runIdentityHash ||
-            row["evidence_snapshot_canonical"].as<std::string>() !=
-                request.evidenceSnapshotCanonical)
-            throw std::runtime_error("recommendation_evaluation_run_retry_mismatch");
-        result.evaluationRunId = row["recommendation_evaluation_run_id"].as<long long>();
-        result.status = row["status"].as<std::string>();
     }
     transaction.commit();
     return result;
@@ -403,6 +415,24 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
     if (runStatusRows.empty())
         throw std::runtime_error("recommendation_evaluation_run_not_found");
     const std::string runStatus = runStatusRows.one_row()[0].as<std::string>();
+    // As for runs, this lock only serializes candidates. Exact equality below
+    // remains the sole identity decision, including after a digest collision.
+    transaction.exec(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1,$2));",
+        pqxx::params{value.evaluationIdentityCanonical,
+                     kEvaluationResultIdentityLockSeed});
+    const pqxx::result identityRows = transaction.exec(
+        "SELECT recommendation_evaluation_result_id,recommendation_id "
+        "FROM experiment_recommendation_evaluation_result "
+        "WHERE recommendation_evaluation_run_id=$1 "
+        "AND evaluation_identity_hash=$2 "
+        "AND evaluation_identity_canonical=$3;",
+        pqxx::params{request.evaluationRunId, value.evaluationIdentityHash,
+                     value.evaluationIdentityCanonical});
+    if (!identityRows.empty() &&
+        identityRows.one_row()["recommendation_id"].as<long long>() !=
+            value.recommendationId)
+        throw std::runtime_error("recommendation_evaluation_identity_conflict");
     const pqxx::result inserted = transaction.exec(
         "INSERT INTO experiment_recommendation_evaluation_result ("
         "recommendation_evaluation_run_id,recommendation_id,"
