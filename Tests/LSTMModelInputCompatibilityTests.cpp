@@ -13,12 +13,15 @@ int main()
     static_assert(relativeTickVolumeCol == 36);
     static_assert(relative_tick_volume_feature_size == 37);
     static_assert(causalReturnSurpriseCol == 37);
-    static_assert(feature_size == 38);
+    static_assert(causal_return_surprise_feature_size == 38);
+    static_assert(causalVolatilityRegimeCol == 38);
+    static_assert(feature_size == 39);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
     static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
-    static_assert(EA::kCurrentModelInputWidth == 42);
+    static_assert(EA::kCausalReturnSurpriseModelInputWidth == 42);
+    static_assert(EA::kCurrentModelInputWidth == 43);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -81,18 +84,30 @@ int main()
            physicalTensor[relativeTickVolumeCol]);
     assert(relativeTickVolumeInput[causalReturnSurpriseCol] == -1.0f);
 
-    // Current persisted models include the appended causal return-surprise
-    // column, while the four return channels remain outside the Tensor prefix.
-    const auto current = EA::ResolveModelInputContract(
+    // Return-surprise-era persisted models retain their exact 38-column
+    // prefix and cannot consume the later volatility-regime column.
+    const auto returnSurprise = EA::ResolveModelInputContract(
         42, physicalTensor.size());
+    assert(returnSurprise.tensorFeatureCount == causal_return_surprise_feature_size);
+    std::vector<float> returnSurpriseInput(42, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(returnSurpriseInput.data(),
+                                        physicalTensor.data(), returnSurprise);
+    for (std::size_t i = 0; i < causal_return_surprise_feature_size; ++i)
+        assert(returnSurpriseInput[i] == physicalTensor[i]);
+    assert(returnSurpriseInput[causalReturnSurpriseCol] ==
+           physicalTensor[causalReturnSurpriseCol]);
+    assert(returnSurpriseInput[causalVolatilityRegimeCol] == -1.0f);
+
+    // Current persisted models consume the appended volatility-regime column.
+    const auto current = EA::ResolveModelInputContract(43, physicalTensor.size());
     assert(current.tensorFeatureCount == feature_size);
-    std::vector<float> currentInput(42, -1.0f);
+    std::vector<float> currentInput(43, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentInput.data(),
                                         physicalTensor.data(), current);
     for (std::size_t i = 0; i < feature_size; ++i)
         assert(currentInput[i] == physicalTensor[i]);
-    assert(currentInput[causalReturnSurpriseCol] ==
-           physicalTensor[causalReturnSurpriseCol]);
+    assert(currentInput[causalVolatilityRegimeCol] ==
+           physicalTensor[causalVolatilityRegimeCol]);
 
     bool unsupportedRejected = false;
     try
@@ -103,7 +118,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43";
     }
     assert(unsupportedRejected);
 

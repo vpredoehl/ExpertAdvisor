@@ -21,6 +21,10 @@ inline constexpr std::size_t session_phase_feature_size = donchian_feature_size 
 inline constexpr std::size_t relativeTickVolumeCol = session_phase_feature_size;
 inline constexpr std::size_t relative_tick_volume_feature_size = session_phase_feature_size + 1;
 inline constexpr std::size_t causalReturnSurpriseCol = relative_tick_volume_feature_size;
-inline constexpr std::size_t feature_size = relative_tick_volume_feature_size + 1;
+inline constexpr std::size_t causal_return_surprise_feature_size =
+    relative_tick_volume_feature_size + 1;
+inline constexpr std::size_t causalVolatilityRegimeCol =
+    causal_return_surprise_feature_size;
+inline constexpr std::size_t feature_size = causal_return_surprise_feature_size + 1;
 
 #endif /* FeatureLayout_hpp */

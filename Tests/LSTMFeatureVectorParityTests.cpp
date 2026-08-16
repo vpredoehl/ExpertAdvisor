@@ -85,7 +85,8 @@ int main()
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
     static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
-    static_assert(EA::kCurrentModelInputWidth == 42);
+    static_assert(EA::kCausalReturnSurpriseModelInputWidth == 42);
+    static_assert(EA::kCurrentModelInputWidth == 43);
 
     constexpr std::size_t sourceRowCount = 96;
     std::vector<std::vector<float>> sourceRows(sourceRowCount,
