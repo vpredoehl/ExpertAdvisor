@@ -105,9 +105,12 @@ void Tensor::Add(Feature f)
     const float closeLocation = causalCloseLocation.PriorCloseLocation();
     const float directionalPersistence =
         causalDirectionalPersistence.PriorDirectionalEfficiency();
+    const float signPersistence =
+        causalReturnSignPersistence.PriorReturnSignPersistence();
     causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
     causalCloseLocation.RetainCompletedBar(f.high, f.low, f.close);
     causalDirectionalPersistence.RetainCompletedClose(f.close);
+    causalReturnSignPersistence.RetainCompletedClose(f.close);
 
     if (!has_prev_close) {
         auto low = MetaNN::LowerAccess(fm);
@@ -122,6 +125,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[causalDirectionalRangeCol] = directionalRange;
         low.MutableRawMemory()[causalCloseLocationCol] = closeLocation;
         low.MutableRawMemory()[causalDirectionalPersistenceCol] = directionalPersistence;
+        low.MutableRawMemory()[causalReturnSignPersistenceCol] = signPersistence;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -377,6 +381,7 @@ void Tensor::Add(Feature f)
     p[causalDirectionalRangeCol] = directionalRange;
     p[causalCloseLocationCol] = closeLocation;
     p[causalDirectionalPersistenceCol] = directionalPersistence;
+    p[causalReturnSignPersistenceCol] = signPersistence;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

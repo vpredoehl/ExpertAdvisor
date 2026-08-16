@@ -37,7 +37,9 @@ inline constexpr std::size_t causal_close_location_feature_size =
     causal_directional_range_feature_size + 1;
 inline constexpr std::size_t causalDirectionalPersistenceCol =
     causal_close_location_feature_size;
+inline constexpr std::size_t causalReturnSignPersistenceCol =
+    causalDirectionalPersistenceCol + 1;
 inline constexpr std::size_t feature_size =
-    causal_close_location_feature_size + 1;
+    causalReturnSignPersistenceCol + 1;
 
 #endif /* FeatureLayout_hpp */

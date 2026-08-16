@@ -21,7 +21,8 @@ int main()
     static_assert(causalCloseLocationCol == 40);
     static_assert(causal_close_location_feature_size == 41);
     static_assert(causalDirectionalPersistenceCol == 41);
-    static_assert(feature_size == 42);
+    static_assert(causalReturnSignPersistenceCol == 42);
+    static_assert(feature_size == 43);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -30,7 +31,8 @@ int main()
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
     static_assert(EA::kCausalCloseLocationModelInputWidth == 45);
-    static_assert(EA::kCurrentModelInputWidth == 46);
+    static_assert(EA::kCausalDirectionalPersistenceModelInputWidth == 46);
+    static_assert(EA::kCurrentModelInputWidth == 47);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -148,17 +150,29 @@ int main()
            physicalTensor[causalCloseLocationCol]);
     assert(currentInput[causalDirectionalPersistenceCol] == -1.0f);
 
-    // Current persisted models consume the append-only directional-persistence
-    // column in addition to the preserved 0..40 prefix.
+    // Directional-persistence-era persisted models retain their exact 42-column
+    // prefix and do not consume the later return-sign-persistence column.
     const auto currentPersistence = EA::ResolveModelInputContract(46, physicalTensor.size());
-    assert(currentPersistence.tensorFeatureCount == feature_size);
+    assert(currentPersistence.tensorFeatureCount == causalReturnSignPersistenceCol);
     std::vector<float> currentPersistenceInput(46, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentPersistenceInput.data(),
                                         physicalTensor.data(), currentPersistence);
-    for (std::size_t i = 0; i < feature_size; ++i)
+    for (std::size_t i = 0; i < causalReturnSignPersistenceCol; ++i)
         assert(currentPersistenceInput[i] == physicalTensor[i]);
     assert(currentPersistenceInput[causalDirectionalPersistenceCol] ==
            physicalTensor[causalDirectionalPersistenceCol]);
+    assert(currentPersistenceInput[causalReturnSignPersistenceCol] == -1.0f);
+
+    // Current persisted models consume the append-only return-sign-persistence
+    // column in addition to the preserved 0..41 prefix.
+    const auto currentSignPersistence = EA::ResolveModelInputContract(47, physicalTensor.size());
+    std::vector<float> currentSignPersistenceInput(47, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(currentSignPersistenceInput.data(),
+                                        physicalTensor.data(), currentSignPersistence);
+    for (std::size_t i = 0; i < feature_size; ++i)
+        assert(currentSignPersistenceInput[i] == physicalTensor[i]);
+    assert(currentSignPersistenceInput[causalReturnSignPersistenceCol] ==
+           physicalTensor[causalReturnSignPersistenceCol]);
 
     bool unsupportedRejected = false;
     try
@@ -169,7 +183,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47";
     }
     assert(unsupportedRejected);
 

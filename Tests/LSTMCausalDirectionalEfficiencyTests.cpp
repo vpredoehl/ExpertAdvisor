@@ -116,9 +116,9 @@ float RowValue(const Tensor& tensor, std::size_t index, std::size_t column)
 void TestTensorIntegrationAndProjection()
 {
     static_assert(causalDirectionalPersistenceCol == 41);
-    static_assert(feature_size == 42);
+    static_assert(feature_size == 43);
     static_assert(EA::kCausalCloseLocationModelInputWidth == 45);
-    static_assert(EA::kCurrentModelInputWidth == 46);
+    static_assert(EA::kCurrentModelInputWidth == 47);
 
     Tensor tensor{"causal-directional-efficiency"};
     for (std::size_t index = 0; index < 8; ++index)
@@ -146,6 +146,7 @@ void TestTensorIntegrationAndProjection()
     std::array<float, 46> v13Output{};
     EA::CopyTensorFeaturesForModelInput(v13Output.data(), source.data(), v13);
     assert(v13Output[causalDirectionalPersistenceCol] == 41.0f);
+    assert(v13Output[causalReturnSignPersistenceCol] == 0.0f);
 }
 } // namespace
 

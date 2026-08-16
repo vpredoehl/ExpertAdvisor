@@ -436,7 +436,8 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
         *semanticVersion == RecommendationSemanticConfigurationVersion::v10 ||
         *semanticVersion == RecommendationSemanticConfigurationVersion::v11 ||
         *semanticVersion == RecommendationSemanticConfigurationVersion::v12 ||
-        *semanticVersion == RecommendationSemanticConfigurationVersion::v13)
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v13 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v14)
         invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
             row["feature_warmup_scope"].as<std::string>());
     // Versions preceding configurable lookback retain the closed 20-bar
@@ -449,7 +450,8 @@ RecommendationConversionRequest LoadRecommendationCampaignConversionRequest(
         *semanticVersion == RecommendationSemanticConfigurationVersion::v10 ||
         *semanticVersion == RecommendationSemanticConfigurationVersion::v11 ||
         *semanticVersion == RecommendationSemanticConfigurationVersion::v12 ||
-        *semanticVersion == RecommendationSemanticConfigurationVersion::v13)
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v13 ||
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v14)
         invocation.configuration.donchianLookback = ParseDonchianLookback(
             row["donchian_lookback"].as<std::string>());
     invocation.checkpointInterval = row["checkpoint_interval"].as<int>();

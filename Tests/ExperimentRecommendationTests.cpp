@@ -223,12 +223,20 @@ int main()
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
     assert(identity.canonicalText ==
-        "experiment_recommendation_semantic_configuration_v13;symbol=eurusd;prediction_horizon=12;"
+        "experiment_recommendation_semantic_configuration_v14;symbol=eurusd;prediction_horizon=12;"
         "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
         "train_start_date=2010-01-01;train_end_date=2025-01-01;"
         "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
         "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
     assert(identity.hash == RecommendationCandidateHash(configuration));
+    const auto v13 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v13);
+    assert(v13.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v13;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
     const auto v12 = BuildRecommendationCandidateIdentity(
         configuration, RecommendationSemanticConfigurationVersion::v12);
     assert(v12.canonicalText ==
@@ -305,7 +313,9 @@ int main()
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v3.canonicalText) == RecommendationSemanticConfigurationVersion::v3);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
-               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v13);
+               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v14);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v13.canonicalText) == RecommendationSemanticConfigurationVersion::v13);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v12.canonicalText) == RecommendationSemanticConfigurationVersion::v12);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
