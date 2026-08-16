@@ -200,6 +200,49 @@ int main()
     assert(currentAdverseExcursionInput[causalDirectionalAdverseExcursionCol] ==
            physicalTensor[causalDirectionalAdverseExcursionCol]);
 
+    // Canonical feature identities are independent of physical offsets and
+    // masking happens after projection without mutating Tensor storage.
+    const auto emptyMask = EA::FeatureAblationMask::Parse("");
+    assert(emptyMask.empty());
+    const auto fullMask = EA::FeatureAblationMask::Parse(
+        "directional_adverse_excursion,directional_efficiency,close_location,"
+        "directional_range,volatility_regime,rms_return_surprise,"
+        "relative_tick_volume,return_direction_imbalance,return_sign_persistence");
+    assert(fullMask.CanonicalText() ==
+           "relative_tick_volume,rms_return_surprise,volatility_regime,"
+           "directional_range,close_location,directional_efficiency,"
+           "return_sign_persistence,return_direction_imbalance,"
+           "directional_adverse_excursion");
+    const auto mask = EA::FeatureAblationMask::Parse(
+        " return_direction_imbalance,return_sign_persistence,return_direction_imbalance ");
+    assert(mask.CanonicalText() == "return_sign_persistence,return_direction_imbalance");
+    std::vector<float> ablatedInput(49, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(ablatedInput.data(), physicalTensor.data(),
+                                        currentAdverseExcursion, mask);
+    assert(ablatedInput[causalReturnSignPersistenceCol] == 0.0f);
+    assert(ablatedInput[causalReturnDirectionImbalanceCol] == 0.0f);
+    assert(ablatedInput[causalDirectionalAdverseExcursionCol] ==
+           physicalTensor[causalDirectionalAdverseExcursionCol]);
+    assert(physicalTensor[causalReturnSignPersistenceCol] ==
+           static_cast<float>(100 + causalReturnSignPersistenceCol));
+    bool absentFeatureRejected = false;
+    try
+    {
+        const auto lateMask = EA::FeatureAblationMask::Parse("directional_adverse_excursion");
+        std::vector<float> historical(48, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(historical.data(), physicalTensor.data(),
+                                            currentDirectionImbalance, lateMask);
+    }
+    catch (const std::runtime_error&)
+    {
+        absentFeatureRejected = true;
+    }
+    assert(absentFeatureRejected);
+    bool unknownFeatureRejected = false;
+    try { (void)EA::FeatureAblationMask::Parse("unknown_feature"); }
+    catch (const std::invalid_argument&) { unknownFeatureRejected = true; }
+    assert(unknownFeatureRejected);
+
     bool unsupportedRejected = false;
     try
     {

@@ -1551,7 +1551,7 @@ std::array<float, direction_output_size> EA::LSTM::PredictNextDirectionProbs(con
         auto lowDst = MetaNN::LowerAccess(model_row);
         float* dst = lowDst.MutableRawMemory();
 
-        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract);
+        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract, featureAblationMask);
         if (useReturnFeatures)
         {
             const size_t appended = AppendMultiHorizonReturnFeatures(
@@ -3038,17 +3038,20 @@ EA::LSTM::LSTM(const Tensor& tt,
                float lt,
                float st,
                TargetType explicitTargetType,
-               std::optional<std::size_t> modelInputWidth)
+               std::optional<std::size_t> modelInputWidth,
+               EA::FeatureAblationMask ablationMask)
   : t{ tt },
     n_in { static_cast<int>(EA::ResolveModelInputContract(
         modelInputWidth.value_or(TensorFeatureCount(tt) + kReturnFeatureCount),
         TensorFeatureCount(tt)).modelInputWidth) },
     targetType { explicitTargetType },
+    featureAblationMask { std::move(ablationMask) },
     param  { static_cast<size_t>(n_in), 4 * n_out } // Combined gate weights matrix with shape [(n_in + hidden_size) x 4*n_out];
 {
     const size_t baseFeatureCount = TensorFeatureCount(tt);
     const auto inputContract = EA::ResolveModelInputContract(
         static_cast<size_t>(n_in), baseFeatureCount);
+    featureAblationMask.ValidateForTensorFeatureCount(inputContract.tensorFeatureCount);
 
 #if LSTM_TRAINING_ASSERTS
     LSTM_ASSERT(baseFeatureCount > 0, "LSTM ctor: input tensor must contain at least one feature column");
@@ -3324,7 +3327,7 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             const float* src = lowRow.RawMemory();
             float* dstRow = dst + r * featureCount;
 
-            EA::CopyTensorFeaturesForModelInput(dstRow, src, inputContract);
+            EA::CopyTensorFeaturesForModelInput(dstRow, src, inputContract, featureAblationMask);
 
             if (useReturnFeatures)
             {
@@ -7293,7 +7296,7 @@ inline float EA::LSTM::PredictNextReturn(const Window& w, bool resetState)
         auto lowDst = MetaNN::LowerAccess(model_row);
         float* dst = lowDst.MutableRawMemory();
 
-        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract);
+        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract, featureAblationMask);
         if (useReturnFeatures)
         {
             const size_t appended = AppendMultiHorizonReturnFeatures(
@@ -7387,7 +7390,7 @@ inline float EA::LSTM::PredictNextRelativeMove(const Window& w, bool resetState)
         auto lowDst = MetaNN::LowerAccess(model_row);
         float* dst = lowDst.MutableRawMemory();
 
-        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract);
+        EA::CopyTensorFeaturesForModelInput(dst, src, inputContract, featureAblationMask);
         if (useReturnFeatures)
         {
             const size_t appended = AppendMultiHorizonReturnFeatures(
