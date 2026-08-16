@@ -17,6 +17,7 @@
 #include "PricePoint.hpp"
 #include "DonchianFeatures.hpp"
 #include "SessionPhaseFeatures.hpp"
+#include "CausalReturnSurpriseFeatures.hpp"
 
 using std::setw;
 
@@ -91,9 +92,10 @@ void Tensor::Add(Feature f)
     if (raw_time.size() == raw_time.capacity())     raw_time.reserve(raw_time.size() + 4096);
 
     FeatureMatrix fm(1, feature_size);
-    // Calculate before retaining this completed bar so column 36's reference
-    // contains only its up-to-32 causal predecessors.
+    // Calculate before retaining this completed bar so the appended causal
+    // features reference only their up-to-32 predecessors.
     const float relativeVolume = relativeTickVolume.AddCompletedBar(f.tickVolume);
+    const float returnSurprise = causalReturnSurprise.AddCompletedClose(f.close);
 
     if (!has_prev_close) {
         auto low = MetaNN::LowerAccess(fm);
@@ -103,6 +105,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[sessionPhaseSinCol] = sessionPhaseSin;
         low.MutableRawMemory()[sessionPhaseCosCol] = sessionPhaseCos;
         low.MutableRawMemory()[relativeTickVolumeCol] = relativeVolume;
+        low.MutableRawMemory()[causalReturnSurpriseCol] = returnSurprise;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -353,6 +356,7 @@ void Tensor::Add(Feature f)
     p[sessionPhaseSinCol] = sessionPhaseSin;
     p[sessionPhaseCosCol] = sessionPhaseCos;
     p[relativeTickVolumeCol] = relativeVolume;
+    p[causalReturnSurpriseCol] = returnSurprise;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

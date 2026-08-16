@@ -126,8 +126,11 @@ void TestTensorPlacementCausalityAndParity()
     static_assert(donchian_feature_size == 34);
     static_assert(session_phase_feature_size == 36);
     static_assert(relativeTickVolumeCol == 36);
-    static_assert(feature_size == 37);
-    static_assert(EA::kCurrentModelInputWidth == 41);
+    static_assert(relative_tick_volume_feature_size == 37);
+    static_assert(causalReturnSurpriseCol == 37);
+    static_assert(feature_size == 38);
+    static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
+    static_assert(EA::kCurrentModelInputWidth == 42);
 
     Tensor baseline{"relative-tick-volume"};
     Tensor changedCurrentVolume{"relative-tick-volume"};

@@ -21,6 +21,7 @@
 #include "Donchian20Mode.hpp"
 #include "DonchianLookback.hpp"
 #include "RelativeTickVolumeFeatures.hpp"
+#include "CausalReturnSurpriseFeatures.hpp"
 
 using std::string;
 using std::list;
@@ -67,6 +68,7 @@ class Tensor
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
     std::size_t donchianLookback = kDefaultDonchianLookback;
     CausalRelativeTickVolume32 relativeTickVolume;
+    CausalReturnSurprise32 causalReturnSurprise;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);

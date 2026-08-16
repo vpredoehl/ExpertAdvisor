@@ -1,7 +1,7 @@
 # Volume II — Data Pipeline
 
 Status: Foundation outline
-Version: 0.1.1
+Version: 0.1.2
 Last revised: 2026-08-15
 
 ## 1. Purpose
@@ -82,7 +82,7 @@ Timestamps, symbols, ordering, duplicates, missing values, and finite numeric
 domains require explicit policy. Legacy data lacking snapshot identity may be
 usable for compatible research but MUST NOT be claimed as exact replay.
 
-### 5.4 Implemented LSTM relative tick-volume feature
+### 5.4 Implemented LSTM appended causal features
 
 The canonical LSTM base-feature layout is append-only. Column 36 is the fixed
 causal 32-bar relative tick-volume feature:
@@ -94,9 +94,29 @@ current completed bar. The bootstrap row is zero; partial predecessor history
 is used as-is; and zero, invalid, or non-finite direct inputs have a finite,
 deterministic fallback. The active `candlestick` source's `vol` field is the
 authoritative tick-volume input. The fixed lookback is not an experiment
-parameter. Historical base prefixes and their model input widths remain 32/36,
-34/38, and 36/40; the current 37-column base tensor maps to `n_in=41` after
-the existing four appended return channels.
+parameter.
+
+Column 37 is the fixed causal 32-bar RMS-normalized close-return surprise.
+For completed bar `t`, `r_t = log(close_t / close_(t-1))`; its reference is up
+to 32 immediately preceding valid close-to-close returns, excluding `r_t`.
+The feature is:
+
+``clamp(r_t / sqrt(mean(r_j^2)), -10, 10)``.
+
+This denominator is root-mean-square return magnitude, with **no mean
+subtraction**. Both closes must be finite and strictly positive for a return to
+be valid. The bootstrap row, an empty predecessor set, a non-finite or
+non-positive denominator, and an invalid or non-finite current return each
+produce `0`. The result is always finite and intrinsically clamped to `[-10,
+10]`. Calculation precedes retention: the current valid return enters the
+rolling state only after its own feature has been computed, then is available
+to future rows. The lookback is a fixed feature definition, not an experiment
+parameter.
+
+The current base tensor has 38 columns; its four existing appended return
+channels yield current `n_in=42`. Historical persisted projections remain
+exactly `36 -> 32`, `38 -> 34`, `40 -> 36`, and `41 -> 37`; the current mapping
+is `42 -> 38`.
 
 ## 6. Transactions
 
@@ -203,5 +223,6 @@ and compatibility before implementation.
 
 | Version | Date | Change | ADR |
 |---|---|---|---|
+| 0.1.2 | 2026-08-15 | Added causal 32-bar RMS-normalized close-return surprise at column 37 and the 38/42 input contract. | — |
 | 0.1.1 | 2026-08-15 | Recorded the fixed causal 32-bar relative tick-volume feature and 37/41 input contract. | — |
 | 0.1.0 | 2026-07-15 | Established the data-pipeline architecture outline. | — |

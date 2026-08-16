@@ -11,11 +11,14 @@ int main()
     static_assert(donchian_feature_size == 34);
     static_assert(session_phase_feature_size == 36);
     static_assert(relativeTickVolumeCol == 36);
-    static_assert(feature_size == 37);
+    static_assert(relative_tick_volume_feature_size == 37);
+    static_assert(causalReturnSurpriseCol == 37);
+    static_assert(feature_size == 38);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
-    static_assert(EA::kCurrentModelInputWidth == 41);
+    static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
+    static_assert(EA::kCurrentModelInputWidth == 42);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -64,19 +67,32 @@ int main()
     assert(sessionPhaseInput[sessionPhaseSinCol] == physicalTensor[sessionPhaseSinCol]);
     assert(sessionPhaseInput[sessionPhaseCosCol] == physicalTensor[sessionPhaseCosCol]);
 
-    // Current persisted models include the appended relative tick-volume
+    // Relative-tick-volume-era persisted models retain their exact 37-column
+    // prefix and cannot consume the later return-surprise column.
+    const auto relativeTickVolume = EA::ResolveModelInputContract(
+        41, physicalTensor.size());
+    assert(relativeTickVolume.tensorFeatureCount == relative_tick_volume_feature_size);
+    std::vector<float> relativeTickVolumeInput(41, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(relativeTickVolumeInput.data(),
+                                        physicalTensor.data(), relativeTickVolume);
+    for (std::size_t i = 0; i < relative_tick_volume_feature_size; ++i)
+        assert(relativeTickVolumeInput[i] == physicalTensor[i]);
+    assert(relativeTickVolumeInput[relativeTickVolumeCol] ==
+           physicalTensor[relativeTickVolumeCol]);
+    assert(relativeTickVolumeInput[causalReturnSurpriseCol] == -1.0f);
+
+    // Current persisted models include the appended causal return-surprise
     // column, while the four return channels remain outside the Tensor prefix.
     const auto current = EA::ResolveModelInputContract(
-        41, physicalTensor.size());
+        42, physicalTensor.size());
     assert(current.tensorFeatureCount == feature_size);
-    std::vector<float> currentInput(41, -1.0f);
+    std::vector<float> currentInput(42, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentInput.data(),
                                         physicalTensor.data(), current);
     for (std::size_t i = 0; i < feature_size; ++i)
         assert(currentInput[i] == physicalTensor[i]);
-    assert(currentInput[sessionPhaseSinCol] == physicalTensor[sessionPhaseSinCol]);
-    assert(currentInput[sessionPhaseCosCol] == physicalTensor[sessionPhaseCosCol]);
-    assert(currentInput[relativeTickVolumeCol] == physicalTensor[relativeTickVolumeCol]);
+    assert(currentInput[causalReturnSurpriseCol] ==
+           physicalTensor[causalReturnSurpriseCol]);
 
     bool unsupportedRejected = false;
     try
@@ -87,7 +103,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42";
     }
     assert(unsupportedRejected);
 

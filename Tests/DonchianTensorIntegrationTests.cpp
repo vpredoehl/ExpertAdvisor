@@ -146,7 +146,7 @@ void TestZeroAblationPreservesWidthAndPositions()
     auto low = MetaNN::LowerAccess(*it);
     const float* p = low.RawMemory();
     assert(tensor.GetDonchian20Mode() == Donchian20Mode::ZeroAblation);
-    assert(feature_size == 37);
+    assert(feature_size == 38);
     assert(p[donchianUpCol] == 0.0f);
     assert(p[donchianDownCol] == 0.0f);
     assert(p[0] != 0.0f);
@@ -155,12 +155,13 @@ void TestZeroAblationPreservesWidthAndPositions()
 
 int main()
 {
-    static_assert(feature_size == 37);
+    static_assert(feature_size == 38);
     static_assert(donchianUpCol == 32);
     static_assert(donchianDownCol == 33);
     static_assert(sessionPhaseSinCol == 34);
     static_assert(sessionPhaseCosCol == 35);
     static_assert(relativeTickVolumeCol == 36);
+    static_assert(causalReturnSurpriseCol == 37);
     static_assert(donchian_lookback == 20);
 
     TestCurrentBarHighLowCannotAffectDonchian();
