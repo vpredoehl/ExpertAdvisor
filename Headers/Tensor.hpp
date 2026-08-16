@@ -30,6 +30,7 @@
 #include "CausalReturnDirectionImbalanceFeatures.hpp"
 #include "CausalDirectionalAdverseExcursionFeatures.hpp"
 #include "CausalMultiBarRangePressureFeatures.hpp"
+#include "CausalRollingRangeExpansionFeatures.hpp"
 
 using std::string;
 using std::list;
@@ -85,6 +86,7 @@ class Tensor
     CausalReturnDirectionImbalanceFeatures causalReturnDirectionImbalance;
     CausalDirectionalAdverseExcursionFeatures causalDirectionalAdverseExcursion;
     CausalMultiBarRangePressure causalMultiBarRangePressure;
+    CausalRollingRangeExpansion causalRollingRangeExpansion;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);

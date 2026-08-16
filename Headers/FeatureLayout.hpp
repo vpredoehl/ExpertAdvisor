@@ -47,7 +47,11 @@ inline constexpr std::size_t causalMultiBarRangePressureCol =
     causalDirectionalAdverseExcursionCol + 1;
 inline constexpr std::size_t causal_multi_bar_range_pressure_feature_size =
     causalMultiBarRangePressureCol + 1;
-inline constexpr std::size_t feature_size =
+inline constexpr std::size_t causalRollingRangeExpansionCol =
     causal_multi_bar_range_pressure_feature_size;
+inline constexpr std::size_t causal_rolling_range_expansion_feature_size =
+    causalRollingRangeExpansionCol + 1;
+inline constexpr std::size_t feature_size =
+    causal_rolling_range_expansion_feature_size;
 
 #endif /* FeatureLayout_hpp */

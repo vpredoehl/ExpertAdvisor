@@ -23,6 +23,7 @@
 #include "CausalCloseLocationFeatures.hpp"
 #include "CausalDirectionalPersistenceFeatures.hpp"
 #include "CausalMultiBarRangePressureFeatures.hpp"
+#include "CausalRollingRangeExpansionFeatures.hpp"
 
 using std::setw;
 
@@ -116,6 +117,8 @@ void Tensor::Add(Feature f)
     // bar, unlike the predecessor-only structural features above.
     const float multiBarRangePressure =
         causalMultiBarRangePressure.AddCompletedBar(f.high, f.low, f.close);
+    const float rollingRangeExpansion =
+        causalRollingRangeExpansion.AddCompletedBar(f.high, f.low);
     causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
     causalCloseLocation.RetainCompletedBar(f.high, f.low, f.close);
     causalDirectionalPersistence.RetainCompletedClose(f.close);
@@ -140,6 +143,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[causalReturnDirectionImbalanceCol] = directionImbalance;
         low.MutableRawMemory()[causalDirectionalAdverseExcursionCol] = adverseExcursion;
         low.MutableRawMemory()[causalMultiBarRangePressureCol] = multiBarRangePressure;
+        low.MutableRawMemory()[causalRollingRangeExpansionCol] = rollingRangeExpansion;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -399,6 +403,7 @@ void Tensor::Add(Feature f)
     p[causalReturnDirectionImbalanceCol] = directionImbalance;
     p[causalDirectionalAdverseExcursionCol] = adverseExcursion;
     p[causalMultiBarRangePressureCol] = multiBarRangePressure;
+    p[causalRollingRangeExpansionCol] = rollingRangeExpansion;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

@@ -1,0 +1,430 @@
+# LSTM Causal Rolling Range Expansion / Compression Feature — Implementation
+
+## Objective
+
+Implement one small, production-quality causal LSTM input feature:
+
+**causal rolling range expansion / compression**
+
+The feature measures whether the recent short-horizon price envelope is expanded or compressed relative to a longer trailing price envelope.
+
+This is intended to complement, not duplicate:
+
+- causal volatility regime
+- causal multi-bar range pressure
+- causal directional range
+- causal close location
+- causal directional efficiency/persistence
+- causal return-direction features
+
+This is the final planned predictive feature increment before feature contribution is evaluated through the formal feature-ablation mechanism.
+
+Work directly in the current repository. Inspect the existing production feature pipeline and follow its established conventions rather than creating a parallel implementation.
+
+## Required semantic definition
+
+Use two fixed causal windows:
+
+    short lookback = 8 bars
+    long lookback  = 32 bars
+
+For completed bar `t`, including the current completed bar:
+
+    short_high_t = max(high[t-i]), i = 0..7
+    short_low_t  = min(low[t-i]),  i = 0..7
+
+    long_high_t = max(high[t-i]), i = 0..31
+    long_low_t  = min(low[t-i]),  i = 0..31
+
+Define:
+
+    short_range_t = short_high_t - short_low_t
+    long_range_t  = long_high_t - long_low_t
+
+The raw relative range ratio is:
+
+    ratio_t = short_range_t / long_range_t
+
+Because the short window is contained within the long window, under ordinary finite inputs:
+
+    0 <= ratio_t <= 1
+
+Map this to a centered scalar:
+
+    range_expansion_t = 2 * ratio_t - 1
+
+Interpretation:
+
+    approximately -1 = strong local compression
+                  0 = short range is 50% of long range
+                 +1 = short range equals long range
+
+Use this centered form as the tensor feature.
+
+## Degenerate-range behavior
+
+If the long-window range is zero or effectively zero, return the neutral value:
+
+    0.0
+
+The result must always be finite.
+
+Use the repository's established numerical-safety conventions for determining an effectively-zero denominator. Do not introduce an arbitrary absolute epsilon if an existing scale-aware convention is available.
+
+If floating-point roundoff produces a ratio microscopically outside [0,1], handle it deterministically and safely according to existing conventions.
+
+Do not use clipping to hide substantive implementation errors.
+
+## Window semantics and warmup
+
+Both windows are strictly causal and include the current completed bar.
+
+At time `t`, no observation after `t` may influence the result.
+
+During startup, use the completed history actually available, consistent with the existing causal feature architecture.
+
+Thus before 8 completed bars exist, the short range uses the available completed bars.
+
+Before 32 completed bars exist, the long range uses the available completed bars.
+
+Do not manufacture synthetic history.
+
+Do not introduce a new feature-warmup policy.
+
+The feature must respect the repository's existing `feature_warmup_scope` and tensor construction behavior.
+
+## Causality requirements
+
+This is a strict causal feature.
+
+For value at bar `t`, only bars with index <= `t` may contribute.
+
+Add explicit regression proof that modifying bars after `t` cannot change the feature at `t`.
+
+Also test the exact eviction boundaries:
+
+- the oldest short-window bar falls out when advancing from 8 to 9 completed bars;
+- the oldest long-window bar falls out when advancing from 32 to 33 completed bars.
+
+## Relationship to existing volatility feature
+
+This feature is NOT another RMS-return volatility feature.
+
+The existing causal volatility-regime feature measures behavior derived from returns.
+
+This feature measures the geometric high-low price envelope:
+
+    recent 8-bar high-low range
+        versus
+    trailing 32-bar high-low range
+
+Do not modify or replace the existing volatility-regime feature.
+
+Document this distinction in the implementation report.
+
+## Relationship to multi-bar range pressure
+
+The recently implemented multi-bar range-pressure feature answers:
+
+    "Where is the current close inside a trailing price range?"
+
+This new feature answers:
+
+    "How wide is the recent short price range relative to the longer price range?"
+
+The two features must remain independent.
+
+Do not modify the semantics of `multi_bar_range_pressure`.
+
+## Feature naming
+
+Preferred canonical ablation/configuration name:
+
+    rolling_range_expansion
+
+Preferred C++ terminology:
+
+    CausalRollingRangeExpansion
+
+Use repository naming conventions consistently if existing architecture strongly favors a slightly different spelling.
+
+Do not use ambiguous names such as simply `range` or `volatility`.
+
+## Implementation architecture
+
+Inspect the recently implemented causal feature helpers, particularly:
+
+- CausalMultiBarRangePressure
+- CausalVolatilityRegime
+- CausalDirectionalRange
+- CausalDirectionalEfficiency
+- CausalReturnSignPersistence
+- CausalReturnDirectionImbalance
+- CausalDirectionalAdverseExcursion
+
+Follow their established production architecture.
+
+A small bounded-state helper is preferred.
+
+Because the windows are fixed at 8 and 32 bars, a straightforward bounded scan over retained state is acceptable unless an existing repository helper makes another implementation clearly preferable.
+
+Avoid unnecessary heap allocation in the per-row hot path.
+
+Do not introduce complicated deque/monotonic-queue machinery merely for theoretical optimization unless the repository already uses that pattern and it materially simplifies the code.
+
+Correctness and auditability are more important than optimizing a fixed 32-element scan.
+
+## Production tensor integration
+
+Integrate the feature into the real production tensor construction path used by both training and classification inference.
+
+Add exactly ONE scalar tensor feature.
+
+Inspect the current feature count and model input width from source. Do not assume counts stated in historical prompts.
+
+Determine the correct next feature slot from the current source tree.
+
+Training and inference must receive identical feature values for identical historical input.
+
+Do not implement a disconnected helper or test-only path.
+
+## Formal feature-ablation integration
+
+The repository already contains the formal feature-ablation mechanism.
+
+Register:
+
+    rolling_range_expansion
+
+as a known ablatable feature using the existing mechanism.
+
+An experiment whose canonical mask contains:
+
+    rolling_range_expansion
+
+must zero exactly this new feature and leave every other tensor feature unchanged.
+
+Do not create another ablation mechanism.
+
+Update:
+
+- canonical feature-name registration
+- validation
+- mask-to-feature projection
+
+only where required by the existing architecture.
+
+Add a regression test proving that ablating this feature changes only its intended tensor column.
+
+## Feature layout and model-input compatibility
+
+Adding this feature increases the current tensor feature count by exactly one and the full model input width by exactly one.
+
+Determine the actual before/after values from current source.
+
+Update all relevant:
+
+- feature layout constants
+- model input contracts
+- static assertions
+- tensor-width tests
+- feature-vector parity tests
+- historical compatibility tests
+- recommendation/materialization expectations
+
+as required.
+
+Preserve historical model compatibility according to the existing repository policy.
+
+In particular, models trained before this feature existed must not accidentally consume this feature.
+
+Do not casually invalidate historical models.
+
+Explicitly test the compatibility boundary between the immediately preceding model width and the new full width.
+
+## Numerical requirements
+
+The result must always be finite.
+
+Test at least:
+
+- ordinary finite prices
+- completely flat price history
+- extremely small but finite ranges
+- large finite price values
+- non-finite input if existing helpers define behavior for it
+
+Use `double` internally if consistent with the recent feature implementations and convert safely to the tensor's scalar representation.
+
+Do not allow NaN or infinity into the production tensor.
+
+## Required focused tests
+
+Add focused tests comparable in quality to the recent causal feature tests.
+
+At minimum prove:
+
+1. Identical short and long ranges produce approximately +1.
+
+2. A short range equal to half the long range produces approximately 0.
+
+3. Strong short-range compression produces a negative value approaching -1.
+
+4. Flat long range produces exactly the defined neutral finite value.
+
+5. Partial startup history behaves deterministically.
+
+6. The short window includes the current completed bar.
+
+7. The long window includes the current completed bar.
+
+8. Short-window eviction occurs at exactly the 8->9 boundary.
+
+9. Long-window eviction occurs at exactly the 32->33 boundary.
+
+10. Modifying future bars cannot change an earlier feature value.
+
+11. Tensor integration places the feature in exactly the intended slot.
+
+12. Training/inference feature-vector parity remains valid.
+
+13. `feature_ablation_mask='rolling_range_expansion'` zeros this feature and only this feature.
+
+14. Historical model input widths remain compatible according to the existing policy.
+
+15. The immediately previous full model width cannot accidentally consume the new feature.
+
+Add a focused shell test runner if that matches the existing recent-feature pattern.
+
+## Existing-test updates
+
+Inspect affected tests rather than blindly replacing feature-count constants.
+
+Likely affected areas include:
+
+- causal feature tests
+- tensor integration tests
+- LSTM feature-vector parity tests
+- model-input compatibility tests
+- feature-ablation tests
+- recommendation tests
+- recommendation campaign materialization tests
+
+Update only assertions/contracts legitimately changed by the addition of this one feature.
+
+Do not weaken tests simply to make them pass.
+
+## Experiment/recommendation plumbing
+
+Inspect code that persists, reconstructs, compares, recommends, materializes, or assesses LSTM feature/input contracts.
+
+Update only what the one-feature width increase requires.
+
+The formal ablation mask already participates in experiment identity.
+
+Do not add another experiment identity field.
+
+No new database migration should normally be necessary.
+
+## Scope constraints
+
+Keep this patch narrow.
+
+DO:
+
+- implement one causal rolling-range-expansion feature;
+- use 8-bar and 32-bar causal price envelopes;
+- add exactly one scalar tensor feature;
+- integrate it into the production tensor path;
+- register it with formal feature ablation;
+- preserve historical model compatibility;
+- update affected tests;
+- run focused regression tests.
+
+DO NOT:
+
+- add another predictive feature;
+- modify multi-bar range-pressure semantics;
+- modify volatility-regime semantics;
+- redesign tensor construction;
+- redesign feature ablation;
+- redesign model persistence;
+- change scheduler behavior;
+- change checkpoint policy;
+- change training hyperparameters;
+- modify migrations 069/070;
+- add a database migration without a demonstrated architectural requirement;
+- perform unrelated cleanup/refactoring.
+
+## Pre-edit inspection
+
+Before editing:
+
+1. inspect the current production tensor construction path;
+2. determine the current tensor feature count;
+3. determine the current full model input width;
+4. identify the exact next tensor feature slot;
+5. inspect historical model-width compatibility;
+6. inspect the formal ablation registry/projection;
+7. inspect `CausalMultiBarRangePressure` for current-bar/window conventions;
+8. inspect `CausalVolatilityRegime` to ensure this feature remains semantically distinct.
+
+Document the discovered before/after feature counts in the final report.
+
+## Validation
+
+Run the new focused feature tests.
+
+Also run the directly affected existing focused regression tests, including at minimum:
+
+- feature-vector parity
+- model-input compatibility
+- formal feature-ablation tests
+- tensor integration tests
+
+Run relevant recent causal-feature tests where practical to detect accidental feature-slot shifts.
+
+Run:
+
+    git diff --check
+
+Inspect the final diff for accidental unrelated changes.
+
+If the repository's Release build requires a clean worktree/provenance state, do not bypass that safety mechanism. Report that the build remains to be performed after review/archive/commit.
+
+Do not claim a Release build succeeded unless it was actually executed successfully.
+
+## Deliverable
+
+Write:
+
+    LSTM_CausalRollingRangeExpansion_Implementation_Output.md
+
+The report must include:
+
+- implementation summary
+- exact mathematical definition
+- 8-bar/32-bar window semantics
+- startup/warmup semantics
+- causality argument
+- degenerate-range behavior
+- distinction from causal volatility regime
+- distinction from multi-bar range pressure
+- production tensor integration point
+- exact new tensor feature slot
+- before/after tensor feature counts
+- before/after full model input widths
+- formal feature-ablation integration
+- historical model compatibility treatment
+- files changed
+- tests actually run
+- exact test results
+- Release-build status
+- remaining risks or limitations
+- final PASS / PASS WITH CAVEAT / FAIL assessment
+
+Do not claim tests were run unless they were actually executed.
+
+Do not commit changes.
+
+Leave the implementation, prompt output, and worktree available for independent review.
