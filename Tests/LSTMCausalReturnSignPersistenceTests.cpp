@@ -108,9 +108,9 @@ float RowValue(const Tensor& tensor, std::size_t row, std::size_t column)
 void TestTensorIntegrationAndContracts()
 {
     static_assert(causalReturnSignPersistenceCol == 42);
-    static_assert(feature_size == 43);
+    static_assert(feature_size == 44);
     static_assert(EA::kCausalDirectionalPersistenceModelInputWidth == 46);
-    static_assert(EA::kCurrentModelInputWidth == 47);
+    static_assert(EA::kCurrentModelInputWidth == 48);
 
     Tensor tensor{"causal-return-sign-persistence"};
     for (std::size_t index = 0; index < 8; ++index)
@@ -148,7 +148,7 @@ void TestTensorIntegrationAndContracts()
     const auto v14 = EA::ResolveModelInputContract(47, source.size());
     std::array<float, 47> v14Output{};
     EA::CopyTensorFeaturesForModelInput(v14Output.data(), source.data(), v14);
-    assert(v14.tensorFeatureCount == feature_size);
+    assert(v14.tensorFeatureCount == causalReturnDirectionImbalanceCol);
     assert(v14Output[causalReturnSignPersistenceCol] == 42.0f);
 }
 } // namespace
