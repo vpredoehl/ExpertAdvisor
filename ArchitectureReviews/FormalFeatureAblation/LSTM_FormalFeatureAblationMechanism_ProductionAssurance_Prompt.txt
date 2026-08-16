@@ -1,0 +1,223 @@
+You are performing a focused production-assurance review and correction pass for the formal LSTM feature-ablation mechanism in the current ExpertAdvisor-next-feature worktree.
+
+GOAL
+Verify the existing feature-ablation implementation end-to-end across the real scheduler, database persistence, resume/retry/checkpoint-inference/model-provenance, continuation, and campaign reconstruction paths. Correct only defects necessary to satisfy the existing ablation contract.
+
+This is NOT a redesign and NOT a new predictive feature.
+
+CURRENT IMPLEMENTATION CONTEXT
+The prior implementation added approximately:
+- Headers/FeatureAblation.hpp
+- ModelInputContract masking support
+- feature_ablation_mask persisted on experiment
+- migration 069_feature_ablation_mask.sql
+- --ablate-features queue CLI
+- scheduler propagation
+- model-input masking in training/inference
+- basic compatibility tests
+
+Expected invariant baseline:
+- feature_size remains 45
+- current n_in remains 49
+- no feature semantic version bump solely for ablation
+- physical Tensor layout unchanged
+- historical model-input width mappings unchanged
+
+Before editing:
+1. inspect git status and HEAD;
+2. inspect all current ablation-related diffs/source;
+3. verify no unrelated source increment is present;
+4. verify the baseline invariants above.
+
+If unrelated source changes are present, stop and document rather than layering work over them.
+
+PRIMARY ASSURANCE QUESTIONS
+
+A. QUEUE / DATABASE ROUND-TRIP
+Prove through the real queue/repository path that:
+- --ablate-features accepts valid canonical feature names;
+- input ordering canonicalizes deterministically;
+- duplicates are canonicalized deterministically or rejected consistently;
+- unknown names fail closed;
+- persisted experiment.feature_ablation_mask exactly matches canonical representation;
+- empty/default queue persists '';
+- reload through the scheduler's real ExperimentRow path returns the same canonical mask;
+- different masks are distinct experiment identities;
+- same logical mask in different CLI order resolves to the same duplicate identity.
+
+Add focused tests where needed.
+
+B. MIGRATION 069
+Verify Database/migrations/069_feature_ablation_mask.sql against the current experiment schema evolution.
+
+Prove:
+- idempotence according to repository migration conventions;
+- existing rows become no-ablation safely;
+- column is NOT NULL DEFAULT '';
+- the current experiment_unique_identity_uidx contains all identity fields introduced by prior migrations, including donchian20_mode, feature_warmup_scope, donchian_lookback, and feature_ablation_mask;
+- the migration does not accidentally regress prior identity semantics;
+- database role grants remain sufficient.
+
+If migration tests exist, extend/add one.
+
+C. REAL RESUME LOADER SAFETY
+This is the highest-priority check.
+
+Trace the exact real training-resume loader from --resume-model-id / automatic continuation/checkpoint resume into persisted model and experiment metadata.
+
+Prove that every persisted object consumed by the actual training-resume loader either:
+- validates feature_ablation_mask directly, OR
+- is reached through shared validation code that validates the same lineage invariant.
+
+Required invariant:
+    resumed training mask == mask associated with the model/checkpoint's training experiment lineage
+
+A mismatch MUST fail closed before training consumes model input.
+
+Do not rely only on the queue CLI's requested mask.
+Do not rely on transient defaults.
+
+Add a focused regression test that:
+- matching mask succeeds;
+- mismatched mask is rejected;
+- historical model/experiment lineage with empty mask resolves to no ablation.
+
+D. RETRY-FAILED SAFETY
+Trace --retry-failed-experiment and any retry reconstruction path.
+
+Prove:
+- retry preserves the exact canonical feature_ablation_mask;
+- retry does not reset it to '';
+- retry cannot silently substitute a different mask;
+- duplicate/identity behavior remains correct.
+
+Add or extend a maintained retry test.
+
+E. CHECKPOINT INFERENCE
+Trace the real checkpoint-inference worker launch path.
+
+Prove:
+- checkpoint inference obtains feature_ablation_mask from persisted parent/model lineage;
+- checkpoint inference applies the same mask used for training;
+- no CLI-global/default state can change it;
+- retry-checkpoint-eval preserves the same mask.
+
+Add a focused test if existing scheduler checkpoint tests can exercise this without excessive fixture construction.
+
+F. FINAL / NORMAL INFERENCE
+Trace normal inference and infer-all paths.
+
+Prove:
+- model->experiment provenance resolves the training mask;
+- inference cannot silently run the model with a different mask;
+- historical models resolve to no ablation;
+- the same shared mask application mechanism is used as training.
+
+G. MODEL PROVENANCE
+Inspect model persistence and PgModelIO.
+
+Determine whether experiment_id provides a sufficient immutable lineage guarantee.
+
+If yes:
+- prove that the model row's experiment_id and experiment.feature_ablation_mask are sufficient;
+- do NOT add a duplicate model mask column unnecessarily.
+
+If no:
+- make the minimal schema/provenance correction required and explain why.
+
+H. CONTINUATION
+Trace automatic/manual continuation creation.
+
+Prove:
+- continuation child inherits the source experiment's exact canonical mask;
+- continuation resume validation agrees with the parent/model lineage;
+- ordinary continuation cannot accidentally add or remove ablation.
+
+I. CAMPAIGN / RECOMMENDATION RECONSTRUCTION
+Inspect recommendation materialization, outcome assessment, and any experiment reconstruction used by campaign operations.
+
+Prove:
+- ordinary recommendation-generated experiments default to no ablation unless explicitly designed as ablation experiments;
+- reconstruction of an already-masked experiment preserves/distinguishes the mask where experiment identity matters;
+- masked and unmasked experiments are not collapsed in outcome/campaign evidence if their experiment identities differ;
+- no recommendation feature-semantic version bump is introduced solely for ablation infrastructure.
+
+J. STATUS / OPERATOR VISIBILITY
+Verify an operator can identify an ablated experiment from maintained status/metadata output.
+Keep output concise and consistent with current conventions.
+
+MASK APPLICATION ASSURANCE
+Reverify the current shared model-input masking semantics:
+- normal Tensor projection happens first;
+- mask sets selected projected feature positions to exactly 0;
+- width does not change;
+- Tensor state/history is not mutated;
+- historical widths reject ablation of a feature not present in that prefix;
+- return features remain out of scope unless current code intentionally supports them.
+
+TEST REQUIREMENTS
+Run the strongest maintained tests available for the touched paths.
+
+At minimum:
+- focused feature-ablation registry/mask tests
+- LSTMModelInputCompatibilityTests
+- LSTMFeatureVectorParityTests
+- ExperimentRecommendationTests
+- campaign materialization repository tests
+- campaign outcome-assessment tests
+- retry-failed tests
+- checkpoint resumability / resume validation tests
+- checkpoint inference tests if maintained
+- continuation tests
+- scheduler CLI/parser tests
+- migration/schema test for 069
+- git diff --check
+
+For database-backed tests:
+- run them if the current environment supports the repository's existing DB test setup;
+- do not skip merely because they are DB-backed if sibling tests can already run here;
+- if a test truly cannot run, document the exact environmental blocker.
+
+CLEAN BUILD
+Do not commit automatically.
+
+If the worktree remains dirty, a Release provenance guard is expected. You may run direct/focused compile checks as appropriate.
+
+For any Xcode build attempt, use:
+    -derivedDataPath DerivedData/ExpertAdvisor-next-feature
+
+Do not invent a different DerivedData path.
+
+OUTPUT
+Write:
+    LSTM_FormalFeatureAblationMechanism_ProductionAssurance_Output.md
+
+The output must include:
+- baseline verified
+- exact files inspected/changed
+- queue/DB round-trip conclusion
+- migration 069 conclusion
+- resume-loader coverage map
+- matching/mismatched resume result
+- retry-failed conclusion
+- checkpoint inference conclusion
+- final inference conclusion
+- model provenance conclusion
+- continuation conclusion
+- campaign/recommendation conclusion
+- status visibility conclusion
+- tests actually run and exact outcomes
+- remaining unverified gaps, if any
+- final verdict: PASS / PASS WITH CAVEAT / FAIL
+
+SCOPE DISCIPLINE
+Do not add:
+- a new predictive feature
+- automated ablation campaign generation
+- statistical significance logic
+- SHAP/permutation importance
+- unrelated scheduler refactors
+- unrelated DB migrations
+- feature semantic version changes unless an actual existing architecture rule absolutely requires it
+
+If defects are found, fix only what is required to make the existing formal feature-ablation mechanism production-safe and verifiable.

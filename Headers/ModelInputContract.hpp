@@ -7,6 +7,7 @@
 #include <string>
 
 #include "FeatureLayout.hpp"
+#include "FeatureAblation.hpp"
 
 namespace EA
 {
@@ -122,6 +123,21 @@ inline void CopyTensorFeaturesForModelInput(
     std::memcpy(destination,
                 source,
                 contract.tensorFeatureCount * sizeof(T));
+}
+
+// This is the sole Tensor-derived model-input materialization hook.  The mask
+// is applied after historical-prefix projection, so width and Tensor state are
+// unchanged and unavailable historical features fail closed.
+template <typename T>
+inline void CopyTensorFeaturesForModelInput(
+    T* destination,
+    const T* source,
+    const ModelInputContract& contract,
+    const FeatureAblationMask& ablationMask)
+{
+    CopyTensorFeaturesForModelInput(destination, source, contract);
+    ablationMask.ApplyToProjectedTensorFeatures(destination,
+                                                 contract.tensorFeatureCount);
 }
 
 } // namespace EA

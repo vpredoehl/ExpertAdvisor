@@ -4389,7 +4389,59 @@ struct ResumeCheckpointConfig
         EA::FeatureWarmupScope::LegacyColdBoundary;
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
     std::size_t donchianLookback = kDefaultDonchianLookback;
+    EA::FeatureAblationMask featureAblationMask;
 };
+
+EA::FeatureAblationMask LoadModelFeatureAblationMask(pqxx::work& w,
+                                                     long long modelId)
+{
+    const pqxx::result rows = w.exec_params(
+        "SELECT m.experiment_id, e.feature_ablation_mask FROM model m "
+        "LEFT JOIN experiment e ON e.experiment_id=m.experiment_id "
+        "WHERE m.model_id=$1;", modelId);
+    if (rows.empty())
+        throw std::runtime_error("model_not_found_for_feature_ablation_mask");
+    // Models predating experiment_id provenance have no ablation contract and
+    // therefore retain the durable compatibility interpretation: no mask.
+    if (rows[0][0].is_null()) return {};
+    if (rows[0][1].is_null())
+        throw std::runtime_error("model_experiment_lineage_missing_feature_ablation_mask");
+    return EA::FeatureAblationMask::Parse(rows[0][1].as<std::string>());
+}
+
+EA::FeatureAblationMask LoadSchedulerFeatureAblationMask(
+    pqxx::work& w, const LaunchArgs& launchArgs)
+{
+    std::optional<long long> experimentId = launchArgs.schedulerExperimentId;
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        const pqxx::result rows = w.exec_params(
+            "SELECT COALESCE(parent_experiment_id, experiment_id) FROM "
+            "experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty()) throw std::runtime_error("checkpoint_eval_not_found_for_feature_ablation_mask");
+        experimentId = rows[0][0].as<long long>();
+    }
+    if (!experimentId.has_value()) return {};
+    const pqxx::result rows = w.exec_params(
+        "SELECT feature_ablation_mask FROM experiment WHERE experiment_id=$1;",
+        *experimentId);
+    if (rows.empty()) throw std::runtime_error("experiment_not_found_for_feature_ablation_mask");
+    return EA::FeatureAblationMask::Parse(rows[0][0].as<std::string>());
+}
+
+void ValidateSchedulerModelFeatureAblationMask(
+    const EA::FeatureAblationMask& modelMask,
+    const EA::FeatureAblationMask& schedulerMask,
+    long long modelId)
+{
+    if (modelMask.CanonicalText() == schedulerMask.CanonicalText())
+        return;
+    throw std::runtime_error(
+        "FEATURE_ABLATION_MASK_LINEAGE_MISMATCH:model_id=" +
+        std::to_string(modelId) + ",model=" + modelMask.CanonicalText() +
+        ",scheduler=" + schedulerMask.CanonicalText());
+}
 
 TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
 {
@@ -4427,6 +4479,7 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
     cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(w, modelId);
     cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
     cfg.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
+    cfg.featureAblationMask = LoadModelFeatureAblationMask(w, modelId);
     cfg.trainConfig = LoadRequiredTrainConfigMetaForResume(w, modelId);
     cfg.completedEpoch = cfg.trainConfig.epochsTrained.value_or(0);
     cfg.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
@@ -5395,6 +5448,7 @@ struct PersistedInferenceConfig
         EA::FeatureWarmupScope::LegacyColdBoundary;
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
     std::size_t donchianLookback = kDefaultDonchianLookback;
+    EA::FeatureAblationMask featureAblationMask;
 };
 
 template <typename T>
@@ -5667,6 +5721,7 @@ PersistedInferenceConfig LoadPersistedInferenceConfig(pqxx::work& w,
 
     cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
     cfg.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
+    cfg.featureAblationMask = LoadModelFeatureAblationMask(w, modelId);
     if (launchArgs.donchianLookback.has_value() &&
         *launchArgs.donchianLookback != cfg.donchianLookback)
         throw std::runtime_error("Donchian lookback mismatch: persisted/runtime");
@@ -6018,11 +6073,12 @@ EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
                                       float initialLongTerm,
                                       float initialShortTerm,
                                       EA::LSTM::TargetType targetType,
-                                      std::optional<std::size_t> modelInputWidth = std::nullopt)
+                                      std::optional<std::size_t> modelInputWidth = std::nullopt,
+                                      EA::FeatureAblationMask ablationMask = {})
 {
     ScopedDiagnosticCoutSilencer silence;
     return EA::LSTM { tensor, initialLongTerm, initialShortTerm, targetType,
-                      modelInputWidth };
+                      modelInputWidth, std::move(ablationMask) };
 }
 
 InferenceIdentity BuildInferenceIdentity(long long modelId,
@@ -6770,7 +6826,8 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
                         << std::endl;
 
     EA::LSTM lstm = CreateLstmForRuntimeLogLevel(
-        tensor, 1, 0, requestedTargetType, candidate.modelInputWidth);
+        tensor, 1, 0, requestedTargetType, candidate.modelInputWidth,
+        LoadModelFeatureAblationMask(w, candidate.modelId));
     PrintRuntimeLrConfig(lstm);
     DiagnosticOut() << "DIAG_LSTM_BINDING"
                     << ",table=" << rawPriceTableName
@@ -7339,6 +7396,28 @@ int main(int argc, const char * argv[])
         ValidateSchedulerDonchianLookback(
             w_LSTM, launchArgs, runtimeDonchianLookback);
 
+        std::optional<EA::FeatureAblationMask> schedulerFeatureAblationMask;
+        if (launchArgs.schedulerExperimentId.has_value() ||
+            launchArgs.schedulerCheckpointEvalId.has_value())
+        {
+            schedulerFeatureAblationMask =
+                LoadSchedulerFeatureAblationMask(w_LSTM, launchArgs);
+            if (resumeConfig.has_value())
+            {
+                ValidateSchedulerModelFeatureAblationMask(
+                    resumeConfig->featureAblationMask,
+                    *schedulerFeatureAblationMask,
+                    resumeConfig->sourceModelId);
+            }
+            if (inferenceConfig.has_value())
+            {
+                ValidateSchedulerModelFeatureAblationMask(
+                    inferenceConfig->featureAblationMask,
+                    *schedulerFeatureAblationMask,
+                    inferenceConfig->modelId);
+            }
+        }
+
         DiagnosticOut() << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
         DiagnosticOut() << "window_size=" << window_size << '\n';
         DiagnosticOut() << "prediction_horizon=" << prediction_horizon << '\n';
@@ -7481,8 +7560,15 @@ int main(int argc, const char * argv[])
                                             logicalOutputStartIndex,
                                             requestedTargetType,
                                             inferenceConfig);
+            const EA::FeatureAblationMask runtimeFeatureAblationMask =
+                schedulerFeatureAblationMask.has_value()
+                    ? *schedulerFeatureAblationMask
+                    : (resumeConfig.has_value() ? resumeConfig->featureAblationMask :
+                       (inferenceConfig.has_value() ? inferenceConfig->featureAblationMask :
+                        EA::FeatureAblationMask{}));
             EA::LSTM l = CreateLstmForRuntimeLogLevel(
-                t, 1, 0, requestedTargetType, persistedModelInputWidth);
+                t, 1, 0, requestedTargetType, persistedModelInputWidth,
+                runtimeFeatureAblationMask);
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
@@ -7664,6 +7750,14 @@ int main(int argc, const char * argv[])
                 modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t, rawPriceTableName);
             PrintEvalLabelConfig();
 
+            // All startup/configuration/model reads from the LSTM database are
+            // complete before the long-running training loop begins.  End this
+            // transaction now so an idle training worker does not retain an
+            // AccessShareLock (and MVCC snapshot) on experiment for hours.
+            // Checkpoint persistence already uses its own short transaction;
+            // final model persistence opens another short transaction below.
+            w_LSTM.commit();
+
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
             PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
 
@@ -7784,14 +7878,16 @@ int main(int argc, const char * argv[])
             {
                 if (save_enable)
                 {
-                    // Ensure this transaction is read-write for saving
-                    w_LSTM.exec("SET TRANSACTION READ WRITE;");
+                    // Startup reads were committed before training.  Use a
+                    // fresh, short transaction for final model persistence.
+                    pqxx::work wSave { c_LSTM };
+                    wSave.exec("SET TRANSACTION READ WRITE;");
                     
                     long long modelId = -1;
                     if (resumeConfig.has_value())
                     {
                         const std::string resumeModelName = launchArgs.newModelName.value_or(rawPriceTableName + "-resume-model");
-                        modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                        modelId = DBIO::PgModelIO::createModel(wSave,
                                                                resumeModelName,
                                                                "resumed trained parameters",
                                                                launchArgs.schedulerExperimentId,
@@ -7804,14 +7900,14 @@ int main(int argc, const char * argv[])
                         if constexpr (save_overwrite)
                             // Overwrite the latest model if one exists; otherwise create a new snapshot
                             try {
-                                pqxx::result rLatest = w_LSTM.exec("SELECT max(model_id) FROM model;");
+                                pqxx::result rLatest = wSave.exec("SELECT max(model_id) FROM model;");
                                 if (!rLatest.empty() && !rLatest[0][0].is_null()) {
                                     modelId = rLatest[0][0].as<long long>();
-                                    LinkModelToSchedulerExperimentIfPresent(w_LSTM, modelId, launchArgs.schedulerExperimentId);
-                                    LinkModelParentIfPresent(w_LSTM, modelId, ParentModelIdForResume(resumeConfig));
+                                    LinkModelToSchedulerExperimentIfPresent(wSave, modelId, launchArgs.schedulerExperimentId);
+                                    LinkModelParentIfPresent(wSave, modelId, ParentModelIdForResume(resumeConfig));
                                     std::cout << "Overwriting latest model_id=" << modelId << " (started from scratch, overwrite enabled)" << std::endl;
                                 } else {
-                                    modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                    modelId = DBIO::PgModelIO::createModel(wSave,
                                                                            rawPriceTableName + "-model",
                                                                            "trained parameters",
                                                                            launchArgs.schedulerExperimentId);
@@ -7820,7 +7916,7 @@ int main(int argc, const char * argv[])
                             } catch (const std::exception& e)
                             {
                                 std::cout << "Fetch latest model_id failed (" << e.what() << "); creating new snapshot" << std::endl;
-                                modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                modelId = DBIO::PgModelIO::createModel(wSave,
                                                                        rawPriceTableName + "-model",
                                                                        "trained parameters",
                                                                        launchArgs.schedulerExperimentId);
@@ -7828,7 +7924,7 @@ int main(int argc, const char * argv[])
                         else
                         {
                             // Create a new snapshot when saving (do not overwrite existing)
-                            modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                            modelId = DBIO::PgModelIO::createModel(wSave,
                                                                    rawPriceTableName + "-model",
                                                                    "trained parameters",
                                                                    launchArgs.schedulerExperimentId);
@@ -7839,13 +7935,13 @@ int main(int argc, const char * argv[])
                             if (loadedModelId.has_value())
                             {
                                 modelId = *loadedModelId;
-                                LinkModelToSchedulerExperimentIfPresent(w_LSTM, modelId, launchArgs.schedulerExperimentId);
-                                LinkModelParentIfPresent(w_LSTM, modelId, ParentModelIdForResume(resumeConfig));
+                                LinkModelToSchedulerExperimentIfPresent(wSave, modelId, launchArgs.schedulerExperimentId);
+                                LinkModelParentIfPresent(wSave, modelId, ParentModelIdForResume(resumeConfig));
                                 std::cout << "Overwriting existing model_id=" << modelId << std::endl;
                             }
                             else
                             {
-                                modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                                modelId = DBIO::PgModelIO::createModel(wSave,
                                                                        rawPriceTableName + "-model",
                                                                        "trained parameters",
                                                                        launchArgs.schedulerExperimentId);
@@ -7854,17 +7950,17 @@ int main(int argc, const char * argv[])
                         else
                         {
                             // Create a new snapshot when saving (do not overwrite existing)
-                            modelId = DBIO::PgModelIO::createModel(w_LSTM,
+                            modelId = DBIO::PgModelIO::createModel(wSave,
                                                                    rawPriceTableName + "-model",
                                                                    "trained parameters",
                                                                    launchArgs.schedulerExperimentId);
                             std::cout << "Created new model_id=" << modelId << std::endl;
                         }
 
-                    DBIO::PgModelIO::saveAll(w_LSTM, modelId, l, rawPriceTableName, fromDate, toDate,
+                    DBIO::PgModelIO::saveAll(wSave, modelId, l, rawPriceTableName, fromDate, toDate,
                                              runtimeDonchian20Mode, featureWarmupScope,
                                              runtimeDonchianLookback);
-                    w_LSTM.commit();
+                    wSave.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())
                         std::cout << "RESUME_SAVED_NEW_MODEL_ID=" << modelId << std::endl;

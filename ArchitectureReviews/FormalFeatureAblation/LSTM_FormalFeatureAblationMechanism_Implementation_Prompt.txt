@@ -1,0 +1,301 @@
+You are implementing a formal feature-ablation mechanism for the LSTM experiment system in the current ExpertAdvisor-next-feature worktree.
+
+GOAL
+Add a production-quality, persisted, deterministic feature-ablation mechanism so matched experiments can measure individual feature contribution without changing Tensor layout, historical model-input widths, or feature semantics.
+
+This is infrastructure, NOT a new feature increment.
+
+BASELINE
+Before editing, inspect and document the actual clean committed baseline. Expected current feature state after the causal directional adverse-excursion increment is approximately:
+- Tensor feature_size = 45
+- model return feature count = 4
+- current n_in = 49
+- appended features include columns 32..44
+- column 44 = causal 8-close directional adverse-excursion ratio
+- current recommendation semantic version approximately v16
+
+Do not blindly trust these expected values. Verify HEAD, branch, git status, FeatureLayout.hpp, ModelInputContract.hpp, Tensor integration, experiment schema/repositories, queue CLI, resume paths, training input construction, inference input construction, model provenance, recommendation/materialization/outcome-assessment code, and relevant migrations/tests.
+
+If the worktree is not clean because only generated implementation prompt/output/transcript artifacts exist, document that. If source changes from another implementation are present, stop rather than layering this mechanism over an unknown state.
+
+CORE DESIGN
+Implement named feature ablation while preserving the physical feature vector.
+
+An ablated experiment MUST:
+1. Build the same Tensor/model input width as an otherwise identical non-ablated experiment.
+2. Deterministically replace selected feature values with exactly 0 before they are consumed by the model.
+3. Apply the identical mask during training, checkpoint inference, normal inference, resumed training, resumed inference, and any other real model-input path.
+4. Persist the ablation specification as experiment/model provenance.
+5. Include the ablation specification in experiment identity/deduplication wherever necessary.
+6. Default all historical/existing experiments to no ablation.
+7. Never reinterpret historical n_in widths.
+8. Never change Tensor feature_size merely because a feature is ablated.
+
+STABLE FEATURE IDENTITIES
+Do NOT make raw numeric Tensor column numbers the primary persisted user-facing identity.
+
+Introduce a stable canonical feature identity registry for ablatable appended features. Prefer canonical names corresponding to semantic features, for example names along the lines of:
+- relative_tick_volume
+- rms_return_surprise
+- volatility_regime
+- directional_range
+- close_location
+- directional_efficiency
+- return_sign_persistence
+- return_direction_imbalance
+- directional_adverse_excursion
+
+Inspect the actual current feature layout and use repository-consistent canonical names.
+
+The registry must map canonical feature identity -> current Tensor/model-input location and validate whether that feature exists for the experiment/model input contract.
+
+Do not silently accept unknown names.
+Do not allow duplicate names to alter semantics.
+Canonicalize ordering so logically identical masks have identical persisted identity.
+
+INITIAL SCOPE
+For the first implementation, support ablation of the newer named Tensor-derived appended features where stable semantic identities are clear.
+
+Do not automatically expose legacy columns 0..31 unless the architecture makes that safe and clearly named.
+Do not ablate the four model return features in this increment unless they already participate naturally in the same stable feature registry and doing so is demonstrably safe. Document them as future scope otherwise.
+
+PERSISTED REPRESENTATION
+Choose a simple canonical persisted representation compatible with PostgreSQL and the existing C++ repositories.
+
+Preferred approach:
+- experiment column such as feature_ablation_mask TEXT NOT NULL DEFAULT ''
+- canonical comma-separated stable feature names in deterministic registry order
+
+An empty string means no ablation.
+
+If repository conventions strongly favor another representation, justify it in the output.
+
+Add a numbered idempotent migration following current migration conventions.
+
+The persisted representation must survive:
+- queue
+- scheduler ownership/dispatch
+- experiment reload
+- retry
+- resume
+- checkpoint promotion/evaluation where relevant
+- model persistence/provenance
+- recommendation/campaign reconstruction where experiment identity is reconstructed
+
+MODEL PROVENANCE
+Inspect how models inherit experiment/model-input provenance.
+
+A model produced by an ablated experiment must be unambiguously associated with the exact canonical ablation mask used to train it.
+
+Do not allow inference of a trained model under a different mask.
+
+If model rows need a persisted mask column, add it through the normal migration/repository path.
+If model provenance is guaranteed through an immutable experiment relationship and existing architecture, prove that in tests/output rather than duplicating state unnecessarily.
+
+TRAINING/INFERENCE APPLICATION POINT
+Find the single safest shared point at which the final model input vector can be masked so training and inference cannot diverge.
+
+Prefer one shared helper/function used by all model-consumption paths rather than separate ad hoc masking implementations.
+
+Required semantic order:
+1. Construct the normal feature vector exactly as today.
+2. Project according to the model's historical/current input contract exactly as today.
+3. Set selected ablatable feature positions to exactly 0.
+4. Feed the resulting unchanged-width vector to the model.
+
+If actual architecture requires masking before projection, prove historical-width correctness and ensure a feature that does not exist in that historical prefix cannot be ablated silently.
+
+Masking must not mutate persistent Tensor history/state or affect computation of later causal features. It only changes the model-consumed input value.
+
+CLI
+Add an experiment-queue option consistent with existing CLI conventions, preferably:
+
+    --ablate-features=name1,name2,...
+
+Support it on the real queue-experiment path and any sweep path where existing experiment configuration is propagated.
+
+Examples should conceptually support:
+
+    --ablate-features=directional_adverse_excursion
+
+and
+
+    --ablate-features=return_sign_persistence,return_direction_imbalance
+
+Canonicalize and validate at queue time.
+
+Do not add a global mutable runtime mask that could accidentally affect unrelated experiments.
+
+IDENTITY / DUPLICATE DETECTION
+Two experiments identical in every other respect but with different ablation masks MUST be allowed to coexist and MUST have distinct experiment identity.
+
+Two masks containing the same feature names in different user-supplied orders MUST canonicalize to the same identity.
+
+Update the experiment uniqueness/deduplication mechanism and migration/index definitions as required.
+
+Be careful with existing partial unique indexes and schema evolution. Inspect current migrations/schema rather than assuming column names.
+
+RESUME / RETRY SAFETY
+This is critical.
+
+A resumed training run must use the same canonical ablation mask as the model/checkpoint lineage being resumed.
+
+Reject attempts to resume a model/checkpoint with a different ablation mask unless there is an explicit future mechanism designed for that purpose.
+
+Integrate the mask into the existing training-resume validation/provenance validation code rather than creating an isolated check that real loaders bypass.
+
+Retry-failed and checkpoint-resumability paths must preserve the mask exactly.
+
+INFERENCE SAFETY
+Inference must obtain the mask from persisted experiment/model provenance, not from a transient CLI default.
+
+Checkpoint inference and normal inference must use the same mask that trained the model.
+
+Historical models/experiments created before this migration must behave exactly as mask=''.
+
+RECOMMENDATION / CAMPAIGN SEMANTICS
+Do NOT advance the feature semantic version merely because ablation infrastructure exists unless the existing architecture explicitly requires recommendation semantic versioning for experiment-control metadata.
+
+Ablation is experiment configuration, not a new Tensor feature.
+
+However:
+- recommendation/materialization/outcome-assessment code must preserve and distinguish ablation configuration wherever it reconstructs experiment identity/configuration;
+- generated recommendations should default to no ablation unless explicitly creating an ablation experiment;
+- do not accidentally cause ordinary campaign continuations to add/remove masks.
+
+If an existing semantic-version bump is genuinely required by architecture, explain why before doing it.
+
+REPORTING / STATUS
+Expose the canonical ablation mask in appropriate experiment metadata/status output so an operator can tell that an experiment is an ablation run.
+
+Keep ordinary status output concise; follow current project conventions.
+
+TESTS
+Add focused maintained tests for the ablation mechanism.
+
+At minimum verify:
+
+REGISTRY / PARSING
+1. empty mask parses as no ablation.
+2. one valid canonical feature parses.
+3. multiple valid features parse.
+4. user order canonicalizes deterministically.
+5. duplicates canonicalize away or are rejected deterministically.
+6. unknown feature name is rejected.
+7. whitespace handling is explicit and tested.
+8. canonical serialization round-trips.
+
+MASK APPLICATION
+9. no-ablation vector is bit-for-bit unchanged.
+10. one selected feature becomes exactly 0.
+11. multiple selected features become exactly 0.
+12. all nonselected inputs remain bit-for-bit unchanged.
+13. vector width is unchanged.
+14. Tensor state/history is not mutated.
+15. masking a current feature works at current n_in.
+16. attempting to ablate a feature absent from an older historical width is rejected clearly, unless architecture intentionally defines it as a no-op; rejection is preferred.
+
+TRAIN / INFER PARITY
+17. training model-input construction applies the mask.
+18. inference model-input construction applies the same mask.
+19. checkpoint inference applies the same mask.
+20. shared code prevents train/infer mask drift.
+
+PERSISTENCE / IDENTITY
+21. queue persists canonical mask.
+22. empty/default queue persists no ablation.
+23. experiment reload round-trips mask.
+24. same logical mask in different input order deduplicates as the same experiment identity.
+25. different masks produce distinct experiment identities.
+26. existing historical rows default to no ablation.
+
+RESUME / RETRY
+27. resume with matching mask succeeds.
+28. resume with mismatched mask is rejected.
+29. retry-failed preserves mask.
+30. newest-checkpoint promotion/resume validation preserves/validates mask.
+31. every persisted object consumed by the real training-resume loader either validates the mask directly or reaches shared validation code.
+
+MODEL PROVENANCE
+32. a trained model can recover/verify its training mask.
+33. inference cannot silently use a different mask.
+34. historical models resolve to no ablation.
+
+CAMPAIGN / RECOMMENDATION
+35. ordinary recommendation/materialization defaults to no ablation.
+36. continuation/reconstruction preserves an existing mask where policy semantics require continuation of the same experiment configuration.
+37. outcome-assessment/reconstruction does not collapse differently masked experiments.
+
+BACKWARD COMPATIBILITY
+38. all existing feature layout tests pass unchanged except intentional additions for the registry.
+39. feature_size remains unchanged from baseline.
+40. current n_in remains unchanged from baseline.
+41. historical n_in mappings remain unchanged.
+42. recommendation feature semantic identity remains unchanged unless a documented architectural necessity requires otherwise.
+
+DATABASE
+Add migration tests or schema checks appropriate to the repository.
+Migration must be safe on an existing database and idempotent according to project conventions.
+
+REGRESSION
+Run relevant maintained suites including at least:
+- LSTMFeatureVectorParityTests
+- LSTMModelInputCompatibilityTests
+- the current causal feature tests
+- ExperimentRecommendationTests
+- campaign materialization/outcome-assessment tests
+- retry/checkpoint resumability tests if maintained
+- CLI/parser tests if maintained
+- repository/database tests that can run in the current environment
+
+Run:
+    git diff --check
+
+BUILD / PROVENANCE
+Do not commit automatically.
+
+Use the established worktree DerivedData path for any Xcode build attempt:
+
+    -derivedDataPath DerivedData/ExpertAdvisor-next-feature
+
+Do not create a new arbitrary DerivedData path.
+
+A dirty-tree Release provenance guard is expected before the operator archives and commits. Do not misreport that as a source compilation failure.
+
+OUTPUT
+Write:
+
+    LSTM_FormalFeatureAblationMechanism_Implementation_Output.md
+
+Document:
+- verified baseline
+- architecture discovery
+- stable feature registry
+- persisted representation
+- migration(s)
+- exact mask application point
+- training/inference parity
+- queue/CLI behavior
+- identity/deduplication changes
+- resume/retry validation
+- model provenance
+- campaign/recommendation behavior
+- backward compatibility
+- files changed
+- tests actually run with results
+- build attempt/result
+- any remaining caveats
+
+SCOPE DISCIPLINE
+Do not add a new predictive feature.
+Do not change feature_size or current n_in.
+Do not change existing feature formulas.
+Do not implement automated ablation campaign generation yet.
+Do not implement statistical significance analysis yet.
+Do not implement feature importance ranking yet.
+Do not implement permutation importance or SHAP.
+Do not modify unrelated scheduler behavior.
+Do not merge/rebase/push/commit.
+
+This increment establishes trustworthy experimental infrastructure for later
+matched leave-one-feature-out and multi-feature ablation campaigns.
