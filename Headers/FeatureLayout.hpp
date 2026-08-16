@@ -25,6 +25,11 @@ inline constexpr std::size_t causal_return_surprise_feature_size =
     relative_tick_volume_feature_size + 1;
 inline constexpr std::size_t causalVolatilityRegimeCol =
     causal_return_surprise_feature_size;
-inline constexpr std::size_t feature_size = causal_return_surprise_feature_size + 1;
+inline constexpr std::size_t causal_volatility_regime_feature_size =
+    causal_return_surprise_feature_size + 1;
+inline constexpr std::size_t causalDirectionalRangeCol =
+    causal_volatility_regime_feature_size;
+inline constexpr std::size_t feature_size =
+    causal_volatility_regime_feature_size + 1;
 
 #endif /* FeatureLayout_hpp */

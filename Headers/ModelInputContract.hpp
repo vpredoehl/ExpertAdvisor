@@ -22,6 +22,8 @@ inline constexpr std::size_t kRelativeTickVolumeModelInputWidth =
     relative_tick_volume_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCausalReturnSurpriseModelInputWidth =
     causal_return_surprise_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalVolatilityRegimeModelInputWidth =
+    causal_volatility_regime_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
     feature_size + kModelReturnFeatureCount;
 
@@ -46,6 +48,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
             return {modelInputWidth, relative_tick_volume_feature_size, 0};
         case kCausalReturnSurpriseModelInputWidth:
             return {modelInputWidth, causal_return_surprise_feature_size, 0};
+        case kCausalVolatilityRegimeModelInputWidth:
+            return {modelInputWidth, causal_volatility_regime_feature_size, 0};
         case kCurrentModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
@@ -57,6 +61,7 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kSessionPhaseModelInputWidth) +
                 ":" + std::to_string(kRelativeTickVolumeModelInputWidth) +
                 ":" + std::to_string(kCausalReturnSurpriseModelInputWidth) +
+                ":" + std::to_string(kCausalVolatilityRegimeModelInputWidth) +
                 ":" + std::to_string(kCurrentModelInputWidth));
     }
 }

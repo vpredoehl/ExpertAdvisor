@@ -19,6 +19,7 @@
 #include "SessionPhaseFeatures.hpp"
 #include "CausalReturnSurpriseFeatures.hpp"
 #include "CausalVolatilityRegimeFeatures.hpp"
+#include "CausalDirectionalRangeFeatures.hpp"
 
 using std::setw;
 
@@ -94,10 +95,12 @@ void Tensor::Add(Feature f)
 
     FeatureMatrix fm(1, feature_size);
     // Calculate before retaining this completed bar so the appended causal
-    // features reference only their up-to-32 predecessors.
+    // features reference only their predecessors.
     const float relativeVolume = relativeTickVolume.AddCompletedBar(f.tickVolume);
     const float returnSurprise = causalReturnSurprise.AddCompletedClose(f.close);
     const float volatilityRegime = causalVolatilityRegime.AddCompletedClose(f.close);
+    const float directionalRange = causalDirectionalRange.PriorDirectionalBodyRange();
+    causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
 
     if (!has_prev_close) {
         auto low = MetaNN::LowerAccess(fm);
@@ -109,6 +112,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[relativeTickVolumeCol] = relativeVolume;
         low.MutableRawMemory()[causalReturnSurpriseCol] = returnSurprise;
         low.MutableRawMemory()[causalVolatilityRegimeCol] = volatilityRegime;
+        low.MutableRawMemory()[causalDirectionalRangeCol] = directionalRange;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -361,6 +365,7 @@ void Tensor::Add(Feature f)
     p[relativeTickVolumeCol] = relativeVolume;
     p[causalReturnSurpriseCol] = returnSurprise;
     p[causalVolatilityRegimeCol] = volatilityRegime;
+    p[causalDirectionalRangeCol] = directionalRange;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

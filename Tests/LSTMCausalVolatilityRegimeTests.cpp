@@ -147,8 +147,8 @@ Feature BarAt(std::size_t index, float close)
 void TestTensorPlacementAndProjection()
 {
     static_assert(causalVolatilityRegimeCol == 38);
-    static_assert(feature_size == 39);
-    static_assert(EA::kCurrentModelInputWidth == 43);
+    static_assert(feature_size == 40);
+    static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     Tensor tensor{"causal-volatility-regime"};
     float close = 100.0f;
     tensor.Add(BarAt(0, close));
