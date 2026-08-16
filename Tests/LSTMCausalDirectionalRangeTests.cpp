@@ -94,9 +94,10 @@ Feature BarAt(std::size_t index, float open, float high, float low, float close)
 void TestTensorPlacementAndModelProjection()
 {
     static_assert(causalDirectionalRangeCol == 39);
-    static_assert(feature_size == 40);
+    static_assert(feature_size == 41);
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
-    static_assert(EA::kCurrentModelInputWidth == 44);
+    static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
+    static_assert(EA::kCurrentModelInputWidth == 45);
 
     Tensor tensor{"causal-directional-range"};
     tensor.Add(BarAt(0, 1.0f, 1.4f, 0.8f, 1.3f));
@@ -112,7 +113,7 @@ void TestTensorPlacementAndModelProjection()
     for (std::size_t i = 0; i < source.size(); ++i)
         source[i] = static_cast<float>(i);
     const auto historical = EA::ResolveModelInputContract(43, source.size());
-    std::array<float, 44> historicalOutput{};
+    std::array<float, 45> historicalOutput{};
     historicalOutput.fill(-1.0f);
     EA::CopyTensorFeaturesForModelInput(
         historicalOutput.data(), source.data(), historical);
@@ -120,7 +121,7 @@ void TestTensorPlacementAndModelProjection()
     assert(historicalOutput[causalDirectionalRangeCol] == -1.0f);
 
     const auto current = EA::ResolveModelInputContract(44, source.size());
-    std::array<float, 44> currentOutput{};
+    std::array<float, 45> currentOutput{};
     EA::CopyTensorFeaturesForModelInput(currentOutput.data(), source.data(), current);
     assert(currentOutput[causalDirectionalRangeCol] == 39.0f);
 }

@@ -29,7 +29,11 @@ inline constexpr std::size_t causal_volatility_regime_feature_size =
     causal_return_surprise_feature_size + 1;
 inline constexpr std::size_t causalDirectionalRangeCol =
     causal_volatility_regime_feature_size;
-inline constexpr std::size_t feature_size =
+inline constexpr std::size_t causal_directional_range_feature_size =
     causal_volatility_regime_feature_size + 1;
+inline constexpr std::size_t causalCloseLocationCol =
+    causal_directional_range_feature_size;
+inline constexpr std::size_t feature_size =
+    causal_directional_range_feature_size + 1;
 
 #endif /* FeatureLayout_hpp */

@@ -17,14 +17,17 @@ int main()
     static_assert(causalVolatilityRegimeCol == 38);
     static_assert(causal_volatility_regime_feature_size == 39);
     static_assert(causalDirectionalRangeCol == 39);
-    static_assert(feature_size == 40);
+    static_assert(causal_directional_range_feature_size == 40);
+    static_assert(causalCloseLocationCol == 40);
+    static_assert(feature_size == 41);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
     static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
     static_assert(EA::kCausalReturnSurpriseModelInputWidth == 42);
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
-    static_assert(EA::kCurrentModelInputWidth == 44);
+    static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
+    static_assert(EA::kCurrentModelInputWidth == 45);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -115,16 +118,30 @@ int main()
            physicalTensor[causalVolatilityRegimeCol]);
     assert(volatilityRegimeInput[causalDirectionalRangeCol] == -1.0f);
 
-    // Current persisted models consume the appended directional-range column.
-    const auto current = EA::ResolveModelInputContract(44, physicalTensor.size());
+    // Directional-range-era persisted models retain their exact 40-column
+    // prefix and cannot consume the later close-location column.
+    const auto directionalRange = EA::ResolveModelInputContract(
+        44, physicalTensor.size());
+    assert(directionalRange.tensorFeatureCount == causal_directional_range_feature_size);
+    std::vector<float> directionalRangeInput(44, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(directionalRangeInput.data(),
+                                        physicalTensor.data(), directionalRange);
+    for (std::size_t i = 0; i < causal_directional_range_feature_size; ++i)
+        assert(directionalRangeInput[i] == physicalTensor[i]);
+    assert(directionalRangeInput[causalDirectionalRangeCol] ==
+           physicalTensor[causalDirectionalRangeCol]);
+    assert(directionalRangeInput[causalCloseLocationCol] == -1.0f);
+
+    // Current persisted models consume the appended close-location column.
+    const auto current = EA::ResolveModelInputContract(45, physicalTensor.size());
     assert(current.tensorFeatureCount == feature_size);
-    std::vector<float> currentInput(44, -1.0f);
+    std::vector<float> currentInput(45, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentInput.data(),
                                         physicalTensor.data(), current);
     for (std::size_t i = 0; i < feature_size; ++i)
         assert(currentInput[i] == physicalTensor[i]);
-    assert(currentInput[causalDirectionalRangeCol] ==
-           physicalTensor[causalDirectionalRangeCol]);
+    assert(currentInput[causalCloseLocationCol] ==
+           physicalTensor[causalCloseLocationCol]);
 
     bool unsupportedRejected = false;
     try
@@ -135,7 +152,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45";
     }
     assert(unsupportedRejected);
 
