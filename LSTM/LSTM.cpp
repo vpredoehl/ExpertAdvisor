@@ -543,7 +543,7 @@ constexpr size_t kReturnFeatureCount =
 static_assert(kReturnFeatureCount == EA::kModelReturnFeatureCount,
               "LSTM return-feature contract must contain four columns");
 static_assert(feature_size + kReturnFeatureCount == EA::kCurrentModelInputWidth,
-              "the active LSTM model input width must remain 40");
+              "the active LSTM model input width must match the feature layout");
 
 size_t TensorFeatureCount(const Tensor& tensor)
 {

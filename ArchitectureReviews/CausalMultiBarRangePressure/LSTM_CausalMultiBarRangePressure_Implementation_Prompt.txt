@@ -1,0 +1,270 @@
+# LSTM Causal Multi-Bar Range Pressure Feature — Implementation
+
+## Objective
+
+Implement one small, production-quality causal LSTM input feature:
+
+**causal multi-bar range pressure / rolling close position**
+
+The feature should measure where the current bar's close lies within the high/low range formed by a fixed trailing window of bars.
+
+This is intended to complement—not duplicate—the existing single-bar causal close-location/range-position feature.
+
+Work directly in the current repository. Inspect the existing feature pipeline and follow its established conventions rather than inventing a parallel mechanism.
+
+## Required semantic definition
+
+Use a fixed causal lookback of **16 bars**, unless repository conventions provide a compelling reason that this exact constant would violate an existing feature contract.
+
+For bar `t`:
+
+    rolling_high_t = max(high[t-i]) for i = 0..15
+    rolling_low_t  = min(low[t-i])  for i = 0..15
+
+Define:
+
+    range_pressure_t =
+        2 * (close[t] - rolling_low_t)
+          / (rolling_high_t - rolling_low_t)
+        - 1
+
+Thus the ordinary range is approximately:
+
+    -1 = close at trailing-window low
+     0 = close at trailing-window midpoint
+    +1 = close at trailing-window high
+
+The implementation must have explicit deterministic behavior for a zero or effectively-zero rolling range. Prefer `0.0` unless an existing repository convention establishes another neutral value.
+
+Do not use future bars.
+
+Do not center the window.
+
+Do not derive the trailing high/low using data after bar `t`.
+
+The current bar MAY be included and SHOULD be included according to the definition above.
+
+## Causality requirements
+
+This is a strict causal feature.
+
+For feature value at time `t`, only observations with index `<= t` may affect the result.
+
+Add a causality regression test demonstrating that modifying bars after `t` cannot change the feature value at `t`.
+
+Also verify boundary/warmup behavior explicitly.
+
+Follow the repository's existing feature warmup policy and tensor construction conventions. Do not silently introduce a new warmup policy.
+
+## Relationship to existing features
+
+Inspect the existing implementations for at least:
+
+- causal close location / range position
+- causal directional range
+- causal directional persistence / efficiency
+- causal return sign persistence
+- causal return direction imbalance
+- causal directional adverse excursion
+- causal return surprise
+- causal volatility regime
+
+Use their established architecture, naming, header organization, tensor integration, tests, feature layout, model input compatibility, experiment recommendation plumbing, and feature-ablation registration as applicable.
+
+This feature is deliberately different from the existing single-bar close-location feature:
+
+- close-location describes close position within the CURRENT BAR.
+- multi-bar range pressure describes current close position within the TRAILING 16-BAR EXTREME RANGE.
+
+Do not remove or redefine the existing close-location feature.
+
+## Feature naming
+
+Use a clear canonical name consistently.
+
+Preferred canonical ablation/configuration name:
+
+    multi_bar_range_pressure
+
+Preferred C++ terminology:
+
+    CausalMultiBarRangePressure
+
+If repository naming conventions strongly favor another spelling, use the established convention consistently and document the choice.
+
+## Feature-ablation integration
+
+The formal feature-ablation mechanism is already implemented.
+
+Register this new feature with that mechanism in the same manner as the other ablatable LSTM features.
+
+An experiment with:
+
+    feature_ablation_mask='multi_bar_range_pressure'
+
+must zero ONLY this feature while leaving all other input features unchanged.
+
+Do not create a second ablation mechanism.
+
+Update validation/canonicalization/known-feature registration wherever required by the existing implementation.
+
+## Feature layout and model-input contract
+
+Inspect the current feature count and model input width from source; do not assume numbers from this prompt.
+
+Add exactly ONE scalar tensor feature.
+
+Update all compile-time/runtime feature-layout contracts that must change when one feature is added.
+
+Preserve historical model compatibility according to the repository's existing model-input compatibility policy.
+
+Do not casually invalidate old models.
+
+Update static assertions and expected feature counts in tests as required.
+
+## Tensor integration
+
+Integrate the feature into the real production tensor construction path used by training and inference.
+
+Training and classification inference must receive the same value for the same historical input.
+
+Do not implement a test-only or disconnected helper.
+
+Prefer a small reusable causal helper consistent with the recent feature implementations.
+
+Avoid unnecessary allocations or asymptotically expensive work in the hot tensor path.
+
+For a fixed 16-bar window, a straightforward bounded scan is acceptable unless repository architecture clearly provides a better established mechanism.
+
+## Numerical behavior
+
+The result must always be finite.
+
+Handle:
+
+- flat ranges
+- tiny ranges
+- normal ranges
+- extreme but finite price inputs
+
+using the repository's existing numerical-safety conventions.
+
+Do not introduce NaN or infinity into the tensor.
+
+Do not use arbitrary clipping unless required by an existing feature contract. If clipping is necessary, explain why.
+
+## Tests
+
+Add focused tests comparable in quality to the recent causal feature tests.
+
+At minimum prove:
+
+1. Close at trailing 16-bar high gives approximately +1.
+2. Close at trailing 16-bar low gives approximately -1.
+3. Close at trailing range midpoint gives approximately 0.
+4. Flat trailing range produces the defined neutral finite value.
+5. Only the trailing causal window is used.
+6. Modifying future bars does not alter an earlier feature value.
+7. The oldest bar falls out of the calculation at the correct boundary.
+8. Tensor integration places the value in the intended feature slot.
+9. Training/inference feature-vector parity remains valid.
+10. Feature-ablation mask zeros this feature and only this feature.
+11. Existing model-input compatibility tests remain correct after the one-feature width increase.
+
+Add a focused shell test runner if that is the established pattern for recent features.
+
+## Experiment/recommendation persistence
+
+Inspect all code that persists, reconstructs, compares, recommends, materializes, or assesses LSTM feature/input contracts.
+
+Update only what is required for the additional feature.
+
+Do not change experiment scientific identity beyond what is already required by the formal feature-ablation mechanism.
+
+## Scope constraints
+
+Keep this patch narrow.
+
+DO:
+
+- implement this one scalar causal feature
+- integrate it into production tensor construction
+- register it for formal feature ablation
+- update feature-layout/input-width contracts
+- preserve old-model compatibility
+- update affected tests
+- run focused regression tests
+
+DO NOT:
+
+- add another predictive feature
+- redesign the tensor architecture
+- redesign feature ablation
+- change scheduler behavior
+- modify migration 069/070 semantics
+- alter checkpoint policy
+- alter training hyperparameters
+- perform unrelated cleanup/refactoring
+- change database schema unless the existing feature architecture absolutely requires it
+
+A new DB migration should NOT normally be necessary for this feature.
+
+## Validation
+
+Run the most relevant focused tests available in the repository.
+
+At minimum run the new feature test plus affected:
+
+- feature vector parity tests
+- model input compatibility tests
+- feature-ablation tests
+- tensor integration tests
+
+Do not perform a broad architectural rewrite merely to satisfy a test.
+
+If a test fails because an expected feature count/input width legitimately increased by one, update that explicit contract carefully.
+
+## Review requirements
+
+Before editing:
+
+1. inspect the existing production tensor path;
+2. determine the current feature count and model input width;
+3. identify the exact feature slot this feature will occupy;
+4. identify all static assertions/contracts affected;
+5. inspect the formal feature-ablation registry;
+6. inspect historical model-width compatibility logic.
+
+After editing, inspect the diff for accidental unrelated changes.
+
+Run:
+
+    git diff --check
+
+## Deliverable
+
+Write:
+
+    LSTM_CausalMultiBarRangePressure_Implementation_Output.md
+
+The report must include:
+
+- implementation summary
+- exact mathematical definition
+- lookback/window semantics
+- causality argument
+- zero-range behavior
+- production tensor integration point
+- feature slot/index and resulting feature/input widths
+- feature-ablation integration
+- historical model compatibility treatment
+- files changed
+- tests run and exact results
+- any remaining risks or limitations
+- final PASS / PASS WITH CAVEAT / FAIL assessment
+
+Do not claim tests were run unless they were actually executed.
+
+Do not commit changes.
+
+Leave the worktree with the implementation and report available for independent review.
