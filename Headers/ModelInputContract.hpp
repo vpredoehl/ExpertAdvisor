@@ -7,6 +7,7 @@
 #include <string>
 
 #include "FeatureLayout.hpp"
+#include "FeatureAblation.hpp"
 
 namespace EA
 {
@@ -22,6 +23,18 @@ inline constexpr std::size_t kRelativeTickVolumeModelInputWidth =
     relative_tick_volume_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCausalReturnSurpriseModelInputWidth =
     causal_return_surprise_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalVolatilityRegimeModelInputWidth =
+    causal_volatility_regime_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalDirectionalRangeModelInputWidth =
+    causal_directional_range_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalCloseLocationModelInputWidth =
+    causal_close_location_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalDirectionalPersistenceModelInputWidth =
+    causalDirectionalPersistenceCol + 1 + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalReturnSignPersistenceModelInputWidth =
+    causalReturnSignPersistenceCol + 1 + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalReturnDirectionImbalanceModelInputWidth =
+    causalReturnDirectionImbalanceCol + 1 + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
     feature_size + kModelReturnFeatureCount;
 
@@ -46,6 +59,18 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
             return {modelInputWidth, relative_tick_volume_feature_size, 0};
         case kCausalReturnSurpriseModelInputWidth:
             return {modelInputWidth, causal_return_surprise_feature_size, 0};
+        case kCausalVolatilityRegimeModelInputWidth:
+            return {modelInputWidth, causal_volatility_regime_feature_size, 0};
+        case kCausalDirectionalRangeModelInputWidth:
+            return {modelInputWidth, causal_directional_range_feature_size, 0};
+        case kCausalCloseLocationModelInputWidth:
+            return {modelInputWidth, causal_close_location_feature_size, 0};
+        case kCausalDirectionalPersistenceModelInputWidth:
+            return {modelInputWidth, causalReturnSignPersistenceCol, 0};
+        case kCausalReturnSignPersistenceModelInputWidth:
+            return {modelInputWidth, causalReturnDirectionImbalanceCol, 0};
+        case kCausalReturnDirectionImbalanceModelInputWidth:
+            return {modelInputWidth, causalDirectionalAdverseExcursionCol, 0};
         case kCurrentModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
@@ -57,6 +82,12 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kSessionPhaseModelInputWidth) +
                 ":" + std::to_string(kRelativeTickVolumeModelInputWidth) +
                 ":" + std::to_string(kCausalReturnSurpriseModelInputWidth) +
+                ":" + std::to_string(kCausalVolatilityRegimeModelInputWidth) +
+                ":" + std::to_string(kCausalDirectionalRangeModelInputWidth) +
+                ":" + std::to_string(kCausalCloseLocationModelInputWidth) +
+                ":" + std::to_string(kCausalDirectionalPersistenceModelInputWidth) +
+                ":" + std::to_string(kCausalReturnSignPersistenceModelInputWidth) +
+                ":" + std::to_string(kCausalReturnDirectionImbalanceModelInputWidth) +
                 ":" + std::to_string(kCurrentModelInputWidth));
     }
 }
@@ -92,6 +123,21 @@ inline void CopyTensorFeaturesForModelInput(
     std::memcpy(destination,
                 source,
                 contract.tensorFeatureCount * sizeof(T));
+}
+
+// This is the sole Tensor-derived model-input materialization hook.  The mask
+// is applied after historical-prefix projection, so width and Tensor state are
+// unchanged and unavailable historical features fail closed.
+template <typename T>
+inline void CopyTensorFeaturesForModelInput(
+    T* destination,
+    const T* source,
+    const ModelInputContract& contract,
+    const FeatureAblationMask& ablationMask)
+{
+    CopyTensorFeaturesForModelInput(destination, source, contract);
+    ablationMask.ApplyToProjectedTensorFeatures(destination,
+                                                 contract.tensorFeatureCount);
 }
 
 } // namespace EA

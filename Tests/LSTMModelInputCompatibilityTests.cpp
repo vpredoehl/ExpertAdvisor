@@ -15,13 +15,28 @@ int main()
     static_assert(causalReturnSurpriseCol == 37);
     static_assert(causal_return_surprise_feature_size == 38);
     static_assert(causalVolatilityRegimeCol == 38);
-    static_assert(feature_size == 39);
+    static_assert(causal_volatility_regime_feature_size == 39);
+    static_assert(causalDirectionalRangeCol == 39);
+    static_assert(causal_directional_range_feature_size == 40);
+    static_assert(causalCloseLocationCol == 40);
+    static_assert(causal_close_location_feature_size == 41);
+    static_assert(causalDirectionalPersistenceCol == 41);
+    static_assert(causalReturnSignPersistenceCol == 42);
+    static_assert(causalReturnDirectionImbalanceCol == 43);
+    static_assert(causalDirectionalAdverseExcursionCol == 44);
+    static_assert(feature_size == 45);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
     static_assert(EA::kRelativeTickVolumeModelInputWidth == 41);
     static_assert(EA::kCausalReturnSurpriseModelInputWidth == 42);
-    static_assert(EA::kCurrentModelInputWidth == 43);
+    static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
+    static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
+    static_assert(EA::kCausalCloseLocationModelInputWidth == 45);
+    static_assert(EA::kCausalDirectionalPersistenceModelInputWidth == 46);
+    static_assert(EA::kCausalReturnSignPersistenceModelInputWidth == 47);
+    static_assert(EA::kCausalReturnDirectionImbalanceModelInputWidth == 48);
+    static_assert(EA::kCurrentModelInputWidth == 49);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -98,16 +113,135 @@ int main()
            physicalTensor[causalReturnSurpriseCol]);
     assert(returnSurpriseInput[causalVolatilityRegimeCol] == -1.0f);
 
-    // Current persisted models consume the appended volatility-regime column.
-    const auto current = EA::ResolveModelInputContract(43, physicalTensor.size());
-    assert(current.tensorFeatureCount == feature_size);
-    std::vector<float> currentInput(43, -1.0f);
+    // Volatility-regime-era persisted models retain their exact 39-column
+    // prefix and cannot consume the later directional-range column.
+    const auto volatilityRegime = EA::ResolveModelInputContract(
+        43, physicalTensor.size());
+    assert(volatilityRegime.tensorFeatureCount == causal_volatility_regime_feature_size);
+    std::vector<float> volatilityRegimeInput(43, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(volatilityRegimeInput.data(),
+                                        physicalTensor.data(), volatilityRegime);
+    for (std::size_t i = 0; i < causal_volatility_regime_feature_size; ++i)
+        assert(volatilityRegimeInput[i] == physicalTensor[i]);
+    assert(volatilityRegimeInput[causalVolatilityRegimeCol] ==
+           physicalTensor[causalVolatilityRegimeCol]);
+    assert(volatilityRegimeInput[causalDirectionalRangeCol] == -1.0f);
+
+    // Directional-range-era persisted models retain their exact 40-column
+    // prefix and cannot consume the later close-location column.
+    const auto directionalRange = EA::ResolveModelInputContract(
+        44, physicalTensor.size());
+    assert(directionalRange.tensorFeatureCount == causal_directional_range_feature_size);
+    std::vector<float> directionalRangeInput(44, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(directionalRangeInput.data(),
+                                        physicalTensor.data(), directionalRange);
+    for (std::size_t i = 0; i < causal_directional_range_feature_size; ++i)
+        assert(directionalRangeInput[i] == physicalTensor[i]);
+    assert(directionalRangeInput[causalDirectionalRangeCol] ==
+           physicalTensor[causalDirectionalRangeCol]);
+    assert(directionalRangeInput[causalCloseLocationCol] == -1.0f);
+
+    // Close-location-era persisted models do not consume the later
+    // directional-persistence column.
+    const auto current = EA::ResolveModelInputContract(45, physicalTensor.size());
+    assert(current.tensorFeatureCount == causal_close_location_feature_size);
+    std::vector<float> currentInput(45, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentInput.data(),
                                         physicalTensor.data(), current);
-    for (std::size_t i = 0; i < feature_size; ++i)
+    for (std::size_t i = 0; i < causal_close_location_feature_size; ++i)
         assert(currentInput[i] == physicalTensor[i]);
-    assert(currentInput[causalVolatilityRegimeCol] ==
-           physicalTensor[causalVolatilityRegimeCol]);
+    assert(currentInput[causalCloseLocationCol] ==
+           physicalTensor[causalCloseLocationCol]);
+    assert(currentInput[causalDirectionalPersistenceCol] == -1.0f);
+
+    // Directional-persistence-era persisted models retain their exact 42-column
+    // prefix and do not consume the later return-sign-persistence column.
+    const auto currentPersistence = EA::ResolveModelInputContract(46, physicalTensor.size());
+    assert(currentPersistence.tensorFeatureCount == causalReturnSignPersistenceCol);
+    std::vector<float> currentPersistenceInput(46, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(currentPersistenceInput.data(),
+                                        physicalTensor.data(), currentPersistence);
+    for (std::size_t i = 0; i < causalReturnSignPersistenceCol; ++i)
+        assert(currentPersistenceInput[i] == physicalTensor[i]);
+    assert(currentPersistenceInput[causalDirectionalPersistenceCol] ==
+           physicalTensor[causalDirectionalPersistenceCol]);
+    assert(currentPersistenceInput[causalReturnSignPersistenceCol] == -1.0f);
+
+    // Return-sign-persistence-era persisted models retain their exact
+    // 43-column prefix and do not consume the later imbalance column.
+    const auto currentSignPersistence = EA::ResolveModelInputContract(47, physicalTensor.size());
+    std::vector<float> currentSignPersistenceInput(47, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(currentSignPersistenceInput.data(),
+                                        physicalTensor.data(), currentSignPersistence);
+    for (std::size_t i = 0; i < causalReturnDirectionImbalanceCol; ++i)
+        assert(currentSignPersistenceInput[i] == physicalTensor[i]);
+    assert(currentSignPersistenceInput[causalReturnSignPersistenceCol] ==
+           physicalTensor[causalReturnSignPersistenceCol]);
+    assert(currentSignPersistenceInput[causalReturnDirectionImbalanceCol] == -1.0f);
+
+    const auto currentDirectionImbalance = EA::ResolveModelInputContract(
+        48, physicalTensor.size());
+    std::vector<float> currentDirectionImbalanceInput(48, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(currentDirectionImbalanceInput.data(),
+                                        physicalTensor.data(), currentDirectionImbalance);
+    for (std::size_t i = 0; i < causalDirectionalAdverseExcursionCol; ++i)
+        assert(currentDirectionImbalanceInput[i] == physicalTensor[i]);
+    assert(currentDirectionImbalanceInput[causalReturnDirectionImbalanceCol] ==
+           physicalTensor[causalReturnDirectionImbalanceCol]);
+    assert(currentDirectionImbalanceInput[causalDirectionalAdverseExcursionCol] == -1.0f);
+
+    const auto currentAdverseExcursion = EA::ResolveModelInputContract(
+        49, physicalTensor.size());
+    std::vector<float> currentAdverseExcursionInput(49, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(currentAdverseExcursionInput.data(), physicalTensor.data(),
+                                        currentAdverseExcursion);
+    for (std::size_t i = 0; i < feature_size; ++i)
+        assert(currentAdverseExcursionInput[i] == physicalTensor[i]);
+    assert(currentAdverseExcursionInput[causalDirectionalAdverseExcursionCol] ==
+           physicalTensor[causalDirectionalAdverseExcursionCol]);
+
+    // Canonical feature identities are independent of physical offsets and
+    // masking happens after projection without mutating Tensor storage.
+    const auto emptyMask = EA::FeatureAblationMask::Parse("");
+    assert(emptyMask.empty());
+    const auto fullMask = EA::FeatureAblationMask::Parse(
+        "directional_adverse_excursion,directional_efficiency,close_location,"
+        "directional_range,volatility_regime,rms_return_surprise,"
+        "relative_tick_volume,return_direction_imbalance,return_sign_persistence");
+    assert(fullMask.CanonicalText() ==
+           "relative_tick_volume,rms_return_surprise,volatility_regime,"
+           "directional_range,close_location,directional_efficiency,"
+           "return_sign_persistence,return_direction_imbalance,"
+           "directional_adverse_excursion");
+    const auto mask = EA::FeatureAblationMask::Parse(
+        " return_direction_imbalance,return_sign_persistence,return_direction_imbalance ");
+    assert(mask.CanonicalText() == "return_sign_persistence,return_direction_imbalance");
+    std::vector<float> ablatedInput(49, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(ablatedInput.data(), physicalTensor.data(),
+                                        currentAdverseExcursion, mask);
+    assert(ablatedInput[causalReturnSignPersistenceCol] == 0.0f);
+    assert(ablatedInput[causalReturnDirectionImbalanceCol] == 0.0f);
+    assert(ablatedInput[causalDirectionalAdverseExcursionCol] ==
+           physicalTensor[causalDirectionalAdverseExcursionCol]);
+    assert(physicalTensor[causalReturnSignPersistenceCol] ==
+           static_cast<float>(100 + causalReturnSignPersistenceCol));
+    bool absentFeatureRejected = false;
+    try
+    {
+        const auto lateMask = EA::FeatureAblationMask::Parse("directional_adverse_excursion");
+        std::vector<float> historical(48, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(historical.data(), physicalTensor.data(),
+                                            currentDirectionImbalance, lateMask);
+    }
+    catch (const std::runtime_error&)
+    {
+        absentFeatureRejected = true;
+    }
+    assert(absentFeatureRejected);
+    bool unknownFeatureRejected = false;
+    try { (void)EA::FeatureAblationMask::Parse("unknown_feature"); }
+    catch (const std::invalid_argument&) { unknownFeatureRejected = true; }
+    assert(unknownFeatureRejected);
 
     bool unsupportedRejected = false;
     try
@@ -118,7 +252,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49";
     }
     assert(unsupportedRejected);
 

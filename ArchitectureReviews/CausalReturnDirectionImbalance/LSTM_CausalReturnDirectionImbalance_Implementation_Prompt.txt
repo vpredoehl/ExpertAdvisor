@@ -1,0 +1,384 @@
+You are implementing exactly one isolated LSTM feature increment in the ExpertAdvisor repository.
+
+BRANCH / SCOPE
+- Work only in the current `next-feature-increment` worktree/branch.
+- Do not merge, rebase, switch branches, push, or modify another worktree.
+- Keep this increment suitable for a clean later merge back to `lstm-feature-development`.
+- Do not make unrelated cleanup, scheduler, campaign-operations, database,
+  or recommendation-policy changes.
+- Preserve every historical model-input prefix and historical recommendation
+  semantic identity exactly.
+- Do not alter existing feature semantics.
+
+CURRENT VERIFIED BASELINE
+The current clean committed branch is expected to contain:
+
+- columns 0..31 legacy
+- 32..33 Donchian
+- 34..35 true UTC session phase
+- 36 causal 32-bar relative tick volume
+- 37 causal 32-bar RMS return surprise
+- 38 causal 8-over-32 RMS volatility regime
+- 39 causal prior-bar directional body/range
+- 40 causal prior-bar close location
+- 41 causal 8-close directional persistence / efficiency
+- 42 causal 8-close return-sign persistence / alternation
+- feature_size = 43
+- model return feature count = 4
+- current n_in = 47
+- recommendation semantic configuration version = v14
+
+Before editing, verify those facts from source and stop/document any material
+mismatch rather than implementing against an unexpected baseline.
+
+TARGET INCREMENT
+Add exactly one append-only feature:
+
+    column 43 = causal 8-close return-direction imbalance
+
+After this increment:
+- feature_size = 44
+- current n_in = 48
+- recommendation semantic configuration version = v15
+
+FEATURE INTENT
+This feature measures the directional breadth of the seven completed
+close-to-close moves inside the retained 8-close window.
+
+It should distinguish:
+- mostly positive completed moves -> positive value
+- mostly negative completed moves -> negative value
+- balanced up/down moves -> near zero
+
+This is intentionally different from:
+- directional efficiency: net displacement / total path magnitude
+- sign persistence: continuation vs alternation between adjacent move signs
+
+Return-direction imbalance ignores adjacency and ignores move magnitude. It
+measures only the balance of positive versus negative completed moves.
+
+FEATURE DEFINITION
+Use only the eight COMPLETED closes strictly prior to current Tensor row t:
+
+    C_{t-8}, C_{t-7}, ..., C_{t-1}
+
+Define seven completed close increments:
+
+    d_i = C_i - C_{i-1}
+
+for the seven consecutive pairs inside the retained 8-close window.
+
+Define:
+
+    direction_score(d) =
+        +1 if d > 0
+        -1 if d < 0
+         0 if d == 0
+
+Then:
+
+    return_direction_imbalance =
+        (1/7) * sum(direction_score(d_i), i=1..7)
+
+when all eight retained closes and all seven increments are finite.
+
+Otherwise emit 0.
+
+Interpretation:
+- +1 = all seven completed moves positive
+- -1 = all seven completed moves negative
+-  0 = exact directional balance only when the seven scores sum to zero;
+       because there are seven increments, exact zero requires at least one
+       zero move unless positive/negative counts plus zeros balance
+- intermediate values occur in increments of 1/7 for finite valid data
+
+Do not magnitude-weight.
+Do not use return sizes.
+Do not use adjacent-pair persistence.
+Do not normalize by volatility.
+Do not add a second feature.
+
+CAUSALITY
+1. Row t uses only retained completed closes through C_{t-1}.
+2. C_t must not influence the row-t value.
+3. Compute row-t imbalance before retaining C_t.
+4. Retain C_t only after row-t value is fixed.
+5. No future bars.
+6. Retain exactly a fixed 8-close completed window.
+
+WARMUP
+- fewer than 8 retained completed closes -> 0
+- no partial-window estimate
+- no shortened denominator
+- no duplicated seed closes
+- first potentially nonzero output is the row after the eighth completed close
+  has been retained
+
+NUMERICAL / ZERO SEMANTICS
+- exact zero increment contributes 0
+- do not introduce an epsilon or threshold for deciding whether an increment is
+  zero unless an explicit repository-wide contract demonstrably requires it
+- any nonfinite required close -> 0
+- any nonfinite derived increment -> 0
+- output must always be finite
+- no clipping is needed because valid output naturally lies in [-1,+1]
+
+PRICE DOMAIN
+Use raw completed closes from the same Feature records consumed by Tensor::Add,
+matching the existing 8-close directional-efficiency and sign-persistence
+feature domain.
+
+REDUNDANCY CHECK
+Before implementation, inspect current Tensor features/tests.
+
+Proceed unless an exact equivalent fixed-window count/balance of positive versus
+negative completed close-to-close moves already exists.
+
+Do NOT treat these as duplicates:
+- directional efficiency
+- return-sign persistence / alternation
+- lagged returns
+- candle body direction
+- Donchian position
+- volatility regime
+- return surprise
+
+IMPLEMENTATION SHAPE
+Prefer a dedicated helper:
+
+    Headers/CausalReturnDirectionImbalanceFeatures.hpp
+
+Prefer explicit causality API separation:
+
+    PriorReturnDirectionImbalance()
+    RetainCompletedClose(currentClose)
+
+A simple fixed-size deque and O(8) computation are preferred.
+
+TENSOR INTEGRATION
+Append only:
+
+    columns 0..42 = unchanged
+    column 43     = causal 8-close return-direction imbalance
+
+Required sequencing:
+
+    directionImbalance =
+        causalReturnDirectionImbalance.PriorReturnDirectionImbalance();
+
+    causalReturnDirectionImbalance.RetainCompletedClose(f.close);
+
+    ... write already-fixed directionImbalance to column 43 ...
+
+Ensure first-row/warmup path writes the feature value too.
+
+MODEL INPUT COMPATIBILITY
+Update FeatureLayout.hpp and ModelInputContract.hpp append-only.
+
+Preserve exact historical widths:
+
+- n_in=36 -> 32 tensor + 4 returns
+- n_in=38 -> 34 tensor + 4 returns
+- n_in=40 -> 36 tensor + 4 returns
+- n_in=41 -> 37 tensor + 4 returns
+- n_in=42 -> 38 tensor + 4 returns
+- n_in=43 -> 39 tensor + 4 returns
+- n_in=44 -> 40 tensor + 4 returns
+- n_in=45 -> 41 tensor + 4 returns
+- n_in=46 -> 42 tensor + 4 returns
+- n_in=47 -> 43 tensor + 4 returns
+
+After this increment:
+- n_in=48 -> 44 tensor + 4 returns
+
+Existing n_in=47 models MUST NOT consume column 43.
+Only current n_in=48 models consume it.
+
+Do not renumber or reinterpret historical prefixes.
+
+RECOMMENDATION SEMANTICS
+Advance current recommendation semantic configuration version:
+
+    v14 -> v15
+
+Requirements:
+- v3 through v14 remain explicit and reconstructable
+- v15 becomes current default
+- v14 remains explicitly parseable/reconstructable as v14
+- update every parser, switch, numeric-version mapping, materialization path,
+  and outcome-assessment reconstruction path required by the current architecture
+- do not collapse v14 into v15
+- update tests enumerating versions
+
+DATABASE / CONFIGURATION
+This is a fixed feature.
+
+Do not add:
+- database columns
+- migrations
+- experiment knobs
+- lookback parameters
+- feature mode flags
+- scheduler flags
+
+TESTS
+Add:
+
+    Tests/LSTMCausalReturnDirectionImbalanceTests.cpp
+    Tests/LSTMCausalReturnDirectionImbalanceTests.sh
+
+Test at minimum:
+
+1. no history -> 0
+
+2. 1 through 7 retained closes -> 0
+
+3. strictly increasing:
+       [1,2,3,4,5,6,7,8]
+   seven positive moves -> +1
+
+4. strictly decreasing:
+       [8,7,6,5,4,3,2,1]
+   seven negative moves -> -1
+
+5. mixed exact positive case:
+   construct 5 positive and 2 negative moves
+   expected = +3/7
+
+6. mixed exact negative case:
+   construct 2 positive and 5 negative moves
+   expected = -3/7
+
+7. zero-move semantics:
+   construct sequence containing repeated closes and verify zero increments
+   contribute exactly 0
+
+8. all identical closes -> 0
+
+9. any nonfinite retained close -> 0
+
+10. current-bar causality:
+    identical retained eight-close histories with different current closes must
+    emit identical row-t values before retention
+
+11. one-step advancement:
+    after retaining different current closes, next emitted values must reflect
+    the updated windows
+
+12. exact ninth-close eviction:
+    oldest retained close must no longer affect output after push
+
+13. no dependence on bars older than retained eight-close window
+
+14. all outputs finite
+
+15. valid output in [-1,+1]
+
+16. Tensor placement exactly at column 43
+
+17. Tensor integration warmup:
+    first eight rows zero, ninth row uses first eight completed closes
+
+18. Tensor current-row close exclusion
+
+19. columns 0..42 unchanged relative to pre-increment behavior
+
+20. feature_size = 44
+
+21. current n_in = 48
+
+22. historical n_in=47 projection excludes column 43
+
+23. current n_in=48 projection consumes column 43
+
+24. all earlier historical widths unchanged
+
+25. feature-vector training/inference parity remains valid
+
+26. recommendation v3-v14 historical identities remain unchanged
+
+27. current recommendation identity = v15
+
+28. explicitly verify v14 parses/reconstructs as v14 rather than v15
+
+REGRESSION SUITES
+Run the focused suite plus:
+
+- Tests/LSTMFeatureVectorParityTests.sh
+- Tests/LSTMModelInputCompatibilityTests.sh
+- Tests/LSTMCausalReturnSignPersistenceTests.sh
+- Tests/LSTMCausalDirectionalEfficiencyTests.sh
+- Tests/LSTMCausalCloseLocationTests.sh
+- Tests/LSTMCausalDirectionalRangeTests.sh
+- Tests/LSTMCausalVolatilityRegimeTests.sh
+- Tests/LSTMCausalReturnSurpriseTests.sh
+- Tests/LSTMRelativeTickVolumeTests.sh
+- Tests/LSTMTrueSessionPhaseTests.sh
+
+Also run maintained recommendation semantic tests covering canonical
+version parsing/reconstruction, including ExperimentRecommendationTests.
+
+If materialization/outcome-assessment reconstruction tests exist for touched
+v15 paths, run them as applicable.
+
+Run:
+
+    git diff --check
+
+BUILD / PROVENANCE
+Do not commit automatically.
+
+During implementation:
+- run focused/direct compiles as useful
+- do not claim final clean Release qualification while changes are uncommitted
+
+The operator will archive, stage, commit, verify clean status, and perform the
+final clean Release build afterward.
+
+IMPORTANT DERIVED DATA PATH
+Use the established path:
+
+    -derivedDataPath DerivedData/ExpertAdvisor-next-feature
+
+Do not use:
+
+    -derivedDataPath DerivedData/ExpertAdvisor
+
+OUTPUT
+Write:
+
+    LSTM_CausalReturnDirectionImbalance_Implementation_Output.md
+
+Summarize:
+- baseline verification
+- redundancy check
+- exact definition
+- price domain
+- causality
+- warmup
+- zero-move semantics
+- files changed
+- layout transition
+- width compatibility
+- v15 transition
+- tests actually run
+- build result
+- caveats
+
+SCOPE DISCIPLINE
+This task is exactly one feature increment.
+
+Do NOT add:
+- magnitude weighting
+- sign persistence variants
+- autocorrelation
+- multiple lookbacks
+- trend labels
+- slope/R-squared
+- moving averages
+- event/news features
+- configurable variants
+- unrelated Tensor refactors
+- scheduler/campaign-operations changes
+
+If a broader concern is discovered, document it without expanding scope.

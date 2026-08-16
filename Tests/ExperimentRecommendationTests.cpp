@@ -223,12 +223,61 @@ int main()
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
     assert(identity.canonicalText ==
-        "experiment_recommendation_semantic_configuration_v10;symbol=eurusd;prediction_horizon=12;"
+        "experiment_recommendation_semantic_configuration_v16;symbol=eurusd;prediction_horizon=12;"
         "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
         "train_start_date=2010-01-01;train_end_date=2025-01-01;"
         "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
         "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
     assert(identity.hash == RecommendationCandidateHash(configuration));
+    const auto v15 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v15);
+    assert(v15.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v15;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
+    const auto v14 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v14);
+    assert(v14.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v14;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
+    const auto v13 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v13);
+    assert(v13.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v13;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
+    const auto v12 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v12);
+    assert(v12.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v12;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
+    assert(identity.canonicalText != v12.canonicalText);
+    const auto v11 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v11);
+    assert(v11.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v11;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
+    const auto v10 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v10);
+    assert(v10.canonicalText ==
+        "experiment_recommendation_semantic_configuration_v10;symbol=eurusd;prediction_horizon=12;"
+        "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
+        "train_start_date=2010-01-01;train_end_date=2025-01-01;"
+        "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
+        "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
     const auto v9 = BuildRecommendationCandidateIdentity(
         configuration, RecommendationSemanticConfigurationVersion::v9);
     assert(v9.canonicalText ==
@@ -280,7 +329,19 @@ int main()
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v3.canonicalText) == RecommendationSemanticConfigurationVersion::v3);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
-               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v10);
+               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v16);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v15.canonicalText) == RecommendationSemanticConfigurationVersion::v15);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v14.canonicalText) == RecommendationSemanticConfigurationVersion::v14);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v13.canonicalText) == RecommendationSemanticConfigurationVersion::v13);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v12.canonicalText) == RecommendationSemanticConfigurationVersion::v12);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v11.canonicalText) == RecommendationSemanticConfigurationVersion::v11);
+    assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
+               v10.canonicalText) == RecommendationSemanticConfigurationVersion::v10);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v9.canonicalText) == RecommendationSemanticConfigurationVersion::v9);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
@@ -319,6 +380,8 @@ int main()
            EA::FeatureWarmupScope::FullHistoryWarmup);
     assert(RecommendationFeatureWarmupScopeFromCanonicalText(v9.canonicalText) ==
            EA::FeatureWarmupScope::FullHistoryWarmup);
+    assert(RecommendationFeatureWarmupScopeFromCanonicalText(v15.canonicalText) ==
+           EA::FeatureWarmupScope::FullHistoryWarmup);
     assert(RecommendationFeatureWarmupScopeFromCanonicalText(identity.canonicalText) ==
            EA::FeatureWarmupScope::FullHistoryWarmup);
     assert(RecommendationDonchianLookbackFromCanonicalText(v4.canonicalText) == 20);
@@ -327,6 +390,7 @@ int main()
     assert(RecommendationDonchianLookbackFromCanonicalText(v7.canonicalText) == 20);
     assert(RecommendationDonchianLookbackFromCanonicalText(v8.canonicalText) == 20);
     assert(RecommendationDonchianLookbackFromCanonicalText(v9.canonicalText) == 20);
+    assert(RecommendationDonchianLookbackFromCanonicalText(v15.canonicalText) == 20);
     assert(RecommendationDonchianLookbackFromCanonicalText(identity.canonicalText) == 20);
     EffectiveExperimentConfiguration cold = configuration;
     cold.featureWarmupScope = EA::FeatureWarmupScope::LegacyColdBoundary;

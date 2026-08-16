@@ -13,6 +13,8 @@ createdb "${test_db}"
 pg_dump -s -h 127.0.0.1 -U vjp -d LSTM | psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -f "${repo_root}/Database/migrations/051_scheduler_ownership_and_worker_attempts.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -f "${repo_root}/Database/migrations/069_feature_ablation_mask.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -f "${repo_root}/Database/migrations/070_model_experiment_lineage_immutable.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton,desired_state) VALUES(true,'running') ON CONFLICT(singleton) DO UPDATE SET desired_state='running';
 UPDATE experiment_scheduler_protocol SET cutover_state='complete',cutover_completed_at=clock_timestamp(),cutover_completed_by='retry-checkpoint-test',cutover_executable_path='/isolated/LSTM_Release',cutover_process_evidence='disposable database',updated_at=clock_timestamp() WHERE singleton;
@@ -60,6 +62,7 @@ add_experiment 960600 infer 961001 enabled
 add_experiment 960561 train 961001 enabled
 add_experiment 960555 train NULL enabled
 add_experiment 960610 train NULL enabled
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "UPDATE experiment SET feature_ablation_mask='return_sign_persistence' WHERE experiment_id=960554"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,status,phase,duplicate_nonce) SELECT id,'cadchfrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','completed','done',id FROM unnest(ARRAY[960551::bigint,960562,960563,960569]) AS id"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,train_start,train_end,status,phase,worker_pid,worker_process_group_id,worker_process_start_identity,worker_executable,worker_command_line,current_operation,worker_control_state,duplicate_nonce) VALUES(960699,'unrelatedrmp',4,0.0008,120,25,80,20,'2020-01-01','2021-01-01','cancelled','done',960699,960699,'unrelated','/unrelated/LSTM_Release','unrelated command','train','running',960699)"
 
@@ -116,6 +119,7 @@ for id in 960554 960549 960546 960560 960570 960580 960581 960590 960600 960555 
 done
 value() { psql -X -At -d "${test_db}" -c "$1"; }
 test "$(value "SELECT status||':'||phase||':'||resume_model_id FROM experiment WHERE experiment_id=960554")" = 'pending:train:961005'
+test "$(value "SELECT feature_ablation_mask FROM experiment WHERE experiment_id=960554")" = 'return_sign_persistence'
 test "$(value "SELECT resume_model_id FROM experiment WHERE experiment_id=960549")" = 961040
 test "$(value "SELECT resume_model_id FROM experiment WHERE experiment_id=960546")" = 961062
 test "$(value "SELECT resume_model_id FROM experiment WHERE experiment_id=960560")" = 961562

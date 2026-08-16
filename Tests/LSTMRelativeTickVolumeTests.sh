@@ -15,7 +15,7 @@ done < <(find "${repo_root}/MetaNN" -type d -print)
     -I"${repo_root}/Headers" "${include_flags[@]}" \
     "${repo_root}/Tests/LSTMRelativeTickVolumeTests.cpp" \
     "${repo_root}/LSTM/Tensor.cpp" "${repo_root}/Common/PricePoint.cpp" \
-    -L"${repo_root}/DerivedData/ExpertAdvisor/Build/Products/Release" \
+    -L"${repo_root}/DerivedData/ExpertAdvisor-next-feature/Build/Products/Release" \
     -lMetaNN -lMetalBuffer -framework Metal -framework Foundation \
     -o "${test_dir}/LSTMRelativeTickVolumeTests"
 "${test_dir}/LSTMRelativeTickVolumeTests"

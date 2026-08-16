@@ -23,6 +23,12 @@
 #include "RelativeTickVolumeFeatures.hpp"
 #include "CausalReturnSurpriseFeatures.hpp"
 #include "CausalVolatilityRegimeFeatures.hpp"
+#include "CausalDirectionalRangeFeatures.hpp"
+#include "CausalCloseLocationFeatures.hpp"
+#include "CausalDirectionalPersistenceFeatures.hpp"
+#include "CausalReturnSignPersistenceFeatures.hpp"
+#include "CausalReturnDirectionImbalanceFeatures.hpp"
+#include "CausalDirectionalAdverseExcursionFeatures.hpp"
 
 using std::string;
 using std::list;
@@ -71,6 +77,12 @@ class Tensor
     CausalRelativeTickVolume32 relativeTickVolume;
     CausalReturnSurprise32 causalReturnSurprise;
     CausalVolatilityRegime8x32 causalVolatilityRegime;
+    CausalDirectionalRangeFeatures causalDirectionalRange;
+    CausalCloseLocationFeatures causalCloseLocation;
+    CausalDirectionalPersistenceFeatures causalDirectionalPersistence;
+    CausalReturnSignPersistenceFeatures causalReturnSignPersistence;
+    CausalReturnDirectionImbalanceFeatures causalReturnDirectionImbalance;
+    CausalDirectionalAdverseExcursionFeatures causalDirectionalAdverseExcursion;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);

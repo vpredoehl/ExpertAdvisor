@@ -1,0 +1,452 @@
+You are implementing exactly one isolated LSTM feature increment in the ExpertAdvisor repository.
+
+BRANCH / SCOPE
+- Work only in the current `next-feature-increment` worktree/branch.
+- Do not merge, rebase, switch branches, push, or modify another worktree.
+- Keep this increment suitable for a clean later merge back to `lstm-feature-development`.
+- Do not make unrelated cleanup, scheduler, campaign-operations, database, or recommendation-policy changes.
+- Preserve every historical model-input prefix and historical recommendation semantic identity exactly.
+- Do not alter existing feature semantics.
+
+CURRENT BASELINE
+Expected clean committed baseline:
+    HEAD = 970c146
+    branch = next-feature-increment
+
+Expected current Tensor/model semantics:
+- columns 0..31 legacy
+- 32..33 Donchian
+- 34..35 true UTC session phase
+- 36 causal 32-bar relative tick volume
+- 37 causal 32-bar RMS return surprise
+- 38 causal 8-over-32 RMS volatility regime
+- 39 causal prior-bar directional body/range
+- 40 causal prior-bar close location
+- 41 causal 8-close directional persistence / efficiency
+- 42 causal 8-close return-sign persistence / alternation
+- 43 causal 8-close return-direction imbalance
+- feature_size = 44
+- model return feature count = 4
+- current n_in = 48
+- recommendation semantic configuration version = v15
+
+Before editing, verify these facts from the current source tree. If HEAD differs
+only because the immediately preceding commit was amended solely to archive a
+transcript, verify the source semantics rather than blindly rejecting the
+baseline. Stop and document any material source/semantic mismatch.
+
+TARGET INCREMENT
+Add exactly one append-only feature:
+
+    column 44 = causal 8-close directional adverse-excursion ratio
+
+After this increment:
+- feature_size = 45
+- current n_in = 49
+- recommendation semantic configuration version = v16
+
+FEATURE INTENT
+Measure how much the completed 8-close path moved against its eventual net
+direction before reaching the final completed close.
+
+This complements:
+- directional efficiency: net displacement / total path length
+- sign persistence: continuation versus alternation of adjacent move signs
+- direction imbalance: count balance of positive versus negative moves
+
+The new feature asks a different question:
+
+    "Relative to the total path traveled, how deep was the worst counter-
+     directional excursion from the starting close?"
+
+A clean monotonic move has value 0.
+A path that first moves substantially against its eventual direction and then
+reverses to finish in the net direction has a larger positive value.
+
+FEATURE DEFINITION
+Use only the eight COMPLETED closes strictly prior to current Tensor row t:
+
+    C0 = C_{t-8}
+    C1 = C_{t-7}
+    ...
+    C7 = C_{t-1}
+
+Define:
+
+    net = C7 - C0
+
+    path =
+        sum_{i=1..7} abs(Ci - C{i-1})
+
+If all eight closes are finite, path is finite and > 0, and net != 0:
+
+For net > 0:
+    adverse =
+        max(0, C0 - min(C0,C1,...,C7))
+
+For net < 0:
+    adverse =
+        max(0, max(C0,C1,...,C7) - C0)
+
+Then:
+
+    directional_adverse_excursion =
+        adverse / path
+
+If:
+- fewer than eight completed closes are retained, or
+- any required close is non-finite, or
+- any required increment is non-finite, or
+- path <= 0 or non-finite, or
+- net == 0 or non-finite, or
+- adverse/result is non-finite,
+
+emit 0.
+
+INTERPRETATION
+- 0 means no excursion against the eventual net direction from the starting
+  close, or a degenerate/net-zero window.
+- Positive values indicate a counter-directional excursion before the final
+  completed close established the net direction.
+- Larger values mean more of the completed path was spent reaching a worse
+  level opposite the eventual direction.
+
+For valid finite data, adverse <= path, so the natural output range is [0,1].
+
+Do not clip.
+Do not add an epsilon denominator.
+Do not magnitude-scale beyond dividing adverse by total path.
+
+IMPORTANT DIRECTION SEMANTICS
+The direction is determined ONLY by:
+
+    sign(C7 - C0)
+
+Do not infer direction from:
+- majority up/down moves,
+- sign-persistence,
+- regression slope,
+- candle bodies,
+- current row t.
+
+For net == 0, emit exactly 0 because there is no eventual net direction against
+which "adverse" can be defined.
+
+CAUSALITY
+1. Row t uses only retained completed closes C_{t-8}..C_{t-1}.
+2. Current close C_t MUST NOT influence row-t output.
+3. Compute the row-t feature first.
+4. Retain C_t only after the row-t value is fixed.
+5. No future bars.
+6. Retain exactly a fixed 8-close completed window.
+
+WARMUP
+- fewer than 8 retained completed closes -> 0
+- no partial-window estimate
+- no shortened denominator
+- no duplicated seed values
+- first potentially nonzero output is the row after the eighth completed close
+  has been retained
+
+PRICE DOMAIN
+Use raw completed closes from the same Feature records consumed by Tensor::Add,
+matching the existing 8-close directional-efficiency, sign-persistence, and
+direction-imbalance features.
+
+REDUNDANCY CHECK
+Before implementation, inspect existing Tensor features/tests.
+
+Proceed unless an exact equivalent feature already measures the worst excursion
+from the starting close against the sign of the eventual 8-close net move,
+normalized by total completed close path.
+
+Do NOT treat as duplicates:
+- directional efficiency
+- sign persistence / alternation
+- return-direction imbalance
+- Donchian distance/position
+- volatility regime
+- return surprise
+- candle body/range
+- close location
+
+If an exact equivalent already exists, stop and document it.
+
+IMPLEMENTATION SHAPE
+Prefer a dedicated helper:
+
+    Headers/CausalDirectionalAdverseExcursionFeatures.hpp
+
+Prefer explicit API separation:
+
+    PriorDirectionalAdverseExcursion()
+    RetainCompletedClose(currentClose)
+
+A fixed 8-close deque/array and O(8) computation are preferred. Do not add
+complex rolling extrema/path bookkeeping merely for optimization.
+
+TENSOR INTEGRATION
+Append only:
+
+    columns 0..43 = unchanged
+    column 44     = causal 8-close directional adverse-excursion ratio
+
+Required sequencing:
+
+    adverseExcursion =
+        causalDirectionalAdverseExcursion.PriorDirectionalAdverseExcursion();
+
+    causalDirectionalAdverseExcursion.RetainCompletedClose(f.close);
+
+    ... write already-fixed adverseExcursion to column 44 ...
+
+Ensure the first-row/warmup path also writes the computed feature value.
+
+MODEL INPUT COMPATIBILITY
+Update FeatureLayout.hpp and ModelInputContract.hpp append-only.
+
+Preserve exact historical widths:
+
+- n_in=36 -> 32 tensor + 4 returns
+- n_in=38 -> 34 tensor + 4 returns
+- n_in=40 -> 36 tensor + 4 returns
+- n_in=41 -> 37 tensor + 4 returns
+- n_in=42 -> 38 tensor + 4 returns
+- n_in=43 -> 39 tensor + 4 returns
+- n_in=44 -> 40 tensor + 4 returns
+- n_in=45 -> 41 tensor + 4 returns
+- n_in=46 -> 42 tensor + 4 returns
+- n_in=47 -> 43 tensor + 4 returns
+- n_in=48 -> 44 tensor + 4 returns
+
+After this increment:
+- n_in=49 -> 45 tensor + 4 returns
+
+Existing n_in=48 models MUST NOT consume column 44.
+Only new current n_in=49 models consume it.
+
+Do not renumber, reinterpret, or zero-extend historical model prefixes.
+
+RECOMMENDATION SEMANTICS
+Advance current recommendation semantic configuration version:
+
+    v15 -> v16
+
+Requirements:
+- v3 through v15 remain explicit and reconstructable
+- v16 becomes current default
+- v15 remains explicitly parseable/reconstructable as v15
+- update every parser, switch, numeric-version mapping, materialization path,
+  and outcome-assessment reconstruction path required by current architecture
+- do not collapse v15 into v16
+- update tests enumerating semantic versions
+
+This is a fixed feature and requires no new experiment-configurable persisted
+field.
+
+DATABASE / CONFIGURATION
+Do NOT add:
+- database columns
+- migrations
+- experiment knobs
+- lookback parameters
+- feature modes
+- scheduler flags
+
+FIXED SEMANTIC IDENTITY
+- completed close window = 8
+- net direction = sign(C7-C0)
+- path = sum of seven absolute consecutive close differences
+- positive-net adverse = C0 - minimum close, floored at zero
+- negative-net adverse = maximum close - C0, floored at zero
+- result = adverse/path
+- net-zero -> 0
+- warmup -> 0
+- invalid/non-finite -> 0
+- no epsilon
+- no clipping
+- raw-close domain
+
+TESTS
+Add a focused maintained suite, preferably:
+
+    Tests/LSTMCausalDirectionalAdverseExcursionTests.cpp
+    Tests/LSTMCausalDirectionalAdverseExcursionTests.sh
+
+Test at minimum:
+
+1. no history -> 0
+
+2. 1 through 7 retained completed closes -> 0
+
+3. strictly increasing:
+       [1,2,3,4,5,6,7,8]
+   net > 0, minimum is starting close
+   adverse = 0
+   expected = 0
+
+4. strictly decreasing:
+       [8,7,6,5,4,3,2,1]
+   net < 0, maximum is starting close
+   adverse = 0
+   expected = 0
+
+5. positive eventual net with initial adverse excursion:
+       [10,8,9,11,12,13,14,15]
+   net = +5
+   path = 2+1+2+1+1+1+1 = 9
+   adverse = 10-8 = 2
+   expected = 2/9
+
+6. negative eventual net with initial adverse excursion:
+       [10,12,11,9,8,7,6,5]
+   net = -5
+   path = 2+1+2+1+1+1+1 = 9
+   adverse = 12-10 = 2
+   expected = 2/9
+
+7. positive net with later deeper adverse excursion:
+       choose exact values where minimum occurs after several steps;
+       verify adverse uses the worst completed close, not merely first move
+
+8. negative net with later higher adverse excursion:
+       symmetric test
+
+9. net-zero window with substantial excursions -> exactly 0
+
+10. all-identical closes -> 0
+
+11. any non-finite retained close -> 0
+
+12. current-bar causality:
+    identical retained 8-close histories with drastically different current
+    closes emit identical row-t values before retention
+
+13. one-step advancement:
+    after retaining different current closes, the NEXT values reflect the
+    updated windows
+
+14. exact ninth-close eviction:
+    oldest close no longer affects output after replacement
+
+15. no dependence on bars older than retained 8-close window
+
+16. all outputs finite
+
+17. valid output naturally in [0,1]
+
+18. Tensor placement exactly column 44
+
+19. Tensor integration warmup:
+    first 8 rows emit 0; ninth row uses first 8 completed closes
+
+20. Tensor current-row close exclusion
+
+21. columns 0..43 unchanged relative to pre-increment behavior
+
+22. feature_size = 45
+
+23. current n_in = 49
+
+24. historical n_in=48 projection excludes column 44
+
+25. current n_in=49 projection consumes column 44
+
+26. all earlier historical width mappings remain unchanged
+
+27. feature-vector training/inference parity remains valid
+
+28. recommendation v3-v15 historical identities remain unchanged
+
+29. current recommendation identity = v16
+
+30. explicitly verify v15 parses/reconstructs as v15 rather than v16
+
+REGRESSION SUITES
+Run the focused suite plus:
+
+- Tests/LSTMFeatureVectorParityTests.sh
+- Tests/LSTMModelInputCompatibilityTests.sh
+- Tests/LSTMCausalReturnDirectionImbalanceTests.sh
+- Tests/LSTMCausalReturnSignPersistenceTests.sh
+- Tests/LSTMCausalDirectionalEfficiencyTests.sh
+- Tests/LSTMCausalCloseLocationTests.sh
+- Tests/LSTMCausalDirectionalRangeTests.sh
+- Tests/LSTMCausalVolatilityRegimeTests.sh
+- Tests/LSTMCausalReturnSurpriseTests.sh
+- Tests/LSTMRelativeTickVolumeTests.sh
+- Tests/LSTMTrueSessionPhaseTests.sh
+
+Also run maintained recommendation semantic tests including
+ExperimentRecommendationTests and applicable materialization/outcome-assessment
+tests for v16 reconstruction paths.
+
+Run:
+
+    git diff --check
+
+BUILD / PROVENANCE
+Do not commit automatically.
+
+During implementation:
+- run focused/direct compiles as useful
+- do not claim final clean Release qualification while implementation changes
+  remain uncommitted
+
+The operator will archive, stage, commit, verify clean status, then perform the
+final clean Release build.
+
+IMPORTANT DERIVED DATA PATH
+Use the established worktree path:
+
+    -derivedDataPath DerivedData/ExpertAdvisor-next-feature
+
+Do not use:
+    -derivedDataPath DerivedData/ExpertAdvisor
+
+Do not invent a new DerivedData directory for final qualification; this
+worktree's MetalBuffer linkage has already been verified with the established
+path above.
+
+OUTPUT
+Write:
+
+    LSTM_CausalDirectionalAdverseExcursion_Implementation_Output.md
+
+Summarize:
+- baseline verification
+- redundancy check
+- exact mathematical definition
+- price domain
+- causality
+- warmup
+- net-zero semantics
+- invalid/degenerate handling
+- files changed
+- layout transition
+- historical width compatibility
+- v16 transition
+- tests actually run and outcomes
+- build attempt/result
+- remaining caveats
+
+Do not commit unless explicitly requested by the operator.
+
+SCOPE DISCIPLINE
+This task is exactly one feature increment.
+
+Do NOT add:
+- favorable excursion as a second feature
+- multiple windows
+- ATR normalization
+- volatility normalization
+- regression slope/R-squared
+- autocorrelation
+- moving averages
+- event/news features
+- experiment-configurable variants
+- unrelated Tensor refactors
+- scheduler/campaign-operations changes
+
+If a broader architectural concern is discovered, document it without expanding
+scope.
