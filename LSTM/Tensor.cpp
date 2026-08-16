@@ -109,11 +109,14 @@ void Tensor::Add(Feature f)
         causalReturnSignPersistence.PriorReturnSignPersistence();
     const float directionImbalance =
         causalReturnDirectionImbalance.PriorReturnDirectionImbalance();
+    const float adverseExcursion =
+        causalDirectionalAdverseExcursion.PriorDirectionalAdverseExcursion();
     causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
     causalCloseLocation.RetainCompletedBar(f.high, f.low, f.close);
     causalDirectionalPersistence.RetainCompletedClose(f.close);
     causalReturnSignPersistence.RetainCompletedClose(f.close);
     causalReturnDirectionImbalance.RetainCompletedClose(f.close);
+    causalDirectionalAdverseExcursion.RetainCompletedClose(f.close);
 
     if (!has_prev_close) {
         auto low = MetaNN::LowerAccess(fm);
@@ -130,6 +133,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[causalDirectionalPersistenceCol] = directionalPersistence;
         low.MutableRawMemory()[causalReturnSignPersistenceCol] = signPersistence;
         low.MutableRawMemory()[causalReturnDirectionImbalanceCol] = directionImbalance;
+        low.MutableRawMemory()[causalDirectionalAdverseExcursionCol] = adverseExcursion;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -387,6 +391,7 @@ void Tensor::Add(Feature f)
     p[causalDirectionalPersistenceCol] = directionalPersistence;
     p[causalReturnSignPersistenceCol] = signPersistence;
     p[causalReturnDirectionImbalanceCol] = directionImbalance;
+    p[causalDirectionalAdverseExcursionCol] = adverseExcursion;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

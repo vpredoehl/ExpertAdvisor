@@ -41,7 +41,9 @@ inline constexpr std::size_t causalReturnSignPersistenceCol =
     causalDirectionalPersistenceCol + 1;
 inline constexpr std::size_t causalReturnDirectionImbalanceCol =
     causalReturnSignPersistenceCol + 1;
-inline constexpr std::size_t feature_size =
+inline constexpr std::size_t causalDirectionalAdverseExcursionCol =
     causalReturnDirectionImbalanceCol + 1;
+inline constexpr std::size_t feature_size =
+    causalDirectionalAdverseExcursionCol + 1;
 
 #endif /* FeatureLayout_hpp */
