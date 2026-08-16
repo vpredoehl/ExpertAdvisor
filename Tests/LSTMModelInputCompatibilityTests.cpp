@@ -19,7 +19,9 @@ int main()
     static_assert(causalDirectionalRangeCol == 39);
     static_assert(causal_directional_range_feature_size == 40);
     static_assert(causalCloseLocationCol == 40);
-    static_assert(feature_size == 41);
+    static_assert(causal_close_location_feature_size == 41);
+    static_assert(causalDirectionalPersistenceCol == 41);
+    static_assert(feature_size == 42);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -27,7 +29,8 @@ int main()
     static_assert(EA::kCausalReturnSurpriseModelInputWidth == 42);
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
-    static_assert(EA::kCurrentModelInputWidth == 45);
+    static_assert(EA::kCausalCloseLocationModelInputWidth == 45);
+    static_assert(EA::kCurrentModelInputWidth == 46);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -132,16 +135,30 @@ int main()
            physicalTensor[causalDirectionalRangeCol]);
     assert(directionalRangeInput[causalCloseLocationCol] == -1.0f);
 
-    // Current persisted models consume the appended close-location column.
+    // Close-location-era persisted models do not consume the later
+    // directional-persistence column.
     const auto current = EA::ResolveModelInputContract(45, physicalTensor.size());
-    assert(current.tensorFeatureCount == feature_size);
+    assert(current.tensorFeatureCount == causal_close_location_feature_size);
     std::vector<float> currentInput(45, -1.0f);
     EA::CopyTensorFeaturesForModelInput(currentInput.data(),
                                         physicalTensor.data(), current);
-    for (std::size_t i = 0; i < feature_size; ++i)
+    for (std::size_t i = 0; i < causal_close_location_feature_size; ++i)
         assert(currentInput[i] == physicalTensor[i]);
     assert(currentInput[causalCloseLocationCol] ==
            physicalTensor[causalCloseLocationCol]);
+    assert(currentInput[causalDirectionalPersistenceCol] == -1.0f);
+
+    // Current persisted models consume the append-only directional-persistence
+    // column in addition to the preserved 0..40 prefix.
+    const auto currentPersistence = EA::ResolveModelInputContract(46, physicalTensor.size());
+    assert(currentPersistence.tensorFeatureCount == feature_size);
+    std::vector<float> currentPersistenceInput(46, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(currentPersistenceInput.data(),
+                                        physicalTensor.data(), currentPersistence);
+    for (std::size_t i = 0; i < feature_size; ++i)
+        assert(currentPersistenceInput[i] == physicalTensor[i]);
+    assert(currentPersistenceInput[causalDirectionalPersistenceCol] ==
+           physicalTensor[causalDirectionalPersistenceCol]);
 
     bool unsupportedRejected = false;
     try
@@ -152,7 +169,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46";
     }
     assert(unsupportedRejected);
 

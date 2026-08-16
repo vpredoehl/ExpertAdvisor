@@ -26,6 +26,8 @@ inline constexpr std::size_t kCausalVolatilityRegimeModelInputWidth =
     causal_volatility_regime_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCausalDirectionalRangeModelInputWidth =
     causal_directional_range_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalCloseLocationModelInputWidth =
+    causal_close_location_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
     feature_size + kModelReturnFeatureCount;
 
@@ -54,6 +56,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
             return {modelInputWidth, causal_volatility_regime_feature_size, 0};
         case kCausalDirectionalRangeModelInputWidth:
             return {modelInputWidth, causal_directional_range_feature_size, 0};
+        case kCausalCloseLocationModelInputWidth:
+            return {modelInputWidth, causal_close_location_feature_size, 0};
         case kCurrentModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
@@ -67,6 +71,7 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kCausalReturnSurpriseModelInputWidth) +
                 ":" + std::to_string(kCausalVolatilityRegimeModelInputWidth) +
                 ":" + std::to_string(kCausalDirectionalRangeModelInputWidth) +
+                ":" + std::to_string(kCausalCloseLocationModelInputWidth) +
                 ":" + std::to_string(kCurrentModelInputWidth));
     }
 }

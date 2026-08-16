@@ -25,6 +25,7 @@
 #include "CausalVolatilityRegimeFeatures.hpp"
 #include "CausalDirectionalRangeFeatures.hpp"
 #include "CausalCloseLocationFeatures.hpp"
+#include "CausalDirectionalPersistenceFeatures.hpp"
 
 using std::string;
 using std::list;
@@ -75,6 +76,7 @@ class Tensor
     CausalVolatilityRegime8x32 causalVolatilityRegime;
     CausalDirectionalRangeFeatures causalDirectionalRange;
     CausalCloseLocationFeatures causalCloseLocation;
+    CausalDirectionalPersistenceFeatures causalDirectionalPersistence;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);

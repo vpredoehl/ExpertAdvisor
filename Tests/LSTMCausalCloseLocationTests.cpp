@@ -97,9 +97,9 @@ Feature BarAt(std::size_t index, float open, float high, float low, float close)
 void TestTensorPlacementAndModelProjection()
 {
     static_assert(causalCloseLocationCol == 40);
-    static_assert(feature_size == 41);
+    static_assert(feature_size == 42);
     static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
-    static_assert(EA::kCurrentModelInputWidth == 45);
+    static_assert(EA::kCurrentModelInputWidth == 46);
 
     Tensor tensor{"causal-close-location"};
     tensor.Add(BarAt(0, 1.0f, 1.4f, 0.8f, 1.25f));
@@ -134,6 +134,7 @@ void TestTensorPlacementAndModelProjection()
     std::array<float, 45> currentOutput{};
     EA::CopyTensorFeaturesForModelInput(currentOutput.data(), source.data(), current);
     assert(currentOutput[causalCloseLocationCol] == 40.0f);
+    assert(currentOutput[causalDirectionalPersistenceCol] == 0.0f);
 }
 } // namespace
 

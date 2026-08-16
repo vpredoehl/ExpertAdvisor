@@ -206,8 +206,8 @@ void TestTensorPlacementAndParity()
     static_assert(relativeTickVolumeCol == 36);
     static_assert(causalReturnSurpriseCol == 37);
     static_assert(causalVolatilityRegimeCol == 38);
-    static_assert(feature_size == 41);
-    static_assert(EA::kCurrentModelInputWidth == 45);
+    static_assert(feature_size == 42);
+    static_assert(EA::kCurrentModelInputWidth == 46);
 
     Tensor tensor{"causal-return-surprise"};
     float close = 100.0f;

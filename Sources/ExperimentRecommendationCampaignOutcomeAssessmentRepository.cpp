@@ -242,7 +242,8 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
         *semanticVersion == RecommendationSemanticConfigurationVersion::v8 ? 8 :
         *semanticVersion == RecommendationSemanticConfigurationVersion::v9 ? 9 :
         *semanticVersion == RecommendationSemanticConfigurationVersion::v10 ? 10 :
-        *semanticVersion == RecommendationSemanticConfigurationVersion::v11 ? 11 : 12;
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v11 ? 11 :
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v12 ? 12 : 13;
     CanonicalReader configuration{semantic};
     const std::string semanticPrefix =
         "experiment_recommendation_semantic_configuration_v" +

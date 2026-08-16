@@ -292,7 +292,7 @@ int main()
         false, 42, RecommendationSemanticConfigurationVersion::v3,
         Donchian20Mode::ZeroAblation);
     assert(fixture.recommendationSemanticCanonical.find(
-               "experiment_recommendation_semantic_configuration_v12;") == 0);
+               "experiment_recommendation_semantic_configuration_v13;") == 0);
     assert(fixture.recommendationSemanticCanonical.find(
                ";donchian20_mode=enabled") != std::string::npos);
     assert(fixture.recommendationSemanticCanonical.find(
@@ -301,7 +301,7 @@ int main()
                ";donchian_lookback=20") != std::string::npos);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
            fixture.recommendationSemanticCanonical) ==
-           RecommendationSemanticConfigurationVersion::v12);
+           RecommendationSemanticConfigurationVersion::v13);
     assert(historicalV3.recommendationSemanticCanonical.find(
                "experiment_recommendation_semantic_configuration_v3;") == 0);
     assert(historicalV3.recommendationSemanticCanonical.find(
