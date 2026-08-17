@@ -107,10 +107,10 @@ float RowValue(const Tensor& tensor, std::size_t row, std::size_t column)
 void TestTensorIntegrationAndContracts()
 {
     static_assert(causalReturnDirectionImbalanceCol == 43);
-    static_assert(feature_size == 45);
+    static_assert(feature_size == 47);
     static_assert(EA::kCausalReturnSignPersistenceModelInputWidth == 47);
     static_assert(EA::kCausalReturnDirectionImbalanceModelInputWidth == 48);
-    static_assert(EA::kCurrentModelInputWidth == 49);
+    static_assert(EA::kCurrentModelInputWidth == 51);
 
     Tensor tensor{"causal-return-direction-imbalance"};
     for (std::size_t index = 0; index < 8; ++index)
