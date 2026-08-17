@@ -1862,7 +1862,7 @@ int RunLabelGridDiagnostic3Class(const std::string& fromDate, const std::string&
     const std::array<float, 7> thresholds {0.0004f, 0.0006f, 0.0008f, 0.0010f, 0.0012f, 0.0015f, 0.0020f};
     const size_t maxHorizon = *std::max_element(horizons.begin(), horizons.end());
 
-    pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=forex" };
+    pqxx::connection c_forex { ForexDbConnectionString() };
     pqxx::work w_forex { c_forex };
     pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     if (tables.empty())
@@ -2054,7 +2054,7 @@ std::vector<BaselineExample> BuildBaselineExamples(const Tensor& tensor)
 
 int RunBaseline3Class(const std::string& fromDate, const std::string& toDate)
 {
-    pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=forex" };
+    pqxx::connection c_forex { ForexDbConnectionString() };
     pqxx::work w_forex { c_forex };
     pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     if (tables.empty())
@@ -2289,7 +2289,7 @@ std::vector<size_t> BuildHiddenDiagnosticIndices(const std::vector<int>& labels,
 
 int RunFeatureTrainability3Class(const std::string& fromDate, const std::string& toDate)
 {
-    pqxx::connection c_forex { "hostaddr=127.0.0.1  user=pqxx dbname=forex" };
+    pqxx::connection c_forex { ForexDbConnectionString() };
     pqxx::work w_forex { c_forex };
     pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp';");
     if (tables.empty())
@@ -3136,7 +3136,18 @@ namespace
 {
 std::string ForexDbConnectionString()
 {
-    return "hostaddr=127.0.0.1  user=pqxx dbname=" + dbName;
+    const char* host = std::getenv("FOREX_DB_HOST");
+    const char* database = std::getenv("FOREX_DB_NAME");
+    return "hostaddr=" +
+           std::string{
+               host != nullptr && *host != '\0'
+                   ? host
+                   : "127.0.0.1"} +
+           " gssencmode=disable user=pqxx dbname=" +
+           std::string{
+               database != nullptr && *database != '\0'
+                   ? database
+                   : dbName};
 }
 
 std::string LstmDbConnectionString()
