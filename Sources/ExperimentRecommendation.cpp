@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdio>
+#include <limits>
+#include <cerrno>
+#include <cstdlib>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -77,15 +81,20 @@ int ParsePositiveInteger(const std::string& key, const std::string& value)
 
 double ParseFiniteDouble(const std::string& key, const std::string& value)
 {
-    double parsed = 0.0;
-    const auto result = std::from_chars(
-        value.data(), value.data() + value.size(), parsed,
-        std::chars_format::general);
-    if (result.ec != std::errc{} ||
-        result.ptr != value.data() + value.size() ||
+    if (value.empty())
+        throw std::invalid_argument(
+            "invalid_recommendation_policy_number:key=" + key);
+
+    errno = 0;
+    char* end = nullptr;
+    const double parsed = std::strtod(value.c_str(), &end);
+
+    if (errno == ERANGE ||
+        end != value.c_str() + value.size() ||
         !std::isfinite(parsed))
         throw std::invalid_argument(
             "invalid_recommendation_policy_number:key=" + key);
+
     return parsed;
 }
 
@@ -437,6 +446,21 @@ std::string CanonicalRecommendationDouble(double value)
     if (!std::isfinite(value))
         throw std::invalid_argument("recommendation_identity_nonfinite_number");
     if (value == 0.0) value = 0.0; // Canonicalize IEEE negative zero.
+
+#if defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && \
+    __MAC_OS_X_VERSION_MIN_REQUIRED < 130300
+    // libc++ floating-point std::to_chars is unavailable for deployment
+    // targets older than macOS 13.3.  Use a round-trip-safe representation
+    // for the legacy build without altering the canonical formatter used by
+    // modern production builds.
+    std::array<char, 128> buffer{};
+    const int length = std::snprintf(
+        buffer.data(), buffer.size(), "%.*g",
+        std::numeric_limits<double>::max_digits10, value);
+    if (length < 0 || static_cast<std::size_t>(length) >= buffer.size())
+        throw std::runtime_error("recommendation_identity_number_format_failed");
+    return std::string(buffer.data(), static_cast<std::size_t>(length));
+#else
     std::array<char, 128> buffer{};
     const auto result = std::to_chars(
         buffer.data(), buffer.data() + buffer.size(), value,
@@ -444,6 +468,7 @@ std::string CanonicalRecommendationDouble(double value)
     if (result.ec != std::errc{})
         throw std::runtime_error("recommendation_identity_number_format_failed");
     return std::string(buffer.data(), result.ptr);
+#endif
 }
 
 std::string RecommendationCanonicalHash(const std::string& canonicalText)

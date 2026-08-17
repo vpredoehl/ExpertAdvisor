@@ -1,6 +1,8 @@
 #include "ExperimentRecommendationConversion.hpp"
 
 #include <charconv>
+#include <cerrno>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <locale>
@@ -94,14 +96,15 @@ ProposedValueValidation ParseProposedValue(
         return ProposedValueValidation::valid;
     }
 
-    double value = 0.0;
-    const auto result = std::from_chars(
-        canonical.data(), canonical.data() + canonical.size(), value,
-        std::chars_format::general);
-    if (result.ec == std::errc::result_out_of_range)
+    if (canonical.empty())
+        return ProposedValueValidation::malformed;
+
+    errno = 0;
+    char* end = nullptr;
+    const double value = std::strtod(canonical.c_str(), &end);
+    if (errno == ERANGE)
         return ProposedValueValidation::outsideRange;
-    if (result.ec != std::errc{} ||
-        result.ptr != canonical.data() + canonical.size() ||
+    if (end != canonical.c_str() + canonical.size() ||
         !std::isfinite(value))
         return ProposedValueValidation::malformed;
     if (value <= 0.0) return ProposedValueValidation::outsideRange;

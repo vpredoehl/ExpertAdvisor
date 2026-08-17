@@ -34,14 +34,17 @@ std::string TrimAscii(const std::string& value)
 
 double ParseFiniteDouble(const std::string& key, const std::string& text)
 {
-    double value = 0.0;
-    const char* begin = text.data();
-    const char* end = text.data() + text.size();
-    const auto parsed = std::from_chars(begin, end, value,
-                                        std::chars_format::general);
-    if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != end ||
-        !std::isfinite(value))
+    if (text.empty())
         throw std::invalid_argument("invalid_scoring_policy_number:" + key);
+
+    double value = 0.0;
+    std::istringstream stream(text);
+    stream.imbue(std::locale::classic());
+    stream >> std::noskipws >> value;
+
+    if (!stream || !stream.eof() || !std::isfinite(value))
+        throw std::invalid_argument("invalid_scoring_policy_number:" + key);
+
     return value == 0.0 ? 0.0 : value;
 }
 

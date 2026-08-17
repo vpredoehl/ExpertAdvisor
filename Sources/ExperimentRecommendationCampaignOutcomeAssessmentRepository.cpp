@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cerrno>
+#include <cstdlib>
 #include <cmath>
 #include <map>
 #include <set>
@@ -181,14 +183,23 @@ Integer ParseCanonicalInteger(std::string_view text)
 
 double ParseCanonicalDouble(std::string_view text)
 {
-    double value = 0.0;
-    const auto result = std::from_chars(text.data(),
-        text.data() + text.size(), value, std::chars_format::general);
-    if (text.empty() || result.ec != std::errc{} ||
-        result.ptr != text.data() + text.size() ||
+    if (text.empty())
+        throw std::invalid_argument(
+            "campaign_outcome_assessment_source_invocation_invalid");
+
+    std::string canonical{text};
+
+    errno = 0;
+    char* end = nullptr;
+    const double value = std::strtod(canonical.c_str(), &end);
+
+    if (errno == ERANGE ||
+        end != canonical.c_str() + canonical.size() ||
+        !std::isfinite(value) ||
         CanonicalRecommendationDouble(value) != text)
         throw std::invalid_argument(
             "campaign_outcome_assessment_source_invocation_invalid");
+
     return value;
 }
 
