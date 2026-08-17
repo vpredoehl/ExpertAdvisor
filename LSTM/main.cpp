@@ -63,6 +63,8 @@ void PrintAndResetDistribution();
 
 namespace
 {
+std::string ForexDbConnectionString();
+
 #ifndef LSTM_RET_HORIZON_1
 #define LSTM_RET_HORIZON_1 1
 #endif
