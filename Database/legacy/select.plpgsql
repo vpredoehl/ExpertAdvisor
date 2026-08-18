@@ -1,0 +1,20 @@
+do $code$
+declare
+	f text;
+	qs text;
+	cnt int;
+begin
+	FOR f in select tablename from pg_tables  where tablename like '%rmp%' order by tablename
+	LOOP
+		qs = format('select distinct vol from  %I order by vol desc', f);
+		raise info 'executing: %', qs;
+		BEGIN
+			for cnt in execute qs LOOP
+				raise info 'count: %', cnt;
+			END LOOP;
+		EXCEPTION WHEN OTHERS THEN
+			raise info 'skipping';
+		END;
+	END LOOP;
+end $code$
+language 'plpgsql';

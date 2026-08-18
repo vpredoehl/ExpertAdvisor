@@ -1,0 +1,16 @@
+select date_part('year',time) as year, date_part('month',time) as month, count(*), sum(profit)::numeric(7,2) as profit from nzdcad_backtest where type like 'close%' group by year,rollup(month) order by 1,2;
+
+select min(time), max(time) from nzdcad_backtest ;
+
+select date_part('year',time) as year, date_part('month',time) as month, sum(profit) filter ( where profit < 0)::numeric(7,2) as loss, count(*) filter ( where profit < 0 ), sum(profit) filter ( where profit > 0)::numeric(7,2) as profit, count(*) filter ( where profit > 0 ) from nzdcad_backtest group by rollup(year,month) order by year,month;
+
+SELECT
+  order_id, sum(profit),
+  MAX(time) - MIN(time) AS time_interval, min(date_part('year',time)) as year, min(date_part('month',time)) as month
+FROM
+  nzdcad_backtest
+GROUP BY
+  order_id order by 2;
+
+
+-- select time, sum(profit)::numeric(7,2) from nzdcad_backtest where type like 'close%' group by rollup(time) order by sum;

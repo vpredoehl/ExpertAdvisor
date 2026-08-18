@@ -1,0 +1,19 @@
+do $code$
+declare
+	f text;
+	qs1 text;
+	qs2 text;
+	qs3 text;
+begin
+	FOR f in select indexname from pg_indexes  where  indexname like '%arch_time_ask_vol_idx'  order by indexname
+	LOOP
+		qs1 = format('alter index %I set tablespace index_archive', f);
+		BEGIN
+			raise info 'executing: %', qs1;
+			execute qs1;
+		EXCEPTION WHEN OTHERS THEN
+			raise info 'skipping';
+		END;
+	END LOOP;
+end $code$
+language 'plpgsql';
