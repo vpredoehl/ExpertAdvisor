@@ -16166,6 +16166,7 @@ int RecoverOrphanedRunningExperiments(
         // A missing process is destructive evidence only when the exact
         // durable attempt still owns the lifecycle row.
         bool lifecycleMatches = false;
+        bool lifecycleAlreadyCompletedAnalyze = false;
         if (checkpointEvalId)
         {
             pqxx::result lifecycle = transaction.exec_params(
@@ -16180,16 +16181,25 @@ int RecoverOrphanedRunningExperiments(
         }
         else
         {
+            // Final analysis persists its durable result and advances the
+            // experiment before the scheduler terminalizes the attempt.
+            // Keep that exact bound crash window eligible for result recovery.
             pqxx::result lifecycle = transaction.exec_params(
-                "SELECT 1 FROM experiment "
-                "WHERE experiment_id=$1 AND status='running' "
-                "AND phase=$2 "
+                "SELECT status,phase FROM experiment "
+                "WHERE experiment_id=$1 "
+                "AND ((status='running' AND phase=$2) "
+                " OR ($2='analyze' AND status='completed' "
+                "     AND phase='done')) "
                 "AND active_scheduler_worker_attempt_id=$3 "
                 "FOR UPDATE;",
                 experimentId,
                 phase,
                 attemptId);
             lifecycleMatches = lifecycle.size() == 1;
+            lifecycleAlreadyCompletedAnalyze =
+                lifecycleMatches &&
+                lifecycle[0][0].as<std::string>() == "completed" &&
+                lifecycle[0][1].as<std::string>() == "done";
         }
         if (!lifecycleMatches)
         {
@@ -16303,11 +16313,14 @@ int RecoverOrphanedRunningExperiments(
                         experiment,
                         attemptStartedEpoch))
                 {
-                    MarkExperimentDone(
-                        transaction,
-                        experiment,
-                        "analyze",
-                        attemptId);
+                    if (!lifecycleAlreadyCompletedAnalyze)
+                    {
+                        MarkExperimentDone(
+                            transaction,
+                            experiment,
+                            "analyze",
+                            attemptId);
+                    }
                     completedEvidence = true;
                 }
                 else if (phase == "train")

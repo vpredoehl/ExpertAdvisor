@@ -7275,8 +7275,6 @@ int main(int argc, const char * argv[])
 
     pqxx::connection c_forex { ForexDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { LstmDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
-    pqxx::work w_forex { c_forex }, w_LSTM { c_LSTM };
-    w_LSTM.exec("SET TRANSACTION READ WRITE;");
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
     EA::FeatureWarmupScope featureWarmupScope =
         launchArgs.featureWarmupScope.value_or(EA::kDefaultFeatureWarmupScope);
@@ -7287,7 +7285,11 @@ int main(int argc, const char * argv[])
     {
         try
         {
-            resumeConfig = LoadResumeCheckpointConfig(w_LSTM, *launchArgs.resumeModelId);
+            pqxx::work resumeRead { c_LSTM };
+            resumeRead.exec("SET TRANSACTION READ ONLY;");
+            resumeConfig = LoadResumeCheckpointConfig(
+                resumeRead, *launchArgs.resumeModelId);
+            resumeRead.commit();
             if (launchArgs.featureWarmupScope.has_value() &&
                 *launchArgs.featureWarmupScope != resumeConfig->featureWarmupScope)
                 throw std::runtime_error("feature warmup scope mismatch: persisted/runtime");
@@ -7314,21 +7316,29 @@ int main(int argc, const char * argv[])
     }
     try
     {
-        pqxx::result tables = w_forex.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp' order by table_name;");
         std::vector<std::string> availableSymbols;
-        availableSymbols.reserve(tables.size());
-        for (auto tbl : tables)
-            availableSymbols.emplace_back(EA::CanonicalSymbol::Normalize(tbl[0].c_str()));
+        {
+            pqxx::work forexMetadataRead { c_forex };
+            forexMetadataRead.exec("SET TRANSACTION READ ONLY;");
+            pqxx::result tables = forexMetadataRead.exec("select table_name from information_schema.tables where table_schema = 'public' and table_name like '%rmp' order by table_name;");
+            availableSymbols.reserve(tables.size());
+            for (auto tbl : tables)
+                availableSymbols.emplace_back(EA::CanonicalSymbol::Normalize(tbl[0].c_str()));
+            forexMetadataRead.commit();
+        }
 
+        pqxx::work configurationRead { c_LSTM };
+        configurationRead.exec("SET TRANSACTION READ ONLY;");
         std::optional<PersistedInferenceConfig> inferenceConfig;
         if (!resumeConfig.has_value() && gRuntimeInferenceMode)
         {
-            const auto anchorModelId = InferenceAnchorModelId(w_LSTM, launchArgs);
+            const auto anchorModelId = InferenceAnchorModelId(
+                configurationRead, launchArgs);
             if (anchorModelId.has_value())
             {
                 try
                 {
-                    inferenceConfig = LoadPersistedInferenceConfig(w_LSTM,
+                    inferenceConfig = LoadPersistedInferenceConfig(configurationRead,
                                                                    *anchorModelId,
                                                                    launchArgs,
                                                                    availableSymbols);
@@ -7361,7 +7371,7 @@ int main(int argc, const char * argv[])
             if (!inferenceConfig.has_value())
                 throw std::runtime_error("scheduler inference could not resolve persisted model configuration");
             schedulerInferenceContext = ResolveSchedulerInferencePersistenceContext(
-                w_LSTM,
+                configurationRead,
                 launchArgs,
                 inferenceConfig->symbol,
                 fromDate,
@@ -7383,11 +7393,11 @@ int main(int argc, const char * argv[])
         else if (gRuntimeInferenceMode && launchArgs.modelId.has_value())
         {
             runtimeDonchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(
-                w_LSTM, *launchArgs.modelId);
+                configurationRead, *launchArgs.modelId);
             runtimeDonchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(
-                w_LSTM, *launchArgs.modelId);
+                configurationRead, *launchArgs.modelId);
             featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(
-                w_LSTM, *launchArgs.modelId);
+                configurationRead, *launchArgs.modelId);
         }
         else if (launchArgs.donchian20Mode.has_value())
             runtimeDonchian20Mode = *launchArgs.donchian20Mode;
@@ -7403,18 +7413,18 @@ int main(int argc, const char * argv[])
                 Donchian20ModeText(runtimeDonchian20Mode) + ", runtime=" +
                 Donchian20ModeText(*launchArgs.donchian20Mode));
         ValidateSchedulerDonchian20Mode(
-            w_LSTM, launchArgs, runtimeDonchian20Mode);
+            configurationRead, launchArgs, runtimeDonchian20Mode);
         ValidateSchedulerFeatureWarmupScope(
-            w_LSTM, launchArgs, featureWarmupScope);
+            configurationRead, launchArgs, featureWarmupScope);
         ValidateSchedulerDonchianLookback(
-            w_LSTM, launchArgs, runtimeDonchianLookback);
+            configurationRead, launchArgs, runtimeDonchianLookback);
 
         std::optional<EA::FeatureAblationMask> schedulerFeatureAblationMask;
         if (launchArgs.schedulerExperimentId.has_value() ||
             launchArgs.schedulerCheckpointEvalId.has_value())
         {
             schedulerFeatureAblationMask =
-                LoadSchedulerFeatureAblationMask(w_LSTM, launchArgs);
+                LoadSchedulerFeatureAblationMask(configurationRead, launchArgs);
             if (resumeConfig.has_value())
             {
                 ValidateSchedulerModelFeatureAblationMask(
@@ -7430,6 +7440,7 @@ int main(int argc, const char * argv[])
                     inferenceConfig->modelId);
             }
         }
+        configurationRead.commit();
 
         DiagnosticOut() << "candle_duration=" << static_cast<int>(candle_duration) << '\n';
         DiagnosticOut() << "window_size=" << window_size << '\n';
@@ -7495,6 +7506,8 @@ int main(int argc, const char * argv[])
 
         for (const auto& rawPriceTableName : selectedSymbols)
         {
+            pqxx::work forexDataRead { c_forex };
+            forexDataRead.exec("SET TRANSACTION READ ONLY;");
             DiagnosticOut() << "SYMBOL_SELECTION"
                             << ",requested=" << (resumeConfig.has_value() ? resumeConfig->symbol : (inferenceConfig.has_value() ? inferenceConfig->symbol : (launchArgs.symbol.has_value() ? *launchArgs.symbol : "none")))
                             << ",selected=" << rawPriceTableName
@@ -7506,20 +7519,18 @@ int main(int argc, const char * argv[])
             const std::string queryStart = fullHistoryWarmup
                 ? EA::kTensorFeatureHistoryQueryStart : fromDate;
             const std::string query =
-                "select * from candlestick(" + w_forex.quote(rawPriceTableName) +
-                ", 15, 'minute', " + w_forex.quote(queryStart) + ", " +
-                w_forex.quote(toDate) + ") order by dt;";
+                "select * from candlestick(" + forexDataRead.quote(rawPriceTableName) +
+                ", 15, 'minute', " + forexDataRead.quote(queryStart) + ", " +
+                forexDataRead.quote(toDate) + ") order by dt;";
             const std::string warmupCountQuery = fullHistoryWarmup
                 ? "select count(*) from candlestick(" +
-                    w_forex.quote(rawPriceTableName) + ", 15, 'minute', " +
-                    w_forex.quote(EA::kTensorFeatureHistoryQueryStart) + ", " +
-                    w_forex.quote(toDate) + ") where dt < " +
-                    w_forex.quote(fromDate) + ";"
+                    forexDataRead.quote(rawPriceTableName) + ", 15, 'minute', " +
+                    forexDataRead.quote(EA::kTensorFeatureHistoryQueryStart) + ", " +
+                    forexDataRead.quote(toDate) + ") where dt < " +
+                    forexDataRead.quote(fromDate) + ";"
                 : "SELECT 0;";
             const size_t logicalOutputStartIndex =
-                w_forex.exec1(warmupCountQuery)[0].as<size_t>();
-            db_cursor_stream<Feature> cs_cur{ w_forex, query, rawPriceTableName + "_candlestick_stream" };
-            db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
+                forexDataRead.exec1(warmupCountQuery)[0].as<size_t>();
             Tensor t{ rawPriceTableName, runtimeDonchian20Mode, runtimeDonchianLookback };
             
             DiagnosticOut() << "Candlestick query: " << query << "\n";
@@ -7531,7 +7542,16 @@ int main(int argc, const char * argv[])
                             << ",warmup_rows=" << logicalOutputStartIndex
                             << std::endl;
             DiagnosticOut() << "Building tensor for table: " << rawPriceTableName << std::endl;
-            while (csb != cse) t.Add(*csb++);
+            {
+                db_cursor_stream<Feature> cs_cur{
+                    forexDataRead,
+                    query,
+                    rawPriceTableName + "_candlestick_stream"};
+                db_input_iterator csb = cs_cur.begin(), cse = cs_cur.end();
+                while (csb != cse)
+                    t.Add(*csb++);
+            }
+            forexDataRead.commit();
             if (logicalOutputStartIndex > t.RowCount())
                 throw std::runtime_error("feature warmup query returned more rows than the source tensor");
             const std::optional<std::size_t> persistedModelInputWidth =
@@ -7557,6 +7577,9 @@ int main(int argc, const char * argv[])
                     return 1;
                 }
             }
+
+            pqxx::work runtimeDatabaseWork { c_LSTM };
+            runtimeDatabaseWork.exec("SET TRANSACTION READ WRITE;");
   
             const auto requestedTargetType = resumeConfig.has_value()
                 ? resumeConfig->targetType
@@ -7564,7 +7587,7 @@ int main(int argc, const char * argv[])
                    ? inferenceConfig->targetType
                    : EA::LSTM::TargetType::UpNeutralDownReturn);
             if (launchArgs.inferAll)
-                return RunInferAllForSymbol(w_LSTM,
+                return RunInferAllForSymbol(runtimeDatabaseWork,
                                             launchArgs,
                                             rawPriceTableName,
                                             fromDate,
@@ -7615,7 +7638,7 @@ int main(int argc, const char * argv[])
                 else if (requestedModel) modelIdToLoad = *launchArgs.modelId;
                 else if (load_latest || gRuntimeInferenceMode)
                 {
-                    pqxx::result r = w_LSTM.exec("SELECT max(model_id) FROM model;");
+                    pqxx::result r = runtimeDatabaseWork.exec("SELECT max(model_id) FROM model;");
                     if (!r.empty() && !r[0][0].is_null()) modelIdToLoad = r[0][0].as<long long>();
                     else DiagnosticOut() << "No models found; using default-initialized parameters" << std::endl;
                 }
@@ -7625,17 +7648,17 @@ int main(int argc, const char * argv[])
                 {
                     {
                         ScopedDiagnosticCoutSilencer silence;
-                        DBIO::PgModelIO::loadAll(w_LSTM, modelIdToLoad, l);
+                        DBIO::PgModelIO::loadAll(runtimeDatabaseWork, modelIdToLoad, l);
                     }
                     if (resumeConfig.has_value())
                     {
                         ScopedDiagnosticCoutSilencer silence;
-                        DBIO::PgModelIO::loadOptimizerMeta(w_LSTM, modelIdToLoad, l);
+                        DBIO::PgModelIO::loadOptimizerMeta(runtimeDatabaseWork, modelIdToLoad, l);
                         l.completedEpochs = resumeConfig->completedEpoch;
                         std::cout << "RESUME_OPTIMIZER_STATE_RESTORED=1" << std::endl;
                     }
                     const Donchian20Mode modelMode =
-                        DBIO::PgModelIO::loadDonchian20ModeMeta(w_LSTM, modelIdToLoad);
+                        DBIO::PgModelIO::loadDonchian20ModeMeta(runtimeDatabaseWork, modelIdToLoad);
                     if (modelMode != runtimeDonchian20Mode)
                         throw std::runtime_error(
                             std::string{"model/runtime Donchian-20 mode mismatch: model="} +
@@ -7677,12 +7700,13 @@ int main(int argc, const char * argv[])
             }
 
             if (loadedModelId.has_value())
-                ValidateLoadedModelSymbolForSelectedTable(w_LSTM, *loadedModelId, rawPriceTableName);
+                ValidateLoadedModelSymbolForSelectedTable(
+                    runtimeDatabaseWork, *loadedModelId, rawPriceTableName);
 
             if (gRuntimeInferenceMode)
             {
                 const InferenceEvaluationResult evaluation =
-                    RunInferenceEvaluation(w_LSTM,
+                    RunInferenceEvaluation(runtimeDatabaseWork,
                                            launchArgs,
                                            l,
                                            t,
@@ -7719,14 +7743,14 @@ int main(int argc, const char * argv[])
 
                         if (schedulerInferenceContext->inferenceScope == "checkpoint")
                         {
-                            PersistCompletedCheckpointInferenceResult(w_LSTM,
+                            PersistCompletedCheckpointInferenceResult(runtimeDatabaseWork,
                                                                       identity,
                                                                       row,
                                                                       *schedulerInferenceContext);
                         }
                         else
                         {
-                            PersistCompletedInferenceResult(w_LSTM, identity, row);
+                            PersistCompletedInferenceResult(runtimeDatabaseWork, identity, row);
                             std::cout << "SCHEDULER_INFER_RESULT_PERSISTED"
                                       << ",experiment_id="
                                       << schedulerInferenceContext->schedulerExperimentId.value_or(-1)
@@ -7735,7 +7759,7 @@ int main(int argc, const char * argv[])
                                       << ",status=completed"
                                       << std::endl;
                         }
-                        w_LSTM.commit();
+                        runtimeDatabaseWork.commit();
                     }
                     catch (const std::exception& e)
                     {
@@ -7760,7 +7784,12 @@ int main(int argc, const char * argv[])
             UseRuntimeDefaultEvalLabelConfig();
             ModelConfigValidationResult modelConfigValidation;
             if (loadedModelId.has_value())
-                modelConfigValidation = PrintModelConfigValidation(w_LSTM, *loadedModelId, requestedTargetType, t, rawPriceTableName);
+                modelConfigValidation = PrintModelConfigValidation(
+                    runtimeDatabaseWork,
+                    *loadedModelId,
+                    requestedTargetType,
+                    t,
+                    rawPriceTableName);
             PrintEvalLabelConfig();
 
             // All startup/configuration/model reads from the LSTM database are
@@ -7769,7 +7798,7 @@ int main(int argc, const char * argv[])
             // AccessShareLock (and MVCC snapshot) on experiment for hours.
             // Checkpoint persistence already uses its own short transaction;
             // final model persistence opens another short transaction below.
-            w_LSTM.commit();
+            runtimeDatabaseWork.commit();
 
             PrintClassificationProofDiagnostics(l, t, fromDate, toDate);
             PrintPhase2TensorDiagnostics(l, t, fromDate, toDate);
