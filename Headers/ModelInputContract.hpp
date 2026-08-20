@@ -41,8 +41,10 @@ inline constexpr std::size_t kCausalMultiBarRangePressureModelInputWidth =
     causal_multi_bar_range_pressure_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCausalRollingRangeExpansionModelInputWidth =
     causal_rolling_range_expansion_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kHistoricalLevelProximityModelInputWidth =
+    historical_level_proximity_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
-    kCausalRollingRangeExpansionModelInputWidth;
+    kHistoricalLevelProximityModelInputWidth;
 
 struct ModelInputContract
 {
@@ -81,6 +83,9 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
             return {modelInputWidth, causalMultiBarRangePressureCol, 0};
         case kCausalMultiBarRangePressureModelInputWidth:
             return {modelInputWidth, causal_multi_bar_range_pressure_feature_size, 0};
+        case kCausalRollingRangeExpansionModelInputWidth:
+            return {modelInputWidth,
+                    causal_rolling_range_expansion_feature_size, 0};
         case kCurrentModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
@@ -100,7 +105,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kCausalReturnDirectionImbalanceModelInputWidth) +
                 ":" + std::to_string(kCausalDirectionalAdverseExcursionModelInputWidth) +
                 ":" + std::to_string(kCausalMultiBarRangePressureModelInputWidth) +
-                ":" + std::to_string(kCausalRollingRangeExpansionModelInputWidth));
+                ":" + std::to_string(kCausalRollingRangeExpansionModelInputWidth) +
+                ":" + std::to_string(kHistoricalLevelProximityModelInputWidth));
     }
 }
 

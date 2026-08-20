@@ -28,7 +28,9 @@ int main()
     static_assert(causal_multi_bar_range_pressure_feature_size == 46);
     static_assert(causalRollingRangeExpansionCol == 46);
     static_assert(causal_rolling_range_expansion_feature_size == 47);
-    static_assert(feature_size == 47);
+    static_assert(historicalLevelProximityCol == 47);
+    static_assert(historical_level_proximity_feature_size == 48);
+    static_assert(feature_size == 48);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -43,7 +45,8 @@ int main()
     static_assert(EA::kCausalDirectionalAdverseExcursionModelInputWidth == 49);
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
-    static_assert(EA::kCurrentModelInputWidth == 51);
+    static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
+    static_assert(EA::kCurrentModelInputWidth == 52);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -222,18 +225,33 @@ int main()
            physicalTensor[causalMultiBarRangePressureCol]);
     assert(multiBarRangePressureInput[causalRollingRangeExpansionCol] == -1.0f);
 
-    // The immediately preceding full model width preserves the 46-column
-    // prefix and cannot consume the newly appended range-expansion column.
+    // The multi-bar-range era preserves its 46-column prefix and cannot
+    // consume the later range-expansion column.
     assert(multiBarRangePressure.tensorFeatureCount == causalRollingRangeExpansionCol);
     const auto rollingRangeExpansion = EA::ResolveModelInputContract(
         51, physicalTensor.size());
     std::vector<float> rollingRangeExpansionInput(51, -1.0f);
     EA::CopyTensorFeaturesForModelInput(rollingRangeExpansionInput.data(),
                                         physicalTensor.data(), rollingRangeExpansion);
-    for (std::size_t i = 0; i < feature_size; ++i)
+    for (std::size_t i = 0;
+         i < causal_rolling_range_expansion_feature_size; ++i)
         assert(rollingRangeExpansionInput[i] == physicalTensor[i]);
     assert(rollingRangeExpansionInput[causalRollingRangeExpansionCol] ==
            physicalTensor[causalRollingRangeExpansionCol]);
+    assert(rollingRangeExpansionInput[historicalLevelProximityCol] == -1.0f);
+
+    // The current model appends historical-level proximity without changing
+    // the exact 51-wide predecessor contract above.
+    const auto historicalLevelProximity = EA::ResolveModelInputContract(
+        52, physicalTensor.size());
+    std::vector<float> historicalLevelProximityInput(52, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(historicalLevelProximityInput.data(),
+                                        physicalTensor.data(),
+                                        historicalLevelProximity);
+    for (std::size_t i = 0; i < feature_size; ++i)
+        assert(historicalLevelProximityInput[i] == physicalTensor[i]);
+    assert(historicalLevelProximityInput[historicalLevelProximityCol] ==
+           physicalTensor[historicalLevelProximityCol]);
 
     // Canonical feature identities are independent of physical offsets and
     // masking happens after projection without mutating Tensor storage.
@@ -243,19 +261,20 @@ int main()
         "directional_adverse_excursion,directional_efficiency,close_location,"
         "directional_range,volatility_regime,rms_return_surprise,"
         "relative_tick_volume,return_direction_imbalance,return_sign_persistence,"
-        "multi_bar_range_pressure,rolling_range_expansion");
+        "multi_bar_range_pressure,rolling_range_expansion,"
+        "historical_level_proximity");
     assert(fullMask.CanonicalText() ==
            "relative_tick_volume,rms_return_surprise,volatility_regime,"
            "directional_range,close_location,directional_efficiency,"
            "return_sign_persistence,return_direction_imbalance,"
            "directional_adverse_excursion,multi_bar_range_pressure,"
-           "rolling_range_expansion");
+           "rolling_range_expansion,historical_level_proximity");
     const auto mask = EA::FeatureAblationMask::Parse(
         " return_direction_imbalance,return_sign_persistence,return_direction_imbalance ");
     assert(mask.CanonicalText() == "return_sign_persistence,return_direction_imbalance");
-    std::vector<float> ablatedInput(51, -1.0f);
+    std::vector<float> ablatedInput(52, -1.0f);
     EA::CopyTensorFeaturesForModelInput(ablatedInput.data(), physicalTensor.data(),
-                                        rollingRangeExpansion, mask);
+                                        historicalLevelProximity, mask);
     assert(ablatedInput[causalReturnSignPersistenceCol] == 0.0f);
     assert(ablatedInput[causalReturnDirectionImbalanceCol] == 0.0f);
     assert(ablatedInput[causalDirectionalAdverseExcursionCol] ==
@@ -264,6 +283,8 @@ int main()
            physicalTensor[causalMultiBarRangePressureCol]);
     assert(ablatedInput[causalRollingRangeExpansionCol] ==
            physicalTensor[causalRollingRangeExpansionCol]);
+    assert(ablatedInput[historicalLevelProximityCol] ==
+           physicalTensor[historicalLevelProximityCol]);
     assert(physicalTensor[causalReturnSignPersistenceCol] ==
            static_cast<float>(100 + causalReturnSignPersistenceCol));
     bool absentFeatureRejected = false;
@@ -292,6 +313,21 @@ int main()
         latestFeatureRejectedByPreviousFullWidth = true;
     }
     assert(latestFeatureRejectedByPreviousFullWidth);
+    bool historicalLevelRejectedByPreviousFullWidth = false;
+    try
+    {
+        const auto latestMask = EA::FeatureAblationMask::Parse(
+            "historical_level_proximity");
+        std::vector<float> previousFullWidth(51, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(
+            previousFullWidth.data(), physicalTensor.data(),
+            rollingRangeExpansion, latestMask);
+    }
+    catch (const std::runtime_error&)
+    {
+        historicalLevelRejectedByPreviousFullWidth = true;
+    }
+    assert(historicalLevelRejectedByPreviousFullWidth);
     bool unknownFeatureRejected = false;
     try { (void)EA::FeatureAblationMask::Parse("unknown_feature"); }
     catch (const std::invalid_argument&) { unknownFeatureRejected = true; }
@@ -306,7 +342,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52";
     }
     assert(unsupportedRejected);
 

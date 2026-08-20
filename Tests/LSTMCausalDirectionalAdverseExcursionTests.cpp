@@ -131,10 +131,10 @@ void TestCausalityAdvancementAndEviction()
 void TestTensorIntegrationAndContracts()
 {
     static_assert(causalDirectionalAdverseExcursionCol == 44);
-    static_assert(feature_size == 47);
+    static_assert(feature_size == 48);
     static_assert(EA::kCausalReturnDirectionImbalanceModelInputWidth == 48);
     static_assert(EA::kCausalDirectionalAdverseExcursionModelInputWidth == 49);
-    static_assert(EA::kCurrentModelInputWidth == 51);
+    static_assert(EA::kCurrentModelInputWidth == 52);
 
     Tensor tensor{"causal-directional-adverse-excursion"};
     const std::array<float, 9> closes{10, 8, 9, 11, 12, 13, 14, 15, 9999};

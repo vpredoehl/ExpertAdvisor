@@ -23,7 +23,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 9> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 10> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -33,6 +33,7 @@ inline constexpr std::array<AblatableFeature, 9> kAblatableFeatures{{
     {"return_direction_imbalance", causalReturnDirectionImbalanceCol},
     {"multi_bar_range_pressure", causalMultiBarRangePressureCol},
     {"rolling_range_expansion", causalRollingRangeExpansionCol},
+    {"historical_level_proximity", historicalLevelProximityCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.

@@ -24,6 +24,7 @@
 #include "CausalDirectionalPersistenceFeatures.hpp"
 #include "CausalMultiBarRangePressureFeatures.hpp"
 #include "CausalRollingRangeExpansionFeatures.hpp"
+#include "CausalHistoricalLevelProximityFeatures.hpp"
 
 using std::setw;
 
@@ -119,6 +120,12 @@ void Tensor::Add(Feature f)
         causalMultiBarRangePressure.AddCompletedBar(f.high, f.low, f.close);
     const float rollingRangeExpansion =
         causalRollingRangeExpansion.AddCompletedBar(f.high, f.low);
+    const auto epochSeconds =
+        std::chrono::duration_cast<std::chrono::seconds>(
+            f.time.time_since_epoch()).count();
+    const float historicalLevelProximity =
+        causalHistoricalLevelProximity.AddCompletedBar(
+            f.high, f.low, f.close, epochSeconds);
     causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
     causalCloseLocation.RetainCompletedBar(f.high, f.low, f.close);
     causalDirectionalPersistence.RetainCompletedClose(f.close);
@@ -144,6 +151,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[causalDirectionalAdverseExcursionCol] = adverseExcursion;
         low.MutableRawMemory()[causalMultiBarRangePressureCol] = multiBarRangePressure;
         low.MutableRawMemory()[causalRollingRangeExpansionCol] = rollingRangeExpansion;
+        low.MutableRawMemory()[historicalLevelProximityCol] = historicalLevelProximity;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -404,6 +412,7 @@ void Tensor::Add(Feature f)
     p[causalDirectionalAdverseExcursionCol] = adverseExcursion;
     p[causalMultiBarRangePressureCol] = multiBarRangePressure;
     p[causalRollingRangeExpansionCol] = rollingRangeExpansion;
+    p[historicalLevelProximityCol] = historicalLevelProximity;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

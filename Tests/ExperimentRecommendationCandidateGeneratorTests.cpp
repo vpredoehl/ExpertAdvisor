@@ -354,9 +354,9 @@ int main()
     assert(RecommendationPolicyHash(RecommendationPolicy{}) ==
            "fnv1a64:5d38b796e2380a45");
     assert(RecommendationCandidateHash(SemanticConfiguration()) ==
-           "fnv1a64:e55c515fcbe9a1ec");
+           "fnv1a64:41e81d4e4d127ca2");
     assert(ExperimentInvocationHash(source.invocation) ==
-           "fnv1a64:c760e6edd2e4c425");
+           "fnv1a64:d1e733cb15beb190");
 
     return 0;
 }

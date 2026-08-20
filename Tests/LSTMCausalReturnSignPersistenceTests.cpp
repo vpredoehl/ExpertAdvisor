@@ -108,9 +108,9 @@ float RowValue(const Tensor& tensor, std::size_t row, std::size_t column)
 void TestTensorIntegrationAndContracts()
 {
     static_assert(causalReturnSignPersistenceCol == 42);
-    static_assert(feature_size == 47);
+    static_assert(feature_size == 48);
     static_assert(EA::kCausalDirectionalPersistenceModelInputWidth == 46);
-    static_assert(EA::kCurrentModelInputWidth == 51);
+    static_assert(EA::kCurrentModelInputWidth == 52);
 
     Tensor tensor{"causal-return-sign-persistence"};
     for (std::size_t index = 0; index < 8; ++index)

@@ -1,8 +1,8 @@
 # Volume II — Data Pipeline
 
 Status: Foundation outline
-Version: 0.1.2
-Last revised: 2026-08-15
+Version: 0.1.3
+Last revised: 2026-08-20
 
 ## 1. Purpose
 
@@ -113,10 +113,30 @@ rolling state only after its own feature has been computed, then is available
 to future rows. The lookback is a fixed feature definition, not an experiment
 parameter.
 
-The current base tensor has 38 columns; its four existing appended return
-channels yield current `n_in=42`. Historical persisted projections remain
-exactly `36 -> 32`, `38 -> 34`, `40 -> 36`, and `41 -> 37`; the current mapping
-is `42 -> 38`.
+Subsequent established causal increments occupy columns 38 through 46. Column
+47 is causal historical-level proximity. Completed source bars are aggregated
+into UTC Monday-based weekly OHLC bars independently inside each symbol's
+Tensor. A week is a high or low candidate only when it is the strict extremum
+of a five-week window and both following weeks are already complete. Its
+log-price bandwidth is one quarter of the median weekly log high/low range over
+the 26 weeks ending at the pivot, floored at `1e-6`. Candidate formation also
+requires that bandwidth history and the two confirmation weeks be consecutive;
+no missing week is synthesized.
+
+Candidates are retained for 260 calendar weeks and taper linearly over their
+final 26 weeks. Candidate importance is a smooth Gaussian corroboration by
+other retained pivots at similar log prices. Current proximity is the bounded
+transform `1 - exp(-density / 2)`, where density sums the age-weighted,
+corroboration-weighted Gaussian distance from the current close to every
+candidate. Fewer than 104 completed weekly bars, invalid inputs, or no
+corroborated candidates produce `0`. Candidate discovery uses only weeks
+completed before the current bar; no symbol-independent levels or complete-data
+level discovery are permitted.
+
+The current base tensor has 48 columns; its four existing appended return
+channels yield current `n_in=52`. Every historical persisted width remains an
+exact prefix projection, including the immediately preceding `51 -> 47`
+contract; the current mapping is `52 -> 48`.
 
 ## 6. Transactions
 
@@ -223,6 +243,7 @@ and compatibility before implementation.
 
 | Version | Date | Change | ADR |
 |---|---|---|---|
+| 0.1.3 | 2026-08-20 | Added causal historical-level proximity at column 47 and the 48/52 input contract. | — |
 | 0.1.2 | 2026-08-15 | Added causal 32-bar RMS-normalized close-return surprise at column 37 and the 38/42 input contract. | — |
 | 0.1.1 | 2026-08-15 | Recorded the fixed causal 32-bar relative tick-volume feature and 37/41 input contract. | — |
 | 0.1.0 | 2026-07-15 | Established the data-pipeline architecture outline. | — |

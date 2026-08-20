@@ -119,10 +119,10 @@ void TestCurrentBarInclusionAndExactEviction()
 void TestTensorIntegrationCausalityAblationAndHistoricalWidth()
 {
     static_assert(causalRollingRangeExpansionCol == 46);
-    static_assert(feature_size == 47);
+    static_assert(feature_size == 48);
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
-    static_assert(EA::kCurrentModelInputWidth == 51);
+    static_assert(EA::kCurrentModelInputWidth == 52);
 
     Tensor tensor{"causal-rolling-range-expansion"};
     for (std::size_t row = 0; row < 8; ++row)
@@ -162,7 +162,8 @@ void TestTensorIntegrationCausalityAblationAndHistoricalWidth()
     const auto mask = EA::FeatureAblationMask::Parse("rolling_range_expansion");
     assert(mask.CanonicalText() == "rolling_range_expansion");
     EA::CopyTensorFeaturesForModelInput(ablatedInput.data(), source.data(), current, mask);
-    for (std::size_t column = 0; column < feature_size; ++column)
+    for (std::size_t column = 0;
+         column < causal_rolling_range_expansion_feature_size; ++column)
         assert(ablatedInput[column] ==
                (column == causalRollingRangeExpansionCol ? 0.0f : source[column]));
 }
