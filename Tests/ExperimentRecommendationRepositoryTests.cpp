@@ -24,19 +24,23 @@ long long InsertExperiment(pqxx::transaction_base& transaction,
                            const std::string& phase,
                            const std::string& trainStart,
                            const std::optional<std::string>& inferStart,
-                           long long lastModelId = 987654321)
+                           long long lastModelId = 987654321,
+                           bool resumeExpandInputWidth = false)
 {
     const pqxx::result rows = transaction.exec(
         "INSERT INTO experiment (symbol,prediction_horizon,c_next_threshold,"
         "core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,"
         "train_start,train_end,infer_start,infer_end,status,phase,last_model_id,"
-        "duplicate_nonce) VALUES ($1,12,0.001,1.0,5.0,120,20,"
+        "resume_model_id,resume_expand_input_width,duplicate_nonce) "
+        "VALUES ($1,12,0.001,1.0,5.0,120,20,"
         "$2::timestamptz,'2025-01-01 00:00:00 America/Chicago',"
         "$3::timestamptz,CASE WHEN $3::text IS NULL THEN NULL ELSE "
-        "'2026-01-01 00:00:00 America/Chicago'::timestamptz END,$4,$5,$6,"
+        "'2026-01-01 00:00:00 America/Chicago'::timestamptz END,$4,$5,"
+        "$6::bigint,CASE WHEN $7::boolean THEN $6::bigint ELSE NULL END,"
+        "$7::boolean,"
         "floor(random()*900000000)::bigint+100000000) RETURNING experiment_id;",
         pqxx::params{symbol, trainStart, inferStart, status, phase,
-                     lastModelId});
+                     lastModelId, resumeExpandInputWidth});
     return rows.one_row()[0].as<long long>();
 }
 
@@ -177,6 +181,12 @@ int main()
         transaction, "step3_stale_analysis", "completed", "done",
         "2010-01-01 00:00:00 America/Chicago", std::nullopt, 987654322);
     InsertFinalAnalysis(transaction, staleAnalysisId, "completed", 987654321);
+    const long long expandedContinuationId = InsertExperiment(
+        transaction, "step3_expanded_continuation", "completed", "done",
+        "2010-01-01 00:00:00 America/Chicago", std::nullopt, 987654323,
+        true);
+    InsertFinalAnalysis(transaction, expandedContinuationId, "completed",
+                        987654323);
 
     RecommendationSourceFilters filters;
     const auto loaded = LoadRecommendationSources(transaction, filters);
@@ -203,6 +213,8 @@ int main()
            "source_mapping_error:ambiguous_experiment_date_mapping");
     assert(FindLoaded(loaded, staleAnalysisId).skipReason ==
            "missing_final_analysis");
+    assert(FindLoaded(loaded, expandedContinuationId).skipReason ==
+           "input_width_expansion_experiment_class_excluded");
     assert(FindLoaded(loaded, winterDateId).source->invocation.configuration
                .trainStartDate == "2024-01-15");
     assert(FindLoaded(loaded, summerDateId).source->invocation.configuration

@@ -17,6 +17,7 @@
 #include "DonchianLookback.hpp"
 #include "FeatureWarmupScope.hpp"
 #include "ModelInputContract.hpp"
+#include "ModelInputExpansion.hpp"
 
 
 #pragma clang diagnostic push
@@ -173,7 +174,9 @@ public:
                         EA::FeatureWarmupScope featureWarmupScope =
                             EA::kDefaultFeatureWarmupScope,
                         std::size_t donchianLookback =
-                            kDefaultDonchianLookback)
+                            kDefaultDonchianLookback,
+                        const std::optional<EA::InputWidthExpansionProvenance>&
+                            inputWidthExpansion = std::nullopt)
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -183,6 +186,7 @@ public:
         saveParameter(w, modelId, "returnHeadDirBias",   lstm.returnHeadDirBias);
         saveTargetMeta(w, modelId, lstm);
         saveModelMeta(w, modelId, lstm);
+        saveModelInputSemanticsMeta(w, modelId);
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
         saveDonchian20ModeMeta(w, modelId, donchian20Mode);
@@ -193,6 +197,8 @@ public:
         saveTrainSymbolMeta(w, modelId, symbol);
         if (!fromDate.empty() || !toDate.empty())
             saveTrainRangeMeta(w, modelId, fromDate, toDate);
+        if (inputWidthExpansion.has_value())
+            saveInputWidthExpansionMeta(w, modelId, *inputWidthExpansion);
     }
 
     static void saveDonchian20ModeMeta(pqxx::work& w,
@@ -309,6 +315,131 @@ public:
             p[2] = static_cast<float>(hidden_size);
         }
         saveParameter(w, modelId, "model_meta", meta);
+    }
+
+    static void saveModelInputSemanticsMeta(pqxx::work& w,
+                                            long long modelId)
+    {
+        MatGPU<float> meta(1, 2);
+        auto low = MetaNN::LowerAccess(meta);
+        float* p = low.MutableRawMemory();
+        p[0] = static_cast<float>(EA::kModelInputSemanticMetaSchemaVersion);
+        p[1] = static_cast<float>(EA::kModelInputSemanticLayoutVersion);
+        saveParameter(w, modelId, "model_input_semantics_meta", meta);
+    }
+
+    // Historical models predate this explicit marker.  Their known width is
+    // the durable mapping into the compile-time append-only registry.  Once a
+    // marker exists, an expansion must fail closed on any semantic mismatch.
+    static std::optional<EA::InputWidthExpansionProvenance>
+    validateModelInputSemanticsForExpansion(pqxx::work& w,
+                                            long long modelId)
+    {
+        const std::size_t persistedInputWidth =
+            loadRequiredModelMeta(w, modelId).inputWidth;
+        // Marker-less models use this durable historical-width registry.
+        // Marker-bearing models must additionally prove a compatible semantic
+        // layout generation below.
+        (void)EA::ContractForModelInputWidth(persistedInputWidth);
+        try
+        {
+            const auto dims = loadParameterDims(
+                w, modelId, "model_input_semantics_meta");
+            const auto vals = loadParameterValues(
+                w, modelId, "model_input_semantics_meta");
+            const EA::ModelInputSemanticMetadata metadata =
+                EA::ParseModelInputSemanticMetadata(
+                    static_cast<std::size_t>(dims.n_rows),
+                    static_cast<std::size_t>(dims.n_cols), vals);
+            EA::ValidateModelInputSemanticMetadataForExpansion(
+                metadata.schemaVersion, metadata.layoutVersion,
+                persistedInputWidth);
+        }
+        catch (const std::exception& error)
+        {
+            if (std::string{error.what()}.find(
+                    "No entries for parameter: model_input_semantics_meta") !=
+                std::string::npos)
+            {
+                // Pre-marker models remain eligible by registered width.
+            }
+            else
+            {
+                throw;
+            }
+        }
+        return validateInputWidthExpansionLineageIfPresent(
+            w, modelId, persistedInputWidth);
+    }
+
+    static void saveInputWidthExpansionMeta(
+        pqxx::work& w,
+        long long modelId,
+        const EA::InputWidthExpansionProvenance& provenance)
+    {
+        // Round-trip through the strict parser before persistence so malformed
+        // provenance can never become a durable model contract.
+        const std::string canonical = provenance.CanonicalText();
+        (void)EA::ParseInputWidthExpansionProvenance(canonical);
+        const PersistedModelMeta modelMeta = loadRequiredModelMeta(w, modelId);
+        validateInputWidthExpansionLineage(
+            w, modelId, modelMeta.inputWidth, provenance);
+        saveAsciiMeta(w, modelId, "input_width_expansion_meta", canonical);
+    }
+
+    static EA::InputWidthExpansionProvenance loadRequiredInputWidthExpansionMeta(
+        pqxx::work& w,
+        long long modelId)
+    {
+        return EA::ParseInputWidthExpansionProvenance(
+            decodeAsciiMeta(w, modelId, "input_width_expansion_meta"));
+    }
+
+    static std::optional<EA::InputWidthExpansionProvenance>
+    validateInputWidthExpansionLineageIfPresent(
+        pqxx::work& w,
+        long long modelId,
+        std::size_t persistedInputWidth)
+    {
+        const pqxx::result marker = w.exec(
+            "SELECT 1 FROM matrix WHERE model_id=$1 "
+            "AND param_name='input_width_expansion_meta' LIMIT 1;",
+            pqxx::params{modelId});
+        if (marker.empty()) return std::nullopt;
+        const EA::InputWidthExpansionProvenance provenance =
+            loadRequiredInputWidthExpansionMeta(w, modelId);
+        validateInputWidthExpansionLineage(
+            w, modelId, persistedInputWidth, provenance);
+        return provenance;
+    }
+
+    static void validateInputWidthExpansionLineage(
+        pqxx::work& w,
+        long long modelId,
+        std::size_t persistedInputWidth,
+        const EA::InputWidthExpansionProvenance& provenance)
+    {
+        if (provenance.expandedInputWidth != persistedInputWidth)
+            throw std::runtime_error(
+                "MODEL_INPUT_EXPANSION_PROVENANCE_MODEL_WIDTH_MISMATCH");
+        const PersistedModelMeta sourceMeta =
+            loadRequiredModelMeta(w, provenance.sourceModelId);
+        if (sourceMeta.inputWidth != provenance.sourceInputWidth)
+            throw std::runtime_error(
+                "MODEL_INPUT_EXPANSION_PROVENANCE_SOURCE_WIDTH_MISMATCH");
+        const pqxx::result lineage = w.exec(
+            "WITH RECURSIVE ancestry(model_id,parent_model_id) AS ("
+            " SELECT model_id,parent_model_id FROM model"
+            " WHERE model_id=(SELECT parent_model_id FROM model"
+            " WHERE model_id=$1)"
+            " UNION"
+            " SELECT m.model_id,m.parent_model_id FROM model m"
+            " JOIN ancestry a ON m.model_id=a.parent_model_id"
+            ") SELECT 1 FROM ancestry WHERE model_id=$2 LIMIT 1;",
+            pqxx::params{modelId, provenance.sourceModelId});
+        if (lineage.empty())
+            throw std::runtime_error(
+                "MODEL_INPUT_EXPANSION_PROVENANCE_SOURCE_LINEAGE_MISMATCH");
     }
 
     // Save training/evaluation compatibility metadata in order:
@@ -694,16 +825,80 @@ public:
         }
     }
 
-    // Load all parameters into an existing LSTM instance
-    static void loadAll(pqxx::work& w, long long modelId, EA::LSTM& lstm)
+    // Load all parameters into an existing LSTM instance.  Ordinary callers
+    // retain the exact historical-width shape contract.  Expansion is an
+    // explicit opt-in that changes only the fused parameter matrix's input
+    // rows according to ModelInputExpansion.hpp.
+    static void loadAll(pqxx::work& w,
+                        long long modelId,
+                        EA::LSTM& lstm,
+                        bool expandInputWidth = false)
     {
-        lstm.param            = loadParameterMatrix<float>(w, modelId, "param");
+        const std::optional<PersistedModelMeta> sourceMeta =
+            expandInputWidth
+                ? std::optional<PersistedModelMeta>{
+                      loadRequiredModelMeta(w, modelId)}
+                : std::nullopt;
+        MatGPU<float> sourceParam = loadParameterMatrix<float>(w, modelId, "param");
+        if (expandInputWidth)
+        {
+            validateModelInputSemanticsForExpansion(w, modelId);
+            const EA::InputWidthExpansionPlan plan =
+                EA::BuildInputWidthExpansionPlan(
+                    sourceMeta->inputWidth,
+                    static_cast<std::size_t>(lstm.InputFeatureCount()));
+            if (lstm.param.Shape()[1] != 4 * sourceMeta->hiddenSize)
+                throw std::runtime_error(
+                    "MODEL_INPUT_EXPANSION_RUNTIME_HIDDEN_SIZE_MISMATCH");
+            const std::vector<double> sourceValues =
+                flattenRowMajor(sourceParam);
+            const std::vector<double> expandedValues =
+                EA::ExpandFusedLstmParameterRowMajor(
+                    sourceValues, sourceMeta->hiddenSize, plan);
+            lstm.param = fromFlatRowMajor<float>(
+                expandedValues,
+                plan.expandedInputWidth + sourceMeta->hiddenSize,
+                4 * sourceMeta->hiddenSize);
+        }
+        else
+        {
+            lstm.param = std::move(sourceParam);
+        }
+
         lstm.bias             = loadParameterMatrix<float>(w, modelId, "bias");
         lstm.returnHeadWeight = loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
         lstm.returnHeadBias   = loadParameterMatrix<float>(w, modelId, "returnHeadBias");
 
-        const std::optional<PersistedTargetMeta> targetMeta =
-            tryLoadTargetMeta(w, modelId, lstm);
+        const auto requireShape = [](const MatGPU<float>& matrix,
+                                     std::size_t rows,
+                                     std::size_t cols,
+                                     const char* name)
+        {
+            if (matrix.Shape()[0] != rows || matrix.Shape()[1] != cols)
+                throw std::runtime_error(
+                    std::string{"MODEL_INPUT_EXPANSION_TENSOR_SHAPE_MISMATCH,name="} +
+                    name + ",actual=" + std::to_string(matrix.Shape()[0]) +
+                    "x" + std::to_string(matrix.Shape()[1]) + ",expected=" +
+                    std::to_string(rows) + "x" + std::to_string(cols));
+        };
+        if (expandInputWidth)
+        {
+            requireShape(lstm.bias, 1, 4 * sourceMeta->hiddenSize, "bias");
+            requireShape(lstm.returnHeadWeight, sourceMeta->hiddenSize, 1,
+                         "returnHeadWeight");
+            requireShape(lstm.returnHeadBias, 1, 1, "returnHeadBias");
+        }
+
+        std::optional<PersistedTargetMeta> targetMeta;
+        if (expandInputWidth)
+        {
+            targetMeta = loadRequiredTargetMeta(w, modelId);
+            applyTargetMeta(*targetMeta, lstm);
+        }
+        else
+        {
+            targetMeta = tryLoadTargetMeta(w, modelId, lstm);
+        }
         if (targetMeta.has_value() &&
             targetMeta->targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
         {
@@ -725,8 +920,28 @@ public:
         {
             // Directional tensors were not consumed by these target paths in
             // historical checkpoints, so preserve their optional loading.
-            try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
-            try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
+            if (expandInputWidth)
+            {
+                lstm.returnHeadDirWeight = loadParameterMatrix<float>(
+                    w, modelId, "returnHeadDirWeight");
+                lstm.returnHeadDirBias = loadParameterMatrix<float>(
+                    w, modelId, "returnHeadDirBias");
+            }
+            else
+            {
+                try { lstm.returnHeadDirWeight = loadParameterMatrix<float>(w, modelId, "returnHeadDirWeight"); } catch (...) { /* keep defaults */ }
+                try { lstm.returnHeadDirBias   = loadParameterMatrix<float>(w, modelId, "returnHeadDirBias"); } catch (...) { /* keep defaults */ }
+            }
+        }
+
+        if (expandInputWidth)
+        {
+            requireShape(lstm.returnHeadDirWeight, sourceMeta->hiddenSize,
+                         static_cast<std::size_t>(direction_output_size),
+                         "returnHeadDirWeight");
+            requireShape(lstm.returnHeadDirBias, 1,
+                         static_cast<std::size_t>(direction_output_size),
+                         "returnHeadDirBias");
         }
 
         const size_t rows = lstm.param.Shape()[0];
@@ -740,7 +955,8 @@ public:
 
         try
         {
-            (void)loadRequiredModelMeta(w, modelId);
+            if (!sourceMeta.has_value())
+                (void)loadRequiredModelMeta(w, modelId);
         }
         catch (const std::exception& error)
         {

@@ -1,6 +1,7 @@
 #ifndef ModelInputContract_hpp
 #define ModelInputContract_hpp
 
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
@@ -45,6 +46,27 @@ inline constexpr std::size_t kHistoricalLevelProximityModelInputWidth =
     historical_level_proximity_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
     kHistoricalLevelProximityModelInputWidth;
+
+// Every persisted width whose Tensor portion has a registered, stable
+// semantic prefix.  Append-only feature additions must retain these entries
+// and append their new width.
+inline constexpr std::array<std::size_t, 15> kRegisteredModelInputWidths{{
+    kLegacyModelInputWidth,
+    kDonchianModelInputWidth,
+    kSessionPhaseModelInputWidth,
+    kRelativeTickVolumeModelInputWidth,
+    kCausalReturnSurpriseModelInputWidth,
+    kCausalVolatilityRegimeModelInputWidth,
+    kCausalDirectionalRangeModelInputWidth,
+    kCausalCloseLocationModelInputWidth,
+    kCausalDirectionalPersistenceModelInputWidth,
+    kCausalReturnSignPersistenceModelInputWidth,
+    kCausalReturnDirectionImbalanceModelInputWidth,
+    kCausalDirectionalAdverseExcursionModelInputWidth,
+    kCausalMultiBarRangePressureModelInputWidth,
+    kCausalRollingRangeExpansionModelInputWidth,
+    kHistoricalLevelProximityModelInputWidth,
+}};
 
 struct ModelInputContract
 {

@@ -430,6 +430,7 @@ std::vector<RecommendationSourceLoadResult> LoadRecommendationSources(
         "CASE WHEN e.infer_start IS NULL THEN NULL ELSE to_char(e.infer_start AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS source_infer_start_date, "
         "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS source_infer_end_date, "
         "e.resume_model_id AS source_resume_model_id, e.last_model_id AS source_model_id, "
+        "e.resume_expand_input_width AS source_resume_expand_input_width, "
         "e.donchian_lookback AS source_donchian_lookback, "
         "e.feature_warmup_scope AS source_feature_warmup_scope, "
         "((e.train_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_start AT TIME ZONE 'America/Chicago') "
@@ -462,6 +463,12 @@ std::vector<RecommendationSourceLoadResult> LoadRecommendationSources(
     {
         RecommendationSourceLoadResult loaded;
         loaded.experimentId = row["experiment_id"].as<long long>();
+        if (row["source_resume_expand_input_width"].as<bool>())
+        {
+            loaded.skipReason = "input_width_expansion_experiment_class_excluded";
+            results.push_back(std::move(loaded));
+            continue;
+        }
         if (row["source_model_id"].is_null())
         {
             loaded.skipReason = "missing_final_model";

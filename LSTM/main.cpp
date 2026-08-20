@@ -47,6 +47,7 @@
 #include "DonchianLookback.hpp"
 #include "FeatureWarmupScope.hpp"
 #include "ModelInputContract.hpp"
+#include "ModelInputExpansion.hpp"
 #include "ReturnFeatureHistory.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
@@ -3812,6 +3813,7 @@ struct LaunchArgs
     bool inferAll = false;
     bool forceInfer = false;
     bool lstmProfileHotspots = false;
+    bool resumeExpandInputWidth = false;
 };
 
 struct LSTMHotspotProfileFinalizer
@@ -3978,6 +3980,13 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             if (i + 1 >= argc)
                 throw std::invalid_argument("--resume-model-id requires a model_id value");
             parsed.resumeModelId = ParseModelIdArg(argv[++i]);
+        }
+        else if (arg == "--resume-expand-input-width")
+        {
+            if (parsed.resumeExpandInputWidth)
+                throw std::invalid_argument(
+                    "--resume-expand-input-width specified more than once");
+            parsed.resumeExpandInputWidth = true;
         }
         else if (arg == "--target-epochs")
         {
@@ -4268,6 +4277,10 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
         return parsed;
     }
 
+    if (parsed.resumeExpandInputWidth)
+        throw std::invalid_argument(
+            "--resume-expand-input-width requires --resume-model-id");
+
     if (parsed.inferStartAfterModelId.has_value() && !parsed.inferAll)
         throw std::invalid_argument("--infer-start-after-model-id requires --infer-all");
     if (parsed.forceInfer && !parsed.inferAll)
@@ -4300,7 +4313,7 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     }
 
     if (positional.size() != 2)
-        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
+        throw std::invalid_argument("expected arguments: [--train|--infer] [--infer-all] [--force-infer] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>; preferred inference: --infer --model=<model_id> <fromDate> <toDate>; preferred infer-all: --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>");
 
     parsed.fromDate = positional[0];
     parsed.toDate = positional[1];
@@ -4403,7 +4416,112 @@ struct ResumeCheckpointConfig
     Donchian20Mode donchian20Mode = kDefaultDonchian20Mode;
     std::size_t donchianLookback = kDefaultDonchianLookback;
     EA::FeatureAblationMask featureAblationMask;
+    bool expandInputWidthRequested = false;
+    bool parameterExpansionRequired = false;
+    std::optional<EA::InputWidthExpansionProvenance>
+        inputWidthExpansionProvenance;
 };
+
+void ConfigureInputWidthExpansionForResume(pqxx::work& w,
+                                           ResumeCheckpointConfig& cfg,
+                                           bool requested,
+                                           std::optional<long long>
+                                               schedulerExperimentId)
+{
+    cfg.expandInputWidthRequested = requested;
+    if (!requested) return;
+
+    DBIO::PgModelIO::validateModelInputSemanticsForExpansion(
+        w, cfg.sourceModelId);
+    const std::size_t sourceWidth =
+        static_cast<std::size_t>(cfg.modelInputWidth);
+    if (sourceWidth < EA::kCurrentModelInputWidth)
+    {
+        const EA::InputWidthExpansionPlan plan =
+            EA::BuildInputWidthExpansionPlan(sourceWidth);
+        cfg.parameterExpansionRequired = true;
+        cfg.inputWidthExpansionProvenance =
+            EA::MakeInputWidthExpansionProvenance(cfg.sourceModelId, plan);
+        return;
+    }
+    if (sourceWidth > EA::kCurrentModelInputWidth)
+    {
+        (void)EA::BuildInputWidthExpansionPlan(sourceWidth);
+        return;
+    }
+
+    // Scheduler retry may resume from a checkpoint already widened by this
+    // same experiment.  Accept the no-op only when durable expansion
+    // provenance proves that fact; arbitrary current-width sources still fail.
+    if (!schedulerExperimentId.has_value())
+    {
+        throw std::runtime_error(
+            "MODEL_INPUT_EXPANSION_NOT_REQUIRED,source_n_in=" +
+            std::to_string(sourceWidth) + ",target_n_in=" +
+            std::to_string(EA::kCurrentModelInputWidth));
+    }
+    const pqxx::result owningExperiment = w.exec(
+        "SELECT 1 FROM model WHERE model_id=$1 AND experiment_id=$2;",
+        pqxx::params{cfg.sourceModelId, *schedulerExperimentId});
+    if (owningExperiment.empty())
+    {
+        throw std::runtime_error(
+            "MODEL_INPUT_EXPANSION_RETRY_EXPERIMENT_LINEAGE_MISMATCH");
+    }
+    cfg.inputWidthExpansionProvenance =
+        DBIO::PgModelIO::loadRequiredInputWidthExpansionMeta(
+            w, cfg.sourceModelId);
+    if (cfg.inputWidthExpansionProvenance->expandedInputWidth !=
+        EA::kCurrentModelInputWidth)
+    {
+        throw std::runtime_error(
+            "MODEL_INPUT_EXPANSION_RETRY_PROVENANCE_TARGET_MISMATCH");
+    }
+    const pqxx::result lineage = w.exec(
+        "WITH RECURSIVE ancestry(model_id,parent_model_id) AS ("
+        " SELECT model_id,parent_model_id FROM model WHERE model_id=$1"
+        " UNION"
+        " SELECT m.model_id,m.parent_model_id FROM model m"
+        " JOIN ancestry a ON m.model_id=a.parent_model_id"
+        ") SELECT 1 FROM ancestry WHERE model_id=$2 LIMIT 1;",
+        pqxx::params{
+            cfg.sourceModelId,
+            cfg.inputWidthExpansionProvenance->sourceModelId});
+    if (lineage.empty())
+    {
+        throw std::runtime_error(
+            "MODEL_INPUT_EXPANSION_RETRY_SOURCE_LINEAGE_MISMATCH");
+    }
+}
+
+void ValidateExpandedResumeAblationComposition(
+    const EA::FeatureAblationMask& sourceMask,
+    const EA::FeatureAblationMask& requestedMask,
+    std::size_t sourceInputWidth)
+{
+    const auto sourceContract = EA::ContractForModelInputWidth(sourceInputWidth);
+    const auto contains = [](const std::vector<std::size_t>& values,
+                             std::size_t value)
+    {
+        return std::find(values.begin(), values.end(), value) != values.end();
+    };
+    for (const std::size_t sourceColumn : sourceMask.tensorColumns())
+    {
+        if (!contains(requestedMask.tensorColumns(), sourceColumn))
+            throw std::runtime_error(
+                "FEATURE_ABLATION_MASK_EXPANSION_REMOVES_SOURCE_ABLATION");
+    }
+    for (const std::size_t requestedColumn : requestedMask.tensorColumns())
+    {
+        if (!contains(sourceMask.tensorColumns(), requestedColumn) &&
+            requestedColumn < sourceContract.tensorFeatureCount)
+        {
+            throw std::runtime_error(
+                "FEATURE_ABLATION_MASK_EXPANSION_CHANGES_HISTORICAL_FEATURE");
+        }
+    }
+    requestedMask.ValidateForTensorFeatureCount(feature_size);
+}
 
 EA::FeatureAblationMask LoadModelFeatureAblationMask(pqxx::work& w,
                                                      long long modelId)
@@ -4454,6 +4572,22 @@ void ValidateSchedulerModelFeatureAblationMask(
         "FEATURE_ABLATION_MASK_LINEAGE_MISMATCH:model_id=" +
         std::to_string(modelId) + ",model=" + modelMask.CanonicalText() +
         ",scheduler=" + schedulerMask.CanonicalText());
+}
+
+void ValidateSchedulerResumeFeatureAblationMask(
+    const ResumeCheckpointConfig& resume,
+    const EA::FeatureAblationMask& schedulerMask)
+{
+    if (!resume.expandInputWidthRequested)
+    {
+        ValidateSchedulerModelFeatureAblationMask(
+            resume.featureAblationMask, schedulerMask, resume.sourceModelId);
+        return;
+    }
+    ValidateExpandedResumeAblationComposition(
+        resume.featureAblationMask,
+        schedulerMask,
+        static_cast<std::size_t>(resume.modelInputWidth));
 }
 
 TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long modelId)
@@ -4889,7 +5023,11 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                      launchArgs.schedulerExperimentId,
                                      ParentModelIdForResume(resumeConfig));
     DBIO::PgModelIO::saveAll(wCheckpoint, checkpointModelId, lstm, rawPriceTableName, fromDate, toDate,
-                             donchian20Mode, featureWarmupScope, donchianLookback);
+                             donchian20Mode, featureWarmupScope,
+                             donchianLookback,
+                             resumeConfig.has_value()
+                                 ? resumeConfig->inputWidthExpansionProvenance
+                                 : std::nullopt);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
               << " epoch=" << completedEpoch
@@ -7260,7 +7398,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
@@ -7289,6 +7427,10 @@ int main(int argc, const char * argv[])
             resumeRead.exec("SET TRANSACTION READ ONLY;");
             resumeConfig = LoadResumeCheckpointConfig(
                 resumeRead, *launchArgs.resumeModelId);
+            ConfigureInputWidthExpansionForResume(
+                resumeRead, *resumeConfig,
+                launchArgs.resumeExpandInputWidth,
+                launchArgs.schedulerExperimentId);
             resumeRead.commit();
             if (launchArgs.featureWarmupScope.has_value() &&
                 *launchArgs.featureWarmupScope != resumeConfig->featureWarmupScope)
@@ -7304,6 +7446,21 @@ int main(int argc, const char * argv[])
                       << (static_cast<size_t>(*launchArgs.targetEpochs) - resumeConfig->completedEpoch)
                       << std::endl;
             std::cout << "RESUME_USING_DB_CONFIG_ONLY=1" << std::endl;
+            if (resumeConfig->expandInputWidthRequested)
+            {
+                std::cout << "RESUME_INPUT_WIDTH_EXPANSION"
+                          << ",source_model_id="
+                          << resumeConfig->inputWidthExpansionProvenance->sourceModelId
+                          << ",source_n_in="
+                          << resumeConfig->inputWidthExpansionProvenance->sourceInputWidth
+                          << ",expanded_n_in="
+                          << resumeConfig->inputWidthExpansionProvenance->expandedInputWidth
+                          << ",initialization="
+                          << resumeConfig->inputWidthExpansionProvenance->initializationPolicy
+                          << ",parameter_expansion_required="
+                          << (resumeConfig->parameterExpansionRequired ? 1 : 0)
+                          << std::endl;
+            }
         }
         catch (const std::exception& e)
         {
@@ -7427,10 +7584,8 @@ int main(int argc, const char * argv[])
                 LoadSchedulerFeatureAblationMask(configurationRead, launchArgs);
             if (resumeConfig.has_value())
             {
-                ValidateSchedulerModelFeatureAblationMask(
-                    resumeConfig->featureAblationMask,
-                    *schedulerFeatureAblationMask,
-                    resumeConfig->sourceModelId);
+                ValidateSchedulerResumeFeatureAblationMask(
+                    *resumeConfig, *schedulerFeatureAblationMask);
             }
             if (inferenceConfig.has_value())
             {
@@ -7556,7 +7711,11 @@ int main(int argc, const char * argv[])
                 throw std::runtime_error("feature warmup query returned more rows than the source tensor");
             const std::optional<std::size_t> persistedModelInputWidth =
                 resumeConfig.has_value()
-                    ? std::optional<std::size_t>{static_cast<std::size_t>(resumeConfig->modelInputWidth)}
+                    ? std::optional<std::size_t>{
+                          resumeConfig->expandInputWidthRequested
+                              ? EA::kCurrentModelInputWidth
+                              : static_cast<std::size_t>(
+                                    resumeConfig->modelInputWidth)}
                     : (inferenceConfig.has_value()
                            ? std::optional<std::size_t>{static_cast<std::size_t>(inferenceConfig->modelInputWidth)}
                            : std::nullopt);
@@ -7648,7 +7807,10 @@ int main(int argc, const char * argv[])
                 {
                     {
                         ScopedDiagnosticCoutSilencer silence;
-                        DBIO::PgModelIO::loadAll(runtimeDatabaseWork, modelIdToLoad, l);
+                        DBIO::PgModelIO::loadAll(
+                            runtimeDatabaseWork, modelIdToLoad, l,
+                            resumeConfig.has_value() &&
+                                resumeConfig->parameterExpansionRequired);
                     }
                     if (resumeConfig.has_value())
                     {
@@ -8001,7 +8163,10 @@ int main(int argc, const char * argv[])
 
                     DBIO::PgModelIO::saveAll(wSave, modelId, l, rawPriceTableName, fromDate, toDate,
                                              runtimeDonchian20Mode, featureWarmupScope,
-                                             runtimeDonchianLookback);
+                                             runtimeDonchianLookback,
+                                             resumeConfig.has_value()
+                                                 ? resumeConfig->inputWidthExpansionProvenance
+                                                 : std::nullopt);
                     wSave.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())
