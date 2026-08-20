@@ -149,10 +149,11 @@ void TestTensorCausalityParityAblationAndCompatibility()
 {
     static_assert(causalRollingRangeExpansionCol == 46);
     static_assert(historicalLevelProximityCol == 47);
-    static_assert(feature_size == 48);
+    static_assert(returnAutocorrelationCol == 48);
+    static_assert(feature_size == 49);
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
-    static_assert(EA::kCurrentModelInputWidth == 52);
+    static_assert(EA::kCurrentModelInputWidth == 53);
 
     Tensor prefix{"historical-level-prefix"};
     Tensor futureA{"historical-level-future-a"};

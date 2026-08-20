@@ -30,7 +30,9 @@ int main()
     static_assert(causal_rolling_range_expansion_feature_size == 47);
     static_assert(historicalLevelProximityCol == 47);
     static_assert(historical_level_proximity_feature_size == 48);
-    static_assert(feature_size == 48);
+    static_assert(returnAutocorrelationCol == 48);
+    static_assert(return_autocorrelation_feature_size == 49);
+    static_assert(feature_size == 49);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -46,7 +48,8 @@ int main()
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
-    static_assert(EA::kCurrentModelInputWidth == 52);
+    static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
+    static_assert(EA::kCurrentModelInputWidth == 53);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -240,18 +243,33 @@ int main()
            physicalTensor[causalRollingRangeExpansionCol]);
     assert(rollingRangeExpansionInput[historicalLevelProximityCol] == -1.0f);
 
-    // The current model appends historical-level proximity without changing
-    // the exact 51-wide predecessor contract above.
+    // The historical-level-proximity model retains its exact 48-column Tensor
+    // prefix and cannot consume the later autocorrelation column.
     const auto historicalLevelProximity = EA::ResolveModelInputContract(
         52, physicalTensor.size());
     std::vector<float> historicalLevelProximityInput(52, -1.0f);
     EA::CopyTensorFeaturesForModelInput(historicalLevelProximityInput.data(),
                                         physicalTensor.data(),
                                         historicalLevelProximity);
-    for (std::size_t i = 0; i < feature_size; ++i)
+    for (std::size_t i = 0;
+         i < historical_level_proximity_feature_size; ++i)
         assert(historicalLevelProximityInput[i] == physicalTensor[i]);
     assert(historicalLevelProximityInput[historicalLevelProximityCol] ==
            physicalTensor[historicalLevelProximityCol]);
+    assert(historicalLevelProximityInput[returnAutocorrelationCol] == -1.0f);
+
+    // The current model appends return autocorrelation without changing the
+    // exact width-52 predecessor contract above.
+    const auto returnAutocorrelation = EA::ResolveModelInputContract(
+        53, physicalTensor.size());
+    std::vector<float> returnAutocorrelationInput(53, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(returnAutocorrelationInput.data(),
+                                        physicalTensor.data(),
+                                        returnAutocorrelation);
+    for (std::size_t i = 0; i < feature_size; ++i)
+        assert(returnAutocorrelationInput[i] == physicalTensor[i]);
+    assert(returnAutocorrelationInput[returnAutocorrelationCol] ==
+           physicalTensor[returnAutocorrelationCol]);
 
     // Canonical feature identities are independent of physical offsets and
     // masking happens after projection without mutating Tensor storage.
@@ -262,19 +280,20 @@ int main()
         "directional_range,volatility_regime,rms_return_surprise,"
         "relative_tick_volume,return_direction_imbalance,return_sign_persistence,"
         "multi_bar_range_pressure,rolling_range_expansion,"
-        "historical_level_proximity");
+        "historical_level_proximity,return_autocorrelation");
     assert(fullMask.CanonicalText() ==
            "relative_tick_volume,rms_return_surprise,volatility_regime,"
            "directional_range,close_location,directional_efficiency,"
            "return_sign_persistence,return_direction_imbalance,"
            "directional_adverse_excursion,multi_bar_range_pressure,"
-           "rolling_range_expansion,historical_level_proximity");
+           "rolling_range_expansion,historical_level_proximity,"
+           "return_autocorrelation");
     const auto mask = EA::FeatureAblationMask::Parse(
         " return_direction_imbalance,return_sign_persistence,return_direction_imbalance ");
     assert(mask.CanonicalText() == "return_sign_persistence,return_direction_imbalance");
-    std::vector<float> ablatedInput(52, -1.0f);
+    std::vector<float> ablatedInput(53, -1.0f);
     EA::CopyTensorFeaturesForModelInput(ablatedInput.data(), physicalTensor.data(),
-                                        historicalLevelProximity, mask);
+                                        returnAutocorrelation, mask);
     assert(ablatedInput[causalReturnSignPersistenceCol] == 0.0f);
     assert(ablatedInput[causalReturnDirectionImbalanceCol] == 0.0f);
     assert(ablatedInput[causalDirectionalAdverseExcursionCol] ==
@@ -328,6 +347,21 @@ int main()
         historicalLevelRejectedByPreviousFullWidth = true;
     }
     assert(historicalLevelRejectedByPreviousFullWidth);
+    bool autocorrelationRejectedByPreviousFullWidth = false;
+    try
+    {
+        const auto latestMask = EA::FeatureAblationMask::Parse(
+            "return_autocorrelation");
+        std::vector<float> previousFullWidth(52, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(
+            previousFullWidth.data(), physicalTensor.data(),
+            historicalLevelProximity, latestMask);
+    }
+    catch (const std::runtime_error&)
+    {
+        autocorrelationRejectedByPreviousFullWidth = true;
+    }
+    assert(autocorrelationRejectedByPreviousFullWidth);
     bool unknownFeatureRejected = false;
     try { (void)EA::FeatureAblationMask::Parse("unknown_feature"); }
     catch (const std::invalid_argument&) { unknownFeatureRejected = true; }
@@ -342,7 +376,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53";
     }
     assert(unsupportedRejected);
 

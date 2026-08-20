@@ -25,6 +25,7 @@
 #include "CausalMultiBarRangePressureFeatures.hpp"
 #include "CausalRollingRangeExpansionFeatures.hpp"
 #include "CausalHistoricalLevelProximityFeatures.hpp"
+#include "CausalReturnAutocorrelationFeatures.hpp"
 
 using std::setw;
 
@@ -126,6 +127,10 @@ void Tensor::Add(Feature f)
     const float historicalLevelProximity =
         causalHistoricalLevelProximity.AddCompletedBar(
             f.high, f.low, f.close, epochSeconds);
+    // Tensor rows describe a just-completed bar, so its close-to-close return
+    // is fully known and is the final return in this row's lag-1 window.
+    const float returnAutocorrelation =
+        causalReturnAutocorrelation.AddCompletedClose(f.close);
     causalDirectionalRange.RetainCompletedBar(f.open, f.high, f.low, f.close);
     causalCloseLocation.RetainCompletedBar(f.high, f.low, f.close);
     causalDirectionalPersistence.RetainCompletedClose(f.close);
@@ -152,6 +157,7 @@ void Tensor::Add(Feature f)
         low.MutableRawMemory()[causalMultiBarRangePressureCol] = multiBarRangePressure;
         low.MutableRawMemory()[causalRollingRangeExpansionCol] = rollingRangeExpansion;
         low.MutableRawMemory()[historicalLevelProximityCol] = historicalLevelProximity;
+        low.MutableRawMemory()[returnAutocorrelationCol] = returnAutocorrelation;
         has_prev_close = true;
         prev_close = f.close;
         ds.push_back(std::move(fm));
@@ -413,6 +419,7 @@ void Tensor::Add(Feature f)
     p[causalMultiBarRangePressureCol] = multiBarRangePressure;
     p[causalRollingRangeExpansionCol] = rollingRangeExpansion;
     p[historicalLevelProximityCol] = historicalLevelProximity;
+    p[returnAutocorrelationCol] = returnAutocorrelation;
 
     // Day-of-week cyclical features (sin/cos)
     const int weekSec = 7 * 24 * 60 * 60;

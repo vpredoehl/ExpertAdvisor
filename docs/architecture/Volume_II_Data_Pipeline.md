@@ -1,7 +1,7 @@
 # Volume II — Data Pipeline
 
 Status: Foundation outline
-Version: 0.1.3
+Version: 0.1.4
 Last revised: 2026-08-20
 
 ## 1. Purpose
@@ -133,10 +133,21 @@ corroborated candidates produce `0`. Candidate discovery uses only weeks
 completed before the current bar; no symbol-independent levels or complete-data
 level discovery are permitted.
 
-The current base tensor has 48 columns; its four existing appended return
-channels yield current `n_in=52`. Every historical persisted width remains an
-exact prefix projection, including the immediately preceding `51 -> 47`
-contract; the current mapping is `52 -> 48`.
+Column 48 is the fixed causal lag-1 return autocorrelation over 32 adjacent
+return pairs. For completed bar `t`, valid one-bar returns use the same
+unscaled double-precision representation as the other causal magnitude
+features: `r_j = log(close_j / close_(j-1))`. The row includes the legally
+completed current return and retains the 33-return window `r_(t-32)..r_t`.
+It computes the mean-centered Pearson correlation between the first and last
+32 returns. Fewer than 33 consecutive valid completed returns,
+invalid/non-finite state, or
+either centered sum of squares at or below `1e-24` produces exactly `0`; the
+finite result is clamped to `[-1,1]`. No additional scaling is applied.
+
+The current base tensor has 49 columns; its four existing appended return
+channels yield current `n_in=53`. Every historical persisted width remains an
+exact prefix projection, including the immediately preceding `52 -> 48`
+historical-level-proximity contract; the current mapping is `53 -> 49`.
 
 ## 6. Transactions
 
@@ -243,6 +254,7 @@ and compatibility before implementation.
 
 | Version | Date | Change | ADR |
 |---|---|---|---|
+| 0.1.4 | 2026-08-20 | Added causal 32-pair lag-1 return autocorrelation at column 48 and the 49/53 input contract. | — |
 | 0.1.3 | 2026-08-20 | Added causal historical-level proximity at column 47 and the 48/52 input contract. | — |
 | 0.1.2 | 2026-08-15 | Added causal 32-bar RMS-normalized close-return surprise at column 37 and the 38/42 input contract. | — |
 | 0.1.1 | 2026-08-15 | Recorded the fixed causal 32-bar relative tick-volume feature and 37/41 input contract. | — |

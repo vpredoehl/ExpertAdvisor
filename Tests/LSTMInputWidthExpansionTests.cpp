@@ -86,17 +86,17 @@ int main()
     constexpr std::size_t hiddenSize = 3;
     constexpr std::size_t gateColumns = 4 * hiddenSize;
     constexpr std::size_t sourceWidth =
-        EA::kCausalRollingRangeExpansionModelInputWidth;
+        EA::kHistoricalLevelProximityModelInputWidth;
     constexpr std::size_t expandedWidth = EA::kCurrentModelInputWidth;
-    static_assert(sourceWidth == 51);
-    static_assert(expandedWidth == 52);
+    static_assert(sourceWidth == 52);
+    static_assert(expandedWidth == 53);
 
     const EA::InputWidthExpansionPlan plan =
         EA::BuildInputWidthExpansionPlan(sourceWidth);
-    assert(plan.sourceTensorFeatureCount == 47);
-    assert(plan.expandedTensorFeatureCount == 48);
+    assert(plan.sourceTensorFeatureCount == 48);
+    assert(plan.expandedTensorFeatureCount == 49);
     assert(plan.newlyIntroducedTensorFeatures ==
-           std::vector<std::string>{"historical_level_proximity"});
+           std::vector<std::string>{"return_autocorrelation"});
 
     std::vector<float> source((sourceWidth + hiddenSize) * gateColumns);
     for (std::size_t i = 0; i < source.size(); ++i)
@@ -218,11 +218,11 @@ int main()
     std::vector<float> physical(feature_size, 2.0f);
     std::vector<float> currentInput(EA::kCurrentModelInputWidth, -1.0f);
     const auto ablation = EA::FeatureAblationMask::Parse(
-        "historical_level_proximity");
+        "return_autocorrelation");
     EA::CopyTensorFeaturesForModelInput(currentInput.data(), physical.data(),
                                         currentContract, ablation);
     assert(currentInput.size() == expandedWidth);
-    assert(currentInput[historicalLevelProximityCol] == 0.0f);
+    assert(currentInput[returnAutocorrelationCol] == 0.0f);
 
     // Ordinary historical-width projection remains unchanged.
     const auto legacyContract = EA::ResolveModelInputContract(
@@ -241,66 +241,77 @@ int main()
     assert(std::memcmp(expanded.data(), reloadedExpanded.data(),
                        expanded.size() * sizeof(float)) == 0);
 
-    // Simulate the real append-only lifecycle beyond the currently compiled
-    // layout.  B records its immutable 51 -> 52 event under V1.  V2 adds one
-    // registered feature at width 53, and V3 adds another at width 54.
-    constexpr std::size_t v2Width = expandedWidth + 1;
-    constexpr std::size_t v3Width = v2Width + 1;
-    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 3>
+    // The prior 51 -> 52 V1 event remains valid under the compiled V2 layout.
+    const EA::InputWidthExpansionPlan v1Plan =
+        EA::BuildRegisteredInputWidthExpansionPlan(
+            EA::kCausalRollingRangeExpansionModelInputWidth, sourceWidth,
+            EA::kRegisteredModelInputWidths,
+            EA::kAppendedTensorFeatureSemantics);
+    const auto v1Provenance = EA::MakeInputWidthExpansionProvenance(
+        9876543209LL, v1Plan, 1, EA::kModelInputSemanticLayoutRegistry,
+        EA::kRegisteredModelInputWidths, EA::kAppendedTensorFeatureSemantics,
+        EA::kModelInputSemanticLayoutVersion, EA::kCurrentModelInputWidth);
+    assert(EA::ParseInputWidthExpansionProvenance(
+               v1Provenance.CanonicalText()).semanticLayoutVersion == 1);
+
+    // Simulate two further append-only generations. The compiled V2 event
+    // remains immutable and can itself be a source for a later expansion.
+    constexpr std::size_t v3Width = expandedWidth + 1;
+    constexpr std::size_t v4Width = v3Width + 1;
+    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 4>
         futureRegistry{{
-            {1, expandedWidth, 0},
-            {2, v2Width, 1},
+            {1, sourceWidth, 0},
+            {2, expandedWidth, 1},
             {3, v3Width, 2},
+            {4, v4Width, 3},
         }};
     std::vector<std::size_t> futureWidths{
         EA::kRegisteredModelInputWidths.begin(),
         EA::kRegisteredModelInputWidths.end()};
-    futureWidths.push_back(v2Width);
     futureWidths.push_back(v3Width);
+    futureWidths.push_back(v4Width);
     std::vector<EA::AppendedTensorFeatureSemantic> futureSemantics{
         EA::kAppendedTensorFeatureSemantics.begin(),
         EA::kAppendedTensorFeatureSemantics.end()};
     futureSemantics.push_back({expandedWidth - EA::kModelReturnFeatureCount,
-                               "synthetic_v2_feature"});
-    futureSemantics.push_back({v2Width - EA::kModelReturnFeatureCount,
                                "synthetic_v3_feature"});
+    futureSemantics.push_back({v3Width - EA::kModelReturnFeatureCount,
+                               "synthetic_v4_feature"});
 
-    const auto historicalUnderV2 =
-        EA::ParseInputWidthExpansionProvenance(
-            encoded, futureRegistry, futureWidths, futureSemantics, 2,
-            v2Width);
     const auto historicalUnderV3 =
         EA::ParseInputWidthExpansionProvenance(
             encoded, futureRegistry, futureWidths, futureSemantics, 3,
             v3Width);
-    assert(historicalUnderV2.semanticLayoutVersion == 1);
-    assert(historicalUnderV3.semanticLayoutVersion == 1);
-    assert(historicalUnderV3.expandedInputWidth == expandedWidth);
+    const auto historicalUnderV4 =
+        EA::ParseInputWidthExpansionProvenance(
+            encoded, futureRegistry, futureWidths, futureSemantics, 4,
+            v4Width);
+    assert(historicalUnderV3.semanticLayoutVersion == 2);
+    assert(historicalUnderV4.semanticLayoutVersion == 2);
+    assert(historicalUnderV4.expandedInputWidth == expandedWidth);
 
-    // B can be re-expanded to C under V2.  C records only the new V2 event;
-    // B's already-persisted V1 evidence remains byte-for-byte unchanged.
-    const EA::InputWidthExpansionPlan v2Plan =
+    const EA::InputWidthExpansionPlan v3Plan =
         EA::BuildRegisteredInputWidthExpansionPlan(
-            expandedWidth, v2Width, futureWidths, futureSemantics);
-    const auto v2Provenance = EA::MakeInputWidthExpansionProvenance(
-        9876543211LL, v2Plan, 2, futureRegistry, futureWidths,
-        futureSemantics, 2, v2Width);
-    assert(v2Provenance.sourceInputWidth == expandedWidth);
-    assert(v2Provenance.expandedInputWidth == v2Width);
-    assert(v2Provenance.semanticLayoutVersion == 2);
-    assert(v2Provenance.newlyIntroducedTensorFeatures ==
-           std::vector<std::string>{"synthetic_v2_feature"});
-    assert(provenance.CanonicalText() == encoded);
-    const auto v2UnderV3 = EA::ParseInputWidthExpansionProvenance(
-        v2Provenance.CanonicalText(), futureRegistry, futureWidths,
+            expandedWidth, v3Width, futureWidths, futureSemantics);
+    const auto v3Provenance = EA::MakeInputWidthExpansionProvenance(
+        9876543211LL, v3Plan, 3, futureRegistry, futureWidths,
         futureSemantics, 3, v3Width);
-    assert(v2UnderV3.semanticLayoutVersion == 2);
+    assert(v3Provenance.sourceInputWidth == expandedWidth);
+    assert(v3Provenance.expandedInputWidth == v3Width);
+    assert(v3Provenance.semanticLayoutVersion == 3);
+    assert(v3Provenance.newlyIntroducedTensorFeatures ==
+           std::vector<std::string>{"synthetic_v3_feature"});
+    assert(provenance.CanonicalText() == encoded);
+    const auto v3UnderV4 = EA::ParseInputWidthExpansionProvenance(
+        v3Provenance.CanonicalText(), futureRegistry, futureWidths,
+        futureSemantics, 4, v4Width);
+    assert(v3UnderV4.semanticLayoutVersion == 3);
 
     ExpectFailureContaining(
         [] { (void)EA::BuildInputWidthExpansionPlan(37); },
         "MODEL_INPUT_WIDTH_UNSUPPORTED");
     ExpectFailureContaining(
-        [] { (void)EA::BuildInputWidthExpansionPlan(53); },
+        [] { (void)EA::BuildInputWidthExpansionPlan(54); },
         "SOURCE_WIDER_THAN_TARGET");
     ExpectFailureContaining(
         [] {
@@ -316,36 +327,37 @@ int main()
         },
         "PARAMETER_SHAPE_MISMATCH");
     EA::ValidateModelInputSemanticMetadataForExpansion(
-        1, 1, expandedWidth, futureRegistry, futureWidths, 2, v2Width);
+        1, 2, expandedWidth, futureRegistry, futureWidths, 3, v3Width);
     EA::ValidateModelInputSemanticMetadataForExpansion(
-        1, 1, expandedWidth, futureRegistry, futureWidths, 3,
-        v3Width);
+        1, 2, expandedWidth, futureRegistry, futureWidths, 4,
+        v4Width);
 
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                1, 999, expandedWidth, futureRegistry, futureWidths, 2,
-                v2Width);
+                1, 999, expandedWidth, futureRegistry, futureWidths, 3,
+                v3Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                1, 1, v2Width, futureRegistry, futureWidths, 2,
-                v2Width);
+                1, 1, expandedWidth, futureRegistry, futureWidths, 3,
+                v3Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
 
-    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 2>
+    constexpr std::array<EA::ModelInputSemanticLayoutRegistryEntry, 3>
         incompatibleFutureRegistry{{
-            {1, expandedWidth, 0},
-            {2, v2Width, 0},
+            {1, sourceWidth, 0},
+            {2, expandedWidth, 1},
+            {3, v3Width, 0},
         }};
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                1, 1, expandedWidth, incompatibleFutureRegistry,
-                futureWidths, 2, v2Width);
+                1, 2, expandedWidth, incompatibleFutureRegistry,
+                futureWidths, 3, v3Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
 
@@ -370,37 +382,37 @@ int main()
     ExpectFailureContaining(
         [&] {
             EA::ValidateModelInputSemanticMetadataForExpansion(
-                999, 1, expandedWidth, futureRegistry, futureWidths, 2,
-                v2Width);
+                999, 2, expandedWidth, futureRegistry, futureWidths, 3,
+                v3Width);
         },
         "SEMANTIC_METADATA_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string unknownLayout = encoded;
-            const std::string needle = "semantic_layout=1";
+            const std::string needle = "semantic_layout=2";
             unknownLayout.replace(unknownLayout.find(needle), needle.size(),
                                   "semantic_layout=999");
             (void)EA::ParseInputWidthExpansionProvenance(
                 unknownLayout, futureRegistry, futureWidths, futureSemantics,
-                2, v2Width);
+                3, v3Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string impossibleWidth = encoded;
-            const std::string needle = "semantic_layout=1";
+            const std::string needle = "semantic_layout=2";
             impossibleWidth.replace(impossibleWidth.find(needle), needle.size(),
-                                    "semantic_layout=2");
+                                    "semantic_layout=1");
             (void)EA::ParseInputWidthExpansionProvenance(
                 impossibleWidth, futureRegistry, futureWidths,
-                futureSemantics, 2, v2Width);
+                futureSemantics, 3, v3Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             (void)EA::ParseInputWidthExpansionProvenance(
                 encoded, incompatibleFutureRegistry, futureWidths,
-                futureSemantics, 2, v2Width);
+                futureSemantics, 3, v3Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
@@ -411,37 +423,37 @@ int main()
                                 "initialization=random");
             (void)EA::ParseInputWidthExpansionProvenance(
                 wrongPolicy, futureRegistry, futureWidths, futureSemantics,
-                2, v2Width);
+                3, v3Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string wrongColumns = encoded;
-            const std::string needle = "new_tensor_columns=47:48";
+            const std::string needle = "new_tensor_columns=48:49";
             wrongColumns.replace(wrongColumns.find(needle), needle.size(),
-                                 "new_tensor_columns=46:48");
+                                 "new_tensor_columns=47:49");
             (void)EA::ParseInputWidthExpansionProvenance(
                 wrongColumns, futureRegistry, futureWidths, futureSemantics,
-                2, v2Width);
+                3, v3Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string wrongFeatures = encoded;
             const std::string needle =
-                "new_tensor_features=historical_level_proximity";
+                "new_tensor_features=return_autocorrelation";
             wrongFeatures.replace(
                 wrongFeatures.find(needle), needle.size(),
                 "new_tensor_features=wrong_feature");
             (void)EA::ParseInputWidthExpansionProvenance(
                 wrongFeatures, futureRegistry, futureWidths, futureSemantics,
-                2, v2Width);
+                3, v3Width);
         },
         "PROVENANCE_INCOMPATIBLE");
     ExpectFailureContaining(
         [&] {
             std::string malformed = encoded;
-            const std::string needle = "source_input_width=51";
+            const std::string needle = "source_input_width=52";
             malformed.replace(malformed.find(needle), needle.size(),
                               "source_input_width=-1");
             (void)EA::ParseInputWidthExpansionProvenance(malformed);

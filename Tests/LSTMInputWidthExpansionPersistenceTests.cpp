@@ -115,7 +115,7 @@ int main()
             transaction, sourceModelId, "model_input_semantics_meta");
         assert(dims.n_rows == 1);
         assert(dims.n_cols == 2);
-        assert(values == std::vector<double>({1.0, 1.0}));
+        assert(values == std::vector<double>({1.0, 2.0}));
         transaction.commit();
     }
 

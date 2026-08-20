@@ -111,10 +111,10 @@ void TestCausalWindowWarmupAndEviction()
 void TestTensorIntegrationCausalityAndAblation()
 {
     static_assert(causalMultiBarRangePressureCol == 45);
-    static_assert(feature_size == 48);
+    static_assert(feature_size == 49);
     static_assert(EA::kCausalDirectionalAdverseExcursionModelInputWidth == 49);
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
-    static_assert(EA::kCurrentModelInputWidth == 52);
+    static_assert(EA::kCurrentModelInputWidth == 53);
 
     Tensor tensor{"causal-multi-bar-range-pressure"};
     for (std::size_t row = 0; row < 15; ++row)

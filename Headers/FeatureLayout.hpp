@@ -55,7 +55,11 @@ inline constexpr std::size_t historicalLevelProximityCol =
     causal_rolling_range_expansion_feature_size;
 inline constexpr std::size_t historical_level_proximity_feature_size =
     historicalLevelProximityCol + 1;
-inline constexpr std::size_t feature_size =
+inline constexpr std::size_t returnAutocorrelationCol =
     historical_level_proximity_feature_size;
+inline constexpr std::size_t return_autocorrelation_feature_size =
+    returnAutocorrelationCol + 1;
+inline constexpr std::size_t feature_size =
+    return_autocorrelation_feature_size;
 
 #endif /* FeatureLayout_hpp */

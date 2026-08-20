@@ -485,6 +485,8 @@ RecommendationSemanticConfigurationVersionFromCanonicalText(
         "experiment_recommendation_semantic_configuration_v16;";
     constexpr std::string_view kV17 =
         "experiment_recommendation_semantic_configuration_v17;";
+    constexpr std::string_view kV18 =
+        "experiment_recommendation_semantic_configuration_v18;";
     if (canonicalText.starts_with(kV3))
         return RecommendationSemanticConfigurationVersion::v3;
     if (canonicalText.starts_with(kV4))
@@ -515,6 +517,8 @@ RecommendationSemanticConfigurationVersionFromCanonicalText(
         return RecommendationSemanticConfigurationVersion::v16;
     if (canonicalText.starts_with(kV17))
         return RecommendationSemanticConfigurationVersion::v17;
+    if (canonicalText.starts_with(kV18))
+        return RecommendationSemanticConfigurationVersion::v18;
     return std::nullopt;
 }
 
@@ -577,7 +581,8 @@ FeatureWarmupScope RecommendationFeatureWarmupScopeFromCanonicalText(
         *version != RecommendationSemanticConfigurationVersion::v14 &&
         *version != RecommendationSemanticConfigurationVersion::v15 &&
         *version != RecommendationSemanticConfigurationVersion::v16 &&
-        *version != RecommendationSemanticConfigurationVersion::v17)
+        *version != RecommendationSemanticConfigurationVersion::v17 &&
+        *version != RecommendationSemanticConfigurationVersion::v18)
         return FeatureWarmupScope::LegacyColdBoundary;
     constexpr std::string_view kField = ";feature_warmup_scope=";
     const std::size_t fieldStart = canonicalText.rfind(kField);
@@ -631,7 +636,8 @@ std::size_t RecommendationDonchianLookbackFromCanonicalText(
         *version != RecommendationSemanticConfigurationVersion::v14 &&
         *version != RecommendationSemanticConfigurationVersion::v15 &&
         *version != RecommendationSemanticConfigurationVersion::v16 &&
-        *version != RecommendationSemanticConfigurationVersion::v17)
+        *version != RecommendationSemanticConfigurationVersion::v17 &&
+        *version != RecommendationSemanticConfigurationVersion::v18)
         return kDefaultDonchianLookback;
     constexpr std::string_view kField = ";donchian_lookback=";
     const std::size_t fieldStart = canonicalText.find(kField);
@@ -748,7 +754,8 @@ std::string EffectiveExperimentConfigurationCanonicalText(
         version == RecommendationSemanticConfigurationVersion::v13 ? 13 :
         version == RecommendationSemanticConfigurationVersion::v14 ? 14 :
         version == RecommendationSemanticConfigurationVersion::v15 ? 15 :
-        version == RecommendationSemanticConfigurationVersion::v16 ? 16 : 17;
+        version == RecommendationSemanticConfigurationVersion::v16 ? 16 :
+        version == RecommendationSemanticConfigurationVersion::v17 ? 17 : 18;
     out << "experiment_recommendation_semantic_configuration_v"
         << versionNumber
         << ";symbol=" << symbol
@@ -779,7 +786,8 @@ std::string EffectiveExperimentConfigurationCanonicalText(
         version == RecommendationSemanticConfigurationVersion::v14 ||
         version == RecommendationSemanticConfigurationVersion::v15 ||
         version == RecommendationSemanticConfigurationVersion::v16 ||
-        version == RecommendationSemanticConfigurationVersion::v17)
+        version == RecommendationSemanticConfigurationVersion::v17 ||
+        version == RecommendationSemanticConfigurationVersion::v18)
         out << ";feature_warmup_scope=" << FeatureWarmupScopeText(
             configuration.featureWarmupScope);
     if (version == RecommendationSemanticConfigurationVersion::v6 ||
@@ -793,7 +801,8 @@ std::string EffectiveExperimentConfigurationCanonicalText(
         version == RecommendationSemanticConfigurationVersion::v14 ||
         version == RecommendationSemanticConfigurationVersion::v15 ||
         version == RecommendationSemanticConfigurationVersion::v16 ||
-        version == RecommendationSemanticConfigurationVersion::v17)
+        version == RecommendationSemanticConfigurationVersion::v17 ||
+        version == RecommendationSemanticConfigurationVersion::v18)
         out << ";donchian_lookback="
             << ValidateDonchianLookback(configuration.donchianLookback);
     return out.str();

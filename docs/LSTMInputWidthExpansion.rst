@@ -80,6 +80,13 @@ width-53 expansion under V2.  The width-52 model retains its V1 event; the new
 width-53 descendant records a new V2 event whose source is the width-52 model.
 The durable parent chain preserves the earlier history.
 
+The current V2 generation appends Tensor column 48,
+``return_autocorrelation``.  An explicit expansion from the immediately
+preceding width 52 to current width 53 uses the generic ``zero`` policy for
+that new input-facing weight row, relocates the four return rows unchanged,
+and leaves ordinary width-52 load, inference, and resume as exact 48-column
+historical-prefix operations.
+
 The experiment row persists ``resume_expand_input_width=true``.  Scheduler
 retries forward the same opt-in.  A retry from an already widened checkpoint is
 accepted only when that checkpoint contains valid expansion provenance, its

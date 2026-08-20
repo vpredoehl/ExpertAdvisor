@@ -44,13 +44,15 @@ inline constexpr std::size_t kCausalRollingRangeExpansionModelInputWidth =
     causal_rolling_range_expansion_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kHistoricalLevelProximityModelInputWidth =
     historical_level_proximity_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kReturnAutocorrelationModelInputWidth =
+    return_autocorrelation_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kCurrentModelInputWidth =
-    kHistoricalLevelProximityModelInputWidth;
+    kReturnAutocorrelationModelInputWidth;
 
 // Every persisted width whose Tensor portion has a registered, stable
 // semantic prefix.  Append-only feature additions must retain these entries
 // and append their new width.
-inline constexpr std::array<std::size_t, 15> kRegisteredModelInputWidths{{
+inline constexpr std::array<std::size_t, 16> kRegisteredModelInputWidths{{
     kLegacyModelInputWidth,
     kDonchianModelInputWidth,
     kSessionPhaseModelInputWidth,
@@ -66,6 +68,7 @@ inline constexpr std::array<std::size_t, 15> kRegisteredModelInputWidths{{
     kCausalMultiBarRangePressureModelInputWidth,
     kCausalRollingRangeExpansionModelInputWidth,
     kHistoricalLevelProximityModelInputWidth,
+    kReturnAutocorrelationModelInputWidth,
 }};
 
 struct ModelInputContract
@@ -108,6 +111,9 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
         case kCausalRollingRangeExpansionModelInputWidth:
             return {modelInputWidth,
                     causal_rolling_range_expansion_feature_size, 0};
+        case kHistoricalLevelProximityModelInputWidth:
+            return {modelInputWidth,
+                    historical_level_proximity_feature_size, 0};
         case kCurrentModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
@@ -128,7 +134,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kCausalDirectionalAdverseExcursionModelInputWidth) +
                 ":" + std::to_string(kCausalMultiBarRangePressureModelInputWidth) +
                 ":" + std::to_string(kCausalRollingRangeExpansionModelInputWidth) +
-                ":" + std::to_string(kHistoricalLevelProximityModelInputWidth));
+                ":" + std::to_string(kHistoricalLevelProximityModelInputWidth) +
+                ":" + std::to_string(kReturnAutocorrelationModelInputWidth));
     }
 }
 

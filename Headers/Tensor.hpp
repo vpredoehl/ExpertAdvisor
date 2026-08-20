@@ -32,6 +32,7 @@
 #include "CausalMultiBarRangePressureFeatures.hpp"
 #include "CausalRollingRangeExpansionFeatures.hpp"
 #include "CausalHistoricalLevelProximityFeatures.hpp"
+#include "CausalReturnAutocorrelationFeatures.hpp"
 
 using std::string;
 using std::list;
@@ -89,6 +90,7 @@ class Tensor
     CausalMultiBarRangePressure causalMultiBarRangePressure;
     CausalRollingRangeExpansion causalRollingRangeExpansion;
     CausalHistoricalLevelProximity causalHistoricalLevelProximity;
+    CausalReturnAutocorrelation32 causalReturnAutocorrelation;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
