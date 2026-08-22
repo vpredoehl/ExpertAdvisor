@@ -37,6 +37,8 @@
 		0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */; };
 		0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
 		0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */; };
+		0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
+		0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C7500003175000100AAA001 /* CheckpointPolicy.cpp */; };
 		0A31000230A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
 		0A31000330A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */; };
 		0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0A4000002FB0000100AAA001 /* RunMetadata.cpp */; };
@@ -331,6 +333,8 @@
 		0A10000B2F70000100AAA001 /* LSTM_Release */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = LSTM_Release; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ExperimentMetaAnalyzer.cpp; sourceTree = "<group>"; };
 		0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ExperimentScheduler.cpp; path = Sources/ExperimentScheduler.cpp; sourceTree = SOURCE_ROOT; };
+		0C7500003175000100AAA001 /* CheckpointPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CheckpointPolicy.cpp; path = Sources/CheckpointPolicy.cpp; sourceTree = SOURCE_ROOT; };
+		0C7500013175000100AAA001 /* CheckpointPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CheckpointPolicy.hpp; path = Sources/CheckpointPolicy.hpp; sourceTree = SOURCE_ROOT; };
 		0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = GlobalExperimentControl.cpp; path = Sources/GlobalExperimentControl.cpp; sourceTree = SOURCE_ROOT; };
 		0A31000130A0000100AAA001 /* GlobalExperimentControl.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = GlobalExperimentControl.hpp; path = Sources/GlobalExperimentControl.hpp; sourceTree = SOURCE_ROOT; };
 		0A4000002FB0000100AAA001 /* RunMetadata.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = RunMetadata.cpp; path = Sources/RunMetadata.cpp; sourceTree = SOURCE_ROOT; };
@@ -603,6 +607,8 @@
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */,
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
+				0C7500003175000100AAA001 /* CheckpointPolicy.cpp */,
+				0C7500013175000100AAA001 /* CheckpointPolicy.hpp */,
 				0A31000030A0000100AAA001 /* GlobalExperimentControl.cpp */,
 				0A31000130A0000100AAA001 /* GlobalExperimentControl.hpp */,
 				0A5000002FC0000100AAA001 /* ContinuationPolicy.cpp */,
@@ -992,6 +998,7 @@
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0C7500023175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0A31000230A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
 				0A5000042FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
 				0A5000062FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,
@@ -1100,6 +1107,7 @@
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
+				0C7500033175000100AAA001 /* CheckpointPolicy.cpp in Sources */,
 				0A31000330A0000100AAA001 /* GlobalExperimentControl.cpp in Sources */,
 				0A5000052FC0000100AAA001 /* ContinuationPolicy.cpp in Sources */,
 				0A5000072FC0000100AAA001 /* ContinuationPolicyInheritance.cpp in Sources */,

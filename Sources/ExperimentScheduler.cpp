@@ -35,6 +35,7 @@
 #include "GlobalExperimentControl.hpp"
 #include "CanonicalSymbol.hpp"
 #include "ExperimentCurrentOperation.hpp"
+#include "CheckpointPolicy.hpp"
 #include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
 #include "ContinuationPolicyPersistence.hpp"
@@ -122,6 +123,7 @@ struct SchedulerOptions
     std::optional<long long> retryFailedExperimentId;
     std::optional<long long> retryCheckpointEvalId;
     std::optional<long long> evaluateCheckpointPolicyEvalId;
+    std::optional<long long> checkpointPolicyStatusEvalId;
     std::optional<long long> enableContinuationPolicyExperimentId;
     std::optional<long long> disableContinuationPolicyExperimentId;
     std::optional<std::pair<long long, std::string>> setContinuationPolicy;
@@ -876,39 +878,42 @@ struct AnalysisScopeOptions
     std::optional<long long> parentExperimentId;
 };
 
-struct CheckpointPolicyConfig
-{
-    bool enabled = false;
-    bool checkpointInferEnabled = false;
-    std::optional<double> minLeaderScore;
-    std::optional<double> minInferAccuracy;
-    std::optional<int> topN;
-    std::string scope = "symbol_horizon";
-    std::string stopMode = "next_checkpoint";
-    int graceEvals = 1;
-    int checkpointInterval = 20;
-    int targetEpochs = 0;
-    std::optional<int> currentEpoch;
-    std::optional<int> stopAfterCheckpointEpoch;
-    std::string status;
-    std::string phase;
-};
-
-struct CheckpointPolicyDecision
-{
-    std::string decision = "skipped";
-    std::string reason;
-    std::optional<int> rankValue;
-    std::optional<int> requestedStopEpoch;
-    std::vector<std::string> passedRules;
-    std::vector<std::string> failedRules;
-};
-
 struct CheckpointPolicyEvaluationResult
 {
     bool evaluated = false;
     std::string decision = "skipped";
     std::string reason;
+};
+
+struct ValidatedCheckpointPolicyEvidence
+{
+    ParsedMetrics metrics;
+    std::optional<double> leaderScore;
+    long long analysisId = -1;
+    long long inferenceEvalResultId = -1;
+    std::string inferenceFromDate;
+    std::string inferenceToDate;
+};
+
+struct CheckpointPolicyPopulation
+{
+    int count = 0;
+    std::optional<int> rankValue;
+    std::string watermark;
+};
+
+struct PersistedCheckpointPolicyDecision
+{
+    long long decisionId = -1;
+    std::string identityStatus;
+    bool reused = false;
+};
+
+struct CheckpointPolicyDecisionContext
+{
+    CheckpointPolicyDecision decision;
+    CheckpointPolicyPopulation completedPopulation;
+    CheckpointPolicyPopulation rankPopulation;
 };
 
 bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
@@ -949,6 +954,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--retry-failed-experiment" ||
             arg == "--retry-checkpoint-eval" ||
             arg == "--evaluate-checkpoint-policy" ||
+            arg == "--checkpoint-policy-status" ||
             arg == "--enable-continuation-policy" ||
             arg == "--disable-continuation-policy" ||
             arg == "--set-continuation-policy" ||
@@ -1910,6 +1916,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.retryCheckpointEvalId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--evaluate-checkpoint-policy")
             options.evaluateCheckpointPolicyEvalId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--checkpoint-policy-status")
+            options.checkpointPolicyStatusEvalId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--enable-continuation-policy")
             options.enableContinuationPolicyExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--disable-continuation-policy")
@@ -3001,6 +3009,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.retryCheckpointEvalId = ParsePositiveLongLong("--retry-checkpoint-eval", value);
         else if (SplitOptionWithValue(arg, "--evaluate-checkpoint-policy", value))
             options.evaluateCheckpointPolicyEvalId = ParsePositiveLongLong("--evaluate-checkpoint-policy", value);
+        else if (SplitOptionWithValue(arg, "--checkpoint-policy-status", value))
+            options.checkpointPolicyStatusEvalId = ParsePositiveLongLong("--checkpoint-policy-status", value);
         else if (SplitOptionWithValue(arg, "--enable-continuation-policy", value))
             options.enableContinuationPolicyExperimentId = ParsePositiveLongLong("--enable-continuation-policy", value);
         else if (SplitOptionWithValue(arg, "--disable-continuation-policy", value))
@@ -3649,6 +3659,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.retryFailedExperimentId.has_value() ? 1 : 0) +
         (options.retryCheckpointEvalId.has_value() ? 1 : 0) +
         (options.evaluateCheckpointPolicyEvalId.has_value() ? 1 : 0) +
+        (options.checkpointPolicyStatusEvalId.has_value() ? 1 : 0) +
         (options.enableContinuationPolicyExperimentId.has_value() ? 1 : 0) +
         (options.disableContinuationPolicyExperimentId.has_value() ? 1 : 0) +
         (options.setContinuationPolicy.has_value() ? 1 : 0) +
@@ -7731,7 +7742,9 @@ CheckpointPolicyConfig LoadCheckpointPolicyControlConfig(
     }
     if (!hasInferExpression)
         sql << "false";
-    sql << ") AS checkpoint_infer_active FROM experiment WHERE experiment_id = $1;";
+    sql << ") AS checkpoint_infer_active, checkpoint_policy_revision, "
+        << "checkpoint_policy_hash, active_scheduler_worker_attempt_id "
+        << "FROM experiment WHERE experiment_id = $1 FOR UPDATE;";
 
     pqxx::result rows = w.exec_params(sql.str(), experimentId);
     if (rows.empty())
@@ -7755,6 +7768,9 @@ CheckpointPolicyConfig LoadCheckpointPolicyControlConfig(
     config.status = rows[0][11].as<std::string>();
     config.phase = rows[0][12].as<std::string>();
     config.checkpointInferEnabled = rows[0][13].as<bool>();
+    config.policyRevision = rows[0][14].as<long long>();
+    config.persistedPolicyHash = OptionalStringCell(rows[0], 15);
+    config.activeTrainingAttemptId = OptionalLongLongCell(rows[0], 16);
     return config;
 }
 
@@ -7991,15 +8007,30 @@ int RunCheckpointControlCommand(const SchedulerOptions& options)
             w.commit();
             return 1;
         }
-        w.exec_params(
+        CheckpointPolicyConfig resultingConfig = config;
+        resultingConfig.enabled = enabled;
+        const bool changed =
+            CheckpointPolicyCanonicalText(config) !=
+            CheckpointPolicyCanonicalText(resultingConfig);
+        const std::string resultingHash =
+            CheckpointPolicySemanticHash(resultingConfig);
+        pqxx::result revised = w.exec_params(
             "UPDATE experiment "
-            "SET checkpoint_policy_enabled = $1, updated_at = now() "
-            "WHERE experiment_id = $2;",
+            "SET checkpoint_policy_enabled = $1, "
+            "checkpoint_policy_revision = checkpoint_policy_revision + "
+            "CASE WHEN $2 THEN 1 ELSE 0 END, "
+            "checkpoint_policy_hash = $3, updated_at = now() "
+            "WHERE experiment_id = $4 "
+            "RETURNING checkpoint_policy_revision;",
             enabled,
+            changed,
+            resultingHash,
             experimentId);
         w.commit();
         std::cout << (enabled ? "CHECKPOINT_POLICY_ENABLED" : "CHECKPOINT_POLICY_DISABLED")
                   << ",experiment_id=" << experimentId
+                  << ",policy_revision=" << revised[0][0].as<long long>()
+                  << ",policy_hash=" << resultingHash
                   << std::endl;
         return 0;
     }
@@ -8036,8 +8067,21 @@ int RunCheckpointControlCommand(const SchedulerOptions& options)
             w.commit();
             return 1;
         }
+        const bool changed =
+            CheckpointPolicyCanonicalText(resultingConfig) !=
+            CheckpointPolicyCanonicalText(
+                LoadCheckpointPolicyControlConfig(
+                    w,
+                    experimentId,
+                    hasCheckpointInferEnabled,
+                    hasOpportunisticCheckpointInfer));
+        const std::string resultingHash =
+            CheckpointPolicySemanticHash(resultingConfig);
         std::ostringstream sql;
-        sql << "UPDATE experiment SET updated_at = now()";
+        sql << "UPDATE experiment SET updated_at = now(), "
+            << "checkpoint_policy_hash = " << w.quote(resultingHash)
+            << ", checkpoint_policy_revision = checkpoint_policy_revision + "
+            << (changed ? "1" : "0");
         if (update.checkpointPolicySetKeys.count("min_leader_score"))
             sql << ", checkpoint_policy_min_leader_score = " << FormatDouble(*update.checkpointPolicyMinLeaderScore);
         if (update.checkpointPolicySetKeys.count("min_infer_accuracy"))
@@ -8050,12 +8094,15 @@ int RunCheckpointControlCommand(const SchedulerOptions& options)
             sql << ", checkpoint_policy_stop_mode = " << w.quote(update.checkpointPolicyStopMode);
         if (update.checkpointPolicySetKeys.count("grace_evals"))
             sql << ", checkpoint_policy_grace_evals = " << update.checkpointPolicyGraceEvals;
-        sql << " WHERE experiment_id = " << experimentId << ";";
-        w.exec(sql.str());
+        sql << " WHERE experiment_id = " << experimentId
+            << " RETURNING checkpoint_policy_revision;";
+        pqxx::result revised = w.exec(sql.str());
         w.commit();
         std::cout << "CHECKPOINT_POLICY_SET"
                   << ",experiment_id=" << experimentId
                   << ",rules=" << CheckpointPolicyRuleText(resultingConfig)
+                  << ",policy_revision=" << revised[0][0].as<long long>()
+                  << ",policy_hash=" << resultingHash
                   << std::endl;
         return 0;
     }
@@ -11520,11 +11567,16 @@ void UpsertAnalysisResult(pqxx::work& w,
 bool CheckpointPolicySchemaExists(pqxx::work& w)
 {
     return ColumnExists(w, "experiment", "checkpoint_policy_enabled") &&
+           ColumnExists(w, "experiment", "checkpoint_policy_revision") &&
+           ColumnExists(w, "experiment", "checkpoint_policy_hash") &&
+           ColumnExists(w, "experiment", "checkpoint_policy_last_decision_id") &&
+           ColumnExists(w, "experiment", "checkpoint_policy_stop_decision_id") &&
            ColumnExists(w, "experiment_analysis_result", "analysis_scope") &&
            ColumnExists(w, "experiment_analysis_result", "checkpoint_eval_id") &&
            ColumnExists(w, "experiment_analysis_result", "checkpoint_epoch") &&
            ColumnExists(w, "experiment_analysis_result", "parent_experiment_id") &&
            ColumnExists(w, "experiment_checkpoint_eval", "analysis_id") &&
+           ColumnExists(w, "experiment_checkpoint_decision", "evidence_watermark") &&
            TableExists(w, "experiment_checkpoint_decision");
 }
 
@@ -11540,7 +11592,9 @@ std::optional<CheckpointPolicyConfig> LoadCheckpointPolicyConfig(pqxx::work& w,
         "checkpoint_policy_top_n, checkpoint_policy_scope, checkpoint_policy_stop_mode, "
         "checkpoint_policy_grace_evals, checkpoint_interval, target_epochs, current_epoch, "
         "stop_after_checkpoint_epoch, status, phase, "
-        "(checkpoint_infer_enabled OR opportunistic_checkpoint_infer) AS checkpoint_infer_active "
+        "(checkpoint_infer_enabled OR opportunistic_checkpoint_infer) AS checkpoint_infer_active, "
+        "checkpoint_policy_revision, checkpoint_policy_hash, "
+        "active_scheduler_worker_attempt_id "
         "FROM experiment "
         "WHERE experiment_id = $1 "
         "FOR UPDATE;",
@@ -11566,22 +11620,27 @@ std::optional<CheckpointPolicyConfig> LoadCheckpointPolicyConfig(pqxx::work& w,
     config.status = rows[0][11].as<std::string>();
     config.phase = rows[0][12].as<std::string>();
     config.checkpointInferEnabled = rows[0][13].as<bool>();
+    config.policyRevision = rows[0][14].as<long long>();
+    config.persistedPolicyHash = OptionalStringCell(rows[0], 15);
+    config.activeTrainingAttemptId = OptionalLongLongCell(rows[0], 16);
     return config;
 }
 
 bool LoadValidatedCheckpointPolicyAnalysis(
     pqxx::work& w,
     const CheckpointEvalRow& eval,
-    ParsedMetrics& metrics,
-    std::optional<double>& leaderScore,
+    ValidatedCheckpointPolicyEvidence& evidence,
     std::string& rejectionReason)
 {
     pqxx::result rows = w.exec_params(
-        "SELECT a.infer_accuracy, a.leader_score, a.completed_epochs "
+        "SELECT a.analysis_id, ir.id, a.infer_accuracy, a.leader_score, "
+        "a.completed_epochs, ir.from_date, ir.to_date "
         "FROM experiment_checkpoint_eval ce "
         "JOIN experiment e "
         "  ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         "JOIN experiment_analysis_result a ON a.analysis_id = ce.analysis_id "
+        "JOIN inference_eval_result ir "
+        "  ON ir.checkpoint_eval_id = ce.checkpoint_eval_id "
         "WHERE ce.checkpoint_eval_id = $1 "
         "AND ce.status = 'completed' "
         "AND ce.phase = 'done' "
@@ -11597,6 +11656,17 @@ bool LoadValidatedCheckpointPolicyAnalysis(
         "AND a.checkpoint_epoch = ce.checkpoint_epoch "
         "AND a.symbol = e.symbol "
         "AND a.prediction_horizon = e.prediction_horizon "
+        "AND ir.inference_scope = 'checkpoint' "
+        "AND ir.status = 'completed' "
+        "AND ir.parent_experiment_id = e.experiment_id "
+        "AND ir.model_id = ce.checkpoint_model_id "
+        "AND ir.checkpoint_epoch = ce.checkpoint_epoch "
+        "AND ir.symbol = e.symbol "
+        "AND ir.prediction_horizon = e.prediction_horizon "
+        "AND ir.threshold_logret = e.c_next_threshold "
+        "AND ir.from_date::date = e.infer_start::date "
+        "AND ir.to_date::date = e.infer_end::date "
+        "AND a.infer_accuracy IS NOT DISTINCT FROM ir.accuracy "
         "AND e.symbol = $5 "
         "AND e.prediction_horizon = $6;",
         eval.checkpointEvalId,
@@ -11608,7 +11678,10 @@ bool LoadValidatedCheckpointPolicyAnalysis(
     if (rows.size() != 1)
     {
         pqxx::result state = w.exec_params(
-            "SELECT status, phase, analysis_id "
+            "SELECT status, phase, analysis_id, "
+            "(SELECT count(*) FROM inference_eval_result ir "
+            " WHERE ir.checkpoint_eval_id = experiment_checkpoint_eval.checkpoint_eval_id "
+            " AND ir.inference_scope = 'checkpoint' AND ir.status = 'completed') "
             "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id = $1;",
             eval.checkpointEvalId);
         if (state.empty())
@@ -11619,28 +11692,64 @@ bool LoadValidatedCheckpointPolicyAnalysis(
             rejectionReason = "checkpoint_eval_not_done";
         else if (state[0][2].is_null())
             rejectionReason = "checkpoint_analysis_not_linked";
+        else if (state[0][3].as<int>() != 1)
+            rejectionReason = "checkpoint_inference_result_not_exactly_one";
         else
-            rejectionReason = "checkpoint_analysis_identity_mismatch";
+            rejectionReason = "checkpoint_analysis_inference_identity_mismatch";
         return false;
     }
 
-    metrics.modelId = eval.checkpointModelId;
-    if (!rows[0][0].is_null())
-        metrics.inferAccuracy = rows[0][0].as<double>();
-    if (!rows[0][1].is_null())
-        leaderScore = rows[0][1].as<double>();
+    evidence.analysisId = rows[0][0].as<long long>();
+    evidence.inferenceEvalResultId = rows[0][1].as<long long>();
+    evidence.metrics.modelId = eval.checkpointModelId;
     if (!rows[0][2].is_null())
-        metrics.completedEpochs = rows[0][2].as<int>();
+        evidence.metrics.inferAccuracy = rows[0][2].as<double>();
+    if (!rows[0][3].is_null())
+        evidence.leaderScore = rows[0][3].as<double>();
+    if (!rows[0][4].is_null())
+        evidence.metrics.completedEpochs = rows[0][4].as<int>();
+    evidence.inferenceFromDate = rows[0][5].as<std::string>();
+    evidence.inferenceToDate = rows[0][6].as<std::string>();
     return true;
 }
 
-int CountCompletedCheckpointPolicyEvals(pqxx::work& w, long long parentExperimentId)
+std::string CheckpointPolicyPopulationWatermark(const pqxx::result& rows)
+{
+    std::ostringstream canonical;
+    canonical << "population_size=" << rows.size();
+    for (const auto& row : rows)
+    {
+        canonical << '|';
+        for (pqxx::row::size_type column = 0; column < row.size(); ++column)
+        {
+            if (column != 0)
+                canonical << ',';
+            if (row[column].is_null())
+            {
+                canonical << "NULL";
+                continue;
+            }
+            const std::string value = row[column].as<std::string>();
+            canonical << value.size() << ':' << value;
+        }
+    }
+    return StableCheckpointPolicyHash(canonical.str());
+}
+
+CheckpointPolicyPopulation LoadCompletedCheckpointPolicyPopulation(
+    pqxx::work& w,
+    long long parentExperimentId)
 {
     pqxx::result rows = w.exec_params(
-        "SELECT count(DISTINCT ce.checkpoint_eval_id) "
+        "SELECT ce.checkpoint_eval_id::text, a.analysis_id::text, "
+        "ir.id::text, ce.checkpoint_epoch::text, a.leader_score::text, "
+        "a.infer_accuracy::text, ce.status, ce.phase, a.analysis_status "
         "FROM experiment_checkpoint_eval ce "
         "JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         "JOIN experiment_analysis_result a ON a.analysis_id = ce.analysis_id "
+        "LEFT JOIN inference_eval_result ir "
+        "  ON ir.checkpoint_eval_id = ce.checkpoint_eval_id "
+        " AND ir.inference_scope = 'checkpoint' AND ir.status = 'completed' "
         "WHERE COALESCE(ce.parent_experiment_id, ce.experiment_id) = $1 "
         "AND ce.status = 'completed' "
         "AND ce.phase = 'done' "
@@ -11652,24 +11761,39 @@ int CountCompletedCheckpointPolicyEvals(pqxx::work& w, long long parentExperimen
         "AND a.model_id = ce.checkpoint_model_id "
         "AND a.checkpoint_epoch = ce.checkpoint_epoch "
         "AND a.symbol = e.symbol "
-        "AND a.prediction_horizon = e.prediction_horizon;",
+        "AND a.prediction_horizon = e.prediction_horizon "
+        "ORDER BY ce.checkpoint_eval_id ASC;",
         parentExperimentId);
-    return rows[0][0].as<int>();
+    return {static_cast<int>(rows.size()), std::nullopt,
+            CheckpointPolicyPopulationWatermark(rows)};
 }
 
-std::optional<int> RankCheckpointPolicyEval(pqxx::work& w,
-                                            const CheckpointEvalRow& eval,
-                                            const CheckpointPolicyConfig& config)
+int CountCompletedCheckpointPolicyEvals(pqxx::work& w,
+                                        long long parentExperimentId,
+                                        CheckpointPolicyPopulation* identity)
+{
+    const CheckpointPolicyPopulation population =
+        LoadCompletedCheckpointPolicyPopulation(w, parentExperimentId);
+    if (identity != nullptr)
+        *identity = population;
+    return population.count;
+}
+
+CheckpointPolicyPopulation LoadCheckpointPolicyRankPopulation(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    const CheckpointPolicyConfig& config)
 {
     std::ostringstream sql;
-    sql << "WITH ranked AS ("
-        << "  SELECT ce.checkpoint_eval_id, "
-        << "         row_number() OVER (ORDER BY "
-        << "a.leader_score DESC NULLS LAST, a.infer_accuracy DESC NULLS LAST, "
-        << "ce.checkpoint_epoch DESC, ce.checkpoint_eval_id ASC) AS rank_value "
+    sql << "SELECT ce.checkpoint_eval_id::text, a.analysis_id::text, "
+        << "ir.id::text, ce.checkpoint_epoch::text, a.leader_score::text, "
+        << "a.infer_accuracy::text, ce.status, ce.phase, a.analysis_status "
         << "  FROM experiment_checkpoint_eval ce "
         << "  JOIN experiment e ON e.experiment_id = COALESCE(ce.parent_experiment_id, ce.experiment_id) "
         << "  JOIN experiment_analysis_result a ON a.analysis_id = ce.analysis_id "
+        << "  LEFT JOIN inference_eval_result ir "
+        << "    ON ir.checkpoint_eval_id = ce.checkpoint_eval_id "
+        << "   AND ir.inference_scope = 'checkpoint' AND ir.status = 'completed' "
         << "  WHERE ce.status = 'completed' "
         << "  AND ce.phase = 'done' "
         << "  AND a.analysis_scope = 'checkpoint' "
@@ -11692,154 +11816,246 @@ std::optional<int> RankCheckpointPolicyEval(pqxx::work& w,
     }
     else if (config.scope != "global")
     {
-        return std::nullopt;
+        return {};
     }
-    sql << ") SELECT rank_value FROM ranked WHERE checkpoint_eval_id = $1;";
+    sql << " ORDER BY a.leader_score DESC NULLS LAST, "
+        << "a.infer_accuracy DESC NULLS LAST, ce.checkpoint_epoch DESC, "
+        << "ce.checkpoint_eval_id ASC;";
 
-    pqxx::result rows = w.exec_params(sql.str(), eval.checkpointEvalId);
-    if (rows.empty() || rows[0][0].is_null())
-        return std::nullopt;
-    return rows[0][0].as<int>();
-}
-
-std::optional<int> RequestedCheckpointPolicyStopEpoch(const CheckpointEvalRow& eval,
-                                                      const CheckpointPolicyConfig& config)
-{
-    const int currentEpoch = config.currentEpoch.value_or(eval.checkpointEpoch);
-    const int interval = std::max(1, config.checkpointInterval);
-    const int latestObservedEpoch = std::max(eval.checkpointEpoch, currentEpoch);
-    int requested = ((latestObservedEpoch / interval) + 1) * interval;
-    if (config.stopMode == "current_checkpoint_if_possible" &&
-        currentEpoch <= eval.checkpointEpoch)
+    pqxx::result rows = w.exec(sql.str());
+    CheckpointPolicyPopulation population;
+    population.count = static_cast<int>(rows.size());
+    population.watermark = CheckpointPolicyPopulationWatermark(rows);
+    for (pqxx::result::size_type index = 0; index < rows.size(); ++index)
     {
-        requested = eval.checkpointEpoch;
-    }
-    if (config.targetEpochs > 0 && requested >= config.targetEpochs)
-        return std::nullopt;
-    return requested;
-}
-
-CheckpointPolicyDecision DecideCheckpointPolicy(pqxx::work& w,
-                                                const CheckpointEvalRow& eval,
-                                                const CheckpointPolicyConfig& config,
-                                                const ParsedMetrics& metrics,
-                                                const std::optional<double>& leaderScore)
-{
-    CheckpointPolicyDecision decision;
-    const int completedEvalCount = CountCompletedCheckpointPolicyEvals(w, eval.experiment.experimentId);
-    decision.rankValue = RankCheckpointPolicyEval(w, eval, config);
-
-    if (completedEvalCount < config.graceEvals)
-    {
-        decision.decision = "continue_grace";
-        decision.reason = "completed_checkpoint_evals=" + std::to_string(completedEvalCount) +
-                          ";grace_evals=" + std::to_string(config.graceEvals);
-        return decision;
-    }
-
-    if (config.minLeaderScore.has_value())
-    {
-        if (leaderScore.has_value() && *leaderScore >= *config.minLeaderScore)
-            decision.passedRules.push_back("leader_score");
-        else
-            decision.failedRules.push_back("leader_score");
-    }
-    if (config.minInferAccuracy.has_value())
-    {
-        if (metrics.inferAccuracy.has_value() && *metrics.inferAccuracy >= *config.minInferAccuracy)
-            decision.passedRules.push_back("infer_accuracy");
-        else
-            decision.failedRules.push_back("infer_accuracy");
-    }
-    if (config.topN.has_value())
-    {
-        if (decision.rankValue.has_value() && *decision.rankValue <= *config.topN)
-            decision.passedRules.push_back("top_n");
-        else
-            decision.failedRules.push_back("top_n");
-    }
-
-    if (!decision.passedRules.empty())
-    {
-        decision.decision = "continue";
-        decision.reason = "passed_rules=";
-        for (size_t i = 0; i < decision.passedRules.size(); ++i)
+        if (rows[index][0].as<long long>() == eval.checkpointEvalId)
         {
-            if (i)
-                decision.reason += "|";
-            decision.reason += decision.passedRules[i];
+            population.rankValue = static_cast<int>(index + 1);
+            break;
         }
-        return decision;
     }
-    if (decision.failedRules.empty())
-    {
-        decision.decision = "skipped";
-        decision.reason = "no_policy_rules_configured";
-        return decision;
-    }
-
-    decision.decision = "stop_requested";
-    decision.reason = "failed_rules=";
-    for (size_t i = 0; i < decision.failedRules.size(); ++i)
-    {
-        if (i)
-            decision.reason += "|";
-        decision.reason += decision.failedRules[i];
-    }
-    decision.requestedStopEpoch = RequestedCheckpointPolicyStopEpoch(eval, config);
-    if (!decision.requestedStopEpoch.has_value())
-    {
-        decision.decision = "skipped";
-        decision.reason += ";no_future_safe_checkpoint";
-    }
-    return decision;
+    return population;
 }
 
-void PersistCheckpointPolicyDecision(pqxx::work& w,
-                                     const CheckpointEvalRow& eval,
-                                     const CheckpointPolicyConfig& config,
-                                     const CheckpointPolicyDecision& decision,
-                                     const ParsedMetrics& metrics,
-                                     const std::optional<double>& leaderScore)
+std::optional<int> RankCheckpointPolicyEval(pqxx::work& w,
+                                            const CheckpointEvalRow& eval,
+                                            const CheckpointPolicyConfig& config,
+                                            CheckpointPolicyPopulation* identity)
 {
-    pqxx::result existing = w.exec_params(
+    const CheckpointPolicyPopulation population =
+        LoadCheckpointPolicyRankPopulation(w, eval, config);
+    if (identity != nullptr)
+        *identity = population;
+    return population.rankValue;
+}
+
+CheckpointPolicyDecision DecideCheckpointPolicy(
+    const CheckpointEvalRow& eval,
+    const CheckpointPolicyConfig& config,
+    const ParsedMetrics& metrics,
+    const std::optional<double>& leaderScore,
+    int completedEvalCount,
+    const std::optional<int>& rankValue)
+{
+    const CheckpointPolicyDecisionInputs inputs{
+        eval.checkpointEpoch,
+        completedEvalCount,
+        leaderScore,
+        metrics.inferAccuracy,
+        rankValue};
+    return DecideCheckpointPolicyPure(config, inputs);
+}
+
+CheckpointPolicyDecisionContext DecideCheckpointPolicyWithIdentity(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    const CheckpointPolicyConfig& config,
+    const ParsedMetrics& metrics,
+    const std::optional<double>& leaderScore)
+{
+    CheckpointPolicyDecisionContext context;
+    const int completedEvalCount = CountCompletedCheckpointPolicyEvals(
+        w,
+        eval.experiment.experimentId,
+        &context.completedPopulation);
+    const std::optional<int> rankValue = RankCheckpointPolicyEval(
+        w, eval, config, &context.rankPopulation);
+    context.decision = DecideCheckpointPolicy(
+        eval,
+        config,
+        metrics,
+        leaderScore,
+        completedEvalCount,
+        rankValue);
+    return context;
+}
+
+CheckpointPolicyEvidenceIdentity MakeCheckpointPolicyEvidenceIdentity(
+    const CheckpointEvalRow& eval,
+    const ValidatedCheckpointPolicyEvidence& validated,
+    const CheckpointPolicyDecisionContext& context,
+    const CheckpointPolicyConfig& config)
+{
+    CheckpointPolicyEvidenceIdentity identity;
+    identity.checkpointEvalId = eval.checkpointEvalId;
+    identity.parentExperimentId = eval.experiment.experimentId;
+    identity.checkpointModelId = eval.checkpointModelId;
+    identity.checkpointEpoch = eval.checkpointEpoch;
+    identity.observedCurrentEpoch = config.currentEpoch;
+    identity.analysisId = validated.analysisId;
+    identity.inferenceEvalResultId = validated.inferenceEvalResultId;
+    identity.symbol = eval.experiment.symbol;
+    identity.predictionHorizon = eval.experiment.predictionHorizon;
+    identity.inferenceFromDate = validated.inferenceFromDate;
+    identity.inferenceToDate = validated.inferenceToDate;
+    identity.leaderScore = validated.leaderScore;
+    identity.inferenceAccuracy = validated.metrics.inferAccuracy;
+    identity.rankValue = config.topN.has_value()
+        ? context.decision.rankValue
+        : std::nullopt;
+    identity.rankScope = config.scope;
+    identity.rankPopulationWatermark = config.topN.has_value()
+        ? context.rankPopulation.watermark
+        : "not_decision_bearing";
+    identity.completedEvalCount = context.completedPopulation.count;
+    identity.completedPopulationWatermark =
+        context.completedPopulation.watermark;
+    return identity;
+}
+
+PersistedCheckpointPolicyDecision PersistCheckpointPolicyDecision(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    const CheckpointPolicyConfig& config,
+    const CheckpointPolicyDecision& decision,
+    const ValidatedCheckpointPolicyEvidence& validated,
+    const CheckpointPolicyEvidenceIdentity& evidenceIdentity)
+{
+    pqxx::result mismatches = w.exec_params(
         "SELECT parent_experiment_id, checkpoint_epoch, checkpoint_model_id "
         "FROM experiment_checkpoint_decision "
-        "WHERE checkpoint_eval_id = $1 FOR UPDATE;",
-        eval.checkpointEvalId);
-    if (!existing.empty() &&
-        (existing[0][0].as<long long>() != eval.experiment.experimentId ||
-         existing[0][1].as<int>() != eval.checkpointEpoch ||
-         existing[0][2].as<long long>() != eval.checkpointModelId))
-    {
+        "WHERE checkpoint_eval_id = $1 "
+        "AND (parent_experiment_id <> $2 OR checkpoint_epoch <> $3 "
+        "OR checkpoint_model_id <> $4) LIMIT 1 FOR UPDATE;",
+        eval.checkpointEvalId,
+        eval.experiment.experimentId,
+        eval.checkpointEpoch,
+        eval.checkpointModelId);
+    if (!mismatches.empty())
         throw std::runtime_error("checkpoint policy decision identity mismatch");
+
+    const std::string policyHash = CheckpointPolicySemanticHash(config);
+    const std::string evidenceWatermark =
+        CheckpointPolicyEvidenceWatermark(evidenceIdentity);
+    std::string identityStatus = "active";
+    std::string supersededReason;
+    pqxx::result terminal = w.exec_params(
+        "SELECT checkpoint_policy_stop_decision_id FROM experiment "
+        "WHERE experiment_id = $1;",
+        eval.experiment.experimentId);
+    if (!terminal.empty() && !terminal[0][0].is_null())
+    {
+        identityStatus = "superseded";
+        supersededReason = "stop_action_already_applied";
+    }
+    else
+    {
+        pqxx::result newer = w.exec_params(
+            "SELECT checkpoint_decision_id "
+            "FROM experiment_checkpoint_decision "
+            "WHERE parent_experiment_id = $1 "
+            "AND identity_status IN ('active', 'action_applied') "
+            "AND (checkpoint_epoch > $2 OR "
+            "(checkpoint_epoch = $2 AND checkpoint_eval_id > $3)) "
+            "ORDER BY checkpoint_epoch DESC, checkpoint_eval_id DESC, "
+            "checkpoint_decision_id DESC LIMIT 1;",
+            eval.experiment.experimentId,
+            eval.checkpointEpoch,
+            eval.checkpointEvalId);
+        if (!newer.empty())
+        {
+            identityStatus = "superseded";
+            supersededReason = "newer_checkpoint_decision_exists";
+        }
     }
 
     std::ostringstream sql;
     sql << "INSERT INTO experiment_checkpoint_decision ("
         << "checkpoint_eval_id, parent_experiment_id, checkpoint_epoch, checkpoint_model_id, "
-        << "decision, reason, leader_score, infer_accuracy, rank_value, rank_scope, requested_stop_epoch"
+        << "analysis_id, inference_eval_result_id, policy_revision, policy_hash, "
+        << "evidence_watermark, rank_population_watermark, identity_status, "
+        << "superseded_at, superseded_reason, decision, reason, leader_score, "
+        << "infer_accuracy, rank_value, rank_scope, requested_stop_epoch"
         << ") VALUES ("
         << eval.checkpointEvalId << ","
         << eval.experiment.experimentId << ","
         << eval.checkpointEpoch << ","
         << eval.checkpointModelId << ","
+        << validated.analysisId << ","
+        << validated.inferenceEvalResultId << ","
+        << config.policyRevision << ","
+        << w.quote(policyHash) << ","
+        << w.quote(evidenceWatermark) << ","
+        << w.quote(evidenceIdentity.rankPopulationWatermark) << ","
+        << w.quote(identityStatus) << ","
+        << (identityStatus == "superseded" ? "clock_timestamp()" : "NULL") << ","
+        << (identityStatus == "superseded" ? w.quote(supersededReason) : "NULL") << ","
         << w.quote(decision.decision) << ","
         << w.quote(decision.reason) << ","
-        << MetricSql(w, leaderScore) << ","
-        << MetricSql(w, metrics.inferAccuracy) << ","
+        << MetricSql(w, validated.leaderScore) << ","
+        << MetricSql(w, validated.metrics.inferAccuracy) << ","
         << MetricSql(w, decision.rankValue) << ","
         << w.quote(config.scope) << ","
         << MetricSql(w, decision.requestedStopEpoch)
-        << ") ON CONFLICT (checkpoint_eval_id) DO UPDATE SET "
-        << "decision = EXCLUDED.decision, "
-        << "reason = EXCLUDED.reason, "
-        << "leader_score = EXCLUDED.leader_score, "
-        << "infer_accuracy = EXCLUDED.infer_accuracy, "
-        << "rank_value = EXCLUDED.rank_value, "
-        << "rank_scope = EXCLUDED.rank_scope, "
-        << "requested_stop_epoch = EXCLUDED.requested_stop_epoch;";
-    w.exec(sql.str());
+        << ") ON CONFLICT (checkpoint_eval_id, policy_revision, policy_hash, evidence_watermark) "
+        << "WHERE policy_revision IS NOT NULL AND policy_hash IS NOT NULL "
+        << "AND evidence_watermark IS NOT NULL DO NOTHING "
+        << "RETURNING checkpoint_decision_id, identity_status;";
+    pqxx::result inserted = w.exec(sql.str());
+
+    PersistedCheckpointPolicyDecision persisted;
+    if (!inserted.empty())
+    {
+        persisted.decisionId = inserted[0][0].as<long long>();
+        persisted.identityStatus = inserted[0][1].as<std::string>();
+    }
+    else
+    {
+        pqxx::result existing = w.exec_params(
+            "SELECT checkpoint_decision_id, identity_status "
+            "FROM experiment_checkpoint_decision "
+            "WHERE checkpoint_eval_id = $1 AND policy_revision = $2 "
+            "AND policy_hash = $3 AND evidence_watermark = $4 FOR UPDATE;",
+            eval.checkpointEvalId,
+            config.policyRevision,
+            policyHash,
+            evidenceWatermark);
+        if (existing.size() != 1)
+            throw std::runtime_error("checkpoint policy idempotent decision lookup failed");
+        persisted.decisionId = existing[0][0].as<long long>();
+        persisted.identityStatus = existing[0][1].as<std::string>();
+        persisted.reused = true;
+    }
+
+    if (!persisted.reused && persisted.identityStatus == "active")
+    {
+        w.exec_params(
+            "UPDATE experiment_checkpoint_decision SET "
+            "identity_status='superseded', superseded_at=clock_timestamp(), "
+            "superseded_reason=CASE "
+            " WHEN checkpoint_eval_id = $1 THEN 'policy_or_evidence_changed' "
+            " ELSE 'newer_checkpoint_decision_became_authoritative' END, "
+            "superseded_by_decision_id=$2 "
+            "WHERE parent_experiment_id=$3 AND checkpoint_decision_id<>$2 "
+            "AND identity_status='active' "
+            "AND (checkpoint_epoch < $4 OR "
+            "(checkpoint_epoch = $4 AND checkpoint_eval_id < $1) OR "
+            "checkpoint_eval_id = $1);",
+            eval.checkpointEvalId,
+            persisted.decisionId,
+            eval.experiment.experimentId,
+            eval.checkpointEpoch);
+    }
 
     w.exec_params(
         "UPDATE experiment "
@@ -11847,30 +12063,185 @@ void PersistCheckpointPolicyDecision(pqxx::work& w,
         "checkpoint_policy_last_decision_at = now(), "
         "checkpoint_policy_last_checkpoint_eval_id = $2, "
         "checkpoint_policy_last_reason = $3, "
+        "checkpoint_policy_last_decision_id = $4, "
+        "checkpoint_policy_hash = COALESCE(checkpoint_policy_hash, $5), "
         "updated_at = now() "
-        "WHERE experiment_id = $4;",
+        "WHERE experiment_id = $6 AND $7 = 'active';",
         decision.decision,
         eval.checkpointEvalId,
         decision.reason,
-        eval.experiment.experimentId);
+        persisted.decisionId,
+        policyHash,
+        eval.experiment.experimentId,
+        persisted.identityStatus);
+    return persisted;
 }
 
-void ApplyCheckpointPolicyStopRequest(pqxx::work& w,
-                                      const CheckpointEvalRow& eval,
-                                      const CheckpointPolicyDecision& decision)
+std::string MarkCheckpointPolicyDecisionSuperseded(
+    pqxx::work& w,
+    long long decisionId,
+    const std::string& reason)
+{
+    w.exec_params(
+        "UPDATE experiment_checkpoint_decision SET "
+        "identity_status='superseded', superseded_at=clock_timestamp(), "
+        "superseded_reason=$1 "
+        "WHERE checkpoint_decision_id=$2 AND identity_status='active';",
+        reason,
+        decisionId);
+    return reason;
+}
+
+std::string ApplyCheckpointPolicyStopRequest(
+    pqxx::work& w,
+    const CheckpointEvalRow& eval,
+    const CheckpointPolicyConfig& config,
+    const CheckpointPolicyDecision& decision,
+    const PersistedCheckpointPolicyDecision& persisted,
+    const std::string& expectedEvidenceWatermark)
 {
     if (!decision.requestedStopEpoch.has_value())
-        return;
+        return "no_requested_stop_epoch";
+    if (persisted.identityStatus != "active")
+        return "decision_superseded";
 
-    w.exec_params(
-        "UPDATE experiment "
-        "SET stop_after_checkpoint_epoch = $1, updated_at = now() "
-        "WHERE experiment_id = $2 "
-        "AND status = 'running' "
-        "AND phase = 'train' "
-        "AND (stop_after_checkpoint_epoch IS NULL OR stop_after_checkpoint_epoch > $1);",
-        *decision.requestedStopEpoch,
+    ValidatedCheckpointPolicyEvidence currentValidated;
+    std::string currentEvidenceReason;
+    if (!LoadValidatedCheckpointPolicyAnalysis(
+            w, eval, currentValidated, currentEvidenceReason))
+    {
+        return MarkCheckpointPolicyDecisionSuperseded(
+            w,
+            persisted.decisionId,
+            "stale_evidence:" + currentEvidenceReason);
+    }
+    const CheckpointPolicyDecisionContext currentContext =
+        DecideCheckpointPolicyWithIdentity(
+            w,
+            eval,
+            config,
+            currentValidated.metrics,
+            currentValidated.leaderScore);
+    const std::string currentEvidenceWatermark =
+        CheckpointPolicyEvidenceWatermark(
+            MakeCheckpointPolicyEvidenceIdentity(
+                eval, currentValidated, currentContext, config));
+    if (currentEvidenceWatermark != expectedEvidenceWatermark)
+    {
+        return MarkCheckpointPolicyDecisionSuperseded(
+            w, persisted.decisionId, "stale_evidence_watermark");
+    }
+
+    pqxx::result state = w.exec_params(
+        "SELECT e.status, e.phase, e.current_epoch, e.target_epochs, "
+        "e.checkpoint_policy_revision, e.checkpoint_policy_hash, "
+        "e.stop_after_checkpoint_epoch, e.checkpoint_policy_stop_decision_id, "
+        "e.active_scheduler_worker_attempt_id, d.identity_status, "
+        "d.evidence_watermark, d.policy_hash, d.policy_revision, "
+        "EXISTS (SELECT 1 FROM experiment_scheduler_worker_attempt a "
+        " JOIN experiment_scheduler_lease l ON l.singleton "
+        " WHERE a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+        " AND a.experiment_id=e.experiment_id AND a.worker_kind='experiment' "
+        " AND a.lifecycle_phase='train' "
+        " AND a.lifecycle_state IN ('reserved','spawned','running','observed') "
+        " AND a.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        " AND a.scheduler_fencing_token=l.fencing_token "
+        " AND l.authority_state='active' AND l.expires_at>clock_timestamp()) "
+        "FROM experiment e JOIN experiment_checkpoint_decision d "
+        "ON d.checkpoint_decision_id=$1 "
+        "WHERE e.experiment_id=$2 FOR UPDATE;",
+        persisted.decisionId,
         eval.experiment.experimentId);
+    if (state.size() != 1)
+        return MarkCheckpointPolicyDecisionSuperseded(
+            w, persisted.decisionId, "parent_or_decision_missing");
+    const pqxx::row row = state[0];
+    const std::string currentPolicyHash = CheckpointPolicySemanticHash(config);
+    std::string fenceReason;
+    if (row[0].as<std::string>() != "running" || row[1].as<std::string>() != "train")
+        fenceReason = "parent_not_running_train";
+    else if (row[4].as<long long>() != config.policyRevision ||
+             row[5].is_null() || row[5].as<std::string>() != currentPolicyHash ||
+             row[11].as<std::string>() != currentPolicyHash ||
+             row[12].as<long long>() != config.policyRevision)
+        fenceReason = "stale_policy_identity";
+    else if (row[9].as<std::string>() != "active")
+        fenceReason = "decision_not_active";
+    else if (row[10].as<std::string>() != expectedEvidenceWatermark)
+        fenceReason = "stale_evidence_watermark";
+    else if (!row[7].is_null())
+        fenceReason = "terminal_stop_decision_already_applied";
+    else if (!row[6].is_null())
+        fenceReason = "conflicting_stop_request_already_present";
+    else if (row[8].is_null() || !row[13].as<bool>())
+        fenceReason = "active_training_attempt_not_scheduler_authoritative";
+    else if (*decision.requestedStopEpoch <=
+             (row[2].is_null()
+                  ? eval.checkpointEpoch
+                  : row[2].as<int>()))
+        fenceReason = "requested_stop_epoch_not_in_future";
+    else if (*decision.requestedStopEpoch >= row[3].as<int>())
+        fenceReason = "requested_stop_epoch_not_before_target";
+    if (!fenceReason.empty())
+        return MarkCheckpointPolicyDecisionSuperseded(
+            w, persisted.decisionId, fenceReason);
+
+    pqxx::result applied = w.exec_params(
+        "UPDATE experiment "
+        "SET stop_after_checkpoint_epoch=$1, "
+        "checkpoint_policy_stop_decision_id=$2, "
+        "checkpoint_policy_last_decision_id=$2, updated_at=now() "
+        "WHERE experiment_id = $3 "
+        "AND status='running' AND phase='train' "
+        "AND stop_after_checkpoint_epoch IS NULL "
+        "AND checkpoint_policy_stop_decision_id IS NULL "
+        "AND checkpoint_policy_revision=$4 AND checkpoint_policy_hash=$5 "
+        "AND COALESCE(current_epoch,$7)<$1 "
+        "AND target_epochs>$1 "
+        "AND EXISTS (SELECT 1 FROM experiment_checkpoint_decision d "
+        " WHERE d.checkpoint_decision_id=$2 AND d.parent_experiment_id=$3 "
+        " AND d.identity_status='active' AND d.policy_revision=$4 "
+        " AND d.policy_hash=$5 AND d.evidence_watermark=$6) "
+        "AND NOT EXISTS (SELECT 1 FROM experiment_checkpoint_decision newer "
+        " JOIN experiment_checkpoint_decision current_decision "
+        "   ON current_decision.checkpoint_decision_id=$2 "
+        " WHERE newer.parent_experiment_id=$3 "
+        " AND newer.identity_status IN ('active','action_applied') "
+        " AND (newer.checkpoint_epoch>current_decision.checkpoint_epoch OR "
+        " (newer.checkpoint_epoch=current_decision.checkpoint_epoch "
+        "  AND newer.checkpoint_eval_id>current_decision.checkpoint_eval_id))) "
+        "AND EXISTS (SELECT 1 FROM experiment_scheduler_worker_attempt a "
+        " JOIN experiment_scheduler_lease l ON l.singleton "
+        " WHERE a.worker_attempt_id=experiment.active_scheduler_worker_attempt_id "
+        " AND a.experiment_id=experiment.experiment_id "
+        " AND a.worker_kind='experiment' AND a.lifecycle_phase='train' "
+        " AND a.lifecycle_state IN ('reserved','spawned','running','observed') "
+        " AND a.scheduler_invocation_id=l.owner_scheduler_invocation_id "
+        " AND a.scheduler_fencing_token=l.fencing_token "
+        " AND l.authority_state='active' AND l.expires_at>clock_timestamp()) "
+        "RETURNING active_scheduler_worker_attempt_id;",
+        *decision.requestedStopEpoch,
+        persisted.decisionId,
+        eval.experiment.experimentId,
+        config.policyRevision,
+        currentPolicyHash,
+        expectedEvidenceWatermark,
+        eval.checkpointEpoch);
+    if (applied.size() != 1 || applied[0][0].is_null())
+        return MarkCheckpointPolicyDecisionSuperseded(
+            w, persisted.decisionId, "atomic_stop_fence_failed");
+    pqxx::result attributed = w.exec_params(
+        "UPDATE experiment_checkpoint_decision SET "
+        "identity_status='action_applied', stop_request_applied=true, "
+        "stop_request_applied_at=clock_timestamp(), "
+        "stop_action_worker_attempt_id=$1 "
+        "WHERE checkpoint_decision_id=$2 AND identity_status='active' "
+        "RETURNING checkpoint_decision_id;",
+        applied[0][0].as<long long>(),
+        persisted.decisionId);
+    if (attributed.size() != 1)
+        throw std::runtime_error("checkpoint policy stop decision attribution failed");
+    return "stop_request_applied";
 }
 
 std::string JoinCheckpointPolicyRules(const std::vector<std::string>& rules)
@@ -11911,12 +12282,36 @@ CheckpointPolicyEvaluationResult EvaluateCheckpointPolicyAfterAnalysis(
         return result;
     }
 
-    const std::optional<CheckpointPolicyConfig> config = LoadCheckpointPolicyConfig(w, eval.experiment.experimentId);
+    std::optional<CheckpointPolicyConfig> config = LoadCheckpointPolicyConfig(
+        w, eval.experiment.experimentId);
     if (!config.has_value() || !config->enabled)
     {
         result.reason = config.has_value() ? "disabled" : "parent_experiment_not_found";
         logSkipped(result.reason);
         return result;
+    }
+    const std::string derivedPolicyHash =
+        CheckpointPolicySemanticHash(*config);
+    if (!config->persistedPolicyHash.has_value())
+    {
+        w.exec_params(
+            "UPDATE experiment SET checkpoint_policy_hash=$1, updated_at=now() "
+            "WHERE experiment_id=$2 AND checkpoint_policy_hash IS NULL;",
+            derivedPolicyHash,
+            eval.experiment.experimentId);
+        config->persistedPolicyHash = derivedPolicyHash;
+    }
+    else if (*config->persistedPolicyHash != derivedPolicyHash)
+    {
+        pqxx::result revised = w.exec_params(
+            "UPDATE experiment SET "
+            "checkpoint_policy_revision=checkpoint_policy_revision+1, "
+            "checkpoint_policy_hash=$1, updated_at=now() "
+            "WHERE experiment_id=$2 RETURNING checkpoint_policy_revision;",
+            derivedPolicyHash,
+            eval.experiment.experimentId);
+        config->policyRevision = revised[0][0].as<long long>();
+        config->persistedPolicyHash = derivedPolicyHash;
     }
     if (!config->checkpointInferEnabled)
     {
@@ -11939,14 +12334,12 @@ CheckpointPolicyEvaluationResult EvaluateCheckpointPolicyAfterAnalysis(
         return result;
     }
 
-    ParsedMetrics metrics;
-    std::optional<double> leaderScore;
+    ValidatedCheckpointPolicyEvidence validated;
     std::string identityRejectionReason;
     if (!LoadValidatedCheckpointPolicyAnalysis(
             w,
             eval,
-            metrics,
-            leaderScore,
+            validated,
             identityRejectionReason))
     {
         result.reason = identityRejectionReason;
@@ -11962,13 +12355,33 @@ CheckpointPolicyEvaluationResult EvaluateCheckpointPolicyAfterAnalysis(
               << ",checkpoint_model_id=" << eval.checkpointModelId
               << ",symbol=" << eval.experiment.symbol
               << ",prediction_horizon=" << eval.experiment.predictionHorizon
-              << ",leader_score=" << (leaderScore.has_value() ? FormatDouble(*leaderScore) : "NULL")
-              << ",infer_accuracy=" << (metrics.inferAccuracy.has_value() ? FormatDouble(*metrics.inferAccuracy) : "NULL")
+              << ",leader_score=" << (validated.leaderScore.has_value() ? FormatDouble(*validated.leaderScore) : "NULL")
+              << ",infer_accuracy=" << (validated.metrics.inferAccuracy.has_value() ? FormatDouble(*validated.metrics.inferAccuracy) : "NULL")
               << ",configured_rules=" << configuredRules
               << std::endl;
 
-    CheckpointPolicyDecision decision = DecideCheckpointPolicy(w, eval, *config, metrics, leaderScore);
-    PersistCheckpointPolicyDecision(w, eval, *config, decision, metrics, leaderScore);
+    const CheckpointPolicyDecisionContext context =
+        DecideCheckpointPolicyWithIdentity(
+            w,
+            eval,
+            *config,
+            validated.metrics,
+            validated.leaderScore);
+    const CheckpointPolicyDecision& decision = context.decision;
+    const CheckpointPolicyEvidenceIdentity evidenceIdentity =
+        MakeCheckpointPolicyEvidenceIdentity(
+            eval, validated, context, *config);
+    const std::string evidenceWatermark =
+        CheckpointPolicyEvidenceWatermark(evidenceIdentity);
+    const PersistedCheckpointPolicyDecision persisted =
+        PersistCheckpointPolicyDecision(
+            w,
+            eval,
+            *config,
+            decision,
+            validated,
+            evidenceIdentity);
+    std::string stopActionResult = "not_requested";
 
     if (decision.decision == "continue")
     {
@@ -11980,8 +12393,16 @@ CheckpointPolicyEvaluationResult EvaluateCheckpointPolicyAfterAnalysis(
     }
     else if (decision.decision == "stop_requested")
     {
-        ApplyCheckpointPolicyStopRequest(w, eval, decision);
-        std::cout << "CHECKPOINT_POLICY_STOP_REQUESTED";
+        stopActionResult = ApplyCheckpointPolicyStopRequest(
+            w,
+            eval,
+            *config,
+            decision,
+            persisted,
+            evidenceWatermark);
+        std::cout << (stopActionResult == "stop_request_applied"
+                          ? "CHECKPOINT_POLICY_STOP_REQUESTED"
+                          : "CHECKPOINT_POLICY_STOP_SUPERSEDED");
     }
     else
     {
@@ -11993,13 +12414,24 @@ CheckpointPolicyEvaluationResult EvaluateCheckpointPolicyAfterAnalysis(
               << ",checkpoint_model_id=" << eval.checkpointModelId
               << ",symbol=" << eval.experiment.symbol
               << ",prediction_horizon=" << eval.experiment.predictionHorizon
-              << ",leader_score=" << (leaderScore.has_value() ? FormatDouble(*leaderScore) : "NULL")
-              << ",infer_accuracy=" << (metrics.inferAccuracy.has_value() ? FormatDouble(*metrics.inferAccuracy) : "NULL")
+              << ",leader_score=" << (validated.leaderScore.has_value() ? FormatDouble(*validated.leaderScore) : "NULL")
+              << ",infer_accuracy=" << (validated.metrics.inferAccuracy.has_value() ? FormatDouble(*validated.metrics.inferAccuracy) : "NULL")
               << ",rank=" << (decision.rankValue.has_value() ? std::to_string(*decision.rankValue) : "NULL")
               << ",configured_rules=" << configuredRules
               << ",passed_rules=" << JoinCheckpointPolicyRules(decision.passedRules)
               << ",failed_rules=" << JoinCheckpointPolicyRules(decision.failedRules)
-              << ",reason=" << decision.reason;
+              << ",reason=" << decision.reason
+              << ",decision_id=" << persisted.decisionId
+              << ",decision_identity_status=" << persisted.identityStatus
+              << ",decision_reused=" << (persisted.reused ? "1" : "0")
+              << ",policy_revision=" << config->policyRevision
+              << ",policy_hash=" << CheckpointPolicySemanticHash(*config)
+              << ",analysis_id=" << validated.analysisId
+              << ",inference_eval_result_id=" << validated.inferenceEvalResultId
+              << ",evidence_watermark=" << evidenceWatermark
+              << ",rank_population_watermark="
+              << context.rankPopulation.watermark
+              << ",stop_action_result=" << stopActionResult;
     if (decision.requestedStopEpoch.has_value())
         std::cout << ",requested_stop_epoch=" << *decision.requestedStopEpoch;
     std::cout << std::endl;
@@ -12066,6 +12498,223 @@ int RunEvaluateCheckpointPolicyCommand(const SchedulerOptions& options)
               << ",checkpoint_model_id=" << eval->checkpointModelId
               << ",decision=" << result.decision
               << ",reason=" << result.reason
+              << std::endl;
+    return 0;
+}
+
+int RunCheckpointPolicyStatusCommand(const SchedulerOptions& options)
+{
+    const long long checkpointEvalId = *options.checkpointPolicyStatusEvalId;
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work w{connection};
+    SetTransactionReadOnly(w);
+    if (!CheckpointPolicySchemaExists(w))
+    {
+        w.commit();
+        std::cerr << "CHECKPOINT_POLICY_STATUS_REJECTED"
+                  << ",checkpoint_eval_id=" << checkpointEvalId
+                  << ",reason=migration_required" << std::endl;
+        return 1;
+    }
+    const std::optional<CheckpointEvalRow> eval =
+        LoadCheckpointEvalById(w, checkpointEvalId);
+    if (!eval.has_value())
+    {
+        w.commit();
+        std::cerr << "CHECKPOINT_POLICY_STATUS_REJECTED"
+                  << ",checkpoint_eval_id=" << checkpointEvalId
+                  << ",reason=checkpoint_eval_not_found" << std::endl;
+        return 1;
+    }
+
+    pqxx::result configRows = w.exec_params(
+        "SELECT checkpoint_policy_enabled, "
+        "checkpoint_policy_min_leader_score, checkpoint_policy_min_infer_accuracy, "
+        "checkpoint_policy_top_n, checkpoint_policy_scope, checkpoint_policy_stop_mode, "
+        "checkpoint_policy_grace_evals, checkpoint_interval, target_epochs, current_epoch, "
+        "stop_after_checkpoint_epoch, status, phase, "
+        "(checkpoint_infer_enabled OR opportunistic_checkpoint_infer), "
+        "checkpoint_policy_revision, checkpoint_policy_hash, "
+        "active_scheduler_worker_attempt_id, checkpoint_policy_last_decision_id, "
+        "checkpoint_policy_stop_decision_id "
+        "FROM experiment WHERE experiment_id=$1;",
+        eval->experiment.experimentId);
+    if (configRows.size() != 1)
+        throw std::runtime_error("checkpoint policy status parent disappeared");
+    const pqxx::row configRow = configRows[0];
+    CheckpointPolicyConfig config;
+    config.enabled = configRow[0].as<bool>();
+    config.minLeaderScore = OptionalDoubleCell(configRow, 1);
+    config.minInferAccuracy = OptionalDoubleCell(configRow, 2);
+    if (!configRow[3].is_null())
+        config.topN = configRow[3].as<int>();
+    config.scope = configRow[4].as<std::string>();
+    config.stopMode = configRow[5].as<std::string>();
+    config.graceEvals = configRow[6].as<int>();
+    config.checkpointInterval = configRow[7].as<int>();
+    config.targetEpochs = configRow[8].as<int>();
+    if (!configRow[9].is_null())
+        config.currentEpoch = configRow[9].as<int>();
+    if (!configRow[10].is_null())
+        config.stopAfterCheckpointEpoch = configRow[10].as<int>();
+    config.status = configRow[11].as<std::string>();
+    config.phase = configRow[12].as<std::string>();
+    config.checkpointInferEnabled = configRow[13].as<bool>();
+    config.policyRevision = configRow[14].as<long long>();
+    config.persistedPolicyHash = OptionalStringCell(configRow, 15);
+    config.activeTrainingAttemptId = OptionalLongLongCell(configRow, 16);
+    const std::optional<long long> lastDecisionId =
+        OptionalLongLongCell(configRow, 17);
+    const std::optional<long long> stopDecisionId =
+        OptionalLongLongCell(configRow, 18);
+
+    ValidatedCheckpointPolicyEvidence validated;
+    std::string evidenceReason;
+    const bool exactEvidence = LoadValidatedCheckpointPolicyAnalysis(
+        w, *eval, validated, evidenceReason);
+    std::optional<CheckpointPolicyDecisionContext> context;
+    std::optional<CheckpointPolicyEvidenceIdentity> identity;
+    std::string evidenceWatermark;
+    if (exactEvidence)
+    {
+        context = DecideCheckpointPolicyWithIdentity(
+            w,
+            *eval,
+            config,
+            validated.metrics,
+            validated.leaderScore);
+        identity = MakeCheckpointPolicyEvidenceIdentity(
+            *eval, validated, *context, config);
+        evidenceWatermark = CheckpointPolicyEvidenceWatermark(*identity);
+    }
+    pqxx::result decisions = w.exec_params(
+        "SELECT checkpoint_decision_id, decision, reason, policy_revision, "
+        "policy_hash, evidence_watermark, analysis_id, inference_eval_result_id, "
+        "rank_value, rank_scope, rank_population_watermark, identity_status, "
+        "stop_request_applied, requested_stop_epoch, superseded_reason, "
+        "superseded_by_decision_id, stop_action_worker_attempt_id, created_at::text "
+        "FROM experiment_checkpoint_decision WHERE checkpoint_eval_id=$1 "
+        "ORDER BY checkpoint_decision_id ASC;",
+        checkpointEvalId);
+    pqxx::result authoritativeRows = w.exec_params(
+        "SELECT checkpoint_decision_id FROM experiment_checkpoint_decision "
+        "WHERE parent_experiment_id=$1 "
+        "AND identity_status IN ('active','action_applied') "
+        "ORDER BY (identity_status='action_applied') DESC, checkpoint_epoch DESC, "
+        "checkpoint_eval_id DESC, checkpoint_decision_id DESC LIMIT 1;",
+        eval->experiment.experimentId);
+    const std::optional<long long> authoritativeDecisionId =
+        authoritativeRows.empty()
+            ? std::nullopt
+            : std::optional<long long>{authoritativeRows[0][0].as<long long>()};
+    w.commit();
+
+    const std::string currentPolicyHash =
+        CheckpointPolicySemanticHash(config);
+    std::cout << "CHECKPOINT POLICY STATUS\n"
+              << "  Checkpoint Eval: " << checkpointEvalId << "\n"
+              << "  Parent Experiment: " << eval->experiment.experimentId << "\n"
+              << "  Checkpoint Model/Epoch: " << eval->checkpointModelId
+              << "/" << eval->checkpointEpoch << "\n"
+              << "  Checkpoint Lifecycle: " << eval->status << "/"
+              << eval->phase << "\n"
+              << "  Policy: " << CheckpointPolicyCanonicalText(config) << "\n"
+              << "  Policy Revision/Hash: " << config.policyRevision << "/"
+              << currentPolicyHash << " (persisted="
+              << config.persistedPolicyHash.value_or("legacy_unmaterialized")
+              << ")\n"
+              << "  Exact Analysis: "
+              << (exactEvidence ? std::to_string(validated.analysisId) : "unavailable")
+              << "\n"
+              << "  Exact Checkpoint Inference Result: "
+              << (exactEvidence
+                      ? std::to_string(validated.inferenceEvalResultId)
+                      : "unavailable")
+              << "\n"
+              << "  Evidence Watermark: "
+              << (exactEvidence ? evidenceWatermark : "unavailable")
+              << "\n"
+              << "  Evidence State: "
+              << (exactEvidence ? "exact" : evidenceReason) << "\n"
+              << "  Current Authoritative Decision: "
+              << (authoritativeDecisionId.has_value()
+                      ? std::to_string(*authoritativeDecisionId)
+                      : "none")
+              << "\n"
+              << "  Last Observed Decision: "
+              << (lastDecisionId.has_value()
+                      ? std::to_string(*lastDecisionId)
+                      : "none")
+              << "\n"
+              << "  Stop Decision: "
+              << (stopDecisionId.has_value()
+                      ? std::to_string(*stopDecisionId)
+                      : "none")
+              << " requested_epoch="
+              << (config.stopAfterCheckpointEpoch.has_value()
+                      ? std::to_string(*config.stopAfterCheckpointEpoch)
+                      : "none")
+              << "\n";
+    for (const auto& row : decisions)
+    {
+        std::cout << "  Durable Decision: id=" << row[0].as<long long>()
+                  << " decision=" << row[1].as<std::string>()
+                  << " identity_status=" << row[11].as<std::string>()
+                  << " policy_revision="
+                  << (row[3].is_null() ? "legacy" : row[3].c_str())
+                  << " policy_hash="
+                  << (row[4].is_null() ? "legacy" : row[4].c_str())
+                  << " evidence_watermark="
+                  << (row[5].is_null() ? "legacy" : row[5].c_str())
+                  << " analysis_id="
+                  << (row[6].is_null() ? "legacy" : row[6].c_str())
+                  << " inference_eval_result_id="
+                  << (row[7].is_null() ? "legacy" : row[7].c_str())
+                  << " stop_applied=" << (row[12].as<bool>() ? "yes" : "no")
+                  << " requested_stop_epoch="
+                  << (row[13].is_null() ? "none" : row[13].c_str())
+                  << " superseded_reason="
+                  << (row[14].is_null() ? "none" : row[14].c_str())
+                  << " reason=" << row[2].as<std::string>() << "\n";
+    }
+    std::cout << "CHECKPOINT_POLICY_STATUS"
+              << ",checkpoint_eval_id=" << checkpointEvalId
+              << ",parent_experiment_id=" << eval->experiment.experimentId
+              << ",checkpoint_model_id=" << eval->checkpointModelId
+              << ",checkpoint_epoch=" << eval->checkpointEpoch
+              << ",checkpoint_status=" << eval->status
+              << ",checkpoint_phase=" << eval->phase
+              << ",policy_revision=" << config.policyRevision
+              << ",policy_hash=" << currentPolicyHash
+              << ",persisted_policy_hash="
+              << config.persistedPolicyHash.value_or("NULL")
+              << ",analysis_id="
+              << (exactEvidence ? std::to_string(validated.analysisId) : "NULL")
+              << ",inference_eval_result_id="
+              << (exactEvidence
+                      ? std::to_string(validated.inferenceEvalResultId)
+                      : "NULL")
+              << ",evidence_watermark="
+              << (exactEvidence ? evidenceWatermark : "NULL")
+              << ",evidence_reason="
+              << (exactEvidence ? "exact" : evidenceReason)
+              << ",authoritative_decision_id="
+              << (authoritativeDecisionId.has_value()
+                      ? std::to_string(*authoritativeDecisionId)
+                      : "NULL")
+              << ",last_decision_id="
+              << (lastDecisionId.has_value()
+                      ? std::to_string(*lastDecisionId)
+                      : "NULL")
+              << ",stop_decision_id="
+              << (stopDecisionId.has_value()
+                      ? std::to_string(*stopDecisionId)
+                      : "NULL")
+              << ",requested_stop_epoch="
+              << (config.stopAfterCheckpointEpoch.has_value()
+                      ? std::to_string(*config.stopAfterCheckpointEpoch)
+                      : "NULL")
+              << ",decision_count=" << decisions.size()
               << std::endl;
     return 0;
 }
@@ -23209,6 +23858,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --evaluate-checkpoint-policy=CHECKPOINT_EVAL_ID\n"
         << "Usage: " << exe
+        << " --checkpoint-policy-status=CHECKPOINT_EVAL_ID\n"
+        << "Usage: " << exe
         << " --enable-continuation-policy=EXPERIMENT_ID | --disable-continuation-policy=EXPERIMENT_ID | "
         << "--set-continuation-policy=EXPERIMENT_ID:key=value,key=value\n"
         << "Continuation keys: target_epochs, min_evals, patience, min_leader_score, "
@@ -24545,6 +25196,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return RunRetryCheckpointEvalCommand(options);
         if (options.evaluateCheckpointPolicyEvalId.has_value())
             return RunEvaluateCheckpointPolicyCommand(options);
+        if (options.checkpointPolicyStatusEvalId.has_value())
+            return RunCheckpointPolicyStatusCommand(options);
         if (HasContinuationControlCommand(options))
             return RunContinuationPolicyControlCommand(options);
         if (options.evaluateContinuationExperimentId.has_value())
