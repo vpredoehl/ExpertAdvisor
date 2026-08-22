@@ -39,6 +39,11 @@ Experiment scheduling tables are created by:
 
 - `005_experiment_scheduler.sql`: `experiment`
 - `006_experiment_analysis.sql`: `experiment_analysis_result`
+- `073_inference_profitability_observation.sql`: immutable, explicitly scoped
+  final/checkpoint terminal-horizon directional log-return observations. It
+  performs no historical backfill and activates no recommendation, campaign,
+  continuation, or checkpoint policy. See
+  `docs/InferenceProfitabilityPersistence.rst`.
 - `046_global_experiment_control.sql`: database-authoritative global desired
   execution state, administrative request/outcome audit, cancellation targets,
   and managed worker PID/process-group/executable/process-start identity

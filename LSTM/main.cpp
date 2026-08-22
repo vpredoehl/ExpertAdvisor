@@ -49,6 +49,7 @@
 #include "ModelInputContract.hpp"
 #include "ModelInputExpansion.hpp"
 #include "ReturnFeatureHistory.hpp"
+#include "InferenceProfitabilityRepository.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -2466,25 +2467,6 @@ struct PredictionStats
     size_t correctDir = 0;
     size_t actedDir = 0;
     size_t confusion[direction_output_size][direction_output_size] = {};
-    size_t tradeCount = 0;
-    size_t longCount = 0;
-    size_t shortCount = 0;
-    size_t flatCount = 0;
-    size_t winCount = 0;
-    size_t lossCount = 0;
-    double tradeLogReturnSum = 0.0;
-    double grossPositiveLogReturn = 0.0;
-    double grossNegativeLogReturn = 0.0;
-    size_t longWinCount = 0;
-    size_t longLossCount = 0;
-    double longLogReturnSum = 0.0;
-    double longGrossPositiveLogReturn = 0.0;
-    double longGrossNegativeLogReturn = 0.0;
-    size_t shortWinCount = 0;
-    size_t shortLossCount = 0;
-    double shortLogReturnSum = 0.0;
-    double shortGrossPositiveLogReturn = 0.0;
-    double shortGrossNegativeLogReturn = 0.0;
 };
 
 const char* ClassName3(size_t cls)
@@ -2510,7 +2492,9 @@ double ProfitFactor(double grossPositiveLogReturn, double grossNegativeLogReturn
         : 0.0;
 }
 
-void PrintEvalTradingMetrics(const PredictionStats& stats)
+void PrintEvalTradingMetrics(
+    const EA::InferenceProfitability::Statistics& stats,
+    const size_t confusion[direction_output_size][direction_output_size])
 {
     size_t total = 0;
     size_t correct = 0;
@@ -2519,13 +2503,13 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
 
     for (size_t cls = 0; cls < direction_output_size; ++cls)
     {
-        const size_t tp = stats.confusion[cls][cls];
+        const size_t tp = confusion[cls][cls];
         size_t predicted = 0;
         size_t support = 0;
         for (size_t i = 0; i < direction_output_size; ++i)
         {
-            support += stats.confusion[cls][i];
-            predicted += stats.confusion[i][cls];
+            support += confusion[cls][i];
+            predicted += confusion[i][cls];
         }
 
         total += support;
@@ -2560,9 +2544,9 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
               << std::endl;
 
     const size_t directionalSamples =
-        stats.confusion[0][0] + stats.confusion[0][1] + stats.confusion[0][2] +
-        stats.confusion[2][0] + stats.confusion[2][1] + stats.confusion[2][2];
-    const size_t directionalCorrect = stats.confusion[0][0] + stats.confusion[2][2];
+        confusion[0][0] + confusion[0][1] + confusion[0][2] +
+        confusion[2][0] + confusion[2][1] + confusion[2][2];
+    const size_t directionalCorrect = confusion[0][0] + confusion[2][2];
     const double directionalAccuracy =
         SafeRatio(static_cast<double>(directionalCorrect), static_cast<double>(directionalSamples));
 
@@ -2572,70 +2556,90 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
               << ",accuracy=" << directionalAccuracy
               << std::endl;
 
-    const double winRate = SafeRatio(static_cast<double>(stats.winCount),
-                                     static_cast<double>(stats.tradeCount));
-    const double avgLogReturn = SafeRatio(stats.tradeLogReturnSum,
-                                          static_cast<double>(stats.tradeCount));
-    const double profitFactor = ProfitFactor(stats.grossPositiveLogReturn,
-                                             stats.grossNegativeLogReturn);
-    const double aggregateTotalLogReturn = stats.tradeLogReturnSum;
+    const size_t flatCount = confusion[0][1] + confusion[1][1] + confusion[2][1];
+    const double winRate = SafeRatio(
+        static_cast<double>(stats.winningActionableCount),
+        static_cast<double>(stats.actionableCount));
+    const double avgLogReturn =
+        stats.AverageTerminalHorizonLogReturnPerActionablePrediction()
+            .value_or(0.0);
+    const double profitFactor = ProfitFactor(
+        stats.grossPositiveTerminalHorizonLogReturnSum,
+        stats.grossNegativeTerminalHorizonLogReturnSum);
+    const double aggregateTotalLogReturn =
+        stats.aggregateTerminalHorizonLogReturnSum;
 
     std::cout << "TRADING_SIGNAL_METRICS"
-              << ",trade_count=" << stats.tradeCount
-              << ",long_count=" << stats.longCount
-              << ",short_count=" << stats.shortCount
-              << ",flat_count=" << stats.flatCount
-              << ",win_count=" << stats.winCount
-              << ",loss_count=" << stats.lossCount
+              << ",trade_count=" << stats.actionableCount
+              << ",long_count=" << stats.upActionableCount
+              << ",short_count=" << stats.downActionableCount
+              << ",flat_count=" << flatCount
+              << ",win_count=" << stats.winningActionableCount
+              << ",loss_count=" << stats.losingActionableCount
               << ",win_rate=" << winRate
               << ",avg_log_return=" << avgLogReturn
-              << ",gross_positive_log_return=" << stats.grossPositiveLogReturn
-              << ",gross_negative_log_return=" << stats.grossNegativeLogReturn
+              << ",gross_positive_log_return="
+              << stats.grossPositiveTerminalHorizonLogReturnSum
+              << ",gross_negative_log_return="
+              << stats.grossNegativeTerminalHorizonLogReturnSum
               << ",profit_factor=" << profitFactor
               << std::endl;
 
-    const double longWinRate = SafeRatio(static_cast<double>(stats.longWinCount),
-                                         static_cast<double>(stats.longCount));
-    const double shortWinRate = SafeRatio(static_cast<double>(stats.shortWinCount),
-                                          static_cast<double>(stats.shortCount));
-    const double longAvgLogReturn = SafeRatio(stats.longLogReturnSum,
-                                              static_cast<double>(stats.longCount));
-    const double shortAvgLogReturn = SafeRatio(stats.shortLogReturnSum,
-                                               static_cast<double>(stats.shortCount));
-    const double longProfitFactor = ProfitFactor(stats.longGrossPositiveLogReturn,
-                                                 stats.longGrossNegativeLogReturn);
-    const double shortProfitFactor = ProfitFactor(stats.shortGrossPositiveLogReturn,
-                                                  stats.shortGrossNegativeLogReturn);
+    const double longWinRate = SafeRatio(
+        static_cast<double>(stats.upWinningActionableCount),
+        static_cast<double>(stats.upActionableCount));
+    const double shortWinRate = SafeRatio(
+        static_cast<double>(stats.downWinningActionableCount),
+        static_cast<double>(stats.downActionableCount));
+    const double longAvgLogReturn = SafeRatio(
+        stats.upTerminalHorizonLogReturnSum,
+        static_cast<double>(stats.upActionableCount));
+    const double shortAvgLogReturn = SafeRatio(
+        stats.downTerminalHorizonLogReturnSum,
+        static_cast<double>(stats.downActionableCount));
+    const double longProfitFactor = ProfitFactor(
+        stats.upGrossPositiveTerminalHorizonLogReturnSum,
+        stats.upGrossNegativeTerminalHorizonLogReturnSum);
+    const double shortProfitFactor = ProfitFactor(
+        stats.downGrossPositiveTerminalHorizonLogReturnSum,
+        stats.downGrossNegativeTerminalHorizonLogReturnSum);
 
     std::cout << "TRADING_SIDE_METRICS"
-              << ",long_count=" << stats.longCount
-              << ",long_win_count=" << stats.longWinCount
-              << ",long_loss_count=" << stats.longLossCount
+              << ",long_count=" << stats.upActionableCount
+              << ",long_win_count=" << stats.upWinningActionableCount
+              << ",long_loss_count=" << stats.upLosingActionableCount
               << ",long_win_rate=" << longWinRate
-              << ",long_total_log_return=" << stats.longLogReturnSum
-              << ",long_gross_positive_log_return=" << stats.longGrossPositiveLogReturn
-              << ",long_gross_negative_log_return=" << stats.longGrossNegativeLogReturn
+              << ",long_total_log_return=" << stats.upTerminalHorizonLogReturnSum
+              << ",long_gross_positive_log_return="
+              << stats.upGrossPositiveTerminalHorizonLogReturnSum
+              << ",long_gross_negative_log_return="
+              << stats.upGrossNegativeTerminalHorizonLogReturnSum
               << ",long_profit_factor=" << longProfitFactor
               << ",long_avg_log_return=" << longAvgLogReturn
-              << ",short_count=" << stats.shortCount
-              << ",short_win_count=" << stats.shortWinCount
-              << ",short_loss_count=" << stats.shortLossCount
+              << ",short_count=" << stats.downActionableCount
+              << ",short_win_count=" << stats.downWinningActionableCount
+              << ",short_loss_count=" << stats.downLosingActionableCount
               << ",short_win_rate=" << shortWinRate
-              << ",short_total_log_return=" << stats.shortLogReturnSum
-              << ",short_gross_positive_log_return=" << stats.shortGrossPositiveLogReturn
-              << ",short_gross_negative_log_return=" << stats.shortGrossNegativeLogReturn
+              << ",short_total_log_return=" << stats.downTerminalHorizonLogReturnSum
+              << ",short_gross_positive_log_return="
+              << stats.downGrossPositiveTerminalHorizonLogReturnSum
+              << ",short_gross_negative_log_return="
+              << stats.downGrossNegativeTerminalHorizonLogReturnSum
               << ",short_profit_factor=" << shortProfitFactor
               << ",short_avg_log_return=" << shortAvgLogReturn
               << std::endl;
 
-    const size_t sideTradeCount = stats.longCount + stats.shortCount;
-    const double sideTotalLogReturn = stats.longLogReturnSum + stats.shortLogReturnSum;
+    const size_t sideTradeCount =
+        stats.upActionableCount + stats.downActionableCount;
+    const double sideTotalLogReturn =
+        stats.upTerminalHorizonLogReturnSum +
+        stats.downTerminalHorizonLogReturnSum;
     constexpr double kTradingAttributionTolerance = 1e-9;
-    if (sideTradeCount != stats.tradeCount ||
+    if (sideTradeCount != stats.actionableCount ||
         std::fabs(sideTotalLogReturn - aggregateTotalLogReturn) > kTradingAttributionTolerance)
     {
         std::cout << "TRADING_SIDE_VALIDATION_WARNING"
-                  << ",trade_count=" << stats.tradeCount
+                  << ",trade_count=" << stats.actionableCount
                   << ",long_plus_short_count=" << sideTradeCount
                   << ",aggregate_total_log_return=" << aggregateTotalLogReturn
                   << ",long_plus_short_total_log_return=" << sideTotalLogReturn
@@ -2645,14 +2649,16 @@ void PrintEvalTradingMetrics(const PredictionStats& stats)
 
     std::string dominantSide = "balanced";
     const double totalPositiveSidePnl =
-        std::max(0.0, stats.longLogReturnSum) +
-        std::max(0.0, stats.shortLogReturnSum);
+        std::max(0.0, stats.upTerminalHorizonLogReturnSum) +
+        std::max(0.0, stats.downTerminalHorizonLogReturnSum);
     if (totalPositiveSidePnl > 0.0)
     {
         const double longFractionOfTotalPnl =
-            std::max(0.0, stats.longLogReturnSum) / totalPositiveSidePnl;
+            std::max(0.0, stats.upTerminalHorizonLogReturnSum) /
+            totalPositiveSidePnl;
         const double shortFractionOfTotalPnl =
-            std::max(0.0, stats.shortLogReturnSum) / totalPositiveSidePnl;
+            std::max(0.0, stats.downTerminalHorizonLogReturnSum) /
+            totalPositiveSidePnl;
         if (longFractionOfTotalPnl > 0.60)
             dominantSide = "long";
         else if (shortFractionOfTotalPnl > 0.60)
@@ -2760,7 +2766,11 @@ void PrintModelAcceptanceDiagnostic(const size_t confusion[direction_output_size
               << std::endl;
 }
 
-static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, const Window& b)
+static PredictionStats ProcessBatchPredict(
+    EA::LSTM& l,
+    const Tensor& tensor,
+    const Window& b,
+    EA::InferenceProfitability::Accumulator& profitability)
 {
     auto stats = [](const auto& v)
     {
@@ -2869,66 +2879,7 @@ static PredictionStats ProcessBatchPredict(EA::LSTM& l, const Tensor& tensor, co
             predMaxProb.push_back(maxProb);
             ++result.confusion[actual][pred];
 
-            if (pred == 1)
-            {
-                ++result.flatCount;
-            }
-            else if (std::isfinite(labelInfo.closeT) &&
-                     std::isfinite(labelInfo.targetClose) &&
-                     labelInfo.closeT > 0.0f &&
-                     labelInfo.targetClose > 0.0f)
-            {
-                const double terminalLogReturn =
-                    std::log(static_cast<double>(labelInfo.targetClose) /
-                             static_cast<double>(labelInfo.closeT));
-                const double realizedLogReturn = (pred == 2)
-                    ? terminalLogReturn
-                    : -terminalLogReturn;
-
-                ++result.tradeCount;
-                if (pred == 2)
-                {
-                    ++result.longCount;
-                    result.longLogReturnSum += realizedLogReturn;
-                    if (realizedLogReturn > 0.0)
-                    {
-                        ++result.longWinCount;
-                        result.longGrossPositiveLogReturn += realizedLogReturn;
-                    }
-                    else if (realizedLogReturn < 0.0)
-                    {
-                        ++result.longLossCount;
-                        result.longGrossNegativeLogReturn += realizedLogReturn;
-                    }
-                }
-                else
-                {
-                    ++result.shortCount;
-                    result.shortLogReturnSum += realizedLogReturn;
-                    if (realizedLogReturn > 0.0)
-                    {
-                        ++result.shortWinCount;
-                        result.shortGrossPositiveLogReturn += realizedLogReturn;
-                    }
-                    else if (realizedLogReturn < 0.0)
-                    {
-                        ++result.shortLossCount;
-                        result.shortGrossNegativeLogReturn += realizedLogReturn;
-                    }
-                }
-
-                result.tradeLogReturnSum += realizedLogReturn;
-                if (realizedLogReturn > 0.0)
-                {
-                    ++result.winCount;
-                    result.grossPositiveLogReturn += realizedLogReturn;
-                }
-                else if (realizedLogReturn < 0.0)
-                {
-                    ++result.lossCount;
-                    result.grossNegativeLogReturn += realizedLogReturn;
-                }
-            }
+            profitability.Observe(pred, labelInfo.closeT, labelInfo.targetClose);
         }
 
         const size_t N = std::min(predClass.size(), actClass.size());
@@ -6001,6 +5952,8 @@ struct InferAllSummaryRow
     std::optional<size_t> completedEpochs;
     double accuracy = 0.0;
     ModelAcceptanceSummary acceptance;
+    std::optional<EA::InferenceProfitability::Statistics> profitability;
+    std::string profitabilitySourceContentHash;
 };
 
 struct InferenceIdentity
@@ -6218,6 +6171,8 @@ struct InferenceEvaluationResult
     double accuracy = 0.0;
     std::optional<size_t> completedEpochs;
     ModelAcceptanceSummary acceptance;
+    std::optional<EA::InferenceProfitability::Statistics> profitability;
+    std::string profitabilitySourceContentHash;
 };
 
 EA::LSTM CreateLstmForRuntimeLogLevel(const Tensor& tensor,
@@ -6253,11 +6208,12 @@ InferenceIdentity BuildInferenceIdentity(long long modelId,
 
 bool RequireInferenceEvalResultTable(pqxx::work& w)
 {
-    if (InferenceEvalResultScopeColumnsExist(w))
+    if (InferenceEvalResultScopeColumnsExist(w) &&
+        EA::InferenceProfitability::SchemaExists(w))
         return true;
 
     std::cerr << "DATABASE_MIGRATION_REQUIRED"
-              << ",missing=inference_eval_result_scope"
+              << ",missing=inference_profitability_observation"
               << ",command=./migrate_lstm_db.sh"
               << std::endl;
     return false;
@@ -6308,14 +6264,14 @@ std::optional<InferAllSummaryRow> LoadCompletedInferenceResult(pqxx::work& w,
     return row;
 }
 
-void PersistCompletedInferenceResult(pqxx::work& w,
-                                      const InferenceIdentity& identity,
-                                      const InferAllSummaryRow& row)
+long long PersistCompletedInferenceResult(pqxx::work& w,
+                                          const InferenceIdentity& identity,
+                                          const InferAllSummaryRow& row)
 {
     const long long completedEpochs = row.completedEpochs.has_value()
         ? static_cast<long long>(*row.completedEpochs)
         : -1;
-    w.exec_params(
+    const pqxx::result persisted = w.exec_params(
         "INSERT INTO inference_eval_result ("
         "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
         "from_date, to_date, completed_epochs, accuracy, accept_model, reject_reason, "
@@ -6331,7 +6287,7 @@ void PersistCompletedInferenceResult(pqxx::work& w,
         "completed_epochs = EXCLUDED.completed_epochs, accuracy = EXCLUDED.accuracy, "
         "accept_model = EXCLUDED.accept_model, reject_reason = EXCLUDED.reject_reason, "
         "pred_down = EXCLUDED.pred_down, pred_neutral = EXCLUDED.pred_neutral, "
-        "pred_up = EXCLUDED.pred_up, completed_at = now();",
+        "pred_up = EXCLUDED.pred_up, completed_at = now() RETURNING id;",
         identity.modelId,
         identity.symbol,
         static_cast<long long>(identity.predictionHorizon),
@@ -6348,6 +6304,9 @@ void PersistCompletedInferenceResult(pqxx::work& w,
         row.acceptance.predFrac[0],
         row.acceptance.predFrac[1],
         row.acceptance.predFrac[2]);
+    if (persisted.size() != 1)
+        throw std::runtime_error("completed_final_inference_result_not_returned");
+    return persisted.one_row()[0].as<long long>();
 }
 
 void PersistFailedInferenceResult(pqxx::work& w,
@@ -6380,7 +6339,7 @@ void PersistFailedInferenceResult(pqxx::work& w,
         error);
 }
 
-void PersistCompletedCheckpointInferenceResult(
+long long PersistCompletedCheckpointInferenceResult(
     pqxx::work& w,
     const InferenceIdentity& identity,
     const InferAllSummaryRow& row,
@@ -6423,14 +6382,14 @@ void PersistCompletedCheckpointInferenceResult(
                       << ",inference_scope=checkpoint"
                       << ",status=completed"
                       << std::endl;
-            return;
+            return existing[0][0].as<long long>();
         }
     }
 
     const long long completedEpochs = row.completedEpochs.has_value()
         ? static_cast<long long>(*row.completedEpochs)
         : static_cast<long long>(*context.checkpointEpoch);
-    w.exec_params(
+    const pqxx::result persisted = w.exec_params(
         "INSERT INTO inference_eval_result ("
         "model_id, symbol, prediction_horizon, threshold_logret, window_size, label_rule_id, target_type, "
         "from_date, to_date, completed_epochs, accuracy, accept_model, reject_reason, "
@@ -6448,7 +6407,8 @@ void PersistCompletedCheckpointInferenceResult(
         "accept_model = EXCLUDED.accept_model, reject_reason = EXCLUDED.reject_reason, "
         "pred_down = EXCLUDED.pred_down, pred_neutral = EXCLUDED.pred_neutral, "
         "pred_up = EXCLUDED.pred_up, status = 'completed', completed_at = now(), "
-        "parent_experiment_id = EXCLUDED.parent_experiment_id, checkpoint_epoch = EXCLUDED.checkpoint_epoch;",
+        "parent_experiment_id = EXCLUDED.parent_experiment_id, "
+        "checkpoint_epoch = EXCLUDED.checkpoint_epoch RETURNING id;",
         identity.modelId,
         identity.symbol,
         static_cast<long long>(identity.predictionHorizon),
@@ -6477,6 +6437,71 @@ void PersistCompletedCheckpointInferenceResult(
               << ",model_id=" << identity.modelId
               << ",inference_scope=checkpoint"
               << ",status=completed"
+              << std::endl;
+    if (persisted.size() != 1)
+        throw std::runtime_error("completed_checkpoint_inference_result_not_returned");
+    return persisted.one_row()[0].as<long long>();
+}
+
+std::optional<long long> ResolveProfitabilityExperimentId(
+    pqxx::work& w,
+    const InferenceIdentity& identity,
+    const std::optional<long long>& explicitExperimentId)
+{
+    if (explicitExperimentId.has_value())
+        return *explicitExperimentId;
+    const pqxx::result rows = w.exec_params(
+        "SELECT experiment_id FROM model WHERE model_id=$1;",
+        identity.modelId);
+    if (rows.size() != 1 || rows[0][0].is_null())
+        return std::nullopt;
+    return rows[0][0].as<long long>();
+}
+
+void PersistInferenceProfitabilityObservation(
+    pqxx::work& w,
+    long long inferenceEvalResultId,
+    const InferenceIdentity& identity,
+    const InferAllSummaryRow& row,
+    EA::InferenceProfitability::Scope scope,
+    const std::optional<long long>& checkpointEvalId,
+    const std::optional<long long>& explicitExperimentId)
+{
+    if (!row.profitability.has_value())
+        return;
+
+    EA::InferenceProfitability::ObservationRequest request;
+    request.provenance.experimentId =
+        ResolveProfitabilityExperimentId(w, identity, explicitExperimentId);
+    request.provenance.modelId = identity.modelId;
+    request.provenance.inferenceEvalResultId = inferenceEvalResultId;
+    request.provenance.scope = scope;
+    request.provenance.checkpointEvalId = checkpointEvalId;
+    request.provenance.inferenceStart = identity.fromDate;
+    request.provenance.inferenceEnd = identity.toDate;
+    request.statistics = *row.profitability;
+    request.sourceContentHash = row.profitabilitySourceContentHash;
+
+    const auto persisted =
+        EA::InferenceProfitability::PersistObservationIdempotently(w, request);
+    std::cout << "INFERENCE_PROFITABILITY_OBSERVATION_PERSISTED"
+              << ",observation_id=" << persisted.observation.observationId
+              << ",observation_identity="
+              << persisted.observation.observationIdentityHash
+              << ",idempotent_existing="
+              << (persisted.created ? "false" : "true")
+              << ",inference_scope="
+              << EA::InferenceProfitability::ScopeText(scope)
+              << ",experiment_id="
+              << request.provenance.experimentId.value_or(-1)
+              << ",model_id=" << identity.modelId
+              << ",inference_eval_result_id=" << inferenceEvalResultId
+              << ",checkpoint_eval_id=" << checkpointEvalId.value_or(-1)
+              << ",actionable_count=" << request.statistics.actionableCount
+              << ",aggregate_terminal_horizon_log_return_sum="
+              << request.statistics.aggregateTerminalHorizonLogReturnSum
+              << ",metric_definition_identity="
+              << persisted.observation.metricDefinitionHash
               << std::endl;
 }
 
@@ -6520,13 +6545,14 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
     size_t totalCorrectDir = 0;
     size_t totalActedDir = 0;
     size_t totalConfusion[direction_output_size][direction_output_size] = {};
-    PredictionStats totalTradeStats;
+    EA::InferenceProfitability::Accumulator profitability;
 
     {
         ScopedDiagnosticCoutSilencer silence;
         tensor.ForEachBatchFrom(logicalOutputStartIndex, [&](auto b)
         {
-            const auto predictionStats = ProcessBatchPredict(lstm, tensor, b);
+            const auto predictionStats =
+                ProcessBatchPredict(lstm, tensor, b, profitability);
             totalCorrectLog += predictionStats.correctLog;
             totalActedLog += predictionStats.actedLog;
             totalWindows += predictionStats.windows;
@@ -6538,25 +6564,6 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
                 for (size_t pred = 0; pred < direction_output_size; ++pred)
                     totalConfusion[actual][pred] += predictionStats.confusion[actual][pred];
 
-            totalTradeStats.tradeCount += predictionStats.tradeCount;
-            totalTradeStats.longCount += predictionStats.longCount;
-            totalTradeStats.shortCount += predictionStats.shortCount;
-            totalTradeStats.flatCount += predictionStats.flatCount;
-            totalTradeStats.winCount += predictionStats.winCount;
-            totalTradeStats.lossCount += predictionStats.lossCount;
-            totalTradeStats.tradeLogReturnSum += predictionStats.tradeLogReturnSum;
-            totalTradeStats.grossPositiveLogReturn += predictionStats.grossPositiveLogReturn;
-            totalTradeStats.grossNegativeLogReturn += predictionStats.grossNegativeLogReturn;
-            totalTradeStats.longWinCount += predictionStats.longWinCount;
-            totalTradeStats.longLossCount += predictionStats.longLossCount;
-            totalTradeStats.longLogReturnSum += predictionStats.longLogReturnSum;
-            totalTradeStats.longGrossPositiveLogReturn += predictionStats.longGrossPositiveLogReturn;
-            totalTradeStats.longGrossNegativeLogReturn += predictionStats.longGrossNegativeLogReturn;
-            totalTradeStats.shortWinCount += predictionStats.shortWinCount;
-            totalTradeStats.shortLossCount += predictionStats.shortLossCount;
-            totalTradeStats.shortLogReturnSum += predictionStats.shortLogReturnSum;
-            totalTradeStats.shortGrossPositiveLogReturn += predictionStats.shortGrossPositiveLogReturn;
-            totalTradeStats.shortGrossNegativeLogReturn += predictionStats.shortGrossNegativeLogReturn;
         });
     }
 
@@ -6574,6 +6581,9 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
 
     if (lstm.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
     {
+        if (profitability.statistics().predictionCount != totalWindows)
+            throw std::runtime_error(
+                "inference_profitability_prediction_count_mismatch");
         result.accuracy = totalWindows
             ? (static_cast<double>(totalCorrectDir) / static_cast<double>(totalWindows))
             : 0.0;
@@ -6589,14 +6599,12 @@ InferenceEvaluationResult RunInferenceEvaluation(pqxx::work& w,
         }
         PrintModelAcceptanceDiagnostic(totalConfusion);
         result.acceptance = ComputeModelAcceptanceSummary(totalConfusion);
+        result.profitability = profitability.statistics();
+        result.profitabilitySourceContentHash =
+            profitability.SourceContentHash();
 
         if (launchArgs.evalTrading)
-        {
-            for (size_t actual = 0; actual < direction_output_size; ++actual)
-                for (size_t pred = 0; pred < direction_output_size; ++pred)
-                    totalTradeStats.confusion[actual][pred] = totalConfusion[actual][pred];
-            PrintEvalTradingMetrics(totalTradeStats);
-        }
+            PrintEvalTradingMetrics(profitability.statistics(), totalConfusion);
     }
     else
     {
@@ -7019,6 +7027,9 @@ InferAllSummaryRow RunInferAllModel(pqxx::work& w,
         : candidate.completedEpochs;
     row.accuracy = evaluation.accuracy;
     row.acceptance = evaluation.acceptance;
+    row.profitability = evaluation.profitability;
+    row.profitabilitySourceContentHash =
+        evaluation.profitabilitySourceContentHash;
 
     if (LogSummary())
         std::cout << "INFER_ALL_MODEL_DONE"
@@ -7157,7 +7168,16 @@ int RunInferAllForSymbol(pqxx::work& w,
                                                       tensor,
                                                       logicalOutputStartIndex,
                                                       requestedTargetType);
-            PersistCompletedInferenceResult(w, identity, row);
+            const long long inferenceEvalResultId =
+                PersistCompletedInferenceResult(w, identity, row);
+            PersistInferenceProfitabilityObservation(
+                w,
+                inferenceEvalResultId,
+                identity,
+                row,
+                EA::InferenceProfitability::Scope::finalInference,
+                std::nullopt,
+                std::nullopt);
             summaries.push_back(row);
             ++newlyEvaluated;
         }
@@ -7902,17 +7922,41 @@ int main(int argc, const char * argv[])
                         row.completedEpochs = evaluation.completedEpochs;
                         row.accuracy = evaluation.accuracy;
                         row.acceptance = evaluation.acceptance;
+                        row.profitability = evaluation.profitability;
+                        row.profitabilitySourceContentHash =
+                            evaluation.profitabilitySourceContentHash;
 
+                        long long inferenceEvalResultId = -1;
                         if (schedulerInferenceContext->inferenceScope == "checkpoint")
                         {
-                            PersistCompletedCheckpointInferenceResult(runtimeDatabaseWork,
-                                                                      identity,
-                                                                      row,
-                                                                      *schedulerInferenceContext);
+                            inferenceEvalResultId =
+                                PersistCompletedCheckpointInferenceResult(
+                                    runtimeDatabaseWork,
+                                    identity,
+                                    row,
+                                    *schedulerInferenceContext);
+                            PersistInferenceProfitabilityObservation(
+                                runtimeDatabaseWork,
+                                inferenceEvalResultId,
+                                identity,
+                                row,
+                                EA::InferenceProfitability::Scope::checkpointInference,
+                                schedulerInferenceContext->checkpointEvalId,
+                                schedulerInferenceContext->parentExperimentId);
                         }
                         else
                         {
-                            PersistCompletedInferenceResult(runtimeDatabaseWork, identity, row);
+                            inferenceEvalResultId =
+                                PersistCompletedInferenceResult(
+                                    runtimeDatabaseWork, identity, row);
+                            PersistInferenceProfitabilityObservation(
+                                runtimeDatabaseWork,
+                                inferenceEvalResultId,
+                                identity,
+                                row,
+                                EA::InferenceProfitability::Scope::finalInference,
+                                std::nullopt,
+                                schedulerInferenceContext->schedulerExperimentId);
                             std::cout << "SCHEDULER_INFER_RESULT_PERSISTED"
                                       << ",experiment_id="
                                       << schedulerInferenceContext->schedulerExperimentId.value_or(-1)
