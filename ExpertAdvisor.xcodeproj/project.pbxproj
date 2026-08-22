@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
+		0E72000130D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
@@ -21,6 +22,7 @@
 		0A1000022F70000100AAA001 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0A1000032F70000100AAA001 /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
 		0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
+		0E72000230D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */; };
 		0A1000052F70000100AAA001 /* LSTM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0890B6A42F1DC54900CEDECF /* LSTM.cpp */; };
 		0A1000062F70000100AAA001 /* libMetalBuffer.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DB2F5FCBBC00BE2DCE /* libMetalBuffer.a */; };
 		0A1000072F70000100AAA001 /* libMetaNN.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 08A334DA2F5FCBAC00BE2DCE /* libMetaNN.a */; };
@@ -506,6 +508,7 @@
 		0B6500013090000100AAA001 /* CampaignOperationsManager.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManager.hpp; path = Sources/CampaignOperationsManager.hpp; sourceTree = SOURCE_ROOT; };
 		0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsManagerService.cpp; path = Sources/CampaignOperationsManagerService.cpp; sourceTree = SOURCE_ROOT; };
 		0B6500033090000100AAA001 /* CampaignOperationsManagerService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManagerService.hpp; path = Sources/CampaignOperationsManagerService.hpp; sourceTree = SOURCE_ROOT; };
+		0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Common/HistoricalFxTimestamp.cpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1067,6 +1070,7 @@
 				0B6500063090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
 				0A4000012FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */,
+				0E72000130D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
 				0890B6A52F1DC54900CEDECF /* LSTM.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1172,6 +1176,7 @@
 				0B6500073090000100AAA001 /* CampaignOperationsManagerService.cpp in Sources */,
 				0A4000022FB0000100AAA001 /* RunMetadata.cpp in Sources */,
 				0A1000042F70000100AAA001 /* db_cursor.cpp in Sources */,
+				0E72000230D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */,
 				0A1000052F70000100AAA001 /* LSTM.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
