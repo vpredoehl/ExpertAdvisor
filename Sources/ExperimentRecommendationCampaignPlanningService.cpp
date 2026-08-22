@@ -97,6 +97,47 @@ void PrintCandidate(
            << OptionalDouble(value.profitabilityMetric)
            << ",profitability_metric_identity="
            << OptionalText(value.profitabilityMetricIdentity)
+           << ",final_profitability_evidence="
+           << (!value.finalProfitabilityEvidence
+                   ? "legacy"
+                   : value.finalProfitabilityEvidence->Available()
+                         ? "available" : "unavailable")
+           << ",final_profitability_unavailable_reason="
+           << (!value.finalProfitabilityEvidence ||
+                       value.finalProfitabilityEvidence->unavailableReason.empty()
+                   ? "NULL"
+                   : RecommendationMachineText(
+                         value.finalProfitabilityEvidence->unavailableReason))
+           << ",final_inference_eval_result_id="
+           << (value.finalProfitabilityEvidence
+                   ? OptionalNumber(value.finalProfitabilityEvidence
+                         ->finalInferenceEvalResultId)
+                   : "NULL")
+           << ",final_profitability_observation_id="
+           << (value.finalProfitabilityEvidence
+                   ? OptionalNumber(value.finalProfitabilityEvidence
+                         ->profitabilityObservationId)
+                   : "NULL")
+           << ",final_profitability_actionable_count="
+           << (value.finalProfitabilityEvidence
+                   ? OptionalNumber(value.finalProfitabilityEvidence
+                         ->actionablePredictionCount)
+                   : "NULL")
+           << ",final_profitability_aggregate_terminal_horizon_log_return_sum="
+           << (value.finalProfitabilityEvidence &&
+                       value.finalProfitabilityEvidence
+                           ->aggregateTerminalHorizonLogReturnSum
+                   ? Number(*value.finalProfitabilityEvidence
+                         ->aggregateTerminalHorizonLogReturnSum)
+                   : "NULL")
+           << ",final_profitability_average_terminal_horizon_log_return_per_actionable_prediction="
+           << (value.finalProfitabilityEvidence &&
+                       value.finalProfitabilityEvidence
+                           ->averageTerminalHorizonLogReturnPerActionablePrediction
+                   ? Number(*value.finalProfitabilityEvidence
+                         ->averageTerminalHorizonLogReturnPerActionablePrediction)
+                   : "NULL")
+           << ",profitability_weight=0,profitability_score_contribution=0"
            << ",proposal_id="
            << (workflow ? std::to_string(workflow->proposalId) : "NULL")
            << ",latest_review_decision_id="

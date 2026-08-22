@@ -81,6 +81,8 @@ struct RecommendationScoreComponent
     double weightedContribution = 0.0;
     bool penalty = false;
     std::string explanation;
+
+    bool operator==(const RecommendationScoreComponent&) const = default;
 };
 
 struct RecommendationScoreResult

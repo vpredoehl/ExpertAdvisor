@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Donchian20Mode.hpp"
+#include "ExperimentRecommendation.hpp"
 #include "ExperimentRecommendationConversionWorkflow.hpp"
 
 #include <optional>
@@ -129,6 +130,11 @@ struct RecommendationCampaignCandidateInput
     std::optional<Donchian20Mode> campaignDonchian20Mode;
     bool persistedProvenanceValid = true;
     std::vector<RecommendationCampaignWorkflowEvidence> workflows;
+    // Observational only. The existing profitabilityMetric field remains the
+    // separate, inactive decision-policy channel and is intentionally not
+    // populated from this Phase 3A evidence.
+    std::optional<RecommendationSource::FinalProfitabilityEvidence>
+        finalProfitabilityEvidence;
 };
 
 enum class RecommendationCampaignDecision

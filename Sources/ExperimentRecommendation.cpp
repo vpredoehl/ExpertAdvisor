@@ -19,6 +19,40 @@ namespace EA::ExperimentRecommendation
 namespace
 {
 
+template <typename Value>
+std::string OptionalProfitabilityValue(
+    const std::optional<Value>& value)
+{
+    return value ? std::to_string(*value) : "NULL";
+}
+
+template <>
+std::string OptionalProfitabilityValue<double>(
+    const std::optional<double>& value)
+{
+    return value ? CanonicalRecommendationDouble(*value) : "NULL";
+}
+
+template <>
+std::string OptionalProfitabilityValue<std::string>(
+    const std::optional<std::string>& value)
+{
+    return value ? *value : "NULL";
+}
+
+void AppendProfitabilityField(
+    std::string& output,
+    const char* name,
+    const std::string& value)
+{
+    output.append(name);
+    output.push_back('=');
+    output.append(std::to_string(value.size()));
+    output.push_back(':');
+    output.append(value);
+    output.push_back(';');
+}
+
 std::vector<std::string> Split(const std::string& text, char delimiter)
 {
     std::vector<std::string> values;
@@ -200,6 +234,117 @@ int MatchedInteger(const std::ssub_match& match, int fallback = 0)
 }
 
 } // namespace
+
+std::optional<std::string> ValidateRecommendationFinalProfitabilityEvidence(
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence)
+{
+    if (!evidence) return std::nullopt;
+    const auto& value = *evidence;
+    if (value.provenanceVersion !=
+            kRecommendationFinalProfitabilityProvenanceVersion)
+        return "unsupported_final_profitability_provenance_version";
+    if (value.inferenceScope != "final")
+        return "recommendation_profitability_not_final";
+    if (value.finalInferenceEvalResultId &&
+        *value.finalInferenceEvalResultId <= 0)
+        return "invalid_final_inference_result_id";
+    if (value.profitabilityObservationId &&
+        *value.profitabilityObservationId <= 0)
+        return "invalid_profitability_observation_id";
+    if (!value.Available())
+    {
+        if (value.unavailableReason.empty())
+            return "missing_profitability_unavailable_reason";
+        if (value.inferenceStart || value.inferenceEnd ||
+            value.actionablePredictionCount ||
+            value.aggregateTerminalHorizonLogReturnSum ||
+            value.averageTerminalHorizonLogReturnPerActionablePrediction ||
+            value.metricDefinitionHash || value.sourceContentHash ||
+            value.observationIdentityHash)
+            return "unavailable_profitability_contains_observation_values";
+        return std::nullopt;
+    }
+    if (!value.finalInferenceEvalResultId ||
+        !value.inferenceStart || !value.inferenceEnd ||
+        !value.actionablePredictionCount ||
+        !value.aggregateTerminalHorizonLogReturnSum ||
+        !value.metricDefinitionHash || !value.sourceContentHash ||
+        !value.observationIdentityHash || !value.unavailableReason.empty())
+        return "incomplete_available_profitability_evidence";
+    if (*value.actionablePredictionCount < 0 ||
+        !std::isfinite(*value.aggregateTerminalHorizonLogReturnSum) ||
+        (value.averageTerminalHorizonLogReturnPerActionablePrediction &&
+         !std::isfinite(
+             *value.averageTerminalHorizonLogReturnPerActionablePrediction)))
+        return "invalid_available_profitability_values";
+    if ((*value.actionablePredictionCount == 0) ==
+        value.averageTerminalHorizonLogReturnPerActionablePrediction.has_value())
+        return "profitability_average_presence_mismatch";
+    return std::nullopt;
+}
+
+std::string RecommendationFinalProfitabilityEvidenceCanonicalText(
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence)
+{
+    if (const auto error =
+            ValidateRecommendationFinalProfitabilityEvidence(evidence))
+        throw std::invalid_argument(*error);
+    std::string canonical =
+        "experiment_recommendation_final_profitability_evidence_v1;";
+    if (!evidence)
+    {
+        AppendProfitabilityField(canonical, "state", "legacy");
+        return canonical;
+    }
+    const auto& value = *evidence;
+    AppendProfitabilityField(canonical, "state",
+                             value.Available() ? "available" : "unavailable");
+    AppendProfitabilityField(canonical, "provenance_version",
+                             std::to_string(value.provenanceVersion));
+    AppendProfitabilityField(canonical, "final_inference_eval_result_id",
+        OptionalProfitabilityValue(value.finalInferenceEvalResultId));
+    AppendProfitabilityField(canonical, "profitability_observation_id",
+        OptionalProfitabilityValue(value.profitabilityObservationId));
+    AppendProfitabilityField(canonical, "inference_scope",
+                             value.inferenceScope);
+    AppendProfitabilityField(canonical, "inference_start",
+        OptionalProfitabilityValue(value.inferenceStart));
+    AppendProfitabilityField(canonical, "inference_end",
+        OptionalProfitabilityValue(value.inferenceEnd));
+    AppendProfitabilityField(canonical, "actionable_prediction_count",
+        OptionalProfitabilityValue(value.actionablePredictionCount));
+    AppendProfitabilityField(canonical,
+        "aggregate_terminal_horizon_log_return_sum",
+        OptionalProfitabilityValue(
+            value.aggregateTerminalHorizonLogReturnSum));
+    AppendProfitabilityField(canonical,
+        "average_terminal_horizon_log_return_per_actionable_prediction",
+        OptionalProfitabilityValue(
+            value.averageTerminalHorizonLogReturnPerActionablePrediction));
+    AppendProfitabilityField(canonical, "metric_definition_hash",
+        OptionalProfitabilityValue(value.metricDefinitionHash));
+    AppendProfitabilityField(canonical, "source_content_hash",
+        OptionalProfitabilityValue(value.sourceContentHash));
+    AppendProfitabilityField(canonical, "observation_identity_hash",
+        OptionalProfitabilityValue(value.observationIdentityHash));
+    AppendProfitabilityField(canonical, "unavailable_reason",
+                             value.unavailableReason.empty()
+                                 ? "NULL" : value.unavailableReason);
+    AppendProfitabilityField(canonical, "profitability_weight", "0");
+    AppendProfitabilityField(canonical,
+                             "profitability_score_contribution", "0");
+    return canonical;
+}
+
+std::string RecommendationFinalProfitabilityEvidenceHash(
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence)
+{
+    return RecommendationCanonicalHash(
+        RecommendationFinalProfitabilityEvidenceCanonicalText(evidence));
+}
 
 std::string RecommendationSourceScopeText(RecommendationSourceScope value)
 {

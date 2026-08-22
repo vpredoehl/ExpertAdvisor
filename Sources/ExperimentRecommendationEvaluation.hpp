@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExperimentRecommendation.hpp"
 #include "ExperimentRecommendationScoring.hpp"
 
 #include <optional>
@@ -76,6 +77,8 @@ struct RecommendationEvaluationInput
     std::string currentSourceAnalysisScope;
     std::vector<RecommendationEvaluationExperimentConflict>
         exactExperimentConflicts;
+    std::optional<RecommendationSource::FinalProfitabilityEvidence>
+        finalProfitabilityEvidence;
 };
 
 struct RecommendationEvaluationResult
@@ -105,6 +108,10 @@ struct RecommendationEvaluationResult
     int missingEvidenceCount = 0;
     std::vector<RecommendationScoreComponent> components;
     int rankingOrdinal = 0;
+    std::optional<RecommendationSource::FinalProfitabilityEvidence>
+        finalProfitabilityEvidence;
+    std::string profitabilityEvidenceCanonical;
+    std::string profitabilityEvidenceHash;
 };
 
 std::string RecommendationEvaluationEvidenceCanonicalText(

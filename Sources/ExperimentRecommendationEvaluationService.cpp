@@ -24,6 +24,51 @@ std::string OptionalScore(const std::optional<double>& value)
     return value ? CanonicalRecommendationDouble(*value) : "NULL";
 }
 
+void PrintProfitability(
+    std::ostream& output,
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence,
+    const std::string* evidenceHash)
+{
+    output << ",final_profitability_evidence="
+           << (!evidence ? "legacy"
+                         : evidence->Available() ? "available" : "unavailable")
+           << ",final_profitability_unavailable_reason="
+           << (!evidence || evidence->unavailableReason.empty()
+                   ? "NULL"
+                   : RecommendationMachineText(evidence->unavailableReason))
+           << ",final_inference_eval_result_id="
+           << (evidence
+                   ? OptionalNumber(evidence->finalInferenceEvalResultId)
+                   : "NULL")
+           << ",final_profitability_observation_id="
+           << (evidence
+                   ? OptionalNumber(evidence->profitabilityObservationId)
+                   : "NULL")
+           << ",final_profitability_inference_scope="
+           << (evidence
+                   ? RecommendationMachineText(evidence->inferenceScope)
+                   : "NULL")
+           << ",final_profitability_actionable_count="
+           << (evidence
+                   ? OptionalNumber(evidence->actionablePredictionCount)
+                   : "NULL")
+           << ",final_profitability_aggregate_terminal_horizon_log_return_sum="
+           << (evidence && evidence->aggregateTerminalHorizonLogReturnSum
+                   ? CanonicalRecommendationDouble(
+                         *evidence->aggregateTerminalHorizonLogReturnSum)
+                   : "NULL")
+           << ",final_profitability_average_terminal_horizon_log_return_per_actionable_prediction="
+           << (evidence &&
+                       evidence->averageTerminalHorizonLogReturnPerActionablePrediction
+                   ? CanonicalRecommendationDouble(
+                         *evidence->averageTerminalHorizonLogReturnPerActionablePrediction)
+                   : "NULL")
+           << ",profitability_evidence_hash="
+           << (evidenceHash ? RecommendationMachineText(*evidenceHash) : "NULL")
+           << ",profitability_weight=0,profitability_score_contribution=0";
+}
+
 std::string SnapshotCanonical(
     const RecommendationEvaluationPolicy& policy,
     const RecommendationEvaluationFilters& filters,
@@ -89,7 +134,10 @@ void PrintEvaluation(
                    ? RecommendationMachineText(result.reasonCode) : "NULL")
            << ",explanation="
            << RecommendationMachineText(result.explanation)
-           << ",persisted=" << (persisted ? "true" : "false") << ',';
+           << ",persisted=" << (persisted ? "true" : "false");
+    PrintProfitability(output, result.finalProfitabilityEvidence,
+                       &result.profitabilityEvidenceHash);
+    output << ',';
     PrintSafety(output);
     output << '\n';
 }
@@ -130,7 +178,12 @@ void PrintPersistedSummary(
            << ",explanation=" << RecommendationMachineText(result.explanation)
            << ",ranking_ordinal=" << result.rankingOrdinal
            << ",created_at=" << RecommendationMachineText(result.createdAt)
-           << ",persisted=true,";
+           << ",persisted=true";
+    const std::string* profitabilityHash = result.profitabilityEvidenceHash
+        ? &*result.profitabilityEvidenceHash : nullptr;
+    PrintProfitability(output, result.finalProfitabilityEvidence,
+                       profitabilityHash);
+    output << ',';
     PrintSafety(output);
     output << '\n';
 }

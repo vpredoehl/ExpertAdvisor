@@ -1,6 +1,7 @@
 #include "ExperimentRecommendationRepository.hpp"
 
 #include "CanonicalSymbol.hpp"
+#include "InferenceProfitabilityRepository.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,110 @@ bool TableExists(pqxx::transaction_base& transaction, const char* table)
         "SELECT 1 FROM information_schema.tables "
         "WHERE table_schema = 'public' AND table_name = $1 LIMIT 1;",
         pqxx::params{table}).empty();
+}
+
+std::optional<RecommendationSource::FinalProfitabilityEvidence>
+MapFinalProfitabilityEvidence(const pqxx::row& row)
+{
+    const auto version = OptionalValue<int>(
+        row, "final_profitability_provenance_version");
+    if (!version) return std::nullopt;
+    RecommendationSource::FinalProfitabilityEvidence evidence;
+    evidence.provenanceVersion = *version;
+    evidence.finalInferenceEvalResultId = OptionalValue<long long>(
+        row, "source_final_inference_eval_result_id");
+    evidence.profitabilityObservationId = OptionalValue<long long>(
+        row, "source_final_profitability_observation_id");
+    evidence.inferenceScope = row[
+        "source_final_profitability_inference_scope"].as<std::string>();
+    evidence.inferenceStart = OptionalValue<std::string>(
+        row, "source_final_profitability_inference_start");
+    evidence.inferenceEnd = OptionalValue<std::string>(
+        row, "source_final_profitability_inference_end");
+    evidence.actionablePredictionCount = OptionalValue<long long>(
+        row, "source_final_profitability_actionable_count");
+    evidence.aggregateTerminalHorizonLogReturnSum = OptionalValue<double>(
+        row, "source_final_profitability_aggregate_return");
+    evidence.averageTerminalHorizonLogReturnPerActionablePrediction =
+        OptionalValue<double>(row,
+            "source_final_profitability_average_return");
+    evidence.metricDefinitionHash = OptionalValue<std::string>(
+        row, "source_final_profitability_metric_definition_hash");
+    evidence.sourceContentHash = OptionalValue<std::string>(
+        row, "source_final_profitability_source_content_hash");
+    evidence.observationIdentityHash = OptionalValue<std::string>(
+        row, "source_final_profitability_observation_identity_hash");
+    evidence.unavailableReason = row[
+        "source_final_profitability_unavailable_reason"].is_null()
+        ? ""
+        : row["source_final_profitability_unavailable_reason"]
+              .as<std::string>();
+    if (const auto error =
+            ValidateRecommendationFinalProfitabilityEvidence(evidence))
+        throw std::runtime_error(*error);
+    return evidence;
+}
+
+RecommendationSource::FinalProfitabilityEvidence
+LoadFinalProfitabilityEvidence(
+    pqxx::transaction_base& transaction,
+    long long experimentId,
+    long long modelId)
+{
+    RecommendationSource::FinalProfitabilityEvidence evidence;
+    const auto finalResult =
+        InferenceProfitability::ResolveExactFinalInferenceResult(
+            transaction, experimentId, modelId);
+    if (finalResult.status !=
+        InferenceProfitability::ExactFinalInferenceResultStatus::available)
+    {
+        evidence.unavailableReason =
+            InferenceProfitability::ExactFinalInferenceResultStatusText(
+                finalResult.status);
+        return evidence;
+    }
+    evidence.finalInferenceEvalResultId =
+        finalResult.inferenceEvalResultId;
+
+    InferenceProfitability::AuthoritativeObservationSelector selector;
+    selector.experimentId = experimentId;
+    selector.modelId = modelId;
+    selector.inferenceEvalResultId = *finalResult.inferenceEvalResultId;
+    selector.scope = InferenceProfitability::Scope::finalInference;
+    selector.metricDefinitionCanonical =
+        InferenceProfitability::kMetricDefinitionCanonical;
+    selector.metricDefinitionHash =
+        InferenceProfitability::MetricDefinitionHash();
+    const auto selected =
+        InferenceProfitability::SelectAuthoritativeObservation(
+            transaction, selector);
+    if (selected.status !=
+        InferenceProfitability::AuthoritativeObservationStatus::available)
+    {
+        evidence.unavailableReason =
+            InferenceProfitability::AuthoritativeObservationStatusText(
+                selected.status);
+        return evidence;
+    }
+
+    const auto& observation = *selected.observation;
+    evidence.profitabilityObservationId = observation.observationId;
+    evidence.inferenceStart = observation.provenance.inferenceStart;
+    evidence.inferenceEnd = observation.provenance.inferenceEnd;
+    evidence.actionablePredictionCount = static_cast<long long>(
+        observation.statistics.actionableCount);
+    evidence.aggregateTerminalHorizonLogReturnSum =
+        observation.statistics.aggregateTerminalHorizonLogReturnSum;
+    evidence.averageTerminalHorizonLogReturnPerActionablePrediction =
+        observation.averageTerminalHorizonLogReturnPerActionablePrediction;
+    evidence.metricDefinitionHash = observation.metricDefinitionHash;
+    evidence.sourceContentHash = observation.sourceContentHash;
+    evidence.observationIdentityHash =
+        observation.observationIdentityHash;
+    if (const auto error =
+            ValidateRecommendationFinalProfitabilityEvidence(evidence))
+        throw std::runtime_error(*error);
+    return evidence;
 }
 
 ExperimentInvocationConfiguration MapExperimentInvocation(
@@ -499,6 +604,9 @@ std::vector<RecommendationSourceLoadResult> LoadRecommendationSources(
             source.predictedNeutralProportion =
                 OptionalValue<double>(row, "source_predicted_neutral_proportion");
             source.evidenceCount = row["source_evidence_count"].as<long long>();
+            source.finalProfitabilityEvidence =
+                LoadFinalProfitabilityEvidence(
+                    transaction, source.experimentId, *source.modelId);
             loaded.source = std::move(source);
         }
         catch (const std::exception& error)
@@ -715,6 +823,17 @@ RecommendationPersistResult PersistRecommendationIdempotently(
     if (!request.source.leaderScore || !request.source.inferenceAccuracy ||
         request.source.evidenceCount <= 0 || request.sourceRank <= 0)
         throw std::invalid_argument("recommendation_persistence_source_evidence_invalid");
+    if (!request.source.finalProfitabilityEvidence)
+        throw std::invalid_argument(
+            "recommendation_persistence_profitability_provenance_missing");
+    if (const auto error = ValidateRecommendationFinalProfitabilityEvidence(
+            request.source.finalProfitabilityEvidence))
+        throw std::invalid_argument(*error);
+    const auto& profitability = *request.source.finalProfitabilityEvidence;
+    const std::optional<std::string> profitabilityUnavailableReason =
+        profitability.unavailableReason.empty()
+            ? std::nullopt
+            : std::optional<std::string>{profitability.unavailableReason};
 
     const std::string sourceValue =
         CanonicalRecommendationDouble(request.candidate.sourceValue);
@@ -727,8 +846,17 @@ RecommendationPersistResult PersistRecommendationIdempotently(
         "source_predicted_neutral_proportion,source_evidence_count,changed_parameter,"
         "source_value_canonical,proposed_value_canonical,absolute_delta,relative_delta,horizon_delta,"
         "semantic_configuration_canonical,semantic_hash,invocation_configuration_canonical,invocation_hash,"
-        "policy_canonical,policy_hash,source_rank,generation_ordinal,structural_rank,duplicate_type,reason) "
-        "VALUES ($1,'proposed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,'no_duplicate','single_parameter_neighborhood') "
+        "policy_canonical,policy_hash,source_rank,generation_ordinal,structural_rank,"
+        "final_profitability_provenance_version,source_final_inference_eval_result_id,"
+        "source_final_profitability_observation_id,source_final_profitability_unavailable_reason,"
+        "source_final_profitability_inference_scope,source_final_profitability_inference_start,"
+        "source_final_profitability_inference_end,source_final_profitability_actionable_count,"
+        "source_final_profitability_aggregate_return,source_final_profitability_average_return,"
+        "source_final_profitability_metric_definition_hash,source_final_profitability_source_content_hash,"
+        "source_final_profitability_observation_identity_hash,duplicate_type,reason) "
+        "VALUES ($1,'proposed',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,"
+        "$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,"
+        "'no_duplicate','single_parameter_neighborhood') "
         "ON CONFLICT (semantic_configuration_canonical,policy_canonical) "
         "WHERE status IN ('proposed','approved') "
         "AND semantic_configuration_canonical IS NOT NULL "
@@ -750,7 +878,20 @@ RecommendationPersistResult PersistRecommendationIdempotently(
             request.candidate.invocationIdentity.hash,
             policyCanonical, RecommendationPolicyHash(request.policy),
             request.sourceRank, request.generationOrdinal,
-            request.structuralRank});
+            request.structuralRank,
+            profitability.provenanceVersion,
+            profitability.finalInferenceEvalResultId,
+            profitability.profitabilityObservationId,
+            profitabilityUnavailableReason,
+            profitability.inferenceScope,
+            profitability.inferenceStart,
+            profitability.inferenceEnd,
+            profitability.actionablePredictionCount,
+            profitability.aggregateTerminalHorizonLogReturnSum,
+            profitability.averageTerminalHorizonLogReturnPerActionablePrediction,
+            profitability.metricDefinitionHash,
+            profitability.sourceContentHash,
+            profitability.observationIdentityHash});
     if (!inserted.empty())
     {
         result.recommendationId = inserted.one_row()[0].as<long long>();
@@ -855,7 +996,14 @@ std::optional<PersistedRecommendationDetail> FindRecommendation(
         "absolute_delta,relative_delta,horizon_delta,semantic_configuration_canonical,"
         "invocation_configuration_canonical,policy_canonical,duplicate_type,matched_experiment_id,"
         "matched_recommendation_id,approved_experiment_id,approved_at::text AS approved_at,rejected_at::text AS rejected_at,"
-        "rejected_reason,expired_at::text AS expired_at "
+        "rejected_reason,expired_at::text AS expired_at,"
+        "final_profitability_provenance_version,source_final_inference_eval_result_id,"
+        "source_final_profitability_observation_id,source_final_profitability_unavailable_reason,"
+        "source_final_profitability_inference_scope,source_final_profitability_inference_start,"
+        "source_final_profitability_inference_end,source_final_profitability_actionable_count,"
+        "source_final_profitability_aggregate_return,source_final_profitability_average_return,"
+        "source_final_profitability_metric_definition_hash,source_final_profitability_source_content_hash,"
+        "source_final_profitability_observation_identity_hash "
         "FROM experiment_recommendation WHERE recommendation_id=$1 "
         "AND recommendation_scan_id IS NOT NULL;",
         pqxx::params{recommendationId});
@@ -887,6 +1035,7 @@ std::optional<PersistedRecommendationDetail> FindRecommendation(
     detail.rejectedAt = OptionalValue<std::string>(row, "rejected_at");
     detail.rejectedReason = OptionalValue<std::string>(row, "rejected_reason");
     detail.expiredAt = OptionalValue<std::string>(row, "expired_at");
+    detail.finalProfitabilityEvidence = MapFinalProfitabilityEvidence(row);
     return detail;
 }
 

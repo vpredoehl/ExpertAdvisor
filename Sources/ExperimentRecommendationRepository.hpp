@@ -167,6 +167,8 @@ struct PersistedRecommendationDetail : PersistedRecommendationSummary
     std::optional<std::string> rejectedAt;
     std::optional<std::string> rejectedReason;
     std::optional<std::string> expiredAt;
+    std::optional<RecommendationSource::FinalProfitabilityEvidence>
+        finalProfitabilityEvidence;
 };
 
 struct RecommendationScoringFilters

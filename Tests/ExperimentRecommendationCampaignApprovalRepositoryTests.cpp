@@ -105,7 +105,12 @@ void InsertRecommendation(
     const std::string semantic = "approval-semantic-" + std::to_string(id);
     const std::string invocation = "approval-invocation-" + std::to_string(id);
     transaction.exec(
-        "INSERT INTO experiment_recommendation VALUES("
+        "INSERT INTO experiment_recommendation("
+        "recommendation_id,source_experiment_id,source_symbol,"
+        "source_prediction_horizon,changed_parameter,source_leader_score,"
+        "source_infer_accuracy,source_predicted_neutral_proportion,"
+        "semantic_configuration_canonical,semantic_hash,"
+        "invocation_configuration_canonical,invocation_hash) VALUES("
         "$1,$2,'eurusd',12,'core_lr_mult',$3,0.8,0.2,$4,$5,$6,$7);",
         pqxx::params{
             id, 500 + id, leader, semantic,
@@ -187,7 +192,20 @@ CREATE TABLE experiment_recommendation(
     semantic_configuration_canonical text NOT NULL,
     semantic_hash text NOT NULL,
     invocation_configuration_canonical text NOT NULL,
-    invocation_hash text NOT NULL);
+    invocation_hash text NOT NULL,
+    final_profitability_provenance_version integer,
+    source_final_inference_eval_result_id bigint,
+    source_final_profitability_observation_id bigint,
+    source_final_profitability_unavailable_reason text,
+    source_final_profitability_inference_scope text,
+    source_final_profitability_inference_start text,
+    source_final_profitability_inference_end text,
+    source_final_profitability_actionable_count bigint,
+    source_final_profitability_aggregate_return double precision,
+    source_final_profitability_average_return double precision,
+    source_final_profitability_metric_definition_hash text,
+    source_final_profitability_source_content_hash text,
+    source_final_profitability_observation_identity_hash text);
 CREATE TABLE experiment(
     experiment_id bigint PRIMARY KEY,
     target_epochs integer,

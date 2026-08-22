@@ -128,6 +128,16 @@ RecommendationEvaluationResult BaseResult(
     result.recommendationSemanticCanonical =
         input.scoringInput.semanticCanonicalText;
     result.recommendationSemanticHash = input.recommendationSemanticHash;
+    // Observational identity is deliberately separate from evidenceCanonical
+    // and evaluationIdentityCanonical. Those existing identities drive
+    // evaluation ordering and ranking tie-breaks.
+    result.finalProfitabilityEvidence = input.finalProfitabilityEvidence;
+    result.profitabilityEvidenceCanonical =
+        RecommendationFinalProfitabilityEvidenceCanonicalText(
+            input.finalProfitabilityEvidence);
+    result.profitabilityEvidenceHash =
+        RecommendationFinalProfitabilityEvidenceHash(
+            input.finalProfitabilityEvidence);
     return result;
 }
 

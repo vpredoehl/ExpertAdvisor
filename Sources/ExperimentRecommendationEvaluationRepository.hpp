@@ -91,6 +91,10 @@ struct PersistedRecommendationEvaluationSummary
     int missingEvidenceCount = 0;
     int rankingOrdinal = 0;
     std::string createdAt;
+    std::optional<RecommendationSource::FinalProfitabilityEvidence>
+        finalProfitabilityEvidence;
+    std::optional<std::string> profitabilityEvidenceCanonical;
+    std::optional<std::string> profitabilityEvidenceHash;
 };
 
 struct PersistedRecommendationEvaluationDetail

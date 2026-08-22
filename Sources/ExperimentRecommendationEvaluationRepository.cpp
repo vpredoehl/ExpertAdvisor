@@ -37,6 +37,48 @@ bool TableExists(pqxx::transaction_base& transaction, const std::string& table)
         pqxx::params{table}).one_row()[0].as<bool>();
 }
 
+std::optional<RecommendationSource::FinalProfitabilityEvidence>
+MapFinalProfitabilityEvidence(const pqxx::row& row)
+{
+    const auto version = OptionalValue<int>(
+        row, "final_profitability_provenance_version");
+    if (!version) return std::nullopt;
+    RecommendationSource::FinalProfitabilityEvidence evidence;
+    evidence.provenanceVersion = *version;
+    evidence.finalInferenceEvalResultId = OptionalValue<long long>(
+        row, "source_final_inference_eval_result_id");
+    evidence.profitabilityObservationId = OptionalValue<long long>(
+        row, "source_final_profitability_observation_id");
+    evidence.inferenceScope = row[
+        "source_final_profitability_inference_scope"].as<std::string>();
+    evidence.inferenceStart = OptionalValue<std::string>(
+        row, "source_final_profitability_inference_start");
+    evidence.inferenceEnd = OptionalValue<std::string>(
+        row, "source_final_profitability_inference_end");
+    evidence.actionablePredictionCount = OptionalValue<long long>(
+        row, "source_final_profitability_actionable_count");
+    evidence.aggregateTerminalHorizonLogReturnSum = OptionalValue<double>(
+        row, "source_final_profitability_aggregate_return");
+    evidence.averageTerminalHorizonLogReturnPerActionablePrediction =
+        OptionalValue<double>(row,
+            "source_final_profitability_average_return");
+    evidence.metricDefinitionHash = OptionalValue<std::string>(
+        row, "source_final_profitability_metric_definition_hash");
+    evidence.sourceContentHash = OptionalValue<std::string>(
+        row, "source_final_profitability_source_content_hash");
+    evidence.observationIdentityHash = OptionalValue<std::string>(
+        row, "source_final_profitability_observation_identity_hash");
+    evidence.unavailableReason = row[
+        "source_final_profitability_unavailable_reason"].is_null()
+        ? ""
+        : row["source_final_profitability_unavailable_reason"]
+              .as<std::string>();
+    if (const auto error =
+            ValidateRecommendationFinalProfitabilityEvidence(evidence))
+        throw std::runtime_error(*error);
+    return evidence;
+}
+
 EffectiveExperimentConfiguration MapExperimentConfiguration(
     const pqxx::row& row)
 {
@@ -151,6 +193,7 @@ RecommendationEvaluationInput MapEvaluationInput(
         ? "" : row["current_source_analysis_status"].as<std::string>();
     input.currentSourceAnalysisScope = row["current_source_analysis_scope"].is_null()
         ? "" : row["current_source_analysis_scope"].as<std::string>();
+    input.finalProfitabilityEvidence = MapFinalProfitabilityEvidence(row);
     input.exactExperimentConflicts = FindConflicts(
         transaction, input.sourceSymbol, score.sourcePredictionHorizon,
         score.semanticCanonicalText);
@@ -196,6 +239,11 @@ PersistedRecommendationEvaluationSummary MapSummary(const pqxx::row& row)
     value.missingEvidenceCount = row["missing_evidence_count"].as<int>();
     value.rankingOrdinal = row["ranking_ordinal"].as<int>();
     value.createdAt = row["created_at"].as<std::string>();
+    value.finalProfitabilityEvidence = MapFinalProfitabilityEvidence(row);
+    value.profitabilityEvidenceCanonical = OptionalValue<std::string>(
+        row, "profitability_evidence_canonical");
+    value.profitabilityEvidenceHash = OptionalValue<std::string>(
+        row, "profitability_evidence_hash");
     return value;
 }
 
@@ -211,7 +259,22 @@ std::string SummaryColumns()
         "run.evaluator_version,run.scoring_policy_hash,run.scoring_version,"
         "er.reason_code,er.explanation,er.final_score,er.component_count,"
         "er.missing_evidence_count,er.ranking_ordinal,"
-        "er.created_at::text AS created_at";
+        "er.created_at::text AS created_at,"
+        "er.final_profitability_provenance_version,"
+        "er.source_final_inference_eval_result_id,"
+        "er.source_final_profitability_observation_id,"
+        "er.source_final_profitability_unavailable_reason,"
+        "er.source_final_profitability_inference_scope,"
+        "er.source_final_profitability_inference_start,"
+        "er.source_final_profitability_inference_end,"
+        "er.source_final_profitability_actionable_count,"
+        "er.source_final_profitability_aggregate_return,"
+        "er.source_final_profitability_average_return,"
+        "er.source_final_profitability_metric_definition_hash,"
+        "er.source_final_profitability_source_content_hash,"
+        "er.source_final_profitability_observation_identity_hash,"
+        "er.profitability_evidence_canonical,"
+        "er.profitability_evidence_hash";
 }
 
 bool ComponentEqual(const pqxx::row& row,
@@ -304,7 +367,20 @@ LoadRecommendationsForEvaluation(
         "e.phase AS source_experiment_phase,e.last_model_id AS current_source_model_id,"
         "a.analysis_id AS current_source_analysis_id,"
         "a.analysis_status AS current_source_analysis_status,"
-        "a.analysis_scope AS current_source_analysis_scope "
+        "a.analysis_scope AS current_source_analysis_scope,"
+        "r.final_profitability_provenance_version,"
+        "r.source_final_inference_eval_result_id,"
+        "r.source_final_profitability_observation_id,"
+        "r.source_final_profitability_unavailable_reason,"
+        "r.source_final_profitability_inference_scope,"
+        "r.source_final_profitability_inference_start,"
+        "r.source_final_profitability_inference_end,"
+        "r.source_final_profitability_actionable_count,"
+        "r.source_final_profitability_aggregate_return,"
+        "r.source_final_profitability_average_return,"
+        "r.source_final_profitability_metric_definition_hash,"
+        "r.source_final_profitability_source_content_hash,"
+        "r.source_final_profitability_observation_identity_hash "
         "FROM experiment_recommendation r "
         "JOIN experiment_recommendation_scan s ON s.recommendation_scan_id=r.recommendation_scan_id "
         "JOIN experiment e ON e.experiment_id=r.source_experiment_id "
@@ -395,6 +471,16 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
     transaction.exec("SET TRANSACTION READ WRITE;");
     const RecommendationEvaluationResult& value = request.result;
     const RecommendationEvaluationInput& input = request.input;
+    if (value.finalProfitabilityEvidence != input.finalProfitabilityEvidence)
+        throw std::invalid_argument(
+            "recommendation_evaluation_profitability_input_mismatch");
+    const auto& profitability = value.finalProfitabilityEvidence;
+    const std::optional<int> profitabilityVersion = profitability
+        ? std::optional<int>{profitability->provenanceVersion} : std::nullopt;
+    const std::optional<std::string> profitabilityUnavailableReason =
+        profitability && !profitability->unavailableReason.empty()
+            ? std::optional<std::string>{profitability->unavailableReason}
+            : std::nullopt;
     const pqxx::result identity = transaction.exec(
         "SELECT semantic_hash,policy_hash FROM experiment_recommendation "
         "WHERE recommendation_id=$1;",
@@ -424,8 +510,17 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
         "source_analysis_id,evidence_canonical,evidence_hash,eligibility,"
         "disposition,reason_code,explanation,final_score,raw_positive_score,"
         "raw_penalty_score,raw_total_score,component_count,missing_evidence_count,"
-        "ranking_ordinal) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,"
-        "$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25 "
+        "ranking_ordinal,final_profitability_provenance_version,"
+        "source_final_inference_eval_result_id,source_final_profitability_observation_id,"
+        "source_final_profitability_unavailable_reason,source_final_profitability_inference_scope,"
+        "source_final_profitability_inference_start,source_final_profitability_inference_end,"
+        "source_final_profitability_actionable_count,source_final_profitability_aggregate_return,"
+        "source_final_profitability_average_return,source_final_profitability_metric_definition_hash,"
+        "source_final_profitability_source_content_hash,source_final_profitability_observation_identity_hash,"
+        "profitability_evidence_canonical,profitability_evidence_hash) "
+        "SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,"
+        "$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,"
+        "$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40 "
         "FROM experiment_recommendation_evaluation_run run_guard "
         "WHERE run_guard.recommendation_evaluation_run_id=$1 "
         "AND run_guard.status='running' "
@@ -445,7 +540,31 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
             value.reasonCode, value.explanation, value.finalScore,
             value.rawPositiveScore, value.rawPenaltyScore, value.rawTotalScore,
             static_cast<int>(value.components.size()), value.missingEvidenceCount,
-            value.rankingOrdinal});
+            value.rankingOrdinal, profitabilityVersion,
+            profitability
+                ? profitability->finalInferenceEvalResultId : std::nullopt,
+            profitability
+                ? profitability->profitabilityObservationId : std::nullopt,
+            profitabilityUnavailableReason,
+            profitability
+                ? std::optional<std::string>{profitability->inferenceScope}
+                : std::nullopt,
+            profitability ? profitability->inferenceStart : std::nullopt,
+            profitability ? profitability->inferenceEnd : std::nullopt,
+            profitability
+                ? profitability->actionablePredictionCount : std::nullopt,
+            profitability
+                ? profitability->aggregateTerminalHorizonLogReturnSum
+                : std::nullopt,
+            profitability
+                ? profitability->averageTerminalHorizonLogReturnPerActionablePrediction
+                : std::nullopt,
+            profitability ? profitability->metricDefinitionHash : std::nullopt,
+            profitability ? profitability->sourceContentHash : std::nullopt,
+            profitability
+                ? profitability->observationIdentityHash : std::nullopt,
+            value.profitabilityEvidenceCanonical,
+            value.profitabilityEvidenceHash});
     RecommendationEvaluationPersistResult result;
     if (!inserted.empty())
     {
@@ -479,6 +598,14 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
             "evidence_canonical,evidence_hash,eligibility,disposition,reason_code,"
             "explanation,final_score,raw_positive_score,raw_penalty_score,"
             "raw_total_score,component_count,missing_evidence_count,ranking_ordinal "
+            ",final_profitability_provenance_version,"
+            "source_final_inference_eval_result_id,source_final_profitability_observation_id,"
+            "source_final_profitability_unavailable_reason,source_final_profitability_inference_scope,"
+            "source_final_profitability_inference_start,source_final_profitability_inference_end,"
+            "source_final_profitability_actionable_count,source_final_profitability_aggregate_return,"
+            "source_final_profitability_average_return,source_final_profitability_metric_definition_hash,"
+            "source_final_profitability_source_content_hash,source_final_profitability_observation_identity_hash,"
+            "profitability_evidence_canonical,profitability_evidence_hash "
             "FROM experiment_recommendation_evaluation_result "
             "WHERE recommendation_evaluation_run_id=$1 AND recommendation_id=$2;",
             pqxx::params{request.evaluationRunId, value.recommendationId});
@@ -515,6 +642,16 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
             row["component_count"].as<int>() == static_cast<int>(value.components.size()) &&
             row["missing_evidence_count"].as<int>() == value.missingEvidenceCount &&
             row["ranking_ordinal"].as<int>() == value.rankingOrdinal;
+        const bool profitabilityEqual =
+            MapFinalProfitabilityEvidence(row) ==
+                value.finalProfitabilityEvidence &&
+            OptionalValue<std::string>(row,
+                "profitability_evidence_canonical") ==
+                std::optional<std::string>{
+                    value.profitabilityEvidenceCanonical} &&
+            OptionalValue<std::string>(row,
+                "profitability_evidence_hash") ==
+                std::optional<std::string>{value.profitabilityEvidenceHash};
         result.evaluationResultId = row["recommendation_evaluation_result_id"].as<long long>();
         const pqxx::result components = transaction.exec(
             "SELECT component_ordinal,component_name,reason_code,input_canonical,"
@@ -528,7 +665,7 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
             componentsEqual = ComponentEqual(
                 components[index], value.components[static_cast<std::size_t>(index)],
                 index + 1);
-        if (!equal || !componentsEqual)
+        if (!equal || !profitabilityEqual || !componentsEqual)
             throw std::runtime_error("recommendation_evaluation_retry_mismatch");
     }
     transaction.commit();

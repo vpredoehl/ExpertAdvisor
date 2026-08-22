@@ -29,6 +29,48 @@ void RequireIdentity(
         throw std::runtime_error(error);
 }
 
+std::optional<RecommendationSource::FinalProfitabilityEvidence>
+MapFinalProfitabilityEvidence(const pqxx::row& row)
+{
+    const auto version = OptionalValue<int>(
+        row, "final_profitability_provenance_version");
+    if (!version) return std::nullopt;
+    RecommendationSource::FinalProfitabilityEvidence evidence;
+    evidence.provenanceVersion = *version;
+    evidence.finalInferenceEvalResultId = OptionalValue<long long>(
+        row, "source_final_inference_eval_result_id");
+    evidence.profitabilityObservationId = OptionalValue<long long>(
+        row, "source_final_profitability_observation_id");
+    evidence.inferenceScope = row[
+        "source_final_profitability_inference_scope"].as<std::string>();
+    evidence.inferenceStart = OptionalValue<std::string>(
+        row, "source_final_profitability_inference_start");
+    evidence.inferenceEnd = OptionalValue<std::string>(
+        row, "source_final_profitability_inference_end");
+    evidence.actionablePredictionCount = OptionalValue<long long>(
+        row, "source_final_profitability_actionable_count");
+    evidence.aggregateTerminalHorizonLogReturnSum = OptionalValue<double>(
+        row, "source_final_profitability_aggregate_return");
+    evidence.averageTerminalHorizonLogReturnPerActionablePrediction =
+        OptionalValue<double>(row,
+            "source_final_profitability_average_return");
+    evidence.metricDefinitionHash = OptionalValue<std::string>(
+        row, "source_final_profitability_metric_definition_hash");
+    evidence.sourceContentHash = OptionalValue<std::string>(
+        row, "source_final_profitability_source_content_hash");
+    evidence.observationIdentityHash = OptionalValue<std::string>(
+        row, "source_final_profitability_observation_identity_hash");
+    evidence.unavailableReason = row[
+        "source_final_profitability_unavailable_reason"].is_null()
+        ? ""
+        : row["source_final_profitability_unavailable_reason"]
+              .as<std::string>();
+    if (const auto error =
+            ValidateRecommendationFinalProfitabilityEvidence(evidence))
+        throw std::runtime_error(*error);
+    return evidence;
+}
+
 RecommendationCampaignWorkflowEvidence MapWorkflowEvidence(
     const RecommendationConversionWorkflowView& view)
 {
@@ -151,7 +193,20 @@ SELECT rm.recommendation_ranking_member_id,rm.global_ordinal,rm.bucket,
        r.source_leader_score,r.source_infer_accuracy,
        r.source_predicted_neutral_proportion,
        r.semantic_configuration_canonical,r.semantic_hash,
-       r.invocation_configuration_canonical,r.invocation_hash
+       r.invocation_configuration_canonical,r.invocation_hash,
+       r.final_profitability_provenance_version,
+       r.source_final_inference_eval_result_id,
+       r.source_final_profitability_observation_id,
+       r.source_final_profitability_unavailable_reason,
+       r.source_final_profitability_inference_scope,
+       r.source_final_profitability_inference_start,
+       r.source_final_profitability_inference_end,
+       r.source_final_profitability_actionable_count,
+       r.source_final_profitability_aggregate_return,
+       r.source_final_profitability_average_return,
+       r.source_final_profitability_metric_definition_hash,
+       r.source_final_profitability_source_content_hash,
+       r.source_final_profitability_observation_identity_hash
 FROM experiment_recommendation_ranking_member rm
 JOIN experiment_recommendation r ON r.recommendation_id=rm.recommendation_id
 JOIN experiment e ON e.experiment_id=rm.source_experiment_id
@@ -228,6 +283,8 @@ WHERE rm.recommendation_ranking_snapshot_id=$1
                 row["recommendation_horizon"].as<int>() &&
             candidate.family ==
                 row["recommendation_family"].as<std::string>();
+        candidate.finalProfitabilityEvidence =
+            MapFinalProfitabilityEvidence(row);
         recommendationIds.push_back(candidate.recommendationId);
         input.candidates.push_back(std::move(candidate));
     }

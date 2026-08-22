@@ -71,6 +71,50 @@ std::string OptionalNumber(const std::optional<Value>& value)
     return value ? std::to_string(*value) : "NULL";
 }
 
+void PrintFinalProfitabilityEvidence(
+    std::ostream& output,
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence)
+{
+    output << ",final_profitability_provenance_version="
+           << (evidence ? std::to_string(evidence->provenanceVersion) : "NULL")
+           << ",final_profitability_evidence="
+           << (!evidence ? "legacy"
+                         : evidence->Available() ? "available" : "unavailable")
+           << ",final_profitability_unavailable_reason="
+           << (!evidence || evidence->unavailableReason.empty()
+                   ? "NULL"
+                   : RecommendationMachineText(evidence->unavailableReason))
+           << ",final_inference_eval_result_id="
+           << (evidence
+                   ? OptionalNumber(evidence->finalInferenceEvalResultId)
+                   : "NULL")
+           << ",final_profitability_observation_id="
+           << (evidence
+                   ? OptionalNumber(evidence->profitabilityObservationId)
+                   : "NULL")
+           << ",final_profitability_inference_scope="
+           << (evidence
+                   ? RecommendationMachineText(evidence->inferenceScope)
+                   : "NULL")
+           << ",final_profitability_actionable_count="
+           << (evidence
+                   ? OptionalNumber(evidence->actionablePredictionCount)
+                   : "NULL")
+           << ",final_profitability_aggregate_terminal_horizon_log_return_sum="
+           << (evidence && evidence->aggregateTerminalHorizonLogReturnSum
+                   ? CanonicalRecommendationDouble(
+                         *evidence->aggregateTerminalHorizonLogReturnSum)
+                   : "NULL")
+           << ",final_profitability_average_terminal_horizon_log_return_per_actionable_prediction="
+           << (evidence &&
+                       evidence->averageTerminalHorizonLogReturnPerActionablePrediction
+                   ? CanonicalRecommendationDouble(
+                         *evidence->averageTerminalHorizonLogReturnPerActionablePrediction)
+                   : "NULL")
+           << ",profitability_weight=0,profitability_score_contribution=0";
+}
+
 int ParameterOrder(RecommendationMutationParameter parameter)
 {
     switch (parameter)
@@ -687,7 +731,9 @@ int RunExperimentRecommendationStatusCommand(
            << ",invocation_canonical="
            << RecommendationMachineText(detail->invocationConfigurationCanonical)
            << ",policy_canonical=" << RecommendationMachineText(detail->policyCanonical)
-           << '\n';
+           ;
+    PrintFinalProfitabilityEvidence(output, detail->finalProfitabilityEvidence);
+    output << '\n';
     return 0;
 }
 

@@ -12,6 +12,12 @@
 namespace EA::ExperimentRecommendation
 {
 
+inline constexpr int kRecommendationFinalProfitabilityProvenanceVersion = 1;
+inline constexpr double kPhase3AProfitabilityScoringWeight = 0.0;
+inline constexpr double kPhase3AProfitabilityScoreContribution = 0.0;
+static_assert(kPhase3AProfitabilityScoringWeight == 0.0);
+static_assert(kPhase3AProfitabilityScoreContribution == 0.0);
+
 inline constexpr const char* kCoreLrMult = "core_lr_mult";
 inline constexpr const char* kHeadLrMult = "head_lr_mult";
 inline constexpr const char* kLabelThreshold = "label_threshold";
@@ -130,7 +136,46 @@ struct RecommendationSource
     std::optional<double> inferenceAccuracy;
     std::optional<double> predictedNeutralProportion;
     long long evidenceCount = 0;
+    // NULL distinguishes a legacy recommendation source/snapshot from a
+    // Phase-3A-aware source whose FINAL profitability was unavailable.
+    struct FinalProfitabilityEvidence
+    {
+        int provenanceVersion =
+            kRecommendationFinalProfitabilityProvenanceVersion;
+        std::optional<long long> finalInferenceEvalResultId;
+        std::optional<long long> profitabilityObservationId;
+        std::string inferenceScope = "final";
+        std::optional<std::string> inferenceStart;
+        std::optional<std::string> inferenceEnd;
+        std::optional<long long> actionablePredictionCount;
+        std::optional<double>
+            aggregateTerminalHorizonLogReturnSum;
+        std::optional<double>
+            averageTerminalHorizonLogReturnPerActionablePrediction;
+        std::optional<std::string> metricDefinitionHash;
+        std::optional<std::string> sourceContentHash;
+        std::optional<std::string> observationIdentityHash;
+        std::string unavailableReason;
+
+        bool Available() const
+        {
+            return profitabilityObservationId.has_value();
+        }
+
+        bool operator==(const FinalProfitabilityEvidence&) const = default;
+    };
+    std::optional<FinalProfitabilityEvidence> finalProfitabilityEvidence;
 };
+
+std::optional<std::string> ValidateRecommendationFinalProfitabilityEvidence(
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence);
+std::string RecommendationFinalProfitabilityEvidenceCanonicalText(
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence);
+std::string RecommendationFinalProfitabilityEvidenceHash(
+    const std::optional<RecommendationSource::FinalProfitabilityEvidence>&
+        evidence);
 
 struct RecommendationCandidateIdentity
 {
