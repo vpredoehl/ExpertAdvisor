@@ -38,6 +38,7 @@
 #include "ContinuationPolicy.hpp"
 #include "ContinuationPolicyInheritance.hpp"
 #include "ContinuationPolicyPersistence.hpp"
+#include "InferenceProfitabilityRepository.hpp"
 #include "ExperimentRecommendationService.hpp"
 #include "ExperimentRecommendationEvaluationService.hpp"
 #include "ExperimentRecommendationRankingService.hpp"
@@ -12074,6 +12075,104 @@ std::string StableFnv1aHash(const std::string& value)
     return StableContinuationPolicyHash(value);
 }
 
+ContinuationProfitabilityEvidence MapContinuationProfitabilityEvidence(
+    const EA::InferenceProfitability::Observation& observation)
+{
+    ContinuationProfitabilityEvidence evidence;
+    evidence.observationId = observation.observationId;
+    evidence.observationIdentityHash =
+        observation.observationIdentityHash;
+    evidence.inferenceEvalResultId =
+        observation.provenance.inferenceEvalResultId;
+    evidence.inferenceScope = EA::InferenceProfitability::ScopeText(
+        observation.provenance.scope);
+    evidence.checkpointEvalId =
+        observation.provenance.checkpointEvalId;
+    evidence.metricDefinitionHash = observation.metricDefinitionHash;
+    evidence.sourceContentHash = observation.sourceContentHash;
+    evidence.predictionCount = observation.statistics.predictionCount;
+    evidence.actionableCount = observation.statistics.actionableCount;
+    evidence.winningActionableCount =
+        observation.statistics.winningActionableCount;
+    evidence.losingActionableCount =
+        observation.statistics.losingActionableCount;
+    evidence.grossPositiveTerminalHorizonLogReturnSum =
+        observation.statistics
+            .grossPositiveTerminalHorizonLogReturnSum;
+    evidence.grossNegativeTerminalHorizonLogReturnSum =
+        observation.statistics
+            .grossNegativeTerminalHorizonLogReturnSum;
+    evidence.aggregateTerminalHorizonLogReturnSum =
+        observation.statistics.aggregateTerminalHorizonLogReturnSum;
+    evidence.averageTerminalHorizonLogReturnPerActionablePrediction =
+        observation
+            .averageTerminalHorizonLogReturnPerActionablePrediction;
+    return evidence;
+}
+
+void AttachContinuationProfitabilityEvidence(
+    pqxx::work& w,
+    long long sourceExperimentId,
+    bool profitabilitySchemaAvailable,
+    ContinuationEvidence& evidence)
+{
+    evidence.profitability.reset();
+    if (!evidence.inferenceEvalResultId.has_value())
+    {
+        if (evidence.profitabilityUnavailableReason.empty() ||
+            evidence.profitabilityUnavailableReason ==
+                "no_selected_continuation_source")
+        {
+            evidence.profitabilityUnavailableReason =
+                "no_completed_inference_result";
+        }
+        return;
+    }
+    if (!profitabilitySchemaAvailable)
+    {
+        evidence.profitabilityUnavailableReason =
+            "profitability_schema_unavailable";
+        return;
+    }
+
+    try
+    {
+        EA::InferenceProfitability::AuthoritativeObservationSelector selector;
+        selector.experimentId = sourceExperimentId;
+        selector.modelId = evidence.modelId;
+        selector.inferenceEvalResultId = *evidence.inferenceEvalResultId;
+        selector.scope = evidence.analysisScope == "checkpoint"
+            ? EA::InferenceProfitability::Scope::checkpointInference
+            : EA::InferenceProfitability::Scope::finalInference;
+        selector.checkpointEvalId = evidence.checkpointEvalId;
+        selector.metricDefinitionCanonical =
+            EA::InferenceProfitability::kMetricDefinitionCanonical;
+        selector.metricDefinitionHash =
+            EA::InferenceProfitability::MetricDefinitionHash();
+        const auto selection =
+            EA::InferenceProfitability::SelectAuthoritativeObservation(
+                w,
+                selector);
+        if (!selection.observation.has_value())
+        {
+            evidence.profitabilityUnavailableReason =
+                EA::InferenceProfitability::
+                    AuthoritativeObservationStatusText(selection.status);
+            return;
+        }
+        evidence.profitability = MapContinuationProfitabilityEvidence(
+            *selection.observation);
+        evidence.profitabilityUnavailableReason.clear();
+    }
+    catch (const std::exception&)
+    {
+        // Profitability is diagnostic in Phase 2A. A lookup failure must not
+        // invalidate otherwise authoritative continuation evidence.
+        evidence.profitabilityUnavailableReason =
+            "profitability_lookup_error";
+    }
+}
+
 std::vector<ContinuationEvidence> LoadContinuationEvidence(
     pqxx::work& w,
     const ContinuationPolicyConfig& config)
@@ -12089,7 +12188,7 @@ std::vector<ContinuationEvidence> LoadContinuationEvidence(
         "SELECT a.analysis_id, ce.checkpoint_eval_id, a.model_id, cfg.completed_epoch, "
         "       a.leader_score, a.infer_accuracy, ir.accept_model, a.analysis_scope, "
         "       COALESCE(ce.analyze_completed_at, ce.completed_at, a.updated_at)::text, "
-        "       a.updated_at::text "
+        "       a.updated_at::text, ir.id "
         "FROM experiment e "
         "JOIN experiment_checkpoint_eval ce ON ce.parent_experiment_id = e.experiment_id "
         "JOIN experiment_analysis_result a ON a.analysis_id = ce.analysis_id "
@@ -12113,19 +12212,13 @@ std::vector<ContinuationEvidence> LoadContinuationEvidence(
         "AND cfg.completed_epoch = ce.checkpoint_epoch "
         "UNION ALL "
         "SELECT a.analysis_id, NULL::bigint, a.model_id, cfg.completed_epoch, "
-        "       a.leader_score, a.infer_accuracy, ir.accept_model, a.analysis_scope, "
-        "       a.updated_at::text, a.updated_at::text "
+        "       a.leader_score, a.infer_accuracy, NULL::boolean, a.analysis_scope, "
+        "       a.updated_at::text, a.updated_at::text, NULL::bigint "
         "FROM experiment e "
         "JOIN experiment_analysis_result a "
         "  ON a.experiment_id = e.experiment_id AND a.model_id = e.last_model_id "
         "JOIN model m ON m.model_id = a.model_id AND m.experiment_id = e.experiment_id "
         "JOIN cfg ON cfg.model_id = m.model_id "
-        "LEFT JOIN LATERAL ("
-        "  SELECT ier.accept_model FROM inference_eval_result ier "
-        "  WHERE ier.model_id = a.model_id "
-        "  AND ier.inference_scope = 'final' AND ier.status = 'completed' "
-        "  ORDER BY ier.completed_at DESC, ier.id DESC LIMIT 1"
-        ") ir ON true "
         "WHERE e.experiment_id = $1 "
         "AND a.analysis_scope = 'final' AND a.analysis_status = 'completed' "
         "AND a.checkpoint_eval_id IS NULL AND a.parent_experiment_id IS NULL "
@@ -12135,6 +12228,8 @@ std::vector<ContinuationEvidence> LoadContinuationEvidence(
         "ORDER BY completed_epoch ASC, 9 ASC, checkpoint_eval_id ASC NULLS LAST, analysis_id ASC;",
         config.sourceExperimentId);
 
+    const bool profitabilitySchemaAvailable =
+        EA::InferenceProfitability::SchemaExists(w);
     std::vector<ContinuationEvidence> evidence;
     evidence.reserve(rows.size());
     for (const pqxx::row& row : rows)
@@ -12151,157 +12246,60 @@ std::vector<ContinuationEvidence> LoadContinuationEvidence(
         point.analysisScope = row[7].as<std::string>();
         point.completedAt = row[8].as<std::string>();
         point.updatedAt = row[9].as<std::string>();
+        point.inferenceEvalResultId = OptionalLongLongCell(row, 10);
+        if (point.analysisScope == "final")
+        {
+            const auto finalInference =
+                EA::InferenceProfitability::ResolveExactFinalInferenceResult(
+                    w,
+                    config.sourceExperimentId,
+                    point.modelId);
+            point.inferenceEvalResultId =
+                finalInference.inferenceEvalResultId;
+            point.acceptModel = finalInference.acceptModel;
+            point.profitabilityUnavailableReason =
+                EA::InferenceProfitability::
+                    ExactFinalInferenceResultStatusText(
+                        finalInference.status);
+            if (finalInference.status ==
+                EA::InferenceProfitability::
+                    ExactFinalInferenceResultStatus::available)
+            {
+                point.profitabilityUnavailableReason.clear();
+            }
+        }
+        AttachContinuationProfitabilityEvidence(
+            w,
+            config.sourceExperimentId,
+            profitabilitySchemaAvailable,
+            point);
         evidence.push_back(std::move(point));
     }
     return evidence;
 }
 
-bool PreferContinuationEvidenceAtSameEpoch(const ContinuationEvidence& candidate,
-                                           const ContinuationEvidence& current)
-{
-    const bool candidateFinal = candidate.analysisScope == "final";
-    const bool currentFinal = current.analysisScope == "final";
-    if (candidateFinal != currentFinal)
-        return candidateFinal;
-    const long long candidateEval = candidate.checkpointEvalId.value_or(std::numeric_limits<long long>::max());
-    const long long currentEval = current.checkpointEvalId.value_or(std::numeric_limits<long long>::max());
-    if (candidateEval != currentEval)
-        return candidateEval < currentEval;
-    return candidate.analysisId < current.analysisId;
-}
-
-std::vector<ContinuationEvidence> DeduplicateContinuationEvidence(
-    const std::vector<ContinuationEvidence>& raw)
-{
-    std::map<int, ContinuationEvidence> byEpoch;
-    for (const ContinuationEvidence& point : raw)
-    {
-        auto it = byEpoch.find(point.completedEpoch);
-        if (it == byEpoch.end() || PreferContinuationEvidenceAtSameEpoch(point, it->second))
-            byEpoch[point.completedEpoch] = point;
-    }
-
-    std::vector<ContinuationEvidence> result;
-    result.reserve(byEpoch.size());
-    for (const auto& [epoch, point] : byEpoch)
-    {
-        (void)epoch;
-        result.push_back(point);
-    }
-    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
-        if (lhs.completedEpoch != rhs.completedEpoch)
-            return lhs.completedEpoch < rhs.completedEpoch;
-        if (lhs.completedAt != rhs.completedAt)
-            return lhs.completedAt < rhs.completedAt;
-        const long long lhsIdentity = lhs.checkpointEvalId.value_or(lhs.analysisId);
-        const long long rhsIdentity = rhs.checkpointEvalId.value_or(rhs.analysisId);
-        return lhsIdentity < rhsIdentity;
-    });
-    return result;
-}
-
-std::string ContinuationEvidenceWatermark(
+void RefreshContinuationSelectedDiagnostics(
+    ContinuationEvidence& selected,
     const std::vector<ContinuationEvidence>& evidence)
 {
-    std::ostringstream canonical;
-    canonical << "count=" << evidence.size();
+    selected.inferenceEvalResultId.reset();
+    selected.profitability.reset();
+    selected.profitabilityUnavailableReason =
+        "selected_continuation_evidence_not_available";
     for (const ContinuationEvidence& point : evidence)
     {
-        canonical << "|epoch=" << point.completedEpoch
-                  << ":scope=" << point.analysisScope
-                  << ":analysis=" << point.analysisId
-                  << ":eval=" << (point.checkpointEvalId.has_value()
-                                        ? std::to_string(*point.checkpointEvalId)
-                                        : "NULL")
-                  << ":model=" << point.modelId
-                  << ":leader=" << ContinuationOptionalDoubleText(point.leaderScore)
-                  << ":infer=" << ContinuationOptionalDoubleText(point.inferAccuracy)
-                  << ":updated=" << point.updatedAt;
-    }
-    return StableFnv1aHash(canonical.str());
-}
-
-bool BetterBestContinuationSource(const ContinuationEvidence& lhs,
-                                  const ContinuationEvidence& rhs)
-{
-    if (lhs.leaderScore.has_value() != rhs.leaderScore.has_value())
-        return lhs.leaderScore.has_value();
-    if (lhs.leaderScore.has_value() && *lhs.leaderScore != *rhs.leaderScore)
-        return *lhs.leaderScore > *rhs.leaderScore;
-    if (lhs.inferAccuracy.has_value() != rhs.inferAccuracy.has_value())
-        return lhs.inferAccuracy.has_value();
-    if (lhs.inferAccuracy.has_value() && *lhs.inferAccuracy != *rhs.inferAccuracy)
-        return *lhs.inferAccuracy > *rhs.inferAccuracy;
-    if (lhs.completedEpoch != rhs.completedEpoch)
-        return lhs.completedEpoch > rhs.completedEpoch;
-    if (lhs.modelId != rhs.modelId)
-        return lhs.modelId < rhs.modelId;
-    return lhs.analysisId < rhs.analysisId;
-}
-
-bool IsCheckpointContinuationSource(const ContinuationEvidence& point)
-{
-    return point.analysisScope == "checkpoint" &&
-           point.checkpointEvalId.has_value();
-}
-
-bool IsFinalContinuationSource(const ContinuationPolicyConfig& config,
-                               const ContinuationEvidence& point)
-{
-    return point.analysisScope == "final" &&
-           !point.checkpointEvalId.has_value() &&
-           config.source.lastModelId.has_value() &&
-           point.modelId == *config.source.lastModelId;
-}
-
-std::optional<ContinuationEvidence> SelectContinuationSourceEvidence(
-    const ContinuationPolicyConfig& config,
-    const std::vector<ContinuationEvidence>& raw)
-{
-    if (config.sourceMode == "best_checkpoint")
-    {
-        std::optional<ContinuationEvidence> selected;
-        for (const ContinuationEvidence& point : raw)
+        if (point.analysisId == selected.analysisId &&
+            point.modelId == selected.modelId &&
+            point.checkpointEvalId == selected.checkpointEvalId)
         {
-            if (!IsCheckpointContinuationSource(point))
-                continue;
-            if (!selected.has_value() ||
-                BetterBestContinuationSource(point, *selected))
-            {
-                selected = point;
-            }
-        }
-        return selected;
-    }
-    if (config.sourceMode == "latest_checkpoint")
-    {
-        std::optional<ContinuationEvidence> selected;
-        for (const ContinuationEvidence& point : raw)
-        {
-            if (!IsCheckpointContinuationSource(point))
-                continue;
-            if (!selected.has_value() ||
-                point.completedEpoch > selected->completedEpoch ||
-                (point.completedEpoch == selected->completedEpoch &&
-                 *point.checkpointEvalId < *selected->checkpointEvalId) ||
-                (point.completedEpoch == selected->completedEpoch &&
-                 *point.checkpointEvalId == *selected->checkpointEvalId &&
-                 point.analysisId < selected->analysisId))
-            {
-                selected = point;
-            }
-        }
-        return selected;
-    }
-    if (config.sourceMode == "final_model")
-    {
-        for (const ContinuationEvidence& point : raw)
-        {
-            if (IsFinalContinuationSource(config, point))
-                return point;
+            selected.analysisScope = point.analysisScope;
+            selected.inferenceEvalResultId = point.inferenceEvalResultId;
+            selected.profitability = point.profitability;
+            selected.profitabilityUnavailableReason =
+                point.profitabilityUnavailableReason;
+            return;
         }
     }
-    return std::nullopt;
 }
 
 bool ValidateContinuationResumeSource(pqxx::work& w,
@@ -12534,76 +12532,6 @@ ContinuationRankResult RankContinuationSource(
     return result;
 }
 
-enum class ContinuationTrendResult
-{
-    Pass,
-    Reject,
-    Insufficient
-};
-
-ContinuationTrendResult EvaluateContinuationTrend(
-    const ContinuationPolicyConfig& config,
-    const std::vector<ContinuationEvidence>& evidence,
-    std::optional<std::string>& metric,
-    std::optional<double>& trendValue,
-    std::string& reason)
-{
-    if (config.trendMode == "none")
-        return ContinuationTrendResult::Pass;
-    if (static_cast<int>(evidence.size()) < config.patience)
-    {
-        reason = "trend_requires_patience_distinct_epochs";
-        return ContinuationTrendResult::Insufficient;
-    }
-
-    const auto windowBegin = evidence.end() - config.patience;
-    bool allLeader = true;
-    bool allInfer = true;
-    for (auto it = windowBegin; it != evidence.end(); ++it)
-    {
-        allLeader = allLeader && it->leaderScore.has_value();
-        allInfer = allInfer && it->inferAccuracy.has_value();
-    }
-
-    double first = 0.0;
-    double latest = 0.0;
-    if (allLeader)
-    {
-        metric = "leader_score";
-        first = *windowBegin->leaderScore;
-        latest = *evidence.back().leaderScore;
-    }
-    else if (allInfer)
-    {
-        metric = "infer_accuracy";
-        first = *windowBegin->inferAccuracy;
-        latest = *evidence.back().inferAccuracy;
-    }
-    else
-    {
-        reason = "trend_window_has_no_complete_single_metric";
-        return ContinuationTrendResult::Insufficient;
-    }
-
-    trendValue = latest - first;
-    if (config.trendMode == "non_degrading")
-    {
-        if (*trendValue >= -*config.maxDegradation)
-            return ContinuationTrendResult::Pass;
-        reason = "trend_delta_below_negative_max_degradation";
-        return ContinuationTrendResult::Reject;
-    }
-    if (config.trendMode == "improving")
-    {
-        if (*trendValue >= *config.minImprovement)
-            return ContinuationTrendResult::Pass;
-        reason = "trend_delta_below_min_improvement";
-        return ContinuationTrendResult::Reject;
-    }
-    reason = "unsupported_trend_mode";
-    return ContinuationTrendResult::Insufficient;
-}
-
 void PrintContinuationPolicyLog(const std::string& marker,
                                 const ContinuationPolicyConfig& config,
                                 const ContinuationEvaluation& evaluation)
@@ -12653,6 +12581,8 @@ void PrintContinuationPolicyLog(const std::string& marker,
               << (evaluation.queuedExperimentId.has_value()
                       ? std::to_string(*evaluation.queuedExperimentId)
                       : "NULL")
+              << ContinuationProfitabilityEvidenceLogFields(
+                     evaluation.selected)
               << ",decision=" << evaluation.decision
               << ",reason=" << evaluation.reason
               << std::endl;
@@ -12938,6 +12868,9 @@ ContinuationEvaluation EvaluateContinuationPolicy(
     if (existing.has_value() && !(*existing)[18].is_null())
     {
         FillContinuationEvaluationFromDecisionRow(evaluation, *existing);
+        RefreshContinuationSelectedDiagnostics(
+            evaluation.selected,
+            rawEvidence);
         evaluation.reused = true;
         evaluation.alreadyQueued = true;
         evaluation.reason = "continuation_already_queued";
@@ -12962,6 +12895,9 @@ ContinuationEvaluation EvaluateContinuationPolicy(
              (*existing)[17].as<std::string>() == evaluation.evidenceWatermark)
     {
         FillContinuationEvaluationFromDecisionRow(evaluation, *existing);
+        RefreshContinuationSelectedDiagnostics(
+            evaluation.selected,
+            rawEvidence);
         evaluation.reused = true;
         evaluation.persisted = true;
         PrintContinuationPolicyLog(ContinuationDecisionMarker(evaluation.decision), config, evaluation);
@@ -13060,7 +12996,8 @@ ContinuationEvaluation EvaluateContinuationPolicy(
 bool ValidateContinuationEvaluationSource(
     pqxx::work& w,
     const ContinuationPolicyConfig& config,
-    std::string& reason)
+    std::string& reason,
+    ContinuationEvidence* selectedEvidence = nullptr)
 {
     const std::optional<std::string> configError =
         ContinuationPolicyConfigurationError(config, true);
@@ -13094,6 +13031,8 @@ bool ValidateContinuationEvaluationSource(
         reason = "no_valid_source_analysis_for_source_mode";
         return false;
     }
+    if (selectedEvidence)
+        *selectedEvidence = *selected;
     return ValidateContinuationResumeSource(w, config, *selected, nullptr, reason);
 }
 
@@ -13732,7 +13671,7 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     const long long sourceExperimentId = *options.continuationStatusExperimentId;
     pqxx::connection connection{LstmDbConnectionString()};
     pqxx::work w{connection};
-    SetTransactionReadWrite(w);
+    SetTransactionReadOnly(w);
     if (!ContinuationPolicySchemaExists(w))
     {
         std::cerr << "DATABASE_MIGRATION_REQUIRED,command=./migrate_lstm_db.sh,missing=continuation_policy_schema"
@@ -13766,6 +13705,7 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
         ContinuationPolicySourceCompletionReady(*config);
     bool evaluationReady = false;
     std::string evaluationDeferredReason;
+    ContinuationEvidence selectedEvidence;
     if (!config->enabled)
     {
         evaluationDeferredReason = "policy_disabled";
@@ -13777,7 +13717,11 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     else
     {
         std::string reason;
-        evaluationReady = ValidateContinuationEvaluationSource(w, *config, reason);
+        evaluationReady = ValidateContinuationEvaluationSource(
+            w,
+            *config,
+            reason,
+            &selectedEvidence);
         if (!evaluationReady)
             evaluationDeferredReason = reason;
     }
@@ -13890,6 +13834,40 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
               << "\n";
     std::cout << "  Inheritance Validation: " << outgoingInheritanceValidation << "\n";
     std::cout << "  Continuation Rules: " << ContinuationPolicyDisplayText(*config) << "\n";
+    if (selectedEvidence.profitability.has_value())
+    {
+        const ContinuationProfitabilityEvidence& profitability =
+            *selectedEvidence.profitability;
+        std::cout << "  Continuation Profitability Evidence: available"
+                  << " observation_id=" << profitability.observationId
+                  << " scope=" << profitability.inferenceScope
+                  << " inference_eval_result_id="
+                  << profitability.inferenceEvalResultId
+                  << " checkpoint_eval_id="
+                  << (profitability.checkpointEvalId.has_value()
+                          ? std::to_string(*profitability.checkpointEvalId)
+                          : "none")
+                  << " metric_definition_hash="
+                  << profitability.metricDefinitionHash
+                  << " actionable_count=" << profitability.actionableCount
+                  << " prediction_count=" << profitability.predictionCount
+                  << " aggregate_terminal_horizon_log_return_sum="
+                  << ContinuationOptionalDoubleText(
+                         profitability
+                             .aggregateTerminalHorizonLogReturnSum)
+                  << " average_terminal_horizon_log_return_per_actionable_prediction="
+                  << ContinuationOptionalDoubleText(
+                         profitability
+                             .averageTerminalHorizonLogReturnPerActionablePrediction)
+                  << "\n";
+    }
+    else
+    {
+        std::cout << "  Continuation Profitability Evidence: unavailable"
+                  << " reason="
+                  << selectedEvidence.profitabilityUnavailableReason
+                  << "\n";
+    }
     std::cout << "CONTINUATION_POLICY_STATUS"
               << ",source_experiment_id=" << sourceExperimentId
               << ",enabled=" << (config->enabled ? "1" : "0")
@@ -13948,6 +13926,8 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
               << ",current_policy_hash=" << currentPolicyHash
               << ",derived_policy_hash="
               << (derivedPolicyHash.empty() ? "NULL" : derivedPolicyHash)
+              << ContinuationProfitabilityEvidenceLogFields(
+                     selectedEvidence)
               << std::endl;
     std::cout << "  Continuation Last: decision="
               << (config->lastDecision.has_value() ? *config->lastDecision : "none")
@@ -14074,6 +14054,8 @@ void PrintContinuationAutoEvaluationLog(
               << (evaluation.queuedExperimentId.has_value()
                       ? std::to_string(*evaluation.queuedExperimentId)
                       : "NULL")
+              << ContinuationProfitabilityEvidenceLogFields(
+                     evaluation.selected)
               << ",dry_run=" << (dryRun ? "1" : "0");
     if (action.has_value())
         std::cout << ",action=" << *action;
@@ -14166,7 +14148,14 @@ void RefreshContinuationAutoQueuedIdentity(ContinuationAutoCandidate& candidate)
                 false,
                 decisionStorage);
             if (decision.has_value())
+            {
                 FillContinuationEvaluationFromDecisionRow(candidate.evaluation, *decision);
+                const std::vector<ContinuationEvidence> rawEvidence =
+                    LoadContinuationEvidence(w, *loaded);
+                RefreshContinuationSelectedDiagnostics(
+                    candidate.evaluation.selected,
+                    rawEvidence);
+            }
         }
     }
     w.commit();

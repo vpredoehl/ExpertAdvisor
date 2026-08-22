@@ -21,6 +21,12 @@ GRANT USAGE ON SCHEMA "${schema}" TO pqxx;
 SET search_path TO "${schema}", public;
 CREATE TABLE experiment (
     experiment_id bigint PRIMARY KEY,
+    symbol text NOT NULL,
+    prediction_horizon integer NOT NULL,
+    c_next_threshold double precision NOT NULL,
+    infer_start timestamptz,
+    infer_end timestamptz,
+    last_model_id bigint,
     recommendation_score_guard double precision NOT NULL,
     campaign_guard text NOT NULL,
     continuation_policy_guard text NOT NULL,
@@ -29,6 +35,13 @@ CREATE TABLE experiment (
 CREATE TABLE model (
     model_id bigint PRIMARY KEY,
     experiment_id bigint REFERENCES experiment(experiment_id)
+);
+CREATE TABLE matrix (
+    model_id bigint NOT NULL REFERENCES model(model_id),
+    param_name text NOT NULL,
+    row_idx integer NOT NULL,
+    col_idx integer NOT NULL,
+    value double precision NOT NULL
 );
 CREATE TABLE experiment_checkpoint_eval (
     checkpoint_eval_id bigint PRIMARY KEY,
@@ -42,11 +55,20 @@ CREATE TABLE inference_eval_result (
     inference_scope text NOT NULL,
     checkpoint_eval_id bigint REFERENCES experiment_checkpoint_eval(checkpoint_eval_id),
     parent_experiment_id bigint REFERENCES experiment(experiment_id),
+    symbol text NOT NULL,
+    prediction_horizon bigint NOT NULL,
+    threshold_logret double precision NOT NULL,
+    window_size bigint NOT NULL,
+    label_rule_id integer NOT NULL,
+    target_type integer NOT NULL,
     from_date text NOT NULL,
-    to_date text NOT NULL
+    to_date text NOT NULL,
+    completed_epochs bigint,
+    accept_model boolean,
+    completed_at timestamptz NOT NULL DEFAULT now()
 );
 GRANT SELECT, INSERT ON experiment, model, experiment_checkpoint_eval,
-    inference_eval_result TO pqxx;
+    inference_eval_result, matrix TO pqxx;
 \i '${repo_root}/Database/migrations/073_inference_profitability_observation.sql'
 SQL
 

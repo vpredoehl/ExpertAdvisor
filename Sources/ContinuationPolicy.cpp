@@ -1,9 +1,11 @@
 #include "ContinuationPolicy.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -531,6 +533,291 @@ std::string ContinuationOptionalDoubleText(const std::optional<double>& value)
 std::string ContinuationOptionalIntText(const std::optional<int>& value)
 {
     return value.has_value() ? std::to_string(*value) : "NULL";
+}
+
+std::string ContinuationProfitabilityEvidenceLogFields(
+    const ContinuationEvidence& evidence)
+{
+    std::ostringstream out;
+    if (!evidence.profitability.has_value())
+    {
+        out << ",profitability_evidence=unavailable"
+            << ",profitability_unavailable_reason="
+            << (evidence.profitabilityUnavailableReason.empty()
+                    ? "no_profitability_observation"
+                    : evidence.profitabilityUnavailableReason)
+            << ",profitability_inference_eval_result_id="
+            << (evidence.inferenceEvalResultId.has_value()
+                    ? std::to_string(*evidence.inferenceEvalResultId)
+                    : "NULL");
+        return out.str();
+    }
+
+    const ContinuationProfitabilityEvidence& profitability =
+        *evidence.profitability;
+    out << ",profitability_evidence=available"
+        << ",profitability_observation_id=" << profitability.observationId
+        << ",profitability_observation_identity_hash="
+        << profitability.observationIdentityHash
+        << ",profitability_inference_scope=" << profitability.inferenceScope
+        << ",profitability_inference_eval_result_id="
+        << profitability.inferenceEvalResultId
+        << ",profitability_checkpoint_eval_id="
+        << (profitability.checkpointEvalId.has_value()
+                ? std::to_string(*profitability.checkpointEvalId)
+                : "NULL")
+        << ",profitability_metric_definition_hash="
+        << profitability.metricDefinitionHash
+        << ",profitability_source_content_hash="
+        << profitability.sourceContentHash
+        << ",profitability_prediction_count="
+        << profitability.predictionCount
+        << ",profitability_actionable_count="
+        << profitability.actionableCount
+        << ",profitability_winning_actionable_count="
+        << profitability.winningActionableCount
+        << ",profitability_losing_actionable_count="
+        << profitability.losingActionableCount
+        << ",profitability_gross_positive_terminal_horizon_log_return_sum="
+        << ContinuationOptionalDoubleText(
+               profitability.grossPositiveTerminalHorizonLogReturnSum)
+        << ",profitability_gross_negative_terminal_horizon_log_return_sum="
+        << ContinuationOptionalDoubleText(
+               profitability.grossNegativeTerminalHorizonLogReturnSum)
+        << ",profitability_aggregate_terminal_horizon_log_return_sum="
+        << ContinuationOptionalDoubleText(
+               profitability.aggregateTerminalHorizonLogReturnSum)
+        << ",profitability_average_terminal_horizon_log_return_per_actionable_prediction="
+        << ContinuationOptionalDoubleText(
+               profitability
+                   .averageTerminalHorizonLogReturnPerActionablePrediction);
+    return out.str();
+}
+
+bool BetterBestContinuationSource(const ContinuationEvidence& lhs,
+                                  const ContinuationEvidence& rhs)
+{
+    if (lhs.leaderScore.has_value() != rhs.leaderScore.has_value())
+        return lhs.leaderScore.has_value();
+    if (lhs.leaderScore.has_value() && *lhs.leaderScore != *rhs.leaderScore)
+        return *lhs.leaderScore > *rhs.leaderScore;
+    if (lhs.inferAccuracy.has_value() != rhs.inferAccuracy.has_value())
+        return lhs.inferAccuracy.has_value();
+    if (lhs.inferAccuracy.has_value() &&
+        *lhs.inferAccuracy != *rhs.inferAccuracy)
+    {
+        return *lhs.inferAccuracy > *rhs.inferAccuracy;
+    }
+    if (lhs.completedEpoch != rhs.completedEpoch)
+        return lhs.completedEpoch > rhs.completedEpoch;
+    if (lhs.modelId != rhs.modelId)
+        return lhs.modelId < rhs.modelId;
+    return lhs.analysisId < rhs.analysisId;
+}
+
+bool IsCheckpointContinuationSource(const ContinuationEvidence& evidence)
+{
+    return evidence.analysisScope == "checkpoint" &&
+           evidence.checkpointEvalId.has_value();
+}
+
+bool IsFinalContinuationSource(const ContinuationPolicyConfig& config,
+                               const ContinuationEvidence& evidence)
+{
+    return evidence.analysisScope == "final" &&
+           !evidence.checkpointEvalId.has_value() &&
+           config.source.lastModelId.has_value() &&
+           evidence.modelId == *config.source.lastModelId;
+}
+
+std::optional<ContinuationEvidence> SelectContinuationSourceEvidence(
+    const ContinuationPolicyConfig& config,
+    const std::vector<ContinuationEvidence>& evidence)
+{
+    if (config.sourceMode == "best_checkpoint")
+    {
+        std::optional<ContinuationEvidence> selected;
+        for (const ContinuationEvidence& point : evidence)
+        {
+            if (!IsCheckpointContinuationSource(point))
+                continue;
+            if (!selected.has_value() ||
+                BetterBestContinuationSource(point, *selected))
+            {
+                selected = point;
+            }
+        }
+        return selected;
+    }
+    if (config.sourceMode == "latest_checkpoint")
+    {
+        std::optional<ContinuationEvidence> selected;
+        for (const ContinuationEvidence& point : evidence)
+        {
+            if (!IsCheckpointContinuationSource(point))
+                continue;
+            if (!selected.has_value() ||
+                point.completedEpoch > selected->completedEpoch ||
+                (point.completedEpoch == selected->completedEpoch &&
+                 *point.checkpointEvalId < *selected->checkpointEvalId) ||
+                (point.completedEpoch == selected->completedEpoch &&
+                 *point.checkpointEvalId == *selected->checkpointEvalId &&
+                 point.analysisId < selected->analysisId))
+            {
+                selected = point;
+            }
+        }
+        return selected;
+    }
+    if (config.sourceMode == "final_model")
+    {
+        for (const ContinuationEvidence& point : evidence)
+        {
+            if (IsFinalContinuationSource(config, point))
+                return point;
+        }
+    }
+    return std::nullopt;
+}
+
+bool PreferContinuationEvidenceAtSameEpoch(
+    const ContinuationEvidence& candidate,
+    const ContinuationEvidence& current)
+{
+    const bool candidateFinal = candidate.analysisScope == "final";
+    const bool currentFinal = current.analysisScope == "final";
+    if (candidateFinal != currentFinal)
+        return candidateFinal;
+    const long long candidateEval = candidate.checkpointEvalId.value_or(
+        std::numeric_limits<long long>::max());
+    const long long currentEval = current.checkpointEvalId.value_or(
+        std::numeric_limits<long long>::max());
+    if (candidateEval != currentEval)
+        return candidateEval < currentEval;
+    return candidate.analysisId < current.analysisId;
+}
+
+std::vector<ContinuationEvidence> DeduplicateContinuationEvidence(
+    const std::vector<ContinuationEvidence>& evidence)
+{
+    std::map<int, ContinuationEvidence> byEpoch;
+    for (const ContinuationEvidence& point : evidence)
+    {
+        auto it = byEpoch.find(point.completedEpoch);
+        if (it == byEpoch.end() ||
+            PreferContinuationEvidenceAtSameEpoch(point, it->second))
+        {
+            byEpoch[point.completedEpoch] = point;
+        }
+    }
+
+    std::vector<ContinuationEvidence> result;
+    result.reserve(byEpoch.size());
+    for (const auto& [epoch, point] : byEpoch)
+    {
+        (void)epoch;
+        result.push_back(point);
+    }
+    std::sort(result.begin(), result.end(), [](const auto& lhs,
+                                                const auto& rhs) {
+        if (lhs.completedEpoch != rhs.completedEpoch)
+            return lhs.completedEpoch < rhs.completedEpoch;
+        if (lhs.completedAt != rhs.completedAt)
+            return lhs.completedAt < rhs.completedAt;
+        const long long lhsIdentity =
+            lhs.checkpointEvalId.value_or(lhs.analysisId);
+        const long long rhsIdentity =
+            rhs.checkpointEvalId.value_or(rhs.analysisId);
+        return lhsIdentity < rhsIdentity;
+    });
+    return result;
+}
+
+std::string ContinuationEvidenceWatermark(
+    const std::vector<ContinuationEvidence>& evidence)
+{
+    std::ostringstream canonical;
+    canonical << "count=" << evidence.size();
+    for (const ContinuationEvidence& point : evidence)
+    {
+        canonical << "|epoch=" << point.completedEpoch
+                  << ":scope=" << point.analysisScope
+                  << ":analysis=" << point.analysisId
+                  << ":eval="
+                  << (point.checkpointEvalId.has_value()
+                          ? std::to_string(*point.checkpointEvalId)
+                          : "NULL")
+                  << ":model=" << point.modelId
+                  << ":leader="
+                  << ContinuationOptionalDoubleText(point.leaderScore)
+                  << ":infer="
+                  << ContinuationOptionalDoubleText(point.inferAccuracy)
+                  << ":updated=" << point.updatedAt;
+    }
+    return StableContinuationPolicyHash(canonical.str());
+}
+
+ContinuationTrendResult EvaluateContinuationTrend(
+    const ContinuationPolicyConfig& config,
+    const std::vector<ContinuationEvidence>& evidence,
+    std::optional<std::string>& metric,
+    std::optional<double>& trendValue,
+    std::string& reason)
+{
+    if (config.trendMode == "none")
+        return ContinuationTrendResult::Pass;
+    if (static_cast<int>(evidence.size()) < config.patience)
+    {
+        reason = "trend_requires_patience_distinct_epochs";
+        return ContinuationTrendResult::Insufficient;
+    }
+
+    const auto windowBegin = evidence.end() - config.patience;
+    bool allLeader = true;
+    bool allInfer = true;
+    for (auto it = windowBegin; it != evidence.end(); ++it)
+    {
+        allLeader = allLeader && it->leaderScore.has_value();
+        allInfer = allInfer && it->inferAccuracy.has_value();
+    }
+
+    double first = 0.0;
+    double latest = 0.0;
+    if (allLeader)
+    {
+        metric = "leader_score";
+        first = *windowBegin->leaderScore;
+        latest = *evidence.back().leaderScore;
+    }
+    else if (allInfer)
+    {
+        metric = "infer_accuracy";
+        first = *windowBegin->inferAccuracy;
+        latest = *evidence.back().inferAccuracy;
+    }
+    else
+    {
+        reason = "trend_window_has_no_complete_single_metric";
+        return ContinuationTrendResult::Insufficient;
+    }
+
+    trendValue = latest - first;
+    if (config.trendMode == "non_degrading")
+    {
+        if (*trendValue >= -*config.maxDegradation)
+            return ContinuationTrendResult::Pass;
+        reason = "trend_delta_below_negative_max_degradation";
+        return ContinuationTrendResult::Reject;
+    }
+    if (config.trendMode == "improving")
+    {
+        if (*trendValue >= *config.minImprovement)
+            return ContinuationTrendResult::Pass;
+        reason = "trend_delta_below_min_improvement";
+        return ContinuationTrendResult::Reject;
+    }
+    reason = "unsupported_trend_mode";
+    return ContinuationTrendResult::Insufficient;
 }
 
 std::string ContinuationPolicyDisplayText(const ContinuationPolicyConfig& config)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
@@ -87,10 +88,31 @@ struct ContinuationPolicyUpdate
     std::optional<std::vector<int>> targetSequence;
 };
 
+struct ContinuationProfitabilityEvidence
+{
+    long long observationId = -1;
+    std::string observationIdentityHash;
+    long long inferenceEvalResultId = -1;
+    std::string inferenceScope;
+    std::optional<long long> checkpointEvalId;
+    std::string metricDefinitionHash;
+    std::string sourceContentHash;
+    std::uint64_t predictionCount = 0;
+    std::uint64_t actionableCount = 0;
+    std::uint64_t winningActionableCount = 0;
+    std::uint64_t losingActionableCount = 0;
+    double grossPositiveTerminalHorizonLogReturnSum = 0.0;
+    double grossNegativeTerminalHorizonLogReturnSum = 0.0;
+    double aggregateTerminalHorizonLogReturnSum = 0.0;
+    std::optional<double>
+        averageTerminalHorizonLogReturnPerActionablePrediction;
+};
+
 struct ContinuationEvidence
 {
     long long analysisId = -1;
     std::optional<long long> checkpointEvalId;
+    std::optional<long long> inferenceEvalResultId;
     long long modelId = -1;
     int completedEpoch = 0;
     std::optional<double> leaderScore;
@@ -99,6 +121,9 @@ struct ContinuationEvidence
     std::string analysisScope;
     std::string completedAt;
     std::string updatedAt;
+    std::optional<ContinuationProfitabilityEvidence> profitability;
+    std::string profitabilityUnavailableReason =
+        "no_selected_continuation_source";
 };
 
 struct ContinuationEvaluation
@@ -165,6 +190,41 @@ std::string ContinuationOptionalDoubleText(
     const std::optional<double>& value);
 std::string ContinuationOptionalIntText(
     const std::optional<int>& value);
+// Stable diagnostic fields. Profitability is intentionally excluded from
+// policy identity, evidence watermarks, eligibility, ordering and trends.
+std::string ContinuationProfitabilityEvidenceLogFields(
+    const ContinuationEvidence& evidence);
+bool BetterBestContinuationSource(
+    const ContinuationEvidence& lhs,
+    const ContinuationEvidence& rhs);
+bool IsCheckpointContinuationSource(const ContinuationEvidence& evidence);
+bool IsFinalContinuationSource(
+    const ContinuationPolicyConfig& config,
+    const ContinuationEvidence& evidence);
+std::optional<ContinuationEvidence> SelectContinuationSourceEvidence(
+    const ContinuationPolicyConfig& config,
+    const std::vector<ContinuationEvidence>& evidence);
+bool PreferContinuationEvidenceAtSameEpoch(
+    const ContinuationEvidence& candidate,
+    const ContinuationEvidence& current);
+std::vector<ContinuationEvidence> DeduplicateContinuationEvidence(
+    const std::vector<ContinuationEvidence>& evidence);
+std::string ContinuationEvidenceWatermark(
+    const std::vector<ContinuationEvidence>& evidence);
+
+enum class ContinuationTrendResult
+{
+    Pass,
+    Reject,
+    Insufficient
+};
+
+ContinuationTrendResult EvaluateContinuationTrend(
+    const ContinuationPolicyConfig& config,
+    const std::vector<ContinuationEvidence>& evidence,
+    std::optional<std::string>& metric,
+    std::optional<double>& trendValue,
+    std::string& reason);
 std::string ContinuationPolicyDisplayText(
     const ContinuationPolicyConfig& config);
 

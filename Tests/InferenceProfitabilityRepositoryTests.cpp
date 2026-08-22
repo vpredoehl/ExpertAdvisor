@@ -55,20 +55,43 @@ int main()
 
     transaction.exec(
         "INSERT INTO experiment("
-        "experiment_id,recommendation_score_guard,campaign_guard,"
+        "experiment_id,symbol,prediction_horizon,c_next_threshold,"
+        "infer_start,infer_end,last_model_id,"
+        "recommendation_score_guard,campaign_guard,"
         "continuation_policy_guard,checkpoint_policy_guard) "
-        "VALUES(1,0.75,'unchanged','unchanged','unchanged');"
+        "VALUES(1,'USDJPYRMP',5,0.001,'2025-01-01','2026-01-01',10,"
+        "0.75,'unchanged','unchanged','unchanged');"
         "INSERT INTO model(model_id,experiment_id) VALUES(10,1),(11,NULL);"
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "SELECT 10,'train_config_meta',0,ordinality-1,value "
+        "FROM unnest(ARRAY[1,5,0.001,64,1,1,1,1,1,1,100,1,1,1]"
+        "::double precision[]) WITH ORDINALITY AS config(value,ordinality);"
+        "INSERT INTO matrix(model_id,param_name,row_idx,col_idx,value) "
+        "VALUES(10,'target_meta',0,0,1);"
         "INSERT INTO experiment_checkpoint_eval("
         "checkpoint_eval_id,parent_experiment_id,checkpoint_model_id) "
-        "VALUES(200,1,10);"
+        "VALUES(200,1,10),(201,1,10);"
         "INSERT INTO inference_eval_result("
         "id,model_id,status,inference_scope,checkpoint_eval_id,"
-        "parent_experiment_id,from_date,to_date) VALUES"
-        "(99,10,'completed','final',NULL,NULL,'2024-01-01','2024-12-31'),"
-        "(100,10,'completed','final',NULL,NULL,'2025-01-01','2026-01-01'),"
-        "(101,10,'completed','checkpoint',200,1,'2025-01-01','2026-01-01'),"
-        "(102,11,'completed','final',NULL,NULL,'2025-01-01','2026-01-01');");
+        "parent_experiment_id,symbol,prediction_horizon,threshold_logret,"
+        "window_size,label_rule_id,target_type,from_date,to_date,"
+        "completed_epochs,accept_model,completed_at) VALUES"
+        "(99,10,'completed','final',NULL,NULL,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2024-01-01','2024-12-31',100,false,'2026-01-01'),"
+        "(100,10,'completed','final',NULL,NULL,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2025-01-01','2026-01-01',100,true,'2026-01-02'),"
+        "(101,10,'completed','checkpoint',200,1,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2025-01-01','2026-01-01',100,true,'2026-01-03'),"
+        "(102,11,'completed','final',NULL,NULL,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2025-01-01','2026-01-01',100,true,'2026-01-04'),"
+        "(103,10,'completed','final',NULL,NULL,'USDJPYRMP',5,0.001,65,1,1,"
+        "'2025-01-01','2026-01-01',100,true,'2026-01-05'),"
+        "(104,10,'completed','checkpoint',201,1,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2025-01-01','2026-01-01',100,true,'2026-01-06'),"
+        "(105,10,'completed','final',NULL,NULL,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2025-02-01','2026-02-01',100,false,'2026-08-01'),"
+        "(106,10,'completed','final',NULL,NULL,'USDJPYRMP',5,0.002,64,1,1,"
+        "'2025-01-01','2026-01-01',100,false,'2026-08-02');");
 
     Accumulator calculation;
     calculation.Observe(kNeutralClass, 100.0f, 120.0f);
@@ -89,6 +112,16 @@ int main()
     assert(!finalFirst.observation.provenance.checkpointEvalId);
     assert(finalFirst.observation.statistics.predictionCount == 3);
     assert(finalFirst.observation.statistics.actionableCount == 2);
+
+    const auto exactFinalInference = ResolveExactFinalInferenceResult(
+        transaction, 1, 10);
+    assert(exactFinalInference.status ==
+           ExactFinalInferenceResultStatus::available);
+    assert(exactFinalInference.inferenceEvalResultId == 100);
+    assert(exactFinalInference.acceptModel.has_value() &&
+           *exactFinalInference.acceptModel);
+    assert(ExactFinalInferenceResultStatusText(
+               exactFinalInference.status) == "available");
 
     ObservationRequest legacyFinalRequest = finalRequest;
     legacyFinalRequest.provenance.experimentId.reset();
@@ -112,6 +145,52 @@ int main()
     assert(finalById->observationIdentityCanonical ==
            finalFirst.observation.observationIdentityCanonical);
 
+    AuthoritativeObservationSelector exactFinalSelector;
+    exactFinalSelector.experimentId = 1;
+    exactFinalSelector.modelId = 10;
+    exactFinalSelector.inferenceEvalResultId = 100;
+    exactFinalSelector.scope = Scope::finalInference;
+    exactFinalSelector.metricDefinitionCanonical =
+        kMetricDefinitionCanonical;
+    exactFinalSelector.metricDefinitionHash = MetricDefinitionHash();
+    const auto exactFinal = SelectAuthoritativeObservation(
+        transaction,
+        exactFinalSelector);
+    assert(exactFinal.status == AuthoritativeObservationStatus::available);
+    assert(exactFinal.observation.has_value());
+    assert(exactFinal.observation->observationId ==
+           finalFirst.observation.observationId);
+    assert(exactFinal.observation->provenance.inferenceEvalResultId ==
+           *exactFinalInference.inferenceEvalResultId);
+
+    transaction.exec(
+        "UPDATE experiment SET infer_start='2025-03-01',"
+        "infer_end='2026-03-01' WHERE experiment_id=1;");
+    const auto noExactFinalInference = ResolveExactFinalInferenceResult(
+        transaction, 1, 10);
+    assert(noExactFinalInference.status ==
+           ExactFinalInferenceResultStatus::noExactFinalInferenceResult);
+    assert(!noExactFinalInference.inferenceEvalResultId.has_value());
+    assert(ExactFinalInferenceResultStatusText(
+               noExactFinalInference.status) ==
+           "no_exact_final_inference_result");
+
+    transaction.exec(
+        "UPDATE experiment SET infer_start='2025-01-01',"
+        "infer_end='2026-01-01',c_next_threshold=0.01 "
+        "WHERE experiment_id=1;");
+    const auto mismatchedFinalContext = ResolveExactFinalInferenceResult(
+        transaction, 1, 10);
+    assert(mismatchedFinalContext.status ==
+           ExactFinalInferenceResultStatus::finalInferenceContextMismatch);
+    assert(!mismatchedFinalContext.inferenceEvalResultId.has_value());
+    assert(ExactFinalInferenceResultStatusText(
+               mismatchedFinalContext.status) ==
+           "final_inference_context_mismatch");
+    transaction.exec(
+        "UPDATE experiment SET c_next_threshold=0.001 "
+        "WHERE experiment_id=1;");
+
     const ObservationRequest checkpointRequest =
         Request(101, Scope::checkpointInference, 200, calculation);
     const PersistResult checkpoint =
@@ -122,6 +201,105 @@ int main()
     assert(checkpoint.observation.provenance.checkpointEvalId == 200);
     assert(checkpoint.observation.observationId !=
            finalFirst.observation.observationId);
+
+    AuthoritativeObservationSelector exactCheckpointSelector;
+    exactCheckpointSelector.experimentId = 1;
+    exactCheckpointSelector.modelId = 10;
+    exactCheckpointSelector.inferenceEvalResultId = 101;
+    exactCheckpointSelector.scope = Scope::checkpointInference;
+    exactCheckpointSelector.checkpointEvalId = 200;
+    exactCheckpointSelector.metricDefinitionCanonical =
+        kMetricDefinitionCanonical;
+    exactCheckpointSelector.metricDefinitionHash = MetricDefinitionHash();
+    const auto exactCheckpoint = SelectAuthoritativeObservation(
+        transaction,
+        exactCheckpointSelector);
+    assert(exactCheckpoint.status ==
+           AuthoritativeObservationStatus::available);
+    assert(exactCheckpoint.observation.has_value());
+    assert(exactCheckpoint.observation->observationId ==
+           checkpoint.observation.observationId);
+
+    AuthoritativeObservationSelector finalCannotUseCheckpoint =
+        exactFinalSelector;
+    finalCannotUseCheckpoint.inferenceEvalResultId = 101;
+    assert(SelectAuthoritativeObservation(
+               transaction,
+               finalCannotUseCheckpoint).status ==
+           AuthoritativeObservationStatus::provenanceMismatch);
+
+    AuthoritativeObservationSelector checkpointCannotUseFinal =
+        exactCheckpointSelector;
+    checkpointCannotUseFinal.inferenceEvalResultId = 100;
+    assert(SelectAuthoritativeObservation(
+               transaction,
+               checkpointCannotUseFinal).status ==
+           AuthoritativeObservationStatus::provenanceMismatch);
+
+    AuthoritativeObservationSelector mismatchedProvenance =
+        exactFinalSelector;
+    mismatchedProvenance.modelId = 11;
+    assert(SelectAuthoritativeObservation(
+               transaction,
+               mismatchedProvenance).status ==
+           AuthoritativeObservationStatus::provenanceMismatch);
+
+    AuthoritativeObservationSelector mismatchedMetric = exactFinalSelector;
+    mismatchedMetric.metricDefinitionHash = "fnv1a64:0000000000000000";
+    assert(SelectAuthoritativeObservation(
+               transaction,
+               mismatchedMetric).status ==
+           AuthoritativeObservationStatus::metricDefinitionMismatch);
+    mismatchedMetric = exactFinalSelector;
+    mismatchedMetric.metricDefinitionCanonical += ";future_revision";
+    assert(SelectAuthoritativeObservation(
+               transaction,
+               mismatchedMetric).status ==
+           AuthoritativeObservationStatus::metricDefinitionMismatch);
+
+    AuthoritativeObservationSelector historicalSelector = exactFinalSelector;
+    historicalSelector.inferenceEvalResultId = 99;
+    assert(SelectAuthoritativeObservation(
+               transaction,
+               historicalSelector).status ==
+           AuthoritativeObservationStatus::noObservation);
+
+    Accumulator zeroActionableCalculation;
+    zeroActionableCalculation.Observe(kNeutralClass, 100.0f, 110.0f);
+    const PersistResult zeroActionable = PersistObservationIdempotently(
+        transaction,
+        Request(103, Scope::finalInference, std::nullopt,
+                zeroActionableCalculation));
+    AuthoritativeObservationSelector zeroActionableSelector =
+        exactFinalSelector;
+    zeroActionableSelector.inferenceEvalResultId = 103;
+    const auto selectedZeroActionable = SelectAuthoritativeObservation(
+        transaction,
+        zeroActionableSelector);
+    assert(selectedZeroActionable.status ==
+           AuthoritativeObservationStatus::available);
+    assert(selectedZeroActionable.observation->statistics.actionableCount ==
+           0);
+    assert(!selectedZeroActionable.observation
+                ->averageTerminalHorizonLogReturnPerActionablePrediction
+                .has_value());
+
+    const PersistResult laterCheckpoint = PersistObservationIdempotently(
+        transaction,
+        Request(104, Scope::checkpointInference, 201, calculation));
+    AuthoritativeObservationSelector laterCheckpointSelector =
+        exactCheckpointSelector;
+    laterCheckpointSelector.inferenceEvalResultId = 104;
+    laterCheckpointSelector.checkpointEvalId = 201;
+    const auto selectedLaterCheckpoint = SelectAuthoritativeObservation(
+        transaction,
+        laterCheckpointSelector);
+    assert(selectedLaterCheckpoint.status ==
+           AuthoritativeObservationStatus::available);
+    assert(selectedLaterCheckpoint.observation->observationId ==
+           laterCheckpoint.observation.observationId);
+    assert(selectedLaterCheckpoint.observation->observationId !=
+           exactCheckpoint.observation->observationId);
 
     bool finalCheckpointRejected = false;
     try
@@ -204,6 +382,29 @@ int main()
     assert(changedSource.created);
     assert(changedSource.observation.observationId !=
            finalFirst.observation.observationId);
+    const auto ambiguousFinal = SelectAuthoritativeObservation(
+        transaction,
+        exactFinalSelector);
+    assert(ambiguousFinal.status ==
+           AuthoritativeObservationStatus::ambiguousObservation);
+    assert(!ambiguousFinal.observation.has_value());
+
+    transaction.exec(
+        "INSERT INTO inference_eval_result("
+        "id,model_id,status,inference_scope,checkpoint_eval_id,"
+        "parent_experiment_id,symbol,prediction_horizon,threshold_logret,"
+        "window_size,label_rule_id,target_type,from_date,to_date,"
+        "completed_epochs,accept_model,completed_at) VALUES("
+        "107,10,'completed','final',NULL,NULL,'USDJPYRMP',5,0.001,64,1,1,"
+        "'2025-01-01','2026-01-01',100,false,'2026-08-03');");
+    const auto ambiguousFinalInference = ResolveExactFinalInferenceResult(
+        transaction, 1, 10);
+    assert(ambiguousFinalInference.status ==
+           ExactFinalInferenceResultStatus::ambiguousFinalInferenceResult);
+    assert(!ambiguousFinalInference.inferenceEvalResultId.has_value());
+    assert(ExactFinalInferenceResultStatusText(
+               ambiguousFinalInference.status) ==
+           "ambiguous_final_inference_result");
 
     ObservationRequest changedMetric = finalRequest;
     changedMetric.metricDefinitionCanonical += ";fixture_revision=2";

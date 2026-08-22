@@ -520,6 +520,229 @@ int main()
     assert(ContinuationPolicySemanticHash(changedSequence) !=
            ContinuationPolicySemanticHash(sequence));
 
+    // Profitability Phase 2A is diagnostic-only. Source selection uses the
+    // preexisting analysis metrics and epochs even when observations differ.
+    ContinuationEvidence checkpointBest;
+    checkpointBest.analysisId = 501;
+    checkpointBest.checkpointEvalId = 601;
+    checkpointBest.inferenceEvalResultId = 701;
+    checkpointBest.modelId = 801;
+    checkpointBest.completedEpoch = 80;
+    checkpointBest.leaderScore = 0.9;
+    checkpointBest.inferAccuracy = 0.7;
+    checkpointBest.analysisScope = "checkpoint";
+    checkpointBest.profitabilityUnavailableReason =
+        "no_profitability_observation";
+
+    ContinuationEvidence checkpointLatest = checkpointBest;
+    checkpointLatest.analysisId = 502;
+    checkpointLatest.checkpointEvalId = 602;
+    checkpointLatest.inferenceEvalResultId = 702;
+    checkpointLatest.modelId = 802;
+    checkpointLatest.completedEpoch = 100;
+    checkpointLatest.leaderScore = 0.8;
+    ContinuationProfitabilityEvidence zeroActionable;
+    zeroActionable.observationId = 901;
+    zeroActionable.observationIdentityHash =
+        "fnv1a64:1111111111111111";
+    zeroActionable.inferenceEvalResultId = 702;
+    zeroActionable.inferenceScope = "checkpoint";
+    zeroActionable.checkpointEvalId = 602;
+    zeroActionable.metricDefinitionHash =
+        "fnv1a64:2222222222222222";
+    zeroActionable.sourceContentHash =
+        "fnv1a64:3333333333333333";
+    zeroActionable.predictionCount = 10;
+    checkpointLatest.profitability = zeroActionable;
+    checkpointLatest.profitabilityUnavailableReason.clear();
+
+    ContinuationEvidence finalEvidence = checkpointLatest;
+    finalEvidence.analysisId = 503;
+    finalEvidence.checkpointEvalId.reset();
+    finalEvidence.inferenceEvalResultId = 703;
+    finalEvidence.modelId = 803;
+    finalEvidence.analysisScope = "final";
+    finalEvidence.profitability.reset();
+    finalEvidence.profitabilityUnavailableReason =
+        "no_profitability_observation";
+
+    const std::vector<ContinuationEvidence> sourceEvidence{
+        checkpointLatest,
+        finalEvidence,
+        checkpointBest};
+    ContinuationPolicyConfig sourceSelection;
+    sourceSelection.source.lastModelId = 803;
+    sourceSelection.sourceMode = "best_checkpoint";
+    const auto selectedBest = SelectContinuationSourceEvidence(
+        sourceSelection,
+        sourceEvidence);
+    assert(selectedBest && selectedBest->checkpointEvalId == 601);
+    sourceSelection.sourceMode = "latest_checkpoint";
+    const auto selectedLatest = SelectContinuationSourceEvidence(
+        sourceSelection,
+        sourceEvidence);
+    assert(selectedLatest && selectedLatest->checkpointEvalId == 602);
+    assert(selectedLatest->profitability.has_value());
+    assert(selectedLatest->profitability->observationId == 901);
+    sourceSelection.sourceMode = "final_model";
+    const auto selectedFinal = SelectContinuationSourceEvidence(
+        sourceSelection,
+        sourceEvidence);
+    assert(selectedFinal && selectedFinal->modelId == 803);
+    assert(!selectedFinal->profitability.has_value());
+
+    ContinuationEvidence profitableBest = checkpointBest;
+    profitableBest.profitability = zeroActionable;
+    profitableBest.profitability->observationId = 999;
+    std::vector<ContinuationEvidence> profitabilityChanged{
+        checkpointLatest,
+        finalEvidence,
+        profitableBest};
+    sourceSelection.sourceMode = "best_checkpoint";
+    assert(SelectContinuationSourceEvidence(
+               sourceSelection,
+               profitabilityChanged)->checkpointEvalId ==
+           selectedBest->checkpointEvalId);
+
+    // Correcting only the FINAL diagnostic provenance (including changing or
+    // removing the previously selected inference row) cannot affect any
+    // continuation source mode or evidence-derived policy input.
+    ContinuationEvidence correctedFinal = finalEvidence;
+    correctedFinal.inferenceEvalResultId = 704;
+    correctedFinal.acceptModel = false;
+    correctedFinal.profitability = zeroActionable;
+    correctedFinal.profitability->observationId = 1000;
+    correctedFinal.profitability->inferenceEvalResultId = 704;
+    correctedFinal.profitability->inferenceScope = "final";
+    correctedFinal.profitability->checkpointEvalId.reset();
+    correctedFinal.profitabilityUnavailableReason.clear();
+    const std::vector<ContinuationEvidence> provenanceCorrected{
+        checkpointLatest,
+        correctedFinal,
+        checkpointBest};
+    sourceSelection.sourceMode = "best_checkpoint";
+    assert(SelectContinuationSourceEvidence(
+               sourceSelection,
+               provenanceCorrected)->analysisId == selectedBest->analysisId);
+    sourceSelection.sourceMode = "latest_checkpoint";
+    assert(SelectContinuationSourceEvidence(
+               sourceSelection,
+               provenanceCorrected)->analysisId == selectedLatest->analysisId);
+    sourceSelection.sourceMode = "final_model";
+    assert(SelectContinuationSourceEvidence(
+               sourceSelection,
+               provenanceCorrected)->analysisId == selectedFinal->analysisId);
+
+    const std::vector<ContinuationEvidence> distinctBefore =
+        DeduplicateContinuationEvidence(sourceEvidence);
+    const std::vector<ContinuationEvidence> distinctAfter =
+        DeduplicateContinuationEvidence(profitabilityChanged);
+    assert(distinctBefore.size() == distinctAfter.size());
+    assert(distinctBefore.size() == 2);
+    for (size_t index = 0; index < distinctBefore.size(); ++index)
+    {
+        assert(distinctBefore[index].analysisId ==
+               distinctAfter[index].analysisId);
+        assert(distinctBefore[index].leaderScore ==
+               distinctAfter[index].leaderScore);
+        assert(distinctBefore[index].inferAccuracy ==
+               distinctAfter[index].inferAccuracy);
+    }
+    assert(ContinuationEvidenceWatermark(distinctBefore) ==
+           ContinuationEvidenceWatermark(distinctAfter));
+    const std::vector<ContinuationEvidence> distinctProvenanceCorrected =
+        DeduplicateContinuationEvidence(provenanceCorrected);
+    assert(distinctBefore.size() == distinctProvenanceCorrected.size());
+    assert(ContinuationEvidenceWatermark(distinctBefore) ==
+           ContinuationEvidenceWatermark(distinctProvenanceCorrected));
+
+    ContinuationPolicyConfig trendPolicy;
+    trendPolicy.trendMode = "non_degrading";
+    trendPolicy.patience = 2;
+    trendPolicy.maxDegradation = 0.2;
+    std::optional<std::string> trendMetricBefore;
+    std::optional<double> trendValueBefore;
+    std::string trendReasonBefore;
+    const ContinuationTrendResult trendBefore = EvaluateContinuationTrend(
+        trendPolicy,
+        distinctBefore,
+        trendMetricBefore,
+        trendValueBefore,
+        trendReasonBefore);
+    std::optional<std::string> trendMetricAfter;
+    std::optional<double> trendValueAfter;
+    std::string trendReasonAfter;
+    const ContinuationTrendResult trendAfter = EvaluateContinuationTrend(
+        trendPolicy,
+        distinctAfter,
+        trendMetricAfter,
+        trendValueAfter,
+        trendReasonAfter);
+    assert(trendBefore == trendAfter);
+    assert(trendMetricBefore == trendMetricAfter);
+    assert(trendValueBefore == trendValueAfter);
+    assert(trendReasonBefore == trendReasonAfter);
+    std::optional<std::string> trendMetricProvenanceCorrected;
+    std::optional<double> trendValueProvenanceCorrected;
+    std::string trendReasonProvenanceCorrected;
+    const ContinuationTrendResult trendProvenanceCorrected =
+        EvaluateContinuationTrend(
+            trendPolicy,
+            distinctProvenanceCorrected,
+            trendMetricProvenanceCorrected,
+            trendValueProvenanceCorrected,
+            trendReasonProvenanceCorrected);
+    assert(trendBefore == trendProvenanceCorrected);
+    assert(trendMetricBefore == trendMetricProvenanceCorrected);
+    assert(trendValueBefore == trendValueProvenanceCorrected);
+    assert(trendReasonBefore == trendReasonProvenanceCorrected);
+
+    const std::string unavailableDiagnostic =
+        ContinuationProfitabilityEvidenceLogFields(checkpointBest);
+    assert(unavailableDiagnostic.find(
+               "profitability_evidence=unavailable") !=
+           std::string::npos);
+    assert(unavailableDiagnostic.find(
+               "profitability_unavailable_reason=no_profitability_observation") !=
+           std::string::npos);
+    ContinuationEvidence unresolvedFinal = finalEvidence;
+    unresolvedFinal.profitabilityUnavailableReason =
+        "no_exact_final_inference_result";
+    const std::string unresolvedFinalDiagnostic =
+        ContinuationProfitabilityEvidenceLogFields(unresolvedFinal);
+    assert(unresolvedFinalDiagnostic.find(
+               "profitability_unavailable_reason=no_exact_final_inference_result") !=
+           std::string::npos);
+    const std::string zeroActionableDiagnostic =
+        ContinuationProfitabilityEvidenceLogFields(checkpointLatest);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_evidence=available") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_observation_id=901") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_inference_scope=checkpoint") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_inference_eval_result_id=702") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_checkpoint_eval_id=602") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_metric_definition_hash=fnv1a64:2222222222222222") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_actionable_count=0") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_aggregate_terminal_horizon_log_return_sum=0") !=
+           std::string::npos);
+    assert(zeroActionableDiagnostic.find(
+               "profitability_average_terminal_horizon_log_return_per_actionable_prediction=NULL") !=
+           std::string::npos);
+
     std::cout << "ContinuationPolicyInheritanceTests passed\n";
     return 0;
 }

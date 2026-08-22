@@ -62,6 +62,70 @@ evaluation persistence.  The diagnostic
 scope, experiment, model, inference-result and checkpoint identities,
 actionable count, aggregate statistic, and metric-definition identity.
 
-Consumers remain future work.  In particular, this observation is not read by
-Campaign Manager, recommendation scoring, scheduler continuation, or
-checkpoint stop/continue policy in Phase 1.
+Profitability Phase 2A continuation evidence
+---------------------------------------------
+
+The scheduler continuation evidence loader now carries an optional diagnostic
+copy of the authoritative Phase 1 observation on each final or checkpoint
+analysis point.  This is evidence plumbing and observability only.  The
+profitability fields are excluded from continuation policy identity, evidence
+watermarks, evidence counts, epoch deduplication, source selection, ranking,
+thresholds, trend calculations, eligibility, queue materialization, and
+queue/no-queue decisions.
+
+The executable continuation path remains::
+
+   source experiment and source mode
+       -> completed final/checkpoint analysis evidence
+       -> distinct-epoch history
+       -> selected final/best-checkpoint/latest-checkpoint model
+       -> existing leader-score/inference-accuracy gates and trend
+       -> existing queue/no-queue result
+
+After each analysis point has identified its exact completed
+``inference_eval_result``, Phase 2A independently attempts to attach diagnostic
+profitability.  ``final_model`` resolves the inference row from the source
+experiment's exact ``last_model_id`` and model-ownership relationship, source
+symbol and inference range, and the model's persisted prediction horizon,
+threshold, window size, label rule, target type, and completed epoch.  The row
+must also be completed, have ``inference_scope='final'``, and have null
+checkpoint and parent-experiment identities.  No newest-row fallback is used;
+zero matches are ``no_exact_final_inference_result`` and multiple matches are
+``ambiguous_final_inference_result``.  An incomplete or inconsistent source
+and model context is ``final_inference_context_mismatch``.
+``best_checkpoint`` and
+``latest_checkpoint`` require the inference result belonging to the exact
+checkpoint already selected by the preexisting source-mode rules, the source
+experiment and model, ``inference_scope='checkpoint'``, that checkpoint's
+identity, and the current canonical metric definition and hash.  Final and
+checkpoint observations are never substituted for one another.
+
+Source content is not guessed.  Exactly one immutable observation with the
+required provenance and metric identity must exist.  Multiple matching rows
+(for example, changed source content under the same metric definition) are
+``ambiguous_profitability_observation`` and unavailable.  Other stable
+unavailable reasons include ``no_profitability_observation``,
+``metric_definition_mismatch``, ``provenance_mismatch``,
+``no_completed_inference_result``, and ``profitability_schema_unavailable``.
+Lookup errors also fail closed for profitability availability while preserving
+the existing continuation evidence point.
+
+Missing observations on historical inference are expected; they are not
+treated as zero and do not invalidate leader-score or inference-accuracy
+history.  An available observation with ``actionable_count=0`` is distinct:
+its aggregate and gross directional log-return sums are valid zero values and
+its per-actionable average remains ``NULL``.
+
+Continuation evaluation logs, automatic-continuation logs, and the read-only
+``--continuation-status`` output expose the selected observation identity,
+scope, inference and checkpoint identities, metric and source-content hashes,
+counts, directional log-return sums, aggregate terminal-horizon directional
+log-return sum, and nullable per-actionable average.  Unavailable evidence is
+reported explicitly as ``profitability_evidence=unavailable`` with its reason.
+
+Phase 2A requires no migration and duplicates no observation into continuation
+tables.  It does not activate ``minimumProfitability`` and makes no change to
+checkpoint stop/continue policy, Campaign Manager or recommendation scoring
+and ranking, campaign admission, or training.  Policy use is reserved for
+Profitability Phase 2B; checkpoint-policy use is reserved for Phase 2C; and
+recommendation/campaign exposure is reserved for Campaign Manager Phase 3A.
