@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static guardrails for Profitability Phase 2A's diagnostic-only boundary."""
+"""Static guardrails for Profitability Phase 2B's continuation-only boundary."""
 
 from pathlib import Path
 
@@ -45,7 +45,6 @@ assert_diagnostic_only(
     [
         "BetterContinuationRankCandidate",
         "RankContinuationSource",
-        "EvaluateContinuationPolicy",
         "BetterContinuationAutoQueueCandidate",
         "DecideCheckpointPolicy",
     ],
@@ -53,7 +52,6 @@ assert_diagnostic_only(
 assert_diagnostic_only(
     policy,
     [
-        "ContinuationPolicySemanticCanonicalText",
         "BetterBestContinuationSource",
         "SelectContinuationSourceEvidence",
         "PreferContinuationEvidenceAtSameEpoch",
@@ -62,6 +60,20 @@ assert_diagnostic_only(
         "EvaluateContinuationTrend",
     ],
 )
+
+evaluator_body = function_body(scheduler, "EvaluateContinuationPolicy")
+if evaluator_body.count("EvaluateContinuationProfitabilityGate") < 1:
+    raise AssertionError("continuation evaluator must use the authoritative profitability gate")
+if "rejected_profitability" not in evaluator_body:
+    raise AssertionError("continuation evaluator must expose profitability rejection")
+if "ContinuationProfitabilityEvidenceIdentity" not in evaluator_body:
+    raise AssertionError("configured profitability evidence must enter decision identity")
+if "ContinuationProfitabilityPolicyConfigured" not in evaluator_body:
+    raise AssertionError("profitability evidence identity must remain conditional")
+
+status_body = function_body(scheduler, "RunContinuationStatusCommand")
+if "EvaluateContinuationPolicy" not in status_body:
+    raise AssertionError("read-only status must use the authoritative continuation evaluator")
 assert_diagnostic_only(
     scoring,
     [
@@ -70,7 +82,6 @@ assert_diagnostic_only(
     ],
 )
 
-status_body = function_body(scheduler, "RunContinuationStatusCommand")
 if "SetTransactionReadOnly(w);" not in status_body:
     raise AssertionError("continuation status must use a read-only transaction")
 if "SetTransactionReadWrite(w);" in status_body:
@@ -84,5 +95,14 @@ if "ResolveExactFinalInferenceResult" not in loader_body:
     raise AssertionError("final continuation diagnostics must use exact provenance")
 if "ORDER BY ier.completed_at DESC" in loader_body:
     raise AssertionError("final continuation diagnostics must not use a newest-row fallback")
+
+inherit_body = function_body(scheduler, "PersistContinuationChildPolicy")
+for field in [
+    "minProfitabilityActionableCount",
+    "minProfitabilityAggregateTerminalHorizonLogReturnSum",
+    "minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction",
+]:
+    if field not in inherit_body:
+        raise AssertionError(f"child policy persistence must inherit {field}")
 
 print("ContinuationProfitabilityPolicyIsolationTests passed")

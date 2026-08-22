@@ -35,6 +35,11 @@ struct ContinuationPolicyConfig
     int patience = 2;
     std::optional<double> minLeaderScore;
     std::optional<double> minInferAccuracy;
+    std::optional<long long> minProfitabilityActionableCount;
+    std::optional<double>
+        minProfitabilityAggregateTerminalHorizonLogReturnSum;
+    std::optional<double>
+        minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction;
     std::optional<double> minImprovement;
     std::optional<double> maxDegradation;
     std::optional<int> topN;
@@ -73,6 +78,11 @@ struct ContinuationPolicyUpdate
     int patience = 2;
     std::optional<double> minLeaderScore;
     std::optional<double> minInferAccuracy;
+    std::optional<long long> minProfitabilityActionableCount;
+    std::optional<double>
+        minProfitabilityAggregateTerminalHorizonLogReturnSum;
+    std::optional<double>
+        minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction;
     std::optional<double> minImprovement;
     std::optional<double> maxDegradation;
     std::optional<int> topN;
@@ -126,6 +136,17 @@ struct ContinuationEvidence
         "no_selected_continuation_source";
 };
 
+struct ContinuationProfitabilityGateEvaluation
+{
+    bool policyConfigured = false;
+    bool evidenceAvailable = false;
+    bool passed = true;
+    std::optional<bool> actionableCountPassed;
+    std::optional<bool> aggregateReturnPassed;
+    std::optional<bool> averageReturnPassed;
+    std::string reason = "profitability_policy_disabled";
+};
+
 struct ContinuationEvaluation
 {
     bool persisted = false;
@@ -144,6 +165,7 @@ struct ContinuationEvaluation
     std::string persistedDecisionPolicyHash;
     std::string evidenceWatermark;
     std::optional<long long> queuedExperimentId;
+    ContinuationProfitabilityGateEvaluation profitabilityGate;
 };
 
 struct ContinuationPolicyIdentityMaterial
@@ -190,9 +212,21 @@ std::string ContinuationOptionalDoubleText(
     const std::optional<double>& value);
 std::string ContinuationOptionalIntText(
     const std::optional<int>& value);
-// Stable diagnostic fields. Profitability is intentionally excluded from
-// policy identity, evidence watermarks, eligibility, ordering and trends.
+std::string ContinuationOptionalLongLongText(
+    const std::optional<long long>& value);
+bool ContinuationProfitabilityPolicyConfigured(
+    const ContinuationPolicyConfig& config);
+ContinuationProfitabilityGateEvaluation EvaluateContinuationProfitabilityGate(
+    const ContinuationPolicyConfig& config,
+    const ContinuationEvidence& evidence);
+// Stable diagnostic fields. Profitability remains excluded from source
+// selection, evidence counts, ordering, ranking, and trends.
 std::string ContinuationProfitabilityEvidenceLogFields(
+    const ContinuationEvidence& evidence);
+std::string ContinuationProfitabilityPolicyLogFields(
+    const ContinuationPolicyConfig& config,
+    const ContinuationProfitabilityGateEvaluation& gate);
+std::string ContinuationProfitabilityEvidenceIdentity(
     const ContinuationEvidence& evidence);
 bool BetterBestContinuationSource(
     const ContinuationEvidence& lhs,

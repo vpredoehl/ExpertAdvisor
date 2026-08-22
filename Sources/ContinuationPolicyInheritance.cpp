@@ -259,6 +259,11 @@ ContinuationAutoSatisfactionResult CheckAutomaticContinuationSatisfaction(
     // be proven current, so retain the full evaluator for that policy shape.
     if (currentPolicy.topN.has_value())
         return requireFullEvaluation("ranking_requires_full_evaluation");
+    // The compact queued-decision identity predates profitability primitives.
+    // Never let the automatic preflight substitute for the authoritative
+    // evaluator when a decision-bearing profitability gate is configured.
+    if (ContinuationProfitabilityPolicyConfigured(currentPolicy))
+        return requireFullEvaluation("profitability_requires_full_evaluation");
     if (persisted.observedEvalCount < currentPolicy.minEvals)
         return requireFullEvaluation("minimum_evidence_changed");
     if (currentPolicy.minLeaderScore.has_value() &&

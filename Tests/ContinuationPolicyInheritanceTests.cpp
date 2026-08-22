@@ -317,6 +317,11 @@ int main()
                requiresEvaluation, satisfied).reason ==
            "ranking_requires_full_evaluation");
     requiresEvaluation = automatic;
+    requiresEvaluation.minProfitabilityActionableCount = 10;
+    assert(CheckAutomaticContinuationSatisfaction(
+               requiresEvaluation, satisfied).reason ==
+           "profitability_requires_full_evaluation");
+    requiresEvaluation = automatic;
     requiresEvaluation.targetEpochs = 138;
     assert(CheckAutomaticContinuationSatisfaction(
                requiresEvaluation, satisfied).reason ==

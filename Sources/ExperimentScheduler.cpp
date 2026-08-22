@@ -12166,8 +12166,8 @@ void AttachContinuationProfitabilityEvidence(
     }
     catch (const std::exception&)
     {
-        // Profitability is diagnostic in Phase 2A. A lookup failure must not
-        // invalidate otherwise authoritative continuation evidence.
+        // Preserve the continuation evidence point. A configured Phase 2B
+        // profitability gate consumes this unavailable state fail-closed.
         evidence.profitabilityUnavailableReason =
             "profitability_lookup_error";
     }
@@ -12583,6 +12583,9 @@ void PrintContinuationPolicyLog(const std::string& marker,
                       : "NULL")
               << ContinuationProfitabilityEvidenceLogFields(
                      evaluation.selected)
+              << ContinuationProfitabilityPolicyLogFields(
+                     config,
+                     evaluation.profitabilityGate)
               << ",decision=" << evaluation.decision
               << ",reason=" << evaluation.reason
               << std::endl;
@@ -12600,6 +12603,8 @@ std::string ContinuationDecisionMarker(const std::string& decision)
         return "CONTINUATION_POLICY_REJECTED_RANK";
     if (decision == "rejected_trend")
         return "CONTINUATION_POLICY_REJECTED_TREND";
+    if (decision == "rejected_profitability")
+        return "CONTINUATION_POLICY_REJECTED_PROFITABILITY";
     if (decision == "already_continued" || decision == "continuation_queued")
         return "CONTINUATION_POLICY_ALREADY_CONTINUED";
     if (decision == "error")
@@ -12771,6 +12776,9 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         return evaluation;
     }
     ContinuationPolicyConfig config = *configOption;
+    evaluation.profitabilityGate = EvaluateContinuationProfitabilityGate(
+        config,
+        evaluation.selected);
     if (loadedConfig)
         *loadedConfig = config;
 
@@ -12819,6 +12827,17 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         return evaluation;
     }
     evaluation.selected = *selected;
+    evaluation.profitabilityGate = EvaluateContinuationProfitabilityGate(
+        config,
+        evaluation.selected);
+    if (ContinuationProfitabilityPolicyConfigured(config))
+    {
+        evaluation.evidenceWatermark = StableFnv1aHash(
+            evaluation.evidenceWatermark +
+            "|profitability=" +
+            ContinuationProfitabilityEvidenceIdentity(
+                evaluation.selected));
+    }
 
     if (evidence.empty() || evidence.back().completedEpoch >= *config.targetEpochs)
     {
@@ -12871,6 +12890,9 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         RefreshContinuationSelectedDiagnostics(
             evaluation.selected,
             rawEvidence);
+        evaluation.profitabilityGate = EvaluateContinuationProfitabilityGate(
+            config,
+            evaluation.selected);
         evaluation.reused = true;
         evaluation.alreadyQueued = true;
         evaluation.reason = "continuation_already_queued";
@@ -12898,6 +12920,9 @@ ContinuationEvaluation EvaluateContinuationPolicy(
         RefreshContinuationSelectedDiagnostics(
             evaluation.selected,
             rawEvidence);
+        evaluation.profitabilityGate = EvaluateContinuationProfitabilityGate(
+            config,
+            evaluation.selected);
         evaluation.reused = true;
         evaluation.persisted = true;
         PrintContinuationPolicyLog(ContinuationDecisionMarker(evaluation.decision), config, evaluation);
@@ -12948,6 +12973,11 @@ ContinuationEvaluation EvaluateContinuationPolicy(
             {
                 evaluation.decision = "rejected_threshold";
                 evaluation.reason = "failed_thresholds=" + JoinCheckpointPolicyRules(failedThresholds);
+            }
+            else if (!evaluation.profitabilityGate.passed)
+            {
+                evaluation.decision = "rejected_profitability";
+                evaluation.reason = evaluation.profitabilityGate.reason;
             }
             else
             {
@@ -13201,6 +13231,27 @@ int RunContinuationPolicyControlCommand(const SchedulerOptions& options)
         sql << ", continuation_policy_min_leader_score = " << SqlNullable(w, update.minLeaderScore);
     if (update.keys.count("min_infer_accuracy"))
         sql << ", continuation_policy_min_infer_accuracy = " << SqlNullable(w, update.minInferAccuracy);
+    if (update.keys.count("min_profitability_actionable_count"))
+        sql << ", continuation_policy_min_profit_actionable_count = "
+            << SqlNullable(w, update.minProfitabilityActionableCount);
+    if (update.keys.count(
+            "min_profitability_aggregate_terminal_horizon_log_return_sum"))
+    {
+        sql << ", continuation_policy_min_profit_aggregate_log_return_sum = "
+            << SqlNullable(
+                   w,
+                   update
+                       .minProfitabilityAggregateTerminalHorizonLogReturnSum);
+    }
+    if (update.keys.count(
+            "min_profitability_average_terminal_horizon_log_return_per_actionable_prediction"))
+    {
+        sql << ", continuation_policy_min_profit_average_log_return = "
+            << SqlNullable(
+                   w,
+                   update
+                       .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction);
+    }
     if (update.keys.count("min_improvement"))
         sql << ", continuation_policy_min_improvement = " << SqlNullable(w, update.minImprovement);
     if (update.keys.count("max_degradation"))
@@ -13368,6 +13419,20 @@ void PersistContinuationChildPolicy(
         << "continuation_policy_patience = " << sourceConfig.patience << ", "
         << "continuation_policy_min_leader_score = " << SqlNullable(w, sourceConfig.minLeaderScore) << ", "
         << "continuation_policy_min_infer_accuracy = " << SqlNullable(w, sourceConfig.minInferAccuracy) << ", "
+        << "continuation_policy_min_profit_actionable_count = "
+        << SqlNullable(w, sourceConfig.minProfitabilityActionableCount) << ", "
+        << "continuation_policy_min_profit_aggregate_log_return_sum = "
+        << SqlNullable(
+               w,
+               sourceConfig
+                   .minProfitabilityAggregateTerminalHorizonLogReturnSum)
+        << ", "
+        << "continuation_policy_min_profit_average_log_return = "
+        << SqlNullable(
+               w,
+               sourceConfig
+                   .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction)
+        << ", "
         << "continuation_policy_min_improvement = " << SqlNullable(w, sourceConfig.minImprovement) << ", "
         << "continuation_policy_max_degradation = " << SqlNullable(w, sourceConfig.maxDegradation) << ", "
         << "continuation_policy_top_n = " << SqlNullable(w, sourceConfig.topN) << ", "
@@ -13706,6 +13771,10 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
     bool evaluationReady = false;
     std::string evaluationDeferredReason;
     ContinuationEvidence selectedEvidence;
+    ContinuationEvaluation currentEvaluation;
+    currentEvaluation.profitabilityGate =
+        EvaluateContinuationProfitabilityGate(*config, selectedEvidence);
+    bool currentEvaluationAvailable = false;
     if (!config->enabled)
     {
         evaluationDeferredReason = "policy_disabled";
@@ -13724,6 +13793,13 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
             &selectedEvidence);
         if (!evaluationReady)
             evaluationDeferredReason = reason;
+        currentEvaluation = EvaluateContinuationPolicy(
+            w,
+            sourceExperimentId,
+            nullptr,
+            false);
+        currentEvaluationAvailable = true;
+        selectedEvidence = currentEvaluation.selected;
     }
     const std::string currentPolicyHash = ContinuationPolicySemanticHash(*config);
     const std::optional<std::string> effectiveProgressionMode =
@@ -13834,6 +13910,22 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
               << "\n";
     std::cout << "  Inheritance Validation: " << outgoingInheritanceValidation << "\n";
     std::cout << "  Continuation Rules: " << ContinuationPolicyDisplayText(*config) << "\n";
+    std::cout << "  Continuation Profitability Policy: "
+              << (ContinuationProfitabilityPolicyConfigured(*config)
+                      ? "enabled"
+                      : "disabled")
+              << " min_actionable_count="
+              << ContinuationOptionalLongLongText(
+                     config->minProfitabilityActionableCount)
+              << " min_aggregate_terminal_horizon_log_return_sum="
+              << ContinuationOptionalDoubleText(
+                     config
+                         ->minProfitabilityAggregateTerminalHorizonLogReturnSum)
+              << " min_average_terminal_horizon_log_return_per_actionable_prediction="
+              << ContinuationOptionalDoubleText(
+                     config
+                         ->minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction)
+              << "\n";
     if (selectedEvidence.profitability.has_value())
     {
         const ContinuationProfitabilityEvidence& profitability =
@@ -13868,6 +13960,20 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
                   << selectedEvidence.profitabilityUnavailableReason
                   << "\n";
     }
+    std::cout << "  Continuation Profitability Gate: "
+              << currentEvaluation.profitabilityGate.reason
+              << " passed="
+              << (currentEvaluation.profitabilityGate.passed ? "yes" : "no")
+              << "\n";
+    std::cout << "  Continuation Current Read-Only Decision: "
+              << (currentEvaluationAvailable
+                      ? currentEvaluation.decision
+                      : "not_evaluated")
+              << " reason="
+              << (currentEvaluationAvailable
+                      ? currentEvaluation.reason
+                      : evaluationDeferredReason)
+              << "\n";
     std::cout << "CONTINUATION_POLICY_STATUS"
               << ",source_experiment_id=" << sourceExperimentId
               << ",enabled=" << (config->enabled ? "1" : "0")
@@ -13928,6 +14034,19 @@ int RunContinuationStatusCommand(const SchedulerOptions& options)
               << (derivedPolicyHash.empty() ? "NULL" : derivedPolicyHash)
               << ContinuationProfitabilityEvidenceLogFields(
                      selectedEvidence)
+              << ContinuationProfitabilityPolicyLogFields(
+                     *config,
+                     currentEvaluation.profitabilityGate)
+              << ",current_read_only_decision="
+              << (currentEvaluationAvailable
+                      ? currentEvaluation.decision
+                      : "not_evaluated")
+              << ",current_read_only_reason="
+              << (currentEvaluationAvailable
+                      ? currentEvaluation.reason
+                      : (evaluationDeferredReason.empty()
+                             ? "NULL"
+                             : evaluationDeferredReason))
               << std::endl;
     std::cout << "  Continuation Last: decision="
               << (config->lastDecision.has_value() ? *config->lastDecision : "none")
@@ -14056,6 +14175,9 @@ void PrintContinuationAutoEvaluationLog(
                       : "NULL")
               << ContinuationProfitabilityEvidenceLogFields(
                      evaluation.selected)
+              << ContinuationProfitabilityPolicyLogFields(
+                     config,
+                     evaluation.profitabilityGate)
               << ",dry_run=" << (dryRun ? "1" : "0");
     if (action.has_value())
         std::cout << ",action=" << *action;
@@ -14155,6 +14277,10 @@ void RefreshContinuationAutoQueuedIdentity(ContinuationAutoCandidate& candidate)
                 RefreshContinuationSelectedDiagnostics(
                     candidate.evaluation.selected,
                     rawEvidence);
+                candidate.evaluation.profitabilityGate =
+                    EvaluateContinuationProfitabilityGate(
+                        *loaded,
+                        candidate.evaluation.selected);
             }
         }
     }
@@ -23086,7 +23212,10 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --enable-continuation-policy=EXPERIMENT_ID | --disable-continuation-policy=EXPERIMENT_ID | "
         << "--set-continuation-policy=EXPERIMENT_ID:key=value,key=value\n"
         << "Continuation keys: target_epochs, min_evals, patience, min_leader_score, "
-        << "min_infer_accuracy, min_improvement, max_degradation, top_n, scope, trend_mode, "
+        << "min_infer_accuracy, min_profitability_actionable_count, "
+        << "min_profitability_aggregate_terminal_horizon_log_return_sum, "
+        << "min_profitability_average_terminal_horizon_log_return_per_actionable_prediction, "
+        << "min_improvement, max_degradation, top_n, scope, trend_mode, "
         << "source_mode, include_excluded, candidate_excluded, inherit_to_child, progression_mode, "
         << "target_increment, max_target_epochs, target_sequence\n"
         << "Continuation policy inheritance is disabled by default. When inherit_to_child=true, "
@@ -23097,7 +23226,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Legacy inherited policies without a maximum retain compatibility until reconfigured.\n"
         << "Continuation gates use AND semantics. trend_delta=latest_metric-first_metric; "
         << "non_degrading requires trend_delta>=-max_degradation and improving requires "
-        << "trend_delta>=min_improvement. trend_mode defaults to none.\n"
+        << "trend_delta>=min_improvement. trend_mode defaults to none. Profitability gates "
+        << "are disabled when all three profitability keys are null. When any is configured, "
+        << "the exact authoritative observation for the already-selected final/best-checkpoint/"
+        << "latest-checkpoint source is required; no cross-scope fallback or source reselection "
+        << "occurs. Configured profitability requirements use AND semantics. Actionable count is "
+        << "independent from prediction count. Aggregate and average fields are terminal-horizon "
+        << "directional log-return primitives, not portfolio P&L; a zero-actionable observation "
+        << "has a valid zero aggregate and undefined average. Profitability does not affect "
+        << "ranking or trend. Use value=null to clear an optional profitability key.\n"
         << "Usage: " << exe
         << " --evaluate-continuation=EXPERIMENT_ID | --queue-continuation=EXPERIMENT_ID | "
         << "--continuation-status=EXPERIMENT_ID\n"

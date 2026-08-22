@@ -64,6 +64,17 @@ ContinuationPolicyConfig MapContinuationPolicyConfig(
     config.patience = row["policy_patience"].as<int>();
     config.minLeaderScore = OptionalValue<double>(row, "policy_min_leader_score");
     config.minInferAccuracy = OptionalValue<double>(row, "policy_min_infer_accuracy");
+    config.minProfitabilityActionableCount =
+        OptionalValue<long long>(row, "policy_min_profit_actionable_count");
+    config.minProfitabilityAggregateTerminalHorizonLogReturnSum =
+        OptionalValue<double>(
+            row,
+            "policy_min_profit_aggregate_log_return_sum");
+    config
+        .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction =
+        OptionalValue<double>(
+            row,
+            "policy_min_profit_average_log_return");
     config.minImprovement = OptionalValue<double>(row, "policy_min_improvement");
     config.maxDegradation = OptionalValue<double>(row, "policy_max_degradation");
     config.topN = OptionalValue<int>(row, "policy_top_n");
@@ -175,6 +186,9 @@ std::optional<ContinuationPolicyConfig> LoadContinuationPolicyConfigImpl(
         "e.continuation_policy_patience AS policy_patience, "
         "e.continuation_policy_min_leader_score AS policy_min_leader_score, "
         "e.continuation_policy_min_infer_accuracy AS policy_min_infer_accuracy, "
+        "e.continuation_policy_min_profit_actionable_count AS policy_min_profit_actionable_count, "
+        "e.continuation_policy_min_profit_aggregate_log_return_sum AS policy_min_profit_aggregate_log_return_sum, "
+        "e.continuation_policy_min_profit_average_log_return AS policy_min_profit_average_log_return, "
         "e.continuation_policy_min_improvement AS policy_min_improvement, "
         "e.continuation_policy_max_degradation AS policy_max_degradation, "
         "e.continuation_policy_top_n AS policy_top_n, "
@@ -228,6 +242,9 @@ bool ContinuationPolicySchemaExists(pqxx::work& transaction)
         {"experiment", "continuation_policy_max_target_epochs"},
         {"experiment", "continuation_policy_progression_mode"},
         {"experiment", "continuation_policy_target_sequence"},
+        {"experiment", "continuation_policy_min_profit_actionable_count"},
+        {"experiment", "continuation_policy_min_profit_aggregate_log_return_sum"},
+        {"experiment", "continuation_policy_min_profit_average_log_return"},
         {"experiment", "continuation_policy_inherited"},
         {"experiment", "continuation_policy_inherited_from_experiment_id"},
         {"experiment", "continuation_policy_inherited_from_revision"},

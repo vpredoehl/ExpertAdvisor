@@ -44,6 +44,12 @@ Experiment scheduling tables are created by:
   performs no historical backfill and activates no recommendation, campaign,
   continuation, or checkpoint policy. See
   `docs/InferenceProfitabilityPersistence.rst`.
+- `074_continuation_profitability_policy.sql`: nullable, default-disabled
+  scheduler-continuation gates for minimum actionable count, aggregate
+  terminal-horizon directional log-return sum, and average terminal-horizon
+  directional log return per actionable prediction. It preserves old rows and
+  does not add profitability ranking, trend, checkpoint policy, or Campaign
+  Manager behavior.
 - `046_global_experiment_control.sql`: database-authoritative global desired
   execution state, administrative request/outcome audit, cancellation targets,
   and managed worker PID/process-group/executable/process-start identity

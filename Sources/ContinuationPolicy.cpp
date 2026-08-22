@@ -50,6 +50,25 @@ int ParsePositiveInt(const std::string& optionName, const std::string& value)
     return static_cast<int>(parsed);
 }
 
+long long ParsePositiveLongLong(
+    const std::string& optionName,
+    const std::string& value)
+{
+    size_t consumed = 0;
+    long long parsed = 0;
+    try
+    {
+        parsed = std::stoll(value, &consumed, 10);
+    }
+    catch (const std::exception&)
+    {
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'");
+    }
+    if (consumed != value.size() || parsed <= 0)
+        throw std::invalid_argument("invalid " + optionName + " value '" + value + "'");
+    return parsed;
+}
+
 double ParseFiniteDouble(const std::string& optionName, const std::string& value)
 {
     size_t consumed = 0;
@@ -223,6 +242,33 @@ ContinuationPolicyUpdate ParseContinuationPolicyUpdate(const std::string& text)
             if (!clearValue)
                 update.minInferAccuracy = ParseFiniteDouble(key, value);
         }
+        else if (key == "min_profitability_actionable_count")
+        {
+            if (!clearValue)
+            {
+                update.minProfitabilityActionableCount =
+                    ParsePositiveLongLong(key, value);
+            }
+        }
+        else if (key ==
+                 "min_profitability_aggregate_terminal_horizon_log_return_sum")
+        {
+            if (!clearValue)
+            {
+                update.minProfitabilityAggregateTerminalHorizonLogReturnSum =
+                    ParseFiniteDouble(key, value);
+            }
+        }
+        else if (key ==
+                 "min_profitability_average_terminal_horizon_log_return_per_actionable_prediction")
+        {
+            if (!clearValue)
+            {
+                update
+                    .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction =
+                    ParseFiniteDouble(key, value);
+            }
+        }
         else if (key == "min_improvement")
         {
             if (!clearValue)
@@ -287,6 +333,22 @@ void ApplyContinuationPolicyUpdate(
     if (update.keys.count("patience")) config.patience = update.patience;
     if (update.keys.count("min_leader_score")) config.minLeaderScore = update.minLeaderScore;
     if (update.keys.count("min_infer_accuracy")) config.minInferAccuracy = update.minInferAccuracy;
+    if (update.keys.count("min_profitability_actionable_count"))
+        config.minProfitabilityActionableCount = update.minProfitabilityActionableCount;
+    if (update.keys.count(
+            "min_profitability_aggregate_terminal_horizon_log_return_sum"))
+    {
+        config.minProfitabilityAggregateTerminalHorizonLogReturnSum =
+            update.minProfitabilityAggregateTerminalHorizonLogReturnSum;
+    }
+    if (update.keys.count(
+            "min_profitability_average_terminal_horizon_log_return_per_actionable_prediction"))
+    {
+        config
+            .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction =
+            update
+                .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction;
+    }
     if (update.keys.count("min_improvement")) config.minImprovement = update.minImprovement;
     if (update.keys.count("max_degradation")) config.maxDegradation = update.maxDegradation;
     if (update.keys.count("top_n")) config.topN = update.topN;
@@ -314,6 +376,26 @@ std::optional<std::string> ContinuationPolicyConfigurationError(
         return "min_leader_score_must_be_finite";
     if (config.minInferAccuracy.has_value() && !std::isfinite(*config.minInferAccuracy))
         return "min_infer_accuracy_must_be_finite";
+    if (config.minProfitabilityActionableCount.has_value() &&
+        *config.minProfitabilityActionableCount <= 0)
+    {
+        return "min_profitability_actionable_count_must_be_positive";
+    }
+    if (config.minProfitabilityAggregateTerminalHorizonLogReturnSum.has_value() &&
+        !std::isfinite(
+            *config.minProfitabilityAggregateTerminalHorizonLogReturnSum))
+    {
+        return "min_profitability_aggregate_terminal_horizon_log_return_sum_must_be_finite";
+    }
+    if (config
+            .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction
+            .has_value() &&
+        !std::isfinite(
+            *config
+                 .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction))
+    {
+        return "min_profitability_average_terminal_horizon_log_return_per_actionable_prediction_must_be_finite";
+    }
     if (config.minImprovement.has_value() &&
         (!std::isfinite(*config.minImprovement) || *config.minImprovement < 0.0))
         return "min_improvement_must_be_non_negative_and_finite";
@@ -473,6 +555,20 @@ std::string ContinuationPolicySemanticCanonicalText(const ContinuationPolicyConf
         << "|include_excluded=" << (config.includeExcluded ? "true" : "false")
         << "|candidate_excluded=" << (config.candidateExcluded ? "true" : "false")
         << "|inherit_to_child=" << (config.inheritToChild ? "true" : "false");
+    if (ContinuationProfitabilityPolicyConfigured(config))
+    {
+        out << "|min_profitability_actionable_count="
+            << ContinuationOptionalLongLongText(
+                   config.minProfitabilityActionableCount)
+            << "|min_profitability_aggregate_terminal_horizon_log_return_sum="
+            << ContinuationOptionalDoubleText(
+                   config
+                       .minProfitabilityAggregateTerminalHorizonLogReturnSum)
+            << "|min_profitability_average_terminal_horizon_log_return_per_actionable_prediction="
+            << ContinuationOptionalDoubleText(
+                   config
+                       .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction);
+    }
     if (EffectiveContinuationProgressionMode(config) == "target_sequence")
     {
         out << "|progression_mode=target_sequence|target_sequence=[";
@@ -535,6 +631,105 @@ std::string ContinuationOptionalIntText(const std::optional<int>& value)
     return value.has_value() ? std::to_string(*value) : "NULL";
 }
 
+std::string ContinuationOptionalLongLongText(
+    const std::optional<long long>& value)
+{
+    return value.has_value() ? std::to_string(*value) : "NULL";
+}
+
+bool ContinuationProfitabilityPolicyConfigured(
+    const ContinuationPolicyConfig& config)
+{
+    return config.minProfitabilityActionableCount.has_value() ||
+           config.minProfitabilityAggregateTerminalHorizonLogReturnSum
+               .has_value() ||
+           config
+               .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction
+               .has_value();
+}
+
+ContinuationProfitabilityGateEvaluation EvaluateContinuationProfitabilityGate(
+    const ContinuationPolicyConfig& config,
+    const ContinuationEvidence& evidence)
+{
+    ContinuationProfitabilityGateEvaluation gate;
+    gate.policyConfigured = ContinuationProfitabilityPolicyConfigured(config);
+    if (!gate.policyConfigured)
+        return gate;
+
+    gate.passed = false;
+    if (!evidence.profitability.has_value())
+    {
+        if (config.minProfitabilityActionableCount.has_value())
+            gate.actionableCountPassed = false;
+        if (config.minProfitabilityAggregateTerminalHorizonLogReturnSum.has_value())
+            gate.aggregateReturnPassed = false;
+        if (config
+                .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction
+                .has_value())
+        {
+            gate.averageReturnPassed = false;
+        }
+        gate.reason = "profitability_evidence_unavailable";
+        return gate;
+    }
+
+    gate.evidenceAvailable = true;
+    const ContinuationProfitabilityEvidence& profitability =
+        *evidence.profitability;
+    if (config.minProfitabilityActionableCount.has_value())
+    {
+        gate.actionableCountPassed =
+            profitability.actionableCount >=
+            static_cast<std::uint64_t>(
+                *config.minProfitabilityActionableCount);
+    }
+    if (config.minProfitabilityAggregateTerminalHorizonLogReturnSum.has_value())
+    {
+        gate.aggregateReturnPassed =
+            profitability.aggregateTerminalHorizonLogReturnSum >=
+            *config.minProfitabilityAggregateTerminalHorizonLogReturnSum;
+    }
+    if (config
+            .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction
+            .has_value())
+    {
+        gate.averageReturnPassed =
+            profitability
+                .averageTerminalHorizonLogReturnPerActionablePrediction
+                .has_value() &&
+            *profitability
+                 .averageTerminalHorizonLogReturnPerActionablePrediction >=
+                *config
+                     .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction;
+    }
+
+    if (gate.actionableCountPassed == false)
+    {
+        gate.reason = "profitability_actionable_count_below_minimum";
+        return gate;
+    }
+    if (gate.aggregateReturnPassed == false)
+    {
+        gate.reason =
+            "profitability_aggregate_terminal_horizon_log_return_sum_below_minimum";
+        return gate;
+    }
+    if (gate.averageReturnPassed == false)
+    {
+        gate.reason = profitability
+                              .averageTerminalHorizonLogReturnPerActionablePrediction
+                              .has_value()
+            ? "profitability_average_terminal_horizon_log_return_per_actionable_prediction_below_minimum"
+            : "profitability_average_terminal_horizon_log_return_per_actionable_prediction_undefined";
+        return gate;
+    }
+
+    gate.passed = true;
+    gate.reason = "profitability_all_configured_requirements_passed";
+    return gate;
+}
+
 std::string ContinuationProfitabilityEvidenceLogFields(
     const ContinuationEvidence& evidence)
 {
@@ -592,6 +787,88 @@ std::string ContinuationProfitabilityEvidenceLogFields(
                profitability
                    .averageTerminalHorizonLogReturnPerActionablePrediction);
     return out.str();
+}
+
+std::string ContinuationProfitabilityPolicyLogFields(
+    const ContinuationPolicyConfig& config,
+    const ContinuationProfitabilityGateEvaluation& gate)
+{
+    const auto optionalBoolText = [](const std::optional<bool>& value) {
+        if (!value.has_value())
+            return std::string{"NULL"};
+        return std::string{*value ? "1" : "0"};
+    };
+    std::ostringstream out;
+    out << ",profitability_policy="
+        << (ContinuationProfitabilityPolicyConfigured(config)
+                ? "enabled"
+                : "disabled")
+        << ",profitability_min_actionable_count="
+        << ContinuationOptionalLongLongText(
+               config.minProfitabilityActionableCount)
+        << ",profitability_min_aggregate_terminal_horizon_log_return_sum="
+        << ContinuationOptionalDoubleText(
+               config.minProfitabilityAggregateTerminalHorizonLogReturnSum)
+        << ",profitability_min_average_terminal_horizon_log_return_per_actionable_prediction="
+        << ContinuationOptionalDoubleText(
+               config
+                   .minProfitabilityAverageTerminalHorizonLogReturnPerActionablePrediction)
+        << ",profitability_actionable_count_requirement_passed="
+        << optionalBoolText(gate.actionableCountPassed)
+        << ",profitability_aggregate_return_requirement_passed="
+        << optionalBoolText(gate.aggregateReturnPassed)
+        << ",profitability_average_return_requirement_passed="
+        << optionalBoolText(gate.averageReturnPassed)
+        << ",profitability_gate_passed=" << (gate.passed ? "1" : "0")
+        << ",profitability_gate_reason=" << gate.reason;
+    return out.str();
+}
+
+std::string ContinuationProfitabilityEvidenceIdentity(
+    const ContinuationEvidence& evidence)
+{
+    std::ostringstream canonical;
+    if (!evidence.profitability.has_value())
+    {
+        canonical << "availability=unavailable"
+                  << "|reason="
+                  << (evidence.profitabilityUnavailableReason.empty()
+                          ? "no_profitability_observation"
+                          : evidence.profitabilityUnavailableReason)
+                  << "|inference_eval_result_id="
+                  << (evidence.inferenceEvalResultId.has_value()
+                          ? std::to_string(*evidence.inferenceEvalResultId)
+                          : "NULL");
+        return StableContinuationPolicyHash(canonical.str());
+    }
+
+    const ContinuationProfitabilityEvidence& profitability =
+        *evidence.profitability;
+    canonical
+        << "availability=available"
+        << "|observation_id=" << profitability.observationId
+        << "|observation_identity_hash="
+        << profitability.observationIdentityHash
+        << "|inference_eval_result_id="
+        << profitability.inferenceEvalResultId
+        << "|inference_scope=" << profitability.inferenceScope
+        << "|checkpoint_eval_id="
+        << (profitability.checkpointEvalId.has_value()
+                ? std::to_string(*profitability.checkpointEvalId)
+                : "NULL")
+        << "|metric_definition_hash="
+        << profitability.metricDefinitionHash
+        << "|source_content_hash=" << profitability.sourceContentHash
+        << "|prediction_count=" << profitability.predictionCount
+        << "|actionable_count=" << profitability.actionableCount
+        << "|aggregate_terminal_horizon_log_return_sum="
+        << ContinuationOptionalDoubleText(
+               profitability.aggregateTerminalHorizonLogReturnSum)
+        << "|average_terminal_horizon_log_return_per_actionable_prediction="
+        << ContinuationOptionalDoubleText(
+               profitability
+                   .averageTerminalHorizonLogReturnPerActionablePrediction);
+    return StableContinuationPolicyHash(canonical.str());
 }
 
 bool BetterBestContinuationSource(const ContinuationEvidence& lhs,
