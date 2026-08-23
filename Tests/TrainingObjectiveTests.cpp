@@ -128,10 +128,96 @@ int main()
     Configuration invalidAuxiliary = legacy;
     invalidAuxiliary.auxiliaryLossCoefficient = 0.1;
     assert(Validate(invalidAuxiliary) ==
-           "phase4a_auxiliary_objective_must_be_disabled");
+           "legacy_classification_only_contract_required");
+
+    const Configuration auxiliary = ProfitabilityAuxiliary();
+    assert(!Validate(auxiliary));
+    assert(AuxiliaryEnabled(auxiliary));
+    assert(auxiliary.mode ==
+           Mode::FirstHitClassificationWithTerminalReturnAuxiliary);
+    assert(auxiliary.auxiliaryLossCoefficient == 0.1);
+    assert(auxiliary.robustLossDelta == 1.0);
+    assert(auxiliary.targetClippingDefinition == "none");
+
+    // Terminal targets use the same prediction-time and terminal-horizon
+    // closes as the classification window identity, with fixed x1000 scaling.
+    assert(NearlyEqual(TerminalHorizonLogReturn(100.0, 110.0),
+                       std::log(1.1)));
+    assert(AuxiliaryRegressionTarget(100.0, 110.0) > 0.0);
+    assert(AuxiliaryRegressionTarget(100.0, 90.0) < 0.0);
+    assert(AuxiliaryRegressionTarget(100.0, 100.0) == 0.0);
+    assert(NearlyEqual(AuxiliaryRegressionTarget(100.0, 110.0),
+                       1000.0 * std::log(1.1)));
+
+    // Huber uses 0.5*r^2 inside delta and delta*(|r|-0.5*delta)
+    // outside, with a signed clipped residual derivative.
+    assert(NearlyEqual(HuberLoss(0.5), 0.125));
+    assert(NearlyEqual(HuberLoss(2.0), 1.5));
+    assert(NearlyEqual(HuberLoss(-2.0), 1.5));
+    assert(NearlyEqual(HuberGradient(0.5), 0.5));
+    assert(NearlyEqual(HuberGradient(2.0), 1.0));
+    assert(NearlyEqual(HuberGradient(-2.0), -1.0));
+    assert(NearlyEqual(WeightedAuxiliaryLoss(2.0, 0.0, 0.2), 0.3));
+    assert(NearlyEqual(WeightedAuxiliaryOutputGradient(2.0, 0.0, 0.2),
+                       0.2));
+
+    // Disabled/zero auxiliary is exactly the classification loss and shared
+    // gradient. Enabling it adds only the scalar-head projection to d_h.
+    const double classificationLoss = -std::log(0.7);
+    assert(CombinedExampleLoss(classificationLoss, 5.0, -5.0, legacy) ==
+           classificationLoss);
+    assert(NearlyEqual(
+        CombinedExampleLoss(classificationLoss, 2.0, 0.0, auxiliary),
+        classificationLoss + 0.15));
+    const std::array<double, 2> classificationProjection {0.25, -0.5};
+    const std::array<double, 2> auxiliaryWeight {2.0, 3.0};
+    const auto legacyShared = CombineSharedCoreHeadGradients(
+        classificationProjection, auxiliaryWeight, 0.1, legacy);
+    assert((legacyShared == std::array<double, 2>{1.0, -2.0}));
+    const auto combinedShared = CombineSharedCoreHeadGradients(
+        classificationProjection, auxiliaryWeight, 0.1, auxiliary);
+    assert(NearlyEqual(combinedShared[0], 1.8));
+    assert(NearlyEqual(combinedShared[1], -0.8));
+    assert(LegacyClassificationLogitGradient(probabilities, 2, auxiliary) ==
+           gradient);
+
+    // Exact objective identity round-trip and bidirectional resume rejection.
+    const std::string auxiliaryCanonical = CanonicalText(auxiliary);
+    const std::string auxiliaryIdentity = Identity(auxiliary);
+    assert(auxiliaryIdentity == "fnv1a64:f7a9a20f7f72eee5");
+    assert(ResolvePersisted(auxiliaryCanonical, auxiliaryIdentity) == auxiliary);
+    assert(!ResumeCompatible(legacy, auxiliary));
+    assert(!ResumeCompatible(auxiliary, legacy));
+    ExpectFailureContaining(
+        [&] { RequireResumeCompatible(legacy, auxiliary); },
+        "training_objective_resume_incompatible");
+    ExpectFailureContaining(
+        [&] { RequireResumeCompatible(auxiliary, legacy); },
+        "training_objective_resume_incompatible");
+
+    std::string unknownAuxiliaryCanonical = auxiliaryCanonical;
+    const std::string knownRobust =
+        "robust_loss_definition=huber_half_squared_inside_linear_outside_v1";
+    const std::size_t robustOffset =
+        unknownAuxiliaryCanonical.find(knownRobust);
+    assert(robustOffset != std::string::npos);
+    unknownAuxiliaryCanonical.replace(
+        robustOffset, knownRobust.size(),
+        "robust_loss_definition=unknown_auxiliary_loss_v99");
+    ExpectFailureContaining(
+        [&] {
+            (void)ResolvePersisted(
+                unknownAuxiliaryCanonical,
+                DeterministicHash(unknownAuxiliaryCanonical));
+        },
+        "unsupported_training_objective_canonical_configuration");
 
     std::cout << "LEGACY_TRAINING_OBJECTIVE_CANONICAL=" << canonical << '\n'
               << "LEGACY_TRAINING_OBJECTIVE_HASH=" << identity << '\n'
+              << "AUXILIARY_TRAINING_OBJECTIVE_CANONICAL="
+              << auxiliaryCanonical << '\n'
+              << "AUXILIARY_TRAINING_OBJECTIVE_HASH="
+              << auxiliaryIdentity << '\n'
               << "TrainingObjectiveTests passed\n";
     return 0;
 }

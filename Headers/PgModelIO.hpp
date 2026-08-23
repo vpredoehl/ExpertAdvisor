@@ -182,6 +182,8 @@ public:
                             trainingObjective =
                                 EA::TrainingObjective::Legacy())
     {
+        EA::TrainingObjective::RequireResumeCompatible(
+            lstm.trainingObjective, trainingObjective);
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
         saveParameter(w, modelId, "returnHeadWeight", lstm.returnHeadWeight);
@@ -397,8 +399,11 @@ public:
         long long modelId,
         const EA::TrainingObjective::Configuration& objective)
     {
+        const auto supported =
+            EA::TrainingObjective::ParseSupportedCanonicalText(
+                EA::TrainingObjective::CanonicalText(objective));
         const std::string canonical =
-            EA::TrainingObjective::CanonicalText(objective);
+            EA::TrainingObjective::CanonicalText(supported);
         const std::string hash =
             EA::TrainingObjective::DeterministicHash(canonical);
         saveAsciiMeta(
@@ -814,14 +819,21 @@ public:
     // is made a resume source.
     static void validateTrainingResumeState(pqxx::work& w, long long modelId)
     {
-        (void)loadTrainingObjectiveMeta(w, modelId);
+        const auto objective = loadTrainingObjectiveMeta(w, modelId);
         const auto modelMeta = loadRequiredModelMeta(w, modelId);
         (void)loadParameterMatrix<float>(w, modelId, "param");
         (void)loadParameterMatrix<float>(w, modelId, "bias");
-        (void)loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
-        (void)loadParameterMatrix<float>(w, modelId, "returnHeadBias");
 
         const auto targetMeta = loadRequiredTargetMeta(w, modelId);
+        if (targetMeta.targetType !=
+                EA::LSTM::TargetType::UpNeutralDownReturn ||
+            EA::TrainingObjective::AuxiliaryEnabled(objective))
+        {
+            (void)loadRequiredDirectionHeadMatrix(
+                w, modelId, "returnHeadWeight", modelMeta.hiddenSize, 1);
+            (void)loadRequiredDirectionHeadMatrix(
+                w, modelId, "returnHeadBias", 1, 1);
+        }
         if (targetMeta.targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
         {
             (void)loadRequiredDirectionHeadMatrix(
@@ -882,6 +894,7 @@ public:
                         EA::LSTM& lstm,
                         bool expandInputWidth = false)
     {
+        const auto trainingObjective = loadTrainingObjectiveMeta(w, modelId);
         const std::optional<PersistedModelMeta> sourceMeta =
             expandInputWidth
                 ? std::optional<PersistedModelMeta>{
@@ -913,9 +926,22 @@ public:
             lstm.param = std::move(sourceParam);
         }
 
-        lstm.bias             = loadParameterMatrix<float>(w, modelId, "bias");
-        lstm.returnHeadWeight = loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
-        lstm.returnHeadBias   = loadParameterMatrix<float>(w, modelId, "returnHeadBias");
+        lstm.bias = loadParameterMatrix<float>(w, modelId, "bias");
+        bool scalarHeadLoaded = false;
+        try
+        {
+            lstm.returnHeadWeight =
+                loadParameterMatrix<float>(w, modelId, "returnHeadWeight");
+            lstm.returnHeadBias =
+                loadParameterMatrix<float>(w, modelId, "returnHeadBias");
+            scalarHeadLoaded = true;
+        }
+        catch (const std::exception&)
+        {
+            if (EA::TrainingObjective::AuxiliaryEnabled(trainingObjective))
+                throw std::runtime_error(
+                    "auxiliary objective requires complete scalar auxiliary head parameters");
+        }
 
         const auto requireShape = [](const MatGPU<float>& matrix,
                                      std::size_t rows,
@@ -932,9 +958,12 @@ public:
         if (expandInputWidth)
         {
             requireShape(lstm.bias, 1, 4 * sourceMeta->hiddenSize, "bias");
-            requireShape(lstm.returnHeadWeight, sourceMeta->hiddenSize, 1,
-                         "returnHeadWeight");
-            requireShape(lstm.returnHeadBias, 1, 1, "returnHeadBias");
+            if (scalarHeadLoaded)
+            {
+                requireShape(lstm.returnHeadWeight, sourceMeta->hiddenSize, 1,
+                             "returnHeadWeight");
+                requireShape(lstm.returnHeadBias, 1, 1, "returnHeadBias");
+            }
         }
 
         std::optional<PersistedTargetMeta> targetMeta;
@@ -947,6 +976,36 @@ public:
         {
             targetMeta = tryLoadTargetMeta(w, modelId, lstm);
         }
+        const bool auxiliaryObjective =
+            EA::TrainingObjective::AuxiliaryEnabled(trainingObjective);
+        if (auxiliaryObjective && !targetMeta.has_value())
+            throw std::runtime_error(
+                "auxiliary objective requires classification target metadata");
+        if (auxiliaryObjective &&
+            targetMeta->targetType !=
+                EA::LSTM::TargetType::UpNeutralDownReturn)
+            throw std::runtime_error(
+                "auxiliary objective requires classification target metadata");
+        const bool scalarHeadRequired = auxiliaryObjective ||
+            (targetMeta.has_value() &&
+             targetMeta->targetType !=
+                 EA::LSTM::TargetType::UpNeutralDownReturn);
+        if (scalarHeadRequired && !scalarHeadLoaded)
+            throw std::runtime_error(
+                auxiliaryObjective
+                    ? "auxiliary objective requires complete scalar auxiliary head parameters"
+                    : "regression model requires complete scalar head parameters");
+        if (scalarHeadRequired)
+        {
+            const std::size_t loadedHiddenSize = lstm.param.Shape()[1] / 4;
+            requireShape(lstm.returnHeadWeight, loadedHiddenSize, 1,
+                         "returnHeadWeight");
+            requireShape(lstm.returnHeadBias, 1, 1, "returnHeadBias");
+        }
+        if (targetMeta.has_value() &&
+            targetMeta->targetType ==
+                EA::LSTM::TargetType::UpNeutralDownReturn)
+            lstm.SetTrainingObjective(trainingObjective, false);
         if (targetMeta.has_value() &&
             targetMeta->targetType == EA::LSTM::TargetType::UpNeutralDownReturn)
         {

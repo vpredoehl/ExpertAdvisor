@@ -38,6 +38,7 @@
 #include <tuple>
 
 #include "Params.hpp"
+#include "TrainingObjective.hpp"
 
 using std::array;
 
@@ -141,6 +142,8 @@ public:
     size_t optimizerUpdateCount = 0;
     size_t completedEpochs = 0;
     EA::FeatureAblationMask featureAblationMask;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
     static bool suppressPhase3HiddenGeometryDiagnostics;
     
     LSTM(const ::Tensor&, float initial_long_term = 1, float initial_short_term = 0,
@@ -162,6 +165,9 @@ public:
     LSTM() = delete;
     
     void SetLearningRate(float lr) { learning_rate = lr; }
+    void SetTrainingObjective(
+        const EA::TrainingObjective::Configuration& objective,
+        bool initializeAuxiliaryHead = true);
     int InputFeatureCount() const { return n_in; }
     const ::Tensor* BoundTensorAddress() const { return &t; }
     

@@ -20,6 +20,13 @@ inline constexpr int kLegacyObjectiveVersion = 1;
 inline constexpr int kLegacyLossDefinitionVersion = 1;
 inline constexpr std::string_view kLegacyObjectiveIdentifier =
     "legacy_first_hit_weighted_ce_v1";
+inline constexpr int kAuxiliaryObjectiveVersion = 1;
+inline constexpr int kAuxiliaryLossDefinitionVersion = 1;
+inline constexpr std::string_view kAuxiliaryObjectiveIdentifier =
+    "first_hit_weighted_ce_terminal_log_return_huber_aux_v1";
+inline constexpr double kAuxiliaryLossCoefficient = 0.1;
+inline constexpr double kTerminalLogReturnFixedScale = 1000.0;
+inline constexpr double kAuxiliaryHuberDelta = 1.0;
 inline constexpr double kLegacyClassWeightDown = 1.0;
 inline constexpr double kLegacyClassWeightNeutral = 1.0;
 inline constexpr double kLegacyClassWeightUp = 1.0;
@@ -30,12 +37,14 @@ inline constexpr double kLegacyGradientClipThreshold = 10.0;
 
 enum class Mode
 {
-    LegacyFirstHitClassification
+    LegacyFirstHitClassification,
+    FirstHitClassificationWithTerminalReturnAuxiliary
 };
 
 enum class AuxiliaryLossMode
 {
-    Disabled
+    Disabled,
+    TerminalHorizonLogReturnHuber
 };
 
 enum class OptimizerFamily
@@ -116,12 +125,55 @@ inline const Configuration& Legacy()
     return value;
 }
 
+inline const Configuration& ProfitabilityAuxiliary()
+{
+    static const Configuration value = []
+    {
+        Configuration result;
+        result.objectiveVersion = kAuxiliaryObjectiveVersion;
+        result.lossDefinitionVersion = kAuxiliaryLossDefinitionVersion;
+        result.mode = Mode::FirstHitClassificationWithTerminalReturnAuxiliary;
+        result.objectiveIdentifier = kAuxiliaryObjectiveIdentifier;
+        result.objectiveFamily =
+            "up_neutral_down_first_hit_classification_with_terminal_horizon_return_auxiliary";
+        result.auxiliaryLossMode =
+            AuxiliaryLossMode::TerminalHorizonLogReturnHuber;
+        result.auxiliaryLossCoefficient = kAuxiliaryLossCoefficient;
+        result.regressionTargetDefinition =
+            "terminal_prediction_horizon_log_return_log_target_close_over_close_t_v1";
+        result.regressionNormalizationIdentity =
+            "fixed_multiply_by_1000_no_fitted_statistics_v1";
+        result.robustLossDefinition = "huber_half_squared_inside_linear_outside_v1";
+        result.robustLossDelta = kAuxiliaryHuberDelta;
+        result.targetClippingDefinition = "none";
+        result.internalLossNormalization =
+            "classification_weighted_ce_plus_unweighted_coefficient_huber_sum_divided_by_true_class_weight_sum_v1";
+        result.calculateBatchReturnNormalization =
+            "classification_weighted_ce_plus_unweighted_coefficient_huber_sum_divided_by_example_count_v1";
+        result.gradientNormalization =
+            "classification_and_auxiliary_gradients_divided_by_true_class_weight_sum_v1";
+        result.learningRateContract =
+            "base_rate_core_multiplier_and_both_head_weight_bias_multipliers_persisted_in_training_config_v1";
+        result.sharedGradientCombination =
+            "legacy_classification_dh_plus_unweighted_coefficient_huber_auxiliary_dh_then_legacy_shared_core_scale_4_v1";
+        return result;
+    }();
+    return value;
+}
+
+inline bool AuxiliaryEnabled(const Configuration& value)
+{
+    return value.auxiliaryLossMode != AuxiliaryLossMode::Disabled;
+}
+
 inline std::string_view ModeText(Mode mode)
 {
     switch (mode)
     {
         case Mode::LegacyFirstHitClassification:
             return "legacy_first_hit_classification";
+        case Mode::FirstHitClassificationWithTerminalReturnAuxiliary:
+            return "first_hit_classification_with_terminal_return_auxiliary";
     }
     throw std::invalid_argument("training_objective_unknown_mode");
 }
@@ -131,6 +183,8 @@ inline std::string_view AuxiliaryLossModeText(AuxiliaryLossMode mode)
     switch (mode)
     {
         case AuxiliaryLossMode::Disabled: return "disabled";
+        case AuxiliaryLossMode::TerminalHorizonLogReturnHuber:
+            return "terminal_horizon_log_return_huber";
     }
     throw std::invalid_argument("training_objective_unknown_auxiliary_mode");
 }
@@ -194,17 +248,49 @@ inline std::optional<std::string> Validate(const Configuration& value)
     if (!std::isfinite(value.gradientClipThreshold) ||
         value.gradientClipThreshold <= 0.0)
         return "gradient_clip_threshold_must_be_finite_and_positive";
-    if (!std::isfinite(value.auxiliaryLossCoefficient) ||
-        value.auxiliaryLossCoefficient != 0.0 ||
-        value.auxiliaryLossMode != AuxiliaryLossMode::Disabled ||
-        value.regressionTargetDefinition.has_value() ||
-        value.regressionNormalizationIdentity.has_value() ||
-        value.robustLossDefinition.has_value() ||
-        value.robustLossDelta.has_value())
-        return "phase4a_auxiliary_objective_must_be_disabled";
-    if (value.targetClippingDefinition != "none" ||
-        value.sharedGradientCombination != "classification_only_v1")
-        return "phase4a_classification_only_contract_required";
+    if (!std::isfinite(value.auxiliaryLossCoefficient))
+        return "auxiliary_coefficient_must_be_finite";
+    if (value.auxiliaryLossMode == AuxiliaryLossMode::Disabled)
+    {
+        if (value.mode != Mode::LegacyFirstHitClassification ||
+            value.objectiveIdentifier != kLegacyObjectiveIdentifier ||
+            value.auxiliaryLossCoefficient != 0.0 ||
+            value.regressionTargetDefinition.has_value() ||
+            value.regressionNormalizationIdentity.has_value() ||
+            value.robustLossDefinition.has_value() ||
+            value.robustLossDelta.has_value() ||
+            value.targetClippingDefinition != "none" ||
+            value.sharedGradientCombination != "classification_only_v1")
+            return "legacy_classification_only_contract_required";
+    }
+    else
+    {
+        if (value.mode !=
+                Mode::FirstHitClassificationWithTerminalReturnAuxiliary ||
+            value.objectiveIdentifier != kAuxiliaryObjectiveIdentifier ||
+            value.auxiliaryLossMode !=
+                AuxiliaryLossMode::TerminalHorizonLogReturnHuber ||
+            value.auxiliaryLossCoefficient != kAuxiliaryLossCoefficient ||
+            value.regressionTargetDefinition !=
+                "terminal_prediction_horizon_log_return_log_target_close_over_close_t_v1" ||
+            value.regressionNormalizationIdentity !=
+                "fixed_multiply_by_1000_no_fitted_statistics_v1" ||
+            value.robustLossDefinition !=
+                "huber_half_squared_inside_linear_outside_v1" ||
+            value.robustLossDelta != kAuxiliaryHuberDelta ||
+            value.targetClippingDefinition != "none" ||
+            value.internalLossNormalization !=
+                "classification_weighted_ce_plus_unweighted_coefficient_huber_sum_divided_by_true_class_weight_sum_v1" ||
+            value.calculateBatchReturnNormalization !=
+                "classification_weighted_ce_plus_unweighted_coefficient_huber_sum_divided_by_example_count_v1" ||
+            value.gradientNormalization !=
+                "classification_and_auxiliary_gradients_divided_by_true_class_weight_sum_v1" ||
+            value.learningRateContract !=
+                "base_rate_core_multiplier_and_both_head_weight_bias_multipliers_persisted_in_training_config_v1" ||
+            value.sharedGradientCombination !=
+                "legacy_classification_dh_plus_unweighted_coefficient_huber_auxiliary_dh_then_legacy_shared_core_scale_4_v1")
+            return "unsupported_auxiliary_objective_configuration";
+    }
     return std::nullopt;
 }
 
@@ -315,6 +401,8 @@ inline Configuration ParseSupportedCanonicalText(const std::string& canonical)
 {
     const Configuration legacy = Legacy();
     if (canonical == CanonicalText(legacy)) return legacy;
+    const Configuration auxiliary = ProfitabilityAuxiliary();
+    if (canonical == CanonicalText(auxiliary)) return auxiliary;
     throw std::invalid_argument(
         "unsupported_training_objective_canonical_configuration");
 }
@@ -413,6 +501,103 @@ inline std::array<double, 3> LegacyClassificationLogitGradient(
             configuration.classificationLogitGradientScale * weight *
             (probabilities[classIndex] -
              (classIndex == static_cast<std::size_t>(trueClass) ? 1.0 : 0.0));
+    }
+    return result;
+}
+
+inline double TerminalHorizonLogReturn(double closeAtPrediction,
+                                       double terminalHorizonClose)
+{
+    if (!std::isfinite(closeAtPrediction) || closeAtPrediction <= 0.0 ||
+        !std::isfinite(terminalHorizonClose) || terminalHorizonClose <= 0.0)
+        throw std::invalid_argument("terminal_log_return_requires_positive_finite_closes");
+    return std::log(terminalHorizonClose / closeAtPrediction);
+}
+
+inline double NormalizeTerminalHorizonLogReturn(double rawLogReturn)
+{
+    if (!std::isfinite(rawLogReturn))
+        throw std::invalid_argument("terminal_log_return_must_be_finite");
+    return rawLogReturn * kTerminalLogReturnFixedScale;
+}
+
+inline double AuxiliaryRegressionTarget(double closeAtPrediction,
+                                        double terminalHorizonClose)
+{
+    return NormalizeTerminalHorizonLogReturn(
+        TerminalHorizonLogReturn(closeAtPrediction, terminalHorizonClose));
+}
+
+inline double HuberLoss(double residual, double delta = kAuxiliaryHuberDelta)
+{
+    if (!std::isfinite(residual) || !std::isfinite(delta) || delta <= 0.0)
+        throw std::invalid_argument("invalid_huber_loss_input");
+    const double magnitude = std::abs(residual);
+    return magnitude <= delta
+        ? 0.5 * residual * residual
+        : delta * (magnitude - 0.5 * delta);
+}
+
+inline double HuberGradient(double residual,
+                           double delta = kAuxiliaryHuberDelta)
+{
+    if (!std::isfinite(residual) || !std::isfinite(delta) || delta <= 0.0)
+        throw std::invalid_argument("invalid_huber_gradient_input");
+    return std::clamp(residual, -delta, delta);
+}
+
+inline double WeightedAuxiliaryLoss(double prediction,
+                                    double target,
+                                    double coefficient = kAuxiliaryLossCoefficient,
+                                    double delta = kAuxiliaryHuberDelta)
+{
+    if (!std::isfinite(coefficient) || coefficient < 0.0)
+        throw std::invalid_argument("invalid_auxiliary_loss_coefficient");
+    return coefficient * HuberLoss(prediction - target, delta);
+}
+
+inline double WeightedAuxiliaryOutputGradient(
+    double prediction,
+    double target,
+    double coefficient = kAuxiliaryLossCoefficient,
+    double delta = kAuxiliaryHuberDelta)
+{
+    if (!std::isfinite(coefficient) || coefficient < 0.0)
+        throw std::invalid_argument("invalid_auxiliary_loss_coefficient");
+    return coefficient * HuberGradient(prediction - target, delta);
+}
+
+inline double CombinedExampleLoss(double classificationLoss,
+                                  double auxiliaryPrediction,
+                                  double auxiliaryTarget,
+                                  const Configuration& configuration)
+{
+    if (!std::isfinite(classificationLoss))
+        throw std::invalid_argument("classification_loss_must_be_finite");
+    return classificationLoss +
+        (AuxiliaryEnabled(configuration)
+             ? WeightedAuxiliaryLoss(
+                   auxiliaryPrediction, auxiliaryTarget,
+                   configuration.auxiliaryLossCoefficient,
+                   *configuration.robustLossDelta)
+             : 0.0);
+}
+
+template <std::size_t HiddenSize>
+inline std::array<double, HiddenSize> CombineSharedCoreHeadGradients(
+    const std::array<double, HiddenSize>& legacyClassificationProjection,
+    const std::array<double, HiddenSize>& auxiliaryHeadWeight,
+    double auxiliaryOutputGradient,
+    const Configuration& configuration)
+{
+    std::array<double, HiddenSize> result{};
+    for (std::size_t index = 0; index < HiddenSize; ++index)
+    {
+        const double auxiliaryProjection = AuxiliaryEnabled(configuration)
+            ? auxiliaryOutputGradient * auxiliaryHeadWeight[index]
+            : 0.0;
+        result[index] = configuration.sharedCoreClassificationGradientScale *
+            (legacyClassificationProjection[index] + auxiliaryProjection);
     }
     return result;
 }

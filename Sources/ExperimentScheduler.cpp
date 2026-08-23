@@ -384,6 +384,9 @@ struct SchedulerOptions
     std::optional<long long> resumeModelId;
     bool resumeExpandInputWidth = false;
     bool allowDuplicateExperiment = false;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
+    bool trainingObjectiveSpecified = false;
 
     std::optional<std::string> leaderboardSymbol;
     std::optional<int> leaderboardHorizon;
@@ -2850,6 +2853,22 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.headLrMult = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--head-lr")
             options.headLrMult = ParsePositiveDouble(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--training-objective")
+        {
+            const std::string objective = RequireNextArg(argc, argv, i, arg);
+            if (objective == EA::TrainingObjective::kLegacyObjectiveIdentifier ||
+                objective == "legacy")
+                options.trainingObjective = EA::TrainingObjective::Legacy();
+            else if (objective ==
+                         EA::TrainingObjective::kAuxiliaryObjectiveIdentifier ||
+                     objective == "profitability_auxiliary_v1")
+                options.trainingObjective =
+                    EA::TrainingObjective::ProfitabilityAuxiliary();
+            else
+                throw std::invalid_argument(
+                    "unsupported --training-objective: " + objective);
+            options.trainingObjectiveSpecified = true;
+        }
         else if (arg == "--target-epochs")
             options.targetEpochs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--epochs")
@@ -2932,6 +2951,21 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.headLrMult = ParsePositiveDouble("--head-lr-mult", value);
         else if (SplitOptionWithValue(arg, "--head-lr", value))
             options.headLrMult = ParsePositiveDouble("--head-lr", value);
+        else if (SplitOptionWithValue(arg, "--training-objective", value))
+        {
+            if (value == EA::TrainingObjective::kLegacyObjectiveIdentifier ||
+                value == "legacy")
+                options.trainingObjective = EA::TrainingObjective::Legacy();
+            else if (value ==
+                         EA::TrainingObjective::kAuxiliaryObjectiveIdentifier ||
+                     value == "profitability_auxiliary_v1")
+                options.trainingObjective =
+                    EA::TrainingObjective::ProfitabilityAuxiliary();
+            else
+                throw std::invalid_argument(
+                    "unsupported --training-objective: " + value);
+            options.trainingObjectiveSpecified = true;
+        }
         else if (SplitOptionWithValue(arg, "--target-epochs", value))
             options.targetEpochs = ParsePositiveInt("--target-epochs", value);
         else if (SplitOptionWithValue(arg, "--epochs", value))
@@ -4938,7 +4972,9 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
         options.resumeExpandInputWidth
             ? std::nullopt
             : std::optional<std::string>{options.featureAblationMask},
-        EA::TrainingObjective::Legacy()
+        options.trainingObjectiveSpecified
+            ? options.trainingObjective
+            : meta.trainingObjective
     };
     if (const std::optional<std::string> failure =
             QueueResumeCompatibilityFailure(meta, requirements);
@@ -4957,6 +4993,7 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
     options.donchian20Mode = meta.donchian20Mode;
     options.featureWarmupScope = meta.featureWarmupScope;
     options.donchianLookback = meta.donchianLookback;
+    options.trainingObjective = meta.trainingObjective;
 
     if (options.resumeExpandInputWidth)
     {
@@ -6089,11 +6126,9 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << " AND resume_expand_input_width = "
         << (options.resumeExpandInputWidth ? "true" : "false")
         << " AND training_objective_hash = " << w.quote(
-            EA::TrainingObjective::Identity(
-                EA::TrainingObjective::Legacy()))
+            EA::TrainingObjective::Identity(options.trainingObjective))
         << " AND training_objective_canonical = " << w.quote(
-            EA::TrainingObjective::CanonicalText(
-                EA::TrainingObjective::Legacy()))
+            EA::TrainingObjective::CanonicalText(options.trainingObjective))
         << " AND status <> 'cancelled'";
     return sql.str();
 }
@@ -6117,11 +6152,9 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
         << " AND resume_expand_input_width = "
         << (options.resumeExpandInputWidth ? "true" : "false")
         << " AND training_objective_hash = " << w.quote(
-            EA::TrainingObjective::Identity(
-                EA::TrainingObjective::Legacy()))
+            EA::TrainingObjective::Identity(options.trainingObjective))
         << " AND training_objective_canonical = " << w.quote(
-            EA::TrainingObjective::CanonicalText(
-                EA::TrainingObjective::Legacy()))
+            EA::TrainingObjective::CanonicalText(options.trainingObjective))
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -6191,7 +6224,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
-    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash";
+    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -6239,9 +6272,34 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "," << w.quote(options.featureAblationMask)
         << "," << (options.resumeExpandInputWidth ? "true" : "false")
         << "," << w.quote(EA::TrainingObjective::CanonicalText(
-            EA::TrainingObjective::Legacy()))
+            options.trainingObjective))
         << "," << w.quote(EA::TrainingObjective::Identity(
-            EA::TrainingObjective::Legacy()));
+            options.trainingObjective))
+        << "," << w.quote(options.trainingObjective.objectiveIdentifier)
+        << "," << options.trainingObjective.objectiveVersion
+        << "," << options.trainingObjective.lossDefinitionVersion
+        << "," << w.quote(EA::TrainingObjective::AuxiliaryLossModeText(
+            options.trainingObjective.auxiliaryLossMode))
+        << "," << EA::TrainingObjective::CanonicalDouble(
+            options.trainingObjective.auxiliaryLossCoefficient)
+        << "," << (options.trainingObjective.regressionTargetDefinition
+            ? w.quote(*options.trainingObjective.regressionTargetDefinition)
+            : "NULL")
+        << "," << (options.trainingObjective.regressionNormalizationIdentity
+            ? w.quote(*options.trainingObjective.regressionNormalizationIdentity)
+            : "NULL")
+        << "," << (options.trainingObjective.robustLossDefinition
+            ? w.quote(*options.trainingObjective.robustLossDefinition)
+            : "NULL")
+        << "," << (options.trainingObjective.robustLossDelta
+            ? EA::TrainingObjective::CanonicalDouble(
+                  *options.trainingObjective.robustLossDelta)
+            : "NULL")
+        << "," << w.quote(options.trainingObjective.targetClippingDefinition)
+        << "," << w.quote(
+            EA::TrainingObjective::AuxiliaryEnabled(options.trainingObjective)
+                ? "classification_weighted_ce_plus_unweighted_coefficient_huber__loss_and_gradients_by_true_class_weight_sum__calculate_batch_return_by_example_count_v1"
+                : "weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1");
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -6430,6 +6488,8 @@ void PrintQueueConfig(const char* marker,
               << ",feature_warmup_scope=" << EA::FeatureWarmupScopeText(options.featureWarmupScope)
               << ",donchian_lookback=" << options.donchianLookback
               << ",feature_ablation_mask=" << options.featureAblationMask
+              << ",training_objective_hash="
+              << EA::TrainingObjective::Identity(options.trainingObjective)
               << ",checkpoint_interval=" << options.checkpointInterval
               << ",checkpoint_infer=" << (options.queueCheckpointInfer ? "1" : "0")
               << ",checkpoint_infer_min_epoch="
@@ -9408,11 +9468,11 @@ int WaitForChildProcess(pid_t pid)
 std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
                                                   const ExperimentRow& experiment)
 {
-    // Phase 4A intentionally supports execution of only the frozen legacy
-    // objective. A future persisted objective may coexist in the schema but
-    // this binary must not silently launch it as legacy training.
-    EA::TrainingObjective::RequireResumeCompatible(
-        experiment.trainingObjective, EA::TrainingObjective::Legacy());
+    // ResolvePersisted already rejected unknown identities. Re-canonicalize
+    // here so only an exact supported objective can reach a training child.
+    (void)EA::TrainingObjective::ParseSupportedCanonicalText(
+        EA::TrainingObjective::CanonicalText(
+            experiment.trainingObjective));
     std::vector<std::string> argv;
     argv.push_back(options.selfPath);
     AddCliFlag(argv, "--train");
@@ -23997,6 +24057,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
     std::cout
         << "Usage: " << exe << " --queue-experiment --symbol=SYMBOL --prediction-horizon=N --target-epochs=N "
         << "[--threshold=VALUE] [--core-lr=VALUE] [--head-lr=VALUE] [--checkpoint-interval=N] "
+        << "[--training-objective=legacy|profitability_auxiliary_v1] "
         << "[--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD] "
         << "[--checkpoint-infer] [--checkpoint-infer-min-epoch=N] [--checkpoint-infer-interval=N] "
         << "[--checkpoint-policy --checkpoint-policy-min-leader-score=VALUE|--checkpoint-policy-min-infer-accuracy=VALUE|--checkpoint-policy-top-n=N]\n"

@@ -79,11 +79,59 @@ weights. Gradients are divided by true-class weight sum. Phase 4A freezes and
 names this behavior; changing it would change training mathematics and is
 therefore deferred to a separately reviewed correction.
 
-## Phase 4B/4C extension boundary
+## Phase 4B auxiliary objective
 
-The configuration reserves typed auxiliary-loss, regression-target,
-normalization, robust-loss, delta, clipping, and coefficient fields, but Phase
-4A validation requires the classification-only legacy values. A later phase
-must add a new supported mode/version, canonical parser, database constraints,
-model metadata compatibility rules, deterministic loss/gradient tests, and an
-explicit execution path before any auxiliary gradient can become active.
+Phase 4B adds one supported opt-in configuration without changing the default:
+
+- identifier: `first_hit_weighted_ce_terminal_log_return_huber_aux_v1`;
+- identity: `fnv1a64:f7a9a20f7f72eee5`, determined from the exact canonical
+  text by the Phase 4A FNV-1a identity function and covered by a deterministic
+  golden test;
+- classification head/loss: exactly the Phase 4A three-logit weighted-CE path;
+- auxiliary head: the separate existing `hidden_size x 1`
+  `returnHeadWeight` and scalar `returnHeadBias`;
+- raw target: `log(target_close / close_t)`, where `close_t` is the final close
+  in the prediction window and `target_close` is the close exactly
+  `prediction_horizon` rows later;
+- normalized target: raw target multiplied by the fixed constant `1000`, with
+  no fitted statistics and no target clipping;
+- robust loss: Huber with `delta=1` in normalized units, equal to
+  `0.5*r*r` for `abs(r) <= 1` and `abs(r)-0.5` otherwise;
+- coefficient: `0.1`, applied to both the auxiliary loss and its output
+  derivative before head/shared-core accumulation.
+
+The combined per-example numerator is class-weighted classification CE plus
+`0.1 * Huber`; the auxiliary term is deliberately not class-weighted.
+The existing true-class-weight sum remains the gradient denominator and the
+existing example count remains the `CalculateBatch` return denominator. The
+classification logit derivative and classification-head gradients are not
+altered. At the last hidden state, the shared derivative is exactly
+`4 * (classification_projection + coefficient * huber_derivative *
+auxiliary_head_weight)`. BPTT then runs once on that sum. Both heads use the
+already persisted head weight/bias learning-rate multipliers; clipping and SGD
+occur at the existing stages.
+
+The target is constructed during the ordinary training-window build from the
+same tensor interval already admitted by the configured classification target
+horizon. It does not read inference results, inference profitability,
+backtests, Campaign Manager data, recommendations, continuation decisions, or
+execution/P&L information.
+
+The scheduler option
+`--training-objective=profitability_auxiliary_v1` (or the full identifier) is
+the only new opt-in. Its default is `legacy`. Queue insertion persists the full
+canonical configuration/hash and the reserved Phase 4A objective columns.
+Recommendation, campaign, continuation, retry, and ordinary queue paths retain
+their existing legacy defaults. Migration 079 already supplied all required
+columns, so Phase 4B requires no schema migration and does not alter historical
+rows.
+
+Auxiliary models require both scalar-head tensors and fail closed if either is
+missing or malformed. Legacy classification models may omit those inactive
+tensors and still load. Exact canonical/hash equality rejects legacy-to-aux and
+aux-to-legacy resume in both directions. Classification inference continues to
+use only the three-class head; the auxiliary scalar is not persisted as an
+inference result and has no production scoring or policy effect.
+
+Phase 4C optimization experiments and any profitability-observation feedback
+remain deferred.

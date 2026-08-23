@@ -3192,6 +3192,29 @@ EA::LSTM::LSTM(const Tensor& tt,
 #endif
 }
 
+void EA::LSTM::SetTrainingObjective(
+    const EA::TrainingObjective::Configuration& objective,
+    bool initializeAuxiliaryHead)
+{
+    const auto supported =
+        EA::TrainingObjective::ParseSupportedCanonicalText(
+            EA::TrainingObjective::CanonicalText(objective));
+    if (EA::TrainingObjective::AuxiliaryEnabled(supported) &&
+        targetType != TargetType::UpNeutralDownReturn)
+        throw std::invalid_argument(
+            "auxiliary_training_objective_requires_classification_target");
+    trainingObjective = supported;
+    if (initializeAuxiliaryHead &&
+        EA::TrainingObjective::AuxiliaryEnabled(trainingObjective))
+    {
+        auto lowW = MetaNN::LowerAccess(returnHeadWeight);
+        float* weights = lowW.MutableRawMemory();
+        std::fill(weights, weights + hidden_size, 0.01f);
+        auto lowB = MetaNN::LowerAccess(returnHeadBias);
+        lowB.MutableRawMemory()[0] = 0.0f;
+    }
+}
+
 std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigned short epochIdx)
 {
     static size_t s_calcBatchCalls = 0;
@@ -3559,6 +3582,13 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             wb.close_target.push_back(close_target_local);
             if (targetType == TargetType::UpNeutralDownReturn) wb.classTargets.push_back(classTarget);
             else wb.targets.push_back(regressionTarget);
+            if (targetType == TargetType::UpNeutralDownReturn &&
+                EA::TrainingObjective::AuxiliaryEnabled(trainingObjective))
+            {
+                wb.targets.push_back(static_cast<float>(
+                    EA::TrainingObjective::AuxiliaryRegressionTarget(
+                        close_t_local, close_target_local)));
+            }
 
             auto lowPrebuilt = MetaNN::LowerAccess(prebuilt_rows);
             const float* prebuiltPtr = lowPrebuilt.RawMemory();
@@ -4688,6 +4718,32 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                               std::max<size_t>(actualHist[2], 1))
                           << std::endl;
             }
+            if (EA::TrainingObjective::AuxiliaryEnabled(trainingObjective))
+            {
+                LSTM_ASSERT(wb.targets.size() == B,
+                            "CalculateBatch: auxiliary target count mismatch");
+                auto lowH = MetaNN::LowerAccess(h_batch);
+                auto lowW = MetaNN::LowerAccess(returnHeadWeight);
+                auto lowB = MetaNN::LowerAccess(returnHeadBias);
+                const float* hptr = lowH.RawMemory();
+                const float* wptr = lowW.RawMemory();
+                const float auxiliaryBias = lowB.RawMemory()[0];
+                for (size_t b = 0; b < B; ++b)
+                {
+                    float prediction = auxiliaryBias;
+                    for (size_t h = 0; h < hidden_size; ++h)
+                        prediction += hptr[b * hidden_size + h] * wptr[h];
+                    const double target = static_cast<double>(wb.targets[b]);
+                    const double residual = static_cast<double>(prediction) - target;
+                    errs[b] = static_cast<float>(
+                        trainingObjective.auxiliaryLossCoefficient *
+                        EA::TrainingObjective::HuberGradient(
+                            residual, *trainingObjective.robustLossDelta));
+                    sse += trainingObjective.auxiliaryLossCoefficient *
+                        EA::TrainingObjective::HuberLoss(
+                            residual, *trainingObjective.robustLossDelta);
+                }
+            }
             windowCount += B;
             windowsInBatch += B;
         }
@@ -4788,6 +4844,19 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
             AccumulateHeadGradsBatch3Class(d_headDirW_accum_f, d_headDirB_accum_f, h_batch, d_logits_batch);
 
             d_h_batch = BuildHeadDhBatch3Class(d_logits_batch, returnHeadDirWeight, LSTM_CORE_GRAD_SCALE);
+            if (EA::TrainingObjective::AuxiliaryEnabled(trainingObjective))
+            {
+                AccumulateHeadGradsBatch(
+                    d_headW_accum_f, d_headB_accum_f, h_batch, errs);
+                EAMatrix auxiliaryDh = BuildHeadDhBatch(
+                    errs, returnHeadWeight, LSTM_CORE_GRAD_SCALE);
+                auto lowCombined = MetaNN::LowerAccess(d_h_batch);
+                auto lowAuxiliary = MetaNN::LowerAccess(auxiliaryDh);
+                float* combined = lowCombined.MutableRawMemory();
+                const float* auxiliary = lowAuxiliary.RawMemory();
+                for (size_t index = 0; index < B * hidden_size; ++index)
+                    combined[index] += auxiliary[index];
+            }
             static size_t s_phase3DhFromHeadDiagCount = 0;
             const size_t phase3DhFromHeadDiagIdx = s_phase3DhFromHeadDiagCount++;
             const bool phase3DhDiagEnabled = (phase3DhFromHeadDiagIdx < LSTM_PHASE3_HEAD_DIAG_LIMIT);
@@ -6143,8 +6212,18 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
 
                     {
                         HotspotScope hotspot("optimizer_update");
-                        SGDUpdate(returnHeadDirWeight, d_headDirW_f, directionHeadWeightLr);
-                        SGDUpdate(returnHeadDirBias, d_headDirB_f, directionHeadBiasLr);
+                        SGDUpdate(returnHeadDirWeight, d_headDirW_f,
+                                  directionHeadWeightLr);
+                        SGDUpdate(returnHeadDirBias, d_headDirB_f,
+                                  directionHeadBiasLr);
+                        if (EA::TrainingObjective::AuxiliaryEnabled(
+                                trainingObjective))
+                        {
+                            SGDUpdate(returnHeadWeight, d_headW_f,
+                                      directionHeadWeightLr);
+                            SGDUpdate(returnHeadBias, d_headB_f,
+                                      directionHeadBiasLr);
+                        }
                     }
 
                     const auto dirBiasAfterUpdate = DirectionBiasValues3(returnHeadDirBias);

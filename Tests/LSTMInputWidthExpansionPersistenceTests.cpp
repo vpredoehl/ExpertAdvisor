@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -91,6 +93,50 @@ int main()
     source.optimizerUpdateCount = 17;
     source.completedEpochs = 40;
 
+    // One deterministic production batch proves coefficient-zero legacy
+    // equivalence and gradient routing: the auxiliary objective leaves the
+    // classification-head update exact, updates its own scalar head, and adds
+    // only its projection to the shared-core gradient.
+    EA::LSTM legacyGradientPath{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kSessionPhaseModelInputWidth};
+    EA::LSTM auxiliaryGradientPath{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kSessionPhaseModelInputWidth};
+    auxiliaryGradientPath.SetTrainingObjective(
+        EA::TrainingObjective::ProfitabilityAuxiliary());
+    for (EA::LSTM* model : {&legacyGradientPath, &auxiliaryGradientPath})
+    {
+        Fill(model->param, -0.015625f);
+        Fill(model->bias, 0.0078125f);
+        Fill(model->returnHeadWeight, 0.125f);
+        Fill(model->returnHeadBias, -0.0625f);
+        Fill(model->returnHeadDirWeight, 0.25f);
+        Fill(model->returnHeadDirBias, -0.125f);
+    }
+    const auto legacyScalarWeightBefore =
+        DBIO::flattenRowMajor(legacyGradientPath.returnHeadWeight);
+    const auto legacyScalarBiasBefore =
+        DBIO::flattenRowMajor(legacyGradientPath.returnHeadBias);
+    std::ostringstream suppressedTrainingOutput;
+    std::streambuf* originalCout = std::cout.rdbuf(
+        suppressedTrainingOutput.rdbuf());
+    (void)legacyGradientPath.CalculateBatch(tensor.GetBatchClamped(0), 0);
+    (void)auxiliaryGradientPath.CalculateBatch(tensor.GetBatchClamped(0), 0);
+    std::cout.rdbuf(originalCout);
+    AssertExact(legacyGradientPath.returnHeadDirWeight,
+                auxiliaryGradientPath.returnHeadDirWeight);
+    AssertExact(legacyGradientPath.returnHeadDirBias,
+                auxiliaryGradientPath.returnHeadDirBias);
+    assert(DBIO::flattenRowMajor(legacyGradientPath.returnHeadWeight) ==
+           legacyScalarWeightBefore);
+    assert(DBIO::flattenRowMajor(legacyGradientPath.returnHeadBias) ==
+           legacyScalarBiasBefore);
+    assert(DBIO::flattenRowMajor(auxiliaryGradientPath.returnHeadWeight) !=
+           legacyScalarWeightBefore);
+    assert(DBIO::flattenRowMajor(auxiliaryGradientPath.param) !=
+           DBIO::flattenRowMajor(legacyGradientPath.param));
+
     const std::string connectionString =
         "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
         " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
@@ -106,6 +152,114 @@ int main()
             "2020-01-01", "2021-01-01");
         transaction.commit();
     }
+
+    // Marker-less/legacy classification models may lack the inactive scalar
+    // head and must continue to load. The 3-class head remains authoritative.
+    long long legacyMissingScalarModelId = -1;
+    {
+        pqxx::work transaction{connection};
+        legacyMissingScalarModelId = DBIO::PgModelIO::createModel(
+            transaction, "legacy-missing-scalar-head", "isolated fixture");
+        DBIO::PgModelIO::saveAll(
+            transaction, legacyMissingScalarModelId, source, "eurusdrmp",
+            "2020-01-01", "2021-01-01");
+        transaction.exec(
+            "DELETE FROM matrix WHERE model_id=$1 AND "
+            "param_name IN ('returnHeadWeight','returnHeadBias');",
+            pqxx::params{legacyMissingScalarModelId});
+        transaction.commit();
+    }
+    EA::LSTM loadedLegacyWithoutScalar{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kSessionPhaseModelInputWidth};
+    {
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION READ ONLY;");
+        DBIO::PgModelIO::loadAll(
+            transaction, legacyMissingScalarModelId,
+            loadedLegacyWithoutScalar);
+        DBIO::PgModelIO::validateTrainingResumeState(
+            transaction, legacyMissingScalarModelId);
+        transaction.commit();
+    }
+    AssertExact(source.returnHeadDirWeight,
+                loadedLegacyWithoutScalar.returnHeadDirWeight);
+    AssertExact(source.returnHeadDirBias,
+                loadedLegacyWithoutScalar.returnHeadDirBias);
+
+    // Auxiliary head tensors and the exact objective canonical/hash pair
+    // round-trip together. Corrupting either scalar tensor fails closed.
+    EA::LSTM auxiliarySource{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kSessionPhaseModelInputWidth};
+    auxiliarySource.SetTrainingObjective(
+        EA::TrainingObjective::ProfitabilityAuxiliary());
+    Fill(auxiliarySource.param, -0.03125f);
+    Fill(auxiliarySource.bias, 0.015625f);
+    Fill(auxiliarySource.returnHeadWeight, 0.8125f);
+    Fill(auxiliarySource.returnHeadBias, -0.9375f);
+    Fill(auxiliarySource.returnHeadDirWeight, 0.5625f);
+    Fill(auxiliarySource.returnHeadDirBias, -0.6875f);
+
+    long long auxiliaryModelId = -1;
+    long long brokenAuxiliaryModelId = -1;
+    {
+        pqxx::work transaction{connection};
+        auxiliaryModelId = DBIO::PgModelIO::createModel(
+            transaction, "auxiliary-objective-roundtrip", "isolated fixture");
+        DBIO::PgModelIO::saveAll(
+            transaction, auxiliaryModelId, auxiliarySource, "eurusdrmp",
+            "2020-01-01", "2021-01-01", kDefaultDonchian20Mode,
+            EA::kDefaultFeatureWarmupScope, kDefaultDonchianLookback,
+            std::nullopt, EA::TrainingObjective::ProfitabilityAuxiliary());
+        brokenAuxiliaryModelId = DBIO::PgModelIO::createModel(
+            transaction, "auxiliary-objective-broken", "isolated fixture");
+        DBIO::PgModelIO::saveAll(
+            transaction, brokenAuxiliaryModelId, auxiliarySource,
+            "eurusdrmp", "2020-01-01", "2021-01-01",
+            kDefaultDonchian20Mode, EA::kDefaultFeatureWarmupScope,
+            kDefaultDonchianLookback, std::nullopt,
+            EA::TrainingObjective::ProfitabilityAuxiliary());
+        transaction.exec(
+            "DELETE FROM matrix WHERE model_id=$1 AND "
+            "param_name='returnHeadBias';",
+            pqxx::params{brokenAuxiliaryModelId});
+        transaction.commit();
+    }
+    EA::LSTM auxiliaryReloaded{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kSessionPhaseModelInputWidth};
+    {
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION READ ONLY;");
+        DBIO::PgModelIO::loadAll(
+            transaction, auxiliaryModelId, auxiliaryReloaded);
+        DBIO::PgModelIO::validateTrainingResumeState(
+            transaction, auxiliaryModelId);
+        const auto objective = DBIO::PgModelIO::loadTrainingObjectiveMeta(
+            transaction, auxiliaryModelId);
+        assert(objective ==
+               EA::TrainingObjective::ProfitabilityAuxiliary());
+        assert(EA::TrainingObjective::Identity(objective) ==
+               "fnv1a64:f7a9a20f7f72eee5");
+        transaction.commit();
+    }
+    AssertExact(auxiliarySource.returnHeadWeight,
+                auxiliaryReloaded.returnHeadWeight);
+    AssertExact(auxiliarySource.returnHeadBias,
+                auxiliaryReloaded.returnHeadBias);
+    ExpectFailureContaining(
+        [&] {
+            EA::LSTM brokenReload{
+                tensor, 1.0f, 0.0f,
+                EA::LSTM::TargetType::UpNeutralDownReturn,
+                EA::kSessionPhaseModelInputWidth};
+            pqxx::work transaction{connection};
+            transaction.exec("SET TRANSACTION READ ONLY;");
+            DBIO::PgModelIO::loadAll(
+                transaction, brokenAuxiliaryModelId, brokenReload);
+        },
+        "auxiliary objective requires complete scalar auxiliary head parameters");
     {
         pqxx::work transaction{connection};
         transaction.exec("SET TRANSACTION READ ONLY;");
@@ -177,6 +331,11 @@ int main()
         }
     }
     assert(hasNonzeroCurrentOnlyFeature);
+    const auto auxiliarySourceProbabilities =
+        auxiliarySource.PredictNextDirectionProbs(predictionWindow);
+    const auto auxiliaryReloadedProbabilities =
+        auxiliaryReloaded.PredictNextDirectionProbs(predictionWindow);
+    assert(auxiliarySourceProbabilities == auxiliaryReloadedProbabilities);
     const auto legacyProbabilities =
         ordinaryLegacy.PredictNextDirectionProbs(predictionWindow);
     const auto expandedProbabilities =

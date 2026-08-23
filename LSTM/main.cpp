@@ -4639,8 +4639,8 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(
 
 void ApplyResumeRuntimeConfig(const ResumeCheckpointConfig& cfg, int targetEpochs)
 {
-    EA::TrainingObjective::RequireResumeCompatible(
-        cfg.trainingObjective, EA::TrainingObjective::Legacy());
+    (void)EA::TrainingObjective::ParseSupportedCanonicalText(
+        EA::TrainingObjective::CanonicalText(cfg.trainingObjective));
     if (cfg.trainConfig.schemaVersion != DBIO::PgModelIO::kTrainConfigMetaSchemaVersion)
         throw std::runtime_error("resume train_config_meta schema_version unsupported");
     if (cfg.trainConfig.labelRuleId != DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId)
@@ -4955,7 +4955,9 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                                                      EA::LSTM& lstm,
                                                      Donchian20Mode donchian20Mode,
                                                      EA::FeatureWarmupScope featureWarmupScope,
-                                                     std::size_t donchianLookback)
+                                                     std::size_t donchianLookback,
+                                                     const EA::TrainingObjective::Configuration&
+                                                         trainingObjective)
 {
     if (!launchArgs.checkpointEvery.has_value() || *launchArgs.checkpointEvery <= 0)
         return std::nullopt;
@@ -5005,7 +5007,7 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                              resumeConfig.has_value()
                                  ? resumeConfig->inputWidthExpansionProvenance
                                  : std::nullopt,
-                             EA::TrainingObjective::Legacy());
+                             trainingObjective);
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
               << " epoch=" << completedEpoch
@@ -7482,8 +7484,9 @@ int main(int argc, const char * argv[])
             runtimeTrainingObjective = LoadExperimentTrainingObjective(
                 objectiveRead, *launchArgs.schedulerExperimentId);
             objectiveRead.commit();
-            EA::TrainingObjective::RequireResumeCompatible(
-                runtimeTrainingObjective, EA::TrainingObjective::Legacy());
+            (void)EA::TrainingObjective::ParseSupportedCanonicalText(
+                EA::TrainingObjective::CanonicalText(
+                    runtimeTrainingObjective));
         }
         catch (const std::exception& error)
         {
@@ -7845,6 +7848,8 @@ int main(int argc, const char * argv[])
             EA::LSTM l = CreateLstmForRuntimeLogLevel(
                 t, 1, 0, requestedTargetType, persistedModelInputWidth,
                 runtimeFeatureAblationMask);
+            if (!gRuntimeInferenceMode)
+                l.SetTrainingObjective(runtimeTrainingObjective);
             PrintRuntimeLrConfig(l);
             static size_t s_lstmBindingDiagCount = 0;
             constexpr size_t kLstmBindingDiagLimit = 50;
@@ -8152,7 +8157,8 @@ int main(int argc, const char * argv[])
                                                     l,
                                                     runtimeDonchian20Mode,
                                                     featureWarmupScope,
-                                                    runtimeDonchianLookback);
+                                                    runtimeDonchianLookback,
+                                                    runtimeTrainingObjective);
                     if (checkpointModelId.has_value())
                     {
                         QueueCheckpointInferenceIfEligible(launchArgs.schedulerExperimentId,
