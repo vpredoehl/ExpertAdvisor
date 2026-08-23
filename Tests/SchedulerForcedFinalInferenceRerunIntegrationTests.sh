@@ -46,7 +46,7 @@ cleanup() {
         fi
     done < <(psql -X -At -d "${test_db}" -c \
         "SELECT worker_pid FROM experiment_scheduler_worker_attempt
-         WHERE experiment_id BETWEEN 978001 AND 978004
+         WHERE experiment_id BETWEEN 978001 AND 978005
            AND worker_pid IS NOT NULL
            AND lifecycle_state IN
                ('reserved','spawned','running','observed','identity_ambiguous')" \
@@ -113,7 +113,8 @@ INSERT INTO model(model_id,name) VALUES
     (978011,'ordinary-final-inference-model'),
     (978012,'forced-final-inference-model'),
     (978013,'analysis-control-model'),
-    (978014,'active-forced-final-inference-model');
+    (978014,'active-forced-final-inference-model'),
+    (978015,'mismatched-threshold-forced-final-inference-model');
 
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
@@ -131,12 +132,16 @@ INSERT INTO experiment(
      'completed','done',978013,978003),
     (978004,'activeforcedrerunfixture',4,0.0008,20,20,
      '2020-01-01','2020-02-01','2020-02-01','2020-03-01',
-     'completed','done',978014,978004);
+     'completed','done',978014,978004),
+    (978005,'mismatchedthresholdrerunfixture',4,0.0008,20,20,
+     '2020-01-01','2020-02-01','2020-02-01','2020-03-01',
+     'completed','done',978015,978005);
 
 UPDATE model SET experiment_id=978001 WHERE model_id=978011;
 UPDATE model SET experiment_id=978002 WHERE model_id=978012;
 UPDATE model SET experiment_id=978003 WHERE model_id=978013;
 UPDATE model SET experiment_id=978004 WHERE model_id=978014;
+UPDATE model SET experiment_id=978005 WHERE model_id=978015;
 
 INSERT INTO inference_eval_result(
     id,model_id,symbol,prediction_horizon,threshold_logret,
@@ -150,11 +155,15 @@ INSERT INTO inference_eval_result(
      30,1,0,'2020-02-01','2020-03-01',20,0.5,false,'fixture',
      0.3,0.4,0.3,'completed',clock_timestamp()-interval '1 day',
      'final',NULL,NULL,NULL),
-    (978022,978012,'forcedrerunfixture',4,0.0008,
+    (978022,978012,'forcedrerunfixture',4,0.00080005,
      30,1,0,'2020-02-01','2020-03-01',20,0.5,false,'fixture',
      0.3,0.4,0.3,'completed',clock_timestamp()-interval '1 day',
      'final',NULL,NULL,NULL),
     (978023,978014,'activeforcedrerunfixture',4,0.0008,
+     30,1,0,'2020-02-01','2020-03-01',20,0.5,false,'fixture',
+     0.3,0.4,0.3,'completed',clock_timestamp()-interval '1 day',
+     'final',NULL,NULL,NULL),
+    (978024,978015,'mismatchedthresholdrerunfixture',4,0.001,
      30,1,0,'2020-02-01','2020-03-01',20,0.5,false,'fixture',
      0.3,0.4,0.3,'completed',clock_timestamp()-interval '1 day',
      'final',NULL,NULL,NULL);
@@ -172,7 +181,7 @@ SQL
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
 
-test "$(scalar "SELECT count(*) FROM inference_eval_result")" = "3"
+test "$(scalar "SELECT count(*) FROM inference_eval_result")" = "4"
 test "$(scalar "SELECT count(*) FROM experiment WHERE operator_forced_final_inference_rerun_requested")" = "0"
 
 # Ordinary train->infer progression keeps exact-result deduplication.
@@ -256,8 +265,8 @@ LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
 test "$(scalar "SELECT status||':'||operator_forced_final_inference_rerun_requested::text||':'||(error_message LIKE 'forced_final_inference_rerun_missing_attempt_result;%')::text FROM experiment WHERE experiment_id=978002")" = \
     "failed:true:true"
 
-# Requeueing later works, and exact attempt-relative completed_at evidence on
-# the same semantic row authoritatively consumes the second request.
+# Requeueing later works, and attempt-relative completed_at evidence whose
+# threshold differs by only 5e-8 authoritatively consumes the second request.
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --requeue-inference=978002 --yes \
     >"${test_dir}/second-requeue.out" 2>&1
@@ -318,7 +327,7 @@ grep -q "SCHEDULER_FORCED_FINAL_INFERENCE_RERUN_CONSUMED,experiment_id=978002,wo
     "${test_dir}/success-recovery.out"
 test "$(scalar "SELECT status||':'||phase||':'||operator_forced_final_inference_rerun_requested::text||':'||(active_scheduler_worker_attempt_id IS NULL)::text FROM experiment WHERE experiment_id=978002")" = \
     "pending:analyze:false:true"
-test "$(scalar "SELECT count(*)||':'||min(id)::text||':'||max(id)::text FROM inference_eval_result WHERE model_id=978012 AND symbol='forcedrerunfixture' AND prediction_horizon=4 AND threshold_logret=0.0008 AND from_date='2020-02-01' AND to_date='2020-03-01' AND status='completed' AND inference_scope='final'")" = \
+test "$(scalar "SELECT count(*)||':'||min(id)::text||':'||max(id)::text FROM inference_eval_result WHERE model_id=978012 AND symbol='forcedrerunfixture' AND prediction_horizon=4 AND abs(threshold_logret-0.0008)<=1e-7 AND from_date='2020-02-01' AND to_date='2020-03-01' AND status='completed' AND inference_scope='final'")" = \
     "1:978022:978022"
 test "$(scalar "SELECT count(*)||':'||min(inference_eval_result_id)::text||':'||max(inference_eval_result_id)::text FROM inference_profitability_observation WHERE experiment_id=978002 AND inference_scope='final'")" = \
     "1:978022:978022"
@@ -326,13 +335,59 @@ test "$(scalar "SELECT count(*)||':'||min(inference_eval_result_id)::text||':'||
 # The database still rejects a duplicate completed FINAL semantic identity.
 set +e
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
-    "INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,threshold_logret,window_size,label_rule_id,target_type,from_date,to_date,status,inference_scope) VALUES(978012,'forcedrerunfixture',4,0.0008,30,1,0,'2020-02-01','2020-03-01','completed','final')" \
+    "INSERT INTO inference_eval_result(model_id,symbol,prediction_horizon,threshold_logret,window_size,label_rule_id,target_type,from_date,to_date,status,inference_scope) VALUES(978012,'forcedrerunfixture',4,0.00080005,30,1,0,'2020-02-01','2020-03-01','completed','final')" \
     >"${test_dir}/duplicate-final.out" 2>&1
 duplicate_result=$?
 set -e
 test "${duplicate_result}" != "0"
 grep -q 'inference_eval_result_final_completed_uidx' \
     "${test_dir}/duplicate-final.out"
+
+# A materially different threshold remains outside the forced-rerun identity.
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --requeue-inference=978005 --yes \
+    >"${test_dir}/mismatched-threshold-requeue.out" 2>&1
+mismatched_threshold_attempt="$(psql -X -qAt -d "${test_db}" <<SQL
+INSERT INTO experiment_scheduler_worker_attempt(
+    launch_attempt_identity,experiment_id,worker_kind,lifecycle_phase,
+    capacity_class,ownership_origin,lifecycle_state,worker_pid,
+    worker_process_group_id,worker_process_start_identity,
+    canonical_executable_path,command_line,command_identity,reserved_at,
+    spawned_at,registered_at
+) VALUES(
+    'forced-final-infer-threshold-mismatch-${$}',978005,'experiment','infer','infer',
+    'legacy_unverified','running',2147480005,2147480005,
+    'absent-forced-final-infer-threshold-mismatch','${scheduler_binary}',
+    '${scheduler_binary} --infer --scheduler-experiment-id=978005 --scheduler-worker-attempt-id=999998',
+    'experiment:978005:infer',clock_timestamp()-interval '1 second',
+    clock_timestamp()-interval '1 second',clock_timestamp()-interval '1 second'
+) RETURNING worker_attempt_id;
+SQL
+)"
+PGOPTIONS='-c expertadvisor.scheduler_protocol_generation=52' \
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -v attempt_id="${mismatched_threshold_attempt}" <<'SQL'
+UPDATE experiment
+SET status='running',phase='infer',current_operation='infer',
+    worker_pid=2147480005,worker_process_group_id=2147480005,
+    worker_process_start_identity='absent-forced-final-infer-threshold-mismatch',
+    active_scheduler_worker_attempt_id=:attempt_id,
+    worker_started_at=clock_timestamp()-interval '1 second',
+    updated_at=clock_timestamp()
+WHERE experiment_id=978005 AND status='pending' AND phase='infer'
+  AND operator_forced_final_inference_rerun_requested;
+UPDATE inference_eval_result
+SET completed_at=clock_timestamp()
+WHERE id=978024;
+SQL
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --schedule-experiments --scheduler-once --recover-orphans-only \
+    --scheduler-log-dir="${test_dir}/mismatched-threshold-recovery-logs" \
+    >"${test_dir}/mismatched-threshold-recovery.out" 2>&1
+! grep -q "SCHEDULER_FORCED_FINAL_INFERENCE_RERUN_CONSUMED,experiment_id=978005,worker_attempt_id=${mismatched_threshold_attempt}" \
+    "${test_dir}/mismatched-threshold-recovery.out"
+test "$(scalar "SELECT status||':'||phase||':'||operator_forced_final_inference_rerun_requested::text||':'||(error_message LIKE 'forced_final_inference_rerun_missing_attempt_result;%')::text FROM experiment WHERE experiment_id=978005")" = \
+    "failed:infer:true:true"
 
 # A scheduler restart while the exact forced worker attempt is live observes
 # that attempt and does not reserve or launch a duplicate.

@@ -28,6 +28,7 @@
 #include "FeatureWarmupScope.hpp"
 #include "RunMetadata.hpp"
 #include "SupportedSymbols.hpp"
+#include "TrainingObjective.hpp"
 
 namespace EA::ExperimentMetaAnalyzer
 {
@@ -1122,7 +1123,10 @@ std::string ExperimentConfigKey(const std::string& symbol,
                                 int targetEpochs,
                                 double threshold,
                                 double coreLr,
-                                double headLr)
+                                double headLr,
+                                const std::string& trainingObjectiveHash =
+                                    EA::TrainingObjective::Identity(
+                                        EA::TrainingObjective::Legacy()))
 {
     std::ostringstream key;
     key << symbol
@@ -1130,7 +1134,8 @@ std::string ExperimentConfigKey(const std::string& symbol,
         << "|epochs=" << targetEpochs
         << "|threshold=" << ConfigDoubleKey(threshold)
         << "|core=" << ConfigDoubleKey(coreLr)
-        << "|head=" << ConfigDoubleKey(headLr);
+        << "|head=" << ConfigDoubleKey(headLr)
+        << "|training_objective=" << trainingObjectiveHash;
     return key.str();
 }
 
@@ -1163,6 +1168,7 @@ struct ExistingExperimentConfig
     double threshold = 0.0;
     double coreLr = 0.0;
     double headLr = 0.0;
+    std::string trainingObjectiveHash;
 };
 
 bool NearlyEqual(double a, double b, double epsilon)
@@ -1176,21 +1182,25 @@ bool MatchesExistingExperimentConfig(const ExistingExperimentConfig& existing,
                                      int targetEpochs,
                                      double threshold,
                                      double coreLr,
-                                     double headLr)
+                                     double headLr,
+                                     const std::string& trainingObjectiveHash =
+                                         EA::TrainingObjective::Identity(
+                                             EA::TrainingObjective::Legacy()))
 {
     return existing.symbol == symbol &&
            existing.horizon == horizon &&
            existing.targetEpochs == targetEpochs &&
            NearlyEqual(existing.threshold, threshold, 1e-12) &&
            NearlyEqual(existing.coreLr, coreLr, 1e-9) &&
-           NearlyEqual(existing.headLr, headLr, 1e-9);
+           NearlyEqual(existing.headLr, headLr, 1e-9) &&
+           existing.trainingObjectiveHash == trainingObjectiveHash;
 }
 
 std::vector<ExistingExperimentConfig> LoadExistingExperimentConfigs(pqxx::work& w)
 {
     pqxx::result rows = w.exec(
         "SELECT symbol, prediction_horizon, target_epochs, "
-        "c_next_threshold, core_lr_mult, head_lr_mult "
+        "c_next_threshold, core_lr_mult, head_lr_mult,training_objective_hash "
         "FROM experiment "
         "WHERE core_lr_mult IS NOT NULL "
         "AND head_lr_mult IS NOT NULL;");
@@ -1206,6 +1216,7 @@ std::vector<ExistingExperimentConfig> LoadExistingExperimentConfigs(pqxx::work& 
         config.threshold = row[3].as<double>();
         config.coreLr = row[4].as<double>();
         config.headLr = row[5].as<double>();
+        config.trainingObjectiveHash = row[6].as<std::string>();
         configs.push_back(std::move(config));
     }
     return configs;
@@ -1501,6 +1512,12 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
             FeatureWarmupScopeText(kDefaultFeatureWarmupScope)) + " "
         "AND donchian_lookback = " + std::to_string(
             DonchianLookbackDatabaseValue(kDefaultDonchianLookback)) + " "
+        "AND training_objective_hash = " + w.quote(
+            EA::TrainingObjective::Identity(
+                EA::TrainingObjective::Legacy())) + " "
+        "AND training_objective_canonical = " + w.quote(
+            EA::TrainingObjective::CanonicalText(
+                EA::TrainingObjective::Legacy())) + " "
         "ORDER BY experiment_id ASC LIMIT 1;");
     if (rows.empty())
         return std::nullopt;

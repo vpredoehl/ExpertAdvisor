@@ -77,6 +77,7 @@
 #include "DonchianLookback.hpp"
 #include "FeatureWarmupScope.hpp"
 #include "FeatureAblation.hpp"
+#include "TrainingObjective.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -419,6 +420,8 @@ struct QueueResumeMeta
     std::size_t donchianLookback = kDefaultDonchianLookback;
     std::string featureAblationMask;
     std::size_t modelInputWidth = 0;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
 };
 
 struct SchedulerLeaseSnapshot
@@ -470,6 +473,8 @@ struct ExperimentRow
     std::size_t donchianLookback = kDefaultDonchianLookback;
     std::string featureAblationMask;
     bool resumeExpandInputWidth = false;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
 };
 
 struct ChildResult
@@ -681,6 +686,8 @@ struct SchedulerControlExperimentRow
         EA::FeatureWarmupScope::LegacyColdBoundary;
     std::size_t donchianLookback = kDefaultDonchianLookback;
     std::string featureAblationMask;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
 };
 
 struct SchedulerStopExperiment
@@ -4792,6 +4799,8 @@ QueueResumeMeta LoadQueueResumeMeta(pqxx::work& w, long long modelId)
     meta.featureAblationMask = LoadModelFeatureAblationMask(w, modelId);
     meta.modelInputWidth =
         DBIO::PgModelIO::loadRequiredModelMeta(w, modelId).inputWidth;
+    meta.trainingObjective =
+        DBIO::PgModelIO::loadTrainingObjectiveMeta(w, modelId);
     meta.symbol = DBIO::PgModelIO::decodeTrainSymbolMeta(w, modelId);
     meta.predictionHorizon = static_cast<int>(std::llround(vals[1]));
     meta.threshold = vals[2];
@@ -4818,6 +4827,8 @@ void PrintQueueResumeMeta(const char* marker,
               << ",donchian_lookback=" << meta.donchianLookback
               << ",feature_ablation_mask=" << meta.featureAblationMask
               << ",model_input_width=" << meta.modelInputWidth
+              << ",training_objective_hash="
+              << EA::TrainingObjective::Identity(meta.trainingObjective)
               << ",completed_epochs=" << meta.completedEpochs
               << ",target_epochs=" << targetEpochs
               << ",train_start=" << meta.trainStart
@@ -4852,6 +4863,8 @@ struct QueueResumeCompatibilityRequirements
     std::optional<EA::FeatureWarmupScope> featureWarmupScope;
     std::optional<std::size_t> donchianLookback;
     std::optional<std::string> featureAblationMask;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
 };
 
 std::optional<std::string> QueueResumeCompatibilityFailure(
@@ -4895,6 +4908,9 @@ std::optional<std::string> QueueResumeCompatibilityFailure(
     if (requirements.featureAblationMask.has_value() &&
         *requirements.featureAblationMask != meta.featureAblationMask)
         return "feature_ablation_mask_mismatch";
+    if (!EA::TrainingObjective::ResumeCompatible(
+            meta.trainingObjective, requirements.trainingObjective))
+        return "training_objective_mismatch";
     return std::nullopt;
 }
 
@@ -4921,7 +4937,8 @@ void MergeResumeMetaIntoQueueOptions(SchedulerOptions& options,
             : std::nullopt,
         options.resumeExpandInputWidth
             ? std::nullopt
-            : std::optional<std::string>{options.featureAblationMask}
+            : std::optional<std::string>{options.featureAblationMask},
+        EA::TrainingObjective::Legacy()
     };
     if (const std::optional<std::string> failure =
             QueueResumeCompatibilityFailure(meta, requirements);
@@ -6071,6 +6088,12 @@ std::string DuplicateWhereClause(pqxx::work& w,
         << " AND resume_model_id IS NOT DISTINCT FROM " << SqlNullable(w, options.resumeModelId)
         << " AND resume_expand_input_width = "
         << (options.resumeExpandInputWidth ? "true" : "false")
+        << " AND training_objective_hash = " << w.quote(
+            EA::TrainingObjective::Identity(
+                EA::TrainingObjective::Legacy()))
+        << " AND training_objective_canonical = " << w.quote(
+            EA::TrainingObjective::CanonicalText(
+                EA::TrainingObjective::Legacy()))
         << " AND status <> 'cancelled'";
     return sql.str();
 }
@@ -6093,6 +6116,12 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
             options.donchianLookback)
         << " AND resume_expand_input_width = "
         << (options.resumeExpandInputWidth ? "true" : "false")
+        << " AND training_objective_hash = " << w.quote(
+            EA::TrainingObjective::Identity(
+                EA::TrainingObjective::Legacy()))
+        << " AND training_objective_canonical = " << w.quote(
+            EA::TrainingObjective::CanonicalText(
+                EA::TrainingObjective::Legacy()))
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -6123,6 +6152,10 @@ long long InsertExperimentRecord(pqxx::work& w,
     if (!ColumnExists(w, "experiment", "resume_expand_input_width"))
         throw std::runtime_error(
             "input width expansion migration required; run ./migrate_lstm_db.sh");
+    if (!ColumnExists(w, "experiment", "training_objective_canonical") ||
+        !ColumnExists(w, "experiment", "training_objective_hash"))
+        throw std::runtime_error(
+            "training objective provenance migration required; run ./migrate_lstm_db.sh");
     const bool hasCheckpointInferEnabled = ColumnExists(w, "experiment", "checkpoint_infer_enabled");
     const bool hasOpportunisticCheckpointInfer = ColumnExists(w, "experiment", "opportunistic_checkpoint_infer");
     const bool hasCheckpointInferMinEpoch = ColumnExists(w, "experiment", "checkpoint_infer_min_epoch");
@@ -6158,7 +6191,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
-    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width";
+    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -6204,7 +6237,11 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "," << w.quote(EA::FeatureWarmupScopeText(options.featureWarmupScope))
         << "," << DonchianLookbackDatabaseValue(options.donchianLookback)
         << "," << w.quote(options.featureAblationMask)
-        << "," << (options.resumeExpandInputWidth ? "true" : "false");
+        << "," << (options.resumeExpandInputWidth ? "true" : "false")
+        << "," << w.quote(EA::TrainingObjective::CanonicalText(
+            EA::TrainingObjective::Legacy()))
+        << "," << w.quote(EA::TrainingObjective::Identity(
+            EA::TrainingObjective::Legacy()));
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -6885,6 +6922,8 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     experiment.featureAblationMask = EA::FeatureAblationMask::Parse(
         row[20].as<std::string>()).CanonicalText();
     experiment.resumeExpandInputWidth = row[21].as<bool>();
+    experiment.trainingObjective = EA::TrainingObjective::ResolvePersisted(
+        row[22].as<std::string>(), row[23].as<std::string>());
     return experiment;
 }
 
@@ -6898,7 +6937,7 @@ std::vector<ExperimentRow> LoadPendingExperiments(
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width "
+        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 ";
     if (cancellationOnly)
@@ -6923,7 +6962,7 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
         "SELECT experiment_id, symbol, prediction_horizon, c_next_threshold, "
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
-        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width, phase, worker_pid, "
+        "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash, phase, worker_pid, "
         "extract(epoch from COALESCE(worker_started_at, updated_at))::double precision "
         "FROM experiment "
         "WHERE status = 'running' "
@@ -6934,9 +6973,9 @@ std::vector<RunningExperimentState> LoadRunningExperiments(pqxx::work& w)
     for (const auto& row : rows)
         experiments.push_back(RunningExperimentState{
             RowToExperiment(row),
-            row[22].as<std::string>(),
-            row[23].is_null() ? std::nullopt : std::optional<int>{row[23].as<int>()},
-            row[24].as<double>()});
+            row[24].as<std::string>(),
+            row[25].is_null() ? std::nullopt : std::optional<int>{row[25].as<int>()},
+            row[26].as<double>()});
     return experiments;
 }
 
@@ -7024,7 +7063,7 @@ std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx
     std::ostringstream sql;
     sql << "SELECT experiment_id, status, phase, last_model_id, resume_model_id, symbol, prediction_horizon, "
         << "c_next_threshold, core_lr_mult, head_lr_mult, target_epochs, "
-        << "train_start::text, train_end::text, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask "
+        << "train_start::text, train_end::text, donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,training_objective_canonical,training_objective_hash "
         << "FROM experiment WHERE experiment_id = " << experimentId;
     if (forUpdate)
         sql << " FOR UPDATE";
@@ -7053,6 +7092,8 @@ std::optional<SchedulerControlExperimentRow> LoadSchedulerControlExperiment(pqxx
     row.donchianLookback = ParseDonchianLookback(rows[0][15].as<std::string>());
     row.featureAblationMask = EA::FeatureAblationMask::Parse(
         rows[0][16].as<std::string>()).CanonicalText();
+    row.trainingObjective = EA::TrainingObjective::ResolvePersisted(
+        rows[0][17].as<std::string>(), rows[0][18].as<std::string>());
     return row;
 }
 
@@ -7096,7 +7137,8 @@ QueueResumeCompatibilityRequirements RetryCheckpointRequirements(
         row.donchian20Mode,
         row.featureWarmupScope,
         row.donchianLookback,
-        row.featureAblationMask
+        row.featureAblationMask,
+        row.trainingObjective
     };
 }
 
@@ -9366,6 +9408,11 @@ int WaitForChildProcess(pid_t pid)
 std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
                                                   const ExperimentRow& experiment)
 {
+    // Phase 4A intentionally supports execution of only the frozen legacy
+    // objective. A future persisted objective may coexist in the schema but
+    // this binary must not silently launch it as legacy training.
+    EA::TrainingObjective::RequireResumeCompatible(
+        experiment.trainingObjective, EA::TrainingObjective::Legacy());
     std::vector<std::string> argv;
     argv.push_back(options.selfPath);
     AddCliFlag(argv, "--train");
@@ -10158,7 +10205,8 @@ bool OperatorForcedFinalInferenceRerunRequested(
 bool HasCompletedInferenceResultForAttempt(
     pqxx::work& w,
     const ExperimentRow& experiment,
-    double attemptStartedEpoch)
+    double attemptStartedEpoch,
+    bool useThresholdTolerance = false)
 {
     if (!TableExists(w, "inference_eval_result") ||
         !experiment.lastModelId.has_value() ||
@@ -10171,7 +10219,9 @@ bool HasCompletedInferenceResultForAttempt(
     pqxx::result rows = w.exec_params(
         "SELECT 1 FROM inference_eval_result "
         "WHERE model_id = $1 AND symbol = $2 AND prediction_horizon = $3 "
-        "AND threshold_logret = $4 AND from_date = $5 AND to_date = $6 "
+        "AND (($8::boolean AND abs(threshold_logret - $4) <= 1e-7) "
+        "OR (NOT $8::boolean AND threshold_logret = $4)) "
+        "AND from_date = $5 AND to_date = $6 "
         "AND status = 'completed' AND inference_scope = 'final' "
         "AND checkpoint_eval_id IS NULL "
         "AND completed_at >= to_timestamp($7) LIMIT 1;",
@@ -10181,7 +10231,8 @@ bool HasCompletedInferenceResultForAttempt(
         experiment.cNextThreshold,
         experiment.inferStart->substr(0, 10),
         experiment.inferEnd->substr(0, 10),
-        attemptStartedEpoch);
+        attemptStartedEpoch,
+        useThresholdTolerance);
     return !rows.empty();
 }
 
@@ -15277,7 +15328,7 @@ int AnalyzeExperimentById(long long experimentId, const SchedulerOptions& option
             "target_epochs,checkpoint_interval,train_start::text,"
             "train_end::text,infer_start::text,infer_end::text,"
             "last_model_id,resume_model_id,train_log_path,"
-            "infer_log_path,analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width "
+            "infer_log_path,analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash "
             "FROM experiment WHERE experiment_id=$1 "
             "AND status='running' AND phase='analyze' "
             "AND active_scheduler_worker_attempt_id=$2;",
@@ -15799,7 +15850,7 @@ void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
             " WHERE r.model_id=e.last_model_id "
             " AND r.symbol=e.symbol "
             " AND r.prediction_horizon=e.prediction_horizon "
-            " AND r.threshold_logret=e.c_next_threshold "
+            " AND abs(r.threshold_logret-e.c_next_threshold)<=1e-7 "
             " AND r.from_date=$3 "
             " AND r.to_date=$4 "
             " AND r.status='completed' "
@@ -17217,7 +17268,7 @@ int RecoverOrphanedRunningExperiments(
                 "train_start::text,train_end::text,"
                 "infer_start::text,infer_end::text,last_model_id,"
                 "resume_model_id,train_log_path,infer_log_path,"
-                "analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width "
+                "analysis_log_path,donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash "
                 "FROM experiment WHERE experiment_id=$1;",
                 experimentId);
             if (experimentRows.size() == 1)
@@ -17228,7 +17279,8 @@ int RecoverOrphanedRunningExperiments(
                     HasCompletedInferenceResultForAttempt(
                         transaction,
                         experiment,
-                        attemptStartedEpoch))
+                        attemptStartedEpoch,
+                        forcedFinalInferenceRerun))
                 {
                     TransitionRecoveredInferenceToAnalyze(
                         transaction,
@@ -17485,7 +17537,7 @@ void PersistObservedExperimentChild(pqxx::work& w,
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "e.donchian20_mode,e.feature_warmup_scope,e.donchian_lookback,e.feature_ablation_mask,e.resume_expand_input_width,e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
+        "e.donchian20_mode,e.feature_warmup_scope,e.donchian_lookback,e.feature_ablation_mask,e.resume_expand_input_width,e.training_objective_canonical,e.training_objective_hash,e.status,e.phase,e.worker_pid,e.cancellation_request_id,"
         "r.cancellation_mode,e.cancel_after_checkpoint_epoch "
         "FROM experiment e LEFT JOIN experiment_admin_request r "
         "ON r.request_id=e.cancellation_request_id "
@@ -17497,23 +17549,23 @@ void PersistObservedExperimentChild(pqxx::work& w,
         return;
 
     ExperimentRow experiment = RowToExperiment(rows[0]);
-    const std::string status = rows[0][22].as<std::string>();
-    const std::string phase = rows[0][23].as<std::string>();
-    const std::optional<int> workerPid = rows[0][24].is_null()
+    const std::string status = rows[0][24].as<std::string>();
+    const std::string phase = rows[0][25].as<std::string>();
+    const std::optional<int> workerPid = rows[0][26].is_null()
         ? std::nullopt
-        : std::optional<int>{rows[0][24].as<int>()};
+        : std::optional<int>{rows[0][26].as<int>()};
     const std::optional<long long> cancellationRequestId =
-        rows[0][25].is_null()
-            ? std::nullopt
-            : std::optional<long long>{rows[0][25].as<long long>()};
-    const std::optional<std::string> cancellationMode =
-        rows[0][26].is_null()
-            ? std::nullopt
-            : std::optional<std::string>{rows[0][26].as<std::string>()};
-    const std::optional<int> cancellationCheckpoint =
         rows[0][27].is_null()
             ? std::nullopt
-            : std::optional<int>{rows[0][27].as<int>()};
+            : std::optional<long long>{rows[0][27].as<long long>()};
+    const std::optional<std::string> cancellationMode =
+        rows[0][28].is_null()
+            ? std::nullopt
+            : std::optional<std::string>{rows[0][28].as<std::string>()};
+    const std::optional<int> cancellationCheckpoint =
+        rows[0][29].is_null()
+            ? std::nullopt
+            : std::optional<int>{rows[0][29].as<int>()};
     const std::string error = ObservedChildError(child, exitCode, signalNumber, coreDumped);
 
     if (status != "running" || phase != child.phase ||
@@ -17610,7 +17662,10 @@ void PersistObservedExperimentChild(pqxx::work& w,
             OperatorForcedFinalInferenceRerunRequested(
                 w, experiment.experimentId);
         if (HasCompletedInferenceResultForAttempt(
-                w, experiment, child.launchedEpoch))
+                w,
+                experiment,
+                child.launchedEpoch,
+                forcedFinalInferenceRerun))
         {
             TransitionRecoveredInferenceToAnalyze(
                 w,
@@ -20927,7 +20982,7 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
         << "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         << "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         << "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        << "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,status, phase,worker_pid,worker_process_group_id,"
+        << "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,status, phase,worker_pid,worker_process_group_id,"
         << "worker_executable,worker_command_line,"
         << "worker_process_start_identity,"
         << "active_scheduler_worker_attempt_id "
@@ -20942,21 +20997,21 @@ std::optional<SchedulerStopExperiment> LoadStopExperiment(pqxx::work& w,
 
     SchedulerStopExperiment result;
     result.experiment = RowToExperiment(rows[0]);
-    result.status = rows[0][22].as<std::string>();
-    result.phase = rows[0][23].as<std::string>();
+    result.status = rows[0][24].as<std::string>();
+    result.phase = rows[0][25].as<std::string>();
     result.worker.experimentId = result.experiment.experimentId;
     result.worker.phase = result.phase;
     result.worker.lifecycleStatus = result.status;
-    if (!rows[0][24].is_null())
-        result.worker.pid = rows[0][24].as<int>();
-    if (!rows[0][25].is_null())
-        result.worker.processGroupId = rows[0][25].as<int>();
-    result.worker.executable = OptionalStringCell(rows[0], 26);
-    result.worker.commandLine = OptionalStringCell(rows[0], 27);
+    if (!rows[0][26].is_null())
+        result.worker.pid = rows[0][26].as<int>();
+    if (!rows[0][27].is_null())
+        result.worker.processGroupId = rows[0][27].as<int>();
+    result.worker.executable = OptionalStringCell(rows[0], 28);
+    result.worker.commandLine = OptionalStringCell(rows[0], 29);
     result.worker.processStartIdentity =
-        OptionalStringCell(rows[0], 28);
+        OptionalStringCell(rows[0], 30);
     result.activeWorkerAttemptId =
-        OptionalLongLongCell(rows[0], 29);
+        OptionalLongLongCell(rows[0], 31);
     result.worker.workerAttemptId =
         result.activeWorkerAttemptId;
     result.worker.workerKind = "experiment";
@@ -20971,7 +21026,7 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,status, phase,worker_pid,worker_process_group_id,"
+        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,status, phase,worker_pid,worker_process_group_id,"
         "worker_executable,worker_command_line,"
         "worker_process_start_identity,"
         "active_scheduler_worker_attempt_id "
@@ -20985,22 +21040,22 @@ std::vector<SchedulerStopExperiment> LoadRunningStopExperiments(pqxx::work& w)
     {
         SchedulerStopExperiment item;
         item.experiment = RowToExperiment(row);
-        item.status = row[22].as<std::string>();
-        item.phase = row[23].as<std::string>();
+        item.status = row[24].as<std::string>();
+        item.phase = row[25].as<std::string>();
         item.worker.experimentId =
             item.experiment.experimentId;
         item.worker.phase = item.phase;
         item.worker.lifecycleStatus = item.status;
-        if (!row[24].is_null())
-            item.worker.pid = row[24].as<int>();
-        if (!row[25].is_null())
-            item.worker.processGroupId = row[25].as<int>();
-        item.worker.executable = OptionalStringCell(row, 26);
-        item.worker.commandLine = OptionalStringCell(row, 27);
+        if (!row[26].is_null())
+            item.worker.pid = row[26].as<int>();
+        if (!row[27].is_null())
+            item.worker.processGroupId = row[27].as<int>();
+        item.worker.executable = OptionalStringCell(row, 28);
+        item.worker.commandLine = OptionalStringCell(row, 29);
         item.worker.processStartIdentity =
-            OptionalStringCell(row, 28);
+            OptionalStringCell(row, 30);
         item.activeWorkerAttemptId =
-            OptionalLongLongCell(row, 29);
+            OptionalLongLongCell(row, 31);
         item.worker.workerAttemptId =
             item.activeWorkerAttemptId;
         item.worker.workerKind = "experiment";

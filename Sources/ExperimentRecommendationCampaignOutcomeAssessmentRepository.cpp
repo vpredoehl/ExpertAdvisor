@@ -248,7 +248,8 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
         *semanticVersion == RecommendationSemanticConfigurationVersion::v14 ? 14 :
         *semanticVersion == RecommendationSemanticConfigurationVersion::v15 ? 15 :
         *semanticVersion == RecommendationSemanticConfigurationVersion::v16 ? 16 :
-        *semanticVersion == RecommendationSemanticConfigurationVersion::v17 ? 17 : 18;
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v17 ? 17 :
+        *semanticVersion == RecommendationSemanticConfigurationVersion::v18 ? 18 : 19;
     CanonicalReader configuration{semantic};
     const std::string semanticPrefix =
         "experiment_recommendation_semantic_configuration_v" +
@@ -301,8 +302,29 @@ ExperimentInvocationConfiguration ParseSourceInvocation(
             {
                 parsed.configuration.featureWarmupScope = ParseFeatureWarmupScope(
                     std::string{configuration.ReadUntil(";donchian_lookback=")});
-                parsed.configuration.donchianLookback = ParseDonchianLookback(
-                    std::string{configuration.Remaining()});
+                if (*semanticVersion ==
+                    RecommendationSemanticConfigurationVersion::v19)
+                {
+                    parsed.configuration.donchianLookback = ParseDonchianLookback(
+                        std::string{configuration.ReadUntil(
+                            ";training_objective_canonical_length=")});
+                    const std::size_t objectiveLength =
+                        ParseCanonicalInteger<std::size_t>(
+                            configuration.ReadUntil(
+                                ";training_objective_canonical="));
+                    const std::string objectiveCanonical{
+                        configuration.Read(objectiveLength)};
+                    configuration.Expect(";training_objective_hash=");
+                    parsed.configuration.trainingObjective =
+                        EA::TrainingObjective::ResolvePersisted(
+                            objectiveCanonical,
+                            std::string{configuration.Remaining()});
+                }
+                else
+                {
+                    parsed.configuration.donchianLookback = ParseDonchianLookback(
+                        std::string{configuration.Remaining()});
+                }
             }
         }
     }

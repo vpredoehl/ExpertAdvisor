@@ -222,13 +222,23 @@ int main()
     const RecommendationCandidateIdentity identity =
         BuildRecommendationCandidateIdentity(configuration);
     assert(identity.configuration.symbol == "eurusd");
-    assert(identity.canonicalText ==
+    assert(identity.canonicalText.starts_with(
+        "experiment_recommendation_semantic_configuration_v19;"));
+    assert(identity.canonicalText.find(
+        ";training_objective_canonical=") != std::string::npos);
+    assert(identity.canonicalText.find(
+        ";training_objective_hash=" +
+        EA::TrainingObjective::Identity(EA::TrainingObjective::Legacy())) !=
+        std::string::npos);
+    assert(identity.hash == RecommendationCandidateHash(configuration));
+    const auto v18 = BuildRecommendationCandidateIdentity(
+        configuration, RecommendationSemanticConfigurationVersion::v18);
+    assert(v18.canonicalText ==
         "experiment_recommendation_semantic_configuration_v18;symbol=eurusd;prediction_horizon=12;"
         "label_threshold=0.001;core_lr_mult=1;head_lr_mult=5;target_epochs=120;"
         "train_start_date=2010-01-01;train_end_date=2025-01-01;"
         "infer_start_date=2025-01-01;infer_end_date=2026-01-01;donchian20_mode=enabled;"
         "feature_warmup_scope=full_history_warmup;donchian_lookback=20");
-    assert(identity.hash == RecommendationCandidateHash(configuration));
     const auto v17 = BuildRecommendationCandidateIdentity(
         configuration, RecommendationSemanticConfigurationVersion::v17);
     assert(v17.canonicalText ==
@@ -345,7 +355,7 @@ int main()
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v3.canonicalText) == RecommendationSemanticConfigurationVersion::v3);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
-               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v18);
+               identity.canonicalText) == RecommendationSemanticConfigurationVersion::v19);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
                v17.canonicalText) == RecommendationSemanticConfigurationVersion::v17);
     assert(RecommendationSemanticConfigurationVersionFromCanonicalText(
@@ -475,6 +485,9 @@ int main()
         [](auto& value) { value.coreLrMult.reset(); });
     AssertIdentityChange(configuration,
         [](auto& value) { value.inferStartDate.reset(); });
+    AssertIdentityChange(configuration, [](auto& value) {
+        value.trainingObjective.classificationLogitGradientScale = 0.2;
+    });
 
     EffectiveExperimentConfiguration nullOptional = configuration;
     nullOptional.coreLrMult.reset();

@@ -169,6 +169,10 @@ ExperimentInvocationConfiguration MapExperimentInvocation(
         row[name("donchian_lookback")].as<std::string>());
     invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
         row[name("feature_warmup_scope")].as<std::string>());
+    invocation.configuration.trainingObjective =
+        EA::TrainingObjective::ResolvePersisted(
+            row[name("training_objective_canonical")].as<std::string>(),
+            row[name("training_objective_hash")].as<std::string>());
     invocation.checkpointInterval =
         row[name("checkpoint_interval")].as<int>();
     invocation.resumeModelId =
@@ -538,6 +542,8 @@ std::vector<RecommendationSourceLoadResult> LoadRecommendationSources(
         "e.resume_expand_input_width AS source_resume_expand_input_width, "
         "e.donchian_lookback AS source_donchian_lookback, "
         "e.feature_warmup_scope AS source_feature_warmup_scope, "
+        "e.training_objective_canonical AS source_training_objective_canonical, "
+        "e.training_objective_hash AS source_training_objective_hash, "
         "((e.train_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_start AT TIME ZONE 'America/Chicago') "
         " AND (e.train_end AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_end AT TIME ZONE 'America/Chicago') "
         " AND (e.infer_start IS NULL OR (e.infer_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.infer_start AT TIME ZONE 'America/Chicago')) "
@@ -640,6 +646,8 @@ ExperimentDuplicateMatch FindExperimentDuplicate(
         "e.resume_model_id AS candidate_resume_model_id, "
         "e.donchian_lookback AS candidate_donchian_lookback, "
         "e.feature_warmup_scope AS candidate_feature_warmup_scope, "
+        "e.training_objective_canonical AS candidate_training_objective_canonical, "
+        "e.training_objective_hash AS candidate_training_objective_hash, "
         "((e.train_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_start AT TIME ZONE 'America/Chicago') "
         " AND (e.train_end AT TIME ZONE 'America/Chicago') = date_trunc('day', e.train_end AT TIME ZONE 'America/Chicago') "
         " AND (e.infer_start IS NULL OR (e.infer_start AT TIME ZONE 'America/Chicago') = date_trunc('day', e.infer_start AT TIME ZONE 'America/Chicago')) "

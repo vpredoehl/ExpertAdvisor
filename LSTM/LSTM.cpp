@@ -31,6 +31,7 @@
 #include "TargetLabel.hpp"
 #include "ModelInputContract.hpp"
 #include "ReturnFeatureHistory.hpp"
+#include "TrainingObjective.hpp"
 #include <MetaNN/data_copy/data_copy.h>
 #include <MetaNN/metal/metal_matmul.h>
 
@@ -478,6 +479,8 @@ using AccumScalar = double;  // higher-precision accumulation
 #else
 using AccumScalar = float;   // default accumulation precision
 #endif
+static_assert(LSTM_MIXED_PRECISION == 1,
+              "legacy training-objective provenance requires double core-gradient accumulation");
 
 #ifndef LSTM_USE_GRAD_CLIP
 #define LSTM_USE_GRAD_CLIP 1
@@ -520,6 +523,22 @@ using AccumScalar = float;   // default accumulation precision
 #ifndef LSTM_HEAD_WEIGHT_DECAY
 #define LSTM_HEAD_WEIGHT_DECAY 1e-4f
 #endif
+
+static_assert(kClassWeightDown ==
+              static_cast<float>(
+                  EA::TrainingObjective::kLegacyClassWeightDown));
+static_assert(kClassWeightNeutral ==
+              static_cast<float>(
+                  EA::TrainingObjective::kLegacyClassWeightNeutral));
+static_assert(kClassWeightUp ==
+              static_cast<float>(
+                  EA::TrainingObjective::kLegacyClassWeightUp));
+static_assert(LSTM_CORE_GRAD_SCALE ==
+              static_cast<float>(EA::TrainingObjective::
+                  kLegacySharedCoreClassificationGradientScale));
+static_assert(LSTM_GRAD_CLIP_THRESHOLD ==
+              static_cast<float>(
+                  EA::TrainingObjective::kLegacyGradientClipThreshold));
 
 #ifndef LSTM_RET_HORIZON_1
 #define LSTM_RET_HORIZON_1 1
@@ -2612,6 +2631,9 @@ auto EA::LSTM::predictAndLoss3Class(const EAMatrix& h_T, const EAMatrix& W, cons
     // Next diagnostic test: reduce the direction-class loss signal instead of
     // trying another forget-gate bias value.
     constexpr float kDirectionClassGradScale = 0.1f;
+    static_assert(kDirectionClassGradScale ==
+                  static_cast<float>(EA::TrainingObjective::
+                      kLegacyClassificationLogitGradientScale));
     float wDown = kClassWeightDown;
     float wNeutral = kClassWeightNeutral;
     float wUp = kClassWeightUp;
@@ -4072,6 +4094,9 @@ std::tuple<float, size_t, size_t> EA::LSTM::CalculateBatch(Window batch, unsigne
                                          : (cls == 1) ? kClassWeightNeutral
                                                       : kClassWeightUp;
                 constexpr float kDirectionClassGradScale = 0.1f;
+                static_assert(kDirectionClassGradScale ==
+                              static_cast<float>(EA::TrainingObjective::
+                                  kLegacyClassificationLogitGradientScale));
                 
                 totalSampleWeight += static_cast<double>(classWeight);
                 dptr[b * direction_output_size + 0] = kDirectionClassGradScale * classWeight * (p[0] - ((cls == 0) ? 1.0f : 0.0f));

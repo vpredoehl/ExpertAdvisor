@@ -18,6 +18,7 @@
 #include "FeatureWarmupScope.hpp"
 #include "ModelInputContract.hpp"
 #include "ModelInputExpansion.hpp"
+#include "TrainingObjective.hpp"
 
 
 #pragma clang diagnostic push
@@ -176,7 +177,10 @@ public:
                         std::size_t donchianLookback =
                             kDefaultDonchianLookback,
                         const std::optional<EA::InputWidthExpansionProvenance>&
-                            inputWidthExpansion = std::nullopt)
+                            inputWidthExpansion = std::nullopt,
+                        const EA::TrainingObjective::Configuration&
+                            trainingObjective =
+                                EA::TrainingObjective::Legacy())
     {
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
@@ -189,6 +193,7 @@ public:
         saveModelInputSemanticsMeta(w, modelId);
         saveTrainConfigMeta(w, modelId, lstm);
         saveOptimizerMeta(w, modelId, lstm);
+        saveTrainingObjectiveMeta(w, modelId, trainingObjective);
         saveDonchian20ModeMeta(w, modelId, donchian20Mode);
         saveFeatureWarmupScopeMeta(w, modelId, featureWarmupScope);
         saveDonchianLookbackMeta(w, modelId, donchianLookback);
@@ -385,6 +390,48 @@ public:
         validateInputWidthExpansionLineage(
             w, modelId, modelMeta.inputWidth, provenance);
         saveAsciiMeta(w, modelId, "input_width_expansion_meta", canonical);
+    }
+
+    static void saveTrainingObjectiveMeta(
+        pqxx::work& w,
+        long long modelId,
+        const EA::TrainingObjective::Configuration& objective)
+    {
+        const std::string canonical =
+            EA::TrainingObjective::CanonicalText(objective);
+        const std::string hash =
+            EA::TrainingObjective::DeterministicHash(canonical);
+        saveAsciiMeta(
+            w, modelId, "training_objective_canonical_meta", canonical);
+        saveAsciiMeta(
+            w, modelId, "training_objective_hash_meta", hash);
+    }
+
+    static EA::TrainingObjective::Configuration loadTrainingObjectiveMeta(
+        pqxx::work& w,
+        long long modelId)
+    {
+        const pqxx::result markers = w.exec(
+            "SELECT param_name FROM matrix WHERE model_id=$1 AND "
+            "param_name IN ('training_objective_canonical_meta',"
+            "'training_objective_hash_meta') GROUP BY param_name "
+            "ORDER BY param_name;",
+            pqxx::params{modelId});
+        if (markers.empty())
+            return EA::TrainingObjective::ResolvePersisted(
+                std::nullopt, std::nullopt);
+
+        std::optional<std::string> canonical;
+        std::optional<std::string> hash;
+        for (const pqxx::row& row : markers)
+        {
+            const std::string name = row[0].as<std::string>();
+            if (name == "training_objective_canonical_meta")
+                canonical = decodeAsciiMeta(w, modelId, name);
+            else if (name == "training_objective_hash_meta")
+                hash = decodeAsciiMeta(w, modelId, name);
+        }
+        return EA::TrainingObjective::ResolvePersisted(canonical, hash);
     }
 
     static EA::InputWidthExpansionProvenance loadRequiredInputWidthExpansionMeta(
@@ -767,6 +814,7 @@ public:
     // is made a resume source.
     static void validateTrainingResumeState(pqxx::work& w, long long modelId)
     {
+        (void)loadTrainingObjectiveMeta(w, modelId);
         const auto modelMeta = loadRequiredModelMeta(w, modelId);
         (void)loadParameterMatrix<float>(w, modelId, "param");
         (void)loadParameterMatrix<float>(w, modelId, "bias");

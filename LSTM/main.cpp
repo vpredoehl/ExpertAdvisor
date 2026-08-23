@@ -4371,7 +4371,24 @@ struct ResumeCheckpointConfig
     bool parameterExpansionRequired = false;
     std::optional<EA::InputWidthExpansionProvenance>
         inputWidthExpansionProvenance;
+    EA::TrainingObjective::Configuration trainingObjective =
+        EA::TrainingObjective::Legacy();
 };
+
+EA::TrainingObjective::Configuration LoadExperimentTrainingObjective(
+    pqxx::work& w,
+    long long experimentId)
+{
+    const pqxx::result rows = w.exec(
+        "SELECT training_objective_canonical,training_objective_hash "
+        "FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{experimentId});
+    if (rows.empty())
+        throw std::runtime_error(
+            "training_objective_experiment_not_found");
+    return EA::TrainingObjective::ResolvePersisted(
+        rows[0][0].as<std::string>(), rows[0][1].as<std::string>());
+}
 
 void ConfigureInputWidthExpansionForResume(pqxx::work& w,
                                            ResumeCheckpointConfig& cfg,
@@ -4568,12 +4585,19 @@ TrainConfigMeta LoadRequiredTrainConfigMetaForResume(pqxx::work& w, long long mo
     return meta;
 }
 
-ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long modelId)
+ResumeCheckpointConfig LoadResumeCheckpointConfig(
+    pqxx::work& w,
+    long long modelId,
+    const EA::TrainingObjective::Configuration& requestedObjective)
 {
     DBIO::PgModelIO::validateTrainingResumeState(w, modelId);
 
     ResumeCheckpointConfig cfg;
     cfg.sourceModelId = modelId;
+    cfg.trainingObjective =
+        DBIO::PgModelIO::loadTrainingObjectiveMeta(w, modelId);
+    EA::TrainingObjective::RequireResumeCompatible(
+        cfg.trainingObjective, requestedObjective);
     cfg.featureWarmupScope = DBIO::PgModelIO::loadFeatureWarmupScopeMeta(w, modelId);
     cfg.donchian20Mode = DBIO::PgModelIO::loadDonchian20ModeMeta(w, modelId);
     cfg.donchianLookback = DBIO::PgModelIO::loadDonchianLookbackMeta(w, modelId);
@@ -4615,6 +4639,8 @@ ResumeCheckpointConfig LoadResumeCheckpointConfig(pqxx::work& w, long long model
 
 void ApplyResumeRuntimeConfig(const ResumeCheckpointConfig& cfg, int targetEpochs)
 {
+    EA::TrainingObjective::RequireResumeCompatible(
+        cfg.trainingObjective, EA::TrainingObjective::Legacy());
     if (cfg.trainConfig.schemaVersion != DBIO::PgModelIO::kTrainConfigMetaSchemaVersion)
         throw std::runtime_error("resume train_config_meta schema_version unsupported");
     if (cfg.trainConfig.labelRuleId != DBIO::PgModelIO::kLookaheadHighLowFirstHitLabelRuleId)
@@ -4978,7 +5004,8 @@ std::optional<long long> SavePeriodicCheckpointIfDue(const LaunchArgs& launchArg
                              donchianLookback,
                              resumeConfig.has_value()
                                  ? resumeConfig->inputWidthExpansionProvenance
-                                 : std::nullopt);
+                                 : std::nullopt,
+                             EA::TrainingObjective::Legacy());
     wCheckpoint.commit();
     std::cout << "CHECKPOINT_SAVE_DONE"
               << " epoch=" << completedEpoch
@@ -5141,6 +5168,16 @@ ModelConfigValidationResult PrintModelConfigValidation(pqxx::work& w,
             else if (paramName == "optimizer_meta")
             {
                 persistedMetadata.push_back("optimizer_meta(schema_version;optimizer_type;update_count;first_moment_buffer_count;second_moment_buffer_count)");
+            }
+            else if (paramName == "training_objective_canonical_meta")
+            {
+                persistedMetadata.push_back(
+                    "training_objective_canonical_meta(ascii_canonical_contract)");
+            }
+            else if (paramName == "training_objective_hash_meta")
+            {
+                persistedMetadata.push_back(
+                    "training_objective_hash_meta(ascii_fnv1a64_identity)");
             }
         }
     }
@@ -7434,6 +7471,29 @@ int main(int argc, const char * argv[])
     pqxx::connection c_forex { ForexDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { LstmDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
+    EA::TrainingObjective::Configuration runtimeTrainingObjective =
+        EA::TrainingObjective::Legacy();
+    if (!gRuntimeInferenceMode && launchArgs.schedulerExperimentId.has_value())
+    {
+        try
+        {
+            pqxx::work objectiveRead { c_LSTM };
+            objectiveRead.exec("SET TRANSACTION READ ONLY;");
+            runtimeTrainingObjective = LoadExperimentTrainingObjective(
+                objectiveRead, *launchArgs.schedulerExperimentId);
+            objectiveRead.commit();
+            EA::TrainingObjective::RequireResumeCompatible(
+                runtimeTrainingObjective, EA::TrainingObjective::Legacy());
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "TRAINING_OBJECTIVE_RESOLVE_FAILED"
+                      << ",experiment_id="
+                      << *launchArgs.schedulerExperimentId
+                      << ",error=" << error.what() << std::endl;
+            return 1;
+        }
+    }
     EA::FeatureWarmupScope featureWarmupScope =
         launchArgs.featureWarmupScope.value_or(EA::kDefaultFeatureWarmupScope);
     std::optional<ResumeCheckpointConfig> resumeConfig;
@@ -7446,7 +7506,8 @@ int main(int argc, const char * argv[])
             pqxx::work resumeRead { c_LSTM };
             resumeRead.exec("SET TRANSACTION READ ONLY;");
             resumeConfig = LoadResumeCheckpointConfig(
-                resumeRead, *launchArgs.resumeModelId);
+                resumeRead, *launchArgs.resumeModelId,
+                runtimeTrainingObjective);
             ConfigureInputWidthExpansionForResume(
                 resumeRead, *resumeConfig,
                 launchArgs.resumeExpandInputWidth,
@@ -7825,6 +7886,14 @@ int main(int argc, const char * argv[])
 
                 if (modelIdToLoad > 0)
                 {
+                    if (!gRuntimeInferenceMode)
+                    {
+                        const auto persistedObjective =
+                            DBIO::PgModelIO::loadTrainingObjectiveMeta(
+                                runtimeDatabaseWork, modelIdToLoad);
+                        EA::TrainingObjective::RequireResumeCompatible(
+                            persistedObjective, runtimeTrainingObjective);
+                    }
                     {
                         ScopedDiagnosticCoutSilencer silence;
                         DBIO::PgModelIO::loadAll(
@@ -8210,7 +8279,8 @@ int main(int argc, const char * argv[])
                                              runtimeDonchianLookback,
                                              resumeConfig.has_value()
                                                  ? resumeConfig->inputWidthExpansionProvenance
-                                                 : std::nullopt);
+                                                 : std::nullopt,
+                                             runtimeTrainingObjective);
                     wSave.commit();
                     std::cout << "Saved model with model_id=" << modelId << std::endl;
                     if (resumeConfig.has_value())

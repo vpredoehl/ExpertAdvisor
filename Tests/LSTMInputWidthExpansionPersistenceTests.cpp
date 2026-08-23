@@ -109,6 +109,13 @@ int main()
     {
         pqxx::work transaction{connection};
         transaction.exec("SET TRANSACTION READ ONLY;");
+        const auto objective =
+            DBIO::PgModelIO::loadTrainingObjectiveMeta(
+                transaction, sourceModelId);
+        assert(objective == EA::TrainingObjective::Legacy());
+        assert(EA::TrainingObjective::Identity(objective) ==
+               EA::TrainingObjective::Identity(
+                   EA::TrainingObjective::Legacy()));
         const auto dims = DBIO::PgModelIO::loadParameterDims(
             transaction, sourceModelId, "model_input_semantics_meta");
         const auto values = DBIO::PgModelIO::loadParameterValues(
@@ -239,6 +246,12 @@ int main()
                 transaction, descendantModelId);
         assert(reloadedProvenance.CanonicalText() ==
                provenance.CanonicalText());
+        const auto reloadedObjective =
+            DBIO::PgModelIO::loadTrainingObjectiveMeta(
+                transaction, descendantModelId);
+        assert(reloadedObjective == EA::TrainingObjective::Legacy());
+        EA::TrainingObjective::RequireResumeCompatible(
+            reloadedObjective, EA::TrainingObjective::Legacy());
         const auto parent = transaction.exec(
             "SELECT parent_model_id FROM model WHERE model_id=$1;",
             pqxx::params{descendantModelId}).one_row();

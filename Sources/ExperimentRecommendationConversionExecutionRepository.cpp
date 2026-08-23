@@ -111,7 +111,8 @@ ExperimentInvocationConfiguration LoadExperimentInvocation(
         "to_char(train_end AT TIME ZONE $2,'YYYY-MM-DD') AS train_end,"
         "to_char(infer_start AT TIME ZONE $2,'YYYY-MM-DD') AS infer_start,"
         "to_char(infer_end AT TIME ZONE $2,'YYYY-MM-DD') AS infer_end,"
-        "resume_model_id,donchian20_mode,donchian_lookback,feature_warmup_scope "
+        "resume_model_id,donchian20_mode,donchian_lookback,feature_warmup_scope,"
+        "training_objective_canonical,training_objective_hash "
         "FROM experiment WHERE experiment_id=$1;",
         pqxx::params{experimentId, kRecommendationDateTimeZone});
     if (rows.empty())
@@ -150,6 +151,10 @@ ExperimentInvocationConfiguration LoadExperimentInvocation(
         row["donchian_lookback"].as<std::string>());
     invocation.configuration.featureWarmupScope = ParseFeatureWarmupScope(
         row["feature_warmup_scope"].as<std::string>());
+    invocation.configuration.trainingObjective =
+        EA::TrainingObjective::ResolvePersisted(
+            row["training_objective_canonical"].as<std::string>(),
+            row["training_objective_hash"].as<std::string>());
     return invocation;
 }
 
@@ -200,7 +205,8 @@ long long InsertPausedExperiment(
         "core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,"
         "train_start,train_end,infer_start,infer_end,resume_model_id,"
         "duplicate_nonce,status,phase,invocation_mode,donchian20_mode,"
-        "donchian_lookback,feature_warmup_scope,updated_at) VALUES ("
+        "donchian_lookback,feature_warmup_scope,training_objective_canonical,"
+        "training_objective_hash,updated_at) VALUES ("
         "$1,$2,$3,$4,$5,$6,$7,"
         "($8::date::timestamp AT TIME ZONE $13),"
         "($9::date::timestamp AT TIME ZONE $13),"
@@ -208,7 +214,7 @@ long long InsertPausedExperiment(
         "($10::date::timestamp AT TIME ZONE $13) END,"
         "CASE WHEN $11::text IS NULL THEN NULL ELSE "
         "($11::date::timestamp AT TIME ZONE $13) END,"
-        "$12,0,'paused','train','recommendation_conversion',$14,$15,$16,now()) "
+        "$12,0,'paused','train','recommendation_conversion',$14,$15,$16,$17,$18,now()) "
         "RETURNING experiment_id;",
         pqxx::params{
             configuration.symbol, configuration.predictionHorizon,
@@ -220,7 +226,11 @@ long long InsertPausedExperiment(
             kRecommendationDateTimeZone,
             Donchian20ModeText(configuration.donchian20Mode),
             DonchianLookbackDatabaseValue(configuration.donchianLookback),
-            FeatureWarmupScopeText(configuration.featureWarmupScope)})
+            FeatureWarmupScopeText(configuration.featureWarmupScope),
+            EA::TrainingObjective::CanonicalText(
+                configuration.trainingObjective),
+            EA::TrainingObjective::Identity(
+                configuration.trainingObjective)})
         .one_row()[0].as<long long>();
 }
 

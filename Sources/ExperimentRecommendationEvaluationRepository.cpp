@@ -101,6 +101,9 @@ EffectiveExperimentConfiguration MapExperimentConfiguration(
         row["candidate_donchian_lookback"].as<std::string>());
     value.featureWarmupScope = ParseFeatureWarmupScope(
         row["candidate_feature_warmup_scope"].as<std::string>());
+    value.trainingObjective = EA::TrainingObjective::ResolvePersisted(
+        row["candidate_training_objective_canonical"].as<std::string>(),
+        row["candidate_training_objective_hash"].as<std::string>());
     return value;
 }
 
@@ -117,7 +120,8 @@ std::vector<RecommendationEvaluationExperimentConflict> FindConflicts(
         "candidate_train_start_date,candidate_train_end_date,"
         "candidate_infer_start_date,candidate_infer_end_date,"
         "candidate_donchian20_mode,candidate_donchian_lookback,"
-        "candidate_feature_warmup_scope FROM ("
+        "candidate_feature_warmup_scope,candidate_training_objective_canonical,"
+        "candidate_training_objective_hash FROM ("
         "SELECT e.experiment_id,e.status AS candidate_status,"
         "e.symbol AS candidate_symbol,e.prediction_horizon AS candidate_prediction_horizon,"
         "e.c_next_threshold AS candidate_label_threshold,"
@@ -129,7 +133,9 @@ std::vector<RecommendationEvaluationExperimentConflict> FindConflicts(
         "CASE WHEN e.infer_end IS NULL THEN NULL ELSE to_char(e.infer_end AT TIME ZONE 'America/Chicago','YYYY-MM-DD') END AS candidate_infer_end_date,"
         "e.donchian20_mode AS candidate_donchian20_mode,"
         "e.donchian_lookback AS candidate_donchian_lookback,"
-        "e.feature_warmup_scope AS candidate_feature_warmup_scope "
+        "e.feature_warmup_scope AS candidate_feature_warmup_scope,"
+        "e.training_objective_canonical AS candidate_training_objective_canonical,"
+        "e.training_objective_hash AS candidate_training_objective_hash "
         "FROM experiment e WHERE lower(btrim(e.symbol))=lower(btrim($1)) "
         "AND e.prediction_horizon=$2 AND e.status IN ('pending','running','paused','completed')"
         ") candidates ORDER BY experiment_id ASC;",
