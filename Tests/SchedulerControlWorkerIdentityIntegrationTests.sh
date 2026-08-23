@@ -26,6 +26,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
 
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton, desired_state)
@@ -159,7 +161,9 @@ LSTM_DB_NAME="${test_db}" "${scheduler_binary}" --requeue-analysis=941003 --yes 
 test "$(psql -X -At -d "${test_db}" -c "SELECT count(*) FROM experiment WHERE experiment_id IN (941001,941002,941003) AND status='pending' AND worker_pid IS NULL AND worker_process_group_id IS NULL AND worker_process_start_identity IS NULL AND worker_executable IS NULL AND worker_command_line IS NULL AND active_scheduler_worker_attempt_id IS NULL AND worker_control_state='running' AND worker_global_pause_request_id IS NULL AND started_at IS NULL AND completed_at IS NULL AND exit_code IS NULL AND error_message IS NULL AND current_operation IS NULL")" = "3"
 test "$(psql -X -At -d "${test_db}" -c "SELECT phase FROM experiment WHERE experiment_id=941001")" = "train"
 test "$(psql -X -At -d "${test_db}" -c "SELECT phase FROM experiment WHERE experiment_id=941002")" = "infer"
+test "$(psql -X -At -d "${test_db}" -c "SELECT operator_forced_final_inference_rerun_requested FROM experiment WHERE experiment_id=941002")" = "t"
 test "$(psql -X -At -d "${test_db}" -c "SELECT phase FROM experiment WHERE experiment_id=941003")" = "analyze"
+test "$(psql -X -At -d "${test_db}" -c "SELECT operator_forced_final_inference_rerun_requested FROM experiment WHERE experiment_id=941003")" = "f"
 test "${historical_before}" = "$(historical_snapshot)"
 test "$(snapshot | sed -n '4p')" = "941004:cancelled:done:941004:941004:unrelated-start-941004:/unrelated/LSTM_Release:/unrelated/LSTM_Release --train --scheduler-experiment-id=941004:NULL:running:NULL:train"
 

@@ -23,6 +23,8 @@ pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/InputWidthExpansionMigrationTests.sql"
 
 source_experiment_id="$(psql -X -At -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'

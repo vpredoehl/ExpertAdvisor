@@ -607,6 +607,7 @@ struct SchedulerStatusJob
     std::string updatedAt;
     std::string completedAt;
     std::string errorMessage;
+    bool operatorForcedFinalInferenceRerunRequested = false;
 };
 
 struct SchedulerCheckpointStatusJob
@@ -5199,6 +5200,15 @@ bool RequireSchedulerTables(pqxx::work& w)
         missing.push_back(
             "experiment.active_scheduler_worker_attempt_id");
     }
+    if (TableExists(w, "experiment") &&
+        !ColumnExists(
+            w,
+            "experiment",
+            "operator_forced_final_inference_rerun_requested"))
+    {
+        missing.push_back(
+            "experiment.operator_forced_final_inference_rerun_requested");
+    }
     if (TableExists(w, "experiment_checkpoint_eval") &&
         !ColumnExists(
             w,
@@ -7238,8 +7248,13 @@ void PrintSchedulerControlApplied(const std::string& action,
               << ",action=" << action
               << ",experiment_id=" << experimentId
               << ",new_status=" << newStatus
-              << ",new_phase=" << newPhase
-              << std::endl;
+              << ",new_phase=" << newPhase;
+    if (action == "requeue_inference")
+    {
+        std::cout
+            << ",operator_forced_final_inference_rerun_requested=1";
+    }
+    std::cout << std::endl;
 }
 
 std::optional<std::string> ValidateSchedulerControlTransition(const SchedulerOptions& options,
@@ -7340,6 +7355,11 @@ void ApplySchedulerControlTransition(pqxx::work& w,
             << ", worker_global_pause_request_id = NULL"
             << ", active_scheduler_worker_attempt_id = NULL"
             << ", current_operation = NULL";
+    }
+
+    if (action == "requeue_inference")
+    {
+        sql << ", operator_forced_final_inference_rerun_requested = true";
     }
 
     if (promotedResumeModelId.has_value())
@@ -10122,6 +10142,17 @@ bool HasCompletedInferenceResult(pqxx::work& w,
         experiment.inferStart->substr(0, 10),
         experiment.inferEnd->substr(0, 10));
     return !rows.empty();
+}
+
+bool OperatorForcedFinalInferenceRerunRequested(
+    pqxx::work& w,
+    long long experimentId)
+{
+    const pqxx::result rows = w.exec(
+        "SELECT operator_forced_final_inference_rerun_requested "
+        "FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{experimentId});
+    return rows.size() == 1 && rows[0][0].as<bool>();
 }
 
 bool HasCompletedInferenceResultForAttempt(
@@ -15730,7 +15761,8 @@ void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
                                                   const std::string& reason,
                                                   const std::optional<std::string>& recoveredLogPath = std::nullopt,
                                                   const std::optional<long long>&
-                                                      workerAttemptId = std::nullopt)
+                                                      workerAttemptId = std::nullopt,
+                                                  bool consumeForcedFinalInferenceRerun = false)
 {
     if (recoveredLogPath.has_value())
         UpdateInferLogPath(
@@ -15746,6 +15778,49 @@ void TransitionRecoveredInferenceToAnalyze(pqxx::work& w,
     else if (experiment.inferLogPath.has_value())
         std::cout << ",infer_log_path=" << *experiment.inferLogPath;
     std::cout << std::endl;
+
+    if (consumeForcedFinalInferenceRerun && workerAttemptId)
+    {
+        const pqxx::result consumed = w.exec(
+            "UPDATE experiment e SET "
+            "operator_forced_final_inference_rerun_requested=false,"
+            "updated_at=clock_timestamp() "
+            "FROM experiment_scheduler_worker_attempt a "
+            "WHERE e.experiment_id=$1 "
+            "AND e.operator_forced_final_inference_rerun_requested "
+            "AND e.status='running' AND e.phase='infer' "
+            "AND e.active_scheduler_worker_attempt_id=$2 "
+            "AND a.worker_attempt_id=$2 "
+            "AND a.experiment_id=e.experiment_id "
+            "AND a.worker_kind='experiment' "
+            "AND a.lifecycle_phase='infer' "
+            "AND EXISTS ("
+            " SELECT 1 FROM inference_eval_result r "
+            " WHERE r.model_id=e.last_model_id "
+            " AND r.symbol=e.symbol "
+            " AND r.prediction_horizon=e.prediction_horizon "
+            " AND r.threshold_logret=e.c_next_threshold "
+            " AND r.from_date=$3 "
+            " AND r.to_date=$4 "
+            " AND r.status='completed' "
+            " AND r.inference_scope='final' "
+            " AND r.checkpoint_eval_id IS NULL "
+            " AND r.completed_at>=a.reserved_at"
+            ") RETURNING e.experiment_id;",
+            pqxx::params{
+                experiment.experimentId,
+                *workerAttemptId,
+                experiment.inferStart->substr(0, 10),
+                experiment.inferEnd->substr(0, 10)});
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            consumed,
+            "consume_operator_forced_final_inference_rerun");
+        std::cout
+            << "SCHEDULER_FORCED_FINAL_INFERENCE_RERUN_CONSUMED"
+            << ",experiment_id=" << experiment.experimentId
+            << ",worker_attempt_id=" << *workerAttemptId
+            << std::endl;
+    }
 
     MarkExperimentPendingPhase(
         w,
@@ -17131,6 +17206,10 @@ int RecoverOrphanedRunningExperiments(
         }
         else
         {
+            const bool forcedFinalInferenceRerun =
+                phase == "infer" &&
+                OperatorForcedFinalInferenceRerunRequested(
+                    transaction, experimentId);
             pqxx::result experimentRows = transaction.exec_params(
                 "SELECT experiment_id,symbol,prediction_horizon,"
                 "c_next_threshold,core_lr_mult,head_lr_mult,"
@@ -17157,7 +17236,8 @@ int RecoverOrphanedRunningExperiments(
                         "SCHEDULER_WORKER_RESULT_RECOVERED",
                         "completed_inference_result",
                         std::nullopt,
-                        attemptId);
+                        attemptId,
+                        forcedFinalInferenceRerun);
                     completedEvidence = true;
                 }
                 else if (
@@ -17201,14 +17281,17 @@ int RecoverOrphanedRunningExperiments(
                     "UPDATE experiment SET status='failed',"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
                     "completed_at=clock_timestamp(),exit_code=-1,"
-                    "error_message='worker_process_missing_no_result',"
+                    "error_message=$4,"
                     "updated_at=clock_timestamp() "
                     "WHERE experiment_id=$1 "
                     "AND active_scheduler_worker_attempt_id=$2 "
                     "AND status='running' AND phase=$3;",
                     experimentId,
                     attemptId,
-                    phase);
+                    phase,
+                    forcedFinalInferenceRerun
+                        ? "forced_final_inference_rerun_missing_attempt_result;worker_process_missing_no_result"
+                        : "worker_process_missing_no_result");
             }
         }
 
@@ -17523,6 +17606,9 @@ void PersistObservedExperimentChild(pqxx::work& w,
 
     if (child.phase == "infer")
     {
+        const bool forcedFinalInferenceRerun =
+            OperatorForcedFinalInferenceRerunRequested(
+                w, experiment.experimentId);
         if (HasCompletedInferenceResultForAttempt(
                 w, experiment, child.launchedEpoch))
         {
@@ -17532,11 +17618,13 @@ void PersistObservedExperimentChild(pqxx::work& w,
                 "SCHEDULER_CHILD_RESULT_PERSISTED",
                 "completed_inference_eval_result",
                 std::nullopt,
-                child.workerAttemptId);
+                child.workerAttemptId,
+                forcedFinalInferenceRerun);
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
-        if (HasValidInferenceLogPathForAttempt(
+        if (!forcedFinalInferenceRerun &&
+            HasValidInferenceLogPathForAttempt(
                 experiment, child.launchedEpoch))
         {
             TransitionRecoveredInferenceToAnalyze(
@@ -17549,19 +17637,33 @@ void PersistObservedExperimentChild(pqxx::work& w,
             PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
-        if (const std::optional<std::string> discoveredLog =
+        if (!forcedFinalInferenceRerun)
+        {
+            if (const std::optional<std::string> discoveredLog =
                 DiscoverValidInferenceLogForAttempt(
                     experiment, child.launchedEpoch);
-            discoveredLog.has_value())
+                discoveredLog.has_value())
+            {
+                TransitionRecoveredInferenceToAnalyze(
+                    w,
+                    experiment,
+                    "SCHEDULER_CHILD_RESULT_PERSISTED",
+                    "discovered_valid_infer_log",
+                    discoveredLog,
+                    child.workerAttemptId);
+                PersistObservedExitFields(w, child, exitCode, error, true);
+                return;
+            }
+        }
+        if (forcedFinalInferenceRerun)
         {
-            TransitionRecoveredInferenceToAnalyze(
+            MarkExperimentFailed(
                 w,
                 experiment,
-                "SCHEDULER_CHILD_RESULT_PERSISTED",
-                "discovered_valid_infer_log",
-                discoveredLog,
+                "forced_final_inference_rerun_missing_attempt_result;" +
+                    error,
+                exitCode,
                 child.workerAttemptId);
-            PersistObservedExitFields(w, child, exitCode, error, true);
             return;
         }
     }
@@ -18439,7 +18541,11 @@ int CountRows(pqxx::work& w, const std::string& sql);
                 MarkExperimentFailed(w, job, "infer_model_not_found");
             continue;
         }
-        if (HasCompletedInferenceResult(w, job))
+        const bool forcedFinalInferenceRerun =
+            OperatorForcedFinalInferenceRerunRequested(
+                w, job.experimentId);
+        if (!forcedFinalInferenceRerun &&
+            HasCompletedInferenceResult(w, job))
         {
             ++stats.skipped;
             LogSkip("infer", job.experimentId, "existing_inference", logState, options.schedulerVerbose);
@@ -18468,7 +18574,16 @@ int CountRows(pqxx::work& w, const std::string& sql);
             }
             continue;
         }
-        if (HasValidInferenceLogPath(job))
+        if (forcedFinalInferenceRerun)
+        {
+            std::cout
+                << "SCHEDULER_FORCED_FINAL_INFERENCE_RERUN_DISPATCH"
+                << ",experiment_id=" << job.experimentId
+                << ",model_id=" << *job.lastModelId
+                << std::endl;
+        }
+        if (!forcedFinalInferenceRerun &&
+            HasValidInferenceLogPath(job))
         {
             ++stats.skipped;
             LogSkip("infer", job.experimentId, "valid_infer_log_path", logState, options.schedulerVerbose);
@@ -18482,21 +18597,25 @@ int CountRows(pqxx::work& w, const std::string& sql);
             }
             continue;
         }
-        if (const std::optional<std::string> discoveredLog = DiscoverValidInferenceLog(job);
-            discoveredLog.has_value())
+        if (!forcedFinalInferenceRerun)
         {
-            ++stats.skipped;
-            LogSkip("infer", job.experimentId, "discovered_valid_infer_log", logState, options.schedulerVerbose);
-            if (!options.dryRun)
+            if (const std::optional<std::string> discoveredLog =
+                    DiscoverValidInferenceLog(job);
+                discoveredLog.has_value())
             {
-                TransitionRecoveredInferenceToAnalyze(
-                    w,
-                    job,
-                    "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
-                    "discovered_valid_infer_log",
-                    discoveredLog);
+                ++stats.skipped;
+                LogSkip("infer", job.experimentId, "discovered_valid_infer_log", logState, options.schedulerVerbose);
+                if (!options.dryRun)
+                {
+                    TransitionRecoveredInferenceToAnalyze(
+                        w,
+                        job,
+                        "SCHEDULER_ORPHAN_RECOVERED_INFER_LOG",
+                        "discovered_valid_infer_log",
+                        discoveredLog);
+                }
+                continue;
             }
-            continue;
         }
         if (const auto discovered =
                 DiscoverRunningProcessForExperiment(job, "infer");
@@ -19731,18 +19850,39 @@ int RunInferJobs(
                 }
                 eligible = false;
             }
-            else if (HasCompletedInferenceResult(transaction, job))
+            else
             {
-                if (!options.dryRun)
+                const bool forcedFinalInferenceRerun =
+                    OperatorForcedFinalInferenceRerunRequested(
+                        transaction, job.experimentId);
+                if (!forcedFinalInferenceRerun &&
+                    HasCompletedInferenceResult(transaction, job))
                 {
-                    if (HasCompletedAnalysisResult(
-                            transaction, job))
-                        MarkExperimentDone(transaction, job, "infer");
-                    else
-                        MarkExperimentPendingPhase(
-                            transaction, job, "infer", "analyze");
+                    if (!options.dryRun)
+                    {
+                        std::cout
+                            << "SCHEDULER_SKIP_EXISTING_INFERENCE"
+                            << ",experiment_id=" << job.experimentId
+                            << ",model_id=" << *job.lastModelId
+                            << std::endl;
+                        if (HasCompletedAnalysisResult(
+                                transaction, job))
+                            MarkExperimentDone(
+                                transaction, job, "infer");
+                        else
+                            MarkExperimentPendingPhase(
+                                transaction, job, "infer", "analyze");
+                    }
+                    eligible = false;
                 }
-                eligible = false;
+                else if (forcedFinalInferenceRerun)
+                {
+                    std::cout
+                        << "SCHEDULER_FORCED_FINAL_INFERENCE_RERUN_DISPATCH"
+                        << ",experiment_id=" << job.experimentId
+                        << ",model_id=" << *job.lastModelId
+                        << std::endl;
+                }
             }
             transaction.commit();
         }
@@ -21997,6 +22137,7 @@ SchedulerStatusJob RowToSchedulerStatusJob(const pqxx::row& row)
     job.checkpointEvalRunning = row[37].as<int>();
     job.checkpointEvalCompleted = row[38].as<int>();
     job.checkpointEvalFailed = row[39].as<int>();
+    job.operatorForcedFinalInferenceRerunRequested = row[40].as<bool>();
     return job;
 }
 
@@ -22088,12 +22229,13 @@ std::vector<SchedulerStatusJob> LoadSchedulerStatusJobs(pqxx::work& w,
         sql << "COALESCE(cec.pending_count, 0)::int, "
             << "COALESCE(cec.running_count, 0)::int, "
             << "COALESCE(cec.completed_count, 0)::int, "
-            << "COALESCE(cec.failed_count, 0)::int ";
+            << "COALESCE(cec.failed_count, 0)::int, ";
     }
     else
     {
-        sql << "0::int, 0::int, 0::int, 0::int ";
+        sql << "0::int, 0::int, 0::int, 0::int, ";
     }
+    sql << "e.operator_forced_final_inference_rerun_requested ";
     sql
         << "FROM experiment e "
         << "LEFT JOIN latest_analysis la ON la.experiment_id = e.experiment_id "
@@ -22206,12 +22348,13 @@ std::optional<SchedulerStatusJob> LoadSchedulerStatusJobById(pqxx::work& w, long
         sql << "COALESCE(cec.pending_count, 0)::int, "
             << "COALESCE(cec.running_count, 0)::int, "
             << "COALESCE(cec.completed_count, 0)::int, "
-            << "COALESCE(cec.failed_count, 0)::int ";
+            << "COALESCE(cec.failed_count, 0)::int, ";
     }
     else
     {
-        sql << "0::int, 0::int, 0::int, 0::int ";
+        sql << "0::int, 0::int, 0::int, 0::int, ";
     }
+    sql << "e.operator_forced_final_inference_rerun_requested ";
     sql
         << "FROM experiment e "
         << "LEFT JOIN latest_analysis la ON la.experiment_id = e.experiment_id "
@@ -22565,6 +22708,8 @@ void PrintSchedulerStatusJobMachine(const SchedulerStatusJob& job)
               << ",checkpoint_eval_running=" << job.checkpointEvalRunning
               << ",checkpoint_eval_completed=" << job.checkpointEvalCompleted
               << ",checkpoint_eval_failed=" << job.checkpointEvalFailed
+              << ",operator_forced_final_inference_rerun_requested="
+              << (job.operatorForcedFinalInferenceRerunRequested ? "1" : "0")
               << ",eta_seconds=" << OptionalDoubleText(job.etaSeconds, 0)
               << ",loss=" << OptionalDoubleText(job.loss, 6)
               << ",validation_accuracy=" << OptionalDoubleText(job.validationAccuracy, 4)
@@ -22600,7 +22745,11 @@ void PrintStatusJobTable(const std::string& title,
                       << " completed_epochs=" << OptionalIntText(job.completedEpochs)
                       << " target_epochs=" << job.targetEpochs
                       << " percent=" << FormatPercentComplete(job)
-                      << " elapsed=" << FormatOptionalDuration(job.elapsedSeconds);
+                      << " elapsed=" << FormatOptionalDuration(job.elapsedSeconds)
+                      << " forced_final_infer_rerun="
+                      << (job.operatorForcedFinalInferenceRerunRequested
+                              ? "requested"
+                              : "none");
             if (job.stopAfterCheckpointEpoch.has_value())
                 std::cout << " stop_after_checkpoint=" << *job.stopAfterCheckpointEpoch;
             if (job.stoppedAtCheckpointEpoch.has_value())
@@ -22628,6 +22777,10 @@ void PrintStatusJobTable(const std::string& title,
                   << " phase=" << job.phase
                   << " status=" << ColorForStatus(job.status, useColor)
                   << " pid=" << OptionalIntText(job.pid)
+                  << " forced_final_infer_rerun="
+                  << (job.operatorForcedFinalInferenceRerunRequested
+                          ? "requested"
+                          : "none")
                   << "\n";
         std::cout << "    cpu=" << OptionalPercentText(job.cpuPercent)
                   << " rss=" << OptionalMbText(job.rssMb)
@@ -22712,6 +22865,11 @@ void PrintCompactStatusJob(const SchedulerStatusJob& job)
     PrintCompactStatusField("Runtime", FormatOptionalDuration(job.elapsedSeconds));
     PrintCompactStatusField("PID", OptionalIntText(job.pid));
     PrintCompactStatusField("Operation", CurrentOperationForStatusJob(job));
+    PrintCompactStatusField(
+        "Forced FINAL Infer Rerun",
+        job.operatorForcedFinalInferenceRerunRequested
+            ? "requested"
+            : "none");
     if (job.lastCheckpointModelId.has_value())
         PrintCompactStatusField("Checkpoint Model", OptionalLongLongText(job.lastCheckpointModelId));
     if (job.lastCheckpointEpoch.has_value())
