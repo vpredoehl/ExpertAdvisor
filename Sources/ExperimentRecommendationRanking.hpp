@@ -91,6 +91,8 @@ struct RecommendationRankingEvaluation
     std::string scoringPolicyCanonical;
     std::string scoringPolicyHash;
     int scoringVersion = 0;
+    RecommendationScoringSemanticIdentity scoringSemanticIdentity;
+    RecommendationEvaluationSemanticIdentity evaluationSemanticIdentity;
     RecommendationEligibility eligibility = RecommendationEligibility::ineligible;
     RecommendationEvaluationDisposition disposition =
         RecommendationEvaluationDisposition::invalidPersistedEvidence;
@@ -101,6 +103,43 @@ struct RecommendationRankingEvaluation
     int missingEvidenceCount = 0;
     std::vector<RecommendationScoreComponent> components;
 };
+
+enum class RecommendationRankingPopulationSemanticState
+{
+    verifiedHomogeneous,
+    empty,
+    legacyHeterogeneous,
+    legacyUnverified
+};
+
+std::string RecommendationRankingPopulationSemanticStateText(
+    RecommendationRankingPopulationSemanticState value);
+
+struct RecommendationRankingPopulationSemanticValidation
+{
+    RecommendationRankingPopulationSemanticState state =
+        RecommendationRankingPopulationSemanticState::legacyUnverified;
+    std::optional<RecommendationScoringSemanticIdentity> scoringIdentity;
+    std::optional<RecommendationEvaluationSemanticIdentity> evaluationIdentity;
+    int distinctScoringIdentityCount = 0;
+    int distinctEvaluationIdentityCount = 0;
+    std::string reason;
+    std::vector<long long> evaluationResultIds;
+    std::vector<long long> evaluationRunIds;
+    std::vector<std::string> scoringSemanticHashes;
+    std::vector<std::string> evaluationSemanticHashes;
+
+    bool acceptableForNewSnapshot() const
+    {
+        return state ==
+                   RecommendationRankingPopulationSemanticState::verifiedHomogeneous ||
+               state == RecommendationRankingPopulationSemanticState::empty;
+    }
+};
+
+RecommendationRankingPopulationSemanticValidation
+ValidateRecommendationRankingPopulationSemantics(
+    const std::vector<RecommendationRankingEvaluation>& evaluations);
 
 struct RecommendationRankingMember
 {
@@ -135,13 +174,18 @@ std::string RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
     const RecommendationRankingPolicy& policy,
     const RecommendationRankingScope& scope,
     int outputLimit,
-    const std::string& membershipCanonical);
+    const std::string& membershipCanonical,
+    const RecommendationRankingPopulationSemanticValidation& semantics);
 
 enum class RecommendationComparisonState
 {
     comparable,
     incomparablePolicyVersion,
     incomparableEvaluatorVersion,
+    incomparableScoringSemantics,
+    incomparableEvaluationSemantics,
+    invalidScoringProvenance,
+    invalidEvaluationProvenance,
     incomparableMissingScore,
     incomparableScope,
     incomparableFamily,

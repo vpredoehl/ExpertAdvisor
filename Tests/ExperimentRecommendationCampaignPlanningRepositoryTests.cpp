@@ -132,7 +132,18 @@ CREATE TABLE experiment_recommendation_ranking_snapshot(
     ranking_snapshot_identity_hash text NOT NULL,
     ranking_policy_canonical text NOT NULL,
     ranking_policy_hash text NOT NULL,
-    ranking_version integer NOT NULL);
+    ranking_version integer NOT NULL,
+    population_semantic_state text NOT NULL,
+    scoring_semantic_canonical text,
+    scoring_semantic_hash text,
+    scoring_semantic_version integer,
+    evaluation_semantic_canonical text,
+    evaluation_semantic_hash text,
+    evaluation_semantic_version integer,
+    distinct_scoring_semantic_count integer NOT NULL,
+    distinct_evaluation_semantic_count integer NOT NULL,
+    homogeneity_validation_result text NOT NULL,
+    member_count integer NOT NULL);
 CREATE TABLE experiment_recommendation_ranking_member(
     recommendation_ranking_member_id bigint PRIMARY KEY,
     recommendation_ranking_snapshot_id bigint NOT NULL,
@@ -237,13 +248,22 @@ CREATE TABLE experiment_recommendation_conversion_activation(
                 "TO pqxx;");
             const std::string snapshotCanonical = "campaign-snapshot";
             const std::string rankingPolicyCanonical = "campaign-ranking-policy";
+            const std::string scoringSemanticCanonical =
+                "campaign-scoring-semantic";
+            const std::string evaluationSemanticCanonical =
+                "campaign-evaluation-semantic";
             fixtures.exec(R"SQL(
 INSERT INTO experiment_recommendation_ranking_snapshot VALUES(
-    7,'completed',$1,$2,$3,$4,1);
+    7,'completed',$1,$2,$3,$4,1,'verified_homogeneous',$5,$6,1,$7,$8,1,
+    1,1,'verified_homogeneous',4);
 )SQL", pqxx::params{
                 snapshotCanonical, RecommendationCanonicalHash(snapshotCanonical),
                 rankingPolicyCanonical,
-                RecommendationCanonicalHash(rankingPolicyCanonical)});
+                RecommendationCanonicalHash(rankingPolicyCanonical),
+                scoringSemanticCanonical,
+                RecommendationCanonicalHash(scoringSemanticCanonical),
+                evaluationSemanticCanonical,
+                RecommendationCanonicalHash(evaluationSemanticCanonical)});
 
             for (long long id = 1; id <= 4; ++id)
             {
@@ -322,6 +342,34 @@ INSERT INTO experiment_recommendation_conversion_proposal VALUES(
             "RECOMMENDATION_CAMPAIGN_REVIEW_FAMILY") != std::string::npos);
         assert(output.str().find("read_only=true") != std::string::npos);
         assert(errors.str().empty());
+
+        {
+            pqxx::work invalidate{owner};
+            invalidate.exec("SET LOCAL search_path TO " +
+                            invalidate.quote_name(schema) + ";");
+            invalidate.exec(
+                "UPDATE experiment_recommendation_ranking_snapshot SET "
+                "population_semantic_state='legacy_unverified',"
+                "scoring_semantic_canonical=NULL,scoring_semantic_hash=NULL,"
+                "scoring_semantic_version=NULL,evaluation_semantic_canonical=NULL,"
+                "evaluation_semantic_hash=NULL,evaluation_semantic_version=NULL,"
+                "distinct_scoring_semantic_count=0,"
+                "distinct_evaluation_semantic_count=0,"
+                "homogeneity_validation_result='legacy_unverified' "
+                "WHERE recommendation_ranking_snapshot_id=7;");
+            invalidate.commit();
+        }
+        bool unverifiedRejected = false;
+        try
+        {
+            (void)LoadRecommendationCampaignPlanInput(runtime, policy, scope);
+        }
+        catch (const std::runtime_error& error)
+        {
+            unverifiedRejected = std::string{error.what()} ==
+                "recommendation_campaign_ranking_semantics_not_verified";
+        }
+        assert(unverifiedRejected);
 
         scope.rankingSnapshotId = 999;
         output.str({});

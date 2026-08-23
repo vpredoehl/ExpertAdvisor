@@ -46,6 +46,35 @@ std::string RecommendationScoringPolicyCanonicalText(
 std::string RecommendationScoringPolicyHash(
     const RecommendationScoringPolicy& policy);
 
+// Phase 3B semantic identity.  The policy canonical remains authoritative;
+// this identity additionally freezes the compiled scoring algorithm contract
+// whose behavior is not represented by configurable policy values alone.
+struct RecommendationScoringSemanticIdentity
+{
+    std::string canonical;
+    std::string hash;
+    int version = 0;
+
+    bool operator==(const RecommendationScoringSemanticIdentity&) const = default;
+};
+
+std::optional<std::string> ValidateRecommendationScoringPolicyProvenance(
+    const std::string& canonical,
+    const std::string& hash,
+    int scoringVersion);
+RecommendationScoringSemanticIdentity RecommendationScoringSemanticIdentityForPolicy(
+    const RecommendationScoringPolicy& policy);
+RecommendationScoringSemanticIdentity
+RecommendationScoringSemanticIdentityFromPolicyProvenance(
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion);
+std::optional<std::string> ValidateRecommendationScoringSemanticIdentity(
+    const RecommendationScoringSemanticIdentity& identity,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion);
+
 struct RecommendationScoringInput
 {
     long long recommendationId = -1;

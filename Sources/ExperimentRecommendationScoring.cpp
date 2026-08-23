@@ -12,6 +12,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 
 namespace EA::ExperimentRecommendation
@@ -79,6 +80,52 @@ std::string StableHash(const std::string& canonical)
         value >>= 4U;
     }
     return "fnv1a64:" + result;
+}
+
+std::string LengthText(const std::string& value)
+{
+    return std::to_string(value.size()) + ":" + value;
+}
+
+constexpr std::string_view kScoringSemanticContract =
+    "experiment_recommendation_scoring_semantic_v1;semantic_version=1;"
+    "algorithm=weighted_component_score_v1;"
+    "components=leader_quality,inference_accuracy,evidence_strength,neutral_balance,"
+    "structural_proximity,parameter_preference,source_rank,horizon_change_penalty,"
+    "relative_mutation_penalty;"
+    "normalization=component_clamp_unit_and_policy_thresholds_v1;"
+    "aggregation=positive_weight_normalized_minus_penalty_weight_normalized_then_policy_clamp_v1;"
+    "missing=neutral_policy_or_ineligible_v1;"
+    "structural_distance=relative_delta_else_absolute_delta_v1;"
+    "source_metrics=persisted_leader_accuracy_neutral_evidence_v1;policy=";
+
+std::optional<RecommendationScoringPolicy> ParseCanonicalScoringPolicy(
+    const std::string& canonical)
+{
+    constexpr std::string_view prefix =
+        "experiment_recommendation_scoring_policy_v1;";
+    if (!canonical.starts_with(prefix)) return std::nullopt;
+    std::string assignments = canonical.substr(prefix.size());
+    std::replace(assignments.begin(), assignments.end(), ';', ',');
+    try
+    {
+        RecommendationScoringPolicy policy =
+            ParseRecommendationScoringPolicy(assignments);
+        if (RecommendationScoringPolicyCanonicalText(policy) != canonical)
+            return std::nullopt;
+        return policy;
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+}
+
+std::string ScoringSemanticCanonical(
+    const std::string& scoringPolicyCanonical)
+{
+    return std::string{kScoringSemanticContract} +
+        LengthText(scoringPolicyCanonical);
 }
 
 double ClampUnit(double value)
@@ -316,6 +363,62 @@ std::string RecommendationScoringPolicyHash(
     const RecommendationScoringPolicy& policy)
 {
     return StableHash(RecommendationScoringPolicyCanonicalText(policy));
+}
+
+std::optional<std::string> ValidateRecommendationScoringPolicyProvenance(
+    const std::string& canonical,
+    const std::string& hash,
+    int scoringVersion)
+{
+    const auto policy = ParseCanonicalScoringPolicy(canonical);
+    if (!policy) return "invalid_scoring_policy_canonical";
+    if (scoringVersion != policy->scoringVersion)
+        return "inconsistent_scoring_policy_version";
+    if (hash != StableHash(canonical))
+        return "inconsistent_scoring_policy_hash";
+    return std::nullopt;
+}
+
+RecommendationScoringSemanticIdentity RecommendationScoringSemanticIdentityForPolicy(
+    const RecommendationScoringPolicy& policy)
+{
+    const std::string canonical = RecommendationScoringPolicyCanonicalText(policy);
+    return RecommendationScoringSemanticIdentityFromPolicyProvenance(
+        canonical, RecommendationScoringPolicyHash(policy), policy.scoringVersion);
+}
+
+RecommendationScoringSemanticIdentity
+RecommendationScoringSemanticIdentityFromPolicyProvenance(
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion)
+{
+    if (const auto error = ValidateRecommendationScoringPolicyProvenance(
+            scoringPolicyCanonical, scoringPolicyHash, scoringVersion))
+        throw std::invalid_argument(*error);
+    RecommendationScoringSemanticIdentity identity;
+    identity.version = 1;
+    identity.canonical = ScoringSemanticCanonical(scoringPolicyCanonical);
+    identity.hash = StableHash(identity.canonical);
+    return identity;
+}
+
+std::optional<std::string> ValidateRecommendationScoringSemanticIdentity(
+    const RecommendationScoringSemanticIdentity& identity,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion)
+{
+    if (const auto error = ValidateRecommendationScoringPolicyProvenance(
+            scoringPolicyCanonical, scoringPolicyHash, scoringVersion))
+        return *error;
+    if (identity.version != 1)
+        return "unsupported_scoring_semantic_version";
+    if (identity.canonical != ScoringSemanticCanonical(scoringPolicyCanonical))
+        return "inconsistent_scoring_semantic_canonical";
+    if (identity.hash != StableHash(identity.canonical))
+        return "inconsistent_scoring_semantic_hash";
+    return std::nullopt;
 }
 
 RecommendationScoreResult ScoreExperimentRecommendation(

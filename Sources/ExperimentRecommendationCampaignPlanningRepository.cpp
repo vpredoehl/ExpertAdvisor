@@ -149,7 +149,13 @@ RecommendationCampaignPlanInput LoadRecommendationCampaignPlanInput(
     const pqxx::result snapshots = transaction.exec(R"SQL(
 SELECT status,ranking_snapshot_identity_canonical,
        ranking_snapshot_identity_hash,ranking_policy_canonical,
-       ranking_policy_hash,ranking_version,transaction_timestamp()::text AS read_at
+       ranking_policy_hash,ranking_version,population_semantic_state,
+       scoring_semantic_canonical,scoring_semantic_hash,
+       scoring_semantic_version,evaluation_semantic_canonical,
+       evaluation_semantic_hash,evaluation_semantic_version,
+       distinct_scoring_semantic_count,distinct_evaluation_semantic_count,
+       homogeneity_validation_result,member_count,
+       transaction_timestamp()::text AS read_at
 FROM experiment_recommendation_ranking_snapshot
 WHERE recommendation_ranking_snapshot_id=$1;
 )SQL", pqxx::params{scope.rankingSnapshotId});
@@ -159,6 +165,43 @@ WHERE recommendation_ranking_snapshot_id=$1;
     if (snapshot["status"].as<std::string>() != "completed")
         throw std::runtime_error(
             "recommendation_campaign_ranking_snapshot_not_completed");
+    const std::string populationState =
+        snapshot["population_semantic_state"].as<std::string>();
+    const bool emptyPopulation = populationState == "empty";
+    if (populationState != "verified_homogeneous" && !emptyPopulation)
+        throw std::runtime_error(
+            "recommendation_campaign_ranking_semantics_not_verified");
+    if (emptyPopulation)
+    {
+        if (snapshot["member_count"].as<int>() != 0 ||
+            !snapshot["scoring_semantic_canonical"].is_null() ||
+            !snapshot["evaluation_semantic_canonical"].is_null() ||
+            snapshot["distinct_scoring_semantic_count"].as<int>() != 0 ||
+            snapshot["distinct_evaluation_semantic_count"].as<int>() != 0 ||
+            snapshot["homogeneity_validation_result"].as<std::string>() !=
+                "empty_population")
+            throw std::runtime_error(
+                "recommendation_campaign_empty_ranking_semantics_invalid");
+    }
+    else
+    {
+        RequireIdentity(
+            snapshot["scoring_semantic_canonical"].as<std::string>(),
+            snapshot["scoring_semantic_hash"].as<std::string>(),
+            "recommendation_campaign_scoring_semantic_identity_invalid");
+        RequireIdentity(
+            snapshot["evaluation_semantic_canonical"].as<std::string>(),
+            snapshot["evaluation_semantic_hash"].as<std::string>(),
+            "recommendation_campaign_evaluation_semantic_identity_invalid");
+        if (snapshot["scoring_semantic_version"].as<int>() <= 0 ||
+            snapshot["evaluation_semantic_version"].as<int>() <= 0 ||
+            snapshot["distinct_scoring_semantic_count"].as<int>() != 1 ||
+            snapshot["distinct_evaluation_semantic_count"].as<int>() != 1 ||
+            snapshot["homogeneity_validation_result"].as<std::string>() !=
+                "verified_homogeneous")
+            throw std::runtime_error(
+                "recommendation_campaign_ranking_semantic_shape_invalid");
+    }
 
     RecommendationCampaignPlanInput input;
     input.policy = policy;

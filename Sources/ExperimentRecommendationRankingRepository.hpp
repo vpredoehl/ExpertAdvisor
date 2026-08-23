@@ -20,6 +20,7 @@ struct RecommendationRankingSnapshotRequest
     std::string snapshotIdentityHash;
     std::string membershipCanonical;
     std::string membershipHash;
+    RecommendationRankingPopulationSemanticValidation populationSemantics;
 };
 
 struct RecommendationRankingSnapshotBeginResult
@@ -52,6 +53,15 @@ struct PersistedRecommendationRankingSnapshot
     int requestedLimit = 0;
     std::string membershipCanonical;
     std::string membershipHash;
+    int snapshotIdentityVersion = 0;
+    RecommendationRankingPopulationSemanticState populationSemanticState =
+        RecommendationRankingPopulationSemanticState::legacyUnverified;
+    std::optional<RecommendationScoringSemanticIdentity> scoringSemanticIdentity;
+    std::optional<RecommendationEvaluationSemanticIdentity>
+        evaluationSemanticIdentity;
+    int distinctScoringSemanticCount = 0;
+    int distinctEvaluationSemanticCount = 0;
+    std::string homogeneityValidationResult;
     RecommendationRankingCounts counts;
     std::string startedAt;
     std::optional<std::string> completedAt;

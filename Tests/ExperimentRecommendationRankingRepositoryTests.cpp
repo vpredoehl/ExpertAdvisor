@@ -31,6 +31,11 @@ std::string ReadFile(const std::string& path)
             std::istreambuf_iterator<char>{}};
 }
 
+std::string LengthText(const std::string& value)
+{
+    return std::to_string(value.size()) + ":" + value;
+}
+
 long long InsertEvaluation(pqxx::work& transaction,
                            long long runId,
                            long long recommendationId,
@@ -39,9 +44,21 @@ long long InsertEvaluation(pqxx::work& transaction,
                            long long analysisId,
                            int ordinal,
                            const std::string& disposition,
-                           std::optional<double> score)
+                           std::optional<double> score,
+                           const RecommendationEvaluationPolicy& policy = {})
 {
     const bool ready = score.has_value();
+    const std::string evaluationPolicy =
+        RecommendationEvaluationPolicyCanonicalText(policy);
+    const std::string recommendationSemantic =
+        "semantic_" + std::to_string(ordinal);
+    const std::string recommendationPolicy = "recommendation_policy";
+    const std::string evidence = "evidence_" + std::to_string(ordinal);
+    const std::string evaluationIdentity =
+        "experiment_recommendation_evaluation_identity_v1;evaluation_policy=" +
+        LengthText(evaluationPolicy) + ";recommendation_semantic=" +
+        LengthText(recommendationSemantic) + ";recommendation_policy=" +
+        LengthText(recommendationPolicy) + ";evidence=" + LengthText(evidence);
     const long long id = transaction.exec(
         "INSERT INTO experiment_recommendation_evaluation_result ("
         "recommendation_evaluation_run_id,recommendation_id,"
@@ -53,16 +70,17 @@ long long InsertEvaluation(pqxx::work& transaction,
         "disposition,reason_code,explanation,final_score,raw_positive_score,"
         "raw_penalty_score,raw_total_score,component_count,"
         "missing_evidence_count,ranking_ordinal) VALUES ($1,$2,$3,$4,$5,$6,"
-        "'recommendation_policy','recommendation_policy_hash',$7,$8,1,$9,"
-        "$10,$11,$12,$13,$13,'explanation',$14,$15,$16,$17,$18,$19,$20) "
+        "$7,$8,$9,$10,1,$11,"
+        "$12,$13,$14,$15,$15,'explanation',$16,$17,$18,$19,$20,$21,$22) "
         "RETURNING recommendation_evaluation_result_id;",
-        pqxx::params{runId, recommendationId,
-            "evaluation_identity_" + std::to_string(ordinal),
-            "evaluation_hash_" + std::to_string(ordinal),
-            "semantic_" + std::to_string(ordinal),
-            "semantic_hash_" + std::to_string(ordinal), scanId, experimentId,
-            analysisId, "evidence_" + std::to_string(ordinal),
-            "evidence_hash_" + std::to_string(ordinal),
+        pqxx::params{runId, recommendationId, evaluationIdentity,
+            RecommendationEvaluationCanonicalHash(evaluationIdentity),
+            recommendationSemantic,
+            RecommendationEvaluationCanonicalHash(recommendationSemantic),
+            recommendationPolicy,
+            RecommendationEvaluationCanonicalHash(recommendationPolicy),
+            scanId, experimentId, analysisId, evidence,
+            RecommendationEvaluationCanonicalHash(evidence),
             ready ? "eligible" : "ineligible", disposition, score,
             ready ? std::optional<double>{1.0} : std::nullopt,
             ready ? std::optional<double>{0.2} : std::nullopt,
@@ -180,6 +198,8 @@ int main()
                 "Database/migrations/034_experiment_recommendation_evaluation.sql"));
             setup.exec(ReadFile(
                 "Database/migrations/035_experiment_recommendation_ranking.sql"));
+            setup.exec(ReadFile(
+                "Database/migrations/077_campaign_manager_ranking_semantic_homogeneity.sql"));
             setup.exec("GRANT USAGE ON SCHEMA " + setup.quote_name(schema) +
                        " TO pqxx;");
             setup.exec("GRANT SELECT ON experiment,model,"
@@ -209,16 +229,27 @@ int main()
             scanId = fixture.exec(
                 "INSERT INTO experiment_recommendation_scan DEFAULT VALUES "
                 "RETURNING recommendation_scan_id;").one_row()[0].as<long long>();
+            const RecommendationEvaluationPolicy evaluationPolicy;
+            const std::string runCanonical = "run";
+            const std::string evidenceCanonical = "evidence";
             runId = fixture.exec(
                 "INSERT INTO experiment_recommendation_evaluation_run(status,"
                 "evaluation_run_identity_canonical,evaluation_run_identity_hash,"
                 "evaluation_policy_canonical,evaluation_policy_hash,"
                 "evaluation_version,evaluator_version,scoring_policy_canonical,"
                 "scoring_policy_hash,scoring_version,evidence_snapshot_canonical,"
-                "evidence_snapshot_hash,completed_at) VALUES ('completed','run',"
-                "'run_hash','evaluation_policy','evaluation_policy_hash',1,1,"
-                "'scoring_policy','scoring_policy_hash',1,'evidence',"
-                "'evidence_hash',now()) RETURNING recommendation_evaluation_run_id;")
+                "evidence_snapshot_hash,completed_at) VALUES ('completed',$1,"
+                "$2,$3,$4,1,1,$5,$6,1,$7,$8,now()) RETURNING "
+                "recommendation_evaluation_run_id;",
+                pqxx::params{runCanonical,
+                    RecommendationEvaluationCanonicalHash(runCanonical),
+                    RecommendationEvaluationPolicyCanonicalText(evaluationPolicy),
+                    RecommendationEvaluationPolicyHash(evaluationPolicy),
+                    RecommendationScoringPolicyCanonicalText(
+                        evaluationPolicy.scoringPolicy),
+                    RecommendationScoringPolicyHash(
+                        evaluationPolicy.scoringPolicy), evidenceCanonical,
+                    RecommendationEvaluationCanonicalHash(evidenceCanonical)})
                 .one_row()[0].as<long long>();
             const char* families[] = {"core_lr_mult", "core_lr_mult",
                                       "core_lr_mult", "core_lr_mult",
@@ -466,10 +497,13 @@ int main()
             RecommendationRankingPolicy{}, globalScope, 100, globalEvaluations);
         const std::string membership =
             RecommendationRankingMembershipCanonicalText(globalEvaluations);
+        const auto globalSemantics =
+            ValidateRecommendationRankingPopulationSemantics(globalEvaluations);
         RecommendationRankingSnapshotRequest malformedMembershipRequest{
             RecommendationRankingPolicy{}, globalScope, 100, "malformed_identity",
             "malformed_identity_hash", "not_canonical_membership",
-            RecommendationRankingCanonicalHash("not_canonical_membership")};
+            RecommendationRankingCanonicalHash("not_canonical_membership"),
+            globalSemantics};
         bool malformedMembershipRejected = false;
         try
         {
@@ -485,7 +519,7 @@ int main()
         RecommendationRankingSnapshotRequest invalidIdentityRequest{
             RecommendationRankingPolicy{}, globalScope, 100, identity,
             "incorrect_identity_hash", membership,
-            RecommendationRankingCanonicalHash(membership)};
+            RecommendationRankingCanonicalHash(membership), globalSemantics};
         bool invalidIdentityRejected = false;
         try
         {
@@ -501,7 +535,7 @@ int main()
         auto atomicSnapshot = BeginOrFindRecommendationRankingSnapshot(runtime, {
             RecommendationRankingPolicy{}, globalScope, 100, identity,
             RecommendationRankingCanonicalHash(identity), membership,
-            RecommendationRankingCanonicalHash(membership)});
+            RecommendationRankingCanonicalHash(membership), globalSemantics});
         auto ownershipMismatch = ranked;
         ownershipMismatch.front().evaluation.recommendationId += 1000;
         bool ownershipRejected = false;
@@ -523,11 +557,114 @@ int main()
         FailRecommendationRankingSnapshot(
             runtime, atomicSnapshot.snapshotId, "intentional_atomicity_test");
 
+        long long incompatibleRunId = -1;
+        {
+            RecommendationEvaluationPolicy incompatiblePolicy;
+            incompatiblePolicy.scoringPolicy.leaderScoreWeight = 0.30;
+            const std::string runCanonical = "incompatible_run";
+            const std::string evidenceCanonical = "incompatible_evidence";
+            pqxx::work fixture{ownerConnection};
+            fixture.exec("SET LOCAL search_path TO " +
+                         fixture.quote_name(schema) + ";");
+            incompatibleRunId = fixture.exec(
+                "INSERT INTO experiment_recommendation_evaluation_run(status,"
+                "evaluation_run_identity_canonical,evaluation_run_identity_hash,"
+                "evaluation_policy_canonical,evaluation_policy_hash,"
+                "evaluation_version,evaluator_version,scoring_policy_canonical,"
+                "scoring_policy_hash,scoring_version,evidence_snapshot_canonical,"
+                "evidence_snapshot_hash,completed_at) VALUES ('completed',$1,$2,"
+                "$3,$4,1,1,$5,$6,1,$7,$8,now()) RETURNING "
+                "recommendation_evaluation_run_id;",
+                pqxx::params{runCanonical,
+                    RecommendationEvaluationCanonicalHash(runCanonical),
+                    RecommendationEvaluationPolicyCanonicalText(
+                        incompatiblePolicy),
+                    RecommendationEvaluationPolicyHash(incompatiblePolicy),
+                    RecommendationScoringPolicyCanonicalText(
+                        incompatiblePolicy.scoringPolicy),
+                    RecommendationScoringPolicyHash(
+                        incompatiblePolicy.scoringPolicy), evidenceCanonical,
+                    RecommendationEvaluationCanonicalHash(evidenceCanonical)})
+                .one_row()[0].as<long long>();
+            const long long recommendationId = fixture.exec(
+                "SELECT recommendation_id FROM "
+                "experiment_recommendation_evaluation_result WHERE "
+                "recommendation_evaluation_result_id=$1;",
+                pqxx::params{evaluationIds.front()}).one_row()[0].as<long long>();
+            (void)InsertEvaluation(fixture, incompatibleRunId, recommendationId,
+                scanId, 1, 1, 1, "advisory_ready", 0.9,
+                incompatiblePolicy);
+            fixture.commit();
+        }
+        RecommendationRankingCommandRequest compatibleSingleRun = request;
+        compatibleSingleRun.scope.evaluationRunId = incompatibleRunId;
+        compatibleSingleRun.dryRun = true;
+        std::ostringstream compatibleOutput;
+        std::ostringstream compatibleErrors;
+        assert(RunRankExperimentRecommendationEvaluationsCommand(
+            runtimeConnectionString, compatibleSingleRun, compatibleOutput,
+            compatibleErrors) == 0);
+        assert(compatibleErrors.str().empty());
+
+        RecommendationRankingScope coreFamilyScope;
+        coreFamilyScope.type = RecommendationRankingScopeType::family;
+        coreFamilyScope.family = "core_lr_mult";
+        const std::vector<RecommendationRankingScope> heterogeneousScopes = {
+            scanScope, symbolScope, horizonScope, coreFamilyScope,
+            symbolHorizonScope, globalScope};
+        const std::size_t snapshotCountBeforeRejections =
+            ListRecommendationRankingSnapshots(runtime, 100).size();
+        for (const auto& heterogeneousScope : heterogeneousScopes)
+        {
+            RecommendationRankingCommandRequest rejected = request;
+            rejected.scope = heterogeneousScope;
+            rejected.limit = 1;
+            rejected.dryRun = true;
+            std::ostringstream rejectedOutput;
+            std::ostringstream rejectedErrors;
+            assert(RunRankExperimentRecommendationEvaluationsCommand(
+                runtimeConnectionString, rejected, rejectedOutput,
+                rejectedErrors) == 2);
+            assert(rejectedErrors.str().find(
+                "EXPERIMENT_RECOMMENDATION_RANKING_REJECTED_"
+                "HETEROGENEOUS_SEMANTICS") != std::string::npos);
+            assert(rejectedErrors.str().find(
+                "reason=heterogeneous_scoring_semantics") !=
+                std::string::npos);
+            assert(rejectedOutput.str().empty());
+        }
+        assert(ListRecommendationRankingSnapshots(runtime, 100).size() ==
+               snapshotCountBeforeRejections);
+        {
+            pqxx::work fixture{ownerConnection};
+            fixture.exec("SET LOCAL search_path TO " +
+                         fixture.quote_name(schema) + ";");
+            fixture.exec(
+                "DELETE FROM experiment_recommendation_evaluation_component "
+                "WHERE recommendation_evaluation_result_id IN ("
+                "SELECT recommendation_evaluation_result_id FROM "
+                "experiment_recommendation_evaluation_result WHERE "
+                "recommendation_evaluation_run_id=$1);",
+                pqxx::params{incompatibleRunId});
+            fixture.exec(
+                "DELETE FROM experiment_recommendation_evaluation_result "
+                "WHERE recommendation_evaluation_run_id=$1;",
+                pqxx::params{incompatibleRunId});
+            fixture.exec(
+                "DELETE FROM experiment_recommendation_evaluation_run "
+                "WHERE recommendation_evaluation_run_id=$1;",
+                pqxx::params{incompatibleRunId});
+            fixture.commit();
+        }
+
         long long boundedRunId = -1;
         {
             pqxx::work fixture{ownerConnection};
             fixture.exec("SET LOCAL search_path TO " +
                          fixture.quote_name(schema) + ";");
+            const RecommendationEvaluationPolicy evaluationPolicy;
+            const std::string boundedRunCanonical = "bounded_run";
+            const std::string boundedEvidenceCanonical = "bounded_evidence";
             boundedRunId = fixture.exec(
                 "INSERT INTO experiment_recommendation_evaluation_run(status,"
                 "evaluation_run_identity_canonical,evaluation_run_identity_hash,"
@@ -535,11 +672,20 @@ int main()
                 "evaluation_version,evaluator_version,scoring_policy_canonical,"
                 "scoring_policy_hash,scoring_version,evidence_snapshot_canonical,"
                 "evidence_snapshot_hash,completed_at) VALUES ('completed',"
-                "'bounded_run','bounded_run_hash','evaluation_policy',"
-                "'evaluation_policy_hash',1,1,'scoring_policy',"
-                "'scoring_policy_hash',1,'bounded_evidence',"
-                "'bounded_evidence_hash',now()) RETURNING "
-                "recommendation_evaluation_run_id;").one_row()[0].as<long long>();
+                "$1,$2,$3,$4,1,1,$5,$6,1,$7,$8,now()) RETURNING "
+                "recommendation_evaluation_run_id;",
+                pqxx::params{boundedRunCanonical,
+                    RecommendationEvaluationCanonicalHash(boundedRunCanonical),
+                    RecommendationEvaluationPolicyCanonicalText(evaluationPolicy),
+                    RecommendationEvaluationPolicyHash(evaluationPolicy),
+                    RecommendationScoringPolicyCanonicalText(
+                        evaluationPolicy.scoringPolicy),
+                    RecommendationScoringPolicyHash(
+                        evaluationPolicy.scoringPolicy),
+                    boundedEvidenceCanonical,
+                    RecommendationEvaluationCanonicalHash(
+                        boundedEvidenceCanonical)})
+                .one_row()[0].as<long long>();
             fixture.exec(
                 "WITH recommendations AS (INSERT INTO "
                 "experiment_recommendation(recommendation_scan_id,"
@@ -549,7 +695,20 @@ int main()
                 "'proposed','BOUND',12,'core_lr_mult','1',series::text FROM "
                 "generate_series(1,$3) series RETURNING recommendation_id), "
                 "ordered AS (SELECT recommendation_id,row_number() OVER "
-                "(ORDER BY recommendation_id) AS ordinal FROM recommendations) "
+                "(ORDER BY recommendation_id) AS ordinal FROM recommendations), "
+                "evidence_values AS (SELECT recommendation_id,ordinal,"
+                "'semantic_'||recommendation_id AS semantic_canonical,"
+                "'policy'::text AS recommendation_policy_canonical,"
+                "'evidence_'||recommendation_id AS evidence_canonical "
+                "FROM ordered), identities AS (SELECT *,"
+                "'experiment_recommendation_evaluation_identity_v1;"
+                "evaluation_policy='||octet_length($4::text)||':'||$4::text||"
+                "';recommendation_semantic='||octet_length(semantic_canonical)||"
+                "':'||semantic_canonical||';recommendation_policy='||"
+                "octet_length(recommendation_policy_canonical)||':'||"
+                "recommendation_policy_canonical||';evidence='||"
+                "octet_length(evidence_canonical)||':'||evidence_canonical "
+                "AS evaluation_identity FROM evidence_values) "
                 "INSERT INTO experiment_recommendation_evaluation_result("
                 "recommendation_evaluation_run_id,recommendation_id,"
                 "evaluation_identity_canonical,evaluation_identity_hash,"
@@ -558,14 +717,19 @@ int main()
                 "recommendation_scan_id,source_experiment_id,evidence_canonical,"
                 "evidence_hash,eligibility,disposition,reason_code,explanation,"
                 "component_count,missing_evidence_count,ranking_ordinal) SELECT "
-                "$2,recommendation_id,'bounded_'||recommendation_id,"
-                "'bounded_hash_'||recommendation_id,'semantic_'||recommendation_id,"
-                "'semantic_hash_'||recommendation_id,'policy','policy_hash',$1,1,"
-                "'evidence_'||recommendation_id,'evidence_hash_'||"
-                "recommendation_id,'ineligible','insufficient_evidence',"
-                "'insufficient','Insufficient.',0,1,ordinal FROM ordered;",
+                "$2,recommendation_id,evaluation_identity,"
+                "recommendation_semantic_tagged_fnv1a64(evaluation_identity),"
+                "semantic_canonical,recommendation_semantic_tagged_fnv1a64("
+                "semantic_canonical),recommendation_policy_canonical,"
+                "recommendation_semantic_tagged_fnv1a64("
+                "recommendation_policy_canonical),$1,1,evidence_canonical,"
+                "recommendation_semantic_tagged_fnv1a64(evidence_canonical),"
+                "'ineligible','insufficient_evidence','insufficient',"
+                "'Insufficient.',0,1,ordinal FROM identities;",
                 pqxx::params{scanId, boundedRunId,
-                             kMaximumRecommendationRankingInputs + 1});
+                             kMaximumRecommendationRankingInputs + 1,
+                             RecommendationEvaluationPolicyCanonicalText(
+                                 evaluationPolicy)});
             fixture.commit();
         }
         RecommendationRankingScope boundedScope;

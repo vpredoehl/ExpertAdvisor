@@ -70,13 +70,14 @@ long long InsertRecommendation(pqxx::work& transaction, long long scanId,
         "semantic_hash,invocation_configuration_canonical,policy_canonical,"
         "policy_hash,duplicate_type) VALUES ($1,'proposed',$2,$3,$4,"
         "'phase4bfixture',12,1,0.75,0.70,0.30,$5,'core_lr_mult','1','1.25',"
-        "0.25,0.25,NULL,$6,$6,$7,$8,$9,'policy_v1','policy_hash',"
+        "0.25,0.25,NULL,$6,$6,$7,$8,$9,'policy_v1',$10,"
         "'no_duplicate') RETURNING recommendation_id;",
         pqxx::params{scanId, sourceExperimentId,
             includeModel ? std::optional<long long>{30} : std::nullopt,
             sourceAnalysisId, evidenceCount, ordinal,
             identity.canonicalText, identity.hash,
-            "invocation_" + std::to_string(ordinal)})
+            "invocation_" + std::to_string(ordinal),
+            RecommendationCanonicalHash("policy_v1")})
         .one_row()[0].as<long long>();
 }
 
@@ -180,6 +181,9 @@ int main()
             "source_final_profitability_source_content_hash text,"
             "source_final_profitability_observation_identity_hash text);");
         setup.exec(ReadFile("Database/migrations/034_experiment_recommendation_evaluation.sql"));
+        setup.exec(ReadFile("Database/migrations/035_experiment_recommendation_ranking.sql"));
+        setup.exec(ReadFile(
+            "Database/migrations/077_campaign_manager_ranking_semantic_homogeneity.sql"));
         setup.exec(
             "ALTER TABLE experiment_recommendation_evaluation_result "
             "ADD final_profitability_provenance_version integer,"
@@ -440,7 +444,8 @@ int main()
         const auto loadedReady = std::find_if(loaded.begin(), loaded.end(),
             [&](const auto& row) { return row.recommendationId == ready->recommendationId; });
         assert(loadedReady != loaded.end());
-        auto mismatch = EvaluateExperimentRecommendation({}, loadedReady->input);
+        auto mismatch = EvaluateExperimentRecommendation(
+            concurrentRequest.policy, loadedReady->input);
         mismatch = RankRecommendationEvaluations({mismatch}).front();
         mismatch.explanation = "conflicting retry";
         bool retryMismatch = false;
@@ -482,11 +487,13 @@ int main()
         conflictRunRequest.policy = {};
         conflictRunRequest.filters = filters;
         conflictRunRequest.runIdentityCanonical = "conflict_target_run";
-        conflictRunRequest.runIdentityHash = "fnv1a64:conflict_target";
+        conflictRunRequest.runIdentityHash = RecommendationEvaluationCanonicalHash(
+            conflictRunRequest.runIdentityCanonical);
         conflictRunRequest.evidenceSnapshotCanonical =
             "conflict_target_snapshot";
         conflictRunRequest.evidenceSnapshotHash =
-            "fnv1a64:conflict_target_snapshot";
+            RecommendationEvaluationCanonicalHash(
+                conflictRunRequest.evidenceSnapshotCanonical);
         const auto conflictRun = BeginOrFindRecommendationEvaluationRun(
             runtime, conflictRunRequest);
         auto firstConflictResult = RankRecommendationEvaluations({
@@ -523,9 +530,9 @@ int main()
                 runtime, {conflictRun.evaluationRunId,
                           additionalLoaded->input, secondConflictResult});
         }
-        catch (const pqxx::unique_violation& error)
+        catch (const pqxx::check_violation& error)
         {
-            duplicateIdentityRejected = error.sqlstate() == "23505";
+            duplicateIdentityRejected = error.sqlstate() == "23514";
         }
         assert(duplicateIdentityRejected);
 
@@ -603,9 +610,11 @@ int main()
         atomicRunRequest.policy = {};
         atomicRunRequest.filters = filters;
         atomicRunRequest.runIdentityCanonical = "atomic_failure_run";
-        atomicRunRequest.runIdentityHash = "fnv1a64:atomic_failure";
+        atomicRunRequest.runIdentityHash = RecommendationEvaluationCanonicalHash(
+            atomicRunRequest.runIdentityCanonical);
         atomicRunRequest.evidenceSnapshotCanonical = "atomic_failure_snapshot";
-        atomicRunRequest.evidenceSnapshotHash = "fnv1a64:atomic_snapshot";
+        atomicRunRequest.evidenceSnapshotHash = RecommendationEvaluationCanonicalHash(
+            atomicRunRequest.evidenceSnapshotCanonical);
         const auto atomicRun = BeginOrFindRecommendationEvaluationRun(
             runtime, atomicRunRequest);
         auto invalidComponentResult = EvaluateExperimentRecommendation(

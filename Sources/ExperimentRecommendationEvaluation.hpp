@@ -30,6 +30,47 @@ std::string RecommendationEvaluationPolicyHash(
 // Callers must persist and compare the canonical text as authoritative.
 std::string RecommendationEvaluationCanonicalHash(const std::string& canonical);
 
+struct RecommendationEvaluationSemanticIdentity
+{
+    std::string canonical;
+    std::string hash;
+    int version = 0;
+
+    bool operator==(const RecommendationEvaluationSemanticIdentity&) const = default;
+};
+
+std::optional<std::string> ValidateRecommendationEvaluationPolicyProvenance(
+    const std::string& evaluationPolicyCanonical,
+    const std::string& evaluationPolicyHash,
+    int evaluationVersion,
+    int evaluatorVersion,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion);
+RecommendationEvaluationSemanticIdentity
+RecommendationEvaluationSemanticIdentityForPolicy(
+    const RecommendationEvaluationPolicy& policy);
+RecommendationEvaluationSemanticIdentity
+RecommendationEvaluationSemanticIdentityFromPolicyProvenance(
+    const std::string& evaluationPolicyCanonical,
+    const std::string& evaluationPolicyHash,
+    int evaluationVersion,
+    int evaluatorVersion,
+    const RecommendationScoringSemanticIdentity& scoringSemanticIdentity,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion);
+std::optional<std::string> ValidateRecommendationEvaluationSemanticIdentity(
+    const RecommendationEvaluationSemanticIdentity& identity,
+    const std::string& evaluationPolicyCanonical,
+    const std::string& evaluationPolicyHash,
+    int evaluationVersion,
+    int evaluatorVersion,
+    const RecommendationScoringSemanticIdentity& scoringSemanticIdentity,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion);
+
 enum class RecommendationEligibility
 {
     eligible,
@@ -93,8 +134,11 @@ struct RecommendationEvaluationResult
     std::string evaluationPolicyHash;
     int evaluationVersion = 0;
     int evaluatorVersion = 0;
+    std::string scoringPolicyCanonical;
     std::string scoringPolicyHash;
     int scoringVersion = 0;
+    RecommendationScoringSemanticIdentity scoringSemanticIdentity;
+    RecommendationEvaluationSemanticIdentity evaluationSemanticIdentity;
     std::string evidenceCanonical;
     std::string evidenceHash;
     std::string evaluationIdentityCanonical;

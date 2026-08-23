@@ -28,6 +28,11 @@ RecommendationRankingEvaluation Evaluation(
     const std::string& semantic,
     const std::string& family = "core_lr_mult")
 {
+    const RecommendationEvaluationPolicy policy;
+    const auto scoringSemantic =
+        RecommendationScoringSemanticIdentityForPolicy(policy.scoringPolicy);
+    const auto evaluationSemantic =
+        RecommendationEvaluationSemanticIdentityForPolicy(policy);
     RecommendationRankingEvaluation value;
     value.evaluationResultId = id;
     value.evaluationRunId = 10;
@@ -44,14 +49,20 @@ RecommendationRankingEvaluation Evaluation(
     value.recommendationSemanticHash = semantic;
     value.evaluationIdentityCanonical = "evaluation_canonical_" +
         std::to_string(id);
-    value.evaluationIdentityHash = "evaluation_hash_" + std::to_string(id);
-    value.evaluationPolicyCanonical = "evaluation_policy";
-    value.evaluationPolicyHash = "evaluation_policy_hash";
+    value.evaluationIdentityHash = RecommendationEvaluationCanonicalHash(
+        value.evaluationIdentityCanonical);
+    value.evaluationPolicyCanonical =
+        RecommendationEvaluationPolicyCanonicalText(policy);
+    value.evaluationPolicyHash = RecommendationEvaluationPolicyHash(policy);
     value.evaluationVersion = 1;
     value.evaluatorVersion = 1;
-    value.scoringPolicyCanonical = "scoring_policy";
-    value.scoringPolicyHash = "scoring_policy_hash";
+    value.scoringPolicyCanonical =
+        RecommendationScoringPolicyCanonicalText(policy.scoringPolicy);
+    value.scoringPolicyHash = RecommendationScoringPolicyHash(
+        policy.scoringPolicy);
     value.scoringVersion = 1;
+    value.scoringSemanticIdentity = scoringSemantic;
+    value.evaluationSemanticIdentity = evaluationSemantic;
     value.disposition = disposition;
     value.reasonCode = RecommendationEvaluationDispositionText(disposition);
     value.explanation = "explanation";
@@ -71,6 +82,25 @@ RecommendationRankingScope RunScope(long long id = 10)
     scope.type = RecommendationRankingScopeType::evaluationRun;
     scope.evaluationRunId = id;
     return scope;
+}
+
+void ApplyPolicy(RecommendationRankingEvaluation& value,
+                 const RecommendationEvaluationPolicy& policy)
+{
+    value.evaluationPolicyCanonical =
+        RecommendationEvaluationPolicyCanonicalText(policy);
+    value.evaluationPolicyHash = RecommendationEvaluationPolicyHash(policy);
+    value.evaluationVersion = policy.evaluationVersion;
+    value.evaluatorVersion = policy.evaluatorVersion;
+    value.scoringPolicyCanonical =
+        RecommendationScoringPolicyCanonicalText(policy.scoringPolicy);
+    value.scoringPolicyHash = RecommendationScoringPolicyHash(
+        policy.scoringPolicy);
+    value.scoringVersion = policy.scoringPolicy.scoringVersion;
+    value.scoringSemanticIdentity =
+        RecommendationScoringSemanticIdentityForPolicy(policy.scoringPolicy);
+    value.evaluationSemanticIdentity =
+        RecommendationEvaluationSemanticIdentityForPolicy(policy);
 }
 
 bool Throws(const auto& operation)
@@ -173,6 +203,85 @@ int main()
     assert(emptyRanking.empty());
     assert(RecommendationRankingMembershipCanonicalText({}) ==
            "experiment_recommendation_ranking_membership_v1;count=0");
+    const auto emptySemantics =
+        ValidateRecommendationRankingPopulationSemantics({});
+    assert(emptySemantics.state ==
+           RecommendationRankingPopulationSemanticState::empty);
+    assert(!emptySemantics.scoringIdentity && !emptySemantics.evaluationIdentity);
+
+    auto homogeneousLeft = Evaluation(101,
+        RecommendationEvaluationDisposition::advisoryReady, 0.7, "one");
+    auto homogeneousRight = Evaluation(102,
+        RecommendationEvaluationDisposition::advisoryReady, 0.6, "two");
+    homogeneousRight.evaluationRunId = 11;
+    const auto homogeneous = ValidateRecommendationRankingPopulationSemantics(
+        {homogeneousLeft, homogeneousRight});
+    assert(homogeneous.state ==
+           RecommendationRankingPopulationSemanticState::verifiedHomogeneous);
+    assert(homogeneous.distinctScoringIdentityCount == 1);
+    assert(homogeneous.distinctEvaluationIdentityCount == 1);
+
+    RecommendationEvaluationPolicy alternatePolicy;
+    alternatePolicy.scoringPolicy.leaderScoreWeight = 0.30;
+    auto incompatible = homogeneousRight;
+    incompatible.finalScore = homogeneousLeft.finalScore;
+    ApplyPolicy(incompatible, alternatePolicy);
+    const auto heterogeneous = ValidateRecommendationRankingPopulationSemantics(
+        {homogeneousLeft, incompatible});
+    assert(heterogeneous.reason == "heterogeneous_scoring_semantics");
+    assert(heterogeneous.evaluationRunIds == std::vector<long long>({10, 11}));
+    assert(Throws([&] {
+        RankRecommendationEvaluationEvidence(
+            policy, {homogeneousLeft, incompatible}, 1);
+    }));
+    incompatible.recommendationId = homogeneousLeft.recommendationId;
+    assert(Throws([&] {
+        RankRecommendationEvaluationEvidence(
+            policy, {homogeneousLeft, incompatible}, 2);
+    }));
+
+    auto inconsistentHash = homogeneousRight;
+    inconsistentHash.scoringSemanticIdentity.hash = "fnv1a64:0000000000000000";
+    assert(ValidateRecommendationRankingPopulationSemantics(
+        {homogeneousLeft, inconsistentHash}).reason ==
+        "invalid_scoring_semantic_provenance");
+    auto sameHashDifferentCanonical = homogeneousRight;
+    sameHashDifferentCanonical.scoringSemanticIdentity.canonical += ";different";
+    sameHashDifferentCanonical.scoringSemanticIdentity.hash =
+        homogeneousLeft.scoringSemanticIdentity.hash;
+    assert(ValidateRecommendationRankingPopulationSemantics(
+        {homogeneousLeft, sameHashDifferentCanonical}).reason ==
+        "invalid_scoring_semantic_provenance");
+    auto inconsistentEvaluationHash = homogeneousRight;
+    inconsistentEvaluationHash.evaluationSemanticIdentity.hash =
+        "fnv1a64:0000000000000000";
+    assert(ValidateRecommendationRankingPopulationSemantics(
+        {homogeneousLeft, inconsistentEvaluationHash}).reason ==
+        "invalid_evaluation_semantic_provenance");
+    auto inconsistentEvaluationCanonical = homogeneousRight;
+    inconsistentEvaluationCanonical.evaluationSemanticIdentity.canonical +=
+        ";different";
+    inconsistentEvaluationCanonical.evaluationSemanticIdentity.hash =
+        RecommendationEvaluationCanonicalHash(
+            inconsistentEvaluationCanonical.evaluationSemanticIdentity.canonical);
+    assert(ValidateRecommendationRankingPopulationSemantics(
+        {homogeneousLeft, inconsistentEvaluationCanonical}).reason ==
+        "invalid_evaluation_semantic_provenance");
+
+    const std::string homogeneousIdentity =
+        RecommendationRankingSnapshotIdentityCanonicalText(
+            policy, run, 1, {homogeneousLeft});
+    const std::string alternateIdentity =
+        RecommendationRankingSnapshotIdentityCanonicalText(
+            policy, run, 1, {incompatible});
+    assert(homogeneousIdentity != alternateIdentity);
+
+    for (const auto& protectedScope : allScopes)
+        assert(Throws([&] {
+            RecommendationRankingSnapshotIdentityCanonicalText(
+                policy, protectedScope, 1,
+                {homogeneousLeft, incompatible});
+        }));
 
     std::vector<RecommendationRankingEvaluation> inputs = {
         Evaluation(8, RecommendationEvaluationDisposition::invalidPersistedEvidence,
@@ -226,8 +335,11 @@ int main()
         RecommendationEvaluationDisposition::advisoryReady, 0.5, "same");
     auto fallbackRight = Evaluation(29,
         RecommendationEvaluationDisposition::advisoryReady, 0.5, "same");
-    fallbackLeft.evaluationIdentityHash = "same_hash";
-    fallbackRight.evaluationIdentityHash = "same_hash";
+    fallbackLeft.evaluationIdentityCanonical = "shared_identity";
+    fallbackRight.evaluationIdentityCanonical = "shared_identity";
+    fallbackLeft.evaluationIdentityHash = RecommendationEvaluationCanonicalHash(
+        fallbackLeft.evaluationIdentityCanonical);
+    fallbackRight.evaluationIdentityHash = fallbackLeft.evaluationIdentityHash;
     const auto collisionOrdered = RankRecommendationEvaluationEvidence(
         policy, {fallbackLeft, fallbackRight}, 2);
     assert(collisionOrdered[0].evaluation.evaluationResultId == 29);
@@ -241,8 +353,11 @@ int main()
         RecommendationEvaluationDisposition::advisoryReady, 0.0, "same");
     auto negativeZero = Evaluation(32,
         RecommendationEvaluationDisposition::advisoryReady, -0.0, "same");
-    positiveZero.evaluationIdentityHash = "same_hash";
-    negativeZero.evaluationIdentityHash = "same_hash";
+    positiveZero.evaluationIdentityCanonical = "signed_zero_identity";
+    negativeZero.evaluationIdentityCanonical = "signed_zero_identity";
+    positiveZero.evaluationIdentityHash = RecommendationEvaluationCanonicalHash(
+        positiveZero.evaluationIdentityCanonical);
+    negativeZero.evaluationIdentityHash = positiveZero.evaluationIdentityHash;
     assert(CanonicalRecommendationDouble(*positiveZero.finalScore) == "0");
     assert(CanonicalRecommendationDouble(*negativeZero.finalScore) == "0");
     assert(RankRecommendationEvaluationEvidence(
@@ -260,9 +375,11 @@ int main()
             policy, run, 100, inputs);
     const std::string membership =
         RecommendationRankingMembershipCanonicalText(inputs);
+    const auto populationSemantics =
+        ValidateRecommendationRankingPopulationSemantics(inputs);
     assert(identity ==
         RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
-            policy, run, 100, membership));
+            policy, run, 100, membership, populationSemantics));
     assert(identity == RecommendationRankingSnapshotIdentityCanonicalText(
                            policy, run, 100, inputs));
     auto membershipChanged = inputs;
@@ -286,6 +403,9 @@ int main()
     auto evaluationIdentityChanged = inputs;
     evaluationIdentityChanged.front().evaluationIdentityCanonical +=
         ";member[0].evaluation_result_id=1;NULL;global;\xc3\xa9";
+    evaluationIdentityChanged.front().evaluationIdentityHash =
+        RecommendationEvaluationCanonicalHash(
+            evaluationIdentityChanged.front().evaluationIdentityCanonical);
     assert(identity != RecommendationRankingSnapshotIdentityCanonicalText(
                            policy, run, 100, evaluationIdentityChanged));
     auto resultIdChanged = inputs;
@@ -299,6 +419,11 @@ int main()
     sharedCanonicalLeft.evaluationIdentityCanonical = "shared;member[1]=10";
     sharedCanonicalRight.evaluationIdentityCanonical =
         sharedCanonicalLeft.evaluationIdentityCanonical;
+    sharedCanonicalLeft.evaluationIdentityHash =
+        RecommendationEvaluationCanonicalHash(
+            sharedCanonicalLeft.evaluationIdentityCanonical);
+    sharedCanonicalRight.evaluationIdentityHash =
+        sharedCanonicalLeft.evaluationIdentityHash;
     const std::string sharedMembership =
         RecommendationRankingMembershipCanonicalText(
             {sharedCanonicalRight, sharedCanonicalLeft});
@@ -309,7 +434,7 @@ int main()
            std::string::npos);
     assert(Throws([&] {
         RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
-            policy, run, 100, "");
+            policy, run, 100, "", populationSemantics);
     }));
     const std::vector<std::string> malformedMemberships = {
         "not_a_membership",
@@ -325,7 +450,7 @@ int main()
     for (const auto& malformedMembership : malformedMemberships)
         assert(Throws([&] {
             RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
-                policy, run, 100, malformedMembership);
+                policy, run, 100, malformedMembership, populationSemantics);
         }));
     const std::string unsortedMembership =
         "experiment_recommendation_ranking_membership_v1;count=2;"
@@ -333,7 +458,7 @@ int main()
         "member[1].evaluation_identity=1:a;member[1].evaluation_result_id=1";
     assert(Throws([&] {
         RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
-            policy, run, 100, unsortedMembership);
+            policy, run, 100, unsortedMembership, populationSemantics);
     }));
     const std::string duplicateResultMembership =
         "experiment_recommendation_ranking_membership_v1;count=2;"
@@ -341,7 +466,7 @@ int main()
         "member[1].evaluation_identity=1:b;member[1].evaluation_result_id=1";
     assert(Throws([&] {
         RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
-            policy, run, 100, duplicateResultMembership);
+            policy, run, 100, duplicateResultMembership, populationSemantics);
     }));
     assert(Throws([&] {
         auto invalid = inputs.front();
@@ -444,23 +569,28 @@ int main()
     assert(comparison.state == RecommendationComparisonState::incomparableScope);
     right.scoringVersion = 2;
     assert(CompareRecommendationEvaluations(left, right).state ==
-           RecommendationComparisonState::incomparablePolicyVersion);
+           RecommendationComparisonState::invalidScoringProvenance);
     right = Evaluation(21,
         RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
     right.evaluationPolicyCanonical = "different_evaluation_policy";
     right.evaluationPolicyHash = left.evaluationPolicyHash;
     assert(CompareRecommendationEvaluations(left, right).state ==
-           RecommendationComparisonState::incomparablePolicyVersion);
+           RecommendationComparisonState::invalidEvaluationProvenance);
     right = Evaluation(21,
         RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
     right.evaluationPolicyHash = "different_hash_but_same_canonical";
     assert(CompareRecommendationEvaluations(left, right).state ==
-           RecommendationComparisonState::comparable);
+           RecommendationComparisonState::invalidEvaluationProvenance);
+    right = Evaluation(21,
+        RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
+    right.evaluationIdentityHash = "fnv1a64:0000000000000000";
+    assert(CompareRecommendationEvaluations(left, right).state ==
+           RecommendationComparisonState::invalidEvaluationProvenance);
     right = Evaluation(21,
         RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
     right.evaluatorVersion = 2;
     assert(CompareRecommendationEvaluations(left, right).state ==
-           RecommendationComparisonState::incomparableEvaluatorVersion);
+           RecommendationComparisonState::invalidEvaluationProvenance);
     right = Evaluation(21,
         RecommendationEvaluationDisposition::advisoryReady, 0.7, "right",
         "head_lr_mult");

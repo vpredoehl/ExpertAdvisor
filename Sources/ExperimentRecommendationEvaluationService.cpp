@@ -234,8 +234,28 @@ void PrintHumanSummary(
 
 void PrintRun(
     std::ostream& output,
-    const PersistedRecommendationEvaluationRun& run)
+    const PersistedRecommendationEvaluationRun& run,
+    bool includeCanonical)
 {
+    const auto policyError = ValidateRecommendationEvaluationPolicyProvenance(
+        run.evaluationPolicyCanonical, run.evaluationPolicyHash,
+        run.evaluationVersion, run.evaluatorVersion,
+        run.scoringPolicyCanonical, run.scoringPolicyHash, run.scoringVersion);
+    std::optional<RecommendationScoringSemanticIdentity> scoringSemantic;
+    std::optional<RecommendationEvaluationSemanticIdentity> evaluationSemantic;
+    if (!policyError)
+    {
+        scoringSemantic =
+            RecommendationScoringSemanticIdentityFromPolicyProvenance(
+                run.scoringPolicyCanonical, run.scoringPolicyHash,
+                run.scoringVersion);
+        evaluationSemantic =
+            RecommendationEvaluationSemanticIdentityFromPolicyProvenance(
+                run.evaluationPolicyCanonical, run.evaluationPolicyHash,
+                run.evaluationVersion, run.evaluatorVersion, *scoringSemantic,
+                run.scoringPolicyCanonical, run.scoringPolicyHash,
+                run.scoringVersion);
+    }
     output << "EXPERIMENT_RECOMMENDATION_EVALUATION_RUN"
            << ",evaluation_run_id=" << run.evaluationRunId
            << ",status=" << RecommendationMachineText(run.status)
@@ -247,6 +267,23 @@ void PrintRun(
            << ",scoring_policy_hash="
            << RecommendationMachineText(run.scoringPolicyHash)
            << ",scoring_version=" << run.scoringVersion
+           << ",semantic_provenance_valid="
+           << (policyError ? "false" : "true")
+           << ",semantic_provenance_reason="
+           << (policyError ? RecommendationMachineText(*policyError)
+                           : "verified")
+           << ",scoring_semantic_hash="
+           << (scoringSemantic
+                   ? RecommendationMachineText(scoringSemantic->hash) : "NULL")
+           << ",scoring_semantic_version="
+           << (scoringSemantic ? std::to_string(scoringSemantic->version)
+                               : "NULL")
+           << ",evaluation_semantic_hash="
+           << (evaluationSemantic
+                   ? RecommendationMachineText(evaluationSemantic->hash) : "NULL")
+           << ",evaluation_semantic_version="
+           << (evaluationSemantic ? std::to_string(evaluationSemantic->version)
+                                  : "NULL")
            << ",recommendation_scan_filter="
            << OptionalNumber(run.recommendationScanFilter)
            << ",recommendation_id_filter="
@@ -268,6 +305,19 @@ void PrintRun(
            << (run.errorMessage ? RecommendationMachineText(*run.errorMessage) : "NULL")
            << ',';
     PrintSafety(output);
+    if (includeCanonical)
+        output << ",scoring_policy_canonical="
+               << RecommendationMachineText(run.scoringPolicyCanonical)
+               << ",evaluation_policy_canonical="
+               << RecommendationMachineText(run.evaluationPolicyCanonical)
+               << ",scoring_semantic_canonical="
+               << (scoringSemantic
+                       ? RecommendationMachineText(scoringSemantic->canonical)
+                       : "NULL")
+               << ",evaluation_semantic_canonical="
+               << (evaluationSemantic
+                       ? RecommendationMachineText(evaluationSemantic->canonical)
+                       : "NULL");
     output << '\n';
 }
 
@@ -480,7 +530,7 @@ int RunListExperimentRecommendationEvaluationRunsCommand(
 {
     pqxx::connection connection{connectionString};
     const auto runs = ListRecommendationEvaluationRuns(connection, limit);
-    for (const auto& run : runs) PrintRun(output, run);
+    for (const auto& run : runs) PrintRun(output, run, false);
     output << "EXPERIMENT_RECOMMENDATION_EVALUATION_RUN_LIST_COMPLETE,count="
            << runs.size() << '\n';
     return 0;
@@ -494,7 +544,7 @@ int RunExperimentRecommendationEvaluationRunStatusCommand(
     pqxx::connection connection{connectionString};
     const auto run = FindRecommendationEvaluationRun(connection, evaluationRunId);
     if (!run) return 3;
-    PrintRun(output, *run);
+    PrintRun(output, *run, true);
     return 0;
 }
 

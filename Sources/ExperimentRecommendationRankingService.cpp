@@ -4,6 +4,7 @@
 #include "ExperimentRecommendationService.hpp"
 
 #include <stdexcept>
+#include <sstream>
 
 namespace EA::ExperimentRecommendation
 {
@@ -29,7 +30,20 @@ std::string OptionalText(const std::optional<std::string>& value)
 void PrintSafety(std::ostream& output)
 {
     output << "experiment_created=false,experiment_queued=false,"
-              "scheduler_modified=false";
+              "scheduler_modified=false,profitability_weight=0,"
+              "profitability_score_contribution=0";
+}
+
+template <typename Value>
+std::string Joined(const std::vector<Value>& values)
+{
+    std::ostringstream out;
+    for (std::size_t index = 0; index < values.size(); ++index)
+    {
+        if (index != 0) out << ';';
+        out << values[index];
+    }
+    return out.str();
 }
 
 RecommendationRankingCounts CountMembers(
@@ -53,13 +67,16 @@ RecommendationRankingCounts CountMembers(
 }
 
 void PrintSnapshot(std::ostream& output,
-                   const PersistedRecommendationRankingSnapshot& snapshot)
+                   const PersistedRecommendationRankingSnapshot& snapshot,
+                   bool includeCanonical)
 {
     output << "EXPERIMENT_RECOMMENDATION_RANKING_SNAPSHOT"
            << ",ranking_snapshot_id=" << snapshot.snapshotId
            << ",status=" << RecommendationMachineText(snapshot.status)
            << ",ranking_snapshot_identity_hash="
            << RecommendationMachineText(snapshot.snapshotIdentityHash)
+           << ",ranking_snapshot_identity_version="
+           << snapshot.snapshotIdentityVersion
            << ",ranking_policy_version=" << snapshot.rankingVersion
            << ",ranking_policy_hash="
            << RecommendationMachineText(snapshot.rankingPolicyHash)
@@ -70,12 +87,50 @@ void PrintSnapshot(std::ostream& output,
                   RecommendationRankingScopeValueText(snapshot.scope))
            << ",source_evaluation_run_id="
            << OptionalNumber(snapshot.scope.evaluationRunId)
+           << ",population_semantic_state="
+           << RecommendationRankingPopulationSemanticStateText(
+                  snapshot.populationSemanticState)
+           << ",scoring_semantic_hash="
+           << (snapshot.scoringSemanticIdentity
+                   ? RecommendationMachineText(
+                         snapshot.scoringSemanticIdentity->hash)
+                   : "NULL")
+           << ",scoring_semantic_version="
+           << (snapshot.scoringSemanticIdentity
+                   ? std::to_string(snapshot.scoringSemanticIdentity->version)
+                   : "NULL")
+           << ",evaluation_semantic_hash="
+           << (snapshot.evaluationSemanticIdentity
+                   ? RecommendationMachineText(
+                         snapshot.evaluationSemanticIdentity->hash)
+                   : "NULL")
+           << ",evaluation_semantic_version="
+           << (snapshot.evaluationSemanticIdentity
+                   ? std::to_string(snapshot.evaluationSemanticIdentity->version)
+                   : "NULL")
+           << ",distinct_scoring_semantic_count="
+           << snapshot.distinctScoringSemanticCount
+           << ",distinct_evaluation_semantic_count="
+           << snapshot.distinctEvaluationSemanticCount
+           << ",homogeneity_validation_result="
+           << RecommendationMachineText(snapshot.homogeneityValidationResult)
            << ",member_count=" << snapshot.counts.memberCount
            << ",advisory_ready_count=" << snapshot.counts.advisoryReadyCount
            << ",blocked_count=" << snapshot.counts.blockedCount
            << ",non_actionable_count=" << snapshot.counts.nonActionableCount
            << ",persisted=true,";
     PrintSafety(output);
+    if (includeCanonical)
+        output << ",scoring_semantic_canonical="
+               << (snapshot.scoringSemanticIdentity
+                       ? RecommendationMachineText(
+                             snapshot.scoringSemanticIdentity->canonical)
+                       : "NULL")
+               << ",evaluation_semantic_canonical="
+               << (snapshot.evaluationSemanticIdentity
+                       ? RecommendationMachineText(
+                             snapshot.evaluationSemanticIdentity->canonical)
+                       : "NULL");
     output << '\n';
 }
 
@@ -261,6 +316,36 @@ int RunRankExperimentRecommendationEvaluationsCommand(
     if (!request.dryRun && !RecommendationRankingSchemaExists(connection))
         throw std::runtime_error("recommendation_ranking_schema_unavailable");
     const auto evaluations = LoadEvaluationsForRanking(connection, request.scope);
+    const auto semantics =
+        ValidateRecommendationRankingPopulationSemantics(evaluations);
+    if (!semantics.acceptableForNewSnapshot())
+    {
+        errors << "EXPERIMENT_RECOMMENDATION_RANKING_REJECTED_HETEROGENEOUS_SEMANTICS"
+               << ",scope="
+               << RecommendationRankingScopeTypeText(request.scope.type)
+               << ",scope_value="
+               << RecommendationMachineText(
+                      RecommendationRankingScopeValueText(request.scope))
+               << ",member_count=" << evaluations.size()
+               << ",reason=" << RecommendationMachineText(semantics.reason)
+               << ",evaluation_result_ids="
+               << RecommendationMachineText(Joined(semantics.evaluationResultIds))
+               << ",conflicting_evaluation_run_ids="
+               << RecommendationMachineText(Joined(semantics.evaluationRunIds))
+               << ",conflicting_scoring_semantic_hashes="
+               << RecommendationMachineText(
+                      Joined(semantics.scoringSemanticHashes))
+               << ",conflicting_evaluation_semantic_hashes="
+               << RecommendationMachineText(
+                      Joined(semantics.evaluationSemanticHashes))
+               << ",distinct_scoring_semantic_count="
+               << semantics.distinctScoringIdentityCount
+               << ",distinct_evaluation_semantic_count="
+               << semantics.distinctEvaluationIdentityCount << ',';
+        PrintSafety(errors);
+        errors << '\n';
+        return 2;
+    }
     const auto members = RankRecommendationEvaluationEvidence(
         request.policy, evaluations, request.limit);
     const std::string membership =
@@ -284,6 +369,29 @@ int RunRankExperimentRecommendationEvaluationsCommand(
                   RecommendationRankingScopeValueText(request.scope))
            << ",source_evaluation_run_id="
            << OptionalNumber(request.scope.evaluationRunId)
+           << ",population_semantic_state="
+           << RecommendationRankingPopulationSemanticStateText(semantics.state)
+           << ",scoring_semantic_hash="
+           << (semantics.scoringIdentity
+                   ? RecommendationMachineText(semantics.scoringIdentity->hash)
+                   : "NULL")
+           << ",scoring_semantic_version="
+           << (semantics.scoringIdentity
+                   ? std::to_string(semantics.scoringIdentity->version) : "NULL")
+           << ",evaluation_semantic_hash="
+           << (semantics.evaluationIdentity
+                   ? RecommendationMachineText(semantics.evaluationIdentity->hash)
+                   : "NULL")
+           << ",evaluation_semantic_version="
+           << (semantics.evaluationIdentity
+                   ? std::to_string(semantics.evaluationIdentity->version)
+                   : "NULL")
+           << ",distinct_scoring_semantic_count="
+           << semantics.distinctScoringIdentityCount
+           << ",distinct_evaluation_semantic_count="
+           << semantics.distinctEvaluationIdentityCount
+           << ",homogeneity_validation_result="
+           << RecommendationMachineText(semantics.reason)
            << ",member_count=" << counts.memberCount
            << ",advisory_ready_count=" << counts.advisoryReadyCount
            << ",blocked_count=" << counts.blockedCount
@@ -309,7 +417,8 @@ int RunRankExperimentRecommendationEvaluationsCommand(
     {
         snapshot = BeginOrFindRecommendationRankingSnapshot(connection, {
             request.policy, request.scope, request.limit, identity, identityHash,
-            membership, RecommendationRankingCanonicalHash(membership)});
+            membership, RecommendationRankingCanonicalHash(membership),
+            semantics});
         if (snapshot.status == "failed")
             throw std::runtime_error("recommendation_ranking_snapshot_failed");
         const auto persisted = PersistRecommendationRankingMembers(
@@ -354,7 +463,7 @@ int RunListExperimentRecommendationRankingSnapshotsCommand(
 {
     pqxx::connection connection{connectionString};
     const auto snapshots = ListRecommendationRankingSnapshots(connection, limit);
-    for (const auto& snapshot : snapshots) PrintSnapshot(output, snapshot);
+    for (const auto& snapshot : snapshots) PrintSnapshot(output, snapshot, false);
     output << "EXPERIMENT_RECOMMENDATION_RANKING_SNAPSHOT_LIST_COMPLETE,count="
            << snapshots.size() << '\n';
     return 0;
@@ -368,7 +477,7 @@ int RunExperimentRecommendationRankingStatusCommand(
     pqxx::connection connection{connectionString};
     const auto snapshot = FindRecommendationRankingSnapshot(connection, snapshotId);
     if (!snapshot) return 3;
-    PrintSnapshot(output, *snapshot);
+    PrintSnapshot(output, *snapshot, true);
     return 0;
 }
 

@@ -10,6 +10,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 
 namespace EA::ExperimentRecommendation
@@ -63,6 +64,36 @@ std::string LengthText(const std::string& value)
     return std::to_string(value.size()) + ":" + value;
 }
 
+constexpr std::string_view kEvaluationSemanticContract =
+    "experiment_recommendation_evaluation_semantic_v1;semantic_version=1;"
+    "algorithm=advisory_evaluator_v1;"
+    "classification=invalid,unsupported,insufficient,stale,pending_duplicate,"
+    "active_duplicate,completed_duplicate,advisory_ready_v1;"
+    "eligibility=only_advisory_ready_is_eligible_v1;"
+    "disposition_precedence=persisted_evidence_then_family_then_missing_then_stale_then_duplicate_then_score_v1;";
+
+std::string EvaluationPolicyCanonicalFromProvenance(
+    int evaluationVersion,
+    int evaluatorVersion,
+    const std::string& scoringPolicyCanonical)
+{
+    return "experiment_recommendation_evaluation_policy_v1;evaluation_version=" +
+        std::to_string(evaluationVersion) + ";evaluator_version=" +
+        std::to_string(evaluatorVersion) + ";scoring_policy=" +
+        LengthText(scoringPolicyCanonical);
+}
+
+std::string EvaluationSemanticCanonical(
+    int evaluationVersion,
+    int evaluatorVersion,
+    const RecommendationScoringSemanticIdentity& scoringSemanticIdentity)
+{
+    return std::string{kEvaluationSemanticContract} +
+        "evaluation_version=" + std::to_string(evaluationVersion) +
+        ";evaluator_version=" + std::to_string(evaluatorVersion) +
+        ";scoring_semantic=" + LengthText(scoringSemanticIdentity.canonical);
+}
+
 bool IsSupportedParameter(const std::string& value)
 {
     return value == kCoreLrMult || value == kHeadLrMult ||
@@ -107,9 +138,15 @@ RecommendationEvaluationResult BaseResult(
     result.evaluationPolicyHash = RecommendationEvaluationPolicyHash(policy);
     result.evaluationVersion = policy.evaluationVersion;
     result.evaluatorVersion = policy.evaluatorVersion;
+    result.scoringPolicyCanonical = RecommendationScoringPolicyCanonicalText(
+        policy.scoringPolicy);
     result.scoringPolicyHash = RecommendationScoringPolicyHash(
         policy.scoringPolicy);
     result.scoringVersion = policy.scoringPolicy.scoringVersion;
+    result.scoringSemanticIdentity =
+        RecommendationScoringSemanticIdentityForPolicy(policy.scoringPolicy);
+    result.evaluationSemanticIdentity =
+        RecommendationEvaluationSemanticIdentityForPolicy(policy);
     result.evidenceCanonical =
         RecommendationEvaluationEvidenceCanonicalText(input);
     result.evidenceHash = StableHash(result.evidenceCanonical);
@@ -202,6 +239,101 @@ std::string RecommendationEvaluationPolicyHash(
 std::string RecommendationEvaluationCanonicalHash(const std::string& canonical)
 {
     return StableHash(canonical);
+}
+
+std::optional<std::string> ValidateRecommendationEvaluationPolicyProvenance(
+    const std::string& evaluationPolicyCanonical,
+    const std::string& evaluationPolicyHash,
+    int evaluationVersion,
+    int evaluatorVersion,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion)
+{
+    if (evaluationVersion != 1) return "unsupported_evaluation_version";
+    if (evaluatorVersion != 1) return "unsupported_evaluator_version";
+    if (const auto error = ValidateRecommendationScoringPolicyProvenance(
+            scoringPolicyCanonical, scoringPolicyHash, scoringVersion))
+        return "invalid_embedded_scoring_policy:" + *error;
+    if (evaluationPolicyCanonical != EvaluationPolicyCanonicalFromProvenance(
+            evaluationVersion, evaluatorVersion, scoringPolicyCanonical))
+        return "inconsistent_evaluation_policy_canonical";
+    if (evaluationPolicyHash != StableHash(evaluationPolicyCanonical))
+        return "inconsistent_evaluation_policy_hash";
+    return std::nullopt;
+}
+
+RecommendationEvaluationSemanticIdentity
+RecommendationEvaluationSemanticIdentityForPolicy(
+    const RecommendationEvaluationPolicy& policy)
+{
+    const auto scoring = RecommendationScoringSemanticIdentityForPolicy(
+        policy.scoringPolicy);
+    return RecommendationEvaluationSemanticIdentityFromPolicyProvenance(
+        RecommendationEvaluationPolicyCanonicalText(policy),
+        RecommendationEvaluationPolicyHash(policy), policy.evaluationVersion,
+        policy.evaluatorVersion, scoring,
+        RecommendationScoringPolicyCanonicalText(policy.scoringPolicy),
+        RecommendationScoringPolicyHash(policy.scoringPolicy),
+        policy.scoringPolicy.scoringVersion);
+}
+
+RecommendationEvaluationSemanticIdentity
+RecommendationEvaluationSemanticIdentityFromPolicyProvenance(
+    const std::string& evaluationPolicyCanonical,
+    const std::string& evaluationPolicyHash,
+    int evaluationVersion,
+    int evaluatorVersion,
+    const RecommendationScoringSemanticIdentity& scoringSemanticIdentity,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion)
+{
+    if (const auto error = ValidateRecommendationScoringSemanticIdentity(
+            scoringSemanticIdentity, scoringPolicyCanonical, scoringPolicyHash,
+            scoringVersion))
+        throw std::invalid_argument(*error);
+    if (const auto error = ValidateRecommendationEvaluationPolicyProvenance(
+            evaluationPolicyCanonical, evaluationPolicyHash, evaluationVersion,
+            evaluatorVersion, scoringPolicyCanonical, scoringPolicyHash,
+            scoringVersion))
+        throw std::invalid_argument(*error);
+    RecommendationEvaluationSemanticIdentity identity;
+    identity.version = 1;
+    identity.canonical = EvaluationSemanticCanonical(
+        evaluationVersion, evaluatorVersion, scoringSemanticIdentity);
+    identity.hash = StableHash(identity.canonical);
+    return identity;
+}
+
+std::optional<std::string> ValidateRecommendationEvaluationSemanticIdentity(
+    const RecommendationEvaluationSemanticIdentity& identity,
+    const std::string& evaluationPolicyCanonical,
+    const std::string& evaluationPolicyHash,
+    int evaluationVersion,
+    int evaluatorVersion,
+    const RecommendationScoringSemanticIdentity& scoringSemanticIdentity,
+    const std::string& scoringPolicyCanonical,
+    const std::string& scoringPolicyHash,
+    int scoringVersion)
+{
+    if (const auto error = ValidateRecommendationScoringSemanticIdentity(
+            scoringSemanticIdentity, scoringPolicyCanonical, scoringPolicyHash,
+            scoringVersion))
+        return "invalid_scoring_semantic:" + *error;
+    if (const auto error = ValidateRecommendationEvaluationPolicyProvenance(
+            evaluationPolicyCanonical, evaluationPolicyHash, evaluationVersion,
+            evaluatorVersion, scoringPolicyCanonical, scoringPolicyHash,
+            scoringVersion))
+        return *error;
+    if (identity.version != 1)
+        return "unsupported_evaluation_semantic_version";
+    if (identity.canonical != EvaluationSemanticCanonical(
+            evaluationVersion, evaluatorVersion, scoringSemanticIdentity))
+        return "inconsistent_evaluation_semantic_canonical";
+    if (identity.hash != StableHash(identity.canonical))
+        return "inconsistent_evaluation_semantic_hash";
+    return std::nullopt;
 }
 
 std::string RecommendationEligibilityText(RecommendationEligibility value)

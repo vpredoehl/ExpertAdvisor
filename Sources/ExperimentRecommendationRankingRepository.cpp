@@ -41,6 +41,20 @@ RecommendationRankingScopeType ParseScopeType(const std::string& value)
     throw std::runtime_error("invalid_persisted_ranking_scope_type");
 }
 
+RecommendationRankingPopulationSemanticState ParsePopulationSemanticState(
+    const std::string& value)
+{
+    if (value == "verified_homogeneous")
+        return RecommendationRankingPopulationSemanticState::verifiedHomogeneous;
+    if (value == "empty")
+        return RecommendationRankingPopulationSemanticState::empty;
+    if (value == "legacy_heterogeneous")
+        return RecommendationRankingPopulationSemanticState::legacyHeterogeneous;
+    if (value == "legacy_unverified")
+        return RecommendationRankingPopulationSemanticState::legacyUnverified;
+    throw std::runtime_error("invalid_persisted_population_semantic_state");
+}
+
 std::string EvaluationColumns()
 {
     return "er.recommendation_evaluation_result_id,"
@@ -91,6 +105,27 @@ RecommendationRankingEvaluation MapEvaluation(const pqxx::row& row)
         row["scoring_policy_canonical"].as<std::string>();
     value.scoringPolicyHash = row["scoring_policy_hash"].as<std::string>();
     value.scoringVersion = row["scoring_version"].as<int>();
+    if (!ValidateRecommendationScoringPolicyProvenance(
+            value.scoringPolicyCanonical, value.scoringPolicyHash,
+            value.scoringVersion))
+    {
+        value.scoringSemanticIdentity =
+            RecommendationScoringSemanticIdentityFromPolicyProvenance(
+                value.scoringPolicyCanonical, value.scoringPolicyHash,
+                value.scoringVersion);
+        if (!ValidateRecommendationEvaluationPolicyProvenance(
+                value.evaluationPolicyCanonical, value.evaluationPolicyHash,
+                value.evaluationVersion, value.evaluatorVersion,
+                value.scoringPolicyCanonical, value.scoringPolicyHash,
+                value.scoringVersion))
+            value.evaluationSemanticIdentity =
+                RecommendationEvaluationSemanticIdentityFromPolicyProvenance(
+                    value.evaluationPolicyCanonical,
+                    value.evaluationPolicyHash, value.evaluationVersion,
+                    value.evaluatorVersion, value.scoringSemanticIdentity,
+                    value.scoringPolicyCanonical, value.scoringPolicyHash,
+                    value.scoringVersion);
+    }
     value.eligibility = ParseEligibility(row["eligibility"].as<std::string>());
     const auto disposition = ParseRecommendationEvaluationDisposition(
         row["disposition"].as<std::string>());
@@ -173,6 +208,12 @@ std::string SnapshotColumns()
         "scope_type,scope_canonical,scope_hash,evaluation_run_filter,"
         "recommendation_scan_filter,symbol_filter,horizon_filter,family_filter,"
         "requested_limit,source_membership_canonical,source_membership_hash,"
+        "ranking_snapshot_identity_version,population_semantic_state,"
+        "scoring_semantic_canonical,scoring_semantic_hash,"
+        "scoring_semantic_version,evaluation_semantic_canonical,"
+        "evaluation_semantic_hash,evaluation_semantic_version,"
+        "distinct_scoring_semantic_count,distinct_evaluation_semantic_count,"
+        "homogeneity_validation_result,"
         "member_count,advisory_ready_count,blocked_count,non_actionable_count,"
         "started_at::text AS started_at,completed_at::text AS completed_at,"
         "error_message";
@@ -198,6 +239,27 @@ PersistedRecommendationRankingSnapshot MapSnapshot(const pqxx::row& row)
     value.membershipCanonical =
         row["source_membership_canonical"].as<std::string>();
     value.membershipHash = row["source_membership_hash"].as<std::string>();
+    value.snapshotIdentityVersion =
+        row["ranking_snapshot_identity_version"].as<int>();
+    value.populationSemanticState = ParsePopulationSemanticState(
+        row["population_semantic_state"].as<std::string>());
+    value.distinctScoringSemanticCount =
+        row["distinct_scoring_semantic_count"].as<int>();
+    value.distinctEvaluationSemanticCount =
+        row["distinct_evaluation_semantic_count"].as<int>();
+    value.homogeneityValidationResult =
+        row["homogeneity_validation_result"].as<std::string>();
+    if (!row["scoring_semantic_canonical"].is_null())
+        value.scoringSemanticIdentity = RecommendationScoringSemanticIdentity{
+            row["scoring_semantic_canonical"].as<std::string>(),
+            row["scoring_semantic_hash"].as<std::string>(),
+            row["scoring_semantic_version"].as<int>()};
+    if (!row["evaluation_semantic_canonical"].is_null())
+        value.evaluationSemanticIdentity =
+            RecommendationEvaluationSemanticIdentity{
+                row["evaluation_semantic_canonical"].as<std::string>(),
+                row["evaluation_semantic_hash"].as<std::string>(),
+                row["evaluation_semantic_version"].as<int>()};
     value.counts.memberCount = row["member_count"].as<int>();
     value.counts.advisoryReadyCount = row["advisory_ready_count"].as<int>();
     value.counts.blockedCount = row["blocked_count"].as<int>();
@@ -416,13 +478,32 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
     const std::string expectedSnapshotIdentity =
         RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
             request.policy, request.scope, request.limit,
-            request.membershipCanonical);
+            request.membershipCanonical, request.populationSemantics);
     if (request.membershipHash != expectedMembershipHash ||
         request.snapshotIdentityCanonical != expectedSnapshotIdentity ||
         request.snapshotIdentityHash !=
             RecommendationRankingCanonicalHash(expectedSnapshotIdentity))
         throw std::invalid_argument(
             "invalid_recommendation_ranking_snapshot_identity");
+    if (!request.populationSemantics.acceptableForNewSnapshot())
+        throw std::invalid_argument(request.populationSemantics.reason);
+    const bool empty = request.populationSemantics.state ==
+        RecommendationRankingPopulationSemanticState::empty;
+    if (empty != !request.populationSemantics.scoringIdentity.has_value() ||
+        empty != !request.populationSemantics.evaluationIdentity.has_value())
+        throw std::invalid_argument(
+            "invalid_recommendation_ranking_population_semantics");
+    if (!empty &&
+        (request.populationSemantics.scoringIdentity->version != 1 ||
+         request.populationSemantics.evaluationIdentity->version != 1 ||
+         request.populationSemantics.scoringIdentity->hash !=
+             RecommendationRankingCanonicalHash(
+                 request.populationSemantics.scoringIdentity->canonical) ||
+         request.populationSemantics.evaluationIdentity->hash !=
+             RecommendationRankingCanonicalHash(
+                 request.populationSemantics.evaluationIdentity->canonical)))
+        throw std::invalid_argument(
+            "invalid_recommendation_ranking_population_semantic_identity");
     pqxx::work transaction{connection};
     transaction.exec("SET TRANSACTION READ WRITE;");
     const pqxx::result inserted = transaction.exec(
@@ -431,8 +512,14 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
         "ranking_policy_canonical,ranking_policy_hash,ranking_version,scope_type,"
         "scope_canonical,scope_hash,evaluation_run_filter,recommendation_scan_filter,"
         "symbol_filter,horizon_filter,family_filter,requested_limit,"
-        "source_membership_canonical,source_membership_hash) VALUES ('running',"
-        "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) "
+        "source_membership_canonical,source_membership_hash,"
+        "ranking_snapshot_identity_version,population_semantic_state,"
+        "scoring_semantic_canonical,scoring_semantic_hash,scoring_semantic_version,"
+        "evaluation_semantic_canonical,evaluation_semantic_hash,"
+        "evaluation_semantic_version,distinct_scoring_semantic_count,"
+        "distinct_evaluation_semantic_count,homogeneity_validation_result) "
+        "VALUES ('running',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,"
+        "$15,$16,2,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) "
         "ON CONFLICT (ranking_snapshot_identity_canonical) DO NOTHING "
         "RETURNING recommendation_ranking_snapshot_id,status;",
         pqxx::params{request.snapshotIdentityCanonical,
@@ -442,7 +529,24 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
             scopeHash, request.scope.evaluationRunId,
             request.scope.recommendationScanId, request.scope.symbol,
             request.scope.horizon, request.scope.family, request.limit,
-            request.membershipCanonical, request.membershipHash});
+            request.membershipCanonical, request.membershipHash,
+            RecommendationRankingPopulationSemanticStateText(
+                request.populationSemantics.state),
+            empty ? std::optional<std::string>{} : std::optional<std::string>{
+                request.populationSemantics.scoringIdentity->canonical},
+            empty ? std::optional<std::string>{} : std::optional<std::string>{
+                request.populationSemantics.scoringIdentity->hash},
+            empty ? std::optional<int>{} : std::optional<int>{
+                request.populationSemantics.scoringIdentity->version},
+            empty ? std::optional<std::string>{} : std::optional<std::string>{
+                request.populationSemantics.evaluationIdentity->canonical},
+            empty ? std::optional<std::string>{} : std::optional<std::string>{
+                request.populationSemantics.evaluationIdentity->hash},
+            empty ? std::optional<int>{} : std::optional<int>{
+                request.populationSemantics.evaluationIdentity->version},
+            request.populationSemantics.distinctScoringIdentityCount,
+            request.populationSemantics.distinctEvaluationIdentityCount,
+            request.populationSemantics.reason});
     RecommendationRankingSnapshotBeginResult result;
     if (!inserted.empty())
     {
@@ -465,7 +569,14 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
             existing.scopeCanonical != scopeCanonical ||
             existing.scopeHash != scopeHash || existing.requestedLimit != request.limit ||
             existing.membershipCanonical != request.membershipCanonical ||
-            existing.membershipHash != request.membershipHash)
+            existing.membershipHash != request.membershipHash ||
+            existing.snapshotIdentityVersion != 2 ||
+            existing.populationSemanticState !=
+                request.populationSemantics.state ||
+            existing.scoringSemanticIdentity !=
+                request.populationSemantics.scoringIdentity ||
+            existing.evaluationSemanticIdentity !=
+                request.populationSemantics.evaluationIdentity)
             throw std::runtime_error("recommendation_ranking_snapshot_retry_mismatch");
         result.snapshotId = existing.snapshotId;
         result.status = existing.status;
@@ -485,7 +596,10 @@ std::vector<PersistedRecommendationRankingMember> PersistRecommendationRankingMe
     pqxx::work transaction{connection};
     transaction.exec("SET TRANSACTION READ WRITE;");
     const pqxx::result snapshotRows = transaction.exec(
-        "SELECT status FROM experiment_recommendation_ranking_snapshot "
+        "SELECT status,population_semantic_state,scoring_semantic_canonical,"
+        "scoring_semantic_hash,scoring_semantic_version,"
+        "evaluation_semantic_canonical,evaluation_semantic_hash,"
+        "evaluation_semantic_version FROM experiment_recommendation_ranking_snapshot "
         "WHERE recommendation_ranking_snapshot_id=$1 FOR UPDATE;",
         pqxx::params{snapshotId});
     if (snapshotRows.empty())
@@ -493,11 +607,38 @@ std::vector<PersistedRecommendationRankingMember> PersistRecommendationRankingMe
     const std::string status = snapshotRows.one_row()[0].as<std::string>();
     if (status == "failed")
         throw std::runtime_error("recommendation_ranking_snapshot_failed");
+    const pqxx::row snapshotRow = snapshotRows.one_row();
+    const auto semanticState = ParsePopulationSemanticState(
+        snapshotRow["population_semantic_state"].as<std::string>());
+    if ((!members.empty() && semanticState !=
+            RecommendationRankingPopulationSemanticState::verifiedHomogeneous) ||
+        (members.empty() && semanticState !=
+            RecommendationRankingPopulationSemanticState::empty))
+        throw std::runtime_error(
+            "recommendation_ranking_snapshot_semantics_not_verified");
+    std::optional<RecommendationScoringSemanticIdentity> snapshotScoring;
+    std::optional<RecommendationEvaluationSemanticIdentity> snapshotEvaluation;
+    if (semanticState ==
+        RecommendationRankingPopulationSemanticState::verifiedHomogeneous)
+    {
+        snapshotScoring = RecommendationScoringSemanticIdentity{
+            snapshotRow["scoring_semantic_canonical"].as<std::string>(),
+            snapshotRow["scoring_semantic_hash"].as<std::string>(),
+            snapshotRow["scoring_semantic_version"].as<int>()};
+        snapshotEvaluation = RecommendationEvaluationSemanticIdentity{
+            snapshotRow["evaluation_semantic_canonical"].as<std::string>(),
+            snapshotRow["evaluation_semantic_hash"].as<std::string>(),
+            snapshotRow["evaluation_semantic_version"].as<int>()};
+    }
     std::vector<PersistedRecommendationRankingMember> persisted;
     persisted.reserve(members.size());
     for (const auto& member : members)
     {
         const auto& value = member.evaluation;
+        if (value.scoringSemanticIdentity != *snapshotScoring ||
+            value.evaluationSemanticIdentity != *snapshotEvaluation)
+            throw std::runtime_error(
+                "recommendation_ranking_member_semantic_identity_mismatch");
         const pqxx::result inserted = transaction.exec(
             "INSERT INTO experiment_recommendation_ranking_member ("
             "recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,"
@@ -512,6 +653,9 @@ std::vector<PersistedRecommendationRankingMember> PersistRecommendationRankingMe
             "$23,$24,$25,$26 FROM experiment_recommendation_ranking_snapshot guard "
             "JOIN experiment_recommendation_evaluation_result er ON "
             "er.recommendation_evaluation_result_id=$2 "
+            "JOIN experiment_recommendation_evaluation_run run ON "
+            "run.recommendation_evaluation_run_id="
+            "er.recommendation_evaluation_run_id "
             "JOIN experiment_recommendation r ON r.recommendation_id=er.recommendation_id "
             "WHERE guard.recommendation_ranking_snapshot_id=$1 "
             "AND guard.status='running' "
@@ -525,6 +669,14 @@ std::vector<PersistedRecommendationRankingMember> PersistRecommendationRankingMe
             "AND r.source_symbol=$18 AND r.source_prediction_horizon=$19 "
             "AND r.changed_parameter=$20 AND r.source_value_canonical=$21 "
             "AND r.proposed_value_canonical=$22 "
+            "AND guard.population_semantic_state='verified_homogeneous' "
+            "AND guard.scoring_semantic_canonical="
+            "recommendation_scoring_semantic_canonical_v1("
+            "run.scoring_policy_canonical,run.scoring_version) "
+            "AND guard.evaluation_semantic_canonical="
+            "recommendation_evaluation_semantic_canonical_v1("
+            "run.evaluation_version,run.evaluator_version,"
+            "run.scoring_policy_canonical,run.scoring_version) "
             "ON CONFLICT (recommendation_ranking_snapshot_id,"
             "recommendation_evaluation_result_id) DO NOTHING "
             "RETURNING recommendation_ranking_member_id;",

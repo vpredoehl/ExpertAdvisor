@@ -119,9 +119,11 @@ struct PersistedRecommendationEvaluationRun
     long long evaluationRunId = -1;
     std::string status;
     std::string runIdentityHash;
+    std::string evaluationPolicyCanonical;
     std::string evaluationPolicyHash;
     int evaluationVersion = 0;
     int evaluatorVersion = 0;
+    std::string scoringPolicyCanonical;
     std::string scoringPolicyHash;
     int scoringVersion = 0;
     std::optional<long long> recommendationScanFilter;

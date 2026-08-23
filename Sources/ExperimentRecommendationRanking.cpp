@@ -238,6 +238,12 @@ std::string ScoreTieBreak(const RecommendationRankingEvaluation& value)
     return "score:" + CanonicalRecommendationDouble(*value.finalScore);
 }
 
+template <typename Value>
+void AssignSorted(const std::set<Value>& source, std::vector<Value>& target)
+{
+    target.assign(source.begin(), source.end());
+}
+
 } // namespace
 
 std::optional<std::string> ValidateRecommendationRankingPolicy(
@@ -383,6 +389,121 @@ std::optional<RecommendationRankingBucket> ParseRecommendationRankingBucket(
     return std::nullopt;
 }
 
+std::string RecommendationRankingPopulationSemanticStateText(
+    RecommendationRankingPopulationSemanticState value)
+{
+    switch (value)
+    {
+        case RecommendationRankingPopulationSemanticState::verifiedHomogeneous:
+            return "verified_homogeneous";
+        case RecommendationRankingPopulationSemanticState::empty:
+            return "empty";
+        case RecommendationRankingPopulationSemanticState::legacyHeterogeneous:
+            return "legacy_heterogeneous";
+        case RecommendationRankingPopulationSemanticState::legacyUnverified:
+            return "legacy_unverified";
+    }
+    throw std::invalid_argument("invalid_ranking_population_semantic_state");
+}
+
+RecommendationRankingPopulationSemanticValidation
+ValidateRecommendationRankingPopulationSemantics(
+    const std::vector<RecommendationRankingEvaluation>& evaluations)
+{
+    RecommendationRankingPopulationSemanticValidation result;
+    if (evaluations.empty())
+    {
+        result.state = RecommendationRankingPopulationSemanticState::empty;
+        result.reason = "empty_population";
+        return result;
+    }
+
+    std::set<long long> resultIds;
+    std::set<long long> runIds;
+    std::set<std::string> scoringHashes;
+    std::set<std::string> evaluationHashes;
+    std::set<std::pair<int, std::string>> scoringIdentities;
+    std::set<std::pair<int, std::string>> evaluationIdentities;
+    bool invalidScoring = false;
+    bool invalidEvaluation = false;
+    for (const auto& value : evaluations)
+    {
+        resultIds.insert(value.evaluationResultId);
+        runIds.insert(value.evaluationRunId);
+        if (!value.scoringSemanticIdentity.hash.empty())
+            scoringHashes.insert(value.scoringSemanticIdentity.hash);
+        if (!value.evaluationSemanticIdentity.hash.empty())
+            evaluationHashes.insert(value.evaluationSemanticIdentity.hash);
+
+        if (value.evaluationResultId <= 0 || value.evaluationRunId <= 0 ||
+            ValidateRecommendationScoringSemanticIdentity(
+                value.scoringSemanticIdentity, value.scoringPolicyCanonical,
+                value.scoringPolicyHash, value.scoringVersion))
+        {
+            invalidScoring = true;
+            continue;
+        }
+        scoringIdentities.emplace(value.scoringSemanticIdentity.version,
+                                  value.scoringSemanticIdentity.canonical);
+        if (value.evaluationIdentityCanonical.empty() ||
+            value.evaluationIdentityHash != RecommendationEvaluationCanonicalHash(
+                value.evaluationIdentityCanonical) ||
+            ValidateRecommendationEvaluationSemanticIdentity(
+                value.evaluationSemanticIdentity,
+                value.evaluationPolicyCanonical, value.evaluationPolicyHash,
+                value.evaluationVersion, value.evaluatorVersion,
+                value.scoringSemanticIdentity, value.scoringPolicyCanonical,
+                value.scoringPolicyHash, value.scoringVersion))
+        {
+            invalidEvaluation = true;
+            continue;
+        }
+        evaluationIdentities.emplace(value.evaluationSemanticIdentity.version,
+                                     value.evaluationSemanticIdentity.canonical);
+    }
+    result.distinctScoringIdentityCount =
+        static_cast<int>(scoringIdentities.size());
+    result.distinctEvaluationIdentityCount =
+        static_cast<int>(evaluationIdentities.size());
+    AssignSorted(resultIds, result.evaluationResultIds);
+    AssignSorted(runIds, result.evaluationRunIds);
+    AssignSorted(scoringHashes, result.scoringSemanticHashes);
+    AssignSorted(evaluationHashes, result.evaluationSemanticHashes);
+
+    if (invalidScoring)
+    {
+        result.state = RecommendationRankingPopulationSemanticState::legacyUnverified;
+        result.reason = "invalid_scoring_semantic_provenance";
+        return result;
+    }
+    if (invalidEvaluation)
+    {
+        result.state = RecommendationRankingPopulationSemanticState::legacyUnverified;
+        result.reason = "invalid_evaluation_semantic_provenance";
+        return result;
+    }
+    if (scoringIdentities.size() != 1U)
+    {
+        result.state =
+            RecommendationRankingPopulationSemanticState::legacyHeterogeneous;
+        result.reason = "heterogeneous_scoring_semantics";
+        return result;
+    }
+    if (evaluationIdentities.size() != 1U)
+    {
+        result.state =
+            RecommendationRankingPopulationSemanticState::legacyHeterogeneous;
+        result.reason = "heterogeneous_evaluation_semantics";
+        return result;
+    }
+    result.state =
+        RecommendationRankingPopulationSemanticState::verifiedHomogeneous;
+    result.reason = "verified_homogeneous";
+    result.scoringIdentity = evaluations.front().scoringSemanticIdentity;
+    result.evaluationIdentity = evaluations.front().evaluationSemanticIdentity;
+    return result;
+}
+
 RecommendationRankingBucket RecommendationRankingBucketForDisposition(
     RecommendationEvaluationDisposition disposition)
 {
@@ -415,6 +536,10 @@ std::vector<RecommendationRankingMember> RankRecommendationEvaluationEvidence(
     if (evaluations.size() >
         static_cast<std::size_t>(kMaximumRecommendationRankingInputs))
         throw std::invalid_argument("recommendation_ranking_input_limit_exceeded");
+    const auto semantics =
+        ValidateRecommendationRankingPopulationSemantics(evaluations);
+    if (!semantics.acceptableForNewSnapshot())
+        throw std::invalid_argument(semantics.reason);
     std::vector<RecommendationRankingMember> members;
     members.reserve(evaluations.size());
     std::set<long long> evaluationResultIds;
@@ -476,6 +601,10 @@ std::string RecommendationRankingMembershipCanonicalText(
     if (evaluations.size() >
         static_cast<std::size_t>(kMaximumRecommendationRankingInputs))
         throw std::invalid_argument("recommendation_ranking_input_limit_exceeded");
+    const auto semantics =
+        ValidateRecommendationRankingPopulationSemantics(evaluations);
+    if (!semantics.acceptableForNewSnapshot())
+        throw std::invalid_argument(semantics.reason);
     std::vector<std::pair<std::string, long long>> identities;
     identities.reserve(evaluations.size());
     std::set<long long> evaluationResultIds;
@@ -511,27 +640,46 @@ std::string RecommendationRankingSnapshotIdentityCanonicalText(
         throw std::invalid_argument("recommendation_ranking_limit_invalid");
     const std::string membership =
         RecommendationRankingMembershipCanonicalText(evaluations);
+    const auto semantics =
+        ValidateRecommendationRankingPopulationSemantics(evaluations);
     return RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
-        policy, scope, outputLimit, membership);
+        policy, scope, outputLimit, membership, semantics);
 }
 
 std::string RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
     const RecommendationRankingPolicy& policy,
     const RecommendationRankingScope& scope,
     int outputLimit,
-    const std::string& membershipCanonical)
+    const std::string& membershipCanonical,
+    const RecommendationRankingPopulationSemanticValidation& semantics)
 {
     if (!ValidRecommendationRankingMembershipCanonicalText(membershipCanonical))
         throw std::invalid_argument(
             "invalid_recommendation_ranking_membership_canonical");
     if (outputLimit <= 0 || outputLimit > kMaximumRecommendationRankingMembers)
         throw std::invalid_argument("recommendation_ranking_limit_invalid");
+    if (!semantics.acceptableForNewSnapshot())
+        throw std::invalid_argument(semantics.reason.empty()
+            ? "invalid_ranking_population_semantics" : semantics.reason);
+    const bool empty = semantics.state ==
+        RecommendationRankingPopulationSemanticState::empty;
+    if (empty != !semantics.scoringIdentity.has_value() ||
+        empty != !semantics.evaluationIdentity.has_value() ||
+        (!empty && (semantics.distinctScoringIdentityCount != 1 ||
+                    semantics.distinctEvaluationIdentityCount != 1)))
+        throw std::invalid_argument("invalid_ranking_population_semantic_shape");
     const std::string policyText =
         RecommendationRankingPolicyCanonicalText(policy);
     const std::string scopeText = RecommendationRankingScopeCanonicalText(scope);
-    return "experiment_recommendation_ranking_snapshot_identity_v1;policy=" +
+    return "experiment_recommendation_ranking_snapshot_identity_v2;policy=" +
         LengthText(policyText) + ";scope=" + LengthText(scopeText) +
-        ";limit=" + std::to_string(outputLimit) + ";membership=" +
+        ";limit=" + std::to_string(outputLimit) + ";population_state=" +
+        RecommendationRankingPopulationSemanticStateText(semantics.state) +
+        ";scoring_semantic=" + (empty ? "NULL" :
+            LengthText(semantics.scoringIdentity->canonical)) +
+        ";evaluation_semantic=" + (empty ? "NULL" :
+            LengthText(semantics.evaluationIdentity->canonical)) +
+        ";membership=" +
         LengthText(membershipCanonical);
 }
 
@@ -545,6 +693,14 @@ std::string RecommendationComparisonStateText(
             return "incomparable_policy_version";
         case RecommendationComparisonState::incomparableEvaluatorVersion:
             return "incomparable_evaluator_version";
+        case RecommendationComparisonState::incomparableScoringSemantics:
+            return "incomparable_scoring_semantics";
+        case RecommendationComparisonState::incomparableEvaluationSemantics:
+            return "incomparable_evaluation_semantics";
+        case RecommendationComparisonState::invalidScoringProvenance:
+            return "invalid_scoring_provenance";
+        case RecommendationComparisonState::invalidEvaluationProvenance:
+            return "invalid_evaluation_provenance";
         case RecommendationComparisonState::incomparableMissingScore:
             return "incomparable_missing_score";
         case RecommendationComparisonState::incomparableScope:
@@ -595,19 +751,56 @@ RecommendationComparisonResult CompareRecommendationEvaluations(
         result.explanation = "Rank positions are not from the same ranking snapshot.";
         return result;
     }
-    if (left.evaluationVersion != right.evaluationVersion ||
-        left.scoringVersion != right.scoringVersion ||
-        left.evaluationPolicyCanonical != right.evaluationPolicyCanonical ||
-        left.scoringPolicyCanonical != right.scoringPolicyCanonical)
+    const auto leftScoringError = ValidateRecommendationScoringSemanticIdentity(
+        left.scoringSemanticIdentity, left.scoringPolicyCanonical,
+        left.scoringPolicyHash, left.scoringVersion);
+    const auto rightScoringError = ValidateRecommendationScoringSemanticIdentity(
+        right.scoringSemanticIdentity, right.scoringPolicyCanonical,
+        right.scoringPolicyHash, right.scoringVersion);
+    if (leftScoringError || rightScoringError)
     {
-        result.state = RecommendationComparisonState::incomparablePolicyVersion;
-        result.explanation = "The evaluations use different evaluation or scoring policies.";
+        result.state = RecommendationComparisonState::invalidScoringProvenance;
+        result.explanation = "At least one scoring semantic identity is malformed or internally inconsistent.";
         return result;
     }
-    if (left.evaluatorVersion != right.evaluatorVersion)
+    const auto leftEvaluationError =
+        ValidateRecommendationEvaluationSemanticIdentity(
+            left.evaluationSemanticIdentity, left.evaluationPolicyCanonical,
+            left.evaluationPolicyHash, left.evaluationVersion,
+            left.evaluatorVersion, left.scoringSemanticIdentity,
+            left.scoringPolicyCanonical, left.scoringPolicyHash,
+            left.scoringVersion);
+    const auto rightEvaluationError =
+        ValidateRecommendationEvaluationSemanticIdentity(
+            right.evaluationSemanticIdentity, right.evaluationPolicyCanonical,
+            right.evaluationPolicyHash, right.evaluationVersion,
+            right.evaluatorVersion, right.scoringSemanticIdentity,
+            right.scoringPolicyCanonical, right.scoringPolicyHash,
+            right.scoringVersion);
+    const bool invalidEvaluationResultIdentity =
+        left.evaluationIdentityCanonical.empty() ||
+        right.evaluationIdentityCanonical.empty() ||
+        left.evaluationIdentityHash != RecommendationEvaluationCanonicalHash(
+            left.evaluationIdentityCanonical) ||
+        right.evaluationIdentityHash != RecommendationEvaluationCanonicalHash(
+            right.evaluationIdentityCanonical);
+    if (leftEvaluationError || rightEvaluationError ||
+        invalidEvaluationResultIdentity)
     {
-        result.state = RecommendationComparisonState::incomparableEvaluatorVersion;
-        result.explanation = "The evaluations use different evaluator versions.";
+        result.state = RecommendationComparisonState::invalidEvaluationProvenance;
+        result.explanation = "At least one evaluation semantic identity is malformed or internally inconsistent.";
+        return result;
+    }
+    if (left.scoringSemanticIdentity != right.scoringSemanticIdentity)
+    {
+        result.state = RecommendationComparisonState::incomparableScoringSemantics;
+        result.explanation = "The evaluations use different scoring semantics.";
+        return result;
+    }
+    if (left.evaluationSemanticIdentity != right.evaluationSemanticIdentity)
+    {
+        result.state = RecommendationComparisonState::incomparableEvaluationSemantics;
+        result.explanation = "The evaluations use different evaluation semantics.";
         return result;
     }
     if (left.family != right.family)

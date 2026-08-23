@@ -299,9 +299,13 @@ PersistedRecommendationEvaluationRun MapRun(const pqxx::row& row)
     value.evaluationRunId = row["recommendation_evaluation_run_id"].as<long long>();
     value.status = row["status"].as<std::string>();
     value.runIdentityHash = row["evaluation_run_identity_hash"].as<std::string>();
+    value.evaluationPolicyCanonical =
+        row["evaluation_policy_canonical"].as<std::string>();
     value.evaluationPolicyHash = row["evaluation_policy_hash"].as<std::string>();
     value.evaluationVersion = row["evaluation_version"].as<int>();
     value.evaluatorVersion = row["evaluator_version"].as<int>();
+    value.scoringPolicyCanonical =
+        row["scoring_policy_canonical"].as<std::string>();
     value.scoringPolicyHash = row["scoring_policy_hash"].as<std::string>();
     value.scoringVersion = row["scoring_version"].as<int>();
     value.recommendationScanFilter = OptionalValue<long long>(
@@ -327,8 +331,9 @@ PersistedRecommendationEvaluationRun MapRun(const pqxx::row& row)
 std::string RunColumns()
 {
     return "recommendation_evaluation_run_id,status,"
-        "evaluation_run_identity_hash,evaluation_policy_hash,"
-        "evaluation_version,evaluator_version,scoring_policy_hash,"
+        "evaluation_run_identity_hash,evaluation_policy_canonical,"
+        "evaluation_policy_hash,evaluation_version,evaluator_version,"
+        "scoring_policy_canonical,scoring_policy_hash,"
         "scoring_version,recommendation_scan_filter,recommendation_id_filter,"
         "requested_limit,recommendations_considered,recommendations_evaluated,"
         "recommendations_eligible,recommendations_blocked,evaluation_errors,"
@@ -410,6 +415,12 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
     if (request.runIdentityCanonical.empty() || request.runIdentityHash.empty() ||
         request.evidenceSnapshotCanonical.empty() || request.evidenceSnapshotHash.empty())
         throw std::invalid_argument("invalid_recommendation_evaluation_run_request");
+    if (request.runIdentityHash != RecommendationEvaluationCanonicalHash(
+            request.runIdentityCanonical) ||
+        request.evidenceSnapshotHash != RecommendationEvaluationCanonicalHash(
+            request.evidenceSnapshotCanonical))
+        throw std::invalid_argument(
+            "invalid_recommendation_evaluation_run_identity");
     pqxx::work transaction{connection};
     transaction.exec("SET TRANSACTION READ WRITE;");
     const pqxx::result inserted = transaction.exec(
@@ -443,14 +454,34 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
     {
         const pqxx::row row = transaction.exec(
             "SELECT recommendation_evaluation_run_id,status,"
-            "evaluation_run_identity_hash,evidence_snapshot_canonical "
+            "evaluation_run_identity_hash,evaluation_policy_canonical,"
+            "evaluation_policy_hash,evaluation_version,evaluator_version,"
+            "scoring_policy_canonical,scoring_policy_hash,scoring_version,"
+            "evidence_snapshot_canonical,evidence_snapshot_hash "
             "FROM experiment_recommendation_evaluation_run "
             "WHERE evaluation_run_identity_canonical=$1;",
             pqxx::params{request.runIdentityCanonical}).one_row();
         if (row["evaluation_run_identity_hash"].as<std::string>() !=
                 request.runIdentityHash ||
             row["evidence_snapshot_canonical"].as<std::string>() !=
-                request.evidenceSnapshotCanonical)
+                request.evidenceSnapshotCanonical ||
+            row["evidence_snapshot_hash"].as<std::string>() !=
+                request.evidenceSnapshotHash ||
+            row["evaluation_policy_canonical"].as<std::string>() !=
+                RecommendationEvaluationPolicyCanonicalText(request.policy) ||
+            row["evaluation_policy_hash"].as<std::string>() !=
+                RecommendationEvaluationPolicyHash(request.policy) ||
+            row["evaluation_version"].as<int>() !=
+                request.policy.evaluationVersion ||
+            row["evaluator_version"].as<int>() !=
+                request.policy.evaluatorVersion ||
+            row["scoring_policy_canonical"].as<std::string>() !=
+                RecommendationScoringPolicyCanonicalText(
+                    request.policy.scoringPolicy) ||
+            row["scoring_policy_hash"].as<std::string>() !=
+                RecommendationScoringPolicyHash(request.policy.scoringPolicy) ||
+            row["scoring_version"].as<int>() !=
+                request.policy.scoringPolicy.scoringVersion)
             throw std::runtime_error("recommendation_evaluation_run_retry_mismatch");
         result.evaluationRunId = row["recommendation_evaluation_run_id"].as<long long>();
         result.status = row["status"].as<std::string>();
@@ -471,6 +502,25 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
     transaction.exec("SET TRANSACTION READ WRITE;");
     const RecommendationEvaluationResult& value = request.result;
     const RecommendationEvaluationInput& input = request.input;
+    if (const auto error = ValidateRecommendationScoringSemanticIdentity(
+            value.scoringSemanticIdentity, value.scoringPolicyCanonical,
+            value.scoringPolicyHash, value.scoringVersion))
+        throw std::invalid_argument(
+            "invalid_recommendation_evaluation_scoring_semantics:" + *error);
+    if (const auto error = ValidateRecommendationEvaluationSemanticIdentity(
+            value.evaluationSemanticIdentity, value.evaluationPolicyCanonical,
+            value.evaluationPolicyHash, value.evaluationVersion,
+            value.evaluatorVersion, value.scoringSemanticIdentity,
+            value.scoringPolicyCanonical, value.scoringPolicyHash,
+            value.scoringVersion))
+        throw std::invalid_argument(
+            "invalid_recommendation_evaluation_semantics:" + *error);
+    if (value.evaluationIdentityHash != RecommendationEvaluationCanonicalHash(
+            value.evaluationIdentityCanonical) ||
+        value.evidenceHash != RecommendationEvaluationCanonicalHash(
+            value.evidenceCanonical))
+        throw std::invalid_argument(
+            "invalid_recommendation_evaluation_result_identity");
     if (value.finalProfitabilityEvidence != input.finalProfitabilityEvidence)
         throw std::invalid_argument(
             "recommendation_evaluation_profitability_input_mismatch");
@@ -494,12 +544,29 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
         throw std::runtime_error(
             "recommendation_evaluation_semantic_identity_mismatch");
     const pqxx::result runStatusRows = transaction.exec(
-        "SELECT status FROM experiment_recommendation_evaluation_run "
+        "SELECT status,evaluation_policy_canonical,evaluation_policy_hash,"
+        "evaluation_version,evaluator_version,scoring_policy_canonical,"
+        "scoring_policy_hash,scoring_version "
+        "FROM experiment_recommendation_evaluation_run "
         "WHERE recommendation_evaluation_run_id=$1 FOR SHARE;",
         pqxx::params{request.evaluationRunId});
     if (runStatusRows.empty())
         throw std::runtime_error("recommendation_evaluation_run_not_found");
     const std::string runStatus = runStatusRows.one_row()[0].as<std::string>();
+    const pqxx::row runRow = runStatusRows.one_row();
+    if (runRow["evaluation_policy_canonical"].as<std::string>() !=
+            value.evaluationPolicyCanonical ||
+        runRow["evaluation_policy_hash"].as<std::string>() !=
+            value.evaluationPolicyHash ||
+        runRow["evaluation_version"].as<int>() != value.evaluationVersion ||
+        runRow["evaluator_version"].as<int>() != value.evaluatorVersion ||
+        runRow["scoring_policy_canonical"].as<std::string>() !=
+            value.scoringPolicyCanonical ||
+        runRow["scoring_policy_hash"].as<std::string>() !=
+            value.scoringPolicyHash ||
+        runRow["scoring_version"].as<int>() != value.scoringVersion)
+        throw std::runtime_error(
+            "recommendation_evaluation_result_run_semantic_mismatch");
     const pqxx::result inserted = transaction.exec(
         "INSERT INTO experiment_recommendation_evaluation_result ("
         "recommendation_evaluation_run_id,recommendation_id,"
