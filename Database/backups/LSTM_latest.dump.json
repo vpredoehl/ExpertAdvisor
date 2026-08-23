@@ -1,14 +1,14 @@
 {
   "database": "LSTM",
-  "backup_path": "Database/backups/LSTM_2026-08-20_063913_e51459d.dump",
-  "size_bytes": 449540598,
-  "git_commit": "e51459d",
-  "created_at": "2026-08-20T11:39:46Z",
+  "backup_path": "Database/backups/LSTM_latest.dump",
+  "size_bytes": 465006838,
+  "git_commit": "d3da207",
+  "created_at": "2026-08-23T18:13:28Z",
   "format": "custom",
   "includes_schema": true,
   "includes_data": true,
-  "schema_version": "070",
-  "model_count": 1324,
-  "experiment_count": 360,
-  "analysis_count": 814
+  "schema_version": "078",
+  "model_count": 1364,
+  "experiment_count": 362,
+  "analysis_count": 828
 }
