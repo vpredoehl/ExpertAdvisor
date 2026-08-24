@@ -1,5 +1,6 @@
 #include "EconomicEventImportService.hpp"
 
+#include "BeaEconomicReleaseAdapter.hpp"
 #include "DolEtaWeeklyClaimsAdapter.hpp"
 #include "EconomicEventImportValidation.hpp"
 
@@ -95,7 +96,7 @@ CliArguments ParseCli(
 
     if (!commandSeen || parsed.agency.empty())
         throw std::invalid_argument("--import-economic-events requires an agency");
-    if (parsed.agency != "dol-eta")
+    if (parsed.agency != "dol-eta" && parsed.agency != "bea")
         throw std::invalid_argument("unsupported economic-event agency: " + parsed.agency);
     if (parsed.manifest.empty())
         throw std::invalid_argument("--manifest is required");
@@ -152,7 +153,9 @@ int RunEconomicEventImportCli(
 
         // Acquisition, digest verification, parsing, and pure validation all
         // finish before any database transaction is opened.
-        auto candidates = LoadDolEtaWeeklyClaimsManifest(arguments.manifest);
+        auto candidates = arguments.agency == "bea"
+            ? LoadBeaEconomicReleaseManifest(arguments.manifest)
+            : LoadDolEtaWeeklyClaimsManifest(arguments.manifest);
         candidates = ValidateAndOrderEconomicEventCandidates(std::move(candidates));
 
         pqxx::connection connection{ConnectionString()};
@@ -162,7 +165,7 @@ int RunEconomicEventImportCli(
             arguments.mode);
 
         std::cout << "ECONOMIC_EVENT_IMPORT_SUMMARY"
-                  << ",agency=dol-eta"
+                  << ",agency=" << arguments.agency
                   << ",mode="
                   << (arguments.mode == EconomicEventImportMode::dryRun
                           ? "dry-run"
