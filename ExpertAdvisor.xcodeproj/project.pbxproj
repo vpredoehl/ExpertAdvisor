@@ -15,6 +15,8 @@
 		0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
 		0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
 		0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
+		0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
+		0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
@@ -526,6 +528,8 @@
 		0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitabilityRepository.hpp; path = Sources/InferenceProfitabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityDistribution.cpp; path = Sources/ProfitabilityDistribution.cpp; sourceTree = SOURCE_ROOT; };
 		0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityDistribution.hpp; path = Sources/ProfitabilityDistribution.hpp; sourceTree = SOURCE_ROOT; };
+		0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluation.cpp; path = Sources/PairedTrainingObjectiveEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0E7900013190000100AAA001 /* PairedTrainingObjectiveEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluation.hpp; path = Sources/PairedTrainingObjectiveEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -611,6 +615,8 @@
 				0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */,
 				0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */,
 				0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */,
+				0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */,
+				0E7900013190000100AAA001 /* PairedTrainingObjectiveEvaluation.hpp */,
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */,
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
@@ -1004,6 +1010,7 @@
 				0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
 				0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
+				0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
@@ -1114,6 +1121,7 @@
 				0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
 				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
+				0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
