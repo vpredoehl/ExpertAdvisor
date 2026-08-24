@@ -223,6 +223,31 @@ bool ParseNewYorkCivilTimestamp(
     if (!stream.eof())
         return false;
 
+    const int parsedYear = civil.tm_year;
+    const int parsedMonth = civil.tm_mon;
+    const int parsedDay = civil.tm_mday;
+    const int parsedHour = civil.tm_hour;
+    const int parsedMinute = civil.tm_min;
+    const int parsedSecond = civil.tm_sec;
+
+    if (
+        parsedYear < 0 ||
+        parsedMonth < 0 ||
+        parsedMonth > 11 ||
+        parsedDay < 1 ||
+        parsedDay > DaysInMonth(
+            parsedYear + 1900,
+            parsedMonth + 1) ||
+        parsedHour < 0 ||
+        parsedHour > 23 ||
+        parsedMinute < 0 ||
+        parsedMinute > 59 ||
+        parsedSecond < 0 ||
+        parsedSecond > 59)
+    {
+        return false;
+    }
+
     if (
         IsExceptionalNewYorkCivilTime(
             civil))
@@ -242,6 +267,19 @@ bool ParseNewYorkCivilTimestamp(
     if (
         civilAsUtc ==
         static_cast<std::time_t>(-1))
+    {
+        return false;
+    }
+
+    // timegm normalizes invalid civil fields.  The explicit range checks
+    // above reject most such inputs; this round trip is the final guard.
+    if (
+        utcFields.tm_year != parsedYear ||
+        utcFields.tm_mon != parsedMonth ||
+        utcFields.tm_mday != parsedDay ||
+        utcFields.tm_hour != parsedHour ||
+        utcFields.tm_min != parsedMinute ||
+        utcFields.tm_sec != parsedSecond)
     {
         return false;
     }
