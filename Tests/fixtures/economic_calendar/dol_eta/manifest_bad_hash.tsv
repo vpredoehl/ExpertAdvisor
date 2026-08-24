@@ -1,0 +1,4 @@
+manifest_version	1
+parser_version	dol_eta_weekly_claims_v1
+artifact_path	artifact_sha256	artifact_type	source_url	source_artifact_path	source_artifact_sha256	extractor
+2010-07-22.html	0000000000000000000000000000000000000000000000000000000000000000	html	https://oui.doleta.gov/press/2010/072210.asp	2010-07-22.html	0000000000000000000000000000000000000000000000000000000000000000	none
