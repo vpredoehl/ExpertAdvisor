@@ -660,6 +660,79 @@ ComparisonResult Compare(const ArmEvidence& control,
     return result;
 }
 
+std::string MaterialityPolicyCanonicalText(const MaterialityPolicy& policy)
+{
+    if (!PolicyFiniteAndNonnegative(policy))
+        throw std::invalid_argument("materiality_policy_invalid");
+
+    std::string result = "paired_objective_materiality_policy_v1;";
+    const auto append = [&result](std::string_view name,
+                                  std::string_view value)
+    {
+        result.append(name);
+        result.push_back('=');
+        result.append(value);
+        result.push_back(';');
+    };
+    switch (policy.primaryProfitabilityMetric)
+    {
+        case ProfitabilityPrimaryMetric::
+                AggregateTerminalHorizonLogReturnSum:
+            append("primary_profitability_metric",
+                   "aggregate_terminal_horizon_log_return_sum");
+            break;
+        case ProfitabilityPrimaryMetric::
+                AverageTerminalHorizonLogReturnPerActionablePrediction:
+            append("primary_profitability_metric",
+                   "average_terminal_horizon_log_return_per_actionable_prediction");
+            break;
+        default:
+            throw std::invalid_argument(
+                "materiality_policy_primary_metric_invalid");
+    }
+    append("minimum_profitability_improvement",
+           TrainingObjective::CanonicalDouble(
+               policy.minimumProfitabilityImprovement));
+    append("maximum_profitability_worsening",
+           TrainingObjective::CanonicalDouble(
+               policy.maximumProfitabilityWorsening));
+    append("classification_policy",
+           policy.classification ? "configured" : "not_configured");
+    if (policy.classification)
+    {
+        append("maximum_inference_accuracy_decrease",
+            TrainingObjective::CanonicalDouble(
+                policy.classification->maximumInferenceAccuracyDecrease));
+        append("maximum_accept_accuracy_decrease",
+            TrainingObjective::CanonicalDouble(
+                policy.classification->maximumAcceptAccuracyDecrease));
+        append("maximum_accept_rate_decrease",
+            TrainingObjective::CanonicalDouble(
+                policy.classification->maximumAcceptRateDecrease));
+        append("maximum_leader_score_decrease",
+            TrainingObjective::CanonicalDouble(
+                policy.classification->maximumLeaderScoreDecrease));
+        append("maximum_neutral_proportion_increase",
+            TrainingObjective::CanonicalDouble(
+                policy.classification->maximumNeutralProportionIncrease));
+    }
+    else
+    {
+        append("maximum_inference_accuracy_decrease", "NULL");
+        append("maximum_accept_accuracy_decrease", "NULL");
+        append("maximum_accept_rate_decrease", "NULL");
+        append("maximum_leader_score_decrease", "NULL");
+        append("maximum_neutral_proportion_increase", "NULL");
+    }
+    return result;
+}
+
+std::string MaterialityPolicyIdentity(const MaterialityPolicy& policy)
+{
+    return TrainingObjective::DeterministicHash(
+        MaterialityPolicyCanonicalText(policy));
+}
+
 std::string DispositionText(Disposition value)
 {
     switch (value)

@@ -212,6 +212,7 @@ struct MetricDelta
     std::optional<double> treatmentMinusControl;
     // Defined as (treatment-control)/abs(control); absent when control is zero.
     std::optional<double> relativeToAbsoluteControl;
+    bool operator==(const MetricDelta&) const = default;
 };
 
 struct ComparisonResult
@@ -234,6 +235,9 @@ ComparisonResult Compare(
     const ArmEvidence& control,
     const ArmEvidence& treatment,
     const MaterialityPolicy& policy);
+
+std::string MaterialityPolicyCanonicalText(const MaterialityPolicy& policy);
+std::string MaterialityPolicyIdentity(const MaterialityPolicy& policy);
 
 std::string DispositionText(Disposition value);
 
