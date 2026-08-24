@@ -3,6 +3,8 @@
 #include <optional>
 #include <string>
 
+#include "SchedulerWorkerLimits.hpp"
+
 namespace EA::ExperimentScheduler
 {
 
@@ -14,17 +16,5 @@ bool RegisterSchedulerWorkerAttempt(
     const std::optional<long long>& checkpointEvalId,
     const std::string& workerKind,
     const std::string& lifecyclePhase);
-
-constexpr int AvailableInferProcessSlots(
-    int maximum,
-    int runningExperimentInference,
-    int runningCheckpointInference) noexcept
-{
-    const int available =
-        maximum -
-        runningExperimentInference -
-        runningCheckpointInference;
-    return available > 0 ? available : 0;
-}
 
 } // namespace EA::ExperimentScheduler

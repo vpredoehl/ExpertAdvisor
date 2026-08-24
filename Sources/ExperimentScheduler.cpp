@@ -359,9 +359,9 @@ struct SchedulerOptions
     int continuationMaxQueuesPerScan = 1;
     bool continuationScanSecondsSpecified = false;
     bool continuationMaxQueuesPerScanSpecified = false;
-    int maxTrainProcs = 1;
-    int maxInferProcs = 1;
-    int maxAnalyzeProcs = 1;
+    int maxTrainProcs = kDefaultMaxTrainProcs;
+    int maxInferProcs = kDefaultMaxInferProcs;
+    int maxAnalyzeProcs = kDefaultMaxAnalyzeProcs;
     int schedulerPollSeconds = 30;
     std::string schedulerLogDir = "experiment_logs";
     std::string experimentReportDir = "experiment_reports";
@@ -1831,6 +1831,17 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         const std::string arg{argv[i]};
         std::string value;
 
+        if (TryParseSchedulerWorkerLimitArgument(
+                argc,
+                argv,
+                i,
+                options.maxTrainProcs,
+                options.maxInferProcs,
+                options.maxAnalyzeProcs))
+        {
+            continue;
+        }
+
         if (arg == "--model-info")
             options.modelInfo = true;
         else if (arg == "--status")
@@ -2975,12 +2986,6 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "--resume-expand-input-width specified more than once");
             options.resumeExpandInputWidth = true;
         }
-        else if (arg == "--max-train-procs")
-            options.maxTrainProcs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
-        else if (arg == "--max-infer-procs")
-            options.maxInferProcs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
-        else if (arg == "--max-analyze-procs")
-            options.maxAnalyzeProcs = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--scheduler-poll-seconds")
             options.schedulerPollSeconds = ParsePositiveInt(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--scheduler-log-dir")
@@ -3060,12 +3065,6 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.inferEnd = value;
         else if (SplitOptionWithValue(arg, "--resume-model-id", value))
             options.resumeModelId = ParsePositiveLongLong("--resume-model-id", value);
-        else if (SplitOptionWithValue(arg, "--max-train-procs", value))
-            options.maxTrainProcs = ParsePositiveInt("--max-train-procs", value);
-        else if (SplitOptionWithValue(arg, "--max-infer-procs", value))
-            options.maxInferProcs = ParsePositiveInt("--max-infer-procs", value);
-        else if (SplitOptionWithValue(arg, "--max-analyze-procs", value))
-            options.maxAnalyzeProcs = ParsePositiveInt("--max-analyze-procs", value);
         else if (SplitOptionWithValue(arg, "--scheduler-poll-seconds", value))
             options.schedulerPollSeconds = ParsePositiveInt("--scheduler-poll-seconds", value);
         else if (SplitOptionWithValue(arg, "--continuation-scan-seconds", value))
@@ -8767,7 +8766,7 @@ ReserveExperimentWorkerAttempt(
 
     const int used =
         CountGlobalWorkerCapacity(transaction, phase);
-    if (used >= maximumCapacity)
+    if (!SchedulerWorkerCapacityHasSlot(maximumCapacity, used))
     {
         transaction.commit();
         return std::nullopt;
@@ -8886,8 +8885,9 @@ ReserveCheckpointWorkerAttempt(
         transaction.commit();
         return std::nullopt;
     }
-    if (CountGlobalWorkerCapacity(transaction, "infer") >=
-        maximumCapacity)
+    if (!SchedulerWorkerCapacityHasSlot(
+            maximumCapacity,
+            CountGlobalWorkerCapacity(transaction, "infer")))
     {
         transaction.commit();
         return std::nullopt;
@@ -18599,7 +18599,9 @@ void FinishSchedulerPollLogging(SchedulerEventLogState* logState)
     PhaseSchedulingStats stats;
     stats.phase = "train";
     stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots = std::max(0, options.maxTrainProcs - RunningCountForPhase(snapshot, "train"));
+    stats.freeSlots = AvailableWorkerProcessSlots(
+        options.maxTrainProcs,
+        RunningCountForPhase(snapshot, "train"));
     int freeSlots = stats.freeSlots;
     int rc = 0;
     std::vector<pid_t> launchedInTransaction;
@@ -19008,7 +19010,9 @@ int CountRows(pqxx::work& w, const std::string& sql);
     PhaseSchedulingStats stats;
     stats.phase = "analyze";
     stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots = std::max(0, options.maxAnalyzeProcs - RunningCountForPhase(snapshot, "analyze"));
+    stats.freeSlots = AvailableWorkerProcessSlots(
+        options.maxAnalyzeProcs,
+        RunningCountForPhase(snapshot, "analyze"));
     int freeSlots = stats.freeSlots;
     int rc = 0;
     std::vector<pid_t> launchedInTransaction;
@@ -19538,9 +19542,9 @@ ClaimCheckpointAnalysis(
         transaction.commit();
         return std::nullopt;
     }
-    if (CountGlobalWorkerCapacity(
-            transaction, "analyze") >=
-        options.maxAnalyzeProcs)
+    if (!SchedulerWorkerCapacityHasSlot(
+            options.maxAnalyzeProcs,
+            CountGlobalWorkerCapacity(transaction, "analyze")))
     {
         transaction.commit();
         return std::nullopt;
@@ -19941,8 +19945,8 @@ int RunTrainJobs(
     PhaseSchedulingStats stats;
     stats.phase = "train";
     stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots =
-        std::max(0, options.maxTrainProcs - initialUsed);
+    stats.freeSlots = AvailableWorkerProcessSlots(
+        options.maxTrainProcs, initialUsed);
     EnsureLogDir(options.schedulerLogDir);
     int rc = 0;
 
@@ -20011,12 +20015,14 @@ int RunTrainJobs(
             LogSkip(
                 "train",
                 job.experimentId,
-                used >= options.maxTrainProcs
+                !SchedulerWorkerCapacityHasSlot(
+                    options.maxTrainProcs, used)
                     ? "global_train_slots_full"
                     : "claim_changed",
                 logState,
                 options.schedulerVerbose);
-            if (used >= options.maxTrainProcs)
+            if (!SchedulerWorkerCapacityHasSlot(
+                    options.maxTrainProcs, used))
                 break;
             continue;
         }
@@ -20077,8 +20083,8 @@ int RunInferJobs(
     PhaseSchedulingStats stats;
     stats.phase = "infer";
     stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots =
-        std::max(0, options.maxInferProcs - initialUsed);
+    stats.freeSlots = AvailableWorkerProcessSlots(
+        options.maxInferProcs, initialUsed);
     EnsureLogDir(options.schedulerLogDir);
     int rc = 0;
 
@@ -20185,12 +20191,14 @@ int RunInferJobs(
             LogSkip(
                 "infer",
                 job.experimentId,
-                used >= options.maxInferProcs
+                !SchedulerWorkerCapacityHasSlot(
+                    options.maxInferProcs, used)
                     ? "global_infer_slots_full"
                     : "claim_changed",
                 logState,
                 options.schedulerVerbose);
-            if (used >= options.maxInferProcs)
+            if (!SchedulerWorkerCapacityHasSlot(
+                    options.maxInferProcs, used))
                 break;
             continue;
         }
@@ -20249,8 +20257,8 @@ int RunAnalyzeJobs(
     PhaseSchedulingStats stats;
     stats.phase = "analyze";
     stats.examined = static_cast<int>(jobs.size());
-    stats.freeSlots =
-        std::max(0, options.maxAnalyzeProcs - initialUsed);
+    stats.freeSlots = AvailableWorkerProcessSlots(
+        options.maxAnalyzeProcs, initialUsed);
     EnsureLogDir(options.schedulerLogDir);
     int rc = 0;
     for (const ExperimentRow& job : jobs)
@@ -20290,7 +20298,8 @@ int RunAnalyzeJobs(
             ++stats.skipped;
             const int used =
                 GlobalCapacityUsed(options, "analyze");
-            if (used >= options.maxAnalyzeProcs)
+            if (!SchedulerWorkerCapacityHasSlot(
+                    options.maxAnalyzeProcs, used))
                 break;
             continue;
         }
@@ -20381,8 +20390,9 @@ int RunCheckpointEvalInferJobs(
             options.maxInferProcs);
         if (!attempt)
         {
-            if (GlobalCapacityUsed(options, "infer") >=
-                options.maxInferProcs)
+            if (!SchedulerWorkerCapacityHasSlot(
+                    options.maxInferProcs,
+                    GlobalCapacityUsed(options, "infer")))
                 break;
             continue;
         }
@@ -20969,7 +20979,7 @@ std::string ReadCommandOutput(const std::string& command)
 }
 
 std::optional<int> ExtractCommandIntOption(const std::string& command,
-                                                  const std::string& option)
+                                           const std::string& option)
 {
     const std::regex regex(option + R"((?:=|\s+)([0-9]+))");
     std::smatch match;
@@ -21102,11 +21112,14 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
             snapshot.schedulerPids.push_back(pid);
             AddResourceToAggregate(snapshot.schedulerResources, resource);
             if (!snapshot.maxTrainProcs.has_value())
-                snapshot.maxTrainProcs = ExtractCommandIntOption(command, "--max-train-procs");
+                snapshot.maxTrainProcs = ExtractSchedulerWorkerLimitFromCommand(
+                    command, "--max-train-procs");
             if (!snapshot.maxInferProcs.has_value())
-                snapshot.maxInferProcs = ExtractCommandIntOption(command, "--max-infer-procs");
+                snapshot.maxInferProcs = ExtractSchedulerWorkerLimitFromCommand(
+                    command, "--max-infer-procs");
             if (!snapshot.maxAnalyzeProcs.has_value())
-                snapshot.maxAnalyzeProcs = ExtractCommandIntOption(command, "--max-analyze-procs");
+                snapshot.maxAnalyzeProcs = ExtractSchedulerWorkerLimitFromCommand(
+                    command, "--max-analyze-procs");
             if (!snapshot.schedulerPollSeconds.has_value())
                 snapshot.schedulerPollSeconds = ExtractCommandIntOption(command, "--scheduler-poll-seconds");
             if (!snapshot.autoQueueContinuations.has_value())
@@ -23236,11 +23249,17 @@ std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProce
         warnings.push_back("process detection unavailable");
     if (processes.schedulerPids.size() > 1)
         warnings.push_back("multiple scheduler processes detected: " + std::to_string(processes.schedulerPids.size()));
-    if (processes.maxTrainProcs.has_value() && accounting.managedTrain > *processes.maxTrainProcs)
+    if (processes.maxTrainProcs.has_value() &&
+        SchedulerWorkerCapacityExceeded(
+            *processes.maxTrainProcs, accounting.managedTrain))
         warnings.push_back("train worker count exceeds max-train-procs");
-    if (processes.maxInferProcs.has_value() && accounting.managedInfer > *processes.maxInferProcs)
+    if (processes.maxInferProcs.has_value() &&
+        SchedulerWorkerCapacityExceeded(
+            *processes.maxInferProcs, accounting.managedInfer))
         warnings.push_back("infer worker count exceeds max-infer-procs");
-    if (processes.maxAnalyzeProcs.has_value() && accounting.managedAnalyze > *processes.maxAnalyzeProcs)
+    if (processes.maxAnalyzeProcs.has_value() &&
+        SchedulerWorkerCapacityExceeded(
+            *processes.maxAnalyzeProcs, accounting.managedAnalyze))
         warnings.push_back("analysis worker count exceeds max-analyze-procs");
     if (!accounting.unmanagedWorkers.empty())
         warnings.push_back("unmanaged LSTM_Release worker processes detected: " + std::to_string(accounting.unmanagedWorkers.size()));
@@ -24235,6 +24254,8 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "[--auto-evaluate-continuations] [--auto-queue-continuations] "
         << "[--continuation-scan-seconds=N] [--continuation-max-queues-per-scan=N] "
         << "[--continuation-dry-run]\n"
+        << "Scheduler worker limits accept non-negative integers. Zero prevents new workers "
+        << "in that capacity class without stopping the scheduler or existing workers.\n"
         << "Continuation automation is disabled by default. Evaluation-only persists/reuses Phase 3A "
         << "decisions without creating children. --auto-queue-continuations implies evaluation; children "
         << "enter the normal pending/train queue and obey ordinary scheduler capacity. Defaults: scan "
