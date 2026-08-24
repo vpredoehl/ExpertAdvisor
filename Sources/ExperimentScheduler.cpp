@@ -78,6 +78,7 @@
 #include "FeatureWarmupScope.hpp"
 #include "FeatureAblation.hpp"
 #include "TrainingObjective.hpp"
+#include "PairedTrainingObjectiveEvaluationService.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -200,6 +201,15 @@ struct SchedulerOptions
     std::optional<std::string> recommendationRankingBucket;
     std::optional<std::pair<long long, long long>> compareRecommendationEvaluations;
     std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
+    std::optional<std::pair<long long, long long>> compareTrainingObjectivePair;
+    std::optional<std::string> pairPrimaryProfitabilityMetric;
+    std::optional<double> pairMinimumProfitabilityImprovement;
+    std::optional<double> pairMaximumProfitabilityWorsening;
+    std::optional<double> pairMaximumInferenceAccuracyDecrease;
+    std::optional<double> pairMaximumAcceptAccuracyDecrease;
+    std::optional<double> pairMaximumAcceptRateDecrease;
+    std::optional<double> pairMaximumLeaderScoreDecrease;
+    std::optional<double> pairMaximumNeutralProportionIncrease;
     std::optional<long long> approveConversionProposalId;
     std::optional<long long> rejectConversionProposalId;
     std::optional<long long> showConversionProposalId;
@@ -932,6 +942,25 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg{argv[i]};
+        if (arg == "--compare-training-objective-pair" ||
+            arg == "--pair-primary-profitability-metric" ||
+            arg == "--pair-min-profitability-improvement" ||
+            arg == "--pair-max-profitability-worsening" ||
+            arg == "--pair-max-infer-accuracy-decrease" ||
+            arg == "--pair-max-accept-accuracy-decrease" ||
+            arg == "--pair-max-accept-rate-decrease" ||
+            arg == "--pair-max-leader-score-decrease" ||
+            arg == "--pair-max-neutral-proportion-increase" ||
+            arg.rfind("--compare-training-objective-pair=", 0) == 0 ||
+            arg.rfind("--pair-primary-profitability-metric=", 0) == 0 ||
+            arg.rfind("--pair-min-profitability-improvement=", 0) == 0 ||
+            arg.rfind("--pair-max-profitability-worsening=", 0) == 0 ||
+            arg.rfind("--pair-max-infer-accuracy-decrease=", 0) == 0 ||
+            arg.rfind("--pair-max-accept-accuracy-decrease=", 0) == 0 ||
+            arg.rfind("--pair-max-accept-rate-decrease=", 0) == 0 ||
+            arg.rfind("--pair-max-leader-score-decrease=", 0) == 0 ||
+            arg.rfind("--pair-max-neutral-proportion-increase=", 0) == 0)
+            return true;
         if (arg == "--schedule-experiments" ||
             arg == "--complete-scheduler-protocol-cutover" ||
             arg == "--model-info" ||
@@ -1896,6 +1925,40 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.allowDuplicateExperiment = true;
         else if (arg == "--analyze-experiment")
             options.analyzeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-training-objective-pair")
+            options.compareTrainingObjectivePair = ParsePositiveIdPair(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-primary-profitability-metric")
+            options.pairPrimaryProfitabilityMetric =
+                RequireNextArg(argc, argv, i, arg);
+        else if (arg == "--pair-min-profitability-improvement")
+            options.pairMinimumProfitabilityImprovement =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-max-profitability-worsening")
+            options.pairMaximumProfitabilityWorsening =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-max-infer-accuracy-decrease")
+            options.pairMaximumInferenceAccuracyDecrease =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-max-accept-accuracy-decrease")
+            options.pairMaximumAcceptAccuracyDecrease =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-max-accept-rate-decrease")
+            options.pairMaximumAcceptRateDecrease =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-max-leader-score-decrease")
+            options.pairMaximumLeaderScoreDecrease =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pair-max-neutral-proportion-increase")
+            options.pairMaximumNeutralProportionIncrease =
+                ParseNonNegativeFiniteDouble(
+                    arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--stop-experiment")
             options.stopExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--reconcile-worker-attempt")
@@ -3570,6 +3633,48 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     "--recommendation-campaign-outcome-assessment", value);
         }
+        else if (SplitOptionWithValue(
+                     arg, "--compare-training-objective-pair", value))
+            options.compareTrainingObjectivePair = ParsePositiveIdPair(
+                "--compare-training-objective-pair", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-primary-profitability-metric", value))
+            options.pairPrimaryProfitabilityMetric = value;
+        else if (SplitOptionWithValue(
+                     arg, "--pair-min-profitability-improvement", value))
+            options.pairMinimumProfitabilityImprovement =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-min-profitability-improvement", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-max-profitability-worsening", value))
+            options.pairMaximumProfitabilityWorsening =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-max-profitability-worsening", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-max-infer-accuracy-decrease", value))
+            options.pairMaximumInferenceAccuracyDecrease =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-max-infer-accuracy-decrease", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-max-accept-accuracy-decrease", value))
+            options.pairMaximumAcceptAccuracyDecrease =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-max-accept-accuracy-decrease", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-max-accept-rate-decrease", value))
+            options.pairMaximumAcceptRateDecrease =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-max-accept-rate-decrease", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-max-leader-score-decrease", value))
+            options.pairMaximumLeaderScoreDecrease =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-max-leader-score-decrease", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pair-max-neutral-proportion-increase", value))
+            options.pairMaximumNeutralProportionIncrease =
+                ParseNonNegativeFiniteDouble(
+                    "--pair-max-neutral-proportion-increase", value);
         else if (SplitOptionWithValue(arg, "--requeue-analysis", value))
             options.requeueAnalysisExperimentId = ParsePositiveLongLong("--requeue-analysis", value);
         else if (SplitOptionWithValue(arg, "--requeue-inference", value))
@@ -3737,6 +3842,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.recommendationRankingMemberStatusId.has_value() ? 1 : 0) +
         (options.compareRecommendationEvaluations.has_value() ? 1 : 0) +
         (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
+        (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -3826,6 +3932,36 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.disableCheckpointPolicyExperimentId.has_value() ? 1 : 0) +
         (options.setCheckpointPolicy.has_value() ? 1 : 0) +
         (options.help ? 1 : 0);
+    const bool pairPolicyOption =
+        options.pairPrimaryProfitabilityMetric.has_value() ||
+        options.pairMinimumProfitabilityImprovement.has_value() ||
+        options.pairMaximumProfitabilityWorsening.has_value() ||
+        options.pairMaximumInferenceAccuracyDecrease.has_value() ||
+        options.pairMaximumAcceptAccuracyDecrease.has_value() ||
+        options.pairMaximumAcceptRateDecrease.has_value() ||
+        options.pairMaximumLeaderScoreDecrease.has_value() ||
+        options.pairMaximumNeutralProportionIncrease.has_value();
+    if (pairPolicyOption && !options.compareTrainingObjectivePair)
+        throw std::invalid_argument(
+            "pair materiality options require "
+            "--compare-training-objective-pair");
+    if (options.compareTrainingObjectivePair &&
+        (!options.pairPrimaryProfitabilityMetric ||
+         !options.pairMinimumProfitabilityImprovement ||
+         !options.pairMaximumProfitabilityWorsening ||
+         !options.pairMaximumInferenceAccuracyDecrease ||
+         !options.pairMaximumAcceptAccuracyDecrease ||
+         !options.pairMaximumAcceptRateDecrease ||
+         !options.pairMaximumLeaderScoreDecrease ||
+         !options.pairMaximumNeutralProportionIncrease))
+        throw std::invalid_argument(
+            "--compare-training-objective-pair requires the explicit primary "
+            "metric and all seven pair materiality thresholds");
+    if (options.pairPrimaryProfitabilityMetric &&
+        *options.pairPrimaryProfitabilityMetric != "aggregate" &&
+        *options.pairPrimaryProfitabilityMetric != "average")
+        throw std::invalid_argument(
+            "--pair-primary-profitability-metric must be aggregate or average");
     if (options.includeParentModels && !options.listExperimentLineageId.has_value())
         throw std::invalid_argument("--include-parent-models is only valid with --list-experiment-lineage=ID");
     if (options.backupOutputPath.has_value() && !options.backupDatabase)
@@ -24107,6 +24243,20 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
         << "Usage: " << exe
+        << " --compare-training-objective-pair=CONTROL_ID:TREATMENT_ID "
+        << "--pair-primary-profitability-metric=aggregate|average "
+        << "--pair-min-profitability-improvement=VALUE "
+        << "--pair-max-profitability-worsening=VALUE "
+        << "--pair-max-infer-accuracy-decrease=VALUE "
+        << "--pair-max-accept-accuracy-decrease=VALUE "
+        << "--pair-max-accept-rate-decrease=VALUE "
+        << "--pair-max-leader-score-decrease=VALUE "
+        << "--pair-max-neutral-proportion-increase=VALUE\n"
+        << "Training-objective pair comparison uses one repeatable-read, "
+        << "read-only transaction and never persists comparison results. "
+        << "Exit 0 includes every scientific disposition; exit 3 is a "
+        << "missing, ambiguous, or invalid evidence contract.\n"
+        << "Usage: " << exe
         << " --pause-all-experiments [--dry-run | --yes]\n"
         << "Usage: " << exe
         << " --resume-all-experiments [--dry-run | --yes]\n"
@@ -25418,6 +25568,34 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         {
             PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
             return 0;
+        }
+        if (options.compareTrainingObjectivePair)
+        {
+            EA::PairedTrainingObjectiveEvaluation::ComparisonCommand command;
+            command.experimentIds = *options.compareTrainingObjectivePair;
+            command.policy.primaryProfitabilityMetric =
+                *options.pairPrimaryProfitabilityMetric == "aggregate"
+                    ? EA::PairedTrainingObjectiveEvaluation::
+                          ProfitabilityPrimaryMetric::
+                              AggregateTerminalHorizonLogReturnSum
+                    : EA::PairedTrainingObjectiveEvaluation::
+                          ProfitabilityPrimaryMetric::
+                              AverageTerminalHorizonLogReturnPerActionablePrediction;
+            command.policy.minimumProfitabilityImprovement =
+                *options.pairMinimumProfitabilityImprovement;
+            command.policy.maximumProfitabilityWorsening =
+                *options.pairMaximumProfitabilityWorsening;
+            command.policy.classification =
+                EA::PairedTrainingObjectiveEvaluation::
+                    ClassificationDegradationPolicy{
+                        *options.pairMaximumInferenceAccuracyDecrease,
+                        *options.pairMaximumAcceptAccuracyDecrease,
+                        *options.pairMaximumAcceptRateDecrease,
+                        *options.pairMaximumLeaderScoreDecrease,
+                        *options.pairMaximumNeutralProportionIncrease};
+            return EA::PairedTrainingObjectiveEvaluation::
+                RunComparisonCommand(
+                    LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.modelInfo)
             return PrintModelInfo(*options.modelInfoModelId);

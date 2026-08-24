@@ -47,29 +47,35 @@ Pair::ArmEvidence Arm(long long experimentId,
     c.coreLearningRateMultiplier = 1.0;
     c.headLearningRateMultiplier = 1.0;
     c.checkpointInterval = 20;
-    c.architectureCanonical = "lstm_v1;layers=1;hidden=64;heads=3class+scalar";
     c.inputWidth = 50;
     c.hiddenSize = 64;
     c.layerCount = 1;
     c.windowSize = 64;
-    c.featureConfigurationCanonical =
-        "feature_layout_v1;width=50;normalization=1";
+    c.modelMetadataSchemaVersion = 1;
+    c.trainConfigurationSchemaVersion = 1;
+    c.normalizationVersion = 1;
+    c.classWeightDown = 1.0;
+    c.classWeightNeutral = 1.0;
+    c.classWeightUp = 1.0;
     c.featureWarmupScope = "full_history_warmup";
     c.donchianMode = "enabled";
     c.donchianLookback = 20;
     c.featureAblationMask = "";
-    c.optimizerConfigurationCanonical = "sgd_v1;moments=0";
-    c.learningRateConfigurationCanonical =
-        "base=runtime_default;core=1;head_weight=1;head_bias=1";
+    c.optimizerMetadataSchemaVersion = 1;
+    c.optimizerType = 1;
+    c.optimizerUpdateCount = 100;
+    c.persistedCoreLearningRateMultiplier = 1.0;
+    c.persistedHeadWeightLearningRateMultiplier = 1.0;
+    c.persistedHeadBiasLearningRateMultiplier = 1.0;
     c.labelRuleId = 1;
-    c.labelRuleCanonical =
-        "up_neutral_down_return_high_low_first_hit_strict_threshold_up_tie_v1";
     c.targetType = 1;
-    c.targetSemanticsCanonical = "up_neutral_down_return_v1";
-    c.modelInputProvenanceCanonical =
-        "model_input_semantics_meta_v1;layout=1;width=50";
-    c.initializationCanonical =
-        "fresh_model_constant_initialization_contract_v1";
+    c.targetScale = 1.0;
+    c.targetStandardDeviation = 1.0;
+    c.modelInputMetadataSchemaVersion = 1;
+    c.modelInputLayoutVersion = 1;
+    c.persistedTrainingSymbol = c.symbol;
+    c.persistedTrainingStart = c.trainStart;
+    c.persistedTrainingEnd = c.trainEnd;
     c.experimentObjective = Provenance(objective);
     c.runProvenance = {
         "abc123", "phase6", false, "Release", "AppleClang-18",
@@ -215,10 +221,9 @@ int main()
     assert(Has(Compare(baseControl, mismatch).invalidReasons,
                "core_lr_mismatch"));
     mismatch = baseTreatment;
-    mismatch.configuration.learningRateConfigurationCanonical =
-        "base=runtime_default;core=1;head_weight=1;head_bias=1.0001";
+    mismatch.configuration.persistedHeadBiasLearningRateMultiplier = 1.0001;
     assert(Has(Compare(baseControl, mismatch).invalidReasons,
-               "learning_rate_configuration_mismatch"));
+               "persisted_head_bias_lr_mismatch"));
     mismatch = baseTreatment;
     mismatch.configuration.inputWidth = 49;
     assert(Has(Compare(baseControl, mismatch).invalidReasons,
@@ -323,7 +328,7 @@ int main()
     auto noRuntime = baseTreatment;
     noRuntime.runtimeObjective.reset();
     assert(Compare(baseControl, noRuntime).disposition ==
-           Pair::Disposition::Incomplete);
+           Pair::Disposition::Promising);
 
     std::cout << "paired_training_objective_evaluation_tests_passed\n";
     return 0;

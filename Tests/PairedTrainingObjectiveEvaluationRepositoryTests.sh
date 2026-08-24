@@ -6,7 +6,7 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/ea_phase4d_verify.XXXXXX")"
 cluster_dir="${work_dir}/pgdata"
 socket_dir="${work_dir}/socket"
 binary="${work_dir}/PairedTrainingObjectiveEvaluationRepositoryTests"
-database_name="ea_phase4d_verify_${$}_${RANDOM}"
+database_name="ea_phase4d_loader_${$}_${RANDOM}"
 database_created=false
 server_started=false
 database_dropped=false
@@ -15,7 +15,7 @@ port="$((54000 + ($$ % 1000)))"
 
 verify_database_name() {
     printf 'DISPOSABLE_DATABASE_NAME=%s\n' "${database_name}"
-    if [[ ! "${database_name}" =~ ^ea_phase4d_verify_[A-Za-z0-9_]+$ ]]; then
+    if [[ ! "${database_name}" =~ ^ea_phase4d_loader_[A-Za-z0-9_]+$ ]]; then
         printf 'Rejected unsafe disposable database name: %s\n' \
             "${database_name}" >&2
         exit 1
@@ -107,7 +107,8 @@ CREATE TABLE experiment (
 
 CREATE TABLE model (
     model_id bigint PRIMARY KEY,
-    experiment_id bigint REFERENCES experiment(experiment_id)
+    experiment_id bigint REFERENCES experiment(experiment_id),
+    parent_model_id bigint REFERENCES model(model_id)
 );
 
 CREATE TABLE matrix (
@@ -115,6 +116,8 @@ CREATE TABLE matrix (
     param_name text NOT NULL,
     row_idx integer NOT NULL,
     col_idx integer NOT NULL,
+    n_rows integer NOT NULL,
+    n_cols integer NOT NULL,
     value double precision NOT NULL,
     PRIMARY KEY (model_id, param_name, row_idx, col_idx)
 );
@@ -154,18 +157,13 @@ CREATE TABLE experiment_analysis_result (
     experiment_id bigint NOT NULL REFERENCES experiment(experiment_id),
     model_id bigint REFERENCES model(model_id),
     analysis_scope text NOT NULL,
+    checkpoint_eval_id bigint REFERENCES experiment_checkpoint_eval(checkpoint_eval_id),
+    parent_experiment_id bigint REFERENCES experiment(experiment_id),
     analysis_status text NOT NULL,
     infer_accuracy double precision,
     accept_accuracy double precision,
     accept_rate double precision,
     leader_score double precision
-);
-
-CREATE TABLE phase4d_runtime_objective_event (
-    experiment_id bigint PRIMARY KEY REFERENCES experiment(experiment_id),
-    event_name text NOT NULL,
-    objective_identifier text NOT NULL,
-    objective_hash text NOT NULL
 );
 
 \i '${repo_root}/Database/migrations/073_inference_profitability_observation.sql'
@@ -187,6 +185,8 @@ fi
     -I"${repo_root}/Headers" -I"${repo_root}/Sources" \
     "${repo_root}/Tests/PairedTrainingObjectiveEvaluationRepositoryTests.cpp" \
     "${repo_root}/Sources/PairedTrainingObjectiveEvaluation.cpp" \
+    "${repo_root}/Sources/PairedTrainingObjectiveEvaluationRepository.cpp" \
+    "${repo_root}/Sources/PairedTrainingObjectiveEvaluationService.cpp" \
     "${repo_root}/Sources/InferenceProfitability.cpp" \
     "${repo_root}/Sources/InferenceProfitabilityRepository.cpp" \
     "${pqxx_libs[@]}" -o "${binary}"

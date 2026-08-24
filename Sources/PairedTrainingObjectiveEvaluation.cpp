@@ -93,6 +93,61 @@ bool ValidObjective(const ObjectiveProvenance& value)
     }
 }
 
+void ValidatePersistedFinalModelConfiguration(
+    const ScientificConfiguration& value,
+    std::string_view arm,
+    std::vector<std::string>& reasons)
+{
+    const std::string prefix = std::string(arm) + '_';
+    if (value.inputWidth <= 0 || value.hiddenSize <= 0 ||
+        value.layerCount <= 0 || value.windowSize <= 0)
+        Add(reasons, prefix + "architecture_incomplete");
+    if (value.modelMetadataSchemaVersion <= 0 ||
+        value.trainConfigurationSchemaVersion <= 0 ||
+        value.optimizerMetadataSchemaVersion <= 0 ||
+        value.optimizerType <= 0 || value.modelInputMetadataSchemaVersion <= 0 ||
+        value.modelInputLayoutVersion <= 0 || value.labelRuleId <= 0 ||
+        value.donchianLookback <= 0)
+        Add(reasons, prefix + "persisted_model_semantics_incomplete");
+    const double persistedValues[] = {
+        value.classWeightDown,
+        value.classWeightNeutral,
+        value.classWeightUp,
+        value.persistedCoreLearningRateMultiplier,
+        value.persistedHeadWeightLearningRateMultiplier,
+        value.persistedHeadBiasLearningRateMultiplier,
+        value.targetScale,
+        value.targetBias,
+        value.targetMean,
+        value.targetStandardDeviation};
+    for (double persisted : persistedValues)
+        if (!Finite(persisted))
+            Add(reasons, prefix + "persisted_model_value_nonfinite");
+    RequireText(value.persistedTrainingSymbol,
+                prefix + "persisted_training_symbol", reasons);
+    RequireText(value.persistedTrainingStart,
+                prefix + "persisted_training_start", reasons);
+    RequireText(value.persistedTrainingEnd,
+                prefix + "persisted_training_end", reasons);
+    if (value.persistedTrainingSymbol != value.symbol ||
+        value.persistedTrainingStart != value.trainStart ||
+        value.persistedTrainingEnd != value.trainEnd)
+        Add(reasons, prefix + "persisted_training_context_mismatch");
+    if (value.coreLearningRateMultiplier &&
+        !SamePersistedModelThreshold(
+            *value.coreLearningRateMultiplier,
+            value.persistedCoreLearningRateMultiplier))
+        Add(reasons, prefix + "persisted_core_lr_context_mismatch");
+    if (value.headLearningRateMultiplier &&
+        !SamePersistedModelThreshold(
+            *value.headLearningRateMultiplier,
+            value.persistedHeadWeightLearningRateMultiplier))
+        Add(reasons, prefix + "persisted_head_lr_context_mismatch");
+    if (value.resumeExpandInputWidth !=
+        value.inputWidthExpansionCanonical.has_value())
+        Add(reasons, prefix + "input_width_expansion_provenance_mismatch");
+}
+
 void ValidateScientificCompleteness(
     const ScientificConfiguration& value,
     std::string_view arm,
@@ -104,11 +159,6 @@ void ValidateScientificCompleteness(
     if (value.targetEpochs <= 0) Add(reasons, prefix + "target_epochs_invalid");
     if (value.checkpointInterval <= 0)
         Add(reasons, prefix + "checkpoint_interval_invalid");
-    if (value.inputWidth <= 0 || value.hiddenSize <= 0 ||
-        value.layerCount <= 0 || value.windowSize <= 0)
-        Add(reasons, prefix + "architecture_incomplete");
-    if (value.labelRuleId <= 0 || value.donchianLookback <= 0)
-        Add(reasons, prefix + "semantic_integer_invalid");
     if (!Finite(value.threshold) ||
         (value.coreLearningRateMultiplier &&
          !Finite(*value.coreLearningRateMultiplier)) ||
@@ -120,27 +170,13 @@ void ValidateScientificCompleteness(
     RequireText(value.trainEnd, prefix + "train_end", reasons);
     RequireText(value.inferenceStart, prefix + "inference_start", reasons);
     RequireText(value.inferenceEnd, prefix + "inference_end", reasons);
-    RequireText(value.architectureCanonical,
-                prefix + "architecture_canonical", reasons);
-    RequireText(value.featureConfigurationCanonical,
-                prefix + "feature_configuration", reasons);
     RequireText(value.featureWarmupScope,
                 prefix + "feature_warmup_scope", reasons);
     RequireText(value.donchianMode, prefix + "donchian_mode", reasons);
-    RequireText(value.optimizerConfigurationCanonical,
-                prefix + "optimizer_configuration", reasons);
-    RequireText(value.learningRateConfigurationCanonical,
-                prefix + "learning_rate_configuration", reasons);
-    RequireText(value.labelRuleCanonical,
-                prefix + "label_rule_canonical", reasons);
-    RequireText(value.targetSemanticsCanonical,
-                prefix + "target_semantics", reasons);
-    RequireText(value.modelInputProvenanceCanonical,
-                prefix + "model_input_provenance", reasons);
-    RequireText(value.initializationCanonical,
-                prefix + "initialization", reasons);
     RequireText(value.runProvenance.gitCommit,
                 prefix + "git_commit", reasons);
+    if (!value.runProvenance.gitDirty)
+        Add(reasons, prefix + "git_dirty_missing");
     RequireText(value.runProvenance.buildConfiguration,
                 prefix + "build_configuration", reasons);
     RequireText(value.runProvenance.compilerVersion,
@@ -176,28 +212,55 @@ void ValidatePairIdentity(const ScientificConfiguration& control,
     EA_COMPARE_FIELD(coreLearningRateMultiplier, "core_lr_mismatch");
     EA_COMPARE_FIELD(headLearningRateMultiplier, "head_lr_mismatch");
     EA_COMPARE_FIELD(checkpointInterval, "checkpoint_interval_mismatch");
-    EA_COMPARE_FIELD(architectureCanonical, "architecture_mismatch");
     EA_COMPARE_FIELD(inputWidth, "input_width_mismatch");
     EA_COMPARE_FIELD(hiddenSize, "hidden_size_mismatch");
     EA_COMPARE_FIELD(layerCount, "layer_count_mismatch");
     EA_COMPARE_FIELD(windowSize, "window_size_mismatch");
-    EA_COMPARE_FIELD(featureConfigurationCanonical,
-                     "feature_configuration_mismatch");
+    EA_COMPARE_FIELD(modelMetadataSchemaVersion,
+                     "model_metadata_schema_mismatch");
+    EA_COMPARE_FIELD(trainConfigurationSchemaVersion,
+                     "train_configuration_schema_mismatch");
+    EA_COMPARE_FIELD(normalizationVersion, "normalization_mismatch");
+    EA_COMPARE_FIELD(classWeightDown, "class_weight_down_mismatch");
+    EA_COMPARE_FIELD(classWeightNeutral, "class_weight_neutral_mismatch");
+    EA_COMPARE_FIELD(classWeightUp, "class_weight_up_mismatch");
     EA_COMPARE_FIELD(featureWarmupScope, "feature_warmup_scope_mismatch");
     EA_COMPARE_FIELD(donchianMode, "donchian_mode_mismatch");
     EA_COMPARE_FIELD(donchianLookback, "donchian_lookback_mismatch");
     EA_COMPARE_FIELD(featureAblationMask, "feature_ablation_mask_mismatch");
-    EA_COMPARE_FIELD(optimizerConfigurationCanonical,
-                     "optimizer_configuration_mismatch");
-    EA_COMPARE_FIELD(learningRateConfigurationCanonical,
-                     "learning_rate_configuration_mismatch");
+    EA_COMPARE_FIELD(optimizerMetadataSchemaVersion,
+                     "optimizer_metadata_schema_mismatch");
+    EA_COMPARE_FIELD(optimizerType, "optimizer_type_mismatch");
+    EA_COMPARE_FIELD(optimizerFirstMomentBufferCount,
+                     "optimizer_first_moment_mismatch");
+    EA_COMPARE_FIELD(optimizerSecondMomentBufferCount,
+                     "optimizer_second_moment_mismatch");
+    EA_COMPARE_FIELD(persistedCoreLearningRateMultiplier,
+                     "persisted_core_lr_mismatch");
+    EA_COMPARE_FIELD(persistedHeadWeightLearningRateMultiplier,
+                     "persisted_head_weight_lr_mismatch");
+    EA_COMPARE_FIELD(persistedHeadBiasLearningRateMultiplier,
+                     "persisted_head_bias_lr_mismatch");
     EA_COMPARE_FIELD(labelRuleId, "label_rule_id_mismatch");
-    EA_COMPARE_FIELD(labelRuleCanonical, "label_rule_mismatch");
     EA_COMPARE_FIELD(targetType, "target_type_mismatch");
-    EA_COMPARE_FIELD(targetSemanticsCanonical, "target_semantics_mismatch");
-    EA_COMPARE_FIELD(modelInputProvenanceCanonical,
-                     "model_input_provenance_mismatch");
-    EA_COMPARE_FIELD(initializationCanonical, "initialization_mismatch");
+    EA_COMPARE_FIELD(targetScale, "target_scale_mismatch");
+    EA_COMPARE_FIELD(targetBias, "target_bias_mismatch");
+    EA_COMPARE_FIELD(targetUseZScore, "target_zscore_mismatch");
+    EA_COMPARE_FIELD(targetMean, "target_mean_mismatch");
+    EA_COMPARE_FIELD(targetStandardDeviation,
+                     "target_standard_deviation_mismatch");
+    EA_COMPARE_FIELD(modelInputMetadataSchemaVersion,
+                     "model_input_metadata_schema_mismatch");
+    EA_COMPARE_FIELD(modelInputLayoutVersion,
+                     "model_input_layout_mismatch");
+    EA_COMPARE_FIELD(persistedTrainingSymbol,
+                     "persisted_training_symbol_mismatch");
+    EA_COMPARE_FIELD(persistedTrainingStart,
+                     "persisted_training_start_mismatch");
+    EA_COMPARE_FIELD(persistedTrainingEnd,
+                     "persisted_training_end_mismatch");
+    EA_COMPARE_FIELD(inputWidthExpansionCanonical,
+                     "input_width_expansion_mismatch");
     EA_COMPARE_FIELD(resumeModelId, "resume_model_id_mismatch");
     EA_COMPARE_FIELD(resumeExpandInputWidth,
                      "resume_expand_input_width_mismatch");
@@ -250,9 +313,12 @@ void ValidateObjectiveExecution(const ArmEvidence& arm,
     else if (finalCount != 1)
         Add(invalid, prefix + "final_model_objective_not_unique");
 
-    if (!arm.runtimeObjective)
-        Add(incomplete, prefix + "runtime_objective_evidence_missing");
-    else
+    // Production does not persist the diagnostic TRAINING_OBJECTIVE_ACTIVE
+    // log event.  Exact experiment provenance plus objective metadata on
+    // every materialized model is the durable execution-lineage contract.
+    // Retain validation for callers that do have independently persisted
+    // runtime evidence, but do not manufacture or require it.
+    if (arm.runtimeObjective)
     {
         const auto& runtime = *arm.runtimeObjective;
         if (runtime.eventName != "TRAINING_OBJECTIVE_ACTIVE" ||
@@ -294,7 +360,8 @@ void ValidateClassification(const ArmEvidence& arm,
         value.analysisExperimentId != arm.configuration.experimentId)
         Add(invalid, prefix + "classification_model_experiment_mismatch");
     if (value.inferenceScope != "final" || value.analysisScope != "final" ||
-        value.checkpointEvalId || value.parentExperimentId)
+        value.checkpointEvalId || value.parentExperimentId ||
+        value.analysisCheckpointEvalId || value.analysisParentExperimentId)
         Add(invalid, prefix + "classification_not_exact_final_scope");
     if (value.status != "completed" || value.analysisStatus != "completed")
         Add(incomplete, prefix + "classification_not_completed");
@@ -416,15 +483,43 @@ ComparisonResult Compare(const ArmEvidence& control,
                                    result.invalidReasons);
     ValidateScientificCompleteness(treatment.configuration, "treatment",
                                    result.invalidReasons);
-    ValidatePairIdentity(control.configuration, treatment.configuration,
-                         result.invalidReasons);
-
     if (control.experimentStatus != "completed" ||
         control.experimentPhase != "done")
         Add(result.incompleteReasons, "control_experiment_not_complete");
     if (treatment.experimentStatus != "completed" ||
         treatment.experimentPhase != "done")
         Add(result.incompleteReasons, "treatment_experiment_not_complete");
+
+    // A running arm has no authoritative final-model identity yet.  Report
+    // that scientific state without comparing checkpoint metadata as though
+    // it were final evidence.
+    if (!result.invalidReasons.empty())
+    {
+        result.disposition = Disposition::InvalidComparison;
+        return result;
+    }
+    if (!result.incompleteReasons.empty())
+    {
+        result.disposition = Disposition::Incomplete;
+        return result;
+    }
+
+    if (!control.finalModelId)
+        Add(result.incompleteReasons, "control_final_model_missing");
+    if (!treatment.finalModelId)
+        Add(result.incompleteReasons, "treatment_final_model_missing");
+    if (!result.incompleteReasons.empty())
+    {
+        result.disposition = Disposition::Incomplete;
+        return result;
+    }
+
+    ValidatePairIdentity(control.configuration, treatment.configuration,
+                         result.invalidReasons);
+    ValidatePersistedFinalModelConfiguration(
+        control.configuration, "control", result.invalidReasons);
+    ValidatePersistedFinalModelConfiguration(
+        treatment.configuration, "treatment", result.invalidReasons);
 
     ValidateObjectiveExecution(control, "control", result.invalidReasons,
                                result.incompleteReasons);
