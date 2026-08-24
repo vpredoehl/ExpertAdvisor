@@ -24,6 +24,7 @@ fi
 COMMON_SOURCES=(
     "$ROOT/Common/HistoricalFxTimestamp.cpp"
     "$ROOT/Sources/BeaEconomicReleaseAdapter.cpp"
+    "$ROOT/Sources/CensusEconomicReleaseAdapter.cpp"
     "$ROOT/Sources/DolEtaWeeklyClaimsAdapter.cpp"
     "$ROOT/Sources/EconomicEventImportValidation.cpp"
     "$ROOT/Sources/EconomicEventImportRepository.cpp"

@@ -1,6 +1,7 @@
 #include "EconomicEventImportService.hpp"
 
 #include "BeaEconomicReleaseAdapter.hpp"
+#include "CensusEconomicReleaseAdapter.hpp"
 #include "DolEtaWeeklyClaimsAdapter.hpp"
 #include "EconomicEventImportValidation.hpp"
 
@@ -96,7 +97,8 @@ CliArguments ParseCli(
 
     if (!commandSeen || parsed.agency.empty())
         throw std::invalid_argument("--import-economic-events requires an agency");
-    if (parsed.agency != "dol-eta" && parsed.agency != "bea")
+    if (parsed.agency != "dol-eta" && parsed.agency != "bea" &&
+        parsed.agency != "census")
         throw std::invalid_argument("unsupported economic-event agency: " + parsed.agency);
     if (parsed.manifest.empty())
         throw std::invalid_argument("--manifest is required");
@@ -153,9 +155,13 @@ int RunEconomicEventImportCli(
 
         // Acquisition, digest verification, parsing, and pure validation all
         // finish before any database transaction is opened.
-        auto candidates = arguments.agency == "bea"
-            ? LoadBeaEconomicReleaseManifest(arguments.manifest)
-            : LoadDolEtaWeeklyClaimsManifest(arguments.manifest);
+        std::vector<AuthoritativeEconomicEventCandidate> candidates;
+        if (arguments.agency == "bea")
+            candidates = LoadBeaEconomicReleaseManifest(arguments.manifest);
+        else if (arguments.agency == "census")
+            candidates = LoadCensusEconomicReleaseManifest(arguments.manifest);
+        else
+            candidates = LoadDolEtaWeeklyClaimsManifest(arguments.manifest);
         candidates = ValidateAndOrderEconomicEventCandidates(std::move(candidates));
 
         pqxx::connection connection{ConnectionString()};

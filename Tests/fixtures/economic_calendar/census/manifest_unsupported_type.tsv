@@ -1,0 +1,4 @@
+manifest_version	1
+parser_version	census_economic_release_v1
+artifact_path	artifact_sha256	artifact_type	source_url	source_artifact_path	source_artifact_sha256	extractor
+2010-retail-sales-advance.txt	8ca65243cb6e62640733342265c9fb6edce3a86e7046540093b293e3d61c386d	html	https://www2.census.gov/retail/releases/historical/marts/adv1005.pdf	2010-retail-sales-advance.txt	8ca65243cb6e62640733342265c9fb6edce3a86e7046540093b293e3d61c386d	none
