@@ -160,6 +160,50 @@ int main(int argc, const char* argv[])
     assert(modernBeigeBookCandidate.eventTimestampUnixMicros ==
            UtcMicros(2024, 4, 17, 18, 0));
 
+    const auto legacyBeigeBookCandidate =
+        ParseFederalReserveEconomicReleaseArtifact(
+            "Beige Book - January 12, 2011\n"
+            "For use at 2:00 p.m. EST\n",
+            "https://www.federalreserve.gov/monetarypolicy/beigebook/files/"
+            "fullreport20110112.pdf",
+            "beige_book");
+    assert(legacyBeigeBookCandidate.sourceEventId ==
+           "federal_reserve:beigebook-20110112");
+
+    const auto publicationsBeigeBookCandidate =
+        ParseFederalReserveEconomicReleaseArtifact(
+            "Beige Book - January 17, 2024\n"
+            "For use at 2:00 p.m. EST\n",
+            "https://www.federalreserve.gov/publications/files/"
+            "BeigeBook_20240117.pdf",
+            "beige_book");
+    assert(publicationsBeigeBookCandidate.sourceEventId ==
+           "federal_reserve:beigebook-20240117");
+
+    const auto modernDateOnlyBeigeBookCandidate =
+        ParseFederalReserveEconomicReleaseArtifact(
+            "The Beige Book\nSummary of Commentary\nJanuary 2024\n",
+            "https://www.federalreserve.gov/publications/files/"
+            "BeigeBook_20240117.pdf",
+            "beige_book");
+    assert(modernDateOnlyBeigeBookCandidate.sourceReleaseDate ==
+           std::optional<std::string>{"2024-01-17"});
+    assert(!modernDateOnlyBeigeBookCandidate.sourceReleaseTime);
+    assert(modernDateOnlyBeigeBookCandidate.historicalTimeConfidence ==
+           "date_only");
+    assert(modernDateOnlyBeigeBookCandidate.eventTimestampUnixMicros ==
+           UtcMicros(2024, 1, 18, 5, 0));
+
+    const auto complexMinutesCandidate =
+        ParseFederalReserveEconomicReleaseArtifact(
+            "May 22, 2024 Minutes of the Federal Open Market Committee, "
+            "April 30–May 1, 2024\nFor release at 2:00 p.m. EDT\n",
+            "https://www.federalreserve.gov/newsevents/pressreleases/"
+            "monetary20240522a.htm",
+            "fomc_minutes");
+    assert(complexMinutesCandidate.referencePeriod ==
+           std::optional<std::string>{"meetings April 30-May 1, 2024"});
+
     const auto manifestCandidates =
         LoadFederalReserveEconomicReleaseManifest(fixtures / "manifest.tsv");
     assert(manifestCandidates.size() == 6);

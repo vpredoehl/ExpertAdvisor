@@ -11,6 +11,7 @@ hashed in the shared ingestion manifest.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import html.parser
 import pathlib
@@ -19,12 +20,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 
 USER_AGENT = "ExpertAdvisor-authoritative-calendar-acquisition/1"
-MAX_ARTIFACTS = 100
+MAX_ARTIFACTS = 2000
+RETRY_ATTEMPTS = 6
+MAX_RETRY_DELAY_SECONDS = 60
 ARCHIVES = {
     "retail-sales-advance": "https://www.census.gov/retail/marts/historic_releases.html",
     "new-residential-construction": "https://www.census.gov/construction/nrc/data/releases.html",
@@ -124,33 +129,56 @@ def occurrence(value: str) -> tuple[str, str, int, int, str]:
 
 def fetch(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        final = urllib.parse.urlsplit(response.geturl())
-        if final.scheme.lower() != "https" or final.hostname not in {
-            "www.census.gov", "www2.census.gov"
-        }:
-            raise RuntimeError(
-                f"download redirected outside first-party Census: {response.geturl()}"
-            )
-        data = response.read()
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                final = urllib.parse.urlsplit(response.geturl())
+                if final.scheme.lower() != "https" or final.hostname not in {
+                    "www.census.gov", "www2.census.gov"
+                }:
+                    raise RuntimeError(
+                        "download redirected outside first-party Census: "
+                        f"{response.geturl()}"
+                    )
+                data = response.read()
+            break
+        except urllib.error.HTTPError as error:
+            if error.code != 429 and error.code < 500:
+                raise
+            if attempt + 1 == RETRY_ATTEMPTS:
+                raise
+            retry_after = error.headers.get("Retry-After")
+            delay = int(retry_after) if retry_after and retry_after.isdigit() \
+                else 2 ** attempt
+            time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
     if not data:
         raise RuntimeError(f"empty download: {url}")
     return data
 
 
-def enumerate_archive(family: str, year: int) -> list[str]:
+@functools.lru_cache(maxsize=None)
+def archive_occurrences(family: str) -> tuple[tuple[str, int], ...]:
     archive_url = ARCHIVES[family]
     parser = LinkParser()
     parser.feed(fetch(archive_url).decode("utf-8", errors="strict"))
-    matches: set[str] = set()
+    matches: set[tuple[str, int]] = set()
     for link in parser.links:
         absolute = urllib.parse.urljoin(archive_url, link)
         try:
             canonical, found_family, found_year, _, _ = occurrence(absolute)
         except ValueError:
             continue
-        if found_family == family and found_year == year:
-            matches.add(canonical)
+        if found_family == family:
+            matches.add((canonical, found_year))
+    return tuple(sorted(matches))
+
+
+def enumerate_archive(family: str, year: int) -> list[str]:
+    matches = {
+        canonical
+        for canonical, found_year in archive_occurrences(family)
+        if found_year == year
+    }
     if not matches:
         raise RuntimeError(f"Census archive exposed no {family} releases for {year}")
     return sorted(matches)
@@ -179,9 +207,15 @@ def extractor_identity(executable: str) -> str:
     return "pdftotext-" + (normalized or "unknown")
 
 
-def acquire(urls: list[str], output: pathlib.Path, pdftotext: str) -> None:
+def acquire(
+    urls: list[str],
+    output: pathlib.Path,
+    pdftotext: str,
+    resume: bool = False,
+    request_delay: float = 0.0,
+) -> None:
     output.mkdir(parents=True, exist_ok=True)
-    if any(output.iterdir()):
+    if any(output.iterdir()) and not resume:
         raise RuntimeError(f"output directory must be empty: {output}")
 
     extractor = extractor_identity(pdftotext)
@@ -191,8 +225,20 @@ def acquire(urls: list[str], output: pathlib.Path, pdftotext: str) -> None:
         relative_source = pathlib.Path(family) / str(year) / filename
         source_path = output / relative_source
         source_path.parent.mkdir(parents=True, exist_ok=True)
-        source_bytes = fetch(canonical)
-        write_new(source_path, source_bytes)
+        if source_path.exists():
+            source_bytes = source_path.read_bytes()
+            if not source_bytes:
+                raise RuntimeError(f"existing source artifact is empty: {source_path}")
+        else:
+            relative_text = relative_source.with_suffix(".txt")
+            if (output / relative_text).exists():
+                raise RuntimeError(
+                    f"extracted artifact exists without source artifact: {relative_text}"
+                )
+            source_bytes = fetch(canonical)
+            write_new(source_path, source_bytes)
+            if request_delay:
+                time.sleep(request_delay)
         source_digest = sha256(source_bytes)
 
         relative_text = relative_source.with_suffix(".txt")
@@ -207,7 +253,13 @@ def acquire(urls: list[str], output: pathlib.Path, pdftotext: str) -> None:
             text_bytes = temporary_path.read_bytes()
             if not text_bytes.strip():
                 raise RuntimeError(f"pdftotext produced empty output: {canonical}")
-            write_new(text_path, text_bytes)
+            if text_path.exists():
+                if text_path.read_bytes() != text_bytes:
+                    raise RuntimeError(
+                        f"existing extracted artifact is not reproducible: {text_path}"
+                    )
+            else:
+                write_new(text_path, text_bytes)
         finally:
             temporary_path.unlink(missing_ok=True)
 
@@ -223,7 +275,15 @@ def acquire(urls: list[str], output: pathlib.Path, pdftotext: str) -> None:
         "source_artifact_path\tsource_artifact_sha256\textractor",
     ]
     manifest_lines.extend("\t".join(entry) for entry in entries)
-    write_new(output / "manifest.tsv", ("\n".join(manifest_lines) + "\n").encode("utf-8"))
+    manifest_bytes = ("\n".join(manifest_lines) + "\n").encode("utf-8")
+    manifest_path = output / "manifest.tsv"
+    if manifest_path.exists():
+        if manifest_path.read_bytes() != manifest_bytes:
+            raise RuntimeError(
+                f"existing manifest differs from reproducible result: {manifest_path}"
+            )
+    else:
+        write_new(manifest_path, manifest_bytes)
 
 
 def main() -> int:
@@ -234,10 +294,14 @@ def main() -> int:
     parser.add_argument("--family", action="append", choices=sorted(ARCHIVES), default=[])
     parser.add_argument("--limit", type=int)
     parser.add_argument("--pdftotext", default=shutil.which("pdftotext"))
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--request-delay", type=float, default=0.0)
     args = parser.parse_args()
 
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
+    if args.request_delay < 0:
+        parser.error("--request-delay must be non-negative")
     if args.archive_year and not args.family:
         parser.error("--archive-year requires at least one --family")
     if args.family and not args.archive_year:
@@ -259,7 +323,13 @@ def main() -> int:
     if len(urls) > MAX_ARTIFACTS:
         parser.error(f"selection exceeds the safety cap of {MAX_ARTIFACTS} artifacts")
 
-    acquire(urls, args.output_dir.resolve(), args.pdftotext)
+    acquire(
+        urls,
+        args.output_dir.resolve(),
+        args.pdftotext,
+        resume=args.resume,
+        request_delay=args.request_delay,
+    )
     print(
         f"CENSUS_ACQUISITION_COMPLETE artifacts={len(urls)} "
         f"manifest={args.output_dir.resolve() / 'manifest.tsv'}"

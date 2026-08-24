@@ -100,6 +100,25 @@ class CensusAcquisitionTests(unittest.TestCase):
             self.assertIn("\tpdf_text\t", manifest)
             self.assertIn("\tpdftotext-test-1", manifest)
 
+            with mock.patch.object(
+                fetch_census, "fetch", side_effect=AssertionError("unexpected download")
+            ), mock.patch.object(
+                fetch_census, "extractor_identity", return_value="pdftotext-test-1"
+            ), mock.patch.object(
+                fetch_census.subprocess, "run", side_effect=fake_extract
+            ):
+                fetch_census.acquire(
+                    urls,
+                    output,
+                    "/test/pdftotext",
+                    resume=True,
+                )
+
+            self.assertEqual(
+                (output / "manifest.tsv").read_text(encoding="utf-8"),
+                manifest,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

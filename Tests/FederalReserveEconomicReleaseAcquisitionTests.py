@@ -19,6 +19,72 @@ SPEC.loader.exec_module(fetch_federal_reserve)
 
 
 class FederalReserveAcquisitionTests(unittest.TestCase):
+    def test_archive_enumeration_includes_intermeeting_and_distinct_families(self) -> None:
+        press_index = b"""
+            <a href='/newsevents/pressreleases/2010all.htm'>2010</a>
+        """
+        annual_index = b"""
+            <a href='/newsevents/pressreleases/monetary20100127a.htm'>FOMC statement</a>
+            <a href='/newsevents/pressreleases/monetary20100509a.htm'>FOMC statement: intermeeting action</a>
+            <a href='/newsevents/pressreleases/monetary20100217a.htm'>Minutes of the Federal Open Market Committee, January 26-27, 2010</a>
+            <a href='/newsevents/pressreleases/monetary20100223a.htm'>Minutes of Board discount rate meetings</a>
+        """
+        beige_archive = b"""
+            <a href='/monetarypolicy/beigebook2010.htm'>2010</a>
+        """
+        beige_year = b"""
+            <a href='/fomc/beigebook/2010/20100113/fullreport20100113.pdf'>PDF</a>
+        """
+
+        def fake_fetch(url: str) -> bytes:
+            return {
+                fetch_federal_reserve.PRESS_ARCHIVE_INDEX: press_index,
+                "https://www.federalreserve.gov/newsevents/pressreleases/2010all.htm": annual_index,
+                fetch_federal_reserve.BEIGE_BOOK_ARCHIVE_INDEX: beige_archive,
+                "https://www.federalreserve.gov/monetarypolicy/beigebook2010.htm": beige_year,
+            }[url]
+
+        with mock.patch.object(
+            fetch_federal_reserve, "fetch", side_effect=fake_fetch
+        ):
+            selections = fetch_federal_reserve.enumerate_archive(
+                2010, set(fetch_federal_reserve.FAMILIES)
+            )
+
+        self.assertEqual(
+            [family for family, _ in selections].count("fomc_statement"), 2
+        )
+        self.assertEqual(
+            [family for family, _ in selections].count("fomc_minutes"), 1
+        )
+        self.assertEqual(
+            [family for family, _ in selections].count("beige_book"), 1
+        )
+        self.assertTrue(any("20100509a" in url for _, url in selections))
+        self.assertFalse(any("20100223a" in url for _, url in selections))
+
+    def test_current_beige_book_falls_back_to_current_index(self) -> None:
+        current_year = fetch_federal_reserve.datetime.date.today().year
+        current_url = (
+            "https://www.federalreserve.gov/monetarypolicy/files/"
+            f"BeigeBook_{current_year}0114.pdf"
+        )
+
+        def fake_fetch(url: str) -> bytes:
+            if url == fetch_federal_reserve.BEIGE_BOOK_ARCHIVE_INDEX:
+                return b"<a href='/monetarypolicy/beigebook2025.htm'>2025</a>"
+            if url == fetch_federal_reserve.BEIGE_BOOK_CURRENT_INDEX:
+                return f"<a href='{current_url}'>PDF</a>".encode()
+            raise AssertionError(url)
+
+        with mock.patch.object(
+            fetch_federal_reserve, "fetch", side_effect=fake_fetch
+        ):
+            self.assertEqual(
+                fetch_federal_reserve.enumerate_beige_book_archive(current_year),
+                [("beige_book", current_url)],
+            )
+
     def test_supported_first_party_occurrences(self) -> None:
         cases = [
             (
@@ -44,6 +110,24 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
                 "BeigeBook_20240417.pdf",
                 "beige_book",
                 "beigebook-20240417",
+            ),
+            (
+                "https://www.federalreserve.gov/monetarypolicy/beigebook/files/"
+                "fullreport20110112.pdf",
+                "beige_book",
+                "beigebook-20110112",
+            ),
+            (
+                "https://www.federalreserve.gov/monetarypolicy/beigebook/files/"
+                "Beigebook_20120606.pdf",
+                "beige_book",
+                "beigebook-20120606",
+            ),
+            (
+                "https://www.federalreserve.gov/publications/files/"
+                "BeigeBook_20240117.pdf",
+                "beige_book",
+                "beigebook-20240117",
             ),
         ]
         for url, family, identity in cases:

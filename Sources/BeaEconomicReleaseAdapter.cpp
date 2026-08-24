@@ -139,6 +139,10 @@ std::string VisibleText(const std::string& artifact)
     ReplaceAll(text, "&mdash;", "—");
     ReplaceAll(text, "&#8211;", "–");
     ReplaceAll(text, "&#8212;", "—");
+    // Several historical BEA pages contain a literal UTF-8 non-breaking
+    // space instead of the equivalent HTML entity. Normalize that exact
+    // sequence before byte-wise whitespace collapsing.
+    ReplaceAll(text, "\xC2\xA0", " ");
     text = std::regex_replace(text, std::regex{R"(<[^>]*>)"}, " ");
 
     std::string collapsed;
@@ -267,7 +271,7 @@ ParsedPublication ParsePublicationHeading(const std::string& afterIdentity)
         const std::string heading = afterIdentity.substr(0, gdpBody);
 
         static const std::regex vintagePattern{
-            R"(\b(advance|second|third)\s+estimate\b)",
+            R"(\b(advance|second|third|initial|updated)\s+estimate\b)",
             std::regex::icase};
         std::set<std::string> vintages;
         for (std::sregex_iterator iterator{
@@ -298,7 +302,7 @@ ParsedPublication ParsePublicationHeading(const std::string& afterIdentity)
             throw std::invalid_argument("bea_gdp_reference_period_invalid");
 
         std::string family;
-        if (*vintages.begin() == "advance")
+        if (*vintages.begin() == "advance" || *vintages.begin() == "initial")
             family = "GDP_ADVANCE";
         else if (*vintages.begin() == "second")
             family = "GDP_SECOND";
@@ -309,7 +313,7 @@ ParsedPublication ParsePublicationHeading(const std::string& afterIdentity)
     }
 
     static const std::regex personalHeading{
-        R"(^Personal Income and Outlays,\s+([A-Za-z]+)\s+([0-9]{4})\b)",
+        R"(^Personal Income and Outlays(?:,|:|\s+for)\s+([A-Za-z]+)\s+([0-9]{4})\b)",
         std::regex::icase};
     std::smatch personal;
     if (std::regex_search(afterIdentity, personal, personalHeading))
@@ -319,6 +323,25 @@ ParsedPublication ParsePublicationHeading(const std::string& afterIdentity)
         std::ostringstream reference;
         reference << std::setfill('0') << std::setw(4) << year << '-'
                   << std::setw(2) << month;
+        return {"PERSONAL_INCOME_OUTLAYS", reference.str()};
+    }
+
+    static const std::regex combinedPersonalHeading{
+        R"(^Personal Income and Outlays(?:,|:)\s+([A-Za-z]+)\s+and\s+([A-Za-z]+)\s+([0-9]{4})\b)",
+        std::regex::icase};
+    std::smatch combinedPersonal;
+    if (std::regex_search(afterIdentity, combinedPersonal, combinedPersonalHeading))
+    {
+        const unsigned firstMonth = MonthNumber(combinedPersonal[1].str());
+        const unsigned secondMonth = MonthNumber(combinedPersonal[2].str());
+        const int year = std::stoi(combinedPersonal[3].str());
+        if (secondMonth != firstMonth + 1)
+            throw std::invalid_argument("bea_personal_income_reference_period_invalid");
+
+        std::ostringstream reference;
+        reference << std::setfill('0') << std::setw(4) << year << '-'
+                  << std::setw(2) << firstMonth << '/' << std::setw(4) << year
+                  << '-' << std::setw(2) << secondMonth;
         return {"PERSONAL_INCOME_OUTLAYS", reference.str()};
     }
 
@@ -363,7 +386,7 @@ AuthoritativeEconomicEventCandidate ParseBeaEconomicReleaseArtifact(
 
     const std::string text = VisibleText(artifact);
     static const std::regex embargoPattern{
-        R"(EMBARGOED UNTIL RELEASE AT\s+([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s+([^,]+),\s+(?:[A-Za-z]+,\s+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4}))",
+        R"(EMBARGOED\s+(?:UNTIL RELEASE AT|FOR RELEASE:)\s+([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s*,?\s*([A-Za-z]+),\s+(?:[A-Za-z]+,?\s+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4})\.?)",
         std::regex::icase};
     std::smatch embargo;
     if (!std::regex_search(text, embargo, embargoPattern))
@@ -414,22 +437,28 @@ AuthoritativeEconomicEventCandidate ParseBeaEconomicReleaseArtifact(
     }
 
     static const std::regex releaseIdPattern{
-        R"(\bBEA\s+[0-9]{2,4}\s*(?:-|–|—)\s*[0-9]{1,3}\b)",
+        R"(^\s*((?:BEA\s+)?[0-9]{2,4}\s*(?:-|–|—)\s*[0-9]{1,3})\b)",
         std::regex::icase};
     static const std::regex beaMarker{R"(\bBEA\b)", std::regex::icase};
+    const std::size_t identitySearchStart = static_cast<std::size_t>(
+        embargo.position() + embargo.length());
+    const std::string identitySuffix = text.substr(identitySearchStart);
     std::smatch releaseId;
-    if (!std::regex_search(text, releaseId, releaseIdPattern))
+    if (!std::regex_search(identitySuffix, releaseId, releaseIdPattern))
     {
         if (std::regex_search(text, beaMarker))
             throw std::invalid_argument("bea_release_id_malformed");
         throw std::invalid_argument("bea_authoritative_identity_missing");
     }
-    const std::string sourceEventId = NormalizeBeaReleaseId(releaseId.str());
+    std::string releaseIdText = releaseId[1].str();
+    if (Lower(releaseIdText).rfind("bea", 0) != 0)
+        releaseIdText.insert(0, "BEA ");
+    const std::string sourceEventId = NormalizeBeaReleaseId(releaseIdText);
     const int identityYear = std::stoi(sourceEventId.substr(4, 2));
     if (identityYear != release.year % 100)
         throw std::invalid_argument("bea_release_id_year_mismatch");
 
-    std::string afterIdentity = text.substr(
+    std::string afterIdentity = identitySuffix.substr(
         static_cast<std::size_t>(releaseId.position() + releaseId.length()));
     while (!afterIdentity.empty() && afterIdentity.front() == ' ')
         afterIdentity.erase(afterIdentity.begin());

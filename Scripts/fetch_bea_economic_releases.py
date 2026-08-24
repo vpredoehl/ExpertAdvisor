@@ -9,6 +9,7 @@ downloaded HTML before hashing and manifest handoff.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import html.parser
 import pathlib
@@ -66,6 +67,7 @@ def fetch(url: str) -> bytes:
     return data
 
 
+@functools.lru_cache(maxsize=None)
 def archive_page(product_id: str, page: int) -> tuple[list[str], bool]:
     query = urllib.parse.urlencode(
         {

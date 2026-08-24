@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <optional>
 #include <regex>
 #include <sstream>
@@ -50,6 +51,8 @@ void ExpectFailure(
     }
     catch (const std::exception& error)
     {
+        if (std::string{error.what()}.find(expected) == std::string::npos)
+            std::cerr << "expected " << expected << ", got " << error.what() << '\n';
         assert(std::string{error.what()}.find(expected) != std::string::npos);
     }
 }
@@ -105,8 +108,10 @@ int main(int argc, const char* argv[])
     assert(thirdCandidate.eventFamily == "GDP_THIRD");
     assert(thirdCandidate.sourceEventId == "bea:10-47");
 
+    const std::string personal =
+        Read(fixtures / "2010-personal-income-outlays.txt");
     const auto personalCandidate = ParseBeaEconomicReleaseArtifact(
-        Read(fixtures / "2010-personal-income-outlays.txt"),
+        personal,
         "https://www.bea.gov/news/2010/personal-income-and-outlays-june-2010");
     assert(personalCandidate.eventFamily == "PERSONAL_INCOME_OUTLAYS");
     assert(personalCandidate.sourceEventId == "bea:10-38");
@@ -114,6 +119,37 @@ int main(int argc, const char* argv[])
            std::optional<std::string>{"2010-06"});
     assert(personalCandidate.eventTimestampUnixMicros ==
            UtcMicros(2010, 8, 3, 12, 30));
+
+    auto colonPersonal = personal;
+    colonPersonal.replace(
+        colonPersonal.find("Personal Income and Outlays,"),
+        std::string{"Personal Income and Outlays,"}.size(),
+        "Personal Income and Outlays:");
+    assert(ParseBeaEconomicReleaseArtifact(
+        colonPersonal,
+        "https://www.bea.gov/news/2010/personal-income-and-outlays-june-2010"
+    ).referencePeriod == std::optional<std::string>{"2010-06"});
+
+    auto legacyIdentity = personal;
+    legacyIdentity.replace(
+        legacyIdentity.find("BEA 10-38"),
+        std::string{"BEA 10-38"}.size(),
+        "10-38\xC2\xA0");
+    assert(ParseBeaEconomicReleaseArtifact(
+        legacyIdentity,
+        "https://www.bea.gov/news/2010/personal-income-and-outlays-june-2010"
+    ).sourceEventId == "bea:10-38");
+
+    auto releaseHeaderVariant = personal;
+    releaseHeaderVariant.replace(
+        releaseHeaderVariant.find("EMBARGOED UNTIL RELEASE AT"),
+        std::string{"EMBARGOED UNTIL RELEASE AT"}.size(),
+        "EMBARGOED FOR RELEASE:");
+    releaseHeaderVariant.erase(releaseHeaderVariant.find("TUESDAY,") + 7, 1);
+    assert(ParseBeaEconomicReleaseArtifact(
+        releaseHeaderVariant,
+        "https://www.bea.gov/news/2010/personal-income-and-outlays-june-2010"
+    ).eventTimestampUnixMicros == UtcMicros(2010, 8, 3, 12, 30));
 
     const auto modernGdp = ParseBeaEconomicReleaseArtifact(
         Read(fixtures / "2024-gdp-third.txt"),
@@ -131,6 +167,32 @@ int main(int argc, const char* argv[])
     assert(modernPersonal.eventFamily == "PERSONAL_INCOME_OUTLAYS");
     assert(modernPersonal.referencePeriod ==
            std::optional<std::string>{"2025-07"});
+
+    auto combinedPersonal = Read(fixtures / "2025-personal-income-outlays.txt");
+    combinedPersonal = std::regex_replace(
+        combinedPersonal,
+        std::regex{"Personal Income and Outlays, July 2025"},
+        "Personal Income and Outlays, October and November 2025");
+    assert(ParseBeaEconomicReleaseArtifact(
+        combinedPersonal,
+        "https://www.bea.gov/news/2025/personal-income-and-outlays-october-and-november-2025"
+    ).referencePeriod == std::optional<std::string>{"2025-10/2025-11"});
+
+    auto initialGdp = advance;
+    initialGdp = std::regex_replace(
+        initialGdp, std::regex{"advance estimate"}, "initial estimate");
+    assert(ParseBeaEconomicReleaseArtifact(
+        initialGdp,
+        "https://www.bea.gov/news/2010/gross-domestic-product-2nd-quarter-2010-initial-estimate"
+    ).eventFamily == "GDP_ADVANCE");
+
+    auto updatedGdp = Read(fixtures / "2010-gdp-third.txt");
+    updatedGdp = std::regex_replace(
+        updatedGdp, std::regex{"third estimate"}, "updated estimate");
+    assert(ParseBeaEconomicReleaseArtifact(
+        updatedGdp,
+        "https://www.bea.gov/news/2010/gross-domestic-product-2nd-quarter-2010-updated-estimate"
+    ).eventFamily == "GDP_THIRD");
 
     auto missingTime = std::regex_replace(
         advance,

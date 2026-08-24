@@ -157,6 +157,60 @@ int main(int argc, const char* argv[])
     const std::string retailUrl =
         "https://www2.census.gov/retail/releases/historical/marts/adv1005.pdf";
 
+    auto weekdayWithoutComma = retail;
+    weekdayWithoutComma.replace(
+        weekdayWithoutComma.find("FRIDAY,"), 7, "FRIDAY");
+    const auto weekdayWithoutCommaCandidate =
+        ParseCensusEconomicReleaseArtifact(weekdayWithoutComma, retailUrl);
+    assert(weekdayWithoutCommaCandidate.sourceEventId == "census:cb10-84");
+    assert(weekdayWithoutCommaCandidate.sourceReleaseTime ==
+           std::optional<std::string>{"08:30:00"});
+
+    const auto modernDurable = ParseCensusEconomicReleaseArtifact(
+        "FOR RELEASE AT 8:30 AM EST, MONDAY, FEBRUARY 27, 2017\n"
+        "MONTHLY ADVANCE REPORT ON MANUFACTURERS’ SHIPMENTS, "
+        "INVENTORIES AND ORDERS JANUARY 2017\n"
+        "Release Number: CB 17-25\n",
+        "https://www.census.gov/manufacturing/m3/historical_data/"
+        "pressreleases/adv/2017/jan17adv.pdf");
+    assert(modernDurable.eventFamily == "DURABLE_GOODS_ADVANCE");
+    assert(modernDurable.referencePeriod ==
+           std::optional<std::string>{"2017-01"});
+
+    const auto shutdownCombined = ParseCensusEconomicReleaseArtifact(
+        "FOR IMMEDIATE RELEASE MONDAY, NOVEMBER 4, 2013, AT 10:00 A.M. EST\n"
+        "CB13-182 Full Report on Manufacturers’ Shipments, Inventories and "
+        "Orders August/September 2013\n",
+        "https://www.census.gov/manufacturing/m3/historical_data/"
+        "pressreleases/prel/2013/sep13prel.pdf");
+    assert(shutdownCombined.referencePeriod ==
+           std::optional<std::string>{"2013-09"});
+
+    const auto shutdownResidential = ParseCensusEconomicReleaseArtifact(
+        "FOR IMMEDIATE RELEASE TUESDAY, NOVEMBER 26, 2013 AT 8:30 A.M. EST\n"
+        "CB13-194 NEW RESIDENTIAL CONSTRUCTION IN OCTOBER 2013\n",
+        "https://www.census.gov/construction/nrc/pdf/newresconst_201309.pdf");
+    assert(shutdownResidential.referencePeriod ==
+           std::optional<std::string>{"2013-10"});
+
+    const auto delayedShutdownSales = ParseCensusEconomicReleaseArtifact(
+        "FOR RELEASE AT 10:00 AM EST, THURSDAY, JANUARY 31, 2019\n"
+        "MONTHLY NEW RESIDENTIAL SALES, NOVEMBER 2018\n"
+        "Release Number: CB18-195\n",
+        "https://www.census.gov/construction/nrs/pdf/newressales_201811.pdf");
+    assert(delayedShutdownSales.sourceEventId == "census:cb18-195");
+
+    const auto dateOnlyCorrection = ParseCensusEconomicReleaseArtifact(
+        "FOR IMMEDIATE RELEASE THURSDAY, DECEMBER 16, 2010\n"
+        "CB10-179 Full Report on Manufacturers’ Shipments, Inventories and "
+        "Orders October 2010\n",
+        "https://www.census.gov/manufacturing/m3/historical_data/"
+        "pressreleases/prel/2010/oct10prel.pdf");
+    assert(dateOnlyCorrection.historicalTimeConfidence == "date_only");
+    assert(!dateOnlyCorrection.sourceReleaseTime);
+    assert(dateOnlyCorrection.eventTimestampUnixMicros ==
+           UtcMicros(2010, 12, 17, 5, 0));
+
     auto missingTime = std::regex_replace(
         retail,
         std::regex{R"(FOR IMMEDIATE RELEASE\s+FRIDAY, JUNE 11, 2010, AT 8:30 A\.M\. EDT\s*)"},

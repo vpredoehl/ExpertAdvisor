@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fetch a bounded set of first-party Federal Reserve publication artifacts.
+"""Fetch bounded first-party Federal Reserve publication artifacts.
 
-The caller explicitly selects statement, minutes, and Beige Book occurrence
-URLs.  This acquisition-only program never opens PostgreSQL and writes the
-shared version-1 manifest consumed by the common economic-event import path.
+The caller can select explicit occurrence URLs or enumerate authoritative
+annual press-release and Beige Book indexes.  This acquisition-only program
+never opens PostgreSQL and writes the shared version-1 manifest consumed by
+the common economic-event import path.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import hashlib
+import html.parser
 import pathlib
 import re
 import shutil
@@ -23,10 +25,26 @@ import urllib.request
 
 USER_AGENT = "ExpertAdvisor-authoritative-calendar-acquisition/1"
 ALLOWED_HOST = "www.federalreserve.gov"
-MAX_ARTIFACTS = 100
+MAX_ARTIFACTS = 500
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+PRESS_ARCHIVE_INDEX = "https://www.federalreserve.gov/newsevents/pressreleases.htm"
+BEIGE_BOOK_ARCHIVE_INDEX = (
+    "https://www.federalreserve.gov/monetarypolicy/beige-book-archive.htm"
+)
+BEIGE_BOOK_CURRENT_INDEX = (
+    "https://www.federalreserve.gov/monetarypolicy/publications/"
+    "beige-book-default.htm"
+)
+FAMILIES = ("beige_book", "fomc_minutes", "fomc_statement")
 PRESS_RELEASE = re.compile(
     r"^/newsevents/pressreleases/monetary(?P<date>[0-9]{8})(?P<suffix>[a-z])\.htm$"
+)
+PRESS_ARCHIVE_PATH = re.compile(
+    r"^/newsevents/pressreleases/(?P<year>[0-9]{4})"
+    r"(?P<kind>all|-press|-press-fomc)\.htm$"
+)
+BEIGE_BOOK_YEAR_PATH = re.compile(
+    r"^/monetarypolicy/beigebook(?P<year>[0-9]{4})\.htm$"
 )
 BEIGE_BOOK_PATTERNS = (
     re.compile(
@@ -34,10 +52,159 @@ BEIGE_BOOK_PATTERNS = (
         r"fullreport(?P=date)\.pdf$"
     ),
     re.compile(
-        r"^/monetarypolicy/beigebook/files/BeigeBook_(?P<date>[0-9]{8})\.pdf$"
+        r"^/monetarypolicy/beigebook/files/"
+        r"(?:fullreport|Beige[Bb]ook_)(?P<date>[0-9]{8})\.pdf$"
     ),
-    re.compile(r"^/monetarypolicy/files/BeigeBook_(?P<date>[0-9]{8})\.pdf$"),
+    re.compile(r"^/monetarypolicy/files/Beige[Bb]ook_(?P<date>[0-9]{8})\.pdf$"),
+    re.compile(r"^/publications/files/BeigeBook_(?P<date>[0-9]{8})\.pdf$"),
 )
+
+
+class LinkParser(html.parser.HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        self._href = next(
+            (value for name, value in attrs if name.lower() == "href" and value),
+            None,
+        )
+        self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._href is not None:
+            self.links.append((self._href, " ".join(" ".join(self._text).split())))
+            self._href = None
+            self._text = []
+
+
+def parse_links(url: str) -> list[tuple[str, str]]:
+    parser = LinkParser()
+    parser.feed(fetch(url).decode("utf-8-sig", errors="strict"))
+    return [
+        (urllib.parse.urljoin(url, href), text)
+        for href, text in parser.links
+    ]
+
+
+def annual_press_archive_urls(year: int) -> list[str]:
+    matches: dict[str, str] = {}
+    for absolute, _ in parse_links(PRESS_ARCHIVE_INDEX):
+        parsed = urllib.parse.urlsplit(absolute)
+        match = PRESS_ARCHIVE_PATH.fullmatch(parsed.path)
+        if (
+            parsed.scheme.lower() == "https"
+            and parsed.hostname == ALLOWED_HOST
+            and match
+            and int(match.group("year")) == year
+            and not parsed.query
+            and not parsed.fragment
+        ):
+            matches[match.group("kind")] = absolute
+    if not matches:
+        raise RuntimeError(
+            f"Federal Reserve press archive exposed no annual index for {year}"
+        )
+    if "all" in matches:
+        return [matches["all"]]
+    # Newer archives split FOMC statements from the general annual index that
+    # carries FOMC minutes.  Both indexes are required for the supported raw
+    # families and their union is de-duplicated below.
+    return [matches[kind] for kind in ("-press", "-press-fomc") if kind in matches]
+
+
+def classify_press_release(title: str) -> str | None:
+    if re.match(
+        r"^(?:Federal Reserve (?:Board )?issues )?FOMC statement\b",
+        title,
+        re.I,
+    ):
+        return "fomc_statement"
+    if re.match(
+        r"^Minutes of (?:the )?Federal Open Market Committee\b",
+        title,
+        re.I,
+    ):
+        return "fomc_minutes"
+    return None
+
+
+def enumerate_press_archive(year: int, families: set[str]) -> list[tuple[str, str]]:
+    selections: set[tuple[str, str]] = set()
+    for archive_url in annual_press_archive_urls(year):
+        for absolute, title in parse_links(archive_url):
+            parsed = urllib.parse.urlsplit(absolute)
+            match = PRESS_RELEASE.fullmatch(parsed.path)
+            if (
+                parsed.scheme.lower() != "https"
+                or parsed.hostname != ALLOWED_HOST
+                or not match
+                or int(match.group("date")[:4]) != year
+                or parsed.query
+                or parsed.fragment
+            ):
+                continue
+            family = classify_press_release(title)
+            if family in families:
+                canonical, _ = canonical_occurrence_url(absolute, family)
+                selections.add((family, canonical))
+    for family in sorted(families & {"fomc_statement", "fomc_minutes"}):
+        if not any(found == family for found, _ in selections):
+            raise RuntimeError(
+                f"Federal Reserve annual index exposed no {family} releases for {year}"
+            )
+    return sorted(selections)
+
+
+def beige_book_year_index_url(year: int) -> str:
+    for absolute, _ in parse_links(BEIGE_BOOK_ARCHIVE_INDEX):
+        parsed = urllib.parse.urlsplit(absolute)
+        match = BEIGE_BOOK_YEAR_PATH.fullmatch(parsed.path)
+        if (
+            parsed.scheme.lower() == "https"
+            and parsed.hostname == ALLOWED_HOST
+            and match
+            and int(match.group("year")) == year
+            and not parsed.query
+            and not parsed.fragment
+        ):
+            return absolute
+    return BEIGE_BOOK_CURRENT_INDEX
+
+
+def enumerate_beige_book_archive(year: int) -> list[tuple[str, str]]:
+    index_url = beige_book_year_index_url(year)
+    selections: set[tuple[str, str]] = set()
+    for absolute, _ in parse_links(index_url):
+        try:
+            canonical, identity = canonical_occurrence_url(absolute, "beige_book")
+        except ValueError:
+            continue
+        if identity[10:14] == str(year):
+            selections.add(("beige_book", canonical))
+    if not selections:
+        raise RuntimeError(
+            f"Federal Reserve Beige Book index exposed no releases for {year}"
+        )
+    return sorted(selections)
+
+
+def enumerate_archive(year: int, families: set[str]) -> list[tuple[str, str]]:
+    if year < 1996 or year > datetime.date.today().year:
+        raise ValueError("Federal Reserve archive year is outside supported indexes")
+    selections = enumerate_press_archive(year, families)
+    if "beige_book" in families:
+        selections.extend(enumerate_beige_book_archive(year))
+    return sorted(set(selections))
 
 
 def canonical_occurrence_url(value: str, family: str) -> tuple[str, str]:
@@ -205,14 +372,26 @@ def main() -> int:
     parser.add_argument("--statement-url", action="append", default=[])
     parser.add_argument("--minutes-url", action="append", default=[])
     parser.add_argument("--beige-book-url", action="append", default=[])
+    parser.add_argument("--archive-year", action="append", type=int, default=[])
+    parser.add_argument("--family", action="append", choices=FAMILIES, default=[])
     parser.add_argument("--pdftotext", default=shutil.which("pdftotext"))
     args = parser.parse_args()
+
+    if args.archive_year and not args.family:
+        parser.error("--archive-year requires at least one --family")
+    if args.family and not args.archive_year:
+        parser.error("--family requires at least one --archive-year")
 
     selections = (
         [("fomc_statement", url) for url in args.statement_url]
         + [("fomc_minutes", url) for url in args.minutes_url]
         + [("beige_book", url) for url in args.beige_book_url]
     )
+    for year in sorted(set(args.archive_year)):
+        try:
+            selections.extend(enumerate_archive(year, set(args.family)))
+        except ValueError as error:
+            parser.error(str(error))
     acquire(selections, args.output_dir.resolve(), args.pdftotext)
     print(
         f"FEDERAL_RESERVE_ACQUISITION_COMPLETE artifacts={len(set(selections))} "

@@ -139,6 +139,10 @@ std::string VisibleText(const std::string& artifact)
     ReplaceAll(text, "&mdash;", "—");
     ReplaceAll(text, "&#8211;", "–");
     ReplaceAll(text, "&#8212;", "—");
+    // Narrow pdftotext repairs observed in the 2015 M3 archive. These restore
+    // words visibly split by the authoritative PDF's embedded text layout.
+    ReplaceAll(text, "RELEAS E", "RELEASE");
+    ReplaceAll(text, "SEPTEMB ER", "SEPTEMBER");
     text = std::regex_replace(text, std::regex{R"(<[^>]*>)"}, " ");
 
     std::string collapsed;
@@ -353,8 +357,11 @@ PublicationHeading ParsePublicationHeading(const std::string& text)
         {"MANUFACTURERS_ORDERS", std::regex{
             R"((?:MONTHLY\s+)?FULL REPORT ON MANUFACTURERS(?:'|’)[ ]*SHIPMENTS,\s*INVENTORIES,?\s+AND\s+ORDERS\s+([A-Za-z]+)\s+([0-9]{4})\b)",
             std::regex::icase}},
+        {"MANUFACTURERS_ORDERS", std::regex{
+            R"((?:MONTHLY\s+)?FULL REPORT ON MANUFACTURERS(?:'|’)[ ]*SHIPMENTS,\s*INVENTORIES,?\s+AND\s+ORDERS\s+[A-Za-z]+/([A-Za-z]+)\s+([0-9]{4})\b)",
+            std::regex::icase}},
         {"DURABLE_GOODS_ADVANCE", std::regex{
-            R"((?:MONTHLY\s+)?ADVANCE REPORT ON DURABLE GOODS MANUFACTURERS(?:'|’)[ ]*SHIPMENTS,\s*INVENTORIES,?\s+AND\s+ORDERS\s+([A-Za-z]+)\s+([0-9]{4})\b)",
+            R"((?:MONTHLY\s+)?ADVANCE REPORT ON (?:DURABLE GOODS )?MANUFACTURERS(?:'|’)[ ]*SHIPMENTS,\s*INVENTORIES,?\s+AND\s+ORDERS\s+([A-Za-z]+)\s+([0-9]{4})\b)",
             std::regex::icase}},
         {"CONSTRUCTION_SPENDING", std::regex{
             R"(MONTHLY CONSTRUCTION SPENDING,\s+([A-Za-z]+)\s+([0-9]{4})\b)",
@@ -390,6 +397,7 @@ struct TimestampEvidence
     std::string meridiem;
     std::string zone;
     ParsedDate date;
+    bool dateOnly = false;
 };
 
 TimestampEvidence ParseTimestampEvidence(const std::string& text)
@@ -398,7 +406,7 @@ TimestampEvidence ParseTimestampEvidence(const std::string& text)
         R"(FOR RELEASE AT\s+([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s+(EDT|EST|EASTERN),\s+(?:[A-Z]+,\s+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4}))",
         std::regex::icase};
     static const std::regex immediate{
-        R"(FOR IMMEDIATE RELEASE\s+(?:[A-Z]+,\s+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4}),?\s+AT\s+([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s+(EDT|EST|EASTERN))",
+        R"(FOR IMMEDIATE RELEASE\s+(?:[A-Z]+,?\s+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4}),?\s+AT\s+([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s+(EDT|EST|EASTERN))",
         std::regex::icase};
 
     std::smatch match;
@@ -421,7 +429,14 @@ TimestampEvidence ParseTimestampEvidence(const std::string& text)
     }
     else
     {
-        throw std::invalid_argument("census_authoritative_release_time_missing");
+        static const std::regex immediateDateOnly{
+            R"(FOR IMMEDIATE RELEASE\s+(?:[A-Z]+,?\s+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4})\b(?!,?\s+AT\b))",
+            std::regex::icase};
+        if (!std::regex_search(text, match, immediateDateOnly))
+            throw std::invalid_argument("census_authoritative_release_time_missing");
+        result.date = ParseLongDate(match[1].str());
+        result.dateOnly = true;
+        return result;
     }
 
     if (result.hour < 1 || result.hour > 12 ||
@@ -464,8 +479,14 @@ AuthoritativeEconomicEventCandidate ParseCensusEconomicReleaseArtifact(
     const PublicationHeading publication = ParsePublicationHeading(text);
     if (publication.family != source.family)
         throw std::invalid_argument("census_publication_url_title_mismatch");
-    if (publication.referenceYear != source.referenceYear ||
-        publication.referenceMonth != source.referenceMonth)
+    const bool shutdownCombinedPeriod =
+        (source.family == "NEW_RESIDENTIAL_CONSTRUCTION" ||
+         source.family == "NEW_RESIDENTIAL_SALES") &&
+        source.referenceYear == 2013 && source.referenceMonth == 9 &&
+        publication.referenceYear == 2013 && publication.referenceMonth == 10;
+    if (!shutdownCombinedPeriod &&
+        (publication.referenceYear != source.referenceYear ||
+         publication.referenceMonth != source.referenceMonth))
     {
         throw std::invalid_argument("census_source_url_reference_period_mismatch");
     }
@@ -475,13 +496,32 @@ AuthoritativeEconomicEventCandidate ParseCensusEconomicReleaseArtifact(
         timestamp.date.year,
         timestamp.date.month,
         timestamp.date.day);
-    std::ostringstream timeOutput;
-    timeOutput << std::setfill('0') << std::setw(2) << timestamp.hour << ':'
-               << std::setw(2) << timestamp.minute << ":00";
-    const std::string releaseTime = timeOutput.str();
-    const std::int64_t instant = UnixMicros(releaseDate + " " + releaseTime);
+    std::optional<std::string> releaseTime;
+    std::int64_t instant = 0;
+    if (timestamp.dateOnly)
+    {
+        const std::chrono::year_month_day next{
+            std::chrono::sys_days{
+                std::chrono::year{timestamp.date.year} /
+                std::chrono::month{timestamp.date.month} /
+                std::chrono::day{timestamp.date.day}} + std::chrono::days{1}};
+        instant = UnixMicros(
+            DateText(
+                static_cast<int>(next.year()),
+                static_cast<unsigned>(next.month()),
+                static_cast<unsigned>(next.day())) + " 00:00:00");
+    }
+    else
+    {
+        std::ostringstream timeOutput;
+        timeOutput << std::setfill('0') << std::setw(2) << timestamp.hour << ':'
+                   << std::setw(2) << timestamp.minute << ":00";
+        releaseTime = timeOutput.str();
+        instant = UnixMicros(releaseDate + " " + *releaseTime);
+    }
 
-    if (timestamp.zone == "edt" || timestamp.zone == "est")
+    if (!timestamp.dateOnly &&
+        (timestamp.zone == "edt" || timestamp.zone == "est"))
     {
         std::tm civil{};
         civil.tm_year = timestamp.date.year - 1900;
@@ -521,7 +561,12 @@ AuthoritativeEconomicEventCandidate ParseCensusEconomicReleaseArtifact(
 
     const std::string sourceEventId = *identities.begin();
     const int identityYear = std::stoi(sourceEventId.substr(9, 2));
-    if (identityYear != timestamp.date.year % 100)
+    const bool delayedShutdownIdentity =
+        publication.family == "NEW_RESIDENTIAL_SALES" &&
+        source.referenceYear == 2018 && source.referenceMonth == 11 &&
+        timestamp.date.year == 2019 && timestamp.date.month == 1 &&
+        identityYear == 18;
+    if (!delayedShutdownIdentity && identityYear != timestamp.date.year % 100)
         throw std::invalid_argument("census_release_id_year_mismatch");
 
     AuthoritativeEconomicEventCandidate candidate;
@@ -535,7 +580,8 @@ AuthoritativeEconomicEventCandidate ParseCensusEconomicReleaseArtifact(
         publication.referenceYear,
         publication.referenceMonth);
     candidate.eventImportance = kCensusImportance;
-    candidate.historicalTimeConfidence = "exact";
+    candidate.historicalTimeConfidence =
+        timestamp.dateOnly ? "date_only" : "exact";
     candidate.sourceReleaseDate = releaseDate;
     candidate.sourceReleaseTime = releaseTime;
     candidate.sourceTimezone = "America/New_York";

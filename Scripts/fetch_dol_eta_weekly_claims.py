@@ -9,6 +9,7 @@ original PDF and extracted parser input are hashed in the manifest.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import html.parser
 import pathlib
@@ -63,10 +64,11 @@ def fetch(url: str) -> bytes:
     return data
 
 
-def enumerate_archive(year: int) -> list[str]:
+@functools.lru_cache(maxsize=1)
+def archive_occurrences() -> tuple[tuple[str, int], ...]:
     parser = LinkParser()
     parser.feed(fetch(ARCHIVE_URL).decode("utf-8", errors="strict"))
-    urls: set[str] = set()
+    urls: set[tuple[str, int]] = set()
     for link in parser.links:
         absolute = urllib.parse.urljoin(ARCHIVE_URL, link)
         try:
@@ -74,8 +76,17 @@ def enumerate_archive(year: int) -> list[str]:
         except ValueError:
             continue
         match = PRESS_PATH.fullmatch(urllib.parse.urlsplit(canonical).path)
-        if match and int(match.group("year")) == year:
-            urls.add(canonical)
+        if match:
+            urls.add((canonical, int(match.group("year"))))
+    return tuple(sorted(urls))
+
+
+def enumerate_archive(year: int) -> list[str]:
+    urls = {
+        canonical
+        for canonical, found_year in archive_occurrences()
+        if found_year == year
+    }
     if not urls:
         raise RuntimeError(f"archive exposed no immutable occurrence links for {year}")
     return sorted(urls)

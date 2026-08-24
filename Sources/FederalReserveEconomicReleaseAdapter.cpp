@@ -294,10 +294,11 @@ SourceIdentity ParseSourceIdentity(const std::string& url)
 
     static const std::vector<std::regex> beigePatterns{
         std::regex{R"(^https://www\.federalreserve\.gov/fomc/beigebook/([0-9]{4})/([0-9]{8})/fullreport\2\.pdf$)"},
-        std::regex{R"(^https://www\.federalreserve\.gov/monetarypolicy/beigebook/files/BeigeBook_([0-9]{8})\.pdf$)"},
-        std::regex{R"(^https://www\.federalreserve\.gov/monetarypolicy/files/BeigeBook_([0-9]{8})\.pdf$)"},
+        std::regex{R"(^https://www\.federalreserve\.gov/monetarypolicy/beigebook/files/(?:fullreport|Beige[Bb]ook_)([0-9]{8})\.pdf$)"},
+        std::regex{R"(^https://www\.federalreserve\.gov/monetarypolicy/files/Beige[Bb]ook_([0-9]{8})\.pdf$)"},
         std::regex{R"(^https://www\.federalreserve\.gov/monetarypolicy/beigebook([0-9]{6})\.htm$)"},
-        std::regex{R"(^https://www\.federalreserve\.gov/fomc/beigebook/([0-9]{4})/([0-9]{8})/default\.htm$)"}};
+        std::regex{R"(^https://www\.federalreserve\.gov/fomc/beigebook/([0-9]{4})/([0-9]{8})/default\.htm$)"},
+        std::regex{R"(^https://www\.federalreserve\.gov/publications/files/BeigeBook_([0-9]{8})\.pdf$)"}};
     for (std::size_t index = 0; index < beigePatterns.size(); ++index)
     {
         if (!std::regex_match(url, match, beigePatterns[index]))
@@ -446,7 +447,7 @@ std::string ExtractReleaseDate(
             return DateText(parsed.year, parsed.month, parsed.day);
         }
         pattern = std::regex{
-            R"(For use at.{0,80}(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?\s*([A-Za-z]+ [0-9]{1,2}, [0-9]{4}))",
+            R"(For use at[^\r\n]{0,80}\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)?\s*((?:January|February|March|April|May|June|July|August|September|October|November|December) [0-9]{1,2}, [0-9]{4}))",
             std::regex::icase};
     }
 
@@ -464,8 +465,20 @@ std::string MeetingReferenceFromMinutes(const std::string& text)
         std::regex::icase};
     std::smatch match;
     if (!std::regex_search(text, match, title))
-        throw std::invalid_argument(
-            "federal_reserve_minutes_meeting_association_missing");
+    {
+        static const std::regex complexTitle{
+            R"((?:Minutes of (?:the )?Federal Open Market Committee,|Committee meeting held on)\s*((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+[0-9]{1,2}(?:\s*(?:-|–|—)\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?[0-9]{1,2})?(?:\s+and\s+(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?[0-9]{1,2}(?:\s*(?:-|–|—)\s*[0-9]{1,2})?)?,\s*[0-9]{4}))",
+            std::regex::icase};
+        if (!std::regex_search(text, match, complexTitle))
+            throw std::invalid_argument(
+                "federal_reserve_minutes_meeting_association_missing");
+        std::string association = match[1].str();
+        association = std::regex_replace(
+            association, std::regex{R"(\s+)"}, " ");
+        association = std::regex_replace(
+            association, std::regex{R"(\s*(?:–|—)\s*)"}, "-");
+        return "meetings " + association;
+    }
     const unsigned month = MonthNumber(match[1].str());
     const int year = std::stoi(match[4].str());
     const std::string start = DateText(
@@ -501,8 +514,8 @@ void ValidateClassification(
     const bool beigeTitle = std::regex_search(
         text,
         std::regex{R"(\b(?:The\s+)?Beige Book\b)", std::regex::icase});
-    const bool beige = beigeTitle && std::regex_search(
-        text, std::regex{R"(For use at\b)", std::regex::icase});
+    const bool beige = beigeTitle && (beigeUrl || std::regex_search(
+        text, std::regex{R"(For use at\b)", std::regex::icase}));
     const int count = static_cast<int>(statement) + static_cast<int>(minutes) +
         static_cast<int>(beige);
     if (count != 1)
@@ -529,7 +542,24 @@ ParseFederalReserveEconomicReleaseArtifact(
     const SourceIdentity identity = ParseSourceIdentity(canonicalSourceUrl);
     const std::string text = VisibleText(artifact);
     ValidateClassification(text, parserType, identity.beigeBook);
-    const std::string releaseDate = ExtractReleaseDate(text, parserType);
+    std::string releaseDate;
+    try
+    {
+        releaseDate = ExtractReleaseDate(text, parserType);
+    }
+    catch (const std::invalid_argument& error)
+    {
+        if (parserType != "beige_book" || !identity.urlDate ||
+            std::string{error.what()} != "federal_reserve_publication_date_missing")
+        {
+            throw;
+        }
+        // Modern Beige Book PDFs establish the publication only to a month on
+        // their cover.  The immutable occurrence URL and official archive
+        // index establish the day; absent a clock time, date_only remains the
+        // conservative causal representation.
+        releaseDate = *identity.urlDate;
+    }
     if (identity.urlDate && *identity.urlDate != releaseDate)
         throw std::invalid_argument(
             "federal_reserve_source_url_release_date_mismatch");
