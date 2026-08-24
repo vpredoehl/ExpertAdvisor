@@ -9,6 +9,10 @@
 /* Begin PBXBuildFile section */
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		0E72000130D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */; };
+		0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
+		0EC2002132C0000100AAA001 /* EconomicEventImportRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */; };
+		0EC2002232C0000100AAA001 /* EconomicEventImportService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */; };
+		0EC2002332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */; };
 		0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
@@ -530,6 +534,15 @@
 		0B6500023090000100AAA001 /* CampaignOperationsManagerService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = CampaignOperationsManagerService.cpp; path = Sources/CampaignOperationsManagerService.cpp; sourceTree = SOURCE_ROOT; };
 		0B6500033090000100AAA001 /* CampaignOperationsManagerService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CampaignOperationsManagerService.hpp; path = Sources/CampaignOperationsManagerService.hpp; sourceTree = SOURCE_ROOT; };
 		0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Common/HistoricalFxTimestamp.cpp; sourceTree = SOURCE_ROOT; };
+		0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventImportValidation.cpp; path = Sources/EconomicEventImportValidation.cpp; sourceTree = SOURCE_ROOT; };
+		0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventImportRepository.cpp; path = Sources/EconomicEventImportRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventImportService.cpp; path = Sources/EconomicEventImportService.cpp; sourceTree = SOURCE_ROOT; };
+		0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = DolEtaWeeklyClaimsAdapter.cpp; path = Sources/DolEtaWeeklyClaimsAdapter.cpp; sourceTree = SOURCE_ROOT; };
+		0EC2001432C0000100AAA001 /* AuthoritativeEconomicEventCandidate.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = AuthoritativeEconomicEventCandidate.hpp; path = Sources/AuthoritativeEconomicEventCandidate.hpp; sourceTree = SOURCE_ROOT; };
+		0EC2001532C0000100AAA001 /* EconomicEventImportValidation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventImportValidation.hpp; path = Sources/EconomicEventImportValidation.hpp; sourceTree = SOURCE_ROOT; };
+		0EC2001632C0000100AAA001 /* EconomicEventImportRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventImportRepository.hpp; path = Sources/EconomicEventImportRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0EC2001732C0000100AAA001 /* EconomicEventImportService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventImportService.hpp; path = Sources/EconomicEventImportService.hpp; sourceTree = SOURCE_ROOT; };
+		0EC2001832C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = DolEtaWeeklyClaimsAdapter.hpp; path = Sources/DolEtaWeeklyClaimsAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0E73000030E0000100AAA001 /* InferenceProfitability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitability.cpp; path = Sources/InferenceProfitability.cpp; sourceTree = SOURCE_ROOT; };
 		0E73000130E0000100AAA001 /* InferenceProfitability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitability.hpp; path = Sources/InferenceProfitability.hpp; sourceTree = SOURCE_ROOT; };
 		0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitabilityRepository.cpp; path = Sources/InferenceProfitabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
@@ -625,6 +638,15 @@
 			children = (
 				08B33BEA2F4213DB0015F9CF /* Answers.txt */,
 				084426892ED8E755002DEB21 /* main.cpp */,
+				0EC2001432C0000100AAA001 /* AuthoritativeEconomicEventCandidate.hpp */,
+				0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */,
+				0EC2001532C0000100AAA001 /* EconomicEventImportValidation.hpp */,
+				0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */,
+				0EC2001632C0000100AAA001 /* EconomicEventImportRepository.hpp */,
+				0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */,
+				0EC2001732C0000100AAA001 /* EconomicEventImportService.hpp */,
+				0EC2001332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp */,
+				0EC2001832C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.hpp */,
 				0E73000030E0000100AAA001 /* InferenceProfitability.cpp */,
 				0E73000130E0000100AAA001 /* InferenceProfitability.hpp */,
 				0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */,
@@ -1144,6 +1166,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */,
+				0EC2002132C0000100AAA001 /* EconomicEventImportRepository.cpp in Sources */,
+				0EC2002232C0000100AAA001 /* EconomicEventImportService.cpp in Sources */,
+				0EC2002332C0000100AAA001 /* DolEtaWeeklyClaimsAdapter.cpp in Sources */,
 				0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */,
 				0A1000022F70000100AAA001 /* main.cpp in Sources */,
 				0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */,

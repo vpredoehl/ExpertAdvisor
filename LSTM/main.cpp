@@ -50,6 +50,7 @@
 #include "ModelInputExpansion.hpp"
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
+#include "EconomicEventImportService.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -7418,6 +7419,8 @@ int main(int argc, const char * argv[])
         return RunFeatureTrainability3Class(argv[2], argv[3]);
     if (EA::ExperimentMetaAnalyzer::IsMetaAnalysisCommand(argc, argv))
         return EA::ExperimentMetaAnalyzer::RunMetaAnalysisCli(argc, argv);
+    if (EA::EconomicCalendar::IsEconomicEventImportCommand(argc, argv))
+        return EA::EconomicCalendar::RunEconomicEventImportCli(argc, argv);
     if (EA::ExperimentScheduler::IsExperimentSchedulerCommand(argc, argv))
         return EA::ExperimentScheduler::RunExperimentSchedulerCli(argc, argv);
 
