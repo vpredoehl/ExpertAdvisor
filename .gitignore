@@ -5,6 +5,7 @@ ratedata.gaincapital.com
 *.swp
 xcuserdata/
 *.txt
+!Tests/fixtures/economic_calendar/federal_reserve/*.txt
 *.plpgsql
 .derived-data-log*
 # Generated analysis output
