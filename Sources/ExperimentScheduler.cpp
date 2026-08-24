@@ -2856,17 +2856,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--training-objective")
         {
             const std::string objective = RequireNextArg(argc, argv, i, arg);
-            if (objective == EA::TrainingObjective::kLegacyObjectiveIdentifier ||
-                objective == "legacy")
-                options.trainingObjective = EA::TrainingObjective::Legacy();
-            else if (objective ==
-                         EA::TrainingObjective::kAuxiliaryObjectiveIdentifier ||
-                     objective == "profitability_auxiliary_v1")
+            try
+            {
                 options.trainingObjective =
-                    EA::TrainingObjective::ProfitabilityAuxiliary();
-            else
+                    EA::TrainingObjective::ParseCliSelection(objective);
+            }
+            catch (const std::invalid_argument&)
+            {
                 throw std::invalid_argument(
                     "unsupported --training-objective: " + objective);
+            }
             options.trainingObjectiveSpecified = true;
         }
         else if (arg == "--target-epochs")
@@ -2953,17 +2952,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.headLrMult = ParsePositiveDouble("--head-lr", value);
         else if (SplitOptionWithValue(arg, "--training-objective", value))
         {
-            if (value == EA::TrainingObjective::kLegacyObjectiveIdentifier ||
-                value == "legacy")
-                options.trainingObjective = EA::TrainingObjective::Legacy();
-            else if (value ==
-                         EA::TrainingObjective::kAuxiliaryObjectiveIdentifier ||
-                     value == "profitability_auxiliary_v1")
+            try
+            {
                 options.trainingObjective =
-                    EA::TrainingObjective::ProfitabilityAuxiliary();
-            else
+                    EA::TrainingObjective::ParseCliSelection(value);
+            }
+            catch (const std::invalid_argument&)
+            {
                 throw std::invalid_argument(
                     "unsupported --training-objective: " + value);
+            }
             options.trainingObjectiveSpecified = true;
         }
         else if (SplitOptionWithValue(arg, "--target-epochs", value))
@@ -6353,6 +6351,11 @@ int EnqueueExperiment(const SchedulerOptions& options)
                       options.donchian20Mode.value_or(kDefaultDonchian20Mode))
                   << ",feature_warmup_scope=" << EA::FeatureWarmupScopeText(options.featureWarmupScope)
                   << ",donchian_lookback=" << options.donchianLookback
+                  << ",training_objective_id="
+                  << options.trainingObjective.objectiveIdentifier
+                  << ",training_objective_hash="
+                  << EA::TrainingObjective::Identity(
+                         options.trainingObjective)
                   << ",target_epochs=" << *options.targetEpochs
                   << ",checkpoint_interval=" << options.checkpointInterval
                   << ",train_start=" << *options.trainStart
@@ -6488,6 +6491,8 @@ void PrintQueueConfig(const char* marker,
               << ",feature_warmup_scope=" << EA::FeatureWarmupScopeText(options.featureWarmupScope)
               << ",donchian_lookback=" << options.donchianLookback
               << ",feature_ablation_mask=" << options.featureAblationMask
+              << ",training_objective_id="
+              << options.trainingObjective.objectiveIdentifier
               << ",training_objective_hash="
               << EA::TrainingObjective::Identity(options.trainingObjective)
               << ",checkpoint_interval=" << options.checkpointInterval
@@ -9486,6 +9491,10 @@ std::vector<std::string> BuildTrainCommand(const SchedulerOptions& options,
     AddCliOption(argv, "--donchian-lookback",
                  std::to_string(experiment.donchianLookback));
     AddCliOption(argv, "--scheduler-experiment-id", std::to_string(experiment.experimentId));
+    AddCliOption(
+        argv,
+        "--training-objective",
+        experiment.trainingObjective.objectiveIdentifier);
     AddLstmProfileOptions(argv, options);
 
     const std::optional<long long> resumeFrom =

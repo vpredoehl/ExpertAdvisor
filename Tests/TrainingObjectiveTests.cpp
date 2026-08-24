@@ -37,6 +37,11 @@ bool NearlyEqual(double left, double right, double tolerance = 1.0e-14)
 int main()
 {
     const Configuration legacy = Legacy();
+    assert(ParseCliSelection("legacy") == legacy);
+    assert(ParseCliSelection(kLegacyObjectiveIdentifier) == legacy);
+    ExpectFailureContaining(
+        [] { (void)ParseCliSelection("unknown_v99"); },
+        "unsupported_training_objective_selection");
     assert(!Validate(legacy));
     const std::string canonical = CanonicalText(legacy);
     const std::string identity = Identity(legacy);
@@ -131,6 +136,8 @@ int main()
            "legacy_classification_only_contract_required");
 
     const Configuration auxiliary = ProfitabilityAuxiliary();
+    assert(ParseCliSelection("profitability_auxiliary_v1") == auxiliary);
+    assert(ParseCliSelection(kAuxiliaryObjectiveIdentifier) == auxiliary);
     assert(!Validate(auxiliary));
     assert(AuxiliaryEnabled(auxiliary));
     assert(auxiliary.mode ==

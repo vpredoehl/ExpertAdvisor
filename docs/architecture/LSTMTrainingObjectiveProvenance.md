@@ -133,5 +133,18 @@ aux-to-legacy resume in both directions. Classification inference continues to
 use only the three-class head; the auxiliary scalar is not persisted as an
 inference result and has no production scoring or policy effect.
 
-Phase 4C optimization experiments and any profitability-observation feedback
-remain deferred.
+## Phase 4C paired-experiment control path
+
+Phase 4C keeps queue selection explicit and keeps `legacy` as the default.
+Queue dry-run and enqueue output name both the resolved objective identifier and
+hash. A scheduler training child now receives the experiment row's persisted
+full objective identifier in `--training-objective`; the training runtime loads
+the same row read-only, requires exact canonical compatibility with that argv,
+and emits `TRAINING_OBJECTIVE_ACTIVE` with identifier, hash, and auxiliary
+enabled state before training. The persisted experiment remains authoritative;
+the child option is an observable, fail-closed binding rather than a second
+source of defaults.
+
+Recommendation, Campaign Manager, continuation, retry, and ordinary queue
+defaults remain unchanged. No Phase 4C path implicitly enables the auxiliary
+objective, and no schema migration or objective-mathematics change is required.

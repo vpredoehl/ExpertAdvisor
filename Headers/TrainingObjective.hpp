@@ -166,6 +166,17 @@ inline bool AuxiliaryEnabled(const Configuration& value)
     return value.auxiliaryLossMode != AuxiliaryLossMode::Disabled;
 }
 
+inline Configuration ParseCliSelection(std::string_view value)
+{
+    if (value == "legacy" || value == kLegacyObjectiveIdentifier)
+        return Legacy();
+    if (value == "profitability_auxiliary_v1" ||
+        value == kAuxiliaryObjectiveIdentifier)
+        return ProfitabilityAuxiliary();
+    throw std::invalid_argument(
+        "unsupported_training_objective_selection:" + std::string(value));
+}
+
 inline std::string_view ModeText(Mode mode)
 {
     switch (mode)

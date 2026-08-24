@@ -3754,6 +3754,7 @@ struct LaunchArgs
     std::optional<long long> schedulerExperimentId;
     std::optional<long long> schedulerCheckpointEvalId;
     std::optional<long long> schedulerWorkerAttemptId;
+    std::optional<EA::TrainingObjective::Configuration> trainingObjective;
     std::optional<long long> inferStartAfterModelId;
     std::optional<EA::FeatureWarmupScope> featureWarmupScope;
     std::optional<Donchian20Mode> donchian20Mode;
@@ -4025,6 +4026,17 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
             parsed.schedulerWorkerAttemptId =
                 ParseModelIdArg(argv[++i]);
         }
+        else if (arg == "--training-objective")
+        {
+            if (parsed.trainingObjective.has_value())
+                throw std::invalid_argument(
+                    "--training-objective specified more than once");
+            if (i + 1 >= argc)
+                throw std::invalid_argument(
+                    "--training-objective requires a value");
+            parsed.trainingObjective =
+                EA::TrainingObjective::ParseCliSelection(argv[++i]);
+        }
         else if (arg == "--log-level")
         {
             if (parsed.logLevel.has_value())
@@ -4160,6 +4172,15 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 parsed.schedulerWorkerAttemptId =
                     ParseModelIdArg(value);
             }
+            else if (SplitOptionWithValue(
+                         arg, "--training-objective", value))
+            {
+                if (parsed.trainingObjective.has_value())
+                    throw std::invalid_argument(
+                        "--training-objective specified more than once");
+                parsed.trainingObjective =
+                    EA::TrainingObjective::ParseCliSelection(value);
+            }
             else if (SplitOptionWithValue(arg, "--log-level", value))
             {
                 if (parsed.logLevel.has_value())
@@ -4205,6 +4226,16 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 positional.push_back(arg);
             }
         }
+    }
+
+    if (parsed.trainingObjective.has_value())
+    {
+        if (!parsed.schedulerExperimentId.has_value())
+            throw std::invalid_argument(
+                "--training-objective requires --scheduler-experiment-id");
+        if (!parsed.inferenceMode.has_value() || *parsed.inferenceMode)
+            throw std::invalid_argument(
+                "--training-objective is valid only for scheduler-managed training");
     }
 
     if (parsed.resumeModelId.has_value())
@@ -7457,7 +7488,7 @@ int main(int argc, const char * argv[])
     catch (const std::exception& e)
     {
         std::cerr << "Argument error: " << e.what() << "\n"
-                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] <fromDate> <toDate>\n"
+                  << "Usage: " << argv[0] << " [--train|--infer] [--infer-all] [--force-infer] [--donchian20-mode=enabled|zero_ablation] [--infer-start-after-model-id <model_id>] [--eval-trading] [--log-level quiet|summary|diagnostic] [--lstm-profile-hotspots] [--lstm-profile-output=<path>] [--resume-model-id=<model_id>] [--resume-expand-input-width] [--target-epochs=<absolute_final_epoch>] [--new-model-name=<name>] [--checkpoint-every <N>] [--symbol=<table_name>] [--model=<model_id>] [--prediction-horizon=<int>] [--threshold=<double>] [--window-size=<int>] [--hidden-size=<int>] [--num-layers=<int>] [--epochs=<int>] [--core-lr-mult=<float>] [--head-weight-lr-mult=<float>] [--head-bias-lr-mult=<float>] [--training-objective=<scheduler-persisted-objective>] <fromDate> <toDate>\n"
                   << "Preferred inference: " << argv[0] << " --infer --model=<model_id> <fromDate> <toDate>\n"
                   << "Preferred infer-all: " << argv[0] << " --infer --infer-all --model=<anchor_model_id> <fromDate> <toDate>\n";
         return 1;
@@ -7487,6 +7518,28 @@ int main(int argc, const char * argv[])
             (void)EA::TrainingObjective::ParseSupportedCanonicalText(
                 EA::TrainingObjective::CanonicalText(
                     runtimeTrainingObjective));
+            if (launchArgs.trainingObjective.has_value() &&
+                !EA::TrainingObjective::ResumeCompatible(
+                    runtimeTrainingObjective,
+                    *launchArgs.trainingObjective))
+            {
+                throw std::invalid_argument(
+                    "scheduler_child_training_objective_mismatch");
+            }
+            std::cout << "TRAINING_OBJECTIVE_ACTIVE"
+                      << ",experiment_id="
+                      << *launchArgs.schedulerExperimentId
+                      << ",objective_id="
+                      << runtimeTrainingObjective.objectiveIdentifier
+                      << ",objective_hash="
+                      << EA::TrainingObjective::Identity(
+                             runtimeTrainingObjective)
+                      << ",auxiliary_enabled="
+                      << (EA::TrainingObjective::AuxiliaryEnabled(
+                              runtimeTrainingObjective)
+                              ? "1"
+                              : "0")
+                      << std::endl;
         }
         catch (const std::exception& error)
         {
