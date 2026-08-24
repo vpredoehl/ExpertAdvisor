@@ -26,6 +26,7 @@ COMMON_SOURCES=(
     "$ROOT/Sources/BeaEconomicReleaseAdapter.cpp"
     "$ROOT/Sources/CensusEconomicReleaseAdapter.cpp"
     "$ROOT/Sources/DolEtaWeeklyClaimsAdapter.cpp"
+    "$ROOT/Sources/FederalReserveEconomicReleaseAdapter.cpp"
     "$ROOT/Sources/EconomicEventImportValidation.cpp"
     "$ROOT/Sources/EconomicEventImportRepository.cpp"
     "$ROOT/Sources/EconomicEventImportService.cpp"
