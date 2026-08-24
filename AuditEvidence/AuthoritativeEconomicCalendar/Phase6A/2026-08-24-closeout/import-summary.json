@@ -1,0 +1,93 @@
+{
+  "disallowed_same_time_count": 0,
+  "disposable_database": "ea_economic_calendar_phase6a_closeout_20260824",
+  "disposable_database_dropped": true,
+  "duplicate_source_identity_count": 0,
+  "first_import": [
+    {
+      "agency": "bea",
+      "inserted": 391,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 0,
+      "updated": 0
+    },
+    {
+      "agency": "bls",
+      "inserted": 813,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 0,
+      "updated": 0
+    },
+    {
+      "agency": "census",
+      "inserted": 1166,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 0,
+      "updated": 0
+    },
+    {
+      "agency": "dol-eta",
+      "inserted": 860,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 0,
+      "updated": 0
+    },
+    {
+      "agency": "federal-reserve",
+      "inserted": 398,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 0,
+      "updated": 0
+    }
+  ],
+  "first_import_total_inserted": 3628,
+  "post_repeat_database_row_count": 3628,
+  "repeat_import": [
+    {
+      "agency": "bea",
+      "inserted": 0,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 391,
+      "updated": 0
+    },
+    {
+      "agency": "bls",
+      "inserted": 0,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 813,
+      "updated": 0
+    },
+    {
+      "agency": "census",
+      "inserted": 0,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 1166,
+      "updated": 0
+    },
+    {
+      "agency": "dol-eta",
+      "inserted": 0,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 860,
+      "updated": 0
+    },
+    {
+      "agency": "federal-reserve",
+      "inserted": 0,
+      "mode": "apply",
+      "rejected": 0,
+      "unchanged": 398,
+      "updated": 0
+    }
+  ],
+  "repeat_import_total_unchanged": 3628
+}

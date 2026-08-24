@@ -1,0 +1,37 @@
+{
+  "bea": {
+    "audit_binary_sha256": "2c61d5b2042962096c9283a79e3ac9759d547cd7c6fcd26f393fe0990fb77863",
+    "audit_script_sha256": "f0d1f3a0a9f661aa8e52f3f2fda02fb3746b798df4fcfd8bc26de132aff81898",
+    "parser_version": "bea_economic_release_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "45174a009b9ab0ed1cd5a4aec7d0fbe9495529073b2f0237cd8ed696ac00208a"
+  },
+  "bls": {
+    "audit_binary_sha256": "2c61d5b2042962096c9283a79e3ac9759d547cd7c6fcd26f393fe0990fb77863",
+    "audit_script_sha256": "f0d1f3a0a9f661aa8e52f3f2fda02fb3746b798df4fcfd8bc26de132aff81898",
+    "parser_version": "bls_schedule_release_v1",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "42ed8a3170a05b522a85dd417426b292fd9d5b0f511a48f831578e792a066d24"
+  },
+  "census": {
+    "audit_binary_sha256": "2c61d5b2042962096c9283a79e3ac9759d547cd7c6fcd26f393fe0990fb77863",
+    "audit_script_sha256": "f0d1f3a0a9f661aa8e52f3f2fda02fb3746b798df4fcfd8bc26de132aff81898",
+    "parser_version": "census_economic_release_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "a22f4e2c6d39bb5214904fb63cfc8d4c155ff90f9bfeb6dea87ec68fcc8a34e9"
+  },
+  "dol-eta": {
+    "audit_binary_sha256": "2c61d5b2042962096c9283a79e3ac9759d547cd7c6fcd26f393fe0990fb77863",
+    "audit_script_sha256": "f0d1f3a0a9f661aa8e52f3f2fda02fb3746b798df4fcfd8bc26de132aff81898",
+    "parser_version": "dol_eta_weekly_claims_v3",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "8364427090f9a4708358c5e884eb35549d2abf26f0655d24f084e047d3900898"
+  },
+  "federal-reserve": {
+    "audit_binary_sha256": "2c61d5b2042962096c9283a79e3ac9759d547cd7c6fcd26f393fe0990fb77863",
+    "audit_script_sha256": "f0d1f3a0a9f661aa8e52f3f2fda02fb3746b798df4fcfd8bc26de132aff81898",
+    "parser_version": "federal_reserve_economic_release_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "6d8286b3ff1ec94f40de71e818a5e1951eeaa50ea7306929f46591adf38fcf94"
+  }
+}
