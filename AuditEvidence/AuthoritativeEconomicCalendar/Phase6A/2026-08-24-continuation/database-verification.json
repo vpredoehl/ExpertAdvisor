@@ -1,0 +1,15 @@
+{
+  "complete_first_import_inserted": 3583,
+  "complete_repeat_import_unchanged": 3583,
+  "complete_repeat_import_inserted": 0,
+  "complete_repeat_import_updated": 0,
+  "complete_repeat_import_rejected": 0,
+  "final_schema_row_count": 3583,
+  "duplicate_source_identity_count": 0,
+  "same_agency_family_timestamp_group_count": 1,
+  "unpermitted_same_agency_family_timestamp_group_count": 0,
+  "fomc_20140917_pair_count": 2,
+  "conflict_suites_passed": true,
+  "atomic_mixed_batch_rollback_suites_passed": true,
+  "disposable_databases_dropped": true
+}

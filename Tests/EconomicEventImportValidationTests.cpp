@@ -138,5 +138,23 @@ int main()
         std::chrono::duration_cast<std::chrono::microseconds>(
             nextMidnight.time_since_epoch()).count();
     assert(ValidateAndOrderEconomicEventCandidates({dateOnly}).size() == 1);
+
+    auto fomcA = dateOnly;
+    fomcA.sourceAgency = "FEDERAL_RESERVE";
+    fomcA.sourceEventId = "federal_reserve:monetary20140917a";
+    fomcA.eventFamily = "FOMC_STATEMENT";
+    fomcA.sourceReleaseDate = "2014-09-17";
+    fomcA.sourceUrl = "https://www.federalreserve.gov/newsevents/"
+        "pressreleases/monetary20140917a.htm";
+    assert(EA::HistoricalFxTimestamp::ParseNewYorkCivilTimestamp(
+        "2014-09-18 00:00:00", nextMidnight));
+    fomcA.eventTimestampUnixMicros =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            nextMidnight.time_since_epoch()).count();
+    auto fomcC = fomcA;
+    fomcC.sourceEventId = "federal_reserve:monetary20140917c";
+    fomcC.sourceUrl = "https://www.federalreserve.gov/newsevents/"
+        "pressreleases/monetary20140917c.htm";
+    assert(ValidateAndOrderEconomicEventCandidates({fomcA, fomcC}).size() == 2);
     return 0;
 }

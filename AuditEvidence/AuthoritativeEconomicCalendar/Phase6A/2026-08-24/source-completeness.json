@@ -1,0 +1,57 @@
+{
+  "as_of_date": "2026-08-24",
+  "required_historical_start": "2010-01-01",
+  "agencies": {
+    "bea": {
+      "current_product_archive_snapshot_occurrences": 371,
+      "retained_prior_product_archive_snapshot_occurrences": 383,
+      "reacquired_union_occurrences": 393,
+      "accepted_union_occurrences": 391,
+      "current_snapshot_missing_from_prior_snapshot": 22,
+      "current_snapshot_additions_over_prior_snapshot": 10,
+      "retained_catalog_reacquisition_supported": true,
+      "remaining_limitation": "BEA product-filtered archive pagination is not a stable complete enumeration; the retained first-party URL/hash catalog is required to reproduce this audit scope."
+    },
+    "bls": {
+      "annual_schedule_resources": 17,
+      "enumerated_occurrences": 813,
+      "accepted_occurrences": 813,
+      "range": "2010-01-01 through 2026-08-24",
+      "remaining_limitation": null
+    },
+    "census": {
+      "enumerated_occurrences": 1171,
+      "accepted_occurrences": 1166,
+      "duplicate_evidence_aliases": 2,
+      "permanent_fail_closed_exclusions": 3,
+      "remaining_limitation": null
+    },
+    "dol-eta": {
+      "enumerated_occurrences": 46,
+      "accepted_occurrences": 46,
+      "accepted_range": "2025-01-02 through 2025-12-31",
+      "missing_intervals": [
+        "2010-01-01 through 2024-12-31",
+        "2026-01-01 through 2026-08-24"
+      ],
+      "unrepresented_nominal_thursday_boundaries": 816,
+      "nominal_boundary_caveat": "The 816 count is a calendar-boundary measure, not a manufactured occurrence count; authoritative holiday, shutdown, and exceptional release handling remains unresolved.",
+      "required_coverage_blocker": true,
+      "remaining_limitation": "No implemented first-party mechanism reproducibly enumerates the missing historical Weekly Claims occurrences and their causal release timestamps."
+    },
+    "federal-reserve": {
+      "enumerated_occurrences": 407,
+      "accepted_occurrences": 398,
+      "permanent_fail_closed_exclusions": 9,
+      "same_date_fomc_pair": [
+        "federal_reserve:monetary20140917a",
+        "federal_reserve:monetary20140917c"
+      ],
+      "same_date_pair_resolution": "Distinct immutable first-party document identifiers coexist at the same authoritative date-only boundary; no release time or temporal ordering was invented.",
+      "remaining_limitation": null
+    }
+  },
+  "readiness_blockers": [
+    "DOL/ETA Weekly Claims coverage is absent for 2010-2024 and 2026 year-to-date, with no implemented authoritative causal acquisition path."
+  ]
+}

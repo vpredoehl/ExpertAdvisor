@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <map>
 #include <regex>
 #include <set>
 #include <stdexcept>
@@ -216,7 +217,9 @@ ValidateAndOrderEconomicEventCandidates(
         });
 
     std::set<std::pair<std::string, std::string>> identities;
-    std::set<std::tuple<std::string, std::string, std::int64_t>> timestamps;
+    std::map<
+        std::tuple<std::string, std::string, std::int64_t>,
+        AuthoritativeEconomicEventCandidate> timestamps;
 
     for (const auto& candidate : candidates)
     {
@@ -228,10 +231,13 @@ ValidateAndOrderEconomicEventCandidates(
                 "economic_event_duplicate_source_event_id_in_batch");
         }
 
-        if (!timestamps.emplace(
-                candidate.sourceAgency,
-                candidate.eventFamily,
-                candidate.eventTimestampUnixMicros).second)
+        const auto key = std::make_tuple(
+            candidate.sourceAgency,
+            candidate.eventFamily,
+            candidate.eventTimestampUnixMicros);
+        const auto [iterator, inserted] = timestamps.emplace(key, candidate);
+        if (!inserted && !IsPermittedEconomicEventTimestampCoexistence(
+                iterator->second, candidate))
         {
             throw std::invalid_argument(
                 "economic_event_duplicate_agency_family_timestamp_in_batch");
@@ -239,6 +245,32 @@ ValidateAndOrderEconomicEventCandidates(
     }
 
     return candidates;
+}
+
+
+bool IsPermittedEconomicEventTimestampCoexistence(
+    const AuthoritativeEconomicEventCandidate& left,
+    const AuthoritativeEconomicEventCandidate& right)
+{
+    if (left.sourceAgency != "FEDERAL_RESERVE" ||
+        right.sourceAgency != "FEDERAL_RESERVE" ||
+        left.eventFamily != "FOMC_STATEMENT" ||
+        right.eventFamily != "FOMC_STATEMENT" ||
+        left.historicalTimeConfidence != "date_only" ||
+        right.historicalTimeConfidence != "date_only" ||
+        left.sourceReleaseDate != std::optional<std::string>{"2014-09-17"} ||
+        right.sourceReleaseDate != std::optional<std::string>{"2014-09-17"} ||
+        left.eventTimestampUnixMicros != right.eventTimestampUnixMicros)
+    {
+        return false;
+    }
+
+    const std::set<std::string> identities{
+        left.sourceEventId,
+        right.sourceEventId};
+    return identities == std::set<std::string>{
+        "federal_reserve:monetary20140917a",
+        "federal_reserve:monetary20140917c"};
 }
 
 } // namespace EA::EconomicCalendar

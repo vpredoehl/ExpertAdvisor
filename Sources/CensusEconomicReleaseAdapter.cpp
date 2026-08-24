@@ -178,6 +178,23 @@ std::string Lower(std::string value)
     return value;
 }
 
+std::string FamilyIdentityNamespace(const std::string& family)
+{
+    if (family == "CONSTRUCTION_SPENDING")
+        return "construction-spending";
+    if (family == "DURABLE_GOODS_ADVANCE")
+        return "durable-goods-advance";
+    if (family == "MANUFACTURERS_ORDERS")
+        return "manufacturers-orders";
+    if (family == "NEW_RESIDENTIAL_CONSTRUCTION")
+        return "new-residential-construction";
+    if (family == "NEW_RESIDENTIAL_SALES")
+        return "new-residential-sales";
+    if (family == "RETAIL_SALES_ADVANCE")
+        return "retail-sales-advance";
+    throw std::invalid_argument("census_identity_family_unsupported");
+}
+
 unsigned MonthNumber(const std::string& month)
 {
     static const std::array<const char*, 12> months{
@@ -559,8 +576,8 @@ AuthoritativeEconomicEventCandidate ParseCensusEconomicReleaseArtifact(
     if (identities.size() != 1)
         throw std::invalid_argument("census_authoritative_identity_ambiguous");
 
-    const std::string sourceEventId = *identities.begin();
-    const int identityYear = std::stoi(sourceEventId.substr(9, 2));
+    const std::string publisherReleaseId = *identities.begin();
+    const int identityYear = std::stoi(publisherReleaseId.substr(9, 2));
     const bool delayedShutdownIdentity =
         publication.family == "NEW_RESIDENTIAL_SALES" &&
         source.referenceYear == 2018 && source.referenceMonth == 11 &&
@@ -574,7 +591,9 @@ AuthoritativeEconomicEventCandidate ParseCensusEconomicReleaseArtifact(
     candidate.eventFamily = publication.family;
     candidate.eventTimestampUnixMicros = instant;
     candidate.sourceAgency = "CENSUS";
-    candidate.sourceEventId = sourceEventId;
+    candidate.sourceEventId =
+        "census:" + FamilyIdentityNamespace(publication.family) + '.' +
+        publisherReleaseId.substr(std::string{"census:"}.size());
     candidate.sourceUrl = canonicalSourceUrl;
     candidate.referencePeriod = ReferenceText(
         publication.referenceYear,
@@ -603,7 +622,7 @@ LoadCensusEconomicReleaseManifest(
     if (!std::getline(input, line) || line != "manifest_version\t1")
         throw std::invalid_argument("census_manifest_version_invalid");
     if (!std::getline(input, line) ||
-        line != "parser_version\tcensus_economic_release_v1")
+        line != "parser_version\tcensus_economic_release_v2")
     {
         throw std::invalid_argument("census_manifest_parser_version_invalid");
     }

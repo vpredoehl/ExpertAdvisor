@@ -1,4 +1,4 @@
 manifest_version	1
-parser_version	census_economic_release_v1
+parser_version	census_economic_release_v2
 artifact_path	artifact_sha256	artifact_type	source_url	source_artifact_path	source_artifact_sha256	extractor
 2010-retail-sales-advance.txt	0000000000000000000000000000000000000000000000000000000000000000	text_fixture	https://www2.census.gov/retail/releases/historical/marts/adv1005.pdf	2010-retail-sales-advance.txt	0000000000000000000000000000000000000000000000000000000000000000	first_party_excerpt_v1

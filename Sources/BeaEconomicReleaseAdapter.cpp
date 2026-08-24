@@ -312,6 +312,29 @@ ParsedPublication ParsePublicationHeading(const std::string& afterIdentity)
             std::to_string(year)};
     }
 
+    // During the 2018-2019 shutdown BEA published February personal income
+    // together with the delayed January personal-outlays occurrence.  The
+    // calendar family represents the complete Income and Outlays occurrence,
+    // so its causal reference month is the explicitly named outlays month.
+    static const std::regex splitPersonalHeading{
+        R"(^Personal Income(?:,|:)\s+([A-Za-z]+)\s+([0-9]{4});\s+Personal Outlays(?:,|:)\s+([A-Za-z]+)\s+([0-9]{4})\b)",
+        std::regex::icase};
+    std::smatch splitPersonal;
+    if (std::regex_search(afterIdentity, splitPersonal, splitPersonalHeading))
+    {
+        (void)MonthNumber(splitPersonal[1].str());
+        const int incomeYear = std::stoi(splitPersonal[2].str());
+        const unsigned outlaysMonth = MonthNumber(splitPersonal[3].str());
+        const int outlaysYear = std::stoi(splitPersonal[4].str());
+        if (incomeYear != outlaysYear)
+            throw std::invalid_argument("bea_personal_income_reference_period_invalid");
+
+        std::ostringstream reference;
+        reference << std::setfill('0') << std::setw(4) << outlaysYear << '-'
+                  << std::setw(2) << outlaysMonth;
+        return {"PERSONAL_INCOME_OUTLAYS", reference.str()};
+    }
+
     static const std::regex personalHeading{
         R"(^Personal Income and Outlays(?:,|:|\s+for)\s+([A-Za-z]+)\s+([0-9]{4})\b)",
         std::regex::icase};
@@ -495,7 +518,7 @@ LoadBeaEconomicReleaseManifest(
     if (!std::getline(input, line) || line != "manifest_version\t1")
         throw std::invalid_argument("bea_manifest_version_invalid");
     if (!std::getline(input, line) ||
-        line != "parser_version\tbea_economic_release_v1")
+        line != "parser_version\tbea_economic_release_v2")
     {
         throw std::invalid_argument("bea_manifest_parser_version_invalid");
     }

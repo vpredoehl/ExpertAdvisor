@@ -1,0 +1,37 @@
+{
+  "focused_tests": {
+    "AuthoritativeEconomicAcquisitionTests.sh": "passed (7)",
+    "BeaEconomicReleaseAdapterTests.sh": "passed",
+    "BlsEconomicReleaseAcquisitionTests.sh": "passed (2)",
+    "BlsScheduleReleaseAdapterTests.sh": "passed",
+    "CensusEconomicReleaseAcquisitionTests.sh": "passed (3)",
+    "CensusEconomicReleaseAdapterTests.sh": "passed",
+    "DolEtaWeeklyClaimsAdapterTests.sh": "passed",
+    "FederalReserveEconomicReleaseAcquisitionTests.sh": "passed (7)",
+    "FederalReserveEconomicReleaseAdapterTests.sh": "passed",
+    "EconomicEventImportValidationTests.sh": "passed",
+    "EconomicEventManifestAuditTests.sh": "passed (5)",
+    "EconomicEventBarAlignmentTests.sh": "passed"
+  },
+  "disposable_database_tests": {
+    "EconomicEventImportRepositoryTests.sh": "passed; database dropped",
+    "BeaEconomicEventImportRepositoryTests.sh": "passed; conflict and rollback assertions passed; database dropped",
+    "CensusEconomicEventImportRepositoryTests.sh": "passed; conflict and rollback assertions passed; database dropped",
+    "FederalReserveEconomicEventImportRepositoryTests.sh": "passed; conflict, rollback, and same-boundary assertions passed; database dropped"
+  },
+  "read_path_regressions": {
+    "initial_all_agency_attempt": "failed expected BLS-only count assertion due to test-fixture contamination",
+    "EconomicEventRepositoryTests.sh": "passed against isolated disposable BLS corpus",
+    "EconomicEventRealBarAlignmentIntegrationTests.sh": "passed against isolated disposable BLS corpus"
+  },
+  "build": {
+    "command": "xcodebuild -project ExpertAdvisor.xcodeproj -scheme 'LSTM Debug' -configuration Debug -derivedDataPath DerivedData/Development build",
+    "result": "BUILD SUCCEEDED"
+  },
+  "static_checks": {
+    "project_pbxproj": "plutil OK",
+    "python_compile": "passed",
+    "shell_syntax": "passed",
+    "git_diff_check": "passed"
+  }
+}

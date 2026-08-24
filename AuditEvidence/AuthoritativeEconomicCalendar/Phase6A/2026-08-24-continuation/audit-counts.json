@@ -1,0 +1,62 @@
+{
+  "bea": {
+    "accepted_candidate_count": 391,
+    "acquisition_failure_count": 0,
+    "acquisition_success_count": 393,
+    "collision_failure_count": 0,
+    "duplicate_evidence_count": 0,
+    "enumerated_occurrence_count": 393,
+    "parse_failure_count": 2,
+    "parsed_count": 391,
+    "validation_failure_count": 0,
+    "validation_success_count": 391
+  },
+  "bls": {
+    "accepted_candidate_count": 813,
+    "acquisition_failure_count": 0,
+    "acquisition_success_count": 813,
+    "collision_failure_count": 0,
+    "duplicate_evidence_count": 0,
+    "enumerated_occurrence_count": 813,
+    "parse_failure_count": 0,
+    "parsed_count": 813,
+    "validation_failure_count": 0,
+    "validation_success_count": 813
+  },
+  "census": {
+    "accepted_candidate_count": 1166,
+    "acquisition_failure_count": 0,
+    "acquisition_success_count": 1171,
+    "collision_failure_count": 0,
+    "duplicate_evidence_count": 2,
+    "enumerated_occurrence_count": 1171,
+    "parse_failure_count": 3,
+    "parsed_count": 1168,
+    "validation_failure_count": 0,
+    "validation_success_count": 1168
+  },
+  "dol-eta": {
+    "accepted_candidate_count": 815,
+    "acquisition_failure_count": 0,
+    "acquisition_success_count": 863,
+    "collision_failure_count": 0,
+    "duplicate_evidence_count": 2,
+    "enumerated_occurrence_count": 863,
+    "parse_failure_count": 46,
+    "parsed_count": 817,
+    "validation_failure_count": 0,
+    "validation_success_count": 817
+  },
+  "federal-reserve": {
+    "accepted_candidate_count": 398,
+    "acquisition_failure_count": 0,
+    "acquisition_success_count": 407,
+    "collision_failure_count": 0,
+    "duplicate_evidence_count": 0,
+    "enumerated_occurrence_count": 407,
+    "parse_failure_count": 9,
+    "parsed_count": 398,
+    "validation_failure_count": 0,
+    "validation_success_count": 398
+  }
+}

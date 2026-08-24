@@ -1,5 +1,5 @@
 manifest_version	1
-parser_version	dol_eta_weekly_claims_v1
+parser_version	dol_eta_weekly_claims_v3
 artifact_path	artifact_sha256	artifact_type	source_url	source_artifact_path	source_artifact_sha256	extractor
 2010-07-22.html	1c46491f197675c7dda57ccbe2295f00bfba6b4fb902dacfe1e59852f163718e	html	https://oui.doleta.gov/press/2010/072210.asp	2010-07-22.html	1c46491f197675c7dda57ccbe2295f00bfba6b4fb902dacfe1e59852f163718e	none
 2025-01-02.txt	0795b52ebdee225bea14452d1324844489040c8e9c27ac0566763f230be7f032	text_fixture	https://oui.doleta.gov/press/2025/010225.pdf	2025-01-02.txt	0795b52ebdee225bea14452d1324844489040c8e9c27ac0566763f230be7f032	first_party_excerpt_v1

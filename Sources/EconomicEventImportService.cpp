@@ -1,6 +1,7 @@
 #include "EconomicEventImportService.hpp"
 
 #include "BeaEconomicReleaseAdapter.hpp"
+#include "BlsScheduleReleaseAdapter.hpp"
 #include "CensusEconomicReleaseAdapter.hpp"
 #include "DolEtaWeeklyClaimsAdapter.hpp"
 #include "EconomicEventImportValidation.hpp"
@@ -99,6 +100,7 @@ CliArguments ParseCli(
     if (!commandSeen || parsed.agency.empty())
         throw std::invalid_argument("--import-economic-events requires an agency");
     if (parsed.agency != "dol-eta" && parsed.agency != "bea" &&
+        parsed.agency != "bls" &&
         parsed.agency != "census" && parsed.agency != "federal-reserve")
         throw std::invalid_argument("unsupported economic-event agency: " + parsed.agency);
     if (parsed.manifest.empty())
@@ -159,6 +161,8 @@ int RunEconomicEventImportCli(
         std::vector<AuthoritativeEconomicEventCandidate> candidates;
         if (arguments.agency == "bea")
             candidates = LoadBeaEconomicReleaseManifest(arguments.manifest);
+        else if (arguments.agency == "bls")
+            candidates = LoadBlsScheduleReleaseManifest(arguments.manifest);
         else if (arguments.agency == "census")
             candidates = LoadCensusEconomicReleaseManifest(arguments.manifest);
         else if (arguments.agency == "federal-reserve")

@@ -5,12 +5,14 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "Scripts"))
 SCRIPT = ROOT / "Scripts" / "fetch_federal_reserve_economic_releases.py"
 SPEC = importlib.util.spec_from_file_location("fetch_federal_reserve", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -36,13 +38,14 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
             <a href='/fomc/beigebook/2010/20100113/fullreport20100113.pdf'>PDF</a>
         """
 
-        def fake_fetch(url: str) -> bytes:
-            return {
+        def fake_fetch(url: str) -> fetch_federal_reserve.Download:
+            data = {
                 fetch_federal_reserve.PRESS_ARCHIVE_INDEX: press_index,
                 "https://www.federalreserve.gov/newsevents/pressreleases/2010all.htm": annual_index,
                 fetch_federal_reserve.BEIGE_BOOK_ARCHIVE_INDEX: beige_archive,
                 "https://www.federalreserve.gov/monetarypolicy/beigebook2010.htm": beige_year,
             }[url]
+            return fetch_federal_reserve.Download(url, url, data)
 
         with mock.patch.object(
             fetch_federal_reserve, "fetch", side_effect=fake_fetch
@@ -70,11 +73,13 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
             f"BeigeBook_{current_year}0114.pdf"
         )
 
-        def fake_fetch(url: str) -> bytes:
+        def fake_fetch(url: str) -> fetch_federal_reserve.Download:
             if url == fetch_federal_reserve.BEIGE_BOOK_ARCHIVE_INDEX:
-                return b"<a href='/monetarypolicy/beigebook2025.htm'>2025</a>"
+                data = b"<a href='/monetarypolicy/beigebook2025.htm'>2025</a>"
+                return fetch_federal_reserve.Download(url, url, data)
             if url == fetch_federal_reserve.BEIGE_BOOK_CURRENT_INDEX:
-                return f"<a href='{current_url}'>PDF</a>".encode()
+                data = f"<a href='{current_url}'>PDF</a>".encode()
+                return fetch_federal_reserve.Download(url, url, data)
             raise AssertionError(url)
 
         with mock.patch.object(
@@ -182,8 +187,10 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
             ),
         ]
 
-        def fake_fetch(url: str) -> bytes:
-            return ("<html>first-party:" + url + "</html>").encode("utf-8")
+        def fake_fetch(url: str, *_: object) -> fetch_federal_reserve.Download:
+            return fetch_federal_reserve.Download(
+                url, url, ("<html>first-party:" + url + "</html>").encode("utf-8")
+            )
 
         with tempfile.TemporaryDirectory(prefix="ea-fed-acquisition-test-") as directory:
             output = pathlib.Path(directory) / "output"
@@ -197,7 +204,7 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
             manifest = (output / "manifest.tsv").read_text(encoding="utf-8")
             self.assertTrue(manifest.startswith(
                 "manifest_version\t1\n"
-                "parser_version\tfederal_reserve_economic_release_v1\n"
+                "parser_version\tfederal_reserve_economic_release_v2\n"
             ))
             entries = manifest.splitlines()[3:]
             self.assertEqual(entries, sorted(entries))
@@ -229,7 +236,11 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ea-fed-acquisition-test-") as directory:
             output = pathlib.Path(directory) / "output"
             with mock.patch.object(
-                fetch_federal_reserve, "fetch", return_value=b"%PDF-test"
+                fetch_federal_reserve,
+                "fetch",
+                side_effect=lambda requested, *_: fetch_federal_reserve.Download(
+                    requested, requested, b"%PDF-test"
+                ),
             ), mock.patch.object(
                 fetch_federal_reserve,
                 "extractor_identity",
@@ -260,7 +271,11 @@ class FederalReserveAcquisitionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ea-fed-acquisition-test-") as directory:
             output = pathlib.Path(directory) / "output"
             with mock.patch.object(
-                fetch_federal_reserve, "fetch", return_value=b"<html>test</html>"
+                fetch_federal_reserve,
+                "fetch",
+                side_effect=lambda requested, *_: fetch_federal_reserve.Download(
+                    requested, requested, b"<html>test</html>"
+                ),
             ):
                 fetch_federal_reserve.acquire(too_many, output, None)
             self.assertEqual(

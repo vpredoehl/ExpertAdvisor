@@ -1,0 +1,54 @@
+{
+  "as_of_date": "2026-08-24",
+  "required_historical_start": "2010-01-01",
+  "agencies": {
+    "bea": {
+      "current_product_archive_snapshot_occurrences": 371,
+      "retained_first_party_union_occurrences": 393,
+      "accepted_union_occurrences": 391,
+      "retained_urls_missing_from_current_pagination": 22,
+      "current_urls_absent_from_retained_union": 0,
+      "same_url_artifact_hash_changes": 2,
+      "changed_accepted_artifacts_with_semantic_changes": 0,
+      "remaining_limitation": "BEA product-filtered archive pagination and same-URL page bytes are not stable complete historical enumeration. The retained first-party URL/hash catalog plus a fresh semantic audit is required."
+    },
+    "bls": {
+      "annual_schedule_resources": 17,
+      "enumerated_occurrences": 813,
+      "accepted_occurrences": 813,
+      "range": "2010-01-01 through 2026-08-24",
+      "remaining_limitation": null
+    },
+    "census": {
+      "enumerated_occurrences": 1171,
+      "accepted_occurrences": 1166,
+      "duplicate_evidence_aliases": 2,
+      "permanent_fail_closed_exclusions": 3,
+      "range": "2010 through 2026",
+      "remaining_limitation": null
+    },
+    "dol-eta": {
+      "enumerated_occurrences": 863,
+      "parsed_occurrences": 817,
+      "accepted_occurrences": 815,
+      "duplicate_evidence_aliases": 2,
+      "explicit_timezone_contradiction_exclusions": 45,
+      "dummy_nonrelease_exclusions": 1,
+      "accepted_range": "2010-01-07 through 2026-08-20",
+      "years_represented": "2010 through 2026",
+      "remaining_limitation": "Forty-five first-party documents explicitly use EST/EDT labels that contradict the release date's New York offset; they remain excluded rather than assigning an invented causal instant. One archive link is an explicit dummy file."
+    },
+    "federal-reserve": {
+      "enumerated_occurrences": 407,
+      "accepted_occurrences": 398,
+      "permanent_fail_closed_exclusions": 9,
+      "same_date_fomc_pair": [
+        "federal_reserve:monetary20140917a",
+        "federal_reserve:monetary20140917c"
+      ],
+      "same_date_pair_resolution": "Distinct immutable first-party document identifiers coexist at the same authoritative date-only boundary; no release time or ordering was invented.",
+      "remaining_limitation": null
+    }
+  },
+  "readiness_blockers": []
+}

@@ -607,7 +607,7 @@ LoadFederalReserveEconomicReleaseManifest(
     if (!std::getline(input, line) || line != "manifest_version\t1")
         throw std::invalid_argument("federal_reserve_manifest_version_invalid");
     if (!std::getline(input, line) ||
-        line != "parser_version\tfederal_reserve_economic_release_v1")
+        line != "parser_version\tfederal_reserve_economic_release_v2")
     {
         throw std::invalid_argument(
             "federal_reserve_manifest_parser_version_invalid");

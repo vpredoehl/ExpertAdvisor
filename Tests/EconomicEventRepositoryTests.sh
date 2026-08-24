@@ -6,7 +6,7 @@ ROOT="$(
     pwd
 )"
 
-BUILD_DIR="$ROOT/Build/economic_event_repository_tests"
+BUILD_DIR="$ROOT/DerivedData/Development/Tests/economic_event_repository_tests"
 BIN="$BUILD_DIR/EconomicEventRepositoryTests"
 
 mkdir -p "$BUILD_DIR"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT/Build/economic_event_import_validation_tests"
+BUILD_DIR="$ROOT/DerivedData/Development/Tests/economic_event_import_validation_tests"
 BIN="$BUILD_DIR/EconomicEventImportValidationTests"
 mkdir -p "$BUILD_DIR"
 

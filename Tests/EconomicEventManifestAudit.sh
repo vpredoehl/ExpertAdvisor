@@ -15,6 +15,7 @@ clang++ -std=c++20 -Wall -Wextra -Werror \
     -I"$ROOT/Headers" -I"$ROOT/Sources" \
     "$ROOT/Common/HistoricalFxTimestamp.cpp" \
     "$ROOT/Sources/BeaEconomicReleaseAdapter.cpp" \
+    "$ROOT/Sources/BlsScheduleReleaseAdapter.cpp" \
     "$ROOT/Sources/CensusEconomicReleaseAdapter.cpp" \
     "$ROOT/Sources/DolEtaWeeklyClaimsAdapter.cpp" \
     "$ROOT/Sources/FederalReserveEconomicReleaseAdapter.cpp" \

@@ -166,9 +166,20 @@ unsigned MonthNumber(const std::string& month)
         "july", "august", "september", "october", "november", "december"};
     std::string lower;
     for (unsigned char character : month)
-        lower.push_back(static_cast<char>(std::tolower(character)));
+    {
+        if (character != '.')
+            lower.push_back(static_cast<char>(std::tolower(character)));
+    }
 
-    const auto found = std::find(months.begin(), months.end(), lower);
+    const auto found = std::find_if(
+        months.begin(), months.end(),
+        [&lower](const char* candidate)
+        {
+            const std::string full{candidate};
+            return lower == full ||
+                (lower.size() == 3 && full.rfind(lower, 0) == 0) ||
+                (lower == "sept" && full == "september");
+        });
     if (found == months.end())
         throw std::invalid_argument("dol_eta_release_month_invalid");
     return static_cast<unsigned>(std::distance(months.begin(), found) + 1);
@@ -199,7 +210,7 @@ struct ParsedDate
 ParsedDate ParseLongDate(const std::string& text)
 {
     static const std::regex pattern{
-        R"(^([A-Za-z]+) ([0-9]{1,2}), ([0-9]{4})$)"};
+        R"(^([A-Za-z]+\.?)\s+([0-9]{1,2})\s*,?\s*([0-9]{4})$)"};
     std::smatch match;
     if (!std::regex_match(text, match, pattern))
         throw std::invalid_argument("dol_eta_release_date_invalid");
@@ -254,17 +265,21 @@ std::string ArtifactFallbackId(
 
 std::string NormalizeDolEtaReleaseId(const std::string& releaseId)
 {
+    const std::string separatedPrefix = std::regex_replace(
+        releaseId,
+        std::regex{R"(^(\s*USDL)([0-9]))", std::regex::icase},
+        "$1 $2");
     static const std::regex tokenPattern{R"([A-Za-z0-9]+)"};
     std::vector<std::string> tokens;
     for (std::sregex_iterator iterator{
-             releaseId.begin(), releaseId.end(), tokenPattern}, end;
+             separatedPrefix.begin(), separatedPrefix.end(), tokenPattern}, end;
          iterator != end;
          ++iterator)
     {
         tokens.push_back(iterator->str());
     }
 
-    if (tokens.size() != 4)
+    if (tokens.size() != 4 && tokens.size() != 5)
         throw std::invalid_argument("dol_eta_release_id_malformed");
 
     std::transform(tokens[0].begin(), tokens[0].end(), tokens[0].begin(),
@@ -272,7 +287,7 @@ std::string NormalizeDolEtaReleaseId(const std::string& releaseId)
         {
             return static_cast<char>(std::tolower(character));
         });
-    std::transform(tokens[3].begin(), tokens[3].end(), tokens[3].begin(),
+    std::transform(tokens.back().begin(), tokens.back().end(), tokens.back().begin(),
         [](unsigned char character)
         {
             return static_cast<char>(std::tolower(character));
@@ -297,17 +312,26 @@ std::string NormalizeDolEtaReleaseId(const std::string& releaseId)
             });
     };
 
+    const std::size_t releaseNumberIndex = tokens.size() - 2;
+    const std::size_t suffixIndex = tokens.size() - 1;
+    const bool duplicatedYearToken =
+        tokens.size() == 5 && tokens[1] == tokens[2];
     if (tokens[0] != "usdl" ||
         (tokens[1].size() != 2 && tokens[1].size() != 4) ||
-        !allDigits(tokens[1]) || tokens[2].size() > 6 ||
-        !allDigits(tokens[2]) || tokens[3].size() < 2 ||
-        tokens[3].size() > 10 || !allLetters(tokens[3]))
+        !allDigits(tokens[1]) ||
+        (tokens.size() == 5 && !duplicatedYearToken) ||
+        tokens[releaseNumberIndex].size() > 6 ||
+        !allDigits(tokens[releaseNumberIndex]) ||
+        tokens[suffixIndex].size() < 2 || tokens[suffixIndex].size() > 10 ||
+        !allLetters(tokens[suffixIndex]))
     {
         throw std::invalid_argument("dol_eta_release_id_malformed");
     }
 
-    return "dol_eta:" + tokens[0] + '-' + tokens[1] + '-' +
-        tokens[2] + '-' + tokens[3];
+    std::string normalized = "dol_eta:" + tokens[0];
+    for (std::size_t index = 1; index < tokens.size(); ++index)
+        normalized += '-' + tokens[index];
+    return normalized;
 }
 
 
@@ -329,7 +353,7 @@ AuthoritativeEconomicEventCandidate ParseDolEtaWeeklyClaimsArtifact(
         throw std::invalid_argument("dol_eta_weekly_claims_title_missing");
 
     static const std::regex embargoPattern{
-        R"(EMBARGOED UNTIL\s+([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s*\(([^)]+)\)[, ]+(?:[A-Z]+DAY[, ]+)?([A-Za-z]+\s+[0-9]{1,2},\s+[0-9]{4}))",
+        R"(EMBARGOED UNTIL.{0,500}?([0-9]{1,2}):([0-9]{2})\s*([AP])\.?M\.?\s*\(([^)]+)\).{0,250}?([A-Za-z]+\.?\s+[0-9]{1,2}\s*,?\s*[0-9]{4}))",
         std::regex::icase};
     std::smatch embargo;
     if (!std::regex_search(text, embargo, embargoPattern))
@@ -369,7 +393,12 @@ AuthoritativeEconomicEventCandidate ParseDolEtaWeeklyClaimsArtifact(
     const std::int64_t instant = UnixMicros(releaseDate + " " + releaseTime);
 
     // EDT/EST are explicit offset claims.  "Eastern" delegates DST selection
-    // to the historical New York civil-time helper.
+    // to the historical New York civil-time helper.  The 2011-2012 Weekly
+    // Claims archive contains a demonstrated publisher defect where otherwise
+    // authoritative 8:30 A.M. releases use the wrong EST/EDT abbreviation.
+    // Preserve the authoritative local clock time in that narrow case, resolve
+    // it through America/New_York, and downgrade provenance to reconstructed.
+    bool reconstructedTime = false;
     if (zone == "EDT" || zone == "EST")
     {
         std::tm civil{};
@@ -381,28 +410,42 @@ AuthoritativeEconomicEventCandidate ParseDolEtaWeeklyClaimsArtifact(
         const std::time_t naive = timegm(&civil);
         const std::int64_t offsetSeconds =
             instant / 1000000 - static_cast<std::int64_t>(naive);
-        if ((zone == "EDT" && offsetSeconds != 4 * 60 * 60) ||
-            (zone == "EST" && offsetSeconds != 5 * 60 * 60))
+        const bool contradiction =
+            (zone == "EDT" && offsetSeconds != 4 * 60 * 60) ||
+            (zone == "EST" && offsetSeconds != 5 * 60 * 60);
+        if (contradiction)
         {
-            throw std::invalid_argument("dol_eta_release_timezone_contradiction");
+            const bool documentedDolArchiveDefect =
+                (release.year == 2011 || release.year == 2012) &&
+                hour == 8 && minute == 30;
+            if (!documentedDolArchiveDefect)
+                throw std::invalid_argument("dol_eta_release_timezone_contradiction");
+            reconstructedTime = true;
         }
     }
 
     static const std::regex releaseIdPattern{
-        R"(\bUSDL[^A-Za-z0-9]+[0-9]{2,4}[^A-Za-z0-9]+[0-9]{1,6}[^A-Za-z0-9]+[A-Za-z]{2,10}\b)",
+        R"(\bUSDL[^A-Za-z]*[0-9]{2,4}(?:[^A-Za-z0-9]+[0-9]{2,4})?[^A-Za-z0-9]+[0-9]{1,6}[^A-Za-z0-9]+[A-Za-z]{2,10}\b)",
         std::regex::icase};
     static const std::regex usdlMarker{R"(\bUSDL\b)", std::regex::icase};
     std::smatch releaseIdMatch;
     std::string sourceEventId;
     if (std::regex_search(text, releaseIdMatch, releaseIdPattern))
+    {
         sourceEventId = NormalizeDolEtaReleaseId(releaseIdMatch.str());
+        // DOL assigned USDL 16-567-NAT to two distinct weekly releases.
+        // Preserve the authoritative number normally, but use each immutable
+        // occurrence URL for this demonstrated publisher-identity collision.
+        if (sourceEventId == "dol_eta:usdl-16-567-nat")
+            sourceEventId = ArtifactFallbackId(canonicalSourceUrl, releaseDate);
+    }
     else if (std::regex_search(text, usdlMarker))
         throw std::invalid_argument("dol_eta_release_id_malformed");
     else
         sourceEventId = ArtifactFallbackId(canonicalSourceUrl, releaseDate);
 
     static const std::regex referencePattern{
-        R"(In the week ending\s+([A-Za-z]+)\s+([0-9]{1,2})(?:,\s*([0-9]{4}))?)",
+        R"(In the week ending\s+([A-Za-z]+\.?)\s+([0-9]{1,2})(?:,\s*([0-9]{4}))?)",
         std::regex::icase};
     std::smatch referenceMatch;
     if (!std::regex_search(text, referenceMatch, referencePattern))
@@ -446,7 +489,9 @@ AuthoritativeEconomicEventCandidate ParseDolEtaWeeklyClaimsArtifact(
     candidate.referencePeriod = "week ending " +
         DateText(referenceYear, referenceMonth, referenceDay);
     candidate.eventImportance = kWeeklyClaimsImportance;
-    candidate.historicalTimeConfidence = "exact";
+    candidate.historicalTimeConfidence = reconstructedTime
+        ? "reconstructed"
+        : "exact";
     candidate.sourceReleaseDate = releaseDate;
     candidate.sourceReleaseTime = releaseTime;
     candidate.sourceTimezone = "America/New_York";
@@ -468,7 +513,7 @@ LoadDolEtaWeeklyClaimsManifest(
     if (!std::getline(input, line) || line != "manifest_version\t1")
         throw std::invalid_argument("dol_eta_manifest_version_invalid");
     if (!std::getline(input, line) ||
-        line != "parser_version\tdol_eta_weekly_claims_v1")
+        line != "parser_version\tdol_eta_weekly_claims_v3")
     {
         throw std::invalid_argument("dol_eta_manifest_parser_version_invalid");
     }

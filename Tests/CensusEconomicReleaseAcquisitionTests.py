@@ -5,12 +5,14 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "Scripts"))
 SCRIPT = ROOT / "Scripts" / "fetch_census_economic_releases.py"
 SPEC = importlib.util.spec_from_file_location("fetch_census", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -80,7 +82,11 @@ class CensusAcquisitionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="ea-census-acquisition-test-") as directory:
             output = pathlib.Path(directory) / "output"
             with mock.patch.object(
-                fetch_census, "fetch", side_effect=lambda url: ("PDF:" + url).encode("utf-8")
+                fetch_census,
+                "fetch",
+                side_effect=lambda url, *_: fetch_census.Download(
+                    url, url, ("PDF:" + url).encode("utf-8")
+                ),
             ), mock.patch.object(
                 fetch_census, "extractor_identity", return_value="pdftotext-test-1"
             ), mock.patch.object(
@@ -90,7 +96,7 @@ class CensusAcquisitionTests(unittest.TestCase):
 
             manifest = (output / "manifest.tsv").read_text(encoding="utf-8")
             self.assertTrue(manifest.startswith(
-                "manifest_version\t1\nparser_version\tcensus_economic_release_v1\n"
+                "manifest_version\t1\nparser_version\tcensus_economic_release_v2\n"
             ))
             entries = manifest.splitlines()[3:]
             self.assertEqual(entries, sorted(entries))

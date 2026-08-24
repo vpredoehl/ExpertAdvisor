@@ -1,5 +1,8 @@
 #include "EconomicEventImportRepository.hpp"
 
+#include "EconomicEventImportValidation.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -80,6 +83,25 @@ bool Equal(
         stored.sourceTimezone == candidate.sourceTimezone;
 }
 
+AuthoritativeEconomicEventCandidate CandidateFromStored(
+    const StoredEconomicEvent& stored)
+{
+    AuthoritativeEconomicEventCandidate candidate;
+    candidate.currency = stored.currency;
+    candidate.eventFamily = stored.eventFamily;
+    candidate.eventTimestampUnixMicros = stored.eventTimestampUnixMicros;
+    candidate.sourceAgency = stored.sourceAgency;
+    candidate.sourceEventId = stored.sourceEventId.value_or("");
+    candidate.sourceUrl = stored.sourceUrl;
+    candidate.referencePeriod = stored.referencePeriod;
+    candidate.eventImportance = stored.eventImportance;
+    candidate.historicalTimeConfidence = stored.historicalTimeConfidence;
+    candidate.sourceReleaseDate = stored.sourceReleaseDate;
+    candidate.sourceReleaseTime = stored.sourceReleaseTime;
+    candidate.sourceTimezone = stored.sourceTimezone;
+    return candidate;
+}
+
 std::vector<StoredEconomicEvent> LoadCollisions(
     pqxx::transaction_base& transaction,
     const AuthoritativeEconomicEventCandidate& candidate)
@@ -124,13 +146,36 @@ EconomicEventImportReport Compare(
         EconomicEventImportItemResult item;
         item.sourceEventId = candidate.sourceEventId;
 
-        if (collisions.empty())
+        const auto identity = std::find_if(
+            collisions.begin(),
+            collisions.end(),
+            [&](const auto& stored)
+            {
+                return stored.sourceEventId ==
+                    std::optional<std::string>{candidate.sourceEventId};
+            });
+        const bool disallowedTimestampCollision = std::any_of(
+            collisions.begin(),
+            collisions.end(),
+            [&](const auto& stored)
+            {
+                return stored.eventFamily == candidate.eventFamily &&
+                    stored.eventTimestampUnixMicros ==
+                        candidate.eventTimestampUnixMicros &&
+                    stored.sourceEventId !=
+                        std::optional<std::string>{candidate.sourceEventId} &&
+                    !IsPermittedEconomicEventTimestampCoexistence(
+                        CandidateFromStored(stored), candidate);
+            });
+
+        if (identity == collisions.end() && !disallowedTimestampCollision)
         {
             item.disposition = EconomicEventImportDisposition::inserted;
             item.diagnostic = "new_authoritative_identity";
             ++report.inserted;
         }
-        else if (collisions.size() == 1 && Equal(collisions.front(), candidate))
+        else if (identity != collisions.end() && Equal(*identity, candidate) &&
+                 !disallowedTimestampCollision)
         {
             item.disposition = EconomicEventImportDisposition::unchanged;
             item.diagnostic = "exact_match";
@@ -141,10 +186,11 @@ EconomicEventImportReport Compare(
             item.disposition = EconomicEventImportDisposition::rejected;
             const bool exactTimestampConflict =
                 !collisions.empty() &&
-                collisions.front().sourceEventId ==
+                identity != collisions.end() &&
+                identity->sourceEventId ==
                     std::optional<std::string>{candidate.sourceEventId} &&
-                collisions.front().historicalTimeConfidence == "exact" &&
-                collisions.front().eventTimestampUnixMicros !=
+                identity->historicalTimeConfidence == "exact" &&
+                identity->eventTimestampUnixMicros !=
                     candidate.eventTimestampUnixMicros;
             item.diagnostic = exactTimestampConflict
                 ? "existing_exact_timestamp_conflict"

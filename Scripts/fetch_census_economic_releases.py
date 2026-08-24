@@ -25,6 +25,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from authoritative_acquisition import (
+    AcquisitionRecord,
+    DEFAULT_MAX_DOWNLOAD_BYTES,
+    Download,
+    ResourceRedirectError,
+    canonical_https_url,
+    digest,
+    read_bounded,
+    validate_final_resource,
+    write_acquisition_manifest,
+)
+
 
 USER_AGENT = "ExpertAdvisor-authoritative-calendar-acquisition/1"
 MAX_ARTIFACTS = 2000
@@ -127,20 +139,30 @@ def occurrence(value: str) -> tuple[str, str, int, int, str]:
     return canonical, family, year, month, pathlib.PurePosixPath(parsed.path).name
 
 
-def fetch(url: str) -> bytes:
+def canonical_census_resource_url(value: str) -> str:
+    return canonical_https_url(
+        value,
+        allowed_hosts={"www.census.gov", "www2.census.gov"},
+    )
+
+
+def fetch(
+    url: str,
+    canonicalize=canonical_census_resource_url,
+    max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+) -> Download:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(RETRY_ATTEMPTS):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                final = urllib.parse.urlsplit(response.geturl())
-                if final.scheme.lower() != "https" or final.hostname not in {
-                    "www.census.gov", "www2.census.gov"
-                }:
-                    raise RuntimeError(
-                        "download redirected outside first-party Census: "
-                        f"{response.geturl()}"
-                    )
-                data = response.read()
+                final_url = validate_final_resource(
+                    url, response.geturl(), canonicalize=canonicalize
+                )
+                data = read_bounded(
+                    response,
+                    requested_url=url,
+                    max_download_bytes=max_download_bytes,
+                )
             break
         except urllib.error.HTTPError as error:
             if error.code != 429 and error.code < 500:
@@ -151,16 +173,14 @@ def fetch(url: str) -> bytes:
             delay = int(retry_after) if retry_after and retry_after.isdigit() \
                 else 2 ** attempt
             time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
-    if not data:
-        raise RuntimeError(f"empty download: {url}")
-    return data
+    return Download(url, final_url, data)
 
 
 @functools.lru_cache(maxsize=None)
 def archive_occurrences(family: str) -> tuple[tuple[str, int], ...]:
     archive_url = ARCHIVES[family]
     parser = LinkParser()
-    parser.feed(fetch(archive_url).decode("utf-8", errors="strict"))
+    parser.feed(fetch(archive_url).data.decode("utf-8", errors="strict"))
     matches: set[tuple[str, int]] = set()
     for link in parser.links:
         absolute = urllib.parse.urljoin(archive_url, link)
@@ -185,7 +205,7 @@ def enumerate_archive(family: str, year: int) -> list[str]:
 
 
 def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return digest(data)
 
 
 def write_new(path: pathlib.Path, data: bytes) -> None:
@@ -220,8 +240,10 @@ def acquire(
 
     extractor = extractor_identity(pdftotext)
     entries: list[list[str]] = []
+    acquisition_records: list[AcquisitionRecord] = []
     for url in sorted(set(urls)):
         canonical, family, year, _, filename = occurrence(url)
+        occurrence_identity = f"census-url:{urllib.parse.urlsplit(canonical).hostname}{urllib.parse.urlsplit(canonical).path}"
         relative_source = pathlib.Path(family) / str(year) / filename
         source_path = output / relative_source
         source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,14 +251,42 @@ def acquire(
             source_bytes = source_path.read_bytes()
             if not source_bytes:
                 raise RuntimeError(f"existing source artifact is empty: {source_path}")
+            acquisition_records.append(AcquisitionRecord(
+                canonical,
+                canonical,
+                occurrence_identity,
+                "reused_verified_later_by_manifest_hash",
+                sha256(source_bytes),
+            ))
         else:
             relative_text = relative_source.with_suffix(".txt")
             if (output / relative_text).exists():
                 raise RuntimeError(
                     f"extracted artifact exists without source artifact: {relative_text}"
                 )
-            source_bytes = fetch(canonical)
+            try:
+                download = fetch(canonical, lambda value: occurrence(value)[0])
+            except Exception as error:
+                acquisition_records.append(AcquisitionRecord(
+                    canonical,
+                    error.final_url if isinstance(error, ResourceRedirectError) else "",
+                    occurrence_identity,
+                    "failed",
+                    diagnostic=str(error).replace("\t", " ").replace("\n", " | "),
+                ))
+                write_acquisition_manifest(
+                    output / "acquisition.tsv", acquisition_records
+                )
+                raise
+            source_bytes = download.data
             write_new(source_path, source_bytes)
+            acquisition_records.append(AcquisitionRecord(
+                canonical,
+                download.final_url,
+                occurrence_identity,
+                "succeeded",
+                sha256(source_bytes),
+            ))
             if request_delay:
                 time.sleep(request_delay)
         source_digest = sha256(source_bytes)
@@ -270,7 +320,7 @@ def acquire(
 
     manifest_lines = [
         "manifest_version\t1",
-        "parser_version\tcensus_economic_release_v1",
+        "parser_version\tcensus_economic_release_v2",
         "artifact_path\tartifact_sha256\tartifact_type\tsource_url\t"
         "source_artifact_path\tsource_artifact_sha256\textractor",
     ]
@@ -284,6 +334,10 @@ def acquire(
             )
     else:
         write_new(manifest_path, manifest_bytes)
+    acquisition_path = output / "acquisition.tsv"
+    if acquisition_path.exists():
+        acquisition_path.unlink()
+    write_acquisition_manifest(acquisition_path, acquisition_records)
 
 
 def main() -> int:

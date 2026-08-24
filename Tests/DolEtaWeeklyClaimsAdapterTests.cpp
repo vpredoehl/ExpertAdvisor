@@ -64,6 +64,10 @@ int main(int argc, const char* argv[])
            "dol_eta:usdl-10-990-nat");
     assert(NormalizeDolEtaReleaseId("usdl.10 / 990 _ NaT") ==
            "dol_eta:usdl-10-990-nat");
+    assert(NormalizeDolEtaReleaseId("USDL10-990-NAT") ==
+           "dol_eta:usdl-10-990-nat");
+    assert(NormalizeDolEtaReleaseId("USDL 24-24-2399-NAT") ==
+           "dol_eta:usdl-24-24-2399-nat");
     ExpectFailure(
         [] { (void)NormalizeDolEtaReleaseId("USDL 10 NAT"); },
         "release_id_malformed");
@@ -90,6 +94,28 @@ int main(int argc, const char* argv[])
     assert(candidate.eventImportance == 3);
     assert(candidate.eventTimestampUnixMicros ==
            UtcMicros(2010, 7, 22, 12, 30));
+
+    auto separatedEmbargoFields = legacy;
+    const std::string compactEmbargo =
+        "8:30 A.M. (EDT), THURSDAY July 22, 2010";
+    const auto compactEmbargoPosition = separatedEmbargoFields.find(compactEmbargo);
+    assert(compactEmbargoPosition != std::string::npos);
+    separatedEmbargoFields.replace(
+        compactEmbargoPosition,
+        compactEmbargo.size(),
+        "8:30 A.M. (EDT), THURSDAY Media Contact: July 22, 2010");
+    assert(ParseDolEtaWeeklyClaimsArtifact(
+               separatedEmbargoFields,
+               "https://oui.doleta.gov/press/2010/072210.asp")
+               .sourceEventId == "dol_eta:usdl-10-990-nat");
+
+    const auto reusedReleaseNumber = ParseDolEtaWeeklyClaimsArtifact(
+        "USDL 16-567-NAT RELEASE IS EMBARGOED UNTIL 8:30 A.M. (EDT), "
+        "THURSDAY March 17, 2016 UNEMPLOYMENT INSURANCE WEEKLY CLAIMS "
+        "In the week ending March 12, initial claims were reported.",
+        "https://oui.doleta.gov/press/2016/031716.pdf");
+    assert(reusedReleaseNumber.sourceEventId ==
+           "dol_eta:artifact-2016-031716-pdf");
 
     const std::string modern = Read(fixtures / "2025-01-02.txt");
     const auto modernCandidate = ParseDolEtaWeeklyClaimsArtifact(
@@ -126,6 +152,44 @@ int main(int argc, const char* argv[])
                 "https://oui.doleta.gov/press/2010/072210.asp");
         },
         "timezone_contradiction");
+
+    const auto wrongWinterEdt2012 = ParseDolEtaWeeklyClaimsArtifact(
+        "USDL 12-001-NAT RELEASE IS EMBARGOED UNTIL 8:30 A.M. (EDT), "
+        "THURSDAY January 5, 2012 UNEMPLOYMENT INSURANCE WEEKLY CLAIMS "
+        "In the week ending December 31, 2011, initial claims were reported.",
+        "https://oui.doleta.gov/press/2012/010512.asp");
+    assert(wrongWinterEdt2012.historicalTimeConfidence == "reconstructed");
+    assert(wrongWinterEdt2012.sourceReleaseTime ==
+           std::optional<std::string>{"08:30:00"});
+    assert(wrongWinterEdt2012.eventTimestampUnixMicros ==
+           UtcMicros(2012, 1, 5, 13, 30));
+
+    const auto wrongSummerEst2012 = ParseDolEtaWeeklyClaimsArtifact(
+        "USDL 12-002-NAT RELEASE IS EMBARGOED UNTIL 8:30 A.M. (EST), "
+        "THURSDAY June 21, 2012 UNEMPLOYMENT INSURANCE WEEKLY CLAIMS "
+        "In the week ending June 16, 2012, initial claims were reported.",
+        "https://oui.doleta.gov/press/2012/062112.asp");
+    assert(wrongSummerEst2012.historicalTimeConfidence == "reconstructed");
+    assert(wrongSummerEst2012.eventTimestampUnixMicros ==
+           UtcMicros(2012, 6, 21, 12, 30));
+
+    const auto wrongWinterEdt2011 = ParseDolEtaWeeklyClaimsArtifact(
+        "USDL 11-001-NAT RELEASE IS EMBARGOED UNTIL 8:30 A.M. (EDT), "
+        "THURSDAY December 29, 2011 UNEMPLOYMENT INSURANCE WEEKLY CLAIMS "
+        "In the week ending December 24, 2011, initial claims were reported.",
+        "https://oui.doleta.gov/press/2011/122911.asp");
+    assert(wrongWinterEdt2011.historicalTimeConfidence == "reconstructed");
+    assert(wrongWinterEdt2011.eventTimestampUnixMicros ==
+           UtcMicros(2011, 12, 29, 13, 30));
+
+    const auto neutralEastern2012 = ParseDolEtaWeeklyClaimsArtifact(
+        "USDL 12-003-NAT RELEASE IS EMBARGOED UNTIL 8:30 A.M. (Eastern), "
+        "THURSDAY September 27, 2012 UNEMPLOYMENT INSURANCE WEEKLY CLAIMS "
+        "In the week ending September 22, 2012, initial claims were reported.",
+        "https://oui.doleta.gov/press/2012/092712.asp");
+    assert(neutralEastern2012.historicalTimeConfidence == "exact");
+    assert(neutralEastern2012.eventTimestampUnixMicros ==
+           UtcMicros(2012, 9, 27, 12, 30));
 
     auto unsupportedZone = legacy;
     const auto secondZonePosition = unsupportedZone.find("(EDT)");

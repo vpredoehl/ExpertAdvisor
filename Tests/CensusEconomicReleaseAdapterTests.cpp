@@ -84,51 +84,51 @@ int main(int argc, const char* argv[])
     const std::vector<Case> cases{
         {"2010-retail-sales-advance.txt",
          "https://www2.census.gov/retail/releases/historical/marts/adv1005.pdf",
-         "RETAIL_SALES_ADVANCE", "census:cb10-84", "2010-05",
+         "RETAIL_SALES_ADVANCE", "census:retail-sales-advance.cb10-84", "2010-05",
          "2010-06-11", "08:30:00", UtcMicros(2010, 6, 11, 12, 30)},
         {"2024-retail-sales-advance.txt",
          "https://www2.census.gov/retail/releases/historical/marts/adv2402.pdf",
-         "RETAIL_SALES_ADVANCE", "census:cb24-40", "2024-02",
+         "RETAIL_SALES_ADVANCE", "census:retail-sales-advance.cb24-40", "2024-02",
          "2024-03-14", "08:30:00", UtcMicros(2024, 3, 14, 12, 30)},
         {"2010-new-residential-construction.txt",
          "https://www.census.gov/construction/nrc/pdf/newresconst_201005.pdf",
-         "NEW_RESIDENTIAL_CONSTRUCTION", "census:cb10-89", "2010-05",
+         "NEW_RESIDENTIAL_CONSTRUCTION", "census:new-residential-construction.cb10-89", "2010-05",
          "2010-06-16", "08:30:00", UtcMicros(2010, 6, 16, 12, 30)},
         {"2024-new-residential-construction.txt",
          "https://www.census.gov/construction/nrc/pdf/newresconst_202404.pdf",
-         "NEW_RESIDENTIAL_CONSTRUCTION", "census:cb24-78", "2024-04",
+         "NEW_RESIDENTIAL_CONSTRUCTION", "census:new-residential-construction.cb24-78", "2024-04",
          "2024-05-16", "08:30:00", UtcMicros(2024, 5, 16, 12, 30)},
         {"2010-new-residential-sales.txt",
          "https://www.census.gov/construction/nrs/pdf/newressales_201005.pdf",
-         "NEW_RESIDENTIAL_SALES", "census:cb10-92", "2010-05",
+         "NEW_RESIDENTIAL_SALES", "census:new-residential-sales.cb10-92", "2010-05",
          "2010-06-23", "10:00:00", UtcMicros(2010, 6, 23, 14, 0)},
         {"2024-new-residential-sales.txt",
          "https://www.census.gov/construction/nrs/pdf/newressales_202412.pdf",
-         "NEW_RESIDENTIAL_SALES", "census:cb25-13", "2024-12",
+         "NEW_RESIDENTIAL_SALES", "census:new-residential-sales.cb25-13", "2024-12",
          "2025-01-27", "10:00:00", UtcMicros(2025, 1, 27, 15, 0)},
         {"2010-manufacturers-orders.txt",
          "https://www.census.gov/manufacturing/m3/historical_data/pressreleases/prel/2010/may10prel.pdf",
-         "MANUFACTURERS_ORDERS", "census:cb10-100", "2010-05",
+         "MANUFACTURERS_ORDERS", "census:manufacturers-orders.cb10-100", "2010-05",
          "2010-07-02", "10:00:00", UtcMicros(2010, 7, 2, 14, 0)},
         {"2024-manufacturers-orders.txt",
          "https://www.census.gov/manufacturing/m3/historical_data/pressreleases/prel/2024/feb24prel.pdf",
-         "MANUFACTURERS_ORDERS", "census:cb24-51", "2024-02",
+         "MANUFACTURERS_ORDERS", "census:manufacturers-orders.cb24-51", "2024-02",
          "2024-04-02", "10:00:00", UtcMicros(2024, 4, 2, 14, 0)},
         {"2010-durable-goods-advance.txt",
          "https://www.census.gov/manufacturing/m3/historical_data/pressreleases/adv/2010/may10adv.pdf",
-         "DURABLE_GOODS_ADVANCE", "census:cb10-94", "2010-05",
+         "DURABLE_GOODS_ADVANCE", "census:durable-goods-advance.cb10-94", "2010-05",
          "2010-06-24", "08:30:00", UtcMicros(2010, 6, 24, 12, 30)},
         {"2024-durable-goods-advance.txt",
          "https://www.census.gov/manufacturing/m3/historical_data/pressreleases/adv/2024/feb24adv.pdf",
-         "DURABLE_GOODS_ADVANCE", "census:cb24-50", "2024-02",
+         "DURABLE_GOODS_ADVANCE", "census:durable-goods-advance.cb24-50", "2024-02",
          "2024-03-26", "08:30:00", UtcMicros(2024, 3, 26, 12, 30)},
         {"2010-construction-spending.txt",
          "https://www.census.gov/construction/c30/pdf/pr201005.pdf",
-         "CONSTRUCTION_SPENDING", "census:cb10-99", "2010-05",
+         "CONSTRUCTION_SPENDING", "census:construction-spending.cb10-99", "2010-05",
          "2010-07-01", "10:00:00", UtcMicros(2010, 7, 1, 14, 0)},
         {"2024-construction-spending.txt",
          "https://www.census.gov/construction/c30/pdf/pr202402.pdf",
-         "CONSTRUCTION_SPENDING", "census:cb24-55", "2024-02",
+         "CONSTRUCTION_SPENDING", "census:construction-spending.cb24-55", "2024-02",
          "2024-04-01", "10:00:00", UtcMicros(2024, 4, 1, 14, 0)}};
 
     for (const auto& test : cases)
@@ -153,6 +153,25 @@ int main(int argc, const char* argv[])
         assert(second.eventTimestampUnixMicros == first.eventTimestampUnixMicros);
     }
 
+    auto reusedPublisherId = Read(fixtures / "2010-construction-spending.txt");
+    reusedPublisherId.replace(
+        reusedPublisherId.find("CB10-99"),
+        std::string{"CB10-99"}.size(),
+        "CB10-100");
+    const auto constructionIdentity = ParseCensusEconomicReleaseArtifact(
+        reusedPublisherId,
+        "https://www.census.gov/construction/c30/pdf/pr201005.pdf"
+    ).sourceEventId;
+    const auto ordersIdentity = ParseCensusEconomicReleaseArtifact(
+        Read(fixtures / "2010-manufacturers-orders.txt"),
+        "https://www.census.gov/manufacturing/m3/historical_data/"
+        "pressreleases/prel/2010/may10prel.pdf"
+    ).sourceEventId;
+    assert(constructionIdentity ==
+           "census:construction-spending.cb10-100");
+    assert(ordersIdentity == "census:manufacturers-orders.cb10-100");
+    assert(constructionIdentity != ordersIdentity);
+
     const std::string retail = Read(fixtures / "2010-retail-sales-advance.txt");
     const std::string retailUrl =
         "https://www2.census.gov/retail/releases/historical/marts/adv1005.pdf";
@@ -162,7 +181,8 @@ int main(int argc, const char* argv[])
         weekdayWithoutComma.find("FRIDAY,"), 7, "FRIDAY");
     const auto weekdayWithoutCommaCandidate =
         ParseCensusEconomicReleaseArtifact(weekdayWithoutComma, retailUrl);
-    assert(weekdayWithoutCommaCandidate.sourceEventId == "census:cb10-84");
+    assert(weekdayWithoutCommaCandidate.sourceEventId ==
+           "census:retail-sales-advance.cb10-84");
     assert(weekdayWithoutCommaCandidate.sourceReleaseTime ==
            std::optional<std::string>{"08:30:00"});
 
@@ -198,7 +218,8 @@ int main(int argc, const char* argv[])
         "MONTHLY NEW RESIDENTIAL SALES, NOVEMBER 2018\n"
         "Release Number: CB18-195\n",
         "https://www.census.gov/construction/nrs/pdf/newressales_201811.pdf");
-    assert(delayedShutdownSales.sourceEventId == "census:cb18-195");
+    assert(delayedShutdownSales.sourceEventId ==
+           "census:new-residential-sales.cb18-195");
 
     const auto dateOnlyCorrection = ParseCensusEconomicReleaseArtifact(
         "FOR IMMEDIATE RELEASE THURSDAY, DECEMBER 16, 2010\n"

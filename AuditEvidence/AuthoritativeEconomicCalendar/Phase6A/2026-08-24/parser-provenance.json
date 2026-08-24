@@ -1,0 +1,37 @@
+{
+  "bea": {
+    "audit_binary_sha256": "0d5120f998d13121a8d64586394c3efb4f5cb9005af55a42a97ce4bb5fd37b82",
+    "audit_script_sha256": "cf76dfce11b3cb2c28a8c3db0561b72f15566e947b5adbdd5d5a3b649a9afb52",
+    "parser_version": "bea_economic_release_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "862e317797a2c8c85dd4d71c293cab387add8803cd23c73b89c6eb857a45f64c"
+  },
+  "bls": {
+    "audit_binary_sha256": "a1558035c201a76023c44cc0586d93e9bfb1da71e676716b433de13a691c26b0",
+    "audit_script_sha256": "dc6d4c9e63ac1014b14587819bfcc8b6d4592a69f25ffadbcb4e0127fff6ef3d",
+    "parser_version": "bls_schedule_release_v1",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "42ed8a3170a05b522a85dd417426b292fd9d5b0f511a48f831578e792a066d24"
+  },
+  "census": {
+    "audit_binary_sha256": "a1558035c201a76023c44cc0586d93e9bfb1da71e676716b433de13a691c26b0",
+    "audit_script_sha256": "cf76dfce11b3cb2c28a8c3db0561b72f15566e947b5adbdd5d5a3b649a9afb52",
+    "parser_version": "census_economic_release_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "a22f4e2c6d39bb5214904fb63cfc8d4c155ff90f9bfeb6dea87ec68fcc8a34e9"
+  },
+  "dol-eta": {
+    "audit_binary_sha256": "a1558035c201a76023c44cc0586d93e9bfb1da71e676716b433de13a691c26b0",
+    "audit_script_sha256": "dc6d4c9e63ac1014b14587819bfcc8b6d4592a69f25ffadbcb4e0127fff6ef3d",
+    "parser_version": "dol_eta_weekly_claims_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "aa89939f2e488a8ba221d4305cdcbdd7e16366d9414b746b225083f54b65ed75"
+  },
+  "federal-reserve": {
+    "audit_binary_sha256": "a1558035c201a76023c44cc0586d93e9bfb1da71e676716b433de13a691c26b0",
+    "audit_script_sha256": "dc6d4c9e63ac1014b14587819bfcc8b6d4592a69f25ffadbcb4e0127fff6ef3d",
+    "parser_version": "federal_reserve_economic_release_v2",
+    "shared_ingestion_contract_version": 1,
+    "source_manifest_sha256": "3c6f5b5e36f0fdf239189800d3dfb1646af9ae03f74ddd967621a14cfc518bb1"
+  }
+}

@@ -1,4 +1,4 @@
 manifest_version	1
-parser_version	bea_economic_release_v1
+parser_version	bea_economic_release_v2
 artifact_path	artifact_sha256	artifact_type	source_url	source_artifact_path	source_artifact_sha256	extractor
 2010-gdp-advance.txt	8bd92683795928f9cabb95e7424ad8816ee88bb43dd8e17dbcbc4d993f4bbd37	pdf_text	https://www.bea.gov/news/2010/gross-domestic-product-2nd-quarter-2010-advance-estimate	2010-gdp-advance.txt	8bd92683795928f9cabb95e7424ad8816ee88bb43dd8e17dbcbc4d993f4bbd37	pdftotext-not-applicable

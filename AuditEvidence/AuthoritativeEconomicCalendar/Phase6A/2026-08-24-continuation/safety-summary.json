@@ -1,0 +1,20 @@
+{
+  "production_database_mutated": false,
+  "production_database_inspected": false,
+  "production_scheduler_interaction": false,
+  "production_campaign_operations": false,
+  "active_lstm_workers_observed_before_testing": true,
+  "lstm_executable_launched": false,
+  "disposable_databases": [
+    "ea_economic_calendar_phase2_dol_001",
+    "ea_economic_calendar_phase3_bea_001",
+    "ea_economic_calendar_phase4_census_001",
+    "ea_economic_calendar_phase5_fed_001",
+    "ea_economic_calendar_phase6a_continuation_20260824",
+    "ea_economic_calendar_phase6a_readpath_20260824",
+    "ea_economic_calendar_phase6a_finalcheck_20260824"
+  ],
+  "all_disposable_databases_dropped": true,
+  "build_directory": "DerivedData/Development",
+  "production_deriveddata_touched": false
+}

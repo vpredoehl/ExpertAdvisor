@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../Sources/BeaEconomicReleaseAdapter.hpp"
+#include "../Sources/BlsScheduleReleaseAdapter.hpp"
 #include "../Sources/CensusEconomicReleaseAdapter.hpp"
 #include "../Sources/DolEtaWeeklyClaimsAdapter.hpp"
 #include "../Sources/EconomicEventImportValidation.hpp"
@@ -30,6 +31,8 @@ std::vector<AuthoritativeEconomicEventCandidate> Load(
         return LoadDolEtaWeeklyClaimsManifest(manifest);
     if (agency == "bea")
         return LoadBeaEconomicReleaseManifest(manifest);
+    if (agency == "bls")
+        return LoadBlsScheduleReleaseManifest(manifest);
     if (agency == "census")
         return LoadCensusEconomicReleaseManifest(manifest);
     if (agency == "federal-reserve")

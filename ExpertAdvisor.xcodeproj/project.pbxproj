@@ -14,6 +14,7 @@
 		0EC2002A32E1000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001932D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp */; };
 		0EC2002B32E1000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
 		0EC2002C32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
+		0EC200313300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
 		08395C292EDA4EC2005B70A0 /* db_cursor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0820370222B43B0D0025307B /* db_cursor.cpp */; };
 		0E72000130D0000100AAA001 /* HistoricalFxTimestamp.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E72000030D0000100AAA001 /* HistoricalFxTimestamp.cpp */; };
 		0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
@@ -23,6 +24,7 @@
 		0EC2002432D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001932D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp */; };
 		0EC2002532E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001B32E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp */; };
 		0EC2002D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */; };
+		0EC200323300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */; };
 		0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000030E0000100AAA001 /* InferenceProfitability.cpp */; };
 		0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
@@ -559,6 +561,8 @@
 		0EC2001C32E0000100AAA001 /* CensusEconomicReleaseAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = CensusEconomicReleaseAdapter.hpp; path = Sources/CensusEconomicReleaseAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FederalReserveEconomicReleaseAdapter.cpp; path = Sources/FederalReserveEconomicReleaseAdapter.cpp; sourceTree = SOURCE_ROOT; };
 		0EC2001E32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FederalReserveEconomicReleaseAdapter.hpp; path = Sources/FederalReserveEconomicReleaseAdapter.hpp; sourceTree = SOURCE_ROOT; };
+		0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = BlsScheduleReleaseAdapter.cpp; path = Sources/BlsScheduleReleaseAdapter.cpp; sourceTree = SOURCE_ROOT; };
+		0EC200333300000100AAA001 /* BlsScheduleReleaseAdapter.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = BlsScheduleReleaseAdapter.hpp; path = Sources/BlsScheduleReleaseAdapter.hpp; sourceTree = SOURCE_ROOT; };
 		0E73000030E0000100AAA001 /* InferenceProfitability.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitability.cpp; path = Sources/InferenceProfitability.cpp; sourceTree = SOURCE_ROOT; };
 		0E73000130E0000100AAA001 /* InferenceProfitability.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitability.hpp; path = Sources/InferenceProfitability.hpp; sourceTree = SOURCE_ROOT; };
 		0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = InferenceProfitabilityRepository.cpp; path = Sources/InferenceProfitabilityRepository.cpp; sourceTree = SOURCE_ROOT; };
@@ -669,6 +673,8 @@
 				0EC2001C32E0000100AAA001 /* CensusEconomicReleaseAdapter.hpp */,
 				0EC2001D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp */,
 				0EC2001E32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.hpp */,
+				0EC200303300000100AAA001 /* BlsScheduleReleaseAdapter.cpp */,
+				0EC200333300000100AAA001 /* BlsScheduleReleaseAdapter.hpp */,
 				0E73000030E0000100AAA001 /* InferenceProfitability.cpp */,
 				0E73000130E0000100AAA001 /* InferenceProfitability.hpp */,
 				0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */,
@@ -1080,6 +1086,7 @@
 				0EC2002A32E1000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */,
 				0EC2002B32E1000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */,
 				0EC2002C32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */,
+				0EC200313300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */,
 				084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */,
 				0844268A2ED8E755002DEB21 /* main.cpp in Sources */,
 				0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
@@ -1202,6 +1209,7 @@
 				0EC2002432D0000100AAA001 /* BeaEconomicReleaseAdapter.cpp in Sources */,
 				0EC2002532E0000100AAA001 /* CensusEconomicReleaseAdapter.cpp in Sources */,
 				0EC2002D32F0000100AAA001 /* FederalReserveEconomicReleaseAdapter.cpp in Sources */,
+				0EC200323300000100AAA001 /* BlsScheduleReleaseAdapter.cpp in Sources */,
 				0A1000012F70000100AAA001 /* PricePoint.cpp in Sources */,
 				0A1000022F70000100AAA001 /* main.cpp in Sources */,
 				0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */,

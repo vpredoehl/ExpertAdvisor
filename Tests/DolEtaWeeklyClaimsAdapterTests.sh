@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT/Build/dol_eta_weekly_claims_adapter_tests"
+BUILD_DIR="$ROOT/DerivedData/Development/Tests/dol_eta_weekly_claims_adapter_tests"
 BIN="$BUILD_DIR/DolEtaWeeklyClaimsAdapterTests"
 mkdir -p "$BUILD_DIR"
 

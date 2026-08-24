@@ -21,6 +21,18 @@ import tempfile
 import urllib.parse
 import urllib.request
 
+from authoritative_acquisition import (
+    AcquisitionRecord,
+    DEFAULT_MAX_DOWNLOAD_BYTES,
+    Download,
+    ResourceRedirectError,
+    canonical_https_url,
+    digest,
+    read_bounded,
+    validate_final_resource,
+    write_acquisition_manifest,
+)
+
 
 ARCHIVE_URL = "https://oui.doleta.gov/unemploy/archive.asp"
 ALLOWED_HOST = "oui.doleta.gov"
@@ -49,25 +61,54 @@ def canonical_press_url(value: str) -> str:
     return urllib.parse.urlunsplit(("https", ALLOWED_HOST, parsed.path, "", ""))
 
 
-def fetch(url: str) -> bytes:
+def canonical_dol_eta_resource_url(value: str) -> str:
+    return canonical_https_url(value, allowed_hosts={ALLOWED_HOST})
+
+
+def fetch(
+    url: str,
+    canonicalize=canonical_dol_eta_resource_url,
+    max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+) -> Download:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "ExpertAdvisor-authoritative-calendar-acquisition/1"},
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        final = urllib.parse.urlsplit(response.geturl())
-        if final.scheme.lower() != "https" or final.hostname != ALLOWED_HOST:
-            raise RuntimeError(f"download redirected outside first-party host: {response.geturl()}")
-        data = response.read()
-    if not data:
-        raise RuntimeError(f"empty download: {url}")
-    return data
+        final_url = validate_final_resource(
+            url, response.geturl(), canonicalize=canonicalize
+        )
+        data = read_bounded(
+            response,
+            requested_url=url,
+            max_download_bytes=max_download_bytes,
+        )
+    return Download(url, final_url, data)
 
 
-@functools.lru_cache(maxsize=1)
-def archive_occurrences() -> tuple[tuple[str, int], ...]:
+@functools.lru_cache(maxsize=None)
+def archive_occurrences(year: int) -> tuple[tuple[str, int], ...]:
+    selection = urllib.parse.urlencode(
+        {"report": "press", "year": str(year)}
+    ).encode("ascii")
+    request = urllib.request.Request(
+        ARCHIVE_URL,
+        data=selection,
+        headers={
+            "User-Agent": "ExpertAdvisor-authoritative-calendar-acquisition/1",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        validate_final_resource(
+            ARCHIVE_URL,
+            response.geturl(),
+            canonicalize=canonical_dol_eta_resource_url,
+        )
+        archive = read_bounded(response, requested_url=ARCHIVE_URL)
+
     parser = LinkParser()
-    parser.feed(fetch(ARCHIVE_URL).decode("utf-8", errors="strict"))
+    parser.feed(archive.decode("utf-8", errors="strict"))
     urls: set[tuple[str, int]] = set()
     for link in parser.links:
         absolute = urllib.parse.urljoin(ARCHIVE_URL, link)
@@ -76,15 +117,15 @@ def archive_occurrences() -> tuple[tuple[str, int], ...]:
         except ValueError:
             continue
         match = PRESS_PATH.fullmatch(urllib.parse.urlsplit(canonical).path)
-        if match:
-            urls.add((canonical, int(match.group("year"))))
+        if match and int(match.group("year")) == year:
+            urls.add((canonical, year))
     return tuple(sorted(urls))
 
 
 def enumerate_archive(year: int) -> list[str]:
     urls = {
         canonical
-        for canonical, found_year in archive_occurrences()
+        for canonical, found_year in archive_occurrences(year)
         if found_year == year
     }
     if not urls:
@@ -93,7 +134,7 @@ def enumerate_archive(year: int) -> list[str]:
 
 
 def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return digest(data)
 
 
 def write_new(path: pathlib.Path, data: bytes) -> None:
@@ -121,6 +162,7 @@ def acquire(urls: list[str], output: pathlib.Path, pdftotext: str | None) -> Non
         raise RuntimeError(f"output directory must be empty: {output}")
 
     entries: list[list[str]] = []
+    acquisition_records: list[AcquisitionRecord] = []
     extractor = extractor_identity(pdftotext) if pdftotext else None
 
     for url in sorted(set(urls)):
@@ -130,9 +172,29 @@ def acquire(urls: list[str], output: pathlib.Path, pdftotext: str | None) -> Non
         relative_source = pathlib.Path(match.group("year")) / match.group("name").lower()
         source_path = output / relative_source
         source_path.parent.mkdir(parents=True, exist_ok=True)
-        source_bytes = fetch(canonical)
+        occurrence_identity = f"dol-eta-url:{match.group('year')}/{match.group('name').lower()}"
+        try:
+            download = fetch(canonical, canonical_press_url)
+        except Exception as error:
+            acquisition_records.append(AcquisitionRecord(
+                canonical,
+                error.final_url if isinstance(error, ResourceRedirectError) else "",
+                occurrence_identity,
+                "failed",
+                diagnostic=str(error).replace("\t", " ").replace("\n", " | "),
+            ))
+            write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
+            raise
+        source_bytes = download.data
         write_new(source_path, source_bytes)
         source_digest = sha256(source_bytes)
+        acquisition_records.append(AcquisitionRecord(
+            canonical,
+            download.final_url,
+            occurrence_identity,
+            "succeeded",
+            source_digest,
+        ))
 
         if source_path.suffix.lower() == ".asp":
             entries.append([
@@ -167,12 +229,13 @@ def acquire(urls: list[str], output: pathlib.Path, pdftotext: str | None) -> Non
 
     manifest_lines = [
         "manifest_version\t1",
-        "parser_version\tdol_eta_weekly_claims_v1",
+        "parser_version\tdol_eta_weekly_claims_v3",
         "artifact_path\tartifact_sha256\tartifact_type\tsource_url\t"
         "source_artifact_path\tsource_artifact_sha256\textractor",
     ]
     manifest_lines.extend("\t".join(entry) for entry in entries)
     write_new(output / "manifest.tsv", ("\n".join(manifest_lines) + "\n").encode("utf-8"))
+    write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
 
 
 def main() -> int:

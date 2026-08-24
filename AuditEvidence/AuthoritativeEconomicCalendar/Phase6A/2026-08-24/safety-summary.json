@@ -1,0 +1,17 @@
+{
+  "production_database_mutated": false,
+  "production_database_inspected": false,
+  "production_scheduler_interaction": false,
+  "production_campaign_operations": false,
+  "disposable_databases": [
+    "ea_economic_calendar_phase2_dol_001",
+    "ea_economic_calendar_phase3_bea_001",
+    "ea_economic_calendar_phase4_census_001",
+    "ea_economic_calendar_phase5_fed_001",
+    "ea_economic_calendar_phase6a_remediation_20260824",
+    "ea_economic_calendar_phase6a_regression_20260824"
+  ],
+  "all_disposable_databases_dropped": true,
+  "failed_setup_attempt": "The pqxx role lacked CREATEDB; no database was created and the guarded retry used the configured local vjp test role.",
+  "build_directory": "DerivedData/Development"
+}

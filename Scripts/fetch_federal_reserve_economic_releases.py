@@ -22,6 +22,17 @@ import tempfile
 import urllib.parse
 import urllib.request
 
+from authoritative_acquisition import (
+    AcquisitionRecord,
+    Download,
+    ResourceRedirectError,
+    canonical_https_url,
+    digest,
+    read_bounded,
+    validate_final_resource,
+    write_acquisition_manifest,
+)
+
 
 USER_AGENT = "ExpertAdvisor-authoritative-calendar-acquisition/1"
 ALLOWED_HOST = "www.federalreserve.gov"
@@ -89,7 +100,7 @@ class LinkParser(html.parser.HTMLParser):
 
 def parse_links(url: str) -> list[tuple[str, str]]:
     parser = LinkParser()
-    parser.feed(fetch(url).decode("utf-8-sig", errors="strict"))
+    parser.feed(fetch(url).data.decode("utf-8-sig", errors="strict"))
     return [
         (urllib.parse.urljoin(url, href), text)
         for href, text in parser.links
@@ -249,25 +260,30 @@ def canonical_occurrence_url(value: str, family: str) -> tuple[str, str]:
     return canonical, identity
 
 
-def fetch(url: str) -> bytes:
+def canonical_federal_resource_url(value: str) -> str:
+    return canonical_https_url(value, allowed_hosts={ALLOWED_HOST})
+
+
+def fetch(
+    url: str,
+    canonicalize=canonical_federal_resource_url,
+    max_download_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> Download:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=30) as response:
-        final = urllib.parse.urlsplit(response.geturl())
-        final_url = urllib.parse.urlunsplit(
-            (final.scheme.lower(), final.hostname or "", final.path, final.query, final.fragment)
+        final_url = validate_final_resource(
+            url, response.geturl(), canonicalize=canonicalize
         )
-        if final_url != url:
-            raise RuntimeError(f"unsupported Federal Reserve redirect: {response.geturl()}")
-        data = response.read(MAX_DOWNLOAD_BYTES + 1)
-    if not data:
-        raise RuntimeError(f"empty download: {url}")
-    if len(data) > MAX_DOWNLOAD_BYTES:
-        raise RuntimeError(f"download exceeds safety limit: {url}")
-    return data
+        data = read_bounded(
+            response,
+            requested_url=url,
+            max_download_bytes=max_download_bytes,
+        )
+    return Download(url, final_url, data)
 
 
 def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return digest(data)
 
 
 def write_new(path: pathlib.Path, data: bytes) -> None:
@@ -312,8 +328,34 @@ def acquire(
         family == "beige_book" for family, _, _ in canonical_selections
     ) else "none"
     entries: list[list[str]] = []
+    acquisition_records: list[AcquisitionRecord] = []
     for family, url, identity in canonical_selections:
-        source_bytes = fetch(url)
+        occurrence_identity = f"federal-reserve:{family}:{identity}"
+        try:
+            download = fetch(
+                url,
+                lambda value, selected_family=family: canonical_occurrence_url(
+                    value, selected_family
+                )[0],
+            )
+        except Exception as error:
+            acquisition_records.append(AcquisitionRecord(
+                url,
+                error.final_url if isinstance(error, ResourceRedirectError) else "",
+                occurrence_identity,
+                "failed",
+                diagnostic=str(error).replace("\t", " ").replace("\n", " | "),
+            ))
+            write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
+            raise
+        source_bytes = download.data
+        acquisition_records.append(AcquisitionRecord(
+            url,
+            download.final_url,
+            occurrence_identity,
+            "succeeded",
+            sha256(source_bytes),
+        ))
         if family == "beige_book":
             if not source_bytes.startswith(b"%PDF-"):
                 raise RuntimeError(f"Beige Book occurrence is not a PDF: {url}")
@@ -358,12 +400,13 @@ def acquire(
 
     manifest_lines = [
         "manifest_version\t1",
-        "parser_version\tfederal_reserve_economic_release_v1",
+        "parser_version\tfederal_reserve_economic_release_v2",
         "artifact_path\tartifact_sha256\tartifact_type\tsource_url\t"
         "source_artifact_path\tsource_artifact_sha256\textractor",
     ]
     manifest_lines.extend("\t".join(entry) for entry in sorted(entries))
     write_new(output / "manifest.tsv", ("\n".join(manifest_lines) + "\n").encode("utf-8"))
+    write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
 
 
 def main() -> int:

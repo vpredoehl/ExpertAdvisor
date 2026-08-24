@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT/Build/census_economic_event_import_repository_tests"
+BUILD_DIR="$ROOT/DerivedData/Development/Tests/census_economic_event_import_repository_tests"
 BIN="$BUILD_DIR/CensusEconomicEventImportRepositoryTests"
 CLI_BIN="$BUILD_DIR/EconomicEventImportCliHarness"
 DB_NAME="ea_economic_calendar_phase4_census_001"
@@ -24,6 +24,7 @@ fi
 COMMON_SOURCES=(
     "$ROOT/Common/HistoricalFxTimestamp.cpp"
     "$ROOT/Sources/BeaEconomicReleaseAdapter.cpp"
+    "$ROOT/Sources/BlsScheduleReleaseAdapter.cpp"
     "$ROOT/Sources/CensusEconomicReleaseAdapter.cpp"
     "$ROOT/Sources/DolEtaWeeklyClaimsAdapter.cpp"
     "$ROOT/Sources/FederalReserveEconomicReleaseAdapter.cpp"
@@ -58,6 +59,8 @@ fi
 createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 "$DB_NAME"
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" -f "$ROOT/Database/migrations/072_economic_event.sql" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$DB_NAME" -f "$ROOT/Database/migrations/080_economic_event_distinct_same_time_identity.sql" >/dev/null
 
 LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" LSTM_DB_NAME="$DB_NAME" "$BIN"
 

@@ -178,6 +178,16 @@ int main(int argc, const char* argv[])
         "https://www.bea.gov/news/2025/personal-income-and-outlays-october-and-november-2025"
     ).referencePeriod == std::optional<std::string>{"2025-10/2025-11"});
 
+    auto shutdownSplitPersonal = Read(fixtures / "2025-personal-income-outlays.txt");
+    shutdownSplitPersonal = std::regex_replace(
+        shutdownSplitPersonal,
+        std::regex{"Personal Income and Outlays, July 2025"},
+        "Personal Income, February 2019; Personal Outlays, January 2019");
+    assert(ParseBeaEconomicReleaseArtifact(
+        shutdownSplitPersonal,
+        "https://www.bea.gov/news/2025/personal-income-february-2019-personal-outlays-january-2019"
+    ).referencePeriod == std::optional<std::string>{"2019-01"});
+
     auto initialGdp = advance;
     initialGdp = std::regex_replace(
         initialGdp, std::regex{"advance estimate"}, "initial estimate");

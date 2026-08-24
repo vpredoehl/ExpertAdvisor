@@ -1,0 +1,35 @@
+{
+  "focused_tests": {
+    "AuthoritativeEconomicAcquisitionTests.sh": "passed (6)",
+    "BeaEconomicReleaseAdapterTests.sh": "passed",
+    "BlsEconomicReleaseAcquisitionTests.sh": "passed (2)",
+    "BlsScheduleReleaseAdapterTests.sh": "passed",
+    "CensusEconomicReleaseAcquisitionTests.sh": "passed (3)",
+    "CensusEconomicReleaseAdapterTests.sh": "passed",
+    "DolEtaWeeklyClaimsAdapterTests.sh": "passed",
+    "FederalReserveEconomicReleaseAcquisitionTests.sh": "passed (7)",
+    "FederalReserveEconomicReleaseAdapterTests.sh": "passed",
+    "EconomicEventImportValidationTests.sh": "passed",
+    "EconomicEventManifestAuditTests.sh": "passed (4)"
+  },
+  "disposable_database_tests": {
+    "EconomicEventImportRepositoryTests.sh": "passed; database dropped",
+    "BeaEconomicEventImportRepositoryTests.sh": "passed; database dropped",
+    "CensusEconomicEventImportRepositoryTests.sh": "passed; conflict and rollback assertions passed; database dropped",
+    "FederalReserveEconomicEventImportRepositoryTests.sh": "passed; conflict, rollback, and same-boundary assertions passed; database dropped"
+  },
+  "regression_tests": {
+    "EconomicEventBarAlignmentTests.sh": "passed",
+    "EconomicEventRepositoryTests.sh": "passed against disposable BLS-populated database",
+    "EconomicEventRealBarAlignmentIntegrationTests.sh": "passed against disposable BLS-populated database"
+  },
+  "build": {
+    "command": "xcodebuild -project ExpertAdvisor.xcodeproj -scheme 'LSTM Debug' -configuration Debug -derivedDataPath DerivedData/Development build",
+    "result": "BUILD SUCCEEDED"
+  },
+  "static_checks": {
+    "project_pbxproj": "plutil OK",
+    "python_compile": "passed",
+    "git_diff_check": "passed"
+  }
+}

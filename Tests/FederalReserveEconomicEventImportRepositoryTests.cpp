@@ -185,10 +185,31 @@ int main()
     assert(RunEconomicEventImport(
         connection, {censusCrossAgency}, EconomicEventImportMode::apply).inserted == 1);
 
+    auto fomcA = Candidate(
+        "FEDERAL_RESERVE", "federal_reserve:monetary20140917a",
+        "FOMC_STATEMENT", "2014-09-18", "00:00:00",
+        "meeting ending 2014-09-17",
+        "https://www.federalreserve.gov/newsevents/pressreleases/monetary20140917a.htm");
+    fomcA.historicalTimeConfidence = "date_only";
+    fomcA.sourceReleaseDate = "2014-09-17";
+    fomcA.sourceReleaseTime.reset();
+    auto fomcC = fomcA;
+    fomcC.sourceEventId = "federal_reserve:monetary20140917c";
+    fomcC.sourceUrl =
+        "https://www.federalreserve.gov/newsevents/pressreleases/monetary20140917c.htm";
+    const auto sameBoundary = RunEconomicEventImport(
+        connection, {fomcA, fomcC}, EconomicEventImportMode::apply);
+    assert(sameBoundary.inserted == 2);
+    assert(sameBoundary.rejected == 0);
+    const auto sameBoundaryRepeat = RunEconomicEventImport(
+        connection, {fomcA, fomcC}, EconomicEventImportMode::apply);
+    assert(sameBoundaryRepeat.unchanged == 2);
+    assert(sameBoundaryRepeat.rejected == 0);
+
     assert(AgencyCount(connection, "DOL_ETA") == 1);
     assert(AgencyCount(connection, "BEA") == 1);
     assert(AgencyCount(connection, "CENSUS") == 2);
-    assert(AgencyCount(connection, "FEDERAL_RESERVE") == 3);
-    assert(RowCount(connection) == 7);
+    assert(AgencyCount(connection, "FEDERAL_RESERVE") == 5);
+    assert(RowCount(connection) == 9);
     return 0;
 }

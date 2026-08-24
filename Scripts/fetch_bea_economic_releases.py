@@ -9,6 +9,7 @@ downloaded HTML before hashing and manifest handoff.
 from __future__ import annotations
 
 import argparse
+import csv
 import functools
 import hashlib
 import html.parser
@@ -17,6 +18,18 @@ import re
 import sys
 import urllib.parse
 import urllib.request
+
+from authoritative_acquisition import (
+    AcquisitionRecord,
+    DEFAULT_MAX_DOWNLOAD_BYTES,
+    Download,
+    ResourceRedirectError,
+    canonical_https_url,
+    digest,
+    read_bounded,
+    validate_final_resource,
+    write_acquisition_manifest,
+)
 
 
 ARCHIVE_URL = "https://www.bea.gov/news/archive"
@@ -52,19 +65,33 @@ def canonical_occurrence_url(value: str) -> str:
     return urllib.parse.urlunsplit(("https", ALLOWED_HOST, parsed.path, "", ""))
 
 
-def fetch(url: str) -> bytes:
+def canonical_bea_resource_url(value: str) -> str:
+    return canonical_https_url(
+        value,
+        allowed_hosts={ALLOWED_HOST},
+        host_aliases={"bea.gov": ALLOWED_HOST},
+    )
+
+
+def fetch(
+    url: str,
+    canonicalize=canonical_bea_resource_url,
+    max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+) -> Download:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "ExpertAdvisor-authoritative-calendar-acquisition/1"},
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        final = urllib.parse.urlsplit(response.geturl())
-        if final.scheme.lower() != "https" or final.hostname not in {"bea.gov", ALLOWED_HOST}:
-            raise RuntimeError(f"download redirected outside first-party BEA: {response.geturl()}")
-        data = response.read()
-    if not data:
-        raise RuntimeError(f"empty download: {url}")
-    return data
+        final_url = validate_final_resource(
+            url, response.geturl(), canonicalize=canonicalize
+        )
+        data = read_bounded(
+            response,
+            requested_url=url,
+            max_download_bytes=max_download_bytes,
+        )
+    return Download(url, final_url, data)
 
 
 @functools.lru_cache(maxsize=None)
@@ -79,7 +106,7 @@ def archive_page(product_id: str, page: int) -> tuple[list[str], bool]:
     )
     page_url = ARCHIVE_URL + "?" + query
     parser = LinkParser()
-    parser.feed(fetch(page_url).decode("utf-8", errors="strict"))
+    parser.feed(fetch(page_url).data.decode("utf-8", errors="strict"))
     occurrences: list[str] = []
     next_page = False
     for link in parser.links:
@@ -115,7 +142,7 @@ def enumerate_archive(family: str, year: int) -> list[str]:
 
 
 def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    return digest(data)
 
 
 def write_new(path: pathlib.Path, data: bytes) -> None:
@@ -124,12 +151,39 @@ def write_new(path: pathlib.Path, data: bytes) -> None:
     path.write_bytes(data)
 
 
-def acquire(urls: list[str], output: pathlib.Path) -> None:
+def read_enumerated_source_manifest(path: pathlib.Path) -> dict[str, str]:
+    expected: dict[str, str] = {}
+    with path.open(encoding="utf-8", newline="") as source:
+        reader = csv.DictReader(source, delimiter="\t")
+        required = {"agency", "source_url", "artifact_sha256"}
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            raise ValueError("BEA enumerated-source manifest columns are invalid")
+        for row in reader:
+            if row["agency"] != "bea":
+                continue
+            url = canonical_occurrence_url(row["source_url"])
+            artifact_sha256 = row["artifact_sha256"].lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+                raise ValueError(f"BEA expected artifact hash is invalid: {url}")
+            if url in expected and expected[url] != artifact_sha256:
+                raise ValueError(f"BEA expected artifact hash conflicts: {url}")
+            expected[url] = artifact_sha256
+    if not expected:
+        raise ValueError("enumerated-source manifest contains no BEA occurrences")
+    return expected
+
+
+def acquire(
+    urls: list[str],
+    output: pathlib.Path,
+    expected_sha256_by_url: dict[str, str] | None = None,
+) -> None:
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         raise RuntimeError(f"output directory must be empty: {output}")
 
     entries: list[list[str]] = []
+    acquisition_records: list[AcquisitionRecord] = []
     for url in sorted(set(urls)):
         canonical = canonical_occurrence_url(url)
         path_match = OCCURRENCE_PATH.fullmatch(urllib.parse.urlsplit(canonical).path)
@@ -137,9 +191,37 @@ def acquire(urls: list[str], output: pathlib.Path) -> None:
         relative = pathlib.Path(path_match.group("year")) / (path_match.group("slug") + ".html")
         artifact_path = output / relative
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact = fetch(canonical)
-        write_new(artifact_path, artifact)
+        occurrence_identity = "bea-url:" + path_match.group("year") + "/" + path_match.group("slug")
+        try:
+            download = fetch(canonical, canonical_occurrence_url)
+        except Exception as error:
+            acquisition_records.append(AcquisitionRecord(
+                canonical,
+                error.final_url if isinstance(error, ResourceRedirectError) else "",
+                occurrence_identity,
+                "failed",
+                diagnostic=str(error).replace("\t", " ").replace("\n", " | "),
+            ))
+            write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
+            raise
+        artifact = download.data
         digest = sha256(artifact)
+        expected_sha256 = (expected_sha256_by_url or {}).get(canonical)
+        if expected_sha256 is not None and digest != expected_sha256:
+            acquisition_records.append(AcquisitionRecord(
+                canonical,
+                download.final_url,
+                occurrence_identity,
+                "failed",
+                digest,
+                "authoritative artifact hash differs from retained occurrence catalog",
+            ))
+            write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
+            raise RuntimeError(f"BEA retained artifact hash mismatch: {canonical}")
+        write_new(artifact_path, artifact)
+        acquisition_records.append(AcquisitionRecord(
+            canonical, download.final_url, occurrence_identity, "succeeded", digest
+        ))
         entries.append([
             relative.as_posix(), digest, "html", canonical,
             relative.as_posix(), digest, "none",
@@ -147,18 +229,20 @@ def acquire(urls: list[str], output: pathlib.Path) -> None:
 
     manifest_lines = [
         "manifest_version\t1",
-        "parser_version\tbea_economic_release_v1",
+        "parser_version\tbea_economic_release_v2",
         "artifact_path\tartifact_sha256\tartifact_type\tsource_url\t"
         "source_artifact_path\tsource_artifact_sha256\textractor",
     ]
     manifest_lines.extend("\t".join(entry) for entry in entries)
     write_new(output / "manifest.tsv", ("\n".join(manifest_lines) + "\n").encode("utf-8"))
+    write_acquisition_manifest(output / "acquisition.tsv", acquisition_records)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     parser.add_argument("--url", action="append", default=[])
+    parser.add_argument("--enumerated-source-manifest", type=pathlib.Path)
     parser.add_argument("--archive-year", action="append", type=int, default=[])
     parser.add_argument("--family", action="append", choices=sorted(PRODUCT_IDS), default=[])
     parser.add_argument("--limit", type=int)
@@ -169,6 +253,12 @@ def main() -> int:
     if args.archive_year and not args.family:
         parser.error("--archive-year requires at least one --family")
     urls = [canonical_occurrence_url(value) for value in args.url]
+    expected_sha256_by_url: dict[str, str] = {}
+    if args.enumerated_source_manifest is not None:
+        expected_sha256_by_url = read_enumerated_source_manifest(
+            args.enumerated_source_manifest.resolve()
+        )
+        urls.extend(expected_sha256_by_url)
     for year in args.archive_year:
         for family in sorted(set(args.family)):
             urls.extend(enumerate_archive(family, year))
@@ -178,7 +268,7 @@ def main() -> int:
     if not urls:
         parser.error("at least one --url or --archive-year/--family selection is required")
 
-    acquire(urls, args.output_dir.resolve())
+    acquire(urls, args.output_dir.resolve(), expected_sha256_by_url)
     print(
         f"BEA_ACQUISITION_COMPLETE artifacts={len(urls)} "
         f"manifest={args.output_dir.resolve() / 'manifest.tsv'}"

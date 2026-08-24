@@ -6,7 +6,7 @@ ROOT="$(
     pwd
 )"
 
-BUILD_DIR="$ROOT/Build/economic_event_bar_alignment_tests"
+BUILD_DIR="$ROOT/DerivedData/Development/Tests/economic_event_bar_alignment_tests"
 BIN="$BUILD_DIR/EconomicEventBarAlignmentTests"
 
 mkdir -p "$BUILD_DIR"

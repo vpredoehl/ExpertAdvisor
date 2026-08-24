@@ -1,0 +1,3 @@
+agency	source_event_id	collision_status	source_url	artifact_path	artifact_sha256	diagnostic
+census	census:new-residential-construction.cb13-194	duplicate_evidence	https://www.census.gov/construction/nrc/pdf/newresconst_201309.pdf	new-residential-construction/2013/newresconst_201309.txt	f7327e5bf5b091c7986adce5646a66e780c35f517621f171f1605a9109d39884	economic_event_duplicate_authoritative_artifact_alias
+census	census:new-residential-sales.cb13-204	duplicate_evidence	https://www.census.gov/construction/nrs/pdf/newressales_201309.pdf	new-residential-sales/2013/newressales_201309.txt	76a1ae64eb7d4d804b09c0936e33aeac201dac166b6dc1673e8d4de898a49be6	economic_event_duplicate_authoritative_artifact_alias
