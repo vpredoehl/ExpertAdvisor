@@ -23,6 +23,8 @@
 		0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
 		0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
 		0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
+		0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
+		0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
 		084426742ED8DD46002DEB21 /* PricePoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084505642048CAB900A0B88F /* PricePoint.cpp */; };
 		0844268A2ED8E755002DEB21 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 084426892ED8E755002DEB21 /* main.cpp */; };
 		0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0851AB082F0A233A00C48FFE /* Tensor.cpp */; };
@@ -542,6 +544,8 @@
 		0E7A000331A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationService.hpp; path = Sources/PairedTrainingObjectiveEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
 		0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PostPairReplicationPolicy.cpp; path = Sources/PostPairReplicationPolicy.cpp; sourceTree = SOURCE_ROOT; };
 		0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostPairReplicationPolicy.hpp; path = Sources/PostPairReplicationPolicy.hpp; sourceTree = SOURCE_ROOT; };
+		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
+		0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ReplicationCandidatePlanning.hpp; path = Sources/ReplicationCandidatePlanning.hpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -635,6 +639,8 @@
 				0E7A000331A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.hpp */,
 				0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */,
 				0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */,
+				0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */,
+				0E7C000131C0000100AAA001 /* ReplicationCandidatePlanning.hpp */,
 				0851AB082F0A233A00C48FFE /* Tensor.cpp */,
 				0A2000002F90000100AAA001 /* ExperimentMetaAnalyzer.cpp */,
 				0A3000002FA0000100AAA001 /* ExperimentScheduler.cpp */,
@@ -1032,6 +1038,7 @@
 				0E7A000431A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
 				0E7A000631A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,
 				0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
+				0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
 				0A2000012F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000012FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
@@ -1146,6 +1153,7 @@
 				0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
 				0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,
 				0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
+				0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,
 				0A2000022F90000100AAA001 /* ExperimentMetaAnalyzer.cpp in Sources */,
 				0A3000022FA0000100AAA001 /* ExperimentScheduler.cpp in Sources */,
