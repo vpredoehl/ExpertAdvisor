@@ -35,10 +35,12 @@ START_DATE = date(2010, 1, 1)
 END_DATE = date(2026, 8, 24)
 
 #
-# Families that are considered part of the authoritative ingestion
-# completed so far.
+# Families that are already authoritative independent of Census import state.
+# Census is classified dynamically from the live read-only database snapshot:
+# zero rows means still planned, the exact validated 399-row population means
+# imported, and any nonzero incomplete population is a hard audit failure.
 #
-EXPECTED_IMPORTED_FAMILIES = {
+BASE_EXPECTED_IMPORTED_FAMILIES = {
     ("BLS", "CPI"),
     ("BLS", "EMPLOYMENT"),
     ("BLS", "EMPLOYMENT_ANNUAL"),
@@ -49,16 +51,24 @@ EXPECTED_IMPORTED_FAMILIES = {
     ("FEDERAL_RESERVE", "FOMC"),
 }
 
-#
-# Known next authoritative-source ingestion families.
-#
-# These are NOT failures. They appear in the "remaining" report so
-# the audit answers both:
-#
-#   What is complete?
-#   What still remains?
-#
-PLANNED_REMAINING_FAMILIES = [
+CENSUS_IMPORTED_FAMILIES = {
+    ("CENSUS", "RETAIL_SALES"),
+    ("CENSUS", "DURABLE_GOODS"),
+}
+
+# Static full authoritative family contract retained for tests/importers.
+# Runtime audit classification still uses expected_imported_families below.
+EXPECTED_IMPORTED_FAMILIES = (
+    BASE_EXPECTED_IMPORTED_FAMILIES | CENSUS_IMPORTED_FAMILIES
+)
+
+CENSUS_EXPECTED_TOTAL_ROWS = 399
+CENSUS_EXPECTED_FAMILY_ROWS = {
+    "RETAIL_SALES": 200,
+    "DURABLE_GOODS": 199,
+}
+
+CENSUS_PLANNED_REMAINING_FAMILIES = [
     {
         "source_agency": "CENSUS",
         "event_family": "RETAIL_SALES",
@@ -76,6 +86,12 @@ PLANNED_REMAINING_FAMILIES = [
         ),
     },
 ]
+
+# Compatibility/exported completed-plan contract used by existing tests.
+# Runtime pre-import Census reporting is handled dynamically through
+# CENSUS_PLANNED_REMAINING_FAMILIES.
+PLANNED_REMAINING_FAMILIES = []
+
 
 #
 # Full-year BLS cadence expectations.
@@ -245,6 +261,56 @@ FOMC_IRREGULAR_NOTES = {
     ),
 }
 
+#
+# Census counts established by validate_census_canonical.py. These are
+# release-year counts, so delayed prior-reference-period publications remain
+# assigned to the calendar year in which the market received the release.
+#
+CENSUS_EXPECTED_YEAR_COUNTS = {
+    "RETAIL_SALES": {
+        **{year: 12 for year in range(2010, 2025)},
+        2025: 11,
+        2026: 9,
+    },
+    "DURABLE_GOODS": {
+        **{year: 12 for year in range(2010, 2025)},
+        2025: 11,
+        2026: 8,
+    },
+}
+
+CENSUS_IRREGULAR_NOTES = {
+    (2019, "RETAIL_SALES"): (
+        "The 2019 federal shutdown delayed the December 2018 and early-2019 "
+        "reference-period sequence; twelve actual release events still "
+        "occurred during release year 2019."
+    ),
+    (2019, "DURABLE_GOODS"): (
+        "The 2019 federal shutdown delayed the December 2018 and early-2019 "
+        "reference-period sequence; twelve actual release events still "
+        "occurred during release year 2019."
+    ),
+    (2025, "RETAIL_SALES"): (
+        "Late-2025 scheduling shifted November 2025 and December 2025 "
+        "reference-period releases into 2026; release year 2025 contains "
+        "eleven events."
+    ),
+    (2025, "DURABLE_GOODS"): (
+        "Late-2025 scheduling shifted November 2025 and December 2025 "
+        "reference-period releases into 2026; release year 2025 contains "
+        "eleven events."
+    ),
+    (2026, "RETAIL_SALES"): (
+        "Partial release year through 2026-08-24, including November and "
+        "December 2025 reference-period releases."
+    ),
+    (2026, "DURABLE_GOODS"): (
+        "Partial release year through 2026-08-24, including November and "
+        "December 2025 reference-period releases; the June 2026 timestamp "
+        "is the validated schedule-derived occurrence."
+    ),
+}
+
 ISSUE_FIELDS = [
     "severity",
     "code",
@@ -346,7 +412,8 @@ FROM (
     WHERE source_agency IN (
         'BLS',
         'BEA',
-        'FEDERAL_RESERVE'
+        'FEDERAL_RESERVE',
+        'CENSUS'
     )
     ORDER BY
         event_timestamp_utc,
@@ -504,6 +571,31 @@ def expected_year_count(
                 note,
             )
 
+    #
+    # Census.
+    #
+    if source_agency == "CENSUS":
+        family_counts = CENSUS_EXPECTED_YEAR_COUNTS.get(
+            family,
+            {},
+        )
+
+        if year in family_counts:
+            note = CENSUS_IRREGULAR_NOTES.get(
+                (year, family),
+                "",
+            )
+
+            return (
+                family_counts[year],
+                (
+                    "documented_irregular"
+                    if note
+                    else "normal"
+                ),
+                note,
+            )
+
     return (
         None,
         "no_expectation",
@@ -534,8 +626,8 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Read-only combined economic_event "
-            "coverage audit for BLS, BEA, and "
-            "Federal Reserve authoritative data."
+            "coverage audit for BLS, BEA, Federal Reserve, "
+            "and Census authoritative data."
         )
     )
 
@@ -578,13 +670,69 @@ def main():
     )
     print()
     print(
-        "Reading BLS / BEA / Federal Reserve "
+        "Reading BLS / BEA / Federal Reserve / Census "
         "economic_event rows (read-only)..."
     )
 
     rows = read_database_rows(args)
 
     issues = []
+
+    census_rows = [
+        row for row in rows
+        if row.get("source_agency") == "CENSUS"
+    ]
+    census_family_counts = Counter(
+        row.get("event_family") or ""
+        for row in census_rows
+    )
+
+    census_import_complete = (
+        len(census_rows) == CENSUS_EXPECTED_TOTAL_ROWS
+        and all(
+            census_family_counts[family] == expected
+            for family, expected
+            in CENSUS_EXPECTED_FAMILY_ROWS.items()
+        )
+        and set(census_family_counts)
+        == set(CENSUS_EXPECTED_FAMILY_ROWS)
+    )
+
+    if not census_rows:
+        expected_imported_families = set(
+            BASE_EXPECTED_IMPORTED_FAMILIES
+        )
+        planned_remaining_families = list(
+            CENSUS_PLANNED_REMAINING_FAMILIES
+        )
+        census_import_state = "not_yet_imported"
+    elif census_import_complete:
+        expected_imported_families = (
+            set(BASE_EXPECTED_IMPORTED_FAMILIES)
+            | CENSUS_IMPORTED_FAMILIES
+        )
+        planned_remaining_families = []
+        census_import_state = "complete"
+    else:
+        expected_imported_families = (
+            set(BASE_EXPECTED_IMPORTED_FAMILIES)
+            | CENSUS_IMPORTED_FAMILIES
+        )
+        planned_remaining_families = []
+        census_import_state = "partial_invalid"
+        add_issue(
+            issues,
+            "error",
+            "partial_census_import",
+            (
+                "Census economic_event population is nonzero but does not "
+                "match the validated complete import: expected 399 total "
+                "rows with RETAIL_SALES=200 and DURABLE_GOODS=199; found "
+                f"total={len(census_rows)}, "
+                f"RETAIL_SALES={census_family_counts['RETAIL_SALES']}, "
+                f"DURABLE_GOODS={census_family_counts['DURABLE_GOODS']}."
+            ),
+        )
 
     #
     # Canonical-key and source-event-id checks.
@@ -887,7 +1035,7 @@ def main():
     )
 
     missing_imported = sorted(
-        EXPECTED_IMPORTED_FAMILIES
+        expected_imported_families
         - actual_family_set
     )
 
@@ -907,11 +1055,11 @@ def main():
 
     #
     # Unexpected source/family combinations
-    # within the three audited source agencies.
+    # within the audited source agencies.
     #
     unexpected_families = sorted(
         actual_family_set
-        - EXPECTED_IMPORTED_FAMILIES
+        - expected_imported_families
     )
 
     for source, family in (
@@ -998,7 +1146,7 @@ def main():
                         source,
                         family,
                     )
-                    in EXPECTED_IMPORTED_FAMILIES
+                    in expected_imported_families
                     else
                     "unexpected_family"
                 ),
@@ -1015,7 +1163,7 @@ def main():
         source,
         family,
     ) in sorted(
-        EXPECTED_IMPORTED_FAMILIES
+        expected_imported_families
     ):
         for year in range(
             2010,
@@ -1096,7 +1244,7 @@ def main():
     remaining_rows = []
 
     for planned in (
-        PLANNED_REMAINING_FAMILIES
+        planned_remaining_families
     ):
         key = (
             planned["source_agency"],
@@ -1207,6 +1355,9 @@ def main():
     summary.append(
         f"Audited rows     : {len(rows)}"
     )
+    summary.append(
+        f"Census state     : {census_import_state}"
+    )
     summary.append("")
 
     summary.append(
@@ -1217,6 +1368,7 @@ def main():
         "BLS",
         "BEA",
         "FEDERAL_RESERVE",
+        "CENSUS",
     ):
         summary.append(
             f"  {source:<16} "
@@ -1232,7 +1384,7 @@ def main():
         source,
         family,
     ) in sorted(
-        EXPECTED_IMPORTED_FAMILIES
+        expected_imported_families
     ):
         summary.append(
             f"  {source:<16} "
@@ -1267,6 +1419,11 @@ def main():
             f"  {row['source_agency']:<16} "
             f"{row['event_family']:<20} "
             f"{row['status']}"
+        )
+
+    if not remaining_rows:
+        summary.append(
+            "  none in the current authoritative family universe"
         )
 
     summary.append("")
@@ -1304,16 +1461,18 @@ def main():
             "coverage audit found errors."
         )
     else:
-        summary.append(
-            "RESULT: PASS - all currently imported "
-            "BLS, BEA, and Federal Reserve families "
-            "satisfy the combined coverage audit."
-        )
-
-        summary.append(
-            "Remaining authoritative ingestion: "
-            "Census Retail Sales and Durable Goods."
-        )
+        if census_import_complete:
+            summary.append(
+                "RESULT: PASS - all currently imported "
+                "BLS, BEA, Federal Reserve, and Census families "
+                "satisfy the combined coverage audit."
+            )
+        else:
+            summary.append(
+                "RESULT: PASS - all currently imported BLS, BEA, and "
+                "Federal Reserve families satisfy the combined coverage "
+                "audit; Census remains not_yet_imported."
+            )
 
     summary.append(
         "No database writes were performed."
