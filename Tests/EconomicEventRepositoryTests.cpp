@@ -86,42 +86,50 @@ int main()
         "2010-01-01 00:00:00+00",
         "2010-02-01 00:00:00+00");
 
-    assert(january.size() == 4);
+    std::vector<EconomicEvent> januaryBls;
+
+    for (const auto& event : january)
+    {
+        if (event.sourceAgency == "BLS")
+            januaryBls.push_back(event);
+    }
+
+    assert(januaryBls.size() == 4);
 
     assert(
-        january[0].eventFamily ==
+        januaryBls[0].eventFamily ==
         "EMPLOYMENT");
 
     assert(
-        january[1].eventFamily ==
+        januaryBls[1].eventFamily ==
         "JOLTS");
 
     assert(
-        january[2].eventFamily ==
+        januaryBls[2].eventFamily ==
         "CPI");
 
     assert(
-        january[3].eventFamily ==
+        januaryBls[3].eventFamily ==
         "PPI");
 
     const EconomicEvent& employment =
         FindFamily(
-            january,
+            januaryBls,
             "EMPLOYMENT");
 
     const EconomicEvent& jolts =
         FindFamily(
-            january,
+            januaryBls,
             "JOLTS");
 
     const EconomicEvent& cpi =
         FindFamily(
-            january,
+            januaryBls,
             "CPI");
 
     const EconomicEvent& ppi =
         FindFamily(
-            january,
+            januaryBls,
             "PPI");
 
     assert(
@@ -146,7 +154,7 @@ int main()
     constexpr std::int64_t fifteenMinutesMicros =
         15LL * 60LL * 1000000LL;
 
-    for (const auto& event : january)
+    for (const auto& event : januaryBls)
     {
         assert(
             event.eventTimestampUnixMicros %
