@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EconomicEventBarAlignment.hpp"
+#include "EconomicEventFeatureLayout.hpp"
 
 #include <array>
 #include <cstddef>
@@ -21,24 +22,10 @@ enum class EconomicEventModelFamily : std::size_t
     count = 5,
 };
 
-enum class EconomicEventFeatureIndex : std::size_t
-{
-    inflationEvent = 0,
-    employmentEvent = 1,
-    growthEvent = 2,
-    fedPolicyEvent = 3,
-    consumerDemandEvent = 4,
-    inflationRecencyDecay = 5,
-    employmentRecencyDecay = 6,
-    growthRecencyDecay = 7,
-    fedPolicyRecencyDecay = 8,
-    consumerDemandRecencyDecay = 9,
-};
-
 inline constexpr std::size_t kEconomicEventModelFamilyCount =
     static_cast<std::size_t>(EconomicEventModelFamily::count);
 
-inline constexpr std::size_t kEconomicEventFeatureWidth = 10;
+inline constexpr std::string_view kEconomicEventFeatureCurrency = "USD";
 
 // For a completed bar cutoff and the most recent causal event timestamp:
 //
@@ -48,9 +35,9 @@ inline constexpr std::size_t kEconomicEventFeatureWidth = 10;
 inline constexpr std::chrono::seconds kEconomicEventRecencyTimeConstant{
     24 * 60 * 60};
 
-// Named fields are the authoritative public representation. Ordered() exists
-// only to make the eventual Tensor integration order explicit and testable;
-// Phase 1 does not append these values to Tensor.
+// Named fields are the authoritative public representation. Ordered() is the
+// stable append-only Tensor integration order used by both training and
+// inference.
 struct EconomicEventFeatureValues
 {
     float inflationEvent = 0.0F;

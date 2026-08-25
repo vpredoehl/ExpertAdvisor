@@ -87,12 +87,14 @@ std::array<float, kModelWidth> BuildInferenceRow(const Tensor& tensor,
 
 void TestUtcPhaseFormulaAndPeriodicity()
 {
-    static_assert(feature_size == 49);
+    static_assert(return_autocorrelation_feature_size == 49);
+    static_assert(feature_size == 59);
     static_assert(sessionPhaseSinCol == 34);
     static_assert(sessionPhaseCosCol == 35);
     static_assert(relativeTickVolumeCol == 36);
     static_assert(causalReturnSurpriseCol == 37);
-    static_assert(EA::kCurrentModelInputWidth == 53);
+    static_assert(EA::kPreEconomicEventModelInputWidth == 53);
+    static_assert(EA::kCurrentModelInputWidth == 63);
 
     const PriceTP midnight{};
     const std::array<std::pair<long long, std::pair<float, float>>, 4> quarters{{
@@ -169,7 +171,14 @@ void TestCausalityAndProductionParity()
     for (const Feature& bar : original) baseline.Add(bar);
 
     std::vector<Feature> futureChanged = original;
-    futureChanged.at(current + 1).time += std::chrono::hours(9);
+
+    // Change only information strictly after the row under test while
+    // preserving the Tensor's required chronological bar ordering.
+    // Shifting the complete future suffix also proves that future session
+    // timestamps cannot affect the already-completed current row.
+    for (std::size_t i = current + 1; i < futureChanged.size(); ++i)
+        futureChanged.at(i).time += std::chrono::hours(9);
+
     futureChanged.at(current + 1).close = 1000.0f;
     Tensor changed{"session-phase-causality"};
     for (const Feature& bar : futureChanged) changed.Add(bar);

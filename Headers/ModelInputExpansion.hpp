@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 2;
+inline constexpr int kModelInputSemanticLayoutVersion = 3;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -36,10 +36,11 @@ struct ModelInputSemanticLayoutRegistryEntry
 // at the time a model is saved.  Append-only additions add a new entry whose
 // predecessor is the prior current version; old entries and their fixed
 // maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 2>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 3>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
+        {3, kEconomicEventModelInputWidth, 2},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -182,7 +183,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 17>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 27>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -202,6 +203,16 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 17>
         {causalRollingRangeExpansionCol, "rolling_range_expansion"},
         {historicalLevelProximityCol, "historical_level_proximity"},
         {returnAutocorrelationCol, "return_autocorrelation"},
+        {inflationEventCol, "inflation_event"},
+        {employmentEventCol, "employment_event"},
+        {growthEventCol, "growth_event"},
+        {fedPolicyEventCol, "fed_policy_event"},
+        {consumerDemandEventCol, "consumer_demand_event"},
+        {inflationRecencyDecayCol, "inflation_recency_decay"},
+        {employmentRecencyDecayCol, "employment_recency_decay"},
+        {growthRecencyDecayCol, "growth_recency_decay"},
+        {fedPolicyRecencyDecayCol, "fed_policy_recency_decay"},
+        {consumerDemandRecencyDecayCol, "consumer_demand_recency_decay"},
     }};
 
 struct InputWidthExpansionPlan

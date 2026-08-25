@@ -46,13 +46,21 @@ inline constexpr std::size_t kHistoricalLevelProximityModelInputWidth =
     historical_level_proximity_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kReturnAutocorrelationModelInputWidth =
     return_autocorrelation_feature_size + kModelReturnFeatureCount;
-inline constexpr std::size_t kCurrentModelInputWidth =
+inline constexpr std::size_t kEconomicEventModelInputWidth =
+    economic_event_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kPreEconomicEventModelInputWidth =
     kReturnAutocorrelationModelInputWidth;
+inline constexpr std::size_t kCurrentModelInputWidth =
+    kEconomicEventModelInputWidth;
+
+static_assert(kCurrentModelInputWidth ==
+              kPreEconomicEventModelInputWidth +
+              EA::EconomicCalendar::kEconomicEventFeatureWidth);
 
 // Every persisted width whose Tensor portion has a registered, stable
 // semantic prefix.  Append-only feature additions must retain these entries
 // and append their new width.
-inline constexpr std::array<std::size_t, 16> kRegisteredModelInputWidths{{
+inline constexpr std::array<std::size_t, 17> kRegisteredModelInputWidths{{
     kLegacyModelInputWidth,
     kDonchianModelInputWidth,
     kSessionPhaseModelInputWidth,
@@ -69,6 +77,7 @@ inline constexpr std::array<std::size_t, 16> kRegisteredModelInputWidths{{
     kCausalRollingRangeExpansionModelInputWidth,
     kHistoricalLevelProximityModelInputWidth,
     kReturnAutocorrelationModelInputWidth,
+    kEconomicEventModelInputWidth,
 }};
 
 struct ModelInputContract
@@ -114,7 +123,9 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
         case kHistoricalLevelProximityModelInputWidth:
             return {modelInputWidth,
                     historical_level_proximity_feature_size, 0};
-        case kCurrentModelInputWidth:
+        case kReturnAutocorrelationModelInputWidth:
+            return {modelInputWidth, return_autocorrelation_feature_size, 0};
+        case kEconomicEventModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
             throw std::runtime_error(
@@ -135,7 +146,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kCausalMultiBarRangePressureModelInputWidth) +
                 ":" + std::to_string(kCausalRollingRangeExpansionModelInputWidth) +
                 ":" + std::to_string(kHistoricalLevelProximityModelInputWidth) +
-                ":" + std::to_string(kReturnAutocorrelationModelInputWidth));
+                ":" + std::to_string(kReturnAutocorrelationModelInputWidth) +
+                ":" + std::to_string(kEconomicEventModelInputWidth));
     }
 }
 

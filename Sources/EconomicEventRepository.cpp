@@ -4,6 +4,7 @@
 #include <cctype>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace EA::EconomicCalendar
 {
@@ -104,6 +105,45 @@ EconomicEvent MapEconomicEvent(const pqxx::row& row)
     return event;
 }
 
+std::string EconomicEventProjection(std::string_view relation)
+{
+    const std::string prefix = relation.empty()
+        ? std::string{}
+        : std::string{relation} + ".";
+
+    return
+        prefix + "economic_event_id, " +
+        prefix + "currency, " +
+        prefix + "event_family, " +
+        "ROUND(EXTRACT(EPOCH FROM " + prefix +
+            "event_timestamp_utc) * 1000000)::bigint "
+            "AS event_timestamp_unix_micros, " +
+        "to_char(" + prefix +
+            "event_timestamp_utc AT TIME ZONE 'UTC', "
+            "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') "
+            "AS event_timestamp_utc_text, " +
+        prefix + "source_agency, " +
+        prefix + "source_event_id, " +
+        prefix + "source_url, " +
+        prefix + "reference_period, " +
+        prefix + "event_importance, " +
+        prefix + "historical_time_confidence, " +
+        prefix + "source_release_date::text AS source_release_date, " +
+        prefix + "source_release_time::text AS source_release_time, " +
+        prefix + "source_timezone ";
+}
+
+std::vector<EconomicEvent> MapEconomicEvents(const pqxx::result& rows)
+{
+    std::vector<EconomicEvent> events;
+    events.reserve(rows.size());
+
+    for (const pqxx::row& row : rows)
+        events.push_back(MapEconomicEvent(row));
+
+    return events;
+}
+
 } // namespace
 
 
@@ -142,29 +182,7 @@ std::vector<EconomicEvent> LoadEconomicEvents(
     // depends on the active PostgreSQL session timezone.
     //
     const pqxx::result rows = transaction.exec(
-        "SELECT "
-        "economic_event_id, "
-        "currency, "
-        "event_family, "
-        "ROUND("
-        "EXTRACT(EPOCH FROM event_timestamp_utc) "
-        "* 1000000"
-        ")::bigint AS event_timestamp_unix_micros, "
-        "to_char("
-        "event_timestamp_utc AT TIME ZONE 'UTC', "
-        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'"
-        ") AS event_timestamp_utc_text, "
-        "source_agency, "
-        "source_event_id, "
-        "source_url, "
-        "reference_period, "
-        "event_importance, "
-        "historical_time_confidence, "
-        "source_release_date::text "
-        "AS source_release_date, "
-        "source_release_time::text "
-        "AS source_release_time, "
-        "source_timezone "
+        "SELECT " + EconomicEventProjection("") +
         "FROM economic_event "
         "WHERE currency = $1 "
         "AND event_timestamp_utc >= $2::timestamptz "
@@ -177,13 +195,50 @@ std::vector<EconomicEvent> LoadEconomicEvents(
             startUtc,
             endUtc});
 
-    std::vector<EconomicEvent> events;
-    events.reserve(rows.size());
+    return MapEconomicEvents(rows);
+}
 
-    for (const pqxx::row& row : rows)
-        events.push_back(MapEconomicEvent(row));
 
-    return events;
+std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
+    pqxx::transaction_base& transaction,
+    const std::string& currency,
+    const std::string& startUtc,
+    const std::string& endUtc)
+{
+    ValidateCurrency(currency);
+
+    // DISTINCT ON seeds one latest row for every authoritative canonical
+    // stream. Several canonical streams may map to one model family; retaining
+    // each stream's latest prior row lets the shared C++ mapper select the
+    // truly latest model-family timestamp without duplicating that mapping in
+    // SQL. The disjoint UNION ALL then includes every event required while
+    // target bars are processed.
+    const pqxx::result rows = transaction.exec(
+        "WITH prior_canonical_stream AS ("
+        "SELECT DISTINCT ON (source_agency, event_family) "
+        "economic_event_id "
+        "FROM economic_event "
+        "WHERE currency = $1 "
+        "AND event_timestamp_utc < $2::timestamptz "
+        "ORDER BY source_agency, event_family, "
+        "event_timestamp_utc DESC, economic_event_id DESC"
+        "), selected_event AS ("
+        "SELECT e.* FROM economic_event e "
+        "JOIN prior_canonical_stream p USING (economic_event_id) "
+        "UNION ALL "
+        "SELECT e.* FROM economic_event e "
+        "WHERE e.currency = $1 "
+        "AND e.event_timestamp_utc >= $2::timestamptz "
+        "AND e.event_timestamp_utc < $3::timestamptz"
+        ") SELECT " + EconomicEventProjection("e") +
+        "FROM selected_event e "
+        "ORDER BY e.event_timestamp_utc ASC, e.economic_event_id ASC;",
+        pqxx::params{
+            currency,
+            startUtc,
+            endUtc});
+
+    return MapEconomicEvents(rows);
 }
 
 } // namespace EA::EconomicCalendar

@@ -15,6 +15,7 @@
 #include <deque>
 #include <ranges>
 #include <iostream>
+#include <utility>
 
 #include "Params.hpp"
 #include "LSTM.hpp"   // for LSTM_TRAINING_ASSERTS
@@ -33,6 +34,7 @@
 #include "CausalRollingRangeExpansionFeatures.hpp"
 #include "CausalHistoricalLevelProximityFeatures.hpp"
 #include "CausalReturnAutocorrelationFeatures.hpp"
+#include "../Sources/EconomicEventFeatures.hpp"
 
 using std::string;
 using std::list;
@@ -91,6 +93,7 @@ class Tensor
     CausalRollingRangeExpansion causalRollingRangeExpansion;
     CausalHistoricalLevelProximity causalHistoricalLevelProximity;
     CausalReturnAutocorrelation32 causalReturnAutocorrelation;
+    EA::EconomicCalendar::EconomicEventFeatureEngine economicEventFeatures;
     
 //    std::vector<float> rolling_mean(const std::vector<float>& data, size_t window);
 //    float rolling_mean_at(const std::vector<float>& data, size_t idx, size_t window);
@@ -141,9 +144,11 @@ public:
 
     
     Tensor(string name, Donchian20Mode mode = kDefaultDonchian20Mode,
-           std::size_t lookback = kDefaultDonchianLookback)
+           std::size_t lookback = kDefaultDonchianLookback,
+           std::vector<EA::EconomicCalendar::EconomicEvent> economicEvents = {})
         : table { name }, donchian20Mode { mode },
-          donchianLookback { ValidateDonchianLookback(lookback) } {}
+          donchianLookback { ValidateDonchianLookback(lookback) },
+          economicEventFeatures { std::move(economicEvents) } {}
     const string& TableName() const { return table; }
     Donchian20Mode GetDonchian20Mode() const { return donchian20Mode; }
     std::size_t GetDonchianLookback() const { return donchianLookback; }

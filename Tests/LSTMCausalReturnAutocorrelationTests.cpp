@@ -218,10 +218,12 @@ void TestTensorParityAblationAndHistoricalPrefix()
 {
     static_assert(historicalLevelProximityCol == 47);
     static_assert(returnAutocorrelationCol == 48);
-    static_assert(feature_size == 49);
+    static_assert(return_autocorrelation_feature_size == 49);
+    static_assert(feature_size == 59);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
     static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 53);
+    static_assert(EA::kPreEconomicEventModelInputWidth == 53);
+    static_assert(EA::kCurrentModelInputWidth == 63);
 
     const auto closes = ClosesForReturns(NegativeReturns());
     Tensor trainingTensor = TensorForCloses("autocorrelation-training", closes);
@@ -283,8 +285,19 @@ void TestGenericInputWidthExpansion()
         EA::kHistoricalLevelProximityModelInputWidth);
     assert(plan.sourceTensorFeatureCount == returnAutocorrelationCol);
     assert(plan.expandedTensorFeatureCount == feature_size);
-    assert(plan.newlyIntroducedTensorFeatures ==
-           std::vector<std::string>{"return_autocorrelation"});
+    assert((plan.newlyIntroducedTensorFeatures ==
+            std::vector<std::string>{
+                "return_autocorrelation",
+                "inflation_event",
+                "employment_event",
+                "growth_event",
+                "fed_policy_event",
+                "consumer_demand_event",
+                "inflation_recency_decay",
+                "employment_recency_decay",
+                "growth_recency_decay",
+                "fed_policy_recency_decay",
+                "consumer_demand_recency_decay"}));
 
     std::vector<float> source(
         (plan.sourceInputWidth + hiddenSize) * gateColumns);

@@ -51,6 +51,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
 #include "EconomicEventImportService.hpp"
+#include "EconomicEventRepository.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
 #define EARLY_STOP_PATIENCE 10
@@ -7826,7 +7827,21 @@ int main(int argc, const char * argv[])
                 : "SELECT 0;";
             const size_t logicalOutputStartIndex =
                 forexDataRead.exec1(warmupCountQuery)[0].as<size_t>();
-            Tensor t{ rawPriceTableName, runtimeDonchian20Mode, runtimeDonchianLookback };
+            std::vector<EA::EconomicCalendar::EconomicEvent> economicEvents;
+            {
+                pqxx::work economicEventRead { c_LSTM };
+                economicEventRead.exec("SET TRANSACTION READ ONLY;");
+                economicEvents =
+                    EA::EconomicCalendar::LoadEconomicEventsForFeatureRange(
+                        economicEventRead,
+                        std::string{EA::EconomicCalendar::
+                            kEconomicEventFeatureCurrency},
+                        queryStart,
+                        toDate);
+                economicEventRead.commit();
+            }
+            Tensor t{ rawPriceTableName, runtimeDonchian20Mode,
+                      runtimeDonchianLookback, std::move(economicEvents) };
             
             DiagnosticOut() << "Candlestick query: " << query << "\n";
             DiagnosticOut() << "FEATURE_WARMUP_SCOPE"

@@ -32,7 +32,8 @@ int main()
     static_assert(historical_level_proximity_feature_size == 48);
     static_assert(returnAutocorrelationCol == 48);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 49);
+    static_assert(economicEventFeatureStartCol == 49);
+    static_assert(feature_size == 59);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -49,7 +50,8 @@ int main()
     static_assert(EA::kCausalRollingRangeExpansionModelInputWidth == 51);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
     static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 53);
+    static_assert(EA::kPreEconomicEventModelInputWidth == 53);
+    static_assert(EA::kCurrentModelInputWidth == 63);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -258,7 +260,7 @@ int main()
            physicalTensor[historicalLevelProximityCol]);
     assert(historicalLevelProximityInput[returnAutocorrelationCol] == -1.0f);
 
-    // The current model appends return autocorrelation without changing the
+    // The return-autocorrelation model appends that feature without changing the
     // exact width-52 predecessor contract above.
     const auto returnAutocorrelation = EA::ResolveModelInputContract(
         53, physicalTensor.size());
@@ -266,10 +268,26 @@ int main()
     EA::CopyTensorFeaturesForModelInput(returnAutocorrelationInput.data(),
                                         physicalTensor.data(),
                                         returnAutocorrelation);
-    for (std::size_t i = 0; i < feature_size; ++i)
+    for (std::size_t i = 0; i < return_autocorrelation_feature_size; ++i)
         assert(returnAutocorrelationInput[i] == physicalTensor[i]);
     assert(returnAutocorrelationInput[returnAutocorrelationCol] ==
            physicalTensor[returnAutocorrelationCol]);
+
+    // Phase 2 appends exactly the ten economic-event Tensor features. The old
+    // width remains a registered projection and cannot silently consume them.
+    const auto economicEvents = EA::ResolveModelInputContract(
+        EA::kCurrentModelInputWidth, physicalTensor.size());
+    assert(economicEvents.tensorFeatureCount == feature_size);
+    std::vector<float> economicEventInput(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(economicEventInput.data(),
+                                        physicalTensor.data(), economicEvents);
+    for (std::size_t i = 0; i < feature_size; ++i)
+        assert(economicEventInput[i] == physicalTensor[i]);
+    assert(returnAutocorrelationInput[inflationEventCol] == -1.0f);
+    assert(economicEventInput[inflationEventCol] ==
+           physicalTensor[inflationEventCol]);
+    assert(economicEventInput[consumerDemandRecencyDecayCol] ==
+           physicalTensor[consumerDemandRecencyDecayCol]);
 
     // Canonical feature identities are independent of physical offsets and
     // masking happens after projection without mutating Tensor storage.
@@ -376,7 +394,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63";
     }
     assert(unsupportedRejected);
 

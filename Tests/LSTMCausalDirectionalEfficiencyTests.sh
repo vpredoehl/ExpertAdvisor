@@ -14,8 +14,8 @@ done < <(find "${repo_root}/MetaNN" -type d -print)
     -Wno-unused-parameter -Wno-ignored-qualifiers -Wno-unused-but-set-variable \
     -I"${repo_root}/Headers" "${include_flags[@]}" \
     "${repo_root}/Tests/LSTMCausalDirectionalEfficiencyTests.cpp" \
-    "${repo_root}/LSTM/Tensor.cpp" "${repo_root}/Common/PricePoint.cpp" \
-    -L"${repo_root}/DerivedData/ExpertAdvisor-next-feature/Build/Products/Release" \
+    "${repo_root}/LSTM/Tensor.cpp" "${repo_root}/Common/PricePoint.cpp" "${repo_root}/Sources/EconomicEventFeatures.cpp" \
+    -L"${repo_root}/DerivedData/Development/Build/Products/Debug" \
     -lMetaNN -lMetalBuffer -framework Metal -framework Foundation \
     -o "${test_dir}/LSTMCausalDirectionalEfficiencyTests"
 "${test_dir}/LSTMCausalDirectionalEfficiencyTests"

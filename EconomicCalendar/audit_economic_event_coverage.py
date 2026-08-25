@@ -49,6 +49,7 @@ BASE_EXPECTED_IMPORTED_FAMILIES = {
     ("BEA", "GDP"),
     ("BEA", "PCE"),
     ("FEDERAL_RESERVE", "FOMC"),
+    ("DOL_ETA", "WEEKLY_CLAIMS"),
 }
 
 CENSUS_IMPORTED_FAMILIES = {
@@ -262,6 +263,49 @@ FOMC_IRREGULAR_NOTES = {
 }
 
 #
+# DOL/ETA Weekly Claims counts established from the validated authoritative
+# 2010-present manifest and canonical production import.
+#
+# These are release-year counts, not an assumed 52-per-year cadence. Calendar
+# structure, archive irregularities, and partial-year coverage mean the
+# authoritative count can legitimately differ from 52.
+#
+DOL_ETA_WEEKLY_CLAIMS_EXPECTED_YEAR_COUNTS = {
+    2010: 52,
+    2011: 52,
+    2012: 52,
+    2013: 52,
+    2014: 53,
+    2015: 52,
+    2016: 52,
+    2017: 52,
+    2018: 52,
+    2019: 51,
+    2020: 53,
+    2021: 52,
+    2022: 52,
+    2023: 52,
+    2024: 52,
+    2025: 46,
+    2026: 33,
+}
+
+DOL_ETA_WEEKLY_CLAIMS_IRREGULAR_NOTES = {
+    2019: (
+        "Validated authoritative DOL/ETA archive contains 51 Weekly Claims "
+        "release occurrences in release year 2019."
+    ),
+    2025: (
+        "Validated authoritative DOL/ETA archive contains 46 Weekly Claims "
+        "release occurrences in release year 2025."
+    ),
+    2026: (
+        "Partial year through 2026-08-24; latest imported Weekly Claims "
+        "release is 2026-08-20."
+    ),
+}
+
+#
 # Census counts established by validate_census_canonical.py. These are
 # release-year counts, so delayed prior-reference-period publications remain
 # assigned to the calendar year in which the market received the release.
@@ -413,7 +457,8 @@ FROM (
         'BLS',
         'BEA',
         'FEDERAL_RESERVE',
-        'CENSUS'
+        'CENSUS',
+        'DOL_ETA'
     )
     ORDER BY
         event_timestamp_utc,
@@ -572,6 +617,24 @@ def expected_year_count(
             )
 
     #
+    # DOL/ETA Weekly Claims.
+    #
+    if (
+        source_agency == "DOL_ETA"
+        and family == "WEEKLY_CLAIMS"
+    ):
+        if year in DOL_ETA_WEEKLY_CLAIMS_EXPECTED_YEAR_COUNTS:
+            note = DOL_ETA_WEEKLY_CLAIMS_IRREGULAR_NOTES.get(
+                year,
+                "",
+            )
+            return (
+                DOL_ETA_WEEKLY_CLAIMS_EXPECTED_YEAR_COUNTS[year],
+                "documented_irregular" if note else "normal",
+                note,
+            )
+
+    #
     # Census.
     #
     if source_agency == "CENSUS":
@@ -627,7 +690,7 @@ def main():
         description=(
             "Read-only combined economic_event "
             "coverage audit for BLS, BEA, Federal Reserve, "
-            "and Census authoritative data."
+            "Census, and DOL/ETA authoritative data."
         )
     )
 
@@ -670,7 +733,7 @@ def main():
     )
     print()
     print(
-        "Reading BLS / BEA / Federal Reserve / Census "
+        "Reading BLS / BEA / Federal Reserve / Census / DOL/ETA "
         "economic_event rows (read-only)..."
     )
 
@@ -915,20 +978,30 @@ def main():
                 row,
             )
 
-        if (
-            row.get(
-                "historical_time_confidence"
-            )
-            != "exact"
-        ):
+        confidence = row.get(
+            "historical_time_confidence"
+        )
+
+        reconstructed_dol_eta_time = (
+            row.get("source_agency") == "DOL_ETA"
+            and row.get("event_family") == "WEEKLY_CLAIMS"
+            and confidence == "reconstructed"
+            and str(row.get("source_release_date") or "")[:4]
+            in {"2011", "2012"}
+            and row.get("source_release_time") == "08:30:00"
+            and row.get("source_timezone") == "America/New_York"
+        )
+
+        if confidence != "exact" and not reconstructed_dol_eta_time:
             add_issue(
                 issues,
                 "error",
                 "unexpected_time_confidence",
                 (
-                    "Expected historical_time_"
-                    "confidence='exact', found "
-                    f"{row.get('historical_time_confidence')!r}"
+                    "Expected historical_time_confidence='exact' "
+                    "except documented DOL/ETA 2011-2012 "
+                    "Weekly Claims reconstructed timestamps; found "
+                    f"{confidence!r}"
                 ),
                 row,
             )
@@ -1369,6 +1442,7 @@ def main():
         "BEA",
         "FEDERAL_RESERVE",
         "CENSUS",
+        "DOL_ETA",
     ):
         summary.append(
             f"  {source:<16} "
@@ -1464,14 +1538,14 @@ def main():
         if census_import_complete:
             summary.append(
                 "RESULT: PASS - all currently imported "
-                "BLS, BEA, Federal Reserve, and Census families "
+                "BLS, BEA, Federal Reserve, Census, and DOL/ETA families "
                 "satisfy the combined coverage audit."
             )
         else:
             summary.append(
-                "RESULT: PASS - all currently imported BLS, BEA, and "
-                "Federal Reserve families satisfy the combined coverage "
-                "audit; Census remains not_yet_imported."
+                "RESULT: PASS - all currently imported BLS, BEA, "
+                "Federal Reserve, and DOL/ETA families satisfy the combined "
+                "coverage audit; Census remains not_yet_imported."
             )
 
     summary.append(

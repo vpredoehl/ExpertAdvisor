@@ -46,4 +46,15 @@ std::vector<EconomicEvent> LoadEconomicEvents(
     const std::string& startUtc,
     const std::string& endUtc);
 
+// Load every event in [startUtc, endUtc), plus the latest event before
+// startUtc for each authoritative (agency, canonical-family) stream. The
+// chronological feature engine then deterministically reduces those prior
+// rows to the latest state of each model-facing family. This exact seed query
+// avoids an arbitrary recency lookback and remains one ordered database query.
+std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
+    pqxx::transaction_base& transaction,
+    const std::string& currency,
+    const std::string& startUtc,
+    const std::string& endUtc);
+
 } // namespace EA::EconomicCalendar

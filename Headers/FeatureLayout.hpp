@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "DonchianLookback.hpp"
+#include "../Sources/EconomicEventFeatureLayout.hpp"
 
 // The first 32 Tensor columns are the pre-Donchian, persisted model prefix.
 // Subsequent feature increments append columns so historical model prefixes
@@ -59,7 +60,47 @@ inline constexpr std::size_t returnAutocorrelationCol =
     historical_level_proximity_feature_size;
 inline constexpr std::size_t return_autocorrelation_feature_size =
     returnAutocorrelationCol + 1;
-inline constexpr std::size_t feature_size =
+inline constexpr std::size_t economicEventFeatureStartCol =
     return_autocorrelation_feature_size;
+inline constexpr std::size_t inflationEventCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::inflationEvent);
+inline constexpr std::size_t employmentEventCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::employmentEvent);
+inline constexpr std::size_t growthEventCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::growthEvent);
+inline constexpr std::size_t fedPolicyEventCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::fedPolicyEvent);
+inline constexpr std::size_t consumerDemandEventCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::consumerDemandEvent);
+inline constexpr std::size_t inflationRecencyDecayCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::inflationRecencyDecay);
+inline constexpr std::size_t employmentRecencyDecayCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::employmentRecencyDecay);
+inline constexpr std::size_t growthRecencyDecayCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::growthRecencyDecay);
+inline constexpr std::size_t fedPolicyRecencyDecayCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::fedPolicyRecencyDecay);
+inline constexpr std::size_t consumerDemandRecencyDecayCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::consumerDemandRecencyDecay);
+inline constexpr std::size_t economic_event_feature_size =
+    economicEventFeatureStartCol +
+    EA::EconomicCalendar::kEconomicEventFeatureWidth;
+inline constexpr std::size_t feature_size =
+    economic_event_feature_size;
+
+static_assert(economicEventFeatureStartCol ==
+              return_autocorrelation_feature_size);
+static_assert(feature_size == return_autocorrelation_feature_size +
+              EA::EconomicCalendar::kEconomicEventFeatureWidth);
 
 #endif /* FeatureLayout_hpp */

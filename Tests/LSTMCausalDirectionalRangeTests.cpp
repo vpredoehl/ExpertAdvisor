@@ -94,10 +94,12 @@ Feature BarAt(std::size_t index, float open, float high, float low, float close)
 void TestTensorPlacementAndModelProjection()
 {
     static_assert(causalDirectionalRangeCol == 39);
-    static_assert(feature_size == 49);
+    static_assert(return_autocorrelation_feature_size == 49);
+    static_assert(feature_size == 59);
     static_assert(EA::kCausalVolatilityRegimeModelInputWidth == 43);
     static_assert(EA::kCausalDirectionalRangeModelInputWidth == 44);
-    static_assert(EA::kCurrentModelInputWidth == 53);
+    static_assert(EA::kPreEconomicEventModelInputWidth == 53);
+    static_assert(EA::kCurrentModelInputWidth == 63);
 
     Tensor tensor{"causal-directional-range"};
     tensor.Add(BarAt(0, 1.0f, 1.4f, 0.8f, 1.3f));

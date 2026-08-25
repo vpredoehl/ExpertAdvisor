@@ -38,6 +38,17 @@ ARCHIVE_URL = "https://oui.doleta.gov/unemploy/archive.asp"
 ALLOWED_HOST = "oui.doleta.gov"
 PRESS_PATH = re.compile(r"^/press/(?P<year>[0-9]{4})/(?P<name>[0-9]{6}\.(?:asp|pdf))$", re.I)
 
+KNOWN_NON_WEEKLY_CLAIMS_OCCURRENCE_URLS = {
+    # First-party DOL/ETA archive placeholder. The PDF text is literally
+    # "Dummy file: March 15, 2014" and contains no Weekly Claims release.
+    "https://oui.doleta.gov/press/2014/031514.pdf",
+
+    # First-party archive aliases that are byte-for-byte duplicates of
+    # authoritative 2013 Weekly Claims releases.
+    "https://oui.doleta.gov/press/2012/010313.asp",
+    "https://oui.doleta.gov/press/2012/080113.asp",
+}
+
 
 class LinkParser(html.parser.HTMLParser):
     def __init__(self) -> None:
@@ -115,6 +126,8 @@ def archive_occurrences(year: int) -> tuple[tuple[str, int], ...]:
         try:
             canonical = canonical_press_url(absolute)
         except ValueError:
+            continue
+        if canonical in KNOWN_NON_WEEKLY_CLAIMS_OCCURRENCE_URLS:
             continue
         match = PRESS_PATH.fullmatch(urllib.parse.urlsplit(canonical).path)
         if match and int(match.group("year")) == year:
