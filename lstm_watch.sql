@@ -66,10 +66,11 @@ SELECT
 FROM experiment;
 
 SELECT
-    count(*) FILTER (
-        WHERE status = 'running' AND phase = 'infer'
-    ) AS cp_infer_running,
-    count(*) FILTER (
-        WHERE status = 'pending' AND phase = 'infer'
-    ) AS cp_infer_pending
-FROM experiment_checkpoint_eval;
+    (SELECT count(*) FROM experiment
+     WHERE status = 'running' AND phase = 'infer') AS final_infer_running,
+    (SELECT count(*) FROM experiment
+     WHERE status = 'pending' AND phase = 'infer') AS final_infer_pending,
+    (SELECT count(*) FROM experiment_checkpoint_eval
+     WHERE status = 'running' AND phase = 'infer') AS cp_infer_running,
+    (SELECT count(*) FROM experiment_checkpoint_eval
+     WHERE status = 'pending' AND phase = 'infer') AS cp_infer_pending;
