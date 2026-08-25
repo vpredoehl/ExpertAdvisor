@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import csv
+import re
+import sys
+from collections import Counter, defaultdict
+from datetime import date, datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ROOT = Path("EconomicCalendar/raw/bea")
+INPUT = ROOT / "bea_canonical_events.csv"
+
+ERRORS = ROOT / "bea_validation_errors.csv"
+WARNINGS = ROOT / "bea_validation_warnings.csv"
+YEAR_COUNTS = ROOT / "bea_validation_year_counts.csv"
+
+START_DATE = date(2010, 1, 1)
+END_DATE = date(2026, 8, 24)
+
+EXPECTED_AGENCY = "BEA"
+EXPECTED_TZ = "America/New_York"
+EASTERN = ZoneInfo(EXPECTED_TZ)
+
+FAMILIES = {"GDP", "PCE"}
+
+# Normal BEA release time is 08:30 ET.
+# Preserve known historical exceptions rather than treating them as corruption.
+ALLOWED_TIMES = {
+    "08:30:00",
+    "10:00:00",
+}
+
+KNOWN_TIME_EXCEPTIONS = {
+    # Historical BEA PCE releases published at 10:00 ET rather than
+    # the more common 08:30 ET. These timestamps come directly from
+    # the authoritative BEA release pages in the canonical dataset.
+    ("PCE", "2014-12-23", "10:00:00"),
+    ("PCE", "2016-02-26", "10:00:00"),
+    ("PCE", "2016-12-22", "10:00:00"),
+    ("PCE", "2018-12-21", "10:00:00"),
+    ("PCE", "2019-11-27", "10:00:00"),
+    ("PCE", "2019-12-20", "10:00:00"),
+    ("PCE", "2020-11-25", "10:00:00"),
+    ("PCE", "2024-11-27", "10:00:00"),
+    ("PCE", "2025-04-30", "10:00:00"),
+    ("PCE", "2025-12-05", "10:00:00"),
+    ("PCE", "2026-01-22", "10:00:00"),
+}
+
+# Explicitly documented irregular calendar years.
+IRREGULAR_YEAR_NOTES = {
+    (2019, "GDP"):
+        "Federal shutdown disrupted the normal GDP release cadence; "
+        "Q4 2018 Initial Estimate replaced normal advance/second sequencing.",
+
+    (2019, "PCE"):
+        "Federal shutdown disrupted the normal monthly PCE release cadence; "
+        "some reference months were combined/delayed.",
+
+    (2025, "GDP"):
+        "Late-2025 shutdown/rescheduling changed normal GDP sequencing; "
+        "Q3 2025 Updated Estimate was the third-estimate equivalent.",
+
+    (2025, "PCE"):
+        "Late-2025 shutdown/rescheduling disrupted normal monthly PCE cadence.",
+
+    (2026, "GDP"):
+        "Partial year through 2026-08-24.",
+
+    (2026, "PCE"):
+        "Partial year through 2026-08-24.",
+}
+
+# Coverage expectations by actual release year.
+# Full normal years should ordinarily have 12 release events per family.
+NORMAL_FULL_YEARS = {
+    2010, 2011, 2012, 2013, 2014, 2015,
+    2016, 2017, 2018, 2020, 2021, 2022,
+    2023, 2024,
+}
+
+MONTH_WORD = (
+    r"January|February|March|April|May|June|"
+    r"July|August|September|October|November|December"
+)
+
+QUARTER_RE = re.compile(
+    r"""
+    (?:
+        (?P<qnum>[1-4])(?:st|nd|rd|th)\s+quarter
+        |
+        (?P<qword>first|second|third|fourth)\s+quarter
+    )
+    (?:\s+and\s+(?:annual|year))?
+    \s+
+    (?P<year>20\d{2})
+    """,
+    re.I | re.X,
+)
+
+GDP_ESTIMATE_RE = re.compile(
+    r"\b(advance|initial|second|third|updated)\s+estimate\b",
+    re.I,
+)
+
+
+def load_rows():
+    with INPUT.open(newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def add_issue(items, severity, code, message, row=None):
+    issue = {
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "source_agency": "",
+        "event_family": "",
+        "event_timestamp_utc": "",
+        "source_local_date": "",
+        "source_local_time": "",
+        "title": "",
+        "url": "",
+    }
+
+    if row:
+        for k in (
+            "source_agency",
+            "event_family",
+            "event_timestamp_utc",
+            "source_local_date",
+            "source_local_time",
+            "title",
+            "url",
+        ):
+            issue[k] = row.get(k, "")
+
+    items.append(issue)
+
+
+def parse_iso_aware(value: str):
+    dt = datetime.fromisoformat(value)
+
+    if dt.tzinfo is None:
+        raise ValueError("timestamp is timezone-naive")
+
+    return dt
+
+
+def parse_local_date(value: str):
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def parse_local_time(value: str):
+    return datetime.strptime(value, "%H:%M:%S").time()
+
+
+def gdp_reference(title: str):
+    qm = QUARTER_RE.search(title)
+    em = GDP_ESTIMATE_RE.search(title)
+
+    if not qm or not em:
+        return None
+
+    if qm.group("qnum"):
+        q = int(qm.group("qnum"))
+    else:
+        q = {
+            "first": 1,
+            "second": 2,
+            "third": 3,
+            "fourth": 4,
+        }[qm.group("qword").lower()]
+
+    year = int(qm.group("year"))
+    estimate = em.group(1).lower()
+
+    return year, q, estimate
+
+
+def pce_combined_month_title(title: str):
+    return bool(
+        re.search(
+            rf"personal\s+income\s+and\s+outlays.*"
+            rf"(?P<m1>{MONTH_WORD})\s+and\s+(?P<m2>{MONTH_WORD})\s+20\d{{2}}",
+            title,
+            re.I,
+        )
+    )
+
+
+def write_issues(path: Path, rows):
+    fields = [
+        "severity",
+        "code",
+        "message",
+        "source_agency",
+        "event_family",
+        "event_timestamp_utc",
+        "source_local_date",
+        "source_local_time",
+        "title",
+        "url",
+    ]
+
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def main():
+    rows = load_rows()
+
+    errors = []
+    warnings = []
+
+    print("BEA canonical invariant/coverage validation")
+    print()
+
+    if not rows:
+        print("ERROR: canonical file is empty")
+        return 1
+
+    #
+    # Basic schema/content invariants.
+    #
+    required = {
+        "source_agency",
+        "event_family",
+        "event_timestamp_utc",
+        "source_local_date",
+        "source_local_time",
+        "source_timezone",
+        "title",
+        "url",
+    }
+
+    missing_columns = sorted(required - set(rows[0].keys()))
+
+    if missing_columns:
+        print("ERROR: missing columns:", ", ".join(missing_columns))
+        return 1
+
+    seen_keys = defaultdict(list)
+    chronological = []
+    year_counts = defaultdict(lambda: defaultdict(int))
+
+    for row in rows:
+        agency = row["source_agency"]
+        family = row["event_family"]
+        timestamp_raw = row["event_timestamp_utc"]
+        local_date_raw = row["source_local_date"]
+        local_time_raw = row["source_local_time"]
+        tz = row["source_timezone"]
+        title = row["title"].strip()
+        url = row["url"].strip()
+
+        if agency != EXPECTED_AGENCY:
+            add_issue(
+                errors,
+                "error",
+                "unexpected_agency",
+                f"Expected source_agency={EXPECTED_AGENCY}, found {agency!r}",
+                row,
+            )
+
+        if family not in FAMILIES:
+            add_issue(
+                errors,
+                "error",
+                "unexpected_family",
+                f"Unexpected event_family={family!r}",
+                row,
+            )
+
+        if tz != EXPECTED_TZ:
+            add_issue(
+                errors,
+                "error",
+                "unexpected_timezone",
+                f"Expected source_timezone={EXPECTED_TZ}, found {tz!r}",
+                row,
+            )
+
+        if not title:
+            add_issue(
+                errors,
+                "error",
+                "empty_title",
+                "Title is empty",
+                row,
+            )
+
+        if not url:
+            add_issue(
+                errors,
+                "error",
+                "empty_url",
+                "URL is empty",
+                row,
+            )
+
+        if url and not url.startswith("https://www.bea.gov/"):
+            add_issue(
+                warnings,
+                "warning",
+                "unexpected_url_domain",
+                "URL does not begin with https://www.bea.gov/",
+                row,
+            )
+
+        try:
+            utc_dt = parse_iso_aware(timestamp_raw)
+        except Exception as exc:
+            add_issue(
+                errors,
+                "error",
+                "invalid_utc_timestamp",
+                f"Invalid event_timestamp_utc: {exc}",
+                row,
+            )
+            continue
+
+        try:
+            local_date = parse_local_date(local_date_raw)
+        except Exception as exc:
+            add_issue(
+                errors,
+                "error",
+                "invalid_local_date",
+                f"Invalid source_local_date: {exc}",
+                row,
+            )
+            continue
+
+        try:
+            local_time = parse_local_time(local_time_raw)
+        except Exception as exc:
+            add_issue(
+                errors,
+                "error",
+                "invalid_local_time",
+                f"Invalid source_local_time: {exc}",
+                row,
+            )
+            continue
+
+        if local_date < START_DATE or local_date > END_DATE:
+            add_issue(
+                errors,
+                "error",
+                "outside_requested_window",
+                f"Release date {local_date} outside {START_DATE}..{END_DATE}",
+                row,
+            )
+
+        local_from_utc = utc_dt.astimezone(EASTERN)
+
+        if local_from_utc.date() != local_date:
+            add_issue(
+                errors,
+                "error",
+                "utc_local_date_mismatch",
+                f"UTC timestamp converts to {local_from_utc.date()}, "
+                f"not {local_date}",
+                row,
+            )
+
+        if local_from_utc.time().replace(tzinfo=None) != local_time:
+            add_issue(
+                errors,
+                "error",
+                "utc_local_time_mismatch",
+                f"UTC timestamp converts to "
+                f"{local_from_utc.time().replace(tzinfo=None)}, "
+                f"not {local_time}",
+                row,
+            )
+
+        if local_time_raw not in ALLOWED_TIMES:
+            add_issue(
+                errors,
+                "error",
+                "unexpected_release_time",
+                f"Unexpected BEA release time {local_time_raw}",
+                row,
+            )
+        elif local_time_raw != "08:30:00":
+            key = (family, local_date_raw, local_time_raw)
+
+            if key not in KNOWN_TIME_EXCEPTIONS:
+                add_issue(
+                    warnings,
+                    "warning",
+                    "unlisted_release_time_exception",
+                    f"Non-08:30 release time {local_time_raw} not in "
+                    f"known exception table",
+                    row,
+                )
+
+        key = (
+            agency,
+            family,
+            timestamp_raw,
+        )
+
+        seen_keys[key].append(row)
+        chronological.append((utc_dt, row))
+        year_counts[local_date.year][family] += 1
+
+    #
+    # Duplicate canonical identity.
+    #
+    for key, dup_rows in seen_keys.items():
+        if len(dup_rows) > 1:
+            for row in dup_rows:
+                add_issue(
+                    errors,
+                    "error",
+                    "duplicate_canonical_key",
+                    "Duplicate "
+                    "(source_agency,event_family,event_timestamp_utc)",
+                    row,
+                )
+
+    #
+    # Chronological sanity.
+    #
+    chronological.sort(key=lambda x: x[0])
+
+    for (prev_dt, prev), (curr_dt, curr) in zip(
+        chronological,
+        chronological[1:],
+    ):
+        if curr_dt < prev_dt:
+            add_issue(
+                errors,
+                "error",
+                "chronology_regression",
+                f"{curr_dt.isoformat()} occurs before "
+                f"{prev_dt.isoformat()}",
+                curr,
+            )
+
+    #
+    # Historical GDP exception validation.
+    #
+    q4_2018_rows = []
+
+    for row in rows:
+        if row["event_family"] != "GDP":
+            continue
+
+        ref = gdp_reference(row["title"])
+
+        if ref and ref[0:2] == (2018, 4):
+            q4_2018_rows.append((ref, row))
+
+    q4_2018_initial = [
+        r
+        for ref, r in q4_2018_rows
+        if ref[2] == "initial"
+    ]
+
+    q4_2018_second = [
+        r
+        for ref, r in q4_2018_rows
+        if ref[2] == "second"
+    ]
+
+    if len(q4_2018_initial) != 1:
+        add_issue(
+            errors,
+            "error",
+            "q4_2018_initial_exception",
+            f"Expected exactly 1 Q4 2018 Initial Estimate event, "
+            f"found {len(q4_2018_initial)}",
+        )
+
+    if q4_2018_second:
+        add_issue(
+            errors,
+            "error",
+            "q4_2018_synthetic_second",
+            f"Expected no separate Q4 2018 second-estimate event; "
+            f"found {len(q4_2018_second)}",
+            q4_2018_second[0],
+        )
+
+    q3_2025_rows = []
+
+    for row in rows:
+        if row["event_family"] != "GDP":
+            continue
+
+        ref = gdp_reference(row["title"])
+
+        if ref and ref[0:2] == (2025, 3):
+            q3_2025_rows.append((ref, row))
+
+    q3_2025_updated = [
+        r
+        for ref, r in q3_2025_rows
+        if ref[2] == "updated"
+    ]
+
+    q3_2025_third = [
+        r
+        for ref, r in q3_2025_rows
+        if ref[2] == "third"
+    ]
+
+    if len(q3_2025_updated) != 1:
+        add_issue(
+            errors,
+            "error",
+            "q3_2025_updated_exception",
+            f"Expected exactly 1 Q3 2025 Updated Estimate event, "
+            f"found {len(q3_2025_updated)}",
+        )
+
+    if q3_2025_third:
+        add_issue(
+            errors,
+            "error",
+            "q3_2025_synthetic_third",
+            f"Expected no separate Q3 2025 third-estimate event; "
+            f"found {len(q3_2025_third)}",
+            q3_2025_third[0],
+        )
+
+    #
+    # Combined PCE release invariant.
+    #
+    combined_pce = [
+        row
+        for row in rows
+        if row["event_family"] == "PCE"
+        and pce_combined_month_title(row["title"])
+    ]
+
+    combined_groups = defaultdict(list)
+
+    for row in combined_pce:
+        combined_groups[row["event_timestamp_utc"]].append(row)
+
+    for timestamp, group in combined_groups.items():
+        if len(group) != 1:
+            for row in group:
+                add_issue(
+                    errors,
+                    "error",
+                    "combined_pce_duplicate_event",
+                    f"Combined PCE release at {timestamp} appears "
+                    f"{len(group)} times",
+                    row,
+                )
+
+    known_combined_2025 = [
+        row
+        for row in combined_pce
+        if "October and November 2025" in row["title"]
+    ]
+
+    if len(known_combined_2025) != 1:
+        add_issue(
+            errors,
+            "error",
+            "combined_pce_2025_missing_or_duplicate",
+            f"Expected exactly one combined October and November 2025 "
+            f"PCE event, found {len(known_combined_2025)}",
+        )
+
+    #
+    # Coverage/year counts.
+    #
+    count_rows = []
+
+    for year in range(2010, 2027):
+        for family in ("GDP", "PCE"):
+            count = year_counts[year][family]
+            note = IRREGULAR_YEAR_NOTES.get((year, family), "")
+
+            status = "normal"
+
+            if year in NORMAL_FULL_YEARS:
+                if count != 12:
+                    status = "unexpected_count"
+                    add_issue(
+                        errors,
+                        "error",
+                        "unexpected_year_family_count",
+                        f"{year} {family} expected 12 canonical releases, "
+                        f"found {count}",
+                    )
+            else:
+                status = "documented_irregular"
+
+                if not note:
+                    add_issue(
+                        warnings,
+                        "warning",
+                        "undocumented_irregular_year",
+                        f"{year} {family} has count {count} but no "
+                        f"irregular-year note",
+                    )
+
+            count_rows.append({
+                "year": year,
+                "family": family,
+                "count": count,
+                "status": status,
+                "note": note,
+            })
+
+    #
+    # File-level total invariants.
+    #
+    total = len(rows)
+    by_family = Counter(r["event_family"] for r in rows)
+
+    if total != 393:
+        add_issue(
+            errors,
+            "error",
+            "unexpected_total_count",
+            f"Expected 393 canonical events, found {total}",
+        )
+
+    if by_family["GDP"] != 197:
+        add_issue(
+            errors,
+            "error",
+            "unexpected_gdp_total",
+            f"Expected 197 GDP events, found {by_family['GDP']}",
+        )
+
+    if by_family["PCE"] != 196:
+        add_issue(
+            errors,
+            "error",
+            "unexpected_pce_total",
+            f"Expected 196 PCE events, found {by_family['PCE']}",
+        )
+
+    write_issues(ERRORS, errors)
+    write_issues(WARNINGS, warnings)
+
+    with YEAR_COUNTS.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "year",
+                "family",
+                "count",
+                "status",
+                "note",
+            ],
+        )
+        w.writeheader()
+        w.writerows(count_rows)
+
+    print(f"Canonical rows       : {total}")
+    print(f"GDP                  : {by_family['GDP']}")
+    print(f"PCE                  : {by_family['PCE']}")
+    print(f"Duplicate keys       : "
+          f"{sum(1 for v in seen_keys.values() if len(v) > 1)}")
+    print(f"Combined PCE events  : {len(combined_pce)}")
+    print(f"Validation errors    : {len(errors)}")
+    print(f"Validation warnings  : {len(warnings)}")
+    print()
+    print(f"Errors               : {ERRORS}")
+    print(f"Warnings             : {WARNINGS}")
+    print(f"Year counts          : {YEAR_COUNTS}")
+    print()
+
+    if errors:
+        print("RESULT: FAIL - do not import into economic_event")
+        return 1
+
+    print("RESULT: PASS - canonical BEA dataset satisfies validation invariants")
+    print("No database writes were performed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

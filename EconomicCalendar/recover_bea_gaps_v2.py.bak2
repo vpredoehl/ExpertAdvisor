@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import html
+import re
+import time
+from collections import defaultdict
+from datetime import date, datetime
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+BASE = "https://www.bea.gov"
+
+ROOT = Path("EconomicCalendar/raw/bea")
+MANIFEST = ROOT / "manifest_filtered.csv"
+RELEASE_DIR = ROOT / "releases"
+
+RECOVERY = ROOT / "recovery_v2"
+RECOVERY_RELEASES = RECOVERY / "releases"
+GAPS = RECOVERY / "gap_report.csv"
+RECOVERED = RECOVERY / "recovered.csv"
+UNRESOLVED = RECOVERY / "unresolved.csv"
+
+THROUGH = date(2026, 8, 24)
+
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X) "
+    "AppleWebKit/537.36 "
+    "ExpertAdvisor EconomicCalendar research"
+)
+
+REQUEST_DELAY = 0.20
+
+QUARTER_PATTERNS = [
+    re.compile(
+        r"\b([1-4])(?:st|nd|rd|th)\s+quarter(?:\s+and\s+(?:annual|year))?\s+(20\d{2})",
+        re.I,
+    ),
+    re.compile(
+        r"\b(first|second|third|fourth)\s+quarter"
+        r"(?:\s+and\s+(?:annual|year))?\s+(20\d{2})",
+        re.I,
+    ),
+]
+
+MONTH_NAMES = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+
+MONTH_WORD = (
+    r"January|February|March|April|May|June|"
+    r"July|August|September|October|November|December"
+)
+
+TIMESTAMP_RE = re.compile(
+    r'EMBARGOED\s+'
+    r'(?:UNTIL\s+RELEASE\s+AT|FOR\s+RELEASE:)\s+'
+    r'(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*'
+    r'(?P<ampm>A\.?M\.?|P\.?M\.?)\s*,?\s*'
+    r'(?P<tz>EST|EDT)?\s*,?\s*'
+    r'(?:(?:MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY),?\s*)?'
+    rf'(?P<month>{MONTH_WORD})\s+'
+    r'(?P<day>\d{1,2}),\s+'
+    r'(?P<year>\d{4})',
+    re.I,
+)
+
+
+def fetch(url: str):
+    req = Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+        },
+    )
+
+    try:
+        with urlopen(req, timeout=20) as r:
+            return r.status, r.read()
+    except HTTPError as e:
+        return e.code, e.read()
+    except URLError:
+        return None, b""
+
+
+def strip_html(text: str):
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def page_title(text: str):
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", text, re.I | re.S)
+    return strip_html(m.group(1)) if m else ""
+
+
+def parse_quarter(title: str):
+    for i, rx in enumerate(QUARTER_PATTERNS):
+        m = rx.search(title)
+        if not m:
+            continue
+
+        if i == 0:
+            q = int(m.group(1))
+        else:
+            q = {
+                "first": 1,
+                "second": 2,
+                "third": 3,
+                "fourth": 4,
+            }[m.group(1).lower()]
+
+        return int(m.group(2)), q
+
+    return None
+
+
+def parse_estimate(title: str):
+    t = title.lower()
+
+    if "advance estimate" in t:
+        return "advance"
+
+    if "initial estimate" in t:
+        return "advance"
+
+    if "second estimate" in t:
+        return "second"
+
+    if "updated estimate" in t:
+        return "second"
+
+    if "third estimate" in t:
+        return "third"
+
+    return None
+
+
+def pce_reference_months(title: str, body_text: str = ""):
+    """
+    Return all reference months represented by an actual PCE/outlays release.
+
+    Handles:
+      Personal Income and Outlays, April 2024
+      Personal Income and Outlays, October and November 2025
+      Personal Income, February 2019; Personal Outlays, January 2019
+      Personal Income and Outlays, March 2019 containing delayed February PCE
+    """
+    refs = set()
+    t = title.lower()
+
+    # Normal one-month PIO title.
+    m = re.search(
+        rf"personal\s+income\s+and\s+outlays[^a-z]+"
+        rf"(?P<m1>{MONTH_WORD})"
+        rf"(?:\s+and\s+(?P<m2>{MONTH_WORD}))?"
+        rf"\s+(?P<year>20\d{{2}})",
+        title,
+        re.I,
+    )
+
+    if m:
+        year = int(m.group("year"))
+        refs.add((year, MONTH_NAMES[m.group("m1").lower()]))
+
+        if m.group("m2"):
+            refs.add((year, MONTH_NAMES[m.group("m2").lower()]))
+
+    # 2019 shutdown special:
+    # "Personal Income, February 2019; Personal Outlays, January 2019"
+    m = re.search(
+        rf"personal\s+outlays[^a-z]+(?P<m>{MONTH_WORD})\s+(?P<year>20\d{{2}})",
+        title,
+        re.I,
+    )
+
+    if m:
+        refs.add(
+            (
+                int(m.group("year")),
+                MONTH_NAMES[m.group("m").lower()],
+            )
+        )
+
+    # Search actual page content for explicit PIO subsections.
+    text = strip_html(body_text)
+
+    for m in re.finditer(
+        rf"Personal\s+Income\s+and\s+Outlays,\s+"
+        rf"(?P<m>{MONTH_WORD})\s+(?P<year>20\d{{2}})",
+        text,
+        re.I,
+    ):
+        refs.add(
+            (
+                int(m.group("year")),
+                MONTH_NAMES[m.group("m").lower()],
+            )
+        )
+
+    return refs
+
+
+def quarter_end(year: int, quarter: int):
+    return {
+        1: date(year, 3, 31),
+        2: date(year, 6, 30),
+        3: date(year, 9, 30),
+        4: date(year, 12, 31),
+    }[quarter]
+
+
+def expected_gdp():
+    result = []
+
+    # Only Q4 2009 can have a release in our 2010+ release window.
+    start = (2009, 4)
+
+    for year in range(2009, THROUGH.year + 1):
+        for q in range(1, 5):
+            if (year, q) < start:
+                continue
+
+            elapsed = (THROUGH - quarter_end(year, q)).days
+
+            if elapsed >= 30:
+                result.append((year, q, "advance"))
+
+            if elapsed >= 60:
+                result.append((year, q, "second"))
+
+            if elapsed >= 90:
+                result.append((year, q, "third"))
+
+    return result
+
+
+def expected_pce():
+    result = []
+
+    y, m = 2009, 12
+
+    while True:
+        if m == 12:
+            month_end = date(y, 12, 31)
+        else:
+            month_end = date.fromordinal(date(y, m + 1, 1).toordinal() - 1)
+
+        if month_end > THROUGH:
+            break
+
+        if (THROUGH - month_end).days >= 35:
+            result.append((y, m))
+
+        m += 1
+
+        if m == 13:
+            y += 1
+            m = 1
+
+    return result
+
+
+def filename_for(url: str):
+    slug = url.rstrip("/").split("/")[-1]
+    digest = hashlib.sha1(url.encode()).hexdigest()[:8]
+    return f"{slug}_{digest}.html"
+
+
+def gdp_candidate_urls(year: int, quarter: int, slot: str):
+    release_years = {year}
+
+    if quarter == 4:
+        release_years.add(year + 1)
+
+    # Shutdown / delayed release edge cases.
+    release_years.add(year + 1)
+
+    ord_numeric = {
+        1: "1st",
+        2: "2nd",
+        3: "3rd",
+        4: "4th",
+    }[quarter]
+
+    ord_word = {
+        1: "first",
+        2: "second",
+        3: "third",
+        4: "fourth",
+    }[quarter]
+
+    estimate_words = {
+        "advance": ["advance", "initial"],
+        "second": ["second", "updated"],
+        "third": ["third"],
+    }[slot]
+
+    slugs = set()
+
+    for est in estimate_words:
+        slugs.add(
+            f"gross-domestic-product-{ord_numeric}-quarter-{year}-{est}-estimate"
+        )
+
+        slugs.add(
+            f"gross-domestic-product-{ord_word}-quarter-{year}-{est}-estimate"
+        )
+
+        # Common BEA corporate-profit suffix pattern.
+        slugs.add(
+            f"gross-domestic-product-{ord_numeric}-quarter-{year}-"
+            f"{est}-estimate-corporate-profits-{ord_numeric}-quarter"
+        )
+
+        slugs.add(
+            f"gross-domestic-product-{ord_word}-quarter-{year}-"
+            f"{est}-estimate-corporate-profits-{ord_word}-quarter"
+        )
+
+        # Modern combined release forms.
+        slugs.add(
+            f"gross-domestic-product-{est}-estimate-corporate-profits-"
+            f"{ord_word}-quarter-{year}"
+        )
+
+        slugs.add(
+            f"gross-domestic-product-{est}-estimate-gdp-industry-and-"
+            f"corporate-profits-{ord_numeric}-quarter-{year}"
+        )
+
+        slugs.add(
+            f"gross-domestic-product-{est}-estimate-gdp-industry-and-"
+            f"corporate-profits-{ord_word}-quarter-{year}"
+        )
+
+    result = []
+
+    for ry in sorted(release_years):
+        for slug in sorted(slugs):
+            result.append(f"{BASE}/news/{ry}/{slug}")
+            result.append(f"{BASE}/index.php/news/{ry}/{slug}")
+
+    return result
+
+
+def pce_candidate_urls(year: int, month: int):
+    name = [
+        "",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ][month]
+
+    release_years = {year, year + 1}
+
+    urls = []
+
+    for ry in sorted(release_years):
+        slug = f"personal-income-and-outlays-{name}-{year}"
+        urls.append(f"{BASE}/news/{ry}/{slug}")
+        urls.append(f"{BASE}/index.php/news/{ry}/{slug}")
+
+    # Known title families for shutdown-era irregular releases.
+    if (year, month) == (2019, 1):
+        urls.extend([
+            f"{BASE}/news/2019/personal-income-february-2019-personal-outlays-january-2019",
+        ])
+
+    if (year, month) in {(2025, 10), (2025, 11)}:
+        urls.extend([
+            f"{BASE}/news/2026/personal-income-and-outlays-october-and-november-2025",
+        ])
+
+    return urls
+
+
+def load_manifest():
+    with MANIFEST.open(newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def existing_page_body(row):
+    path = RELEASE_DIR / row["filename"]
+
+    if not path.exists():
+        return ""
+
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def main():
+    RECOVERY.mkdir(parents=True, exist_ok=True)
+    RECOVERY_RELEASES.mkdir(parents=True, exist_ok=True)
+
+    rows = load_manifest()
+
+    observed_gdp = defaultdict(list)
+    observed_pce = defaultdict(list)
+
+    #
+    # First use all pages we ALREADY downloaded.
+    #
+    for row in rows:
+        title = row["title"]
+
+        if row["family"] == "GDP":
+            qp = parse_quarter(title)
+            est = parse_estimate(title)
+
+            if qp and est:
+                observed_gdp[(qp[0], qp[1], est)].append(row)
+
+        elif row["family"] == "PCE":
+            body = existing_page_body(row)
+
+            for ref in pce_reference_months(title, body):
+                observed_pce[ref].append(row)
+
+    missing_gdp = [
+        x for x in expected_gdp()
+        if x not in observed_gdp
+    ]
+
+    missing_pce = [
+        x for x in expected_pce()
+        if x not in observed_pce
+    ]
+
+    print("BEA gap recovery v2")
+    print()
+    print(f"Observed GDP slots : {len(observed_gdp)}")
+    print(f"Observed PCE months: {len(observed_pce)}")
+    print(f"Missing GDP slots  : {len(missing_gdp)}")
+    print(f"Missing PCE months : {len(missing_pce)}")
+    print()
+
+    gaps = []
+
+    for y, q, slot in missing_gdp:
+        gaps.append({
+            "family": "GDP",
+            "reference_year": y,
+            "reference_period": f"Q{q}",
+            "slot": slot,
+        })
+        print(f"MISSING GDP {y} Q{q} {slot}")
+
+    for y, m in missing_pce:
+        gaps.append({
+            "family": "PCE",
+            "reference_year": y,
+            "reference_period": f"{m:02d}",
+            "slot": "monthly",
+        })
+        print(f"MISSING PCE {y}-{m:02d}")
+
+    with GAPS.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "family",
+                "reference_year",
+                "reference_period",
+                "slot",
+            ],
+        )
+        w.writeheader()
+        w.writerows(gaps)
+
+    recovered = []
+    unresolved = []
+
+    #
+    # Direct URL probe for GDP.
+    #
+    for y, q, slot in missing_gdp:
+        found = False
+
+        for url in gdp_candidate_urls(y, q, slot):
+            status, body = fetch(url)
+
+            if status != 200:
+                continue
+
+            text = body.decode("utf-8", errors="replace")
+            title = page_title(text)
+
+            if parse_quarter(title) != (y, q):
+                continue
+
+            if parse_estimate(title) != slot:
+                continue
+
+            fn = filename_for(url)
+            (RECOVERY_RELEASES / fn).write_bytes(body)
+
+            recovered.append({
+                "family": "GDP",
+                "reference_year": y,
+                "reference_period": f"Q{q}",
+                "slot": slot,
+                "title": title,
+                "url": url,
+                "filename": fn,
+                "http_status": status,
+                "bytes": len(body),
+            })
+
+            print(f"RECOVERED GDP {y} Q{q} {slot}: {title}")
+
+            found = True
+            break
+
+        if not found:
+            unresolved.append({
+                "family": "GDP",
+                "reference_year": y,
+                "reference_period": f"Q{q}",
+                "slot": slot,
+                "reason": "no_direct_BEА_URL_match",
+            })
+
+        time.sleep(REQUEST_DELAY)
+
+    #
+    # Direct URL probe for PCE.
+    #
+    for y, m in missing_pce:
+        found = False
+
+        for url in pce_candidate_urls(y, m):
+            status, body = fetch(url)
+
+            if status != 200:
+                continue
+
+            text = body.decode("utf-8", errors="replace")
+            title = page_title(text)
+
+            refs = pce_reference_months(title, text)
+
+            if (y, m) not in refs:
+                continue
+
+            fn = filename_for(url)
+            (RECOVERY_RELEASES / fn).write_bytes(body)
+
+            recovered.append({
+                "family": "PCE",
+                "reference_year": y,
+                "reference_period": f"{m:02d}",
+                "slot": "monthly",
+                "title": title,
+                "url": url,
+                "filename": fn,
+                "http_status": status,
+                "bytes": len(body),
+            })
+
+            print(f"RECOVERED PCE {y}-{m:02d}: {title}")
+
+            found = True
+            break
+
+        if not found:
+            unresolved.append({
+                "family": "PCE",
+                "reference_year": y,
+                "reference_period": f"{m:02d}",
+                "slot": "monthly",
+                "reason": "no_direct_BEA_URL_match",
+            })
+
+        time.sleep(REQUEST_DELAY)
+
+    rec_fields = [
+        "family",
+        "reference_year",
+        "reference_period",
+        "slot",
+        "title",
+        "url",
+        "filename",
+        "http_status",
+        "bytes",
+    ]
+
+    with RECOVERED.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=rec_fields)
+        w.writeheader()
+        w.writerows(recovered)
+
+    with UNRESOLVED.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "family",
+                "reference_year",
+                "reference_period",
+                "slot",
+                "reason",
+            ],
+        )
+        w.writeheader()
+        w.writerows(unresolved)
+
+    print()
+    print("Finished.")
+    print(f"Recovered : {len(recovered)}")
+    print(f"Unresolved: {len(unresolved)}")
+    print()
+    print(f"Gaps      : {GAPS}")
+    print(f"Recovered : {RECOVERED}")
+    print(f"Unresolved: {UNRESOLVED}")
+    print()
+    print("No database writes were performed.")
+
+
+if __name__ == "__main__":
+    main()

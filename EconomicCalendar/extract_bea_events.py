@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import csv
+import html
+import re
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ROOT = Path("EconomicCalendar/raw/bea")
+MANIFEST = ROOT / "manifest_filtered.csv"
+RELEASE_DIR = ROOT / "releases"
+
+OUTPUT = ROOT / "events_extracted.csv"
+FAILURES = ROOT / "timestamp_parse_failures.csv"
+DUPLICATES = ROOT / "duplicate_candidates.csv"
+
+EASTERN = ZoneInfo("America/New_York")
+
+RELEASE_RE = re.compile(
+    r'EMBARGOED\s+'
+    r'(?:UNTIL\s+RELEASE\s+AT|FOR\s+RELEASE:)\s+'
+    r'(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*'
+    r'(?P<ampm>A\.?M\.?|P\.?M\.?)\s*'
+    r',?\s*'
+    r'(?P<tz>EST|EDT)?\s*'
+    r',?\s*'
+    r'(?:(?:MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY),?\s*)?'
+    r'(?P<month>January|February|March|April|May|June|July|August|September|October|November|December)\s+'
+    r'(?P<day>\d{1,2}),\s+'
+    r'(?P<year>\d{4})',
+    re.I,
+)
+
+
+def strip_html(text: str) -> str:
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def parse_release_timestamp(page_text: str):
+    text = strip_html(page_text)
+    m = RELEASE_RE.search(text)
+
+    if not m:
+        return None, None
+
+    hour = int(m.group("hour"))
+    minute = int(m.group("minute"))
+    ampm = m.group("ampm").replace(".", "").upper()
+
+    if ampm == "PM" and hour != 12:
+        hour += 12
+    elif ampm == "AM" and hour == 12:
+        hour = 0
+
+    dt_local = datetime.strptime(
+        f"{m.group('month')} {m.group('day')} {m.group('year')} "
+        f"{hour:02d}:{minute:02d}",
+        "%B %d %Y %H:%M",
+    ).replace(tzinfo=EASTERN)
+
+    dt_utc = dt_local.astimezone(timezone.utc)
+
+    return dt_local, dt_utc
+
+
+def main() -> int:
+    with MANIFEST.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    extracted = []
+    failures = []
+
+    for row in rows:
+        path = RELEASE_DIR / row["filename"]
+
+        if not path.exists():
+            failures.append({
+                **row,
+                "error": "missing_html",
+            })
+            continue
+
+        text = path.read_text(encoding="utf-8", errors="replace")
+
+        local_dt, utc_dt = parse_release_timestamp(text)
+
+        if local_dt is None:
+            failures.append({
+                **row,
+                "error": "timestamp_not_found",
+            })
+            continue
+
+        extracted.append({
+            "family": row["family"],
+            "archive_year": row["year"],
+            "title": row["title"],
+            "url": row["url"],
+            "filename": row["filename"],
+            "source_local_date": local_dt.date().isoformat(),
+            "source_local_time": local_dt.time().isoformat(),
+            "source_timezone": "America/New_York",
+            "event_timestamp_utc": utc_dt.isoformat(),
+        })
+
+    fields = [
+        "family",
+        "archive_year",
+        "title",
+        "url",
+        "filename",
+        "source_local_date",
+        "source_local_time",
+        "source_timezone",
+        "event_timestamp_utc",
+    ]
+
+    with OUTPUT.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(extracted)
+
+    failure_fields = list(rows[0].keys()) + ["error"]
+
+    with FAILURES.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=failure_fields)
+        w.writeheader()
+        w.writerows(failures)
+
+    groups = defaultdict(list)
+
+    for row in extracted:
+        key = (
+            row["family"],
+            row["event_timestamp_utc"],
+        )
+        groups[key].append(row)
+
+    duplicates = []
+
+    for key, items in groups.items():
+        if len(items) > 1:
+            for item in items:
+                duplicates.append(item)
+
+    with DUPLICATES.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(duplicates)
+
+    print("BEA timestamp extraction")
+    print()
+    print(f"Candidates       : {len(rows)}")
+    print(f"Parsed timestamps: {len(extracted)}")
+    print(f"Parse failures   : {len(failures)}")
+    print(f"Duplicate rows   : {len(duplicates)}")
+    print()
+
+    counts = defaultdict(lambda: defaultdict(int))
+
+    for row in extracted:
+        year = int(row["source_local_date"][:4])
+        counts[year][row["family"]] += 1
+
+    print(f"{'YEAR':<6} {'GDP':>5} {'PCE':>5}")
+    print("-" * 18)
+
+    for year in range(2010, 2027):
+        print(
+            f"{year:<6} "
+            f"{counts[year]['GDP']:>5} "
+            f"{counts[year]['PCE']:>5}"
+        )
+
+    print()
+    print(f"Events     : {OUTPUT}")
+    print(f"Failures   : {FAILURES}")
+    print(f"Duplicates : {DUPLICATES}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
