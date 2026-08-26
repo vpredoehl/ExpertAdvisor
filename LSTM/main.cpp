@@ -51,6 +51,7 @@
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
 #include "EconomicEventImportService.hpp"
+#include "EconomicEventConsensusImport.hpp"
 #include "EconomicEventRepository.hpp"
 
 #ifndef EARLY_STOP_PATIENCE
@@ -7422,6 +7423,9 @@ int main(int argc, const char * argv[])
         return EA::ExperimentMetaAnalyzer::RunMetaAnalysisCli(argc, argv);
     if (EA::EconomicCalendar::IsEconomicEventImportCommand(argc, argv))
         return EA::EconomicCalendar::RunEconomicEventImportCli(argc, argv);
+    if (EA::EconomicCalendar::IsEconomicEventConsensusImportCommand(argc, argv))
+        return EA::EconomicCalendar::RunEconomicEventConsensusImportCli(
+            argc, argv);
     if (EA::ExperimentScheduler::IsExperimentSchedulerCommand(argc, argv))
         return EA::ExperimentScheduler::RunExperimentSchedulerCli(argc, argv);
 

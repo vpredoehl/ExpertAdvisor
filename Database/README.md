@@ -35,6 +35,17 @@ Applied migrations are tracked in `schema_migrations`:
 - `checksum text not null`
 - `applied_at timestamptz not null default now()`
 
+Economic-calendar enrichment persistence is created by:
+
+- `081_economic_event_consensus.sql`: one immutable, audited secondary-source
+  consensus row per authoritative `economic_event`, with source-scoped event
+  identity, raw forecast/previous/actual text, exact `numeric` parsed and
+  canonical endpoints, missing-value checks, match provenance, and import
+  time. The persistence-only CLI is
+  `--import-economic-consensus --input=<audited.csv> --dry-run|--apply`.
+  Exact retries are unchanged; conflicting retries fail closed. This migration
+  does not backfill rows or alter economic-event Tensor/model features.
+
 Experiment scheduling tables are created by:
 
 - `005_experiment_scheduler.sql`: `experiment`

@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0EC201003320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */; };
+		0EC201013320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */; };
+		0EC201023320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */; };
+		0EC201033320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */; };
 		0EC2002632E1000100AAA001 /* EconomicEventImportValidation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */; };
 		0EC2002732E1000100AAA001 /* EconomicEventImportRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001132C0000100AAA001 /* EconomicEventImportRepository.cpp */; };
 		0EC2002832E1000100AAA001 /* EconomicEventImportService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0EC2001232C0000100AAA001 /* EconomicEventImportService.cpp */; };
@@ -336,6 +340,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventConsensusImport.cpp; path = Sources/EconomicEventConsensusImport.cpp; sourceTree = SOURCE_ROOT; };
+		0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventConsensusImport.hpp; path = Sources/EconomicEventConsensusImport.hpp; sourceTree = SOURCE_ROOT; };
+		0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = EconomicEventConsensusRepository.cpp; path = Sources/EconomicEventConsensusRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0EC201133320000100AAA001 /* EconomicEventConsensusRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = EconomicEventConsensusRepository.hpp; path = Sources/EconomicEventConsensusRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0820370222B43B0D0025307B /* db_cursor.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = db_cursor.cpp; path = Common/db_cursor.cpp; sourceTree = SOURCE_ROOT; };
 		08403E922F1DD75E004742A5 /* Tensor.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Tensor.hpp; sourceTree = "<group>"; };
 		08403E942F1DD7C3004742A5 /* db_cursor_iterator.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = db_cursor_iterator.hpp; sourceTree = "<group>"; };
@@ -666,6 +674,10 @@
 			children = (
 				08B33BEA2F4213DB0015F9CF /* Answers.txt */,
 				084426892ED8E755002DEB21 /* main.cpp */,
+				0EC201103320000100AAA001 /* EconomicEventConsensusImport.cpp */,
+				0EC201113320000100AAA001 /* EconomicEventConsensusImport.hpp */,
+				0EC201123320000100AAA001 /* EconomicEventConsensusRepository.cpp */,
+				0EC201133320000100AAA001 /* EconomicEventConsensusRepository.hpp */,
 				0EC2001432C0000100AAA001 /* AuthoritativeEconomicEventCandidate.hpp */,
 				0EC2001032C0000100AAA001 /* EconomicEventImportValidation.cpp */,
 				0EC2001532C0000100AAA001 /* EconomicEventImportValidation.hpp */,
@@ -1091,6 +1103,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0EC201003320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */,
+				0EC201013320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */,
 				0EC2002632E1000100AAA001 /* EconomicEventImportValidation.cpp in Sources */,
 				0EC2002732E1000100AAA001 /* EconomicEventImportRepository.cpp in Sources */,
 				0EC2002832E1000100AAA001 /* EconomicEventImportService.cpp in Sources */,
@@ -1216,6 +1230,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0EC201023320000100AAA001 /* EconomicEventConsensusImport.cpp in Sources */,
+				0EC201033320000100AAA001 /* EconomicEventConsensusRepository.cpp in Sources */,
 				0EC2002032C0000100AAA001 /* EconomicEventImportValidation.cpp in Sources */,
 				0EC2002132C0000100AAA001 /* EconomicEventImportRepository.cpp in Sources */,
 				0EC2002232C0000100AAA001 /* EconomicEventImportService.cpp in Sources */,
