@@ -10,6 +10,8 @@ xcuserdata/
 .derived-data-log*
 # Generated analysis output
 *.csv
+!EconomicCalendar/raw/myfxbook/derived/
+!EconomicCalendar/raw/myfxbook/derived/*.csv
 *_results.csv
 experiment_logs/
 nohup.out

@@ -1,0 +1,107 @@
+{
+  "artifacts": {
+    "exclusions": "myfxbook_consensus_exclusions.csv",
+    "gap_fill_candidates": "myfxbook_oanda_gap_fill_candidates.csv",
+    "normalized_evidence": "myfxbook_consensus_normalized.csv",
+    "oanda_blank_reconciliation": "myfxbook_oanda_blank_reconciliation.csv"
+  },
+  "duplicates": {
+    "family_date_key_count": 5,
+    "family_date_keys": [
+      "EMPLOYMENT 2025-12-16",
+      "JOLTS 2025-12-09",
+      "PCE 2019-04-29",
+      "PCE 2026-01-22",
+      "PPI 2026-01-14"
+    ],
+    "observation_count": 10
+  },
+  "exclusions": {
+    "by_anomaly_type": {
+      "duplicate_family_date": 10,
+      "emergency_fomc_null_consensus": 2,
+      "gdp_null_consensus": 1,
+      "manual_review": 1,
+      "pce_null_consensus": 44
+    },
+    "rows": 58
+  },
+  "gap_fill_candidates": {
+    "by_family": {
+      "CPI": 0,
+      "DURABLE_GOODS": 0,
+      "EMPLOYMENT": 0,
+      "FOMC": 0,
+      "GDP": 0,
+      "JOLTS": 113,
+      "PCE": 0,
+      "PPI": 0,
+      "RETAIL_SALES": 0
+    },
+    "rows": 113
+  },
+  "inputs": {
+    "myfxbook_capture": {
+      "capture_extracted_at": "2026-08-26T15:48:54.341Z",
+      "capture_filename": "EconomicCalendar/raw/myfxbook/myfxbook_consensus_history.json",
+      "capture_sha256": "1538055386838d8ec50ab9cce40153f69aa8bf841c2ae50f67751b2c465432cb",
+      "endpoint": "calendar-chart-years-back.json",
+      "source": "myfxbook",
+      "years_back": 20
+    },
+    "oanda_matches": {
+      "filename": "EconomicCalendar/raw/oanda/oanda_consensus_matches.csv",
+      "sha256": "58e8e48189b674897845cac1cb4f9ef398900ae34194bd7215f568cf780f0e74"
+    }
+  },
+  "normalized_evidence": {
+    "by_canonical_family": {
+      "CPI": 161,
+      "DURABLE_GOODS": 162,
+      "EMPLOYMENT": 162,
+      "FOMC": 109,
+      "GDP": 158,
+      "JOLTS": 146,
+      "PCE": 154,
+      "PPI": 161,
+      "RETAIL_SALES": 162
+    },
+    "by_source_family": {
+      "CPI_MOM": 161,
+      "DURABLE_GOODS_MOM": 162,
+      "EMPLOYMENT_NFP": 162,
+      "FOMC_RATE": 109,
+      "GDP": 158,
+      "JOLTS": 146,
+      "PCE": 154,
+      "PPI_MOM": 161,
+      "RETAIL_SALES": 162
+    },
+    "classification_counts": {
+      "ambiguous_duplicate": 10,
+      "manual_review": 1,
+      "unique_null": 47,
+      "unique_populated": 1317
+    },
+    "rows": 1375,
+    "source_to_canonical_mapping": {
+      "CPI_MOM": "CPI",
+      "DURABLE_GOODS_MOM": "DURABLE_GOODS",
+      "EMPLOYMENT_NFP": "EMPLOYMENT",
+      "FOMC_RATE": "FOMC",
+      "GDP": "GDP",
+      "JOLTS": "JOLTS",
+      "PCE": "PCE",
+      "PPI_MOM": "PPI",
+      "RETAIL_SALES": "RETAIL_SALES"
+    }
+  },
+  "oanda_blank_reconciliation": {
+    "by_merge_classification": {
+      "myfxbook_no_match": 6,
+      "myfxbook_null": 2,
+      "myfxbook_populated_candidate": 3
+    },
+    "rows": 11
+  }
+}
