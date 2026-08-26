@@ -1,0 +1,9 @@
+check,count,status,detail
+input_rows,1416,PASS,Expected 1416 enrichment candidates
+economic_event_id_unique,0,PASS,Count is number of economic_event_id values whose row count is not exactly 1
+oanda_event_id_unique_mapping,0,PASS,Count is OANDA event IDs mapping to more than one official event
+period_rows_for_manual_review,1,REVIEW,Not automatically rejected; inspect the period mismatch artifact
+report_or_event_name_issues,0,PASS,Expected pinned report IDs and event names
+missing_forecasts,11,PASS,Expected exactly 11 preserved missing OANDA forecasts
+known_cpi_698_exception_rows,1,PASS,Expected exactly one CPI report-698 exception on 2025-12-18
+unexpected_nonstandard_report_rows,0,PASS,Must be zero if CPI-698 is the only nonstandard report mapping

@@ -1,0 +1,12 @@
+economic_event_id,event_family,event_timestamp_utc,source_release_date,reference_period,oanda_report_id,oanda_event_id,oanda_event,oanda_period,forecast_raw,actual_raw,previous_raw
+2301,RETAIL_SALES,2011-07-14T07:30:00-05:00,2011-07-14,June 2011,696,24144,Retail Sales,June,,0.1% m/m,-0.2% m/m
+81,PPI,2011-08-17T07:30:00-05:00,2011-08-17,July 2011,703,24466,Producer Price Index,July,,0.2% m/m,-0.4% m/m
+94,CPI,2011-11-16T07:30:00-06:00,2011-11-16,October 2011,699,24306,Consumer Price Index,October,,-0.1% m/m,0.3% m/m
+118,PPI,2012-05-11T07:30:00-05:00,2012-05-11,April 2012,703,24455,Producer Price Index,April,,-0.2% m/m,
+1659,PCE,2012-06-29T07:30:00-05:00,2012-06-29,May 2012,694,24031,Personal Consumption Expenditures,May,,,0.3% m/m
+127,CPI,2012-07-17T07:30:00-05:00,2012-07-17,June 2012,699,24291,Consumer Price Index,June,,,-0.3% m/m
+195,PPI,2013-12-13T07:30:00-06:00,2013-12-13,November 2013,703,38983,Producer Price Index,November,,"-0,1% m/m","-0,2% m/m"
+2211,FOMC,2020-03-03T09:00:00-06:00,2020-03-03,FOMC 2020-03-03,82,98040,FOMC Interest Rate Decision,March,,"1,00-1,25%","1,50-1,75%"
+2212,FOMC,2020-03-15T16:00:00-05:00,2020-03-15,FOMC 2020-03-15,82,98158,FOMC Interest Rate Decision,March,,"0-0,25%","1,00-1,25%"
+2569,RETAIL_SALES,2022-09-15T07:30:00-05:00,2022-09-15,August 2022,696,110600,Retail Sales,August,,"0,3% m/m",
+685,CPI,2023-12-12T07:30:00-06:00,2023-12-12,November 2023,699,118320,Consumer Price Index,November,,"0,1% m/m",

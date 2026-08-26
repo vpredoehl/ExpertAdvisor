@@ -1,0 +1,14 @@
+event_family,oanda_report_id,oanda_event,candidate_matches,currently_pinned
+CPI,698,Consumer Price Index,181,false
+CPI,699,Consumer Price Index,180,true
+DURABLE_GOODS,59,Durable Goods Orders - fin..,118,true
+DURABLE_GOODS,59,Durable Goods Orders - pre..,181,true
+EMPLOYMENT,707,Non-Farm Employment Change,181,true
+FOMC,82,FOMC Interest Rate Decision,122,true
+GDP,690,GDP (Annualized) - fin..,60,true
+GDP,690,GDP (Annualized) - pre..,61,true
+GDP,690,GDP (Annualized) - rev..,59,true
+JOLTS,1371,JOLTS Job Openings,33,true
+PCE,694,Personal Consumption Expenditures,181,true
+PPI,703,Producer Price Index,182,true
+RETAIL_SALES,696,Retail Sales,182,true

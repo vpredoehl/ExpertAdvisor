@@ -1,0 +1,4 @@
+economic_event_id,event_family,event_timestamp_utc,issue_type,detail
+779,CPI,2025-12-18T07:30:00-06:00,forecast_unexpected_qualifier,"expected=['m/m'];actual='y/y';raw='3,1% y/y'"
+779,CPI,2025-12-18T07:30:00-06:00,actual_unexpected_qualifier,"expected=['m/m'];actual='y/y';raw='2,7% y/y'"
+779,CPI,2025-12-18T07:30:00-06:00,previous_unexpected_qualifier,expected=['m/m'];actual='y/y';raw='3% y/y'

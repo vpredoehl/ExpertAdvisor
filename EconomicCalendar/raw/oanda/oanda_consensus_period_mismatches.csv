@@ -1,0 +1,2 @@
+economic_event_id,event_family,event_timestamp_utc,reference_period,oanda_period,period_status,period_detail,oanda_report_id,oanda_event_id,oanda_event,forecast_raw
+1979,PCE,2026-01-22T09:00:00-06:00,October and November 2025,November,mismatch_month,official_month=10;oanda_month=11,694,148841,Personal Consumption Expenditures,"0,5% m/m"
