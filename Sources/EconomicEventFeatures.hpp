@@ -35,6 +35,13 @@ inline constexpr std::string_view kEconomicEventFeatureCurrency = "USD";
 inline constexpr std::chrono::seconds kEconomicEventRecencyTimeConstant{
     24 * 60 * 60};
 
+// Static normalization constants. Canonical percentage values are percentage
+// points; count values have already had their persisted source scale applied.
+// These constants never depend on future observations or dataset statistics.
+inline constexpr double kEconomicPercentNormalizationScale = 10.0;
+inline constexpr double kEconomicEmploymentNormalizationScale = 1'000'000.0;
+inline constexpr double kEconomicJoltsNormalizationScale = 10'000'000.0;
+
 // Named fields are the authoritative public representation. Ordered() is the
 // stable append-only Tensor integration order used by both training and
 // inference.
@@ -52,12 +59,34 @@ struct EconomicEventFeatureValues
     float fedPolicyRecencyDecay = 0.0F;
     float consumerDemandRecencyDecay = 0.0F;
 
+    // Consensus context is the event exactly at the completed information
+    // cutoff, if any, otherwise the most recent causally released event. This
+    // avoids leaking a final pre-release forecast into arbitrarily early bars.
+    // Scalar forecasts duplicate their value in low/high; range forecasts
+    // retain both endpoints and set relevantEventConsensusIsRange.
+    float relevantEventHasConsensus = 0.0F;
+    float relevantEventConsensusLow = 0.0F;
+    float relevantEventConsensusHigh = 0.0F;
+    float relevantEventConsensusIsRange = 0.0F;
+
+    // Surprise is available only for the most recent released event and only
+    // when forecast/actual are compatible scalar semantics. The validity bit
+    // distinguishes missing/incompatible data from a true zero surprise.
+    float releasedEventHasSurprise = 0.0F;
+    float releasedEventSurprise = 0.0F;
+    float releasedEventSurpriseAbs = 0.0F;
+    float releasedEventSurpriseDirection = 0.0F;
+
     std::array<float, kEconomicEventFeatureWidth> Ordered() const noexcept;
 };
 
 EconomicEventModelFamily MapEconomicEventModelFamily(
     std::string_view sourceAgency,
     std::string_view canonicalEventFamily);
+
+double EconomicEventNormalizationScale(
+    std::string_view canonicalEventFamily,
+    std::string_view canonicalUnit);
 
 // Shared chronological implementation for future training and inference use.
 //
@@ -83,9 +112,13 @@ public:
 private:
     struct MappedEvent
     {
+        long long economicEventId = 0;
         PriceTP timestamp{};
         EconomicEventModelFamily family =
             EconomicEventModelFamily::inflation;
+        std::string eventFamily;
+        int eventImportance = 0;
+        std::optional<EconomicEventSelectedConsensus> selectedConsensus;
     };
 
     std::vector<MappedEvent> events_;
@@ -93,6 +126,8 @@ private:
 
     std::array<std::optional<PriceTP>, kEconomicEventModelFamilyCount>
         mostRecentEventTimes_{};
+
+    std::optional<std::size_t> mostRecentReleasedEventIndex_;
 
     std::optional<PriceTP> previousBarStart_;
 };

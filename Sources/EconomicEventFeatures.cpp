@@ -101,6 +101,155 @@ void SetDecay(
         "economic_event_feature_invalid_model_family");
 }
 
+
+bool ValidValueShape(
+    const EconomicEventConsensusValue& value)
+{
+    if (
+        !std::isfinite(value.canonicalValueLow) ||
+        !std::isfinite(value.scale) ||
+        value.scale <= 0.0)
+    {
+        return false;
+    }
+
+    if (value.valueKind == "scalar")
+        return !value.canonicalValueHigh;
+
+    return
+        value.valueKind == "range" &&
+        value.canonicalValueHigh &&
+        std::isfinite(*value.canonicalValueHigh) &&
+        value.canonicalValueLow <= *value.canonicalValueHigh;
+}
+
+
+template <typename MappedEvent>
+double Normalize(
+    const MappedEvent& event,
+    double canonicalValue)
+{
+    return canonicalValue /
+        EconomicEventNormalizationScale(
+            event.eventFamily,
+            event.selectedConsensus->forecast.unit);
+}
+
+
+template <typename MappedEvent>
+void SetConsensus(
+    EconomicEventFeatureValues& values,
+    const MappedEvent& event)
+{
+    if (!event.selectedConsensus)
+        return;
+
+    const EconomicEventConsensusValue& forecast =
+        event.selectedConsensus->forecast;
+
+    if (!ValidValueShape(forecast))
+    {
+        throw std::invalid_argument(
+            "economic_event_consensus_invalid_forecast_shape");
+    }
+
+    values.relevantEventHasConsensus = 1.0F;
+    values.relevantEventConsensusLow =
+        static_cast<float>(Normalize(event, forecast.canonicalValueLow));
+    values.relevantEventConsensusHigh =
+        static_cast<float>(Normalize(
+            event,
+            forecast.canonicalValueHigh.value_or(
+                forecast.canonicalValueLow)));
+    values.relevantEventConsensusIsRange =
+        forecast.valueKind == "range" ? 1.0F : 0.0F;
+}
+
+
+bool CompatibleScalarSurprise(
+    const EconomicEventSelectedConsensus& selected)
+{
+    if (!selected.actual)
+        return false;
+
+    const EconomicEventConsensusValue& forecast = selected.forecast;
+    const EconomicEventConsensusValue& actual = *selected.actual;
+
+    return
+        ValidValueShape(actual) &&
+        forecast.valueKind == "scalar" &&
+        actual.valueKind == "scalar" &&
+        forecast.unit == actual.unit &&
+        forecast.scale == actual.scale &&
+        forecast.qualifier == actual.qualifier;
+}
+
+
+template <typename MappedEvent>
+void SetSurprise(
+    EconomicEventFeatureValues& values,
+    const MappedEvent& event)
+{
+    if (
+        !event.selectedConsensus ||
+        !CompatibleScalarSurprise(*event.selectedConsensus))
+    {
+        return;
+    }
+
+    const double normalized = Normalize(
+        event,
+        event.selectedConsensus->actual->canonicalValueLow -
+            event.selectedConsensus->forecast.canonicalValueLow);
+
+    if (!std::isfinite(normalized))
+    {
+        throw std::invalid_argument(
+            "economic_event_consensus_nonfinite_surprise");
+    }
+
+    values.releasedEventHasSurprise = 1.0F;
+    values.releasedEventSurprise = static_cast<float>(normalized);
+    values.releasedEventSurpriseAbs =
+        static_cast<float>(std::abs(normalized));
+    values.releasedEventSurpriseDirection =
+        normalized > 0.0 ? 1.0F : normalized < 0.0 ? -1.0F : 0.0F;
+}
+
+
+template <typename MappedEvent>
+bool MoreRelevantAtSameTimestamp(
+    const MappedEvent& candidate,
+    const MappedEvent& selected)
+{
+    if (candidate.eventImportance != selected.eventImportance)
+        return candidate.eventImportance > selected.eventImportance;
+
+    return
+        candidate.economicEventId > 0 &&
+        selected.economicEventId > 0 &&
+        candidate.economicEventId < selected.economicEventId;
+}
+
+
+template <typename Events>
+std::size_t MostRelevantAtTimestamp(
+    const Events& events,
+    std::size_t first)
+{
+    std::size_t selected = first;
+    for (
+        std::size_t index = first + 1;
+        index < events.size() &&
+            events[index].timestamp == events[first].timestamp;
+        ++index)
+    {
+        if (MoreRelevantAtSameTimestamp(events[index], events[selected]))
+            selected = index;
+    }
+    return selected;
+}
+
 } // namespace
 
 
@@ -118,6 +267,14 @@ EconomicEventFeatureValues::Ordered() const noexcept
         growthRecencyDecay,
         fedPolicyRecencyDecay,
         consumerDemandRecencyDecay,
+        relevantEventHasConsensus,
+        relevantEventConsensusLow,
+        relevantEventConsensusHigh,
+        relevantEventConsensusIsRange,
+        releasedEventHasSurprise,
+        releasedEventSurprise,
+        releasedEventSurpriseAbs,
+        releasedEventSurpriseDirection,
     };
 }
 
@@ -173,6 +330,49 @@ EconomicEventModelFamily MapEconomicEventModelFamily(
 }
 
 
+double EconomicEventNormalizationScale(
+    std::string_view canonicalEventFamily,
+    std::string_view canonicalUnit)
+{
+    if (
+        canonicalEventFamily == "EMPLOYMENT" ||
+        canonicalEventFamily == "EMPLOYMENT_ANNUAL")
+    {
+        if (canonicalUnit != "count")
+            throw std::invalid_argument(
+                "economic_event_employment_consensus_unit_mismatch");
+        return kEconomicEmploymentNormalizationScale;
+    }
+
+    if (canonicalEventFamily == "JOLTS")
+    {
+        if (canonicalUnit != "count")
+            throw std::invalid_argument(
+                "economic_event_jolts_consensus_unit_mismatch");
+        return kEconomicJoltsNormalizationScale;
+    }
+
+    if (
+        canonicalEventFamily == "CPI" ||
+        canonicalEventFamily == "PPI" ||
+        canonicalEventFamily == "PCE" ||
+        canonicalEventFamily == "GDP" ||
+        canonicalEventFamily == "DURABLE_GOODS" ||
+        canonicalEventFamily == "RETAIL_SALES" ||
+        canonicalEventFamily == "FOMC")
+    {
+        if (canonicalUnit != "percent")
+            throw std::invalid_argument(
+                "economic_event_percent_consensus_unit_mismatch");
+        return kEconomicPercentNormalizationScale;
+    }
+
+    throw std::invalid_argument(
+        "unsupported_economic_event_consensus_family:" +
+        std::string{canonicalEventFamily});
+}
+
+
 EconomicEventFeatureEngine::EconomicEventFeatureEngine(
     std::vector<EconomicEvent> chronologicalEvents)
 {
@@ -196,10 +396,27 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
 
         events_.push_back(
             MappedEvent{
+                event.economicEventId,
                 eventTime,
                 MapEconomicEventModelFamily(
                     event.sourceAgency,
-                    event.eventFamily)});
+                    event.eventFamily),
+                event.eventFamily,
+                event.eventImportance,
+                event.selectedConsensus});
+
+        if (event.selectedConsensus)
+        {
+            const EconomicEventConsensusValue& forecast =
+                event.selectedConsensus->forecast;
+            if (!ValidValueShape(forecast))
+                throw std::invalid_argument(
+                    "economic_event_consensus_invalid_forecast_shape");
+
+            (void)EconomicEventNormalizationScale(
+                event.eventFamily,
+                forecast.unit);
+        }
 
         previousEventTime = eventTime;
     }
@@ -232,6 +449,23 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
 
         mostRecentEventTimes_[FamilyIndex(event.family)] =
             event.timestamp;
+
+        if (!mostRecentReleasedEventIndex_)
+        {
+            mostRecentReleasedEventIndex_ = nextEventIndex_;
+        }
+        else
+        {
+            const MappedEvent& selected =
+                events_[*mostRecentReleasedEventIndex_];
+            if (
+                selected.timestamp < event.timestamp ||
+                (selected.timestamp == event.timestamp &&
+                 MoreRelevantAtSameTimestamp(event, selected)))
+            {
+                mostRecentReleasedEventIndex_ = nextEventIndex_;
+            }
+        }
 
         // A current-bar indicator describes an event contained in this actual
         // observed bar: [barStart, barStart + 15m). An event learned across a
@@ -273,6 +507,30 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
             values,
             static_cast<EconomicEventModelFamily>(index),
             static_cast<float>(decay));
+    }
+
+    // Final pre-release consensus is exposed only when the completed
+    // information cutoff is exactly the authoritative release timestamp. On
+    // all other bars, consensus and surprise describe the same most-recent
+    // released event. This makes a provider's final historical forecast
+    // impossible to leak into arbitrarily early bars when no historical
+    // provider-observation timestamp exists.
+    const bool exactBoundaryEvent =
+        nextEventIndex_ < events_.size() &&
+        events_[nextEventIndex_].timestamp == informationCutoff;
+
+    if (exactBoundaryEvent)
+    {
+        const std::size_t relevant =
+            MostRelevantAtTimestamp(events_, nextEventIndex_);
+        SetConsensus(values, events_[relevant]);
+    }
+    else if (mostRecentReleasedEventIndex_)
+    {
+        const MappedEvent& relevant =
+            events_[*mostRecentReleasedEventIndex_];
+        SetConsensus(values, relevant);
+        SetSurprise(values, relevant);
     }
 
     previousBarStart_ = barStart;

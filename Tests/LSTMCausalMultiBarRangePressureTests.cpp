@@ -112,11 +112,11 @@ void TestTensorIntegrationCausalityAndAblation()
 {
     static_assert(causalMultiBarRangePressureCol == 45);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 59);
+    static_assert(feature_size == 67);
     static_assert(EA::kCausalDirectionalAdverseExcursionModelInputWidth == 49);
     static_assert(EA::kCausalMultiBarRangePressureModelInputWidth == 50);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 63);
+    static_assert(EA::kCurrentModelInputWidth == 71);
 
     Tensor tensor{"causal-multi-bar-range-pressure"};
     for (std::size_t row = 0; row < 15; ++row)

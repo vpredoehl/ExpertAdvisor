@@ -17,8 +17,20 @@ enum class EconomicEventFeatureIndex : std::size_t
     growthRecencyDecay = 7,
     fedPolicyRecencyDecay = 8,
     consumerDemandRecencyDecay = 9,
+    relevantEventHasConsensus = 10,
+    relevantEventConsensusLow = 11,
+    relevantEventConsensusHigh = 12,
+    relevantEventConsensusIsRange = 13,
+    releasedEventHasSurprise = 14,
+    releasedEventSurprise = 15,
+    releasedEventSurpriseAbs = 16,
+    releasedEventSurpriseDirection = 17,
 };
 
-inline constexpr std::size_t kEconomicEventFeatureWidth = 10;
+inline constexpr std::size_t kPreConsensusEconomicEventFeatureWidth = 10;
+inline constexpr std::size_t kEconomicEventConsensusFeatureWidth = 8;
+inline constexpr std::size_t kEconomicEventFeatureWidth =
+    kPreConsensusEconomicEventFeatureWidth +
+    kEconomicEventConsensusFeatureWidth;
 
 } // namespace EA::EconomicCalendar

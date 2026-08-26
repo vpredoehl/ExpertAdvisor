@@ -219,11 +219,11 @@ void TestTensorParityAblationAndHistoricalPrefix()
     static_assert(historicalLevelProximityCol == 47);
     static_assert(returnAutocorrelationCol == 48);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 59);
+    static_assert(feature_size == 67);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
     static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 63);
+    static_assert(EA::kCurrentModelInputWidth == 71);
 
     const auto closes = ClosesForReturns(NegativeReturns());
     Tensor trainingTensor = TensorForCloses("autocorrelation-training", closes);
@@ -297,7 +297,15 @@ void TestGenericInputWidthExpansion()
                 "employment_recency_decay",
                 "growth_recency_decay",
                 "fed_policy_recency_decay",
-                "consumer_demand_recency_decay"}));
+                "consumer_demand_recency_decay",
+                "relevant_event_has_consensus",
+                "relevant_event_consensus_low",
+                "relevant_event_consensus_high",
+                "relevant_event_consensus_is_range",
+                "released_event_has_surprise",
+                "released_event_surprise",
+                "released_event_surprise_abs",
+                "released_event_surprise_direction"}));
 
     std::vector<float> source(
         (plan.sourceInputWidth + hiddenSize) * gateColumns);

@@ -10,6 +10,26 @@
 namespace EA::EconomicCalendar
 {
 
+struct EconomicEventConsensusValue
+{
+    std::string valueKind;
+    double canonicalValueLow = 0.0;
+    std::optional<double> canonicalValueHigh;
+    std::string unit;
+    double scale = 0.0;
+    std::optional<std::string> qualifier;
+};
+
+struct EconomicEventSelectedConsensus
+{
+    EconomicEventConsensusValue forecast;
+    std::optional<EconomicEventConsensusValue> actual;
+
+    // Retained for diagnostics and repository tests only. Feature computation
+    // deliberately ignores provider identity and all provider provenance.
+    std::string provider;
+};
+
 struct EconomicEvent
 {
     long long economicEventId = 0;
@@ -35,6 +55,10 @@ struct EconomicEvent
     std::optional<std::string> sourceReleaseDate;
     std::optional<std::string> sourceReleaseTime;
     std::optional<std::string> sourceTimezone;
+
+    // Populated only by the provider-neutral selected-consensus abstraction.
+    // Events without a selected forecast remain std::nullopt.
+    std::optional<EconomicEventSelectedConsensus> selectedConsensus;
 };
 
 bool EconomicEventSchemaExists(
@@ -46,11 +70,14 @@ std::vector<EconomicEvent> LoadEconomicEvents(
     const std::string& startUtc,
     const std::string& endUtc);
 
-// Load every event in [startUtc, endUtc), plus the latest event before
+// Load every event in [startUtc, endUtc], plus the latest event before
 // startUtc for each authoritative (agency, canonical-family) stream. The
 // chronological feature engine then deterministically reduces those prior
 // rows to the latest state of each model-facing family. This exact seed query
 // avoids an arbitrary recency lookback and remains one ordered database query.
+// The inclusive end boundary supplies consensus to the final completed bar
+// when a release occurs exactly at that bar's information cutoff; the strict
+// feature-engine release test still prevents actual/surprise leakage.
 std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     pqxx::transaction_base& transaction,
     const std::string& currency,

@@ -92,6 +92,33 @@ inline constexpr std::size_t fedPolicyRecencyDecayCol =
 inline constexpr std::size_t consumerDemandRecencyDecayCol =
     economicEventFeatureStartCol + static_cast<std::size_t>(
         EA::EconomicCalendar::EconomicEventFeatureIndex::consumerDemandRecencyDecay);
+inline constexpr std::size_t relevantEventHasConsensusCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::relevantEventHasConsensus);
+inline constexpr std::size_t relevantEventConsensusLowCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::relevantEventConsensusLow);
+inline constexpr std::size_t relevantEventConsensusHighCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::relevantEventConsensusHigh);
+inline constexpr std::size_t relevantEventConsensusIsRangeCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::relevantEventConsensusIsRange);
+inline constexpr std::size_t releasedEventHasSurpriseCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::releasedEventHasSurprise);
+inline constexpr std::size_t releasedEventSurpriseCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::releasedEventSurprise);
+inline constexpr std::size_t releasedEventSurpriseAbsCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::releasedEventSurpriseAbs);
+inline constexpr std::size_t releasedEventSurpriseDirectionCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::releasedEventSurpriseDirection);
+inline constexpr std::size_t pre_consensus_economic_event_feature_size =
+    economicEventFeatureStartCol +
+    EA::EconomicCalendar::kPreConsensusEconomicEventFeatureWidth;
 inline constexpr std::size_t economic_event_feature_size =
     economicEventFeatureStartCol +
     EA::EconomicCalendar::kEconomicEventFeatureWidth;
@@ -102,5 +129,7 @@ static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
 static_assert(feature_size == return_autocorrelation_feature_size +
               EA::EconomicCalendar::kEconomicEventFeatureWidth);
+static_assert(relevantEventHasConsensusCol ==
+              pre_consensus_economic_event_feature_size);
 
 #endif /* FeatureLayout_hpp */

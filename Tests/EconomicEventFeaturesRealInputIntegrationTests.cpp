@@ -149,18 +149,26 @@ void AssertRanges(
     const auto ordered = values.Ordered();
 
     for (std::size_t index = 0; index < ordered.size(); ++index)
-    {
         assert(std::isfinite(ordered[index]));
-        assert(ordered[index] >= 0.0F);
-        assert(ordered[index] <= 1.0F);
 
-        if (index < kEconomicEventModelFamilyCount)
-        {
-            assert(
-                ordered[index] == 0.0F ||
-                ordered[index] == 1.0F);
-        }
-    }
+    for (std::size_t index = 0; index < kEconomicEventModelFamilyCount; ++index)
+        assert(ordered[index] == 0.0F || ordered[index] == 1.0F);
+
+    for (std::size_t index = kEconomicEventModelFamilyCount;
+         index < kPreConsensusEconomicEventFeatureWidth;
+         ++index)
+        assert(ordered[index] >= 0.0F && ordered[index] <= 1.0F);
+
+    assert(values.relevantEventHasConsensus == 0.0F ||
+           values.relevantEventHasConsensus == 1.0F);
+    assert(values.relevantEventConsensusIsRange == 0.0F ||
+           values.relevantEventConsensusIsRange == 1.0F);
+    assert(values.releasedEventHasSurprise == 0.0F ||
+           values.releasedEventHasSurprise == 1.0F);
+    assert(values.releasedEventSurpriseAbs >= 0.0F);
+    assert(values.releasedEventSurpriseDirection == -1.0F ||
+           values.releasedEventSurpriseDirection == 0.0F ||
+           values.releasedEventSurpriseDirection == 1.0F);
 }
 
 } // namespace

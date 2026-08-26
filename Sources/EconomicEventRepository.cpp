@@ -102,14 +102,58 @@ EconomicEvent MapEconomicEvent(const pqxx::row& row)
             row,
             "source_timezone");
 
+    if (!row["consensus_value_low"].is_null())
+    {
+        EconomicEventSelectedConsensus selected;
+        selected.forecast.valueKind =
+            row["consensus_value_kind"].as<std::string>();
+        selected.forecast.canonicalValueLow =
+            row["consensus_value_low"].as<double>();
+        selected.forecast.canonicalValueHigh =
+            OptionalValue<double>(row, "consensus_value_high");
+        selected.forecast.unit =
+            row["consensus_unit"].as<std::string>();
+        selected.forecast.scale =
+            row["consensus_scale"].as<double>();
+        selected.forecast.qualifier =
+            OptionalValue<std::string>(row, "consensus_qualifier");
+        selected.provider =
+            row["consensus_source"].as<std::string>();
+
+        if (row["selected_actual_parse_status"].as<std::string>() == "parsed")
+        {
+            EconomicEventConsensusValue actual;
+            actual.valueKind =
+                row["selected_actual_value_kind"].as<std::string>();
+            actual.canonicalValueLow =
+                row["selected_actual_value_low"].as<double>();
+            actual.canonicalValueHigh = OptionalValue<double>(
+                row, "selected_actual_value_high");
+            actual.unit =
+                row["selected_actual_unit"].as<std::string>();
+            actual.scale =
+                row["selected_actual_scale"].as<double>();
+            actual.qualifier = OptionalValue<std::string>(
+                row, "selected_actual_qualifier");
+            selected.actual = std::move(actual);
+        }
+
+        event.selectedConsensus = std::move(selected);
+    }
+
     return event;
 }
 
-std::string EconomicEventProjection(std::string_view relation)
+std::string EconomicEventProjection(
+    std::string_view eventRelation,
+    std::string_view consensusRelation)
 {
-    const std::string prefix = relation.empty()
+    const std::string prefix = eventRelation.empty()
         ? std::string{}
-        : std::string{relation} + ".";
+        : std::string{eventRelation} + ".";
+    const std::string consensusPrefix = consensusRelation.empty()
+        ? std::string{}
+        : std::string{consensusRelation} + ".";
 
     return
         prefix + "economic_event_id, " +
@@ -130,7 +174,23 @@ std::string EconomicEventProjection(std::string_view relation)
         prefix + "historical_time_confidence, " +
         prefix + "source_release_date::text AS source_release_date, " +
         prefix + "source_release_time::text AS source_release_time, " +
-        prefix + "source_timezone ";
+        prefix + "source_timezone, " +
+        consensusPrefix + "consensus_value_low, " +
+        consensusPrefix + "consensus_value_high, " +
+        consensusPrefix + "consensus_value_kind, " +
+        consensusPrefix + "consensus_unit, " +
+        consensusPrefix + "consensus_scale, " +
+        consensusPrefix + "consensus_qualifier, " +
+        consensusPrefix + "consensus_source, " +
+        "COALESCE(" + consensusPrefix +
+            "selected_actual_parse_status, 'missing') "
+            "AS selected_actual_parse_status, " +
+        consensusPrefix + "selected_actual_value_low, " +
+        consensusPrefix + "selected_actual_value_high, " +
+        consensusPrefix + "selected_actual_value_kind, " +
+        consensusPrefix + "selected_actual_unit, " +
+        consensusPrefix + "selected_actual_scale, " +
+        consensusPrefix + "selected_actual_qualifier ";
 }
 
 std::vector<EconomicEvent> MapEconomicEvents(const pqxx::result& rows)
@@ -182,14 +242,16 @@ std::vector<EconomicEvent> LoadEconomicEvents(
     // depends on the active PostgreSQL session timezone.
     //
     const pqxx::result rows = transaction.exec(
-        "SELECT " + EconomicEventProjection("") +
-        "FROM economic_event "
-        "WHERE currency = $1 "
-        "AND event_timestamp_utc >= $2::timestamptz "
-        "AND event_timestamp_utc < $3::timestamptz "
+        "SELECT " + EconomicEventProjection("e", "c") +
+        "FROM economic_event e "
+        "LEFT JOIN economic_event_selected_consensus c "
+        "USING (economic_event_id) "
+        "WHERE e.currency = $1 "
+        "AND e.event_timestamp_utc >= $2::timestamptz "
+        "AND e.event_timestamp_utc < $3::timestamptz "
         "ORDER BY "
-        "event_timestamp_utc ASC, "
-        "economic_event_id ASC;",
+        "e.event_timestamp_utc ASC, "
+        "e.economic_event_id ASC;",
         pqxx::params{
             currency,
             startUtc,
@@ -229,9 +291,11 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
         "SELECT e.* FROM economic_event e "
         "WHERE e.currency = $1 "
         "AND e.event_timestamp_utc >= $2::timestamptz "
-        "AND e.event_timestamp_utc < $3::timestamptz"
-        ") SELECT " + EconomicEventProjection("e") +
+        "AND e.event_timestamp_utc <= $3::timestamptz"
+        ") SELECT " + EconomicEventProjection("e", "c") +
         "FROM selected_event e "
+        "LEFT JOIN economic_event_selected_consensus c "
+        "USING (economic_event_id) "
         "ORDER BY e.event_timestamp_utc ASC, e.economic_event_id ASC;",
         pqxx::params{
             currency,

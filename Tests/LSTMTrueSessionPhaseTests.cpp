@@ -88,13 +88,13 @@ std::array<float, kModelWidth> BuildInferenceRow(const Tensor& tensor,
 void TestUtcPhaseFormulaAndPeriodicity()
 {
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 59);
+    static_assert(feature_size == 67);
     static_assert(sessionPhaseSinCol == 34);
     static_assert(sessionPhaseCosCol == 35);
     static_assert(relativeTickVolumeCol == 36);
     static_assert(causalReturnSurpriseCol == 37);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 63);
+    static_assert(EA::kCurrentModelInputWidth == 71);
 
     const PriceTP midnight{};
     const std::array<std::pair<long long, std::pair<float, float>>, 4> quarters{{

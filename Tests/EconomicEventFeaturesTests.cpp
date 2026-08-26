@@ -41,6 +41,56 @@ EconomicEvent EventAt(
 }
 
 
+EconomicEvent ScalarConsensusEventAt(
+    std::int64_t seconds,
+    std::string agency,
+    std::string family,
+    std::string provider,
+    double forecast,
+    std::optional<double> actual,
+    std::string unit,
+    double sourceScale,
+    std::optional<std::string> qualifier = std::nullopt)
+{
+    EconomicEvent event = EventAt(
+        seconds,
+        std::move(agency),
+        std::move(family));
+    EconomicEventSelectedConsensus selected;
+    selected.provider = std::move(provider);
+    selected.forecast = EconomicEventConsensusValue{
+        "scalar", forecast, std::nullopt, unit, sourceScale, qualifier};
+    if (actual)
+    {
+        selected.actual = EconomicEventConsensusValue{
+            "scalar", *actual, std::nullopt, std::move(unit), sourceScale,
+            std::move(qualifier)};
+    }
+    event.selectedConsensus = std::move(selected);
+    return event;
+}
+
+
+EconomicEvent RangeConsensusEventAt(
+    std::int64_t seconds,
+    double forecastLow,
+    double forecastHigh,
+    double actualLow,
+    double actualHigh)
+{
+    EconomicEvent event = EventAt(
+        seconds, "FEDERAL_RESERVE", "FOMC");
+    EconomicEventSelectedConsensus selected;
+    selected.provider = "OANDA";
+    selected.forecast = EconomicEventConsensusValue{
+        "range", forecastLow, forecastHigh, "percent", 1.0, std::nullopt};
+    selected.actual = EconomicEventConsensusValue{
+        "range", actualLow, actualHigh, "percent", 1.0, std::nullopt};
+    event.selectedConsensus = std::move(selected);
+    return event;
+}
+
+
 bool Near(
     float actual,
     double expected,
@@ -84,7 +134,9 @@ void AssertInvalidArgument(Function&& function)
 int main()
 {
     static_assert(kEconomicEventModelFamilyCount == 5);
-    static_assert(kEconomicEventFeatureWidth == 10);
+    static_assert(kPreConsensusEconomicEventFeatureWidth == 10);
+    static_assert(kEconomicEventConsensusFeatureWidth == 8);
+    static_assert(kEconomicEventFeatureWidth == 18);
 
     // All ten authoritative canonical families map explicitly.
     const std::array mappings{
@@ -263,7 +315,9 @@ int main()
             static_cast<float>(
                 std::exp(-900.0 / 86400.0));
 
-        for (std::size_t index = 5; index < values.Ordered().size(); ++index)
+        for (std::size_t index = 5;
+             index < kPreConsensusEconomicEventFeatureWidth;
+             ++index)
             assert(Near(values.Ordered()[index], expected));
     }
 
@@ -334,19 +388,169 @@ int main()
         values.growthRecencyDecay = 8.0F;
         values.fedPolicyRecencyDecay = 9.0F;
         values.consumerDemandRecencyDecay = 10.0F;
+        values.relevantEventHasConsensus = 11.0F;
+        values.relevantEventConsensusLow = 12.0F;
+        values.relevantEventConsensusHigh = 13.0F;
+        values.relevantEventConsensusIsRange = 14.0F;
+        values.releasedEventHasSurprise = 15.0F;
+        values.releasedEventSurprise = 16.0F;
+        values.releasedEventSurpriseAbs = 17.0F;
+        values.releasedEventSurpriseDirection = 18.0F;
 
         const std::array<float, kEconomicEventFeatureWidth> expected{
             1.0F, 2.0F, 3.0F, 4.0F, 5.0F,
-            6.0F, 7.0F, 8.0F, 9.0F, 10.0F};
+            6.0F, 7.0F, 8.0F, 9.0F, 10.0F,
+            11.0F, 12.0F, 13.0F, 14.0F,
+            15.0F, 16.0F, 17.0F, 18.0F};
 
         assert(values.Ordered() == expected);
     }
 
-    // Separate instances produce bit-identical output for train/infer parity.
+
+    // Provider identity is diagnostic-only: equal selected forecast semantics
+    // from OANDA and Myfxbook produce bit-identical model features. The exact
+    // boundary row knows the final consensus but not the release actual.
+    {
+        const EconomicEvent oanda = ScalarConsensusEventAt(
+            kBase + 900, "BLS", "CPI", "OANDA", 0.3, std::nullopt,
+            "percent", 1.0, "m/m");
+        const EconomicEvent myfxbook = ScalarConsensusEventAt(
+            kBase + 900, "BLS", "CPI", "MYFXBOOK", 0.3, std::nullopt,
+            "percent", 1.0, "m/m");
+
+        EconomicEventFeatureEngine oandaEngine{{oanda}};
+        EconomicEventFeatureEngine myfxbookEngine{{myfxbook}};
+        const auto oandaValues = oandaEngine.AdvanceCompletedBar(At(kBase));
+        const auto myfxbookValues =
+            myfxbookEngine.AdvanceCompletedBar(At(kBase));
+
+        assert(oandaValues.Ordered() == myfxbookValues.Ordered());
+        assert(oandaValues.relevantEventHasConsensus == 1.0F);
+        assert(Near(oandaValues.relevantEventConsensusLow, 0.03));
+        assert(Near(oandaValues.relevantEventConsensusHigh, 0.03));
+        assert(oandaValues.relevantEventConsensusIsRange == 0.0F);
+        assert(oandaValues.releasedEventHasSurprise == 0.0F);
+    }
+
+    // A final forecast is not projected into arbitrarily early bars. It first
+    // appears at the exact release cutoff; actual-minus-consensus is delayed
+    // until the event is strictly causal under the existing alignment rule.
+    {
+        const EconomicEvent event = ScalarConsensusEventAt(
+            kBase + 1800, "BLS", "PPI", "OANDA", 0.2, 0.5,
+            "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine engine{{event}};
+
+        const auto tooEarly = engine.AdvanceCompletedBar(At(kBase));
+        AssertAllZero(tooEarly);
+
+        const auto exactRelease =
+            engine.AdvanceCompletedBar(At(kBase + 900));
+        assert(exactRelease.relevantEventHasConsensus == 1.0F);
+        assert(Near(exactRelease.relevantEventConsensusLow, 0.02));
+        assert(exactRelease.releasedEventHasSurprise == 0.0F);
+
+        const auto released =
+            engine.AdvanceCompletedBar(At(kBase + 1800));
+        assert(released.relevantEventHasConsensus == 1.0F);
+        assert(released.releasedEventHasSurprise == 1.0F);
+        assert(Near(released.releasedEventSurprise, 0.03));
+        assert(Near(released.releasedEventSurpriseAbs, 0.03));
+        assert(released.releasedEventSurpriseDirection == 1.0F);
+    }
+
+    // Positive/negative direction and the explicit zero-surprise validity bit.
+    {
+        EconomicEventFeatureEngine negative{{ScalarConsensusEventAt(
+            kBase, "CENSUS", "RETAIL_SALES", "OANDA", 0.4, -0.1,
+            "percent", 1.0, "m/m")}};
+        const auto negativeValues =
+            negative.AdvanceCompletedBar(At(kBase));
+        assert(negativeValues.releasedEventHasSurprise == 1.0F);
+        assert(Near(negativeValues.releasedEventSurprise, -0.05));
+        assert(Near(negativeValues.releasedEventSurpriseAbs, 0.05));
+        assert(negativeValues.releasedEventSurpriseDirection == -1.0F);
+
+        EconomicEventFeatureEngine zero{{ScalarConsensusEventAt(
+            kBase, "BEA", "GDP", "OANDA", 2.0, 2.0,
+            "percent", 1.0)}};
+        const auto zeroValues = zero.AdvanceCompletedBar(At(kBase));
+        assert(zeroValues.releasedEventHasSurprise == 1.0F);
+        assert(zeroValues.releasedEventSurprise == 0.0F);
+        assert(zeroValues.releasedEventSurpriseAbs == 0.0F);
+        assert(zeroValues.releasedEventSurpriseDirection == 0.0F);
+    }
+
+    // Fixed count-family scales are family-specific and dataset-independent.
+    {
+        EconomicEventFeatureEngine employment{{ScalarConsensusEventAt(
+            kBase, "BLS", "EMPLOYMENT", "OANDA", 200'000.0, 250'000.0,
+            "count", 1000.0)}};
+        const auto employmentValues =
+            employment.AdvanceCompletedBar(At(kBase));
+        assert(Near(employmentValues.relevantEventConsensusLow, 0.2));
+        assert(Near(employmentValues.releasedEventSurprise, 0.05));
+
+        EconomicEventFeatureEngine jolts{{ScalarConsensusEventAt(
+            kBase, "BLS", "JOLTS", "MYFXBOOK", 9'250'000.0,
+            std::nullopt, "count", 1.0)}};
+        const auto joltsValues = jolts.AdvanceCompletedBar(At(kBase));
+        assert(Near(joltsValues.relevantEventConsensusLow, 0.925));
+        assert(joltsValues.releasedEventHasSurprise == 0.0F);
+    }
+
+    // FOMC endpoints are preserved independently. Range surprise is explicitly
+    // unavailable; no midpoint or interval subtraction is invented.
+    {
+        EconomicEventFeatureEngine fomc{{RangeConsensusEventAt(
+            kBase, 5.25, 5.5, 5.0, 5.25)}};
+        const auto values = fomc.AdvanceCompletedBar(At(kBase));
+        assert(values.relevantEventHasConsensus == 1.0F);
+        assert(values.relevantEventConsensusIsRange == 1.0F);
+        assert(Near(values.relevantEventConsensusLow, 0.525));
+        assert(Near(values.relevantEventConsensusHigh, 0.55));
+        assert(values.releasedEventHasSurprise == 0.0F);
+    }
+
+    // Valid but incompatible selected actual semantics cannot silently produce
+    // a surprise. Consensus remains usable and absence is explicit.
+    {
+        EconomicEvent incompatible = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.3, 0.4,
+            "percent", 1.0, "m/m");
+        incompatible.selectedConsensus->actual->qualifier = "y/y";
+        EconomicEventFeatureEngine engine{{incompatible}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+        assert(values.relevantEventHasConsensus == 1.0F);
+        assert(values.releasedEventHasSurprise == 0.0F);
+        assert(values.releasedEventSurprise == 0.0F);
+    }
+
+    // Missing selected consensus, including the two emergency FOMC release
+    // dates, remains the all-zero missing encoding.
+    for (const std::string& releaseDate : {"2020-03-03", "2020-03-15"})
+    {
+        EconomicEvent emergency =
+            EventAt(kBase, "FEDERAL_RESERVE", "FOMC");
+        emergency.sourceReleaseDate = releaseDate;
+        EconomicEventFeatureEngine engine{{emergency}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+        assert(values.relevantEventHasConsensus == 0.0F);
+        assert(values.relevantEventConsensusLow == 0.0F);
+        assert(values.relevantEventConsensusHigh == 0.0F);
+        assert(values.releasedEventHasSurprise == 0.0F);
+    }
+
+    // Separate instances produce bit-identical consensus and surprise output
+    // for train/infer parity.
     {
         const std::vector<EconomicEvent> events{
-            EventAt(kBase, "BLS", "EMPLOYMENT"),
-            EventAt(kBase + 900, "CENSUS", "DURABLE_GOODS"),
+            ScalarConsensusEventAt(
+                kBase, "BLS", "EMPLOYMENT", "OANDA", 200'000.0,
+                250'000.0, "count", 1000.0),
+            ScalarConsensusEventAt(
+                kBase + 900, "CENSUS", "DURABLE_GOODS", "MYFXBOOK",
+                0.4, std::nullopt, "percent", 1.0, "m/m"),
         };
 
         EconomicEventFeatureEngine training{events};

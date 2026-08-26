@@ -47,6 +47,15 @@ createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 "$DB_NAME"
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" \
     -f "$ROOT/Database/migrations/072_economic_event.sql" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/081_economic_event_consensus.sql" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/083_economic_event_selected_consensus_release_semantics.sql" >/dev/null
 
 LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" LSTM_DB_NAME="$DB_NAME" \
     "$BIN"

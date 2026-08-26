@@ -36,6 +36,24 @@ EconomicEvent EventAt(std::int64_t seconds,
     return event;
 }
 
+EconomicEvent ConsensusEventAt(std::int64_t seconds,
+                               std::string agency,
+                               std::string family,
+                               double forecast,
+                               double actual)
+{
+    EconomicEvent event = EventAt(
+        seconds, std::move(agency), std::move(family));
+    EconomicEventSelectedConsensus selected;
+    selected.provider = "OANDA";
+    selected.forecast = EconomicEventConsensusValue{
+        "scalar", forecast, std::nullopt, "percent", 1.0, std::nullopt};
+    selected.actual = EconomicEventConsensusValue{
+        "scalar", actual, std::nullopt, "percent", 1.0, std::nullopt};
+    event.selectedConsensus = std::move(selected);
+    return event;
+}
+
 Feature BarAt(std::int64_t seconds, std::size_t index)
 {
     const float base = 1.0F + static_cast<float>(index) * 0.001F;
@@ -64,12 +82,14 @@ int main()
 {
     static_assert(return_autocorrelation_feature_size == 49);
     static_assert(economicEventFeatureStartCol == 49);
-    static_assert(feature_size == 59);
+    static_assert(pre_consensus_economic_event_feature_size == 59);
+    static_assert(feature_size == 67);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 63);
+    static_assert(EA::kEconomicEventModelInputWidth == 63);
+    static_assert(EA::kCurrentModelInputWidth == 71);
     static_assert(EA::kCurrentModelInputWidth ==
-                  EA::kPreEconomicEventModelInputWidth +
-                  kEconomicEventFeatureWidth);
+                  EA::kEconomicEventModelInputWidth +
+                  kEconomicEventConsensusFeatureWidth);
 
     // Pre-window state is reconstructed from authoritative prior rows. The
     // first requested bar has no occurrence indicator but has exact nonzero
@@ -90,10 +110,10 @@ int main()
                 std::exp(-2700.0 / 86400.0)));
 
     // Compare an event-enabled Tensor to the unchanged prefix produced by the
-    // pre-Phase-2 pipeline. Only the final ten columns may differ.
+    // pre-economic-event pipeline. Only the final eighteen columns may differ.
     const std::vector<EconomicEvent> causalEvents{
         EventAt(kBase + 100, "FEDERAL_RESERVE", "FOMC"),
-        EventAt(kBase + 900, "BEA", "GDP"),
+        ConsensusEventAt(kBase + 900, "BEA", "GDP", 2.0, 2.5),
         EventAt(kBase + 2700, "CENSUS", "RETAIL_SALES"),
     };
     Tensor withEvents{"with-events", kDefaultDonchian20Mode,
@@ -125,7 +145,13 @@ int main()
     const auto bar3 = Row(withEvents, 3);
     assert(bar0[fedPolicyEventCol] == 1.0F);       // inside the completed bar
     assert(bar0[growthEventCol] == 0.0F);          // exact cutoff is excluded
+    assert(bar0[relevantEventHasConsensusCol] == 1.0F);
+    assert(Near(bar0[relevantEventConsensusLowCol], 0.2));
+    assert(bar0[releasedEventHasSurpriseCol] == 0.0F);
     assert(bar1[growthEventCol] == 1.0F);          // bar-start event is included
+    assert(bar1[releasedEventHasSurpriseCol] == 1.0F);
+    assert(Near(bar1[releasedEventSurpriseCol], 0.05));
+    assert(bar1[releasedEventSurpriseDirectionCol] == 1.0F);
     assert(bar2[consumerDemandEventCol] == 0.0F);  // future event cannot leak
     assert(bar3[consumerDemandEventCol] == 1.0F);
 
@@ -140,13 +166,17 @@ int main()
     assert(postGap[inflationRecencyDecayCol] > 0.0F);
     assert(postGap[inflationRecencyDecayCol] < 1.0F);
 
-    // Persisted width 53 sees the exact historical Tensor prefix. New width 63
-    // sees the same prefix followed by the documented ten-feature order.
-    const auto oldContract = EA::ResolveModelInputContract(
+    // Persisted widths 53 and 63 retain their exact historical prefixes. New
+    // width 71 appends the documented eight consensus components.
+    const auto preEventContract = EA::ResolveModelInputContract(
         EA::kPreEconomicEventModelInputWidth, feature_size);
+    const auto oldContract = EA::ResolveModelInputContract(
+        EA::kEconomicEventModelInputWidth, feature_size);
     const auto newContract = EA::ResolveModelInputContract(
         EA::kCurrentModelInputWidth, feature_size);
-    assert(oldContract.tensorFeatureCount == economicEventFeatureStartCol);
+    assert(preEventContract.tensorFeatureCount == economicEventFeatureStartCol);
+    assert(oldContract.tensorFeatureCount ==
+           pre_consensus_economic_event_feature_size);
     assert(newContract.tensorFeatureCount == feature_size);
     std::array<float, EA::kCurrentModelInputWidth> modelInput{};
     EA::CopyTensorFeaturesForModelInput(modelInput.data(), bar1.data(),
@@ -160,6 +190,12 @@ int main()
            bar1[inflationRecencyDecayCol]);
     assert(modelInput[consumerDemandRecencyDecayCol] ==
            bar1[consumerDemandRecencyDecayCol]);
+    assert(modelInput[relevantEventHasConsensusCol] ==
+           bar1[relevantEventHasConsensusCol]);
+    assert(modelInput[relevantEventConsensusLowCol] ==
+           bar1[relevantEventConsensusLowCol]);
+    assert(modelInput[releasedEventSurpriseCol] ==
+           bar1[releasedEventSurpriseCol]);
 
     return 0;
 }
