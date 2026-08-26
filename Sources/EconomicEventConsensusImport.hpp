@@ -36,16 +36,20 @@ struct EconomicEventConsensusCandidate
     std::string sourceReleaseDate;
 
     std::string consensusSource;
-    std::int64_t sourceReportId = 0;
+    std::optional<std::int64_t> sourceReportId;
     std::int64_t secondarySourceEventId = 0;
+    std::string secondarySourceObservationId;
     std::string secondarySourceEventName;
-    std::string secondarySourcePeriod;
-    int secondarySourcePriority = 0;
-    std::int64_t secondarySourceTimestampEpoch = 0;
-    std::string secondarySourceDate;
+    std::optional<std::string> secondarySourcePeriod;
+    std::optional<int> secondarySourcePriority;
+    std::optional<std::int64_t> secondarySourceTimestampEpoch;
+    std::optional<std::string> secondarySourceDate;
     std::string secondarySourceArtifactPath;
+    std::optional<std::string> secondarySourceArtifactSha256;
+    std::string candidateClassification;
     std::string matchRule;
     std::string semanticContract = "oanda_economic_consensus_candidate_v1";
+    std::string providerProvenance = "{}";
 
     ConsensusParsedValue forecast;
     ConsensusParsedValue previous;
@@ -81,12 +85,40 @@ struct EconomicEventConsensusImportReport
     std::vector<EconomicEventConsensusImportItemResult> items;
 };
 
+struct EconomicEventConsensusEvidencePaths
+{
+    std::filesystem::path oandaCandidates;
+    std::filesystem::path myfxbookNormalized;
+    std::filesystem::path myfxbookGapCandidates;
+    std::filesystem::path myfxbookBlankReconciliation;
+};
+
+struct EconomicEventConsensusWorkflowReport
+{
+    std::size_t canonicalEventsExamined = 0;
+    std::size_t oandaCandidates = 0;
+    std::size_t oandaMatchedBlankEvidence = 0;
+    std::size_t myfxbookJoltsGapCandidates = 0;
+    std::size_t myfxbookOandaBlankCandidates = 0;
+    std::size_t matchedCanonicalEvents = 0;
+    std::size_t missingCanonicalMatches = 0;
+    std::size_t ambiguousCanonicalMatches = 0;
+    std::size_t sourceExclusions = 0;
+    EconomicEventConsensusImportReport persistence;
+};
+
 std::vector<EconomicEventConsensusCandidate>
 LoadAndValidateOandaEconomicConsensusCsv(const std::filesystem::path& path);
 
 EconomicEventConsensusImportReport RunEconomicEventConsensusImport(
     pqxx::connection& connection,
     const std::vector<EconomicEventConsensusCandidate>& candidates,
+    EconomicEventConsensusImportMode mode);
+
+EconomicEventConsensusWorkflowReport
+RunAuthoritativeEconomicEventConsensusWorkflow(
+    pqxx::connection& connection,
+    const EconomicEventConsensusEvidencePaths& paths,
     EconomicEventConsensusImportMode mode);
 
 const char* EconomicEventConsensusImportDispositionName(

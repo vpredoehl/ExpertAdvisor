@@ -108,7 +108,7 @@ int main()
         Find(all, 1636),  // GDP percent
         Find(all, 2154),  // FOMC range
         Find(all, 2146),  // FOMC scalar
-        Find(all, 2301),  // missing forecast
+        Find(all, 685),   // verified CPI OANDA blank
         Find(all, 779),   // CPI report-698 y/y exception
         Find(all, 1979)   // legitimate multi-month PCE release
     };
@@ -154,7 +154,7 @@ int main()
         "economic_event_id = 2146 AND forecast_value_kind = 'scalar' AND "
         "forecast_value_low = 0.25 AND forecast_value_high IS NULL") == 1);
     assert(Count(connection,
-        "economic_event_id = 2301 AND forecast_raw IS NULL AND "
+        "economic_event_id = 685 AND forecast_raw IS NULL AND "
         "forecast_parse_status = 'missing' AND forecast_value_low IS NULL "
         "AND forecast_canonical_value_low IS NULL") == 1);
     assert(Count(connection,
@@ -171,6 +171,83 @@ int main()
     assert(secondApply.inserted == 0);
     assert(secondApply.unchanged == selected.size());
     assert(secondApply.rejected == 0);
+
+    const auto makeMyfxbook = [](EconomicEventConsensusCandidate candidate,
+                                 const std::string& consensus,
+                                 const std::string& observation)
+    {
+        candidate.consensusSource = "MYFXBOOK";
+        candidate.sourceReportId.reset();
+        candidate.secondarySourceEventId = -265326876;
+        candidate.secondarySourceObservationId = observation;
+        candidate.secondarySourceEventName = "CPI_MOM";
+        candidate.secondarySourcePeriod.reset();
+        candidate.secondarySourcePriority.reset();
+        candidate.secondarySourceTimestampEpoch.reset();
+        candidate.secondarySourceDate.reset();
+        candidate.secondarySourceArtifactPath =
+            "EconomicCalendar/raw/myfxbook/myfxbook_consensus_history.json";
+        candidate.secondarySourceArtifactSha256 =
+            "1538055386838d8ec50ab9cce40153f69aa8bf841c2ae50f67751b2c465432cb";
+        candidate.candidateClassification = "myfxbook_oanda_blank_fill";
+        candidate.matchRule = "oanda_blank_official_identity_unique";
+        candidate.semanticContract = "myfxbook_consensus_observation_v1";
+        candidate.providerProvenance =
+            R"({"provider":"MYFXBOOK","source_observation_ordinal":1})";
+        candidate.forecast.raw = consensus;
+        candidate.forecast.parseStatus = "parsed";
+        candidate.forecast.valueKind = "scalar";
+        candidate.forecast.valueLow = consensus;
+        candidate.forecast.valueHigh.reset();
+        candidate.forecast.canonicalValueLow = consensus;
+        candidate.forecast.canonicalValueHigh.reset();
+        candidate.forecast.unit = "percent";
+        candidate.forecast.scale = "1";
+        candidate.forecast.qualifier = "m/m";
+        candidate.previous = {};
+        candidate.previous.parseStatus = "missing";
+        candidate.actual = {};
+        candidate.actual.parseStatus = "missing";
+        return candidate;
+    };
+
+    auto myfxbookFill = makeMyfxbook(
+        Find(all, 685), "0.0",
+        "myfxbook:event:-265326876:date:2023-12-12:series:1:observation:1");
+    const auto fill = RunEconomicEventConsensusImport(
+        connection, {myfxbookFill}, EconomicEventConsensusImportMode::apply);
+    assert(fill.inserted == 1 && fill.unchanged == 0 && fill.rejected == 0);
+    const auto fillRetry = RunEconomicEventConsensusImport(
+        connection, {myfxbookFill}, EconomicEventConsensusImportMode::apply);
+    assert(fillRetry.inserted == 0 && fillRetry.unchanged == 1 &&
+           fillRetry.rejected == 0);
+    assert(Count(connection,
+        "economic_event_id = 685 AND consensus_source = 'MYFXBOOK' AND "
+        "forecast_canonical_value_low = 0.0 AND "
+        "candidate_classification = 'myfxbook_oanda_blank_fill' AND "
+        "source_artifact_sha256 IS NOT NULL AND "
+        "provider_provenance ? 'source_observation_ordinal'") == 1);
+
+    auto conflictingFill = myfxbookFill;
+    conflictingFill.forecast.raw = "0.1";
+    conflictingFill.forecast.valueLow = "0.1";
+    conflictingFill.forecast.canonicalValueLow = "0.1";
+    const auto fillConflict = RunEconomicEventConsensusImport(
+        connection, {conflictingFill}, EconomicEventConsensusImportMode::apply);
+    assert(fillConflict.rejected == 1);
+    assert(fillConflict.items.front().diagnostic ==
+           "immutable_persisted_payload_conflict");
+
+    auto overlap = makeMyfxbook(
+        Find(all, 78), "-0.1",
+        "myfxbook:event:-265326876:date:2011-08-18:series:1:observation:2");
+    const auto overlapResult = RunEconomicEventConsensusImport(
+        connection, {overlap}, EconomicEventConsensusImportMode::apply);
+    assert(overlapResult.rejected == 1);
+    assert(overlapResult.items.front().diagnostic ==
+           "populated_consensus_precedence_conflict");
+    assert(Count(connection,
+        "economic_event_id = 78 AND consensus_source = 'OANDA'") == 1);
 
     auto conflicting = selected.front();
     conflicting.forecast.raw = "-0.10% m/m";
@@ -198,8 +275,8 @@ int main()
             EconomicEventConsensusImportMode::dryRun);
     });
     auto duplicateSourceEvent = selected[1];
-    duplicateSourceEvent.secondarySourceEventId =
-        selected.front().secondarySourceEventId;
+    duplicateSourceEvent.secondarySourceObservationId =
+        selected.front().secondarySourceObservationId;
     ExpectInvalidArgument([&]
     {
         RunEconomicEventConsensusImport(

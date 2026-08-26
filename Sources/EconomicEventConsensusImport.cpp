@@ -401,7 +401,9 @@ void ValidateParsedValue(
             candidate.eventFamily == "PCE" || candidate.eventFamily == "PPI" ||
             candidate.eventFamily == "RETAIL_SALES";
         const std::optional<std::string> expectedQualifier =
-            candidate.eventFamily == "CPI" && candidate.sourceReportId == 698
+            candidate.consensusSource == "OANDA" &&
+                    candidate.eventFamily == "CPI" &&
+                    candidate.sourceReportId == 698
                 ? std::optional<std::string>{"y/y"}
                 : monthlyFamily ? std::optional<std::string>{"m/m"}
                                 : std::nullopt;
@@ -435,7 +437,11 @@ void ValidateParsedValue(
     }
 
     std::string rawNumber;
-    if (*value.unit == "percent" && !value.qualifier)
+    if (candidate.consensusSource == "MYFXBOOK")
+    {
+        rawNumber = *value.raw;
+    }
+    else if (*value.unit == "percent" && !value.qualifier)
     {
         rawNumber = *value.raw;
         while (!rawNumber.empty() && rawNumber.back() == ' ')
@@ -502,18 +508,75 @@ void ValidateCandidate(const EconomicEventConsensusCandidate& candidate)
         {"PPI", {"Producer Price Index"}},
         {"RETAIL_SALES", {"Retail Sales"}}};
 
-    if (candidate.economicEventId <= 0 || candidate.consensusSource != "OANDA" ||
-        candidate.sourceReportId <= 0 || candidate.secondarySourceEventId <= 0 ||
-        candidate.secondarySourcePriority < 1 ||
-        candidate.secondarySourcePriority > 3 ||
-        candidate.secondarySourceTimestampEpoch <= 0 ||
+    if (candidate.economicEventId <= 0 ||
+        (candidate.consensusSource != "OANDA" &&
+         candidate.consensusSource != "MYFXBOOK") ||
+        candidate.secondarySourceEventId == 0 ||
         candidate.sourceAgency.empty() || candidate.sourceEventId.empty() ||
-        candidate.secondarySourcePeriod.empty() ||
+        candidate.secondarySourceObservationId.empty() ||
+        candidate.secondarySourceEventName.empty() ||
         candidate.secondarySourceArtifactPath.empty() ||
+        candidate.candidateClassification.empty() ||
         candidate.matchRule.empty() ||
-        candidate.semanticContract != "oanda_economic_consensus_candidate_v1")
+        candidate.semanticContract.empty() || candidate.providerProvenance.empty())
         throw std::invalid_argument(
             "invalid_consensus_identity:economic_event_id=" +
+            std::to_string(candidate.economicEventId));
+
+    if (candidate.consensusSource == "MYFXBOOK")
+    {
+        const bool gap = candidate.candidateClassification ==
+                "myfxbook_jolts_gap_fill" &&
+            candidate.eventFamily == "JOLTS";
+        const bool blankFill = candidate.candidateClassification ==
+                "myfxbook_oanda_blank_fill" &&
+            (candidate.eventFamily == "CPI" ||
+             candidate.eventFamily == "PPI" ||
+             candidate.eventFamily == "RETAIL_SALES");
+        if (candidate.sourceReportId || candidate.secondarySourcePeriod ||
+            candidate.secondarySourcePriority ||
+            candidate.secondarySourceTimestampEpoch ||
+            candidate.secondarySourceDate ||
+            !candidate.secondarySourceArtifactSha256 ||
+            candidate.secondarySourceArtifactSha256->size() != 64 ||
+            candidate.semanticContract !=
+                "myfxbook_consensus_observation_v1" ||
+            (!gap && !blankFill) ||
+            candidate.forecast.parseStatus != "parsed" ||
+            candidate.previous.parseStatus != "missing" ||
+            candidate.actual.parseStatus != "missing")
+            throw std::invalid_argument(
+                "invalid_myfxbook_consensus_identity:economic_event_id=" +
+                std::to_string(candidate.economicEventId));
+        if (!ValidDate(candidate.sourceReleaseDate) ||
+            candidate.eventTimestampUtc.size() < 20 ||
+            candidate.eventTimestampUtc.substr(0, 10) !=
+                candidate.sourceReleaseDate)
+            throw std::invalid_argument(
+                "invalid_consensus_date:economic_event_id=" +
+                std::to_string(candidate.economicEventId));
+        ValidateParsedValue(candidate, candidate.forecast, "forecast");
+        ValidateParsedValue(candidate, candidate.previous, "previous");
+        ValidateParsedValue(candidate, candidate.actual, "actual");
+        return;
+    }
+
+    if (!candidate.sourceReportId || *candidate.sourceReportId <= 0 ||
+        candidate.secondarySourceEventId <= 0 ||
+        !candidate.secondarySourcePeriod ||
+        candidate.secondarySourcePeriod->empty() ||
+        !candidate.secondarySourcePriority ||
+        *candidate.secondarySourcePriority < 1 ||
+        *candidate.secondarySourcePriority > 3 ||
+        !candidate.secondarySourceTimestampEpoch ||
+        *candidate.secondarySourceTimestampEpoch <= 0 ||
+        !candidate.secondarySourceDate ||
+        candidate.candidateClassification !=
+            (candidate.forecast.parseStatus == "parsed"
+                ? "oanda_populated_initial" : "oanda_matched_blank") ||
+        candidate.semanticContract != "oanda_economic_consensus_candidate_v1")
+        throw std::invalid_argument(
+            "invalid_oanda_consensus_identity:economic_event_id=" +
             std::to_string(candidate.economicEventId));
     const auto report = reports.find(candidate.eventFamily);
     if (report == reports.end())
@@ -543,10 +606,10 @@ void ValidateCandidate(const EconomicEventConsensusCandidate& candidate)
         candidate.eventTimestampUtc.substr(0, 10) !=
             candidate.sourceReleaseDate ||
         candidate.eventTimestampUtc[10] != 'T' ||
-        candidate.secondarySourceDate.size() != 16 ||
-        !ValidDate(candidate.secondarySourceDate.substr(0, 10)) ||
-        candidate.secondarySourceDate[10] != ' ' ||
-        candidate.secondarySourceDate[13] != ':')
+        candidate.secondarySourceDate->size() != 16 ||
+        !ValidDate(candidate.secondarySourceDate->substr(0, 10)) ||
+        (*candidate.secondarySourceDate)[10] != ' ' ||
+        (*candidate.secondarySourceDate)[13] != ':')
         throw std::invalid_argument(
             "invalid_consensus_date:economic_event_id=" +
             std::to_string(candidate.economicEventId));
@@ -557,7 +620,8 @@ void ValidateCandidate(const EconomicEventConsensusCandidate& candidate)
             candidate.sourceReleaseDate != "2026-01-22" ||
             candidate.referencePeriod !=
                 std::optional<std::string>{"October and November 2025"} ||
-            candidate.secondarySourcePeriod != "November" ||
+            candidate.secondarySourcePeriod !=
+                std::optional<std::string>{"November"} ||
             candidate.sourceReportId != 694 ||
             candidate.matchRule != "authoritative_reference_period")
             throw std::invalid_argument("invalid_known_multimonth_pce_mapping");
@@ -572,7 +636,7 @@ std::vector<EconomicEventConsensusCandidate> ValidateAndOrder(
     std::vector<EconomicEventConsensusCandidate> candidates)
 {
     std::set<std::int64_t> economicEventIds;
-    std::map<std::pair<std::string, std::int64_t>, std::int64_t> sourceEvents;
+    std::map<std::pair<std::string, std::string>, std::int64_t> sourceEvents;
     for (const auto& candidate : candidates)
     {
         ValidateCandidate(candidate);
@@ -581,13 +645,14 @@ std::vector<EconomicEventConsensusCandidate> ValidateAndOrder(
                 "duplicate_economic_event_id:" +
                 std::to_string(candidate.economicEventId));
         const auto identity = std::make_pair(
-            candidate.consensusSource, candidate.secondarySourceEventId);
+            candidate.consensusSource,
+            candidate.secondarySourceObservationId);
         const auto [iterator, inserted] = sourceEvents.emplace(
             identity, candidate.economicEventId);
         if (!inserted && iterator->second != candidate.economicEventId)
             throw std::invalid_argument(
-                "secondary_source_event_maps_to_multiple_official_events:" +
-                std::to_string(candidate.secondarySourceEventId));
+                "secondary_source_observation_maps_to_multiple_official_events:" +
+                candidate.secondarySourceObservationId);
     }
     std::sort(candidates.begin(), candidates.end(),
               [](const auto& left, const auto& right)
@@ -597,9 +662,268 @@ std::vector<EconomicEventConsensusCandidate> ValidateAndOrder(
     return candidates;
 }
 
+struct CsvTable
+{
+    std::unordered_map<std::string, std::size_t> columns;
+    std::vector<std::vector<std::string>> rows;
+};
+
+CsvTable LoadCsvTable(
+    const std::filesystem::path& path,
+    const std::set<std::string>& required)
+{
+    auto parsed = ParseCsv(path);
+    CsvTable table;
+    for (std::size_t index = 0; index < parsed.front().size(); ++index)
+    {
+        if (!table.columns.emplace(parsed.front()[index], index).second)
+            throw std::invalid_argument(
+                "duplicate_consensus_csv_column:" + parsed.front()[index]);
+    }
+    for (const auto& column : required)
+    {
+        if (!table.columns.contains(column))
+            throw std::invalid_argument(
+                "missing_consensus_csv_column:" + column);
+    }
+    table.rows.assign(
+        std::make_move_iterator(parsed.begin() + 1),
+        std::make_move_iterator(parsed.end()));
+    for (std::size_t index = 0; index < table.rows.size(); ++index)
+    {
+        if (table.rows[index].size() != table.columns.size())
+            throw std::invalid_argument(
+                "consensus_csv_column_count_mismatch:row=" +
+                std::to_string(index + 2));
+    }
+    return table;
+}
+
+const std::string& CsvValue(
+    const CsvTable& table,
+    const std::vector<std::string>& row,
+    std::string_view column)
+{
+    return row.at(table.columns.at(std::string{column}));
+}
+
+std::string JsonEscape(std::string_view value)
+{
+    std::string escaped;
+    for (const char character : value)
+    {
+        switch (character)
+        {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(character); break;
+        }
+    }
+    return escaped;
+}
+
+struct MyfxbookEvidence
+{
+    std::string eventFamily;
+    std::string sourceFamily;
+    std::int64_t eventId = 0;
+    std::string releaseDate;
+    std::string actual;
+    std::string consensus;
+    std::string classification;
+    std::string eligible;
+    std::string capturePath;
+    std::string captureSha256;
+    int seriesOrdinal = 0;
+    int observationOrdinal = 0;
+};
+
+using EvidenceKey = std::pair<std::string, std::string>;
+
+std::map<EvidenceKey, std::vector<MyfxbookEvidence>> LoadMyfxbookEvidence(
+    const std::filesystem::path& path,
+    std::size_t& sourceExclusions)
+{
+    const CsvTable table = LoadCsvTable(path, {
+        "event_family", "myfxbook_source_family", "myfxbook_event_id",
+        "release_date", "myfxbook_actual", "myfxbook_consensus",
+        "classification", "automatic_candidate_eligible",
+        "source_capture_filename", "source_capture_sha256",
+        "source_series_ordinal", "source_observation_ordinal"});
+    std::map<EvidenceKey, std::vector<MyfxbookEvidence>> evidence;
+    for (std::size_t index = 0; index < table.rows.size(); ++index)
+    {
+        const auto& row = table.rows[index];
+        MyfxbookEvidence item;
+        item.eventFamily = CsvValue(table, row, "event_family");
+        item.sourceFamily = CsvValue(table, row, "myfxbook_source_family");
+        item.eventId = ParseInteger<std::int64_t>(
+            CsvValue(table, row, "myfxbook_event_id"),
+            "myfxbook_event_id", index + 2);
+        item.releaseDate = CsvValue(table, row, "release_date");
+        item.actual = CsvValue(table, row, "myfxbook_actual");
+        item.consensus = CsvValue(table, row, "myfxbook_consensus");
+        item.classification = CsvValue(table, row, "classification");
+        item.eligible = CsvValue(table, row, "automatic_candidate_eligible");
+        item.capturePath = CsvValue(table, row, "source_capture_filename");
+        item.captureSha256 = CsvValue(table, row, "source_capture_sha256");
+        item.seriesOrdinal = ParseInteger<int>(
+            CsvValue(table, row, "source_series_ordinal"),
+            "source_series_ordinal", index + 2);
+        item.observationOrdinal = ParseInteger<int>(
+            CsvValue(table, row, "source_observation_ordinal"),
+            "source_observation_ordinal", index + 2);
+        if (!ValidDate(item.releaseDate) || item.capturePath.empty() ||
+            item.captureSha256.size() != 64)
+            throw std::invalid_argument(
+                "invalid_myfxbook_normalized_evidence:row=" +
+                std::to_string(index + 2));
+        const bool eligible = item.classification == "unique_populated" &&
+            item.eligible == "1" && !item.consensus.empty();
+        const bool excluded = item.classification == "ambiguous_duplicate" ||
+            item.classification == "unique_null" ||
+            item.classification == "manual_review";
+        if (!eligible && !excluded)
+            throw std::invalid_argument(
+                "invalid_myfxbook_classification:row=" +
+                std::to_string(index + 2));
+        if (excluded)
+            ++sourceExclusions;
+        evidence[{item.eventFamily, item.releaseDate}].push_back(
+            std::move(item));
+    }
+    return evidence;
+}
+
+const MyfxbookEvidence& UniqueEligibleEvidence(
+    const std::map<EvidenceKey, std::vector<MyfxbookEvidence>>& evidence,
+    const std::string& family,
+    const std::string& releaseDate)
+{
+    const auto iterator = evidence.find({family, releaseDate});
+    if (iterator == evidence.end() || iterator->second.size() != 1 ||
+        iterator->second.front().classification != "unique_populated" ||
+        iterator->second.front().eligible != "1")
+        throw std::invalid_argument(
+            "myfxbook_candidate_not_unique_populated:" + family + ":" +
+            releaseDate);
+    return iterator->second.front();
+}
+
+struct CanonicalMatch
+{
+    std::int64_t economicEventId = 0;
+    std::string eventFamily;
+    std::string eventTimestampUtc;
+    std::string sourceAgency;
+    std::string sourceEventId;
+    std::optional<std::string> referencePeriod;
+    std::string sourceReleaseDate;
+};
+
+std::vector<CanonicalMatch> LoadCanonicalMatches(
+    pqxx::transaction_base& transaction,
+    const std::string& family,
+    const std::string& releaseDate,
+    const std::optional<std::string>& sourceAgency = std::nullopt,
+    const std::optional<std::string>& timestamp = std::nullopt,
+    const std::optional<std::string>& referencePeriod = std::nullopt)
+{
+    const pqxx::result rows = transaction.exec(
+        "SELECT economic_event_id, event_family, "
+        "to_char(event_timestamp_utc AT TIME ZONE 'UTC', "
+        "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS timestamp_utc, "
+        "source_agency, source_event_id, reference_period, "
+        "source_release_date::text AS release_date "
+        "FROM economic_event WHERE event_family = $1 "
+        "AND source_release_date = $2::date "
+        "AND ($3::text IS NULL OR source_agency = $3) "
+        "AND ($4::timestamptz IS NULL OR event_timestamp_utc = $4) "
+        "AND ($5::text IS NULL OR reference_period IS NOT DISTINCT FROM $5) "
+        "ORDER BY economic_event_id;",
+        pqxx::params{
+            family, releaseDate, sourceAgency, timestamp, referencePeriod});
+    std::vector<CanonicalMatch> matches;
+    for (const pqxx::row& row : rows)
+    {
+        CanonicalMatch match;
+        match.economicEventId = row["economic_event_id"].as<std::int64_t>();
+        match.eventFamily = row["event_family"].as<std::string>();
+        match.eventTimestampUtc = row["timestamp_utc"].as<std::string>();
+        match.sourceAgency = row["source_agency"].as<std::string>();
+        match.sourceEventId = row["source_event_id"].as<std::string>();
+        if (!row["reference_period"].is_null())
+            match.referencePeriod =
+                row["reference_period"].as<std::string>();
+        match.sourceReleaseDate = row["release_date"].as<std::string>();
+        matches.push_back(std::move(match));
+    }
+    return matches;
+}
+
+EconomicEventConsensusCandidate MakeMyfxbookCandidate(
+    const MyfxbookEvidence& evidence,
+    const CanonicalMatch& canonical,
+    const std::string& classification,
+    const std::string& matchRule,
+    const std::filesystem::path& derivedArtifact,
+    const std::string& extraProvenance)
+{
+    EconomicEventConsensusCandidate candidate;
+    candidate.economicEventId = canonical.economicEventId;
+    candidate.eventFamily = canonical.eventFamily;
+    candidate.eventTimestampUtc = canonical.eventTimestampUtc;
+    candidate.sourceAgency = canonical.sourceAgency;
+    candidate.sourceEventId = canonical.sourceEventId;
+    candidate.referencePeriod = canonical.referencePeriod;
+    candidate.sourceReleaseDate = canonical.sourceReleaseDate;
+    candidate.consensusSource = "MYFXBOOK";
+    candidate.secondarySourceEventId = evidence.eventId;
+    candidate.secondarySourceObservationId =
+        "myfxbook:event:" + std::to_string(evidence.eventId) + ":date:" +
+        evidence.releaseDate + ":series:" +
+        std::to_string(evidence.seriesOrdinal) + ":observation:" +
+        std::to_string(evidence.observationOrdinal);
+    candidate.secondarySourceEventName = evidence.sourceFamily;
+    candidate.secondarySourceArtifactPath = evidence.capturePath;
+    candidate.secondarySourceArtifactSha256 = evidence.captureSha256;
+    candidate.candidateClassification = classification;
+    candidate.matchRule = matchRule;
+    candidate.semanticContract = "myfxbook_consensus_observation_v1";
+    candidate.providerProvenance =
+        "{\"provider\":\"MYFXBOOK\",\"myfxbook_event_id\":" +
+        std::to_string(evidence.eventId) +
+        ",\"source_family\":\"" + JsonEscape(evidence.sourceFamily) +
+        "\",\"source_series_ordinal\":" +
+        std::to_string(evidence.seriesOrdinal) +
+        ",\"source_observation_ordinal\":" +
+        std::to_string(evidence.observationOrdinal) +
+        ",\"myfxbook_actual\":\"" + JsonEscape(evidence.actual) +
+        "\",\"normalized_artifact\":\"" +
+        JsonEscape(derivedArtifact.string()) + "\"" + extraProvenance + "}";
+    candidate.forecast.raw = evidence.consensus;
+    candidate.forecast.parseStatus = "parsed";
+    candidate.forecast.valueKind = "scalar";
+    candidate.forecast.valueLow = evidence.consensus;
+    candidate.forecast.canonicalValueLow = evidence.consensus;
+    candidate.forecast.unit =
+        evidence.eventFamily == "JOLTS" ? "count" : "percent";
+    candidate.forecast.scale = "1";
+    if (evidence.eventFamily == "CPI" || evidence.eventFamily == "PPI" ||
+        evidence.eventFamily == "RETAIL_SALES")
+        candidate.forecast.qualifier = "m/m";
+    candidate.previous.parseStatus = "missing";
+    candidate.actual.parseStatus = "missing";
+    return candidate;
+}
+
 struct CliArguments
 {
     std::filesystem::path input;
+    std::filesystem::path evidenceRoot;
     EconomicEventConsensusImportMode mode =
         EconomicEventConsensusImportMode::dryRun;
     bool modeSpecified = false;
@@ -631,6 +955,20 @@ CliArguments ParseCli(int argc, const char* const argv[])
                 throw std::invalid_argument("--input specified more than once");
             parsed.input = argument.substr(8);
         }
+        else if (argument == "--evidence-root")
+        {
+            if (!parsed.evidenceRoot.empty() || ++index >= argc)
+                throw std::invalid_argument(
+                    "--evidence-root requires one path");
+            parsed.evidenceRoot = argv[index];
+        }
+        else if (argument.rfind("--evidence-root=", 0) == 0)
+        {
+            if (!parsed.evidenceRoot.empty())
+                throw std::invalid_argument(
+                    "--evidence-root specified more than once");
+            parsed.evidenceRoot = argument.substr(16);
+        }
         else if (argument == "--dry-run" || argument == "--apply")
         {
             if (parsed.modeSpecified)
@@ -649,8 +987,9 @@ CliArguments ParseCli(int argc, const char* const argv[])
     }
     if (!commandSeen)
         throw std::invalid_argument("--import-economic-consensus is required");
-    if (parsed.input.empty())
-        throw std::invalid_argument("--input is required");
+    if (parsed.input.empty() == parsed.evidenceRoot.empty())
+        throw std::invalid_argument(
+            "exactly one of --input or --evidence-root is required");
     if (!parsed.modeSpecified)
         throw std::invalid_argument(
             "exactly one of --dry-run or --apply is required");
@@ -706,6 +1045,8 @@ LoadAndValidateOandaEconomicConsensusCsv(const std::filesystem::path& path)
             value(row, "oanda_report_id"), "oanda_report_id", index + 1);
         candidate.secondarySourceEventId = ParseInteger<std::int64_t>(
             value(row, "oanda_event_id"), "oanda_event_id", index + 1);
+        candidate.secondarySourceObservationId = "oanda:event:" +
+            std::to_string(candidate.secondarySourceEventId);
         candidate.secondarySourceEventName = value(row, "oanda_event");
         candidate.secondarySourcePeriod = value(row, "oanda_period");
         candidate.secondarySourcePriority = ParseInteger<int>(
@@ -718,11 +1059,242 @@ LoadAndValidateOandaEconomicConsensusCsv(const std::filesystem::path& path)
         candidate.forecast = ParsedValue(row, columns, "forecast");
         candidate.previous = ParsedValue(row, columns, "previous");
         candidate.actual = ParsedValue(row, columns, "actual");
+        candidate.candidateClassification =
+            candidate.forecast.parseStatus == "parsed"
+                ? "oanda_populated_initial" : "oanda_matched_blank";
+        candidate.providerProvenance =
+            "{\"provider\":\"OANDA\",\"oanda_report_id\":" +
+            std::to_string(*candidate.sourceReportId) +
+            ",\"oanda_event_id\":" +
+            std::to_string(candidate.secondarySourceEventId) +
+            ",\"source_artifact\":\"" +
+            JsonEscape(candidate.secondarySourceArtifactPath) +
+            "\",\"phase\":\"phase_1_initial_population\"}";
         candidates.push_back(std::move(candidate));
     }
     if (candidates.empty())
         throw std::invalid_argument("consensus_csv_has_no_candidates");
     return ValidateAndOrder(std::move(candidates));
+}
+
+
+EconomicEventConsensusWorkflowReport
+RunAuthoritativeEconomicEventConsensusWorkflow(
+    pqxx::connection& connection,
+    const EconomicEventConsensusEvidencePaths& paths,
+    EconomicEventConsensusImportMode mode)
+{
+    EconomicEventConsensusWorkflowReport report;
+    auto oanda = LoadAndValidateOandaEconomicConsensusCsv(
+        paths.oandaCandidates);
+    std::vector<EconomicEventConsensusCandidate> candidates;
+    candidates.reserve(oanda.size() + 116);
+    for (auto& candidate : oanda)
+    {
+        if (candidate.forecast.parseStatus == "parsed")
+        {
+            candidates.push_back(std::move(candidate));
+            ++report.oandaCandidates;
+        }
+        else
+        {
+            ++report.oandaMatchedBlankEvidence;
+            ++report.sourceExclusions;
+        }
+    }
+
+    const auto evidence = LoadMyfxbookEvidence(
+        paths.myfxbookNormalized, report.sourceExclusions);
+
+    pqxx::read_transaction transaction{connection};
+    report.canonicalEventsExamined =
+        transaction.query_value<std::size_t>(
+            "SELECT count(*) FROM economic_event;");
+
+    const CsvTable gap = LoadCsvTable(paths.myfxbookGapCandidates, {
+        "event_family", "release_date", "myfxbook_source_family",
+        "myfxbook_event_id", "myfxbook_actual", "myfxbook_consensus",
+        "consensus_source", "candidate_classification",
+        "target_coverage_source", "myfxbook_capture_filename",
+        "myfxbook_capture_sha256", "source_series_ordinal",
+        "source_observation_ordinal"});
+    for (std::size_t index = 0; index < gap.rows.size(); ++index)
+    {
+        const auto& row = gap.rows[index];
+        const std::string& family = CsvValue(gap, row, "event_family");
+        const std::string& releaseDate = CsvValue(gap, row, "release_date");
+        const auto& source = UniqueEligibleEvidence(
+            evidence, family, releaseDate);
+        if (family != "JOLTS" ||
+            CsvValue(gap, row, "candidate_classification") !=
+                "myfxbook_unique_populated_gap_fill" ||
+            CsvValue(gap, row, "consensus_source") != "myfxbook" ||
+            CsvValue(gap, row, "target_coverage_source") != "oanda" ||
+            CsvValue(gap, row, "myfxbook_source_family") !=
+                source.sourceFamily ||
+            CsvValue(gap, row, "myfxbook_event_id") !=
+                std::to_string(source.eventId) ||
+            CsvValue(gap, row, "myfxbook_actual") != source.actual ||
+            CsvValue(gap, row, "myfxbook_consensus") != source.consensus ||
+            CsvValue(gap, row, "myfxbook_capture_filename") !=
+                source.capturePath ||
+            CsvValue(gap, row, "myfxbook_capture_sha256") !=
+                source.captureSha256 ||
+            ParseInteger<int>(CsvValue(gap, row, "source_series_ordinal"),
+                "source_series_ordinal", index + 2) != source.seriesOrdinal ||
+            ParseInteger<int>(
+                CsvValue(gap, row, "source_observation_ordinal"),
+                "source_observation_ordinal", index + 2) !=
+                source.observationOrdinal)
+            throw std::invalid_argument(
+                "invalid_myfxbook_gap_candidate:row=" +
+                std::to_string(index + 2));
+        ++report.myfxbookJoltsGapCandidates;
+        const auto matches = LoadCanonicalMatches(
+            transaction, family, releaseDate);
+        if (matches.empty())
+        {
+            ++report.missingCanonicalMatches;
+            continue;
+        }
+        if (matches.size() != 1)
+        {
+            ++report.ambiguousCanonicalMatches;
+            continue;
+        }
+        candidates.push_back(MakeMyfxbookCandidate(
+            source, matches.front(), "myfxbook_jolts_gap_fill",
+            "canonical_family_release_date_unique",
+            paths.myfxbookNormalized,
+            ",\"candidate_artifact\":\"" +
+                JsonEscape(paths.myfxbookGapCandidates.string()) +
+                "\",\"merge_rule\":\"oanda_coverage_gap\""));
+    }
+
+    const std::map<EvidenceKey, std::string> expectedBlankFills{
+        {{"PPI", "2013-12-13"}, "-0.1"},
+        {{"RETAIL_SALES", "2022-09-15"}, "0.0"},
+        {{"CPI", "2023-12-12"}, "0.0"}};
+    const CsvTable blank = LoadCsvTable(
+        paths.myfxbookBlankReconciliation, {
+            "event_family", "official_event_timestamp_utc",
+            "official_release_date", "official_source_agency",
+            "official_reference_period", "oanda_report_id",
+            "oanda_event_id", "original_oanda_forecast_present",
+            "oanda_source_file", "oanda_matches_filename",
+            "oanda_matches_sha256", "myfxbook_capture_filename",
+            "myfxbook_capture_sha256", "candidate_myfxbook_event_id",
+            "candidate_myfxbook_actual", "candidate_myfxbook_consensus",
+            "candidate_consensus_source", "merge_classification",
+            "merge_exclusion_reason"});
+    std::set<EvidenceKey> observedBlankFills;
+    for (std::size_t index = 0; index < blank.rows.size(); ++index)
+    {
+        const auto& row = blank.rows[index];
+        if (CsvValue(blank, row, "merge_classification") !=
+            "myfxbook_populated_candidate")
+            continue;
+        const std::string& family = CsvValue(blank, row, "event_family");
+        const std::string& releaseDate =
+            CsvValue(blank, row, "official_release_date");
+        const EvidenceKey key{family, releaseDate};
+        const auto expected = expectedBlankFills.find(key);
+        if (expected == expectedBlankFills.end() ||
+            !observedBlankFills.insert(key).second ||
+            CsvValue(blank, row, "candidate_myfxbook_consensus") !=
+                expected->second ||
+            CsvValue(blank, row, "original_oanda_forecast_present") != "0" ||
+            CsvValue(blank, row, "candidate_consensus_source") != "myfxbook" ||
+            !CsvValue(blank, row, "merge_exclusion_reason").empty())
+            throw std::invalid_argument(
+                "unapproved_myfxbook_oanda_blank_fill:row=" +
+                std::to_string(index + 2));
+        const auto& source = UniqueEligibleEvidence(
+            evidence, family, releaseDate);
+        if (CsvValue(blank, row, "candidate_myfxbook_event_id") !=
+                std::to_string(source.eventId) ||
+            CsvValue(blank, row, "candidate_myfxbook_actual") !=
+                source.actual ||
+            CsvValue(blank, row, "candidate_myfxbook_consensus") !=
+                source.consensus ||
+            CsvValue(blank, row, "myfxbook_capture_filename") !=
+                source.capturePath ||
+            CsvValue(blank, row, "myfxbook_capture_sha256") !=
+                source.captureSha256 ||
+            CsvValue(blank, row, "oanda_matches_sha256").size() != 64)
+            throw std::invalid_argument(
+                "myfxbook_blank_fill_normalized_evidence_mismatch:row=" +
+                std::to_string(index + 2));
+        ++report.myfxbookOandaBlankCandidates;
+        const auto matches = LoadCanonicalMatches(
+            transaction, family, releaseDate,
+            CsvValue(blank, row, "official_source_agency"),
+            CsvValue(blank, row, "official_event_timestamp_utc"),
+            CsvValue(blank, row, "official_reference_period"));
+        if (matches.empty())
+        {
+            ++report.missingCanonicalMatches;
+            continue;
+        }
+        if (matches.size() != 1)
+        {
+            ++report.ambiguousCanonicalMatches;
+            continue;
+        }
+        candidates.push_back(MakeMyfxbookCandidate(
+            source, matches.front(), "myfxbook_oanda_blank_fill",
+            "oanda_blank_official_identity_unique",
+            paths.myfxbookNormalized,
+            ",\"reconciliation_artifact\":\"" +
+                JsonEscape(paths.myfxbookBlankReconciliation.string()) +
+                "\",\"oanda_matches_artifact\":\"" +
+                JsonEscape(CsvValue(blank, row, "oanda_matches_filename")) +
+                "\",\"oanda_matches_sha256\":\"" +
+                JsonEscape(CsvValue(blank, row, "oanda_matches_sha256")) +
+                "\",\"oanda_report_id\":" +
+                CsvValue(blank, row, "oanda_report_id") +
+                ",\"oanda_event_id\":" +
+                CsvValue(blank, row, "oanda_event_id") +
+                ",\"oanda_source_artifact\":\"" +
+                JsonEscape(CsvValue(blank, row, "oanda_source_file")) +
+                "\",\"merge_rule\":\"oanda_matched_blank_fill\""));
+    }
+    if (observedBlankFills.size() != expectedBlankFills.size())
+        throw std::invalid_argument(
+            "missing_verified_myfxbook_oanda_blank_fill");
+    transaction.commit();
+
+    report.matchedCanonicalEvents = candidates.size();
+    const bool matchingFailure = report.missingCanonicalMatches != 0 ||
+        report.ambiguousCanonicalMatches != 0;
+    report.persistence = RunEconomicEventConsensusImport(
+        connection, candidates,
+        matchingFailure ? EconomicEventConsensusImportMode::dryRun : mode);
+    for (const auto& item : report.persistence.items)
+    {
+        if (item.diagnostic == "economic_event_id_not_found" ||
+            item.diagnostic == "authoritative_identity_conflict")
+        {
+            ++report.missingCanonicalMatches;
+            --report.matchedCanonicalEvents;
+        }
+    }
+    if (matchingFailure && mode == EconomicEventConsensusImportMode::apply)
+    {
+        for (auto& item : report.persistence.items)
+        {
+            if (item.disposition ==
+                EconomicEventConsensusImportDisposition::inserted)
+            {
+                item.disposition =
+                    EconomicEventConsensusImportDisposition::rejected;
+                item.diagnostic = "batch_not_applied_due_to_source_matching_error";
+                --report.persistence.inserted;
+                ++report.persistence.rejected;
+            }
+        }
+    }
+    return report;
 }
 
 
@@ -777,9 +1349,65 @@ int RunEconomicEventConsensusImportCli(
     try
     {
         const CliArguments arguments = ParseCli(argc, argv);
+        pqxx::connection connection{ConnectionString()};
+        if (!arguments.evidenceRoot.empty())
+        {
+            const EconomicEventConsensusEvidencePaths paths{
+                arguments.evidenceRoot /
+                    "oanda/oanda_consensus_enrichment_candidates.csv",
+                arguments.evidenceRoot /
+                    "myfxbook/derived/myfxbook_consensus_normalized.csv",
+                arguments.evidenceRoot /
+                    "myfxbook/derived/myfxbook_oanda_gap_fill_candidates.csv",
+                arguments.evidenceRoot /
+                    "myfxbook/derived/myfxbook_oanda_blank_reconciliation.csv"};
+            const auto workflow =
+                RunAuthoritativeEconomicEventConsensusWorkflow(
+                    connection, paths, arguments.mode);
+            std::cout << "ECONOMIC_EVENT_CONSENSUS_IMPORT_SUMMARY"
+                      << ",source=OANDA+MYFXBOOK"
+                      << ",mode="
+                      << (arguments.mode ==
+                                  EconomicEventConsensusImportMode::dryRun
+                              ? "dry-run" : "apply")
+                      << ",canonical_events_examined="
+                      << workflow.canonicalEventsExamined
+                      << ",oanda_candidates=" << workflow.oandaCandidates
+                      << ",oanda_matched_blanks="
+                      << workflow.oandaMatchedBlankEvidence
+                      << ",myfxbook_jolts_gap_candidates="
+                      << workflow.myfxbookJoltsGapCandidates
+                      << ",myfxbook_oanda_blank_candidates="
+                      << workflow.myfxbookOandaBlankCandidates
+                      << ",matched_canonical_events="
+                      << workflow.matchedCanonicalEvents
+                      << ",missing_canonical_matches="
+                      << workflow.missingCanonicalMatches
+                      << ",ambiguous_canonical_matches="
+                      << workflow.ambiguousCanonicalMatches
+                      << ",source_exclusions=" << workflow.sourceExclusions
+                      << ",inserted=" << workflow.persistence.inserted
+                      << ",unchanged=" << workflow.persistence.unchanged
+                      << ",rejected=" << workflow.persistence.rejected
+                      << '\n';
+            for (const auto& item : workflow.persistence.items)
+            {
+                if (item.disposition ==
+                    EconomicEventConsensusImportDisposition::rejected)
+                    std::cout << "ECONOMIC_EVENT_CONSENSUS_IMPORT_ITEM"
+                              << ",economic_event_id="
+                              << item.economicEventId
+                              << ",disposition=rejected,diagnostic="
+                              << item.diagnostic << '\n';
+            }
+            return workflow.persistence.rejected == 0 &&
+                    workflow.missingCanonicalMatches == 0 &&
+                    workflow.ambiguousCanonicalMatches == 0
+                ? 0 : 2;
+        }
+
         const auto candidates =
             LoadAndValidateOandaEconomicConsensusCsv(arguments.input);
-        pqxx::connection connection{ConnectionString()};
         const auto report = RunEconomicEventConsensusImport(
             connection, candidates, arguments.mode);
         std::cout << "ECONOMIC_EVENT_CONSENSUS_IMPORT_SUMMARY"

@@ -17,18 +17,23 @@ struct Column
     std::string_view type;
 };
 
-constexpr std::array<Column, 41> kPayloadColumns{{
+constexpr std::array<Column, 46> kPayloadColumns{{
     {"consensus_source", "text"},
     {"source_report_id", "bigint"},
     {"source_event_id", "bigint"},
+    {"source_observation_id", "text"},
     {"source_event_name", "text"},
     {"source_period", "text"},
     {"source_priority", "smallint"},
     {"source_timestamp_epoch", "bigint"},
     {"source_date", "timestamp without time zone"},
+    {"source_release_date", "date"},
     {"source_artifact_path", "text"},
+    {"source_artifact_sha256", "text"},
+    {"candidate_classification", "text"},
     {"match_rule", "text"},
     {"semantic_contract", "text"},
+    {"provider_provenance", "jsonb"},
     {"forecast_raw", "text"},
     {"forecast_parse_status", "text"},
     {"forecast_value_kind", "text"},
@@ -83,14 +88,19 @@ pqxx::params CandidateParameters(
     parameters.append(candidate.consensusSource);
     parameters.append(candidate.sourceReportId);
     parameters.append(candidate.secondarySourceEventId);
+    parameters.append(candidate.secondarySourceObservationId);
     parameters.append(candidate.secondarySourceEventName);
     parameters.append(candidate.secondarySourcePeriod);
     parameters.append(candidate.secondarySourcePriority);
     parameters.append(candidate.secondarySourceTimestampEpoch);
     parameters.append(candidate.secondarySourceDate);
+    parameters.append(candidate.sourceReleaseDate);
     parameters.append(candidate.secondarySourceArtifactPath);
+    parameters.append(candidate.secondarySourceArtifactSha256);
+    parameters.append(candidate.candidateClassification);
     parameters.append(candidate.matchRule);
     parameters.append(candidate.semanticContract);
+    parameters.append(candidate.providerProvenance);
     AppendValue(parameters, candidate.forecast);
     AppendValue(parameters, candidate.previous);
     AppendValue(parameters, candidate.actual);
@@ -172,12 +182,14 @@ std::string OfficialIdentityDiagnostic(
 
 bool StoredIdentityExists(
     pqxx::transaction_base& transaction,
-    std::int64_t economicEventId)
+    const EconomicEventConsensusCandidate& candidate)
 {
     return transaction.query_value<bool>(
         "SELECT EXISTS (SELECT 1 FROM economic_event_consensus "
-        "WHERE economic_event_id = $1);",
-        pqxx::params{economicEventId});
+        "WHERE consensus_source = $1 AND source_observation_id = $2);",
+        pqxx::params{
+            candidate.consensusSource,
+            candidate.secondarySourceObservationId});
 }
 
 bool StoredSourceEventMapsElsewhere(
@@ -186,12 +198,22 @@ bool StoredSourceEventMapsElsewhere(
 {
     return transaction.query_value<bool>(
         "SELECT EXISTS (SELECT 1 FROM economic_event_consensus "
-        "WHERE consensus_source = $1 AND source_event_id = $2 "
+        "WHERE consensus_source = $1 AND source_observation_id = $2 "
         "AND economic_event_id <> $3);",
         pqxx::params{
             candidate.consensusSource,
-            candidate.secondarySourceEventId,
+            candidate.secondarySourceObservationId,
             candidate.economicEventId});
+}
+
+bool StoredPopulatedConsensusExists(
+    pqxx::transaction_base& transaction,
+    std::int64_t economicEventId)
+{
+    return transaction.query_value<bool>(
+        "SELECT EXISTS (SELECT 1 FROM economic_event_consensus "
+        "WHERE economic_event_id = $1 AND forecast_parse_status = 'parsed');",
+        pqxx::params{economicEventId});
 }
 
 EconomicEventConsensusImportReport Compare(
@@ -210,7 +232,7 @@ EconomicEventConsensusImportReport Compare(
             item.disposition = EconomicEventConsensusImportDisposition::rejected;
             ++report.rejected;
         }
-        else if (StoredIdentityExists(transaction, candidate.economicEventId))
+        else if (StoredIdentityExists(transaction, candidate))
         {
             const bool exact = transaction.query_value<bool>(
                 ExactPayloadSql(), CandidateParameters(candidate));
@@ -233,6 +255,14 @@ EconomicEventConsensusImportReport Compare(
         {
             item.disposition = EconomicEventConsensusImportDisposition::rejected;
             item.diagnostic = "secondary_source_event_identity_conflict";
+            ++report.rejected;
+        }
+        else if (candidate.forecast.parseStatus == "parsed" &&
+                 StoredPopulatedConsensusExists(
+                     transaction, candidate.economicEventId))
+        {
+            item.disposition = EconomicEventConsensusImportDisposition::rejected;
+            item.diagnostic = "populated_consensus_precedence_conflict";
             ++report.rejected;
         }
         else

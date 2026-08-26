@@ -45,6 +45,23 @@ Economic-calendar enrichment persistence is created by:
   `--import-economic-consensus --input=<audited.csv> --dry-run|--apply`.
   Exact retries are unchanged; conflicting retries fail closed. This migration
   does not backfill rows or alter economic-event Tensor/model features.
+- `082_economic_event_consensus_provider_provenance.sql`: upgrades the
+  phase-one table without changing any stored consensus value. It gives each
+  immutable provider observation a surrogate row ID and a deterministic
+  provider-scoped observation ID, retains provider artifact/date/hash and
+  provider-specific JSON provenance, and records whether the row is an OANDA
+  initial population, an OANDA matched blank, a verified Myfxbook OANDA-blank
+  fill, or a verified Myfxbook JOLTS gap fill. A partial unique index permits
+  retained blank OANDA evidence plus one populated Myfxbook fill, while
+  prohibiting two populated consensus values for one authoritative event. The
+  `economic_event_selected_consensus` view exposes only that sole populated
+  observation. The authoritative workflow is
+  `--import-economic-consensus --evidence-root=EconomicCalendar/raw
+  --dry-run|--apply`; it validates the retained normalized/reconciliation
+  evidence, accepts only the established 113 JOLTS and three OANDA-blank
+  candidates, matches government events, and fails closed on conflicts. The
+  migration and workflow do not alter `economic_event.source_agency`, create
+  economic events, or change model feature contracts.
 
 Experiment scheduling tables are created by:
 

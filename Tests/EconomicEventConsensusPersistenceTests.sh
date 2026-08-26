@@ -12,8 +12,11 @@ PRODUCTION_DB="${LSTM_PRODUCTION_DB_NAME:-LSTM}"
 RUN_ID="$(date -u +%Y%m%d%H%M%S)_$$"
 FOCUSED_DB="ea_consensus_phase1_test_${RUN_ID}"
 INTEGRATION_DB="ea_consensus_phase1_integration_${RUN_ID}"
+WORKFLOW_DB="ea_consensus_authoritative_workflow_${RUN_ID}"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ea-consensus-phase1.XXXXXX")"
 SEED_FILE="$TEMP_DIR/economic_event_seed.csv"
+ALL_EVENT_SEED_FILE="$TEMP_DIR/all_economic_event_seed.csv"
+CONSENSUS_SEED_FILE="$TEMP_DIR/economic_event_consensus_seed.csv"
 BAD_HEADER_FILE="$TEMP_DIR/missing_required_column.csv"
 
 cleanup() {
@@ -21,7 +24,10 @@ cleanup() {
         "$FOCUSED_DB" >/dev/null
     dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
         "$INTEGRATION_DB" >/dev/null
-    rm -f "$SEED_FILE" "$BAD_HEADER_FILE"
+    dropdb --if-exists --host="$DB_HOST" --username="$DB_USER" \
+        "$WORKFLOW_DB" >/dev/null
+    rm -f "$SEED_FILE" "$ALL_EVENT_SEED_FILE" "$CONSENSUS_SEED_FILE" \
+        "$BAD_HEADER_FILE"
     rmdir "$TEMP_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -83,6 +89,10 @@ create_schema() {
         --dbname="$database" \
         -f "$ROOT/Database/migrations/081_economic_event_consensus.sql" \
         >/dev/null
+    psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+        --dbname="$database" \
+        -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" \
+        >/dev/null
 }
 
 create_schema "$FOCUSED_DB"
@@ -91,7 +101,7 @@ LSTM_DB_NAME="$FOCUSED_DB" CONSENSUS_INPUT="$CANDIDATES" "$TEST_BIN"
 
 test "$(psql -X --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$FOCUSED_DB" -tAc \
-    "SELECT count(*) FROM pg_constraint WHERE conrelid = 'economic_event_consensus'::regclass AND conname IN ('economic_event_consensus_pkey','economic_event_consensus_economic_event_id_fkey','economic_event_consensus_source_event_uq','economic_event_consensus_forecast_semantics_ck','economic_event_consensus_previous_semantics_ck','economic_event_consensus_actual_semantics_ck');")" = "6"
+    "SELECT count(*) FROM pg_constraint WHERE conrelid = 'economic_event_consensus'::regclass AND conname IN ('economic_event_consensus_pkey','economic_event_consensus_economic_event_id_fkey','economic_event_consensus_provider_observation_uq','economic_event_consensus_forecast_semantics_ck','economic_event_consensus_previous_semantics_ck','economic_event_consensus_actual_semantics_ck');")" = "6"
 
 sed '1s/forecast_parse_status/forecast_parse_state/' \
     "$CANDIDATES" > "$BAD_HEADER_FILE"
@@ -113,8 +123,8 @@ PRODUCTION_COUNT_BEFORE="$(PGOPTIONS='-c default_transaction_read_only=on' \
 PRODUCTION_CONSENSUS_BEFORE="$(PGOPTIONS='-c default_transaction_read_only=on' \
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$PRODUCTION_DB" -tAc \
-    "SELECT current_setting('transaction_read_only') || '|' || (to_regclass('public.economic_event_consensus') IS NULL)::text;")"
-test "$PRODUCTION_CONSENSUS_BEFORE" = "on|true"
+    "SELECT current_setting('transaction_read_only') || '|' || count(*) FROM economic_event_consensus;")"
+test "$PRODUCTION_CONSENSUS_BEFORE" = "on|1416"
 
 CANDIDATE_IDS="$(tail -n +2 "$CANDIDATES" | cut -d, -f1 | paste -sd, -)"
 PGOPTIONS='-c default_transaction_read_only=on' \
@@ -183,6 +193,110 @@ dropdb --host="$DB_HOST" --username="$DB_USER" "$INTEGRATION_DB"
 database_must_not_exist "$INTEGRATION_DB"
 echo "INTEGRATION_DISPOSABLE_DATABASE_DROPPED=true"
 
+# Exercise the forward 081 -> 082 upgrade and the authoritative mixed-provider
+# workflow against a disposable clone of production canonical/OANDA state.
+PGOPTIONS='-c default_transaction_read_only=on' \
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$PRODUCTION_DB" -c "\copy (
+        SELECT economic_event_id, currency, event_family, event_timestamp_utc,
+               source_agency, source_event_id, source_url, reference_period,
+               event_importance, historical_time_confidence,
+               source_release_date, source_release_time, source_timezone,
+               imported_at
+        FROM economic_event ORDER BY economic_event_id
+    ) TO '$ALL_EVENT_SEED_FILE' CSV HEADER" >/dev/null
+PGOPTIONS='-c default_transaction_read_only=on' \
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$PRODUCTION_DB" -c "\copy (
+        SELECT economic_event_id, consensus_source, source_report_id,
+               source_event_id, source_event_name, source_period,
+               source_priority, source_timestamp_epoch, source_date,
+               source_artifact_path, match_rule, semantic_contract,
+               forecast_raw, forecast_parse_status, forecast_value_kind,
+               forecast_value_low, forecast_value_high,
+               forecast_canonical_value_low, forecast_canonical_value_high,
+               forecast_unit, forecast_scale, forecast_qualifier,
+               previous_raw, previous_parse_status, previous_value_kind,
+               previous_value_low, previous_value_high,
+               previous_canonical_value_low, previous_canonical_value_high,
+               previous_unit, previous_scale, previous_qualifier,
+               actual_raw, actual_parse_status, actual_value_kind,
+               actual_value_low, actual_value_high,
+               actual_canonical_value_low, actual_canonical_value_high,
+               actual_unit, actual_scale, actual_qualifier, imported_at
+        FROM economic_event_consensus ORDER BY economic_event_id
+    ) TO '$CONSENSUS_SEED_FILE' CSV HEADER" >/dev/null
+
+database_must_not_exist "$WORKFLOW_DB"
+createdb --host="$DB_HOST" --username="$DB_USER" --template=template0 \
+    "$WORKFLOW_DB"
+for migration in \
+    072_economic_event.sql \
+    080_economic_event_distinct_same_time_identity.sql \
+    081_economic_event_consensus.sql; do
+    psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+        --dbname="$WORKFLOW_DB" \
+        -f "$ROOT/Database/migrations/$migration" >/dev/null
+done
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$WORKFLOW_DB" \
+    -c "\copy economic_event FROM '$ALL_EVENT_SEED_FILE' CSV HEADER" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$WORKFLOW_DB" \
+    -c "\copy economic_event_consensus FROM '$CONSENSUS_SEED_FILE' CSV HEADER" \
+    >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$WORKFLOW_DB" \
+    -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" \
+    >/dev/null
+
+EVIDENCE_ROOT="$ROOT/EconomicCalendar/raw"
+
+EXPECTED_MYFXBOOK_SHA256="1538055386838d8ec50ab9cce40153f69aa8bf841c2ae50f67751b2c465432cb"
+MYFXBOOK_CAPTURE="$EVIDENCE_ROOT/myfxbook/myfxbook_consensus_history.json"
+
+ACTUAL_MYFXBOOK_SHA256="$(shasum -a 256 "$MYFXBOOK_CAPTURE" | awk '{print $1}')"
+test "$ACTUAL_MYFXBOOK_SHA256" = "$EXPECTED_MYFXBOOK_SHA256"
+
+WORKFLOW_DRY_RUN="$(LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" \
+    LSTM_DB_NAME="$WORKFLOW_DB" "$CLI_BIN" \
+    --import-economic-consensus --evidence-root="$EVIDENCE_ROOT" --dry-run)"
+grep -Fq 'canonical_events_examined=2601,oanda_candidates=1405,oanda_matched_blanks=11,myfxbook_jolts_gap_candidates=113,myfxbook_oanda_blank_candidates=3,matched_canonical_events=1521,missing_canonical_matches=0,ambiguous_canonical_matches=0,source_exclusions=69,inserted=116,unchanged=1405,rejected=0' \
+    <<< "$WORKFLOW_DRY_RUN"
+
+WORKFLOW_FIRST_APPLY="$(LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" \
+    LSTM_DB_NAME="$WORKFLOW_DB" "$CLI_BIN" \
+    --import-economic-consensus --evidence-root="$EVIDENCE_ROOT" --apply)"
+grep -Fq 'inserted=116,unchanged=1405,rejected=0' \
+    <<< "$WORKFLOW_FIRST_APPLY"
+WORKFLOW_SECOND_APPLY="$(LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" \
+    LSTM_DB_NAME="$WORKFLOW_DB" "$CLI_BIN" \
+    --import-economic-consensus --evidence-root="$EVIDENCE_ROOT" --apply)"
+grep -Fq 'inserted=0,unchanged=1521,rejected=0' \
+    <<< "$WORKFLOW_SECOND_APPLY"
+
+workflow_scalar() {
+    psql -X --host="$DB_HOST" --username="$DB_USER" \
+        --dbname="$WORKFLOW_DB" -tAc "$1"
+}
+test "$(workflow_scalar 'SELECT count(*) FROM economic_event_consensus;')" = "1532"
+test "$(workflow_scalar "SELECT count(*) FROM pg_indexes WHERE tablename = 'economic_event_consensus' AND indexname = 'economic_event_consensus_one_populated_per_event_uq';")" = "1"
+test "$(workflow_scalar 'SELECT count(*) FROM economic_event_selected_consensus;')" = "1521"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE consensus_source = 'OANDA';")" = "1405"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE consensus_source = 'MYFXBOOK';")" = "116"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE candidate_classification = 'myfxbook_jolts_gap_fill';")" = "113"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE candidate_classification = 'myfxbook_oanda_blank_fill';")" = "3"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE c.consensus_source = 'MYFXBOOK' AND e.source_agency IN ('BLS','CENSUS');")" = "116"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE c.consensus_source = 'MYFXBOOK' AND c.candidate_classification = 'myfxbook_jolts_gap_fill' AND e.source_agency = 'BLS';")" = "113"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus WHERE source_artifact_path = 'EconomicCalendar/raw/myfxbook/myfxbook_consensus_history.json' AND source_artifact_sha256 = '1538055386838d8ec50ab9cce40153f69aa8bf841c2ae50f67751b2c465432cb' AND provider_provenance ? 'source_observation_ordinal';")" = "116"
+test "$(workflow_scalar "SELECT count(*) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE e.event_family = 'FOMC' AND e.source_release_date IN (DATE '2020-03-03', DATE '2020-03-15');")" = "0"
+test "$(workflow_scalar "SELECT string_agg(e.event_family || ':' || e.source_release_date::text || ':' || c.consensus_value_low::text, ',' ORDER BY e.source_release_date) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE c.candidate_classification = 'myfxbook_oanda_blank_fill';")" = "PPI:2013-12-13:-0.1,RETAIL_SALES:2022-09-15:0.0,CPI:2023-12-12:0.0"
+test "$(workflow_scalar "SELECT string_agg(e.source_release_date::text || ':' || c.consensus_value_low::text, ',' ORDER BY e.source_release_date) FROM economic_event_selected_consensus c JOIN economic_event e USING (economic_event_id) WHERE c.candidate_classification = 'myfxbook_jolts_gap_fill' AND e.source_release_date IN (DATE '2014-07-08', DATE '2023-11-01');")" = "2014-07-08:4530000,2023-11-01:9250000"
+
+dropdb --host="$DB_HOST" --username="$DB_USER" "$WORKFLOW_DB"
+database_must_not_exist "$WORKFLOW_DB"
+echo "WORKFLOW_DISPOSABLE_DATABASE_DROPPED=true"
+
 PRODUCTION_COUNT_AFTER="$(PGOPTIONS='-c default_transaction_read_only=on' \
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$PRODUCTION_DB" -tAc \
@@ -190,9 +304,9 @@ PRODUCTION_COUNT_AFTER="$(PGOPTIONS='-c default_transaction_read_only=on' \
 PRODUCTION_CONSENSUS_AFTER="$(PGOPTIONS='-c default_transaction_read_only=on' \
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$PRODUCTION_DB" -tAc \
-    "SELECT current_setting('transaction_read_only') || '|' || (to_regclass('public.economic_event_consensus') IS NULL)::text;")"
+    "SELECT current_setting('transaction_read_only') || '|' || count(*) FROM economic_event_consensus;")"
 test "$PRODUCTION_COUNT_AFTER" = "$PRODUCTION_COUNT_BEFORE"
-test "$PRODUCTION_CONSENSUS_AFTER" = "on|true"
+test "$PRODUCTION_CONSENSUS_AFTER" = "$PRODUCTION_CONSENSUS_BEFORE"
 
 echo "FULL_IMPORT_ROWS=1416"
 echo "FULL_IMPORT_MISSING_FORECASTS=11"
