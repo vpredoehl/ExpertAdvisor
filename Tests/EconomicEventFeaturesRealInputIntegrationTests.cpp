@@ -163,12 +163,10 @@ void AssertRanges(
            values.relevantEventHasConsensus == 1.0F);
     assert(values.relevantEventConsensusIsRange == 0.0F ||
            values.relevantEventConsensusIsRange == 1.0F);
-    assert(values.releasedEventHasSurprise == 0.0F ||
-           values.releasedEventHasSurprise == 1.0F);
-    assert(values.releasedEventSurpriseAbs >= 0.0F);
-    assert(values.releasedEventSurpriseDirection == -1.0F ||
-           values.releasedEventSurpriseDirection == 0.0F ||
-           values.releasedEventSurpriseDirection == 1.0F);
+    assert(values.releasedEventHasSurprise == 0.0F);
+    assert(values.releasedEventSurprise == 0.0F);
+    assert(values.releasedEventSurpriseAbs == 0.0F);
+    assert(values.releasedEventSurpriseDirection == 0.0F);
 }
 
 } // namespace

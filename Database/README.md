@@ -61,7 +61,14 @@ Economic-calendar enrichment persistence is created by:
   evidence, accepts only the established 113 JOLTS and three OANDA-blank
   candidates, matches government events, and fails closed on conflicts. The
   migration and workflow do not alter `economic_event.source_agency`, create
-  economic events, or change model feature contracts.
+  economic events, or change model feature contracts. The selected view's
+  consensus low/high/kind/unit/scale/qualifier projection is also the complete
+  database contract required by semantic-layout-v4 consensus features.
+  Provider `actual` fields are intentionally not projected into model inputs:
+  persisted observations do not prove original release-time rather than later
+  revised actual provenance. The four append-only surprise channels therefore
+  remain reserved zero values, and no migration after 082 is required for the
+  consensus-only Phase-4 runtime.
 
 Experiment scheduling tables are created by:
 

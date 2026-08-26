@@ -13,9 +13,10 @@ into arbitrary earlier bars. For a completed 15-minute bar with information
 cutoff `bar_start + 15 minutes`:
 
 - an event exactly at the cutoff supplies consensus, but not actual/surprise;
-- an event strictly before the cutoff is released and may supply surprise;
-- otherwise consensus/surprise describe the most recent released event;
-- a future event after the cutoff supplies nothing.
+- otherwise consensus describes the most recent released event;
+- a future event after the cutoff supplies nothing;
+- surprise is unavailable at every cutoff under the current provenance
+  contract.
 
 At a shared timestamp, highest `event_importance` wins; a positive lower
 `economic_event_id` is the deterministic tie-breaker. This affects only the
@@ -48,23 +49,30 @@ layout v4 appends columns 59 through 66:
 | 60 | `relevant_event_consensus_low` | normalized low/scalar endpoint |
 | 61 | `relevant_event_consensus_high` | normalized high; scalar duplicates low |
 | 62 | `relevant_event_consensus_is_range` | 0 or 1 |
-| 63 | `released_event_has_surprise` | 0 or 1 |
-| 64 | `released_event_surprise` | normalized `actual - consensus` |
-| 65 | `released_event_surprise_abs` | absolute normalized surprise |
-| 66 | `released_event_surprise_direction` | -1, 0, or +1 |
+| 63 | `released_event_has_surprise` | reserved; always 0 |
+| 64 | `released_event_surprise` | reserved; always 0 |
+| 65 | `released_event_surprise_abs` | reserved; always 0 |
+| 66 | `released_event_surprise_direction` | reserved; always 0 |
 
 Missing consensus encodes all eight fields as zero. A true zero surprise is
-distinguished from missing/incompatible surprise by
-`released_event_has_surprise = 1`.
+not represented by the current contract because surprise is disabled.
 
-Surprise requires scalar forecast and actual values with identical persisted
-unit, source scale, and qualifier. Missing or incompatible actual semantics set
-the validity bit and all surprise values to zero.
+The persisted OANDA and Myfxbook provider artifacts do not carry an explicit
+contract proving that an `actual` is the original value known at the historical
+release instant rather than a later revision. Provider identity, event time,
+import time, artifact date, observation date, and mere actual-value presence do
+not establish that provenance. The runtime therefore does not load provider
+actual fields and cannot derive `actual - consensus`. All four surprise
+channels are reserved and remain zero until a future persisted, deterministic
+first-release/revision provenance contract is implemented.
 
-FOMC range consensus preserves both endpoints and sets the range bit. Range
-surprise is unavailable because no midpoint or interval-subtraction rule is
-part of the persisted semantic contract. Compatible scalar FOMC observations
-may produce surprise normally.
+Current active semantic-layout-v4 model inputs are consensus-only: presence,
+normalized low/high endpoints, and the range bit are active, followed by four
+reserved zero surprise channels.
+
+FOMC range consensus preserves both endpoints and sets the range bit. No
+midpoint or interval-subtraction rule is invented. Like every other family,
+FOMC surprise remains unavailable under the current provenance contract.
 
 ## Width and ancestry
 
@@ -75,6 +83,7 @@ may produce surprise normally.
 - expansion to width 71 continues through the existing explicit
   `resume_expand_input_width` workflow with zero-initialized appended weights.
 
-Migration 083 only extends the selected view with actual semantics from the
-same immutable selected provider observation. It does not mutate consensus
-rows or change selection precedence.
+The runtime requires production schema through migration 082. It queries only
+the consensus and provider-diagnostic columns exposed by the migration-082
+`economic_event_selected_consensus` view. No migration 083 is required for the
+consensus-only Phase-4 deployment.

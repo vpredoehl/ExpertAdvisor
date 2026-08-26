@@ -120,24 +120,6 @@ EconomicEvent MapEconomicEvent(const pqxx::row& row)
         selected.provider =
             row["consensus_source"].as<std::string>();
 
-        if (row["selected_actual_parse_status"].as<std::string>() == "parsed")
-        {
-            EconomicEventConsensusValue actual;
-            actual.valueKind =
-                row["selected_actual_value_kind"].as<std::string>();
-            actual.canonicalValueLow =
-                row["selected_actual_value_low"].as<double>();
-            actual.canonicalValueHigh = OptionalValue<double>(
-                row, "selected_actual_value_high");
-            actual.unit =
-                row["selected_actual_unit"].as<std::string>();
-            actual.scale =
-                row["selected_actual_scale"].as<double>();
-            actual.qualifier = OptionalValue<std::string>(
-                row, "selected_actual_qualifier");
-            selected.actual = std::move(actual);
-        }
-
         event.selectedConsensus = std::move(selected);
     }
 
@@ -181,16 +163,7 @@ std::string EconomicEventProjection(
         consensusPrefix + "consensus_unit, " +
         consensusPrefix + "consensus_scale, " +
         consensusPrefix + "consensus_qualifier, " +
-        consensusPrefix + "consensus_source, " +
-        "COALESCE(" + consensusPrefix +
-            "selected_actual_parse_status, 'missing') "
-            "AS selected_actual_parse_status, " +
-        consensusPrefix + "selected_actual_value_low, " +
-        consensusPrefix + "selected_actual_value_high, " +
-        consensusPrefix + "selected_actual_value_kind, " +
-        consensusPrefix + "selected_actual_unit, " +
-        consensusPrefix + "selected_actual_scale, " +
-        consensusPrefix + "selected_actual_qualifier ";
+        consensusPrefix + "consensus_source ";
 }
 
 std::vector<EconomicEvent> MapEconomicEvents(const pqxx::result& rows)

@@ -53,9 +53,25 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" \
     -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" >/dev/null
-psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
-    --dbname="$DB_NAME" \
-    -f "$ROOT/Database/migrations/083_economic_event_selected_consensus_release_semantics.sql" >/dev/null
+
+if [[ -e "$ROOT/Database/migrations/083_economic_event_selected_consensus_release_semantics.sql" ]]; then
+    printf 'unexpected migration 083 remains in deployment set\n' >&2
+    exit 3
+fi
+
+expected_view_columns="economic_event_consensus_id,economic_event_id,consensus_value_low,consensus_value_high,consensus_value_kind,consensus_unit,consensus_scale,consensus_qualifier,consensus_source,source_report_id,source_event_id,source_observation_id,source_release_date,source_artifact_path,source_artifact_sha256,candidate_classification,match_rule,semantic_contract,provider_provenance,imported_at"
+actual_view_columns="$(psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" \
+    --username="$DB_USER" --dbname="$DB_NAME" -tAc \
+    "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'economic_event_selected_consensus';")"
+if [[ "$actual_view_columns" != "$expected_view_columns" ]]; then
+    printf 'schema-082 selected-consensus projection mismatch: %s\n' \
+        "$actual_view_columns" >&2
+    exit 4
+fi
+
+printf 'DISPOSABLE_SCHEMA_END=082\n'
+printf 'MIGRATION_083_APPLIED=false\n'
+printf 'SELECTED_CONSENSUS_VIEW_082_ONLY=true\n'
 
 LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" LSTM_DB_NAME="$DB_NAME" \
     "$BIN"

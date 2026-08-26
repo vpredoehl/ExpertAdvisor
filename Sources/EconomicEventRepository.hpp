@@ -23,7 +23,14 @@ struct EconomicEventConsensusValue
 struct EconomicEventSelectedConsensus
 {
     EconomicEventConsensusValue forecast;
-    std::optional<EconomicEventConsensusValue> actual;
+
+    // A provider artifact may contain an actual value, but the current
+    // persistence contract does not prove that it is the original value known
+    // at release time rather than a later revision. Repository loaders ending
+    // at schema 082 therefore never populate this field, and feature
+    // computation must ignore it. It exists only so tests can prove that mere
+    // actual-value presence cannot activate the reserved surprise channels.
+    std::optional<EconomicEventConsensusValue> unprovenProviderActual;
 
     // Retained for diagnostics and repository tests only. Feature computation
     // deliberately ignores provider identity and all provider provenance.
@@ -76,8 +83,7 @@ std::vector<EconomicEvent> LoadEconomicEvents(
 // rows to the latest state of each model-facing family. This exact seed query
 // avoids an arbitrary recency lookback and remains one ordered database query.
 // The inclusive end boundary supplies consensus to the final completed bar
-// when a release occurs exactly at that bar's information cutoff; the strict
-// feature-engine release test still prevents actual/surprise leakage.
+// when a release occurs exactly at that bar's information cutoff.
 std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     pqxx::transaction_base& transaction,
     const std::string& currency,

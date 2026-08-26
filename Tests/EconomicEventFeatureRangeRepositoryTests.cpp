@@ -106,7 +106,20 @@ int main()
            std::optional<std::string>{"range-gdp"});
     assert(halfOpenEvents.front().selectedConsensus);
     assert(halfOpenEvents.front().selectedConsensus->provider == "OANDA");
-    assert(halfOpenEvents.front().selectedConsensus->actual);
+    assert(!halfOpenEvents.front().selectedConsensus
+                ->unprovenProviderActual);
+
+    // The base observation really does contain a populated historical OANDA
+    // actual. Schema 082 deliberately does not expose it through the selected
+    // view, so presence alone cannot activate surprise in runtime features.
+    const pqxx::row persistedOanda = read.exec(
+        "SELECT actual_parse_status, actual_canonical_value_low "
+        "FROM economic_event_consensus "
+        "WHERE source_event_id = 9001;").one_row();
+    assert(persistedOanda["actual_parse_status"].as<std::string>() ==
+           "parsed");
+    assert(persistedOanda["actual_canonical_value_low"].as<double>() ==
+           2.5);
 
     const auto events = LoadEconomicEventsForFeatureRange(
         read, "USD", "2023-11-14 22:13:20+00",
@@ -121,11 +134,10 @@ int main()
     assert(events[3].sourceEventId == std::optional<std::string>{"range-jolts"});
     assert(events[2].selectedConsensus);
     assert(events[2].selectedConsensus->provider == "OANDA");
-    assert(events[2].selectedConsensus->actual);
-    assert(events[2].selectedConsensus->actual->canonicalValueLow == 2.5);
+    assert(!events[2].selectedConsensus->unprovenProviderActual);
     assert(events[3].selectedConsensus);
     assert(events[3].selectedConsensus->provider == "MYFXBOOK");
-    assert(!events[3].selectedConsensus->actual);
+    assert(!events[3].selectedConsensus->unprovenProviderActual);
     assert(events[3].selectedConsensus->forecast.canonicalValueLow == 4530000.0);
 
     constexpr std::int64_t firstBarStart = 1'700'000'000;
@@ -137,6 +149,9 @@ int main()
     assert(first.relevantEventHasConsensus == 1.0F);
     assert(Near(first.relevantEventConsensusLow, 0.453));
     assert(first.releasedEventHasSurprise == 0.0F);
+    assert(first.releasedEventSurprise == 0.0F);
+    assert(first.releasedEventSurpriseAbs == 0.0F);
+    assert(first.releasedEventSurpriseDirection == 0.0F);
     assert(Near(first.inflationRecencyDecay,
                 std::exp(-4500.0 / 86400.0)));
     assert(Near(first.employmentRecencyDecay,
@@ -148,6 +163,9 @@ int main()
     assert(second.relevantEventHasConsensus == 1.0F);
     assert(Near(second.relevantEventConsensusLow, 0.453));
     assert(second.releasedEventHasSurprise == 0.0F);
+    assert(second.releasedEventSurprise == 0.0F);
+    assert(second.releasedEventSurpriseAbs == 0.0F);
+    assert(second.releasedEventSurpriseDirection == 0.0F);
 
     return 0;
 }

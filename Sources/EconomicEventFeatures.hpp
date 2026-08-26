@@ -69,9 +69,10 @@ struct EconomicEventFeatureValues
     float relevantEventConsensusHigh = 0.0F;
     float relevantEventConsensusIsRange = 0.0F;
 
-    // Surprise is available only for the most recent released event and only
-    // when forecast/actual are compatible scalar semantics. The validity bit
-    // distinguishes missing/incompatible data from a true zero surprise.
+    // Reserved append-only channels. Persisted provider actuals do not prove
+    // first-release/revision provenance, so the current v4 contract leaves all
+    // four values zero for every event. They may be activated only by a future
+    // explicit persisted release-time actual provenance contract.
     float releasedEventHasSurprise = 0.0F;
     float releasedEventSurprise = 0.0F;
     float releasedEventSurpriseAbs = 0.0F;

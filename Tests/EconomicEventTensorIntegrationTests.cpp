@@ -48,7 +48,7 @@ EconomicEvent ConsensusEventAt(std::int64_t seconds,
     selected.provider = "OANDA";
     selected.forecast = EconomicEventConsensusValue{
         "scalar", forecast, std::nullopt, "percent", 1.0, std::nullopt};
-    selected.actual = EconomicEventConsensusValue{
+    selected.unprovenProviderActual = EconomicEventConsensusValue{
         "scalar", actual, std::nullopt, "percent", 1.0, std::nullopt};
     event.selectedConsensus = std::move(selected);
     return event;
@@ -149,9 +149,10 @@ int main()
     assert(Near(bar0[relevantEventConsensusLowCol], 0.2));
     assert(bar0[releasedEventHasSurpriseCol] == 0.0F);
     assert(bar1[growthEventCol] == 1.0F);          // bar-start event is included
-    assert(bar1[releasedEventHasSurpriseCol] == 1.0F);
-    assert(Near(bar1[releasedEventSurpriseCol], 0.05));
-    assert(bar1[releasedEventSurpriseDirectionCol] == 1.0F);
+    assert(bar1[releasedEventHasSurpriseCol] == 0.0F);
+    assert(bar1[releasedEventSurpriseCol] == 0.0F);
+    assert(bar1[releasedEventSurpriseAbsCol] == 0.0F);
+    assert(bar1[releasedEventSurpriseDirectionCol] == 0.0F);
     assert(bar2[consumerDemandEventCol] == 0.0F);  // future event cannot leak
     assert(bar3[consumerDemandEventCol] == 1.0F);
 

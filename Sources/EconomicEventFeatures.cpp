@@ -166,57 +166,6 @@ void SetConsensus(
 }
 
 
-bool CompatibleScalarSurprise(
-    const EconomicEventSelectedConsensus& selected)
-{
-    if (!selected.actual)
-        return false;
-
-    const EconomicEventConsensusValue& forecast = selected.forecast;
-    const EconomicEventConsensusValue& actual = *selected.actual;
-
-    return
-        ValidValueShape(actual) &&
-        forecast.valueKind == "scalar" &&
-        actual.valueKind == "scalar" &&
-        forecast.unit == actual.unit &&
-        forecast.scale == actual.scale &&
-        forecast.qualifier == actual.qualifier;
-}
-
-
-template <typename MappedEvent>
-void SetSurprise(
-    EconomicEventFeatureValues& values,
-    const MappedEvent& event)
-{
-    if (
-        !event.selectedConsensus ||
-        !CompatibleScalarSurprise(*event.selectedConsensus))
-    {
-        return;
-    }
-
-    const double normalized = Normalize(
-        event,
-        event.selectedConsensus->actual->canonicalValueLow -
-            event.selectedConsensus->forecast.canonicalValueLow);
-
-    if (!std::isfinite(normalized))
-    {
-        throw std::invalid_argument(
-            "economic_event_consensus_nonfinite_surprise");
-    }
-
-    values.releasedEventHasSurprise = 1.0F;
-    values.releasedEventSurprise = static_cast<float>(normalized);
-    values.releasedEventSurpriseAbs =
-        static_cast<float>(std::abs(normalized));
-    values.releasedEventSurpriseDirection =
-        normalized > 0.0 ? 1.0F : normalized < 0.0 ? -1.0F : 0.0F;
-}
-
-
 template <typename MappedEvent>
 bool MoreRelevantAtSameTimestamp(
     const MappedEvent& candidate,
@@ -511,8 +460,8 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
 
     // Final pre-release consensus is exposed only when the completed
     // information cutoff is exactly the authoritative release timestamp. On
-    // all other bars, consensus and surprise describe the same most-recent
-    // released event. This makes a provider's final historical forecast
+    // all other bars, consensus describes the most-recent released event.
+    // This makes a provider's final historical forecast
     // impossible to leak into arbitrarily early bars when no historical
     // provider-observation timestamp exists.
     const bool exactBoundaryEvent =
@@ -530,7 +479,6 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
         const MappedEvent& relevant =
             events_[*mostRecentReleasedEventIndex_];
         SetConsensus(values, relevant);
-        SetSurprise(values, relevant);
     }
 
     previousBarStart_ = barStart;
