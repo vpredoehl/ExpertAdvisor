@@ -291,6 +291,55 @@ int main()
     assert(economicEventInput[consumerDemandRecencyDecayCol] ==
            physicalTensor[consumerDemandRecencyDecayCol]);
 
+    // The consensus control retains the current width and zeros exactly the
+    // four active consensus channels.  The economic prefix and reserved
+    // surprise channels remain identical to treatment.
+    const auto consensusAblation = EA::FeatureAblationMask::Parse(
+        std::string{EA::kEconomicEventConsensusAblationMaskText});
+    assert(consensusAblation.CanonicalText() ==
+           EA::kEconomicEventConsensusAblationMaskText);
+    std::vector<float> consensusControl(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        consensusControl.data(), physicalTensor.data(), economicEvents,
+        consensusAblation);
+    assert(consensusControl.size() == EA::kCurrentModelInputWidth);
+    for (std::size_t col = 0; col < relevantEventHasConsensusCol; ++col)
+        assert(consensusControl[col] == economicEventInput[col]);
+    for (std::size_t col = relevantEventHasConsensusCol;
+         col <= relevantEventConsensusIsRangeCol; ++col)
+        assert(consensusControl[col] == 0.0f);
+    for (std::size_t col = releasedEventHasSurpriseCol;
+         col < feature_size; ++col)
+        assert(consensusControl[col] == economicEventInput[col]);
+
+    const auto unrelatedAblation = EA::FeatureAblationMask::Parse(
+        "return_autocorrelation");
+    std::vector<float> unrelatedControl(EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        unrelatedControl.data(), physicalTensor.data(), economicEvents,
+        unrelatedAblation);
+    assert(unrelatedControl[returnAutocorrelationCol] == 0.0f);
+    for (std::size_t col = relevantEventHasConsensusCol;
+         col <= relevantEventConsensusIsRangeCol; ++col)
+        assert(unrelatedControl[col] == economicEventInput[col]);
+
+    bool consensusMaskRejectedByWidth63 = false;
+    try
+    {
+        const auto width63 = EA::ResolveModelInputContract(
+            EA::kEconomicEventModelInputWidth, physicalTensor.size());
+        std::vector<float> historicalConsensusInput(
+            EA::kEconomicEventModelInputWidth, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(
+            historicalConsensusInput.data(), physicalTensor.data(), width63,
+            consensusAblation);
+    }
+    catch (const std::runtime_error&)
+    {
+        consensusMaskRejectedByWidth63 = true;
+    }
+    assert(consensusMaskRejectedByWidth63);
+
     // Canonical feature identities are independent of physical offsets and
     // masking happens after projection without mutating Tensor storage.
     const auto emptyMask = EA::FeatureAblationMask::Parse("");

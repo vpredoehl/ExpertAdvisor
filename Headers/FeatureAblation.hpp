@@ -23,7 +23,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 11> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 15> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -35,10 +35,21 @@ inline constexpr std::array<AblatableFeature, 11> kAblatableFeatures{{
     {"rolling_range_expansion", causalRollingRangeExpansionCol},
     {"historical_level_proximity", historicalLevelProximityCol},
     {"return_autocorrelation", returnAutocorrelationCol},
+    {"relevant_event_has_consensus", relevantEventHasConsensusCol},
+    {"relevant_event_consensus_low", relevantEventConsensusLowCol},
+    {"relevant_event_consensus_high", relevantEventConsensusHighCol},
+    {"relevant_event_consensus_is_range", relevantEventConsensusIsRangeCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
 }};
+
+// The controlled consensus experiment uses all four active channels together.
+// Each remains individually named in persisted provenance; this constant keeps
+// the scientific control arm deterministic without adding group/alias parsing.
+inline constexpr std::string_view kEconomicEventConsensusAblationMaskText =
+    "relevant_event_has_consensus,relevant_event_consensus_low,"
+    "relevant_event_consensus_high,relevant_event_consensus_is_range";
 
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.

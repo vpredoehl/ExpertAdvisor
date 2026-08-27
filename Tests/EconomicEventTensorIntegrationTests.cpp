@@ -54,6 +54,20 @@ EconomicEvent ConsensusEventAt(std::int64_t seconds,
     return event;
 }
 
+EconomicEvent RangeConsensusEventAt(std::int64_t seconds,
+                                    double forecastLow,
+                                    double forecastHigh)
+{
+    EconomicEvent event = EventAt(
+        seconds, "FEDERAL_RESERVE", "FOMC");
+    EconomicEventSelectedConsensus selected;
+    selected.provider = "OANDA";
+    selected.forecast = EconomicEventConsensusValue{
+        "range", forecastLow, forecastHigh, "percent", 1.0, std::nullopt};
+    event.selectedConsensus = std::move(selected);
+    return event;
+}
+
 Feature BarAt(std::int64_t seconds, std::size_t index)
 {
     const float base = 1.0F + static_cast<float>(index) * 0.001F;
@@ -74,6 +88,32 @@ std::array<float, feature_size> Row(const Tensor& tensor, std::size_t index)
 bool Near(float actual, double expected, double tolerance = 1.0e-6)
 {
     return std::abs(static_cast<double>(actual) - expected) <= tolerance;
+}
+
+std::array<float, EA::kCurrentModelInputWidth> Project(
+    const std::array<float, feature_size>& row,
+    const EA::FeatureAblationMask& mask = {})
+{
+    const auto contract = EA::ResolveModelInputContract(
+        EA::kCurrentModelInputWidth, feature_size);
+    std::array<float, EA::kCurrentModelInputWidth> result{};
+    EA::CopyTensorFeaturesForModelInput(
+        result.data(), row.data(), contract, mask);
+    return result;
+}
+
+void AssertConsensusControlParity(
+    const std::array<float, EA::kCurrentModelInputWidth>& treatment,
+    const std::array<float, EA::kCurrentModelInputWidth>& control)
+{
+    for (std::size_t col = 0; col < relevantEventHasConsensusCol; ++col)
+        assert(control[col] == treatment[col]);
+    for (std::size_t col = relevantEventHasConsensusCol;
+         col <= relevantEventConsensusIsRangeCol; ++col)
+        assert(control[col] == 0.0F);
+    for (std::size_t col = releasedEventHasSurpriseCol;
+         col < EA::kCurrentModelInputWidth; ++col)
+        assert(control[col] == treatment[col]);
 }
 
 } // namespace
@@ -197,6 +237,72 @@ int main()
            bar1[relevantEventConsensusLowCol]);
     assert(modelInput[releasedEventSurpriseCol] ==
            bar1[releasedEventSurpriseCol]);
+
+    const auto consensusControlMask = EA::FeatureAblationMask::Parse(
+        std::string{EA::kEconomicEventConsensusAblationMaskText});
+    assert(consensusControlMask.CanonicalText() ==
+           EA::kEconomicEventConsensusAblationMaskText);
+    const auto scalarTreatment = Project(bar0);
+    const auto scalarControl = Project(bar0, consensusControlMask);
+    AssertConsensusControlParity(scalarTreatment, scalarControl);
+    assert(scalarTreatment[relevantEventHasConsensusCol] == 1.0F);
+    assert(Near(scalarTreatment[relevantEventConsensusLowCol], 0.2));
+    assert(Near(scalarTreatment[relevantEventConsensusHighCol], 0.2));
+    assert(scalarTreatment[relevantEventConsensusIsRangeCol] == 0.0F);
+    for (std::size_t col = releasedEventHasSurpriseCol;
+         col <= releasedEventSurpriseDirectionCol; ++col)
+    {
+        assert(scalarTreatment[col] == 0.0F);
+        assert(scalarControl[col] == 0.0F);
+    }
+
+    // Missing and genuine-zero consensus remain distinguishable in treatment;
+    // the control zeros only the four active channels in both cases.
+    Tensor missingConsensus{
+        "missing-consensus", kDefaultDonchian20Mode,
+        kDefaultDonchianLookback,
+        {EventAt(kBase + 100, "DOL_ETA", "WEEKLY_CLAIMS")}};
+    missingConsensus.Add(BarAt(kBase, 0));
+    const auto missingTreatment = Project(Row(missingConsensus, 0));
+    const auto missingControl = Project(
+        Row(missingConsensus, 0), consensusControlMask);
+    AssertConsensusControlParity(missingTreatment, missingControl);
+    assert(missingTreatment[relevantEventHasConsensusCol] == 0.0F);
+    assert(missingTreatment[relevantEventConsensusLowCol] == 0.0F);
+    assert(missingTreatment[relevantEventConsensusHighCol] == 0.0F);
+    assert(missingTreatment[employmentEventCol] == 1.0F);
+    assert(missingControl[employmentEventCol] ==
+           missingTreatment[employmentEventCol]);
+    assert(missingControl[employmentRecencyDecayCol] ==
+           missingTreatment[employmentRecencyDecayCol]);
+
+    Tensor zeroConsensus{
+        "zero-consensus", kDefaultDonchian20Mode,
+        kDefaultDonchianLookback,
+        {ConsensusEventAt(kBase + 100, "BLS", "CPI", 0.0, 0.0)}};
+    zeroConsensus.Add(BarAt(kBase, 0));
+    const auto zeroTreatment = Project(Row(zeroConsensus, 0));
+    const auto zeroControl = Project(Row(zeroConsensus, 0),
+                                     consensusControlMask);
+    AssertConsensusControlParity(zeroTreatment, zeroControl);
+    assert(zeroTreatment[relevantEventHasConsensusCol] == 1.0F);
+    assert(zeroTreatment[relevantEventConsensusLowCol] == 0.0F);
+    assert(zeroTreatment[relevantEventConsensusHighCol] == 0.0F);
+
+    // FOMC range endpoints and the range flag survive in treatment without a
+    // midpoint; the same-width control zeros all four consensus channels.
+    Tensor fomcRange{
+        "fomc-range", kDefaultDonchian20Mode, kDefaultDonchianLookback,
+        {RangeConsensusEventAt(kBase + 100, 5.25, 5.5)}};
+    fomcRange.Add(BarAt(kBase, 0));
+    const auto rangeTreatment = Project(Row(fomcRange, 0));
+    const auto rangeControl = Project(Row(fomcRange, 0),
+                                      consensusControlMask);
+    AssertConsensusControlParity(rangeTreatment, rangeControl);
+    assert(rangeTreatment[relevantEventHasConsensusCol] == 1.0F);
+    assert(Near(rangeTreatment[relevantEventConsensusLowCol], 0.525));
+    assert(Near(rangeTreatment[relevantEventConsensusHighCol], 0.55));
+    assert(rangeTreatment[relevantEventConsensusIsRangeCol] == 1.0F);
 
     return 0;
 }

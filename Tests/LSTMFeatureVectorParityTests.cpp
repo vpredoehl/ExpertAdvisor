@@ -22,15 +22,16 @@ bool IsZero(float value)
 std::vector<float> BuildModelInputRow(const std::vector<std::vector<float>>& sourceRows,
                                       const std::vector<float>& rawCloses,
                                       std::size_t currentGlobalPosition,
-                                      std::size_t modelInputWidth)
+                                      std::size_t modelInputWidth,
+                                      const EA::FeatureAblationMask& ablationMask = {})
 {
     const auto inputContract = EA::ResolveModelInputContract(
         modelInputWidth,
         sourceRows.at(currentGlobalPosition).size());
     std::vector<float> result(modelInputWidth, -1.0f);
-    EA::CopyTensorFeaturesForModelInput(result.data(),
-                                        sourceRows.at(currentGlobalPosition).data(),
-                                        inputContract);
+    EA::CopyTensorFeaturesForModelInput(
+        result.data(), sourceRows.at(currentGlobalPosition).data(),
+        inputContract, ablationMask);
     const std::size_t appended = EA::AppendMultiHorizonReturnFeaturesAtGlobalPosition(
         currentGlobalPosition,
         result.data(),
@@ -49,12 +50,13 @@ std::vector<float> BuildTrainingStyleModelInputRow(
     const std::vector<float>& rawCloses,
     std::size_t enclosingBatchGlobalStart,
     std::size_t batchLocalRow,
-    std::size_t modelInputWidth)
+    std::size_t modelInputWidth,
+    const EA::FeatureAblationMask& ablationMask = {})
 {
     return BuildModelInputRow(sourceRows,
                               rawCloses,
                               enclosingBatchGlobalStart + batchLocalRow,
-                              modelInputWidth);
+                              modelInputWidth, ablationMask);
 }
 
 std::vector<float> BuildInferenceStyleModelInputRow(
@@ -62,12 +64,13 @@ std::vector<float> BuildInferenceStyleModelInputRow(
     const std::vector<float>& rawCloses,
     std::size_t inferenceWindowGlobalStart,
     std::size_t windowLocalRow,
-    std::size_t modelInputWidth)
+    std::size_t modelInputWidth,
+    const EA::FeatureAblationMask& ablationMask = {})
 {
     return BuildModelInputRow(sourceRows,
                               rawCloses,
                               inferenceWindowGlobalStart + windowLocalRow,
-                              modelInputWidth);
+                              modelInputWidth, ablationMask);
 }
 
 void AssertByteIdentical(const std::vector<float>& lhs, const std::vector<float>& rhs)
@@ -115,6 +118,25 @@ int main()
     AssertByteIdentical(trainingAtOffset16, inferenceAtOffset16);
     for (std::size_t col = feature_size; col < EA::kCurrentModelInputWidth; ++col)
         assert(!IsZero(trainingAtOffset16[col]));
+
+    const auto consensusAblation = EA::FeatureAblationMask::Parse(
+        std::string{EA::kEconomicEventConsensusAblationMaskText});
+    const auto ablatedTraining = BuildTrainingStyleModelInputRow(
+        sourceRows, rawCloses, kPreviouslyFailingGlobalStart, 0,
+        EA::kCurrentModelInputWidth, consensusAblation);
+    const auto ablatedInference = BuildInferenceStyleModelInputRow(
+        sourceRows, rawCloses, kPreviouslyFailingGlobalStart, 0,
+        EA::kCurrentModelInputWidth, consensusAblation);
+    AssertByteIdentical(ablatedTraining, ablatedInference);
+    assert(ablatedTraining.size() == EA::kCurrentModelInputWidth);
+    for (std::size_t col = 0; col < relevantEventHasConsensusCol; ++col)
+        assert(ablatedTraining[col] == trainingAtOffset16[col]);
+    for (std::size_t col = relevantEventHasConsensusCol;
+         col <= relevantEventConsensusIsRangeCol; ++col)
+        assert(IsZero(ablatedTraining[col]));
+    for (std::size_t col = releasedEventHasSurpriseCol;
+         col < EA::kCurrentModelInputWidth; ++col)
+        assert(ablatedTraining[col] == trainingAtOffset16[col]);
 
     // Cover the availability boundaries before and at 1, 4, 8, and 16 bars,
     // plus a window beginning well after the maximum lookback.

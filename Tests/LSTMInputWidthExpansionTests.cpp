@@ -228,11 +228,14 @@ int main()
     std::vector<float> physical(feature_size, 2.0f);
     std::vector<float> currentInput(EA::kCurrentModelInputWidth, -1.0f);
     const auto ablation = EA::FeatureAblationMask::Parse(
-        "return_autocorrelation");
+        std::string{EA::kEconomicEventConsensusAblationMaskText});
     EA::CopyTensorFeaturesForModelInput(currentInput.data(), physical.data(),
                                         currentContract, ablation);
     assert(currentInput.size() == expandedWidth);
-    assert(currentInput[returnAutocorrelationCol] == 0.0f);
+    for (std::size_t col = relevantEventHasConsensusCol;
+         col <= relevantEventConsensusIsRangeCol; ++col)
+        assert(currentInput[col] == 0.0f);
+    assert(currentInput[returnAutocorrelationCol] == 2.0f);
 
     // Ordinary historical-width projection remains unchanged.
     const auto legacyContract = EA::ResolveModelInputContract(

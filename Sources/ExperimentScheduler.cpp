@@ -24222,6 +24222,7 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe << " --queue-experiment --symbol=SYMBOL --prediction-horizon=N --target-epochs=N "
         << "[--threshold=VALUE] [--core-lr=VALUE] [--head-lr=VALUE] [--checkpoint-interval=N] "
         << "[--training-objective=legacy|profitability_auxiliary_v1] "
+        << "[--ablate-features=NAME[,NAME...]] "
         << "[--train-start=YYYY-MM-DD] [--train-end=YYYY-MM-DD] [--infer-start=YYYY-MM-DD] [--infer-end=YYYY-MM-DD] "
         << "[--checkpoint-infer] [--checkpoint-infer-min-epoch=N] [--checkpoint-infer-interval=N] "
         << "[--checkpoint-policy --checkpoint-policy-min-leader-score=VALUE|--checkpoint-policy-min-infer-accuracy=VALUE|--checkpoint-policy-top-n=N]\n"
