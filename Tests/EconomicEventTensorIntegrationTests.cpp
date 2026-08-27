@@ -156,16 +156,16 @@ int main()
     assert(bar2[consumerDemandEventCol] == 0.0F);  // future event cannot leak
     assert(bar3[consumerDemandEventCol] == 1.0F);
 
-    // A market-gap event advances recency without becoming a false current-bar
-    // occurrence on the next observed bar.
+    // A Weekly Claims market-gap event advances employment recency without
+    // becoming a false current-bar occurrence on the next observed bar.
     Tensor gap{"gap", kDefaultDonchian20Mode, kDefaultDonchianLookback,
-               {EventAt(kBase + 86400, "BLS", "PPI")}};
+               {EventAt(kBase + 86400, "DOL_ETA", "WEEKLY_CLAIMS")}};
     gap.Add(BarAt(kBase, 0));
     gap.Add(BarAt(kBase + 2 * 86400, 1));
     const auto postGap = Row(gap, 1);
-    assert(postGap[inflationEventCol] == 0.0F);
-    assert(postGap[inflationRecencyDecayCol] > 0.0F);
-    assert(postGap[inflationRecencyDecayCol] < 1.0F);
+    assert(postGap[employmentEventCol] == 0.0F);
+    assert(postGap[employmentRecencyDecayCol] > 0.0F);
+    assert(postGap[employmentRecencyDecayCol] < 1.0F);
 
     // Persisted widths 53 and 63 retain their exact historical prefixes. New
     // width 71 appends the documented eight consensus components.

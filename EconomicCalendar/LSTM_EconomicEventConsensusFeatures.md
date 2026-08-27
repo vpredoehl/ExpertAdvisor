@@ -18,6 +18,42 @@ cutoff `bar_start + 15 minutes`:
 - surprise is unavailable at every cutoff under the current provenance
   contract.
 
+## DOL/ETA Weekly Claims treatment
+
+`DOL_ETA/WEEKLY_CLAIMS` is explicitly mapped to the existing employment model
+family. It affects only `employment_event` and `employment_recency_decay`; it
+does not activate inflation, growth, fed-policy, or consumer-demand features.
+The authoritative publication is the U.S. Department of Labor / Employment
+and Training Administration's Unemployment Insurance Weekly Claims report,
+which contains initial and continued claims in one release artifact. The raw
+calendar therefore correctly retains one `WEEKLY_CLAIMS` occurrence rather
+than manufacturing separate statistic-level events.
+
+Each imported occurrence uses the release date and 08:30 America/New_York
+embargo clock published in its immutable first-party DOL/ETA artifact. Most
+timestamps are `exact`. A documented 2011-2012 archive defect used the wrong
+EST/EDT abbreviation on 45 otherwise authoritative 08:30 releases; those rows
+preserve the published local clock, resolve it with historical
+America/New_York rules, and are marked `reconstructed`. This bounded
+reconstruction is part of the authoritative calendar audit contract and is
+causally suitable for the same strict completed-bar cutoff as exact rows.
+
+Production schema 082 has no selected consensus for Weekly Claims. Therefore,
+when it is the relevant event, consensus presence/low/high/range remain zero;
+the reserved surprise fields also remain zero.
+
+This compatibility correction does not add or reorder a feature, so physical
+Tensor width remains 67, model input width remains 71, and semantic layout
+remains v4. Although Weekly Claims changes the values carried by the existing
+employment columns relative to the incomplete mapper, v4 had not been deployed
+to a production width-63 or width-71 model when the correction was made. The
+correction therefore completes the pre-deployment v4 employment-family
+contract without changing an already-trained production economic-feature
+model. Any non-production width-63 or width-71 artifact trained with the
+incomplete mapper must not be assumed semantically interchangeable with newly
+generated inputs. Width-53 models project only Tensor columns 0-48 and cannot
+consume any economic-event column.
+
 At a shared timestamp, highest `event_importance` wins; a positive lower
 `economic_event_id` is the deterministic tie-breaker. This affects only the
 single relevant-event consensus/surprise context. Existing per-family event and

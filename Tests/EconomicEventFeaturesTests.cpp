@@ -148,7 +148,7 @@ int main()
     static_assert(kEconomicEventConsensusFeatureWidth == 8);
     static_assert(kEconomicEventFeatureWidth == 18);
 
-    // All ten authoritative canonical families map explicitly.
+    // All eleven authoritative canonical families map explicitly.
     const std::array mappings{
         std::pair{"BLS:CPI", EconomicEventModelFamily::inflation},
         std::pair{"BLS:PPI", EconomicEventModelFamily::inflation},
@@ -156,6 +156,7 @@ int main()
         std::pair{"BLS:EMPLOYMENT", EconomicEventModelFamily::employment},
         std::pair{"BLS:EMPLOYMENT_ANNUAL", EconomicEventModelFamily::employment},
         std::pair{"BLS:JOLTS", EconomicEventModelFamily::employment},
+        std::pair{"DOL_ETA:WEEKLY_CLAIMS", EconomicEventModelFamily::employment},
         std::pair{"BEA:GDP", EconomicEventModelFamily::growth},
         std::pair{"CENSUS:DURABLE_GOODS", EconomicEventModelFamily::growth},
         std::pair{"FEDERAL_RESERVE:FOMC", EconomicEventModelFamily::fedPolicy},
@@ -172,6 +173,66 @@ int main()
                 value.substr(0, separator),
                 value.substr(separator + 1)) ==
             expected);
+    }
+
+    // Weekly Claims is an explicit employment-family release. It activates
+    // only employment occurrence/recency, has the missing-consensus encoding,
+    // and cannot activate the reserved surprise channels.
+    {
+        EconomicEvent claims =
+            EventAt(kBase + 100, "DOL_ETA", "WEEKLY_CLAIMS");
+        claims.historicalTimeConfidence = "reconstructed";
+        EconomicEventFeatureEngine engine{{claims}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+
+        assert(values.employmentEvent == 1.0F);
+        assert(Near(
+            values.employmentRecencyDecay,
+            std::exp(-800.0 / 86400.0)));
+        assert(values.inflationEvent == 0.0F);
+        assert(values.growthEvent == 0.0F);
+        assert(values.fedPolicyEvent == 0.0F);
+        assert(values.consumerDemandEvent == 0.0F);
+        assert(values.inflationRecencyDecay == 0.0F);
+        assert(values.growthRecencyDecay == 0.0F);
+        assert(values.fedPolicyRecencyDecay == 0.0F);
+        assert(values.consumerDemandRecencyDecay == 0.0F);
+        assert(values.relevantEventHasConsensus == 0.0F);
+        assert(values.relevantEventConsensusLow == 0.0F);
+        assert(values.relevantEventConsensusHigh == 0.0F);
+        assert(values.relevantEventConsensusIsRange == 0.0F);
+        AssertReservedSurpriseZero(values);
+    }
+
+    // A claims release exactly at a completed-bar cutoff is excluded from the
+    // preceding bar and first activates the bar beginning at that boundary.
+    {
+        EconomicEventFeatureEngine engine{
+            {EventAt(kBase + 900, "DOL_ETA", "WEEKLY_CLAIMS")}};
+
+        AssertAllZero(engine.AdvanceCompletedBar(At(kBase)));
+        const auto boundary = engine.AdvanceCompletedBar(At(kBase + 900));
+        assert(boundary.employmentEvent == 1.0F);
+        assert(Near(
+            boundary.employmentRecencyDecay,
+            std::exp(-900.0 / 86400.0)));
+    }
+
+    // A claims release learned across a market-data gap advances employment
+    // recency without being relabeled as a later-bar occurrence.
+    {
+        EconomicEventFeatureEngine engine{
+            {EventAt(
+                kBase + 24 * 60 * 60,
+                "DOL_ETA",
+                "WEEKLY_CLAIMS")}};
+
+        AssertAllZero(engine.AdvanceCompletedBar(At(kBase)));
+        const auto postGap =
+            engine.AdvanceCompletedBar(At(kBase + 48 * 60 * 60));
+        assert(postGap.employmentEvent == 0.0F);
+        assert(postGap.employmentRecencyDecay > 0.0F);
+        assert(postGap.employmentRecencyDecay < 1.0F);
     }
 
     // No history and an exact future boundary are both all-zero.
@@ -593,6 +654,12 @@ int main()
         []
         {
             (void)MapEconomicEventModelFamily("BLS", "GDP");
+        });
+
+    AssertInvalidArgument(
+        []
+        {
+            (void)MapEconomicEventModelFamily("DOL_ETA", "UNKNOWN");
         });
 
     AssertInvalidArgument(

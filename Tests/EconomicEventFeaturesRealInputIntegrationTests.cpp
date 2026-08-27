@@ -210,6 +210,8 @@ int main()
 
     bool foundEmployment = false;
     bool foundCpi = false;
+    std::size_t weeklyClaimsCount = 0;
+    std::size_t reconstructedWeeklyClaimsCount = 0;
     std::array<bool, kEconomicEventModelFamilyCount> foundModelFamilies{};
 
     for (std::size_t index = 0; index < events.size(); ++index)
@@ -237,10 +239,25 @@ int main()
         foundCpi =
             foundCpi ||
             events[index].eventFamily == "CPI";
+
+        if (
+            events[index].sourceAgency == "DOL_ETA" &&
+            events[index].eventFamily == "WEEKLY_CLAIMS")
+        {
+            ++weeklyClaimsCount;
+            assert(modelFamily == EconomicEventModelFamily::employment);
+            assert(!events[index].selectedConsensus);
+            if (events[index].historicalTimeConfidence == "reconstructed")
+                ++reconstructedWeeklyClaimsCount;
+            else
+                assert(events[index].historicalTimeConfidence == "exact");
+        }
     }
 
     assert(foundEmployment);
     assert(foundCpi);
+    assert(weeklyClaimsCount > 0);
+    assert(reconstructedWeeklyClaimsCount > 0);
 
     for (bool found : foundModelFamilies)
         assert(found);
@@ -272,8 +289,10 @@ int main()
     assert(
         firstValues[employmentBefore].employmentEvent ==
         0.0F);
+    // The prior day's authoritative Weekly Claims release supplies causal
+    // employment-family history before the BLS Employment release.
     assert(
-        firstValues[employmentBefore].employmentRecencyDecay ==
+        firstValues[employmentBefore].employmentRecencyDecay >
         0.0F);
 
     assert(
@@ -307,6 +326,10 @@ int main()
         << bars.size()
         << ",events="
         << events.size()
+        << ",weekly_claims="
+        << weeklyClaimsCount
+        << ",reconstructed_weekly_claims="
+        << reconstructedWeeklyClaimsCount
         << ",consumed="
         << firstRun.ConsumedEventCount()
         << '\n';

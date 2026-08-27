@@ -52,6 +52,8 @@ int main()
             "'https://example.test/seed-cpi',3,'exact'),"
             "('USD','EMPLOYMENT','2023-11-14 20:43:20+00','BLS',"
             "'seed-employment','https://example.test/seed-employment',3,'exact'),"
+            "('USD','WEEKLY_CLAIMS','2023-11-14 21:43:20+00','DOL_ETA',"
+            "'seed-claims','https://example.test/seed-claims',3,'reconstructed'),"
             "('USD','GDP','2023-11-14 22:18:20+00','BEA','range-gdp',"
             "'https://example.test/range-gdp',3,'exact'),"
             "('USD','JOLTS','2023-11-14 22:28:20+00','BLS','range-jolts',"
@@ -126,19 +128,22 @@ int main()
         "2023-11-14 22:43:20+00");
 
     // The old CPI row is superseded within its canonical stream. The loader
-    // returns exactly the two prior stream seeds and two in-range rows.
-    assert(events.size() == 4);
+    // returns exactly the three prior stream seeds and two in-range rows.
+    assert(events.size() == 5);
     assert(events[0].sourceEventId == std::optional<std::string>{"seed-employment"});
     assert(events[1].sourceEventId == std::optional<std::string>{"seed-cpi"});
-    assert(events[2].sourceEventId == std::optional<std::string>{"range-gdp"});
-    assert(events[3].sourceEventId == std::optional<std::string>{"range-jolts"});
-    assert(events[2].selectedConsensus);
-    assert(events[2].selectedConsensus->provider == "OANDA");
-    assert(!events[2].selectedConsensus->unprovenProviderActual);
+    assert(events[2].sourceEventId == std::optional<std::string>{"seed-claims"});
+    assert(events[2].historicalTimeConfidence == "reconstructed");
+    assert(!events[2].selectedConsensus);
+    assert(events[3].sourceEventId == std::optional<std::string>{"range-gdp"});
+    assert(events[4].sourceEventId == std::optional<std::string>{"range-jolts"});
     assert(events[3].selectedConsensus);
-    assert(events[3].selectedConsensus->provider == "MYFXBOOK");
+    assert(events[3].selectedConsensus->provider == "OANDA");
     assert(!events[3].selectedConsensus->unprovenProviderActual);
-    assert(events[3].selectedConsensus->forecast.canonicalValueLow == 4530000.0);
+    assert(events[4].selectedConsensus);
+    assert(events[4].selectedConsensus->provider == "MYFXBOOK");
+    assert(!events[4].selectedConsensus->unprovenProviderActual);
+    assert(events[4].selectedConsensus->forecast.canonicalValueLow == 4530000.0);
 
     constexpr std::int64_t firstBarStart = 1'700'000'000;
     EconomicEventFeatureEngine engine{events};
@@ -155,7 +160,7 @@ int main()
     assert(Near(first.inflationRecencyDecay,
                 std::exp(-4500.0 / 86400.0)));
     assert(Near(first.employmentRecencyDecay,
-                std::exp(-6300.0 / 86400.0)));
+                std::exp(-2700.0 / 86400.0)));
 
     const auto second =
         engine.AdvanceCompletedBar(At(firstBarStart + 900));

@@ -270,6 +270,12 @@ EconomicEventModelFamily MapEconomicEventModelFamily(
         if (canonicalEventFamily == "RETAIL_SALES")
             return EconomicEventModelFamily::consumerDemand;
     }
+    else if (
+        sourceAgency == "DOL_ETA" &&
+        canonicalEventFamily == "WEEKLY_CLAIMS")
+    {
+        return EconomicEventModelFamily::employment;
+    }
 
     throw std::invalid_argument(
         "unsupported_authoritative_economic_event_family:" +
