@@ -45,6 +45,12 @@
 		0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */; };
 		0E7A000631A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
 		0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */; };
+		0E7D000631D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */; };
+		0E7D000731D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */; };
+		0E7D000831D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
+		0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */; };
+		0E7D000A31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
+		0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */; };
 		0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
 		0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */; };
 		0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */; };
@@ -591,6 +597,12 @@
 		0E7A000131A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationRepository.hpp; path = Sources/PairedTrainingObjectiveEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluationService.cpp; path = Sources/PairedTrainingObjectiveEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
 		0E7A000331A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluationService.hpp; path = Sources/PairedTrainingObjectiveEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluation.cpp; path = Sources/FeatureAblationPairEvaluation.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D000131D0000100AAA001 /* FeatureAblationPairEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluation.hpp; path = Sources/FeatureAblationPairEvaluation.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationRepository.cpp; path = Sources/FeatureAblationPairEvaluationRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D000331D0000100AAA001 /* FeatureAblationPairEvaluationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationRepository.hpp; path = Sources/FeatureAblationPairEvaluationRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = FeatureAblationPairEvaluationService.cpp; path = Sources/FeatureAblationPairEvaluationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E7D000531D0000100AAA001 /* FeatureAblationPairEvaluationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = FeatureAblationPairEvaluationService.hpp; path = Sources/FeatureAblationPairEvaluationService.hpp; sourceTree = SOURCE_ROOT; };
 		0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PostPairReplicationPolicy.cpp; path = Sources/PostPairReplicationPolicy.cpp; sourceTree = SOURCE_ROOT; };
 		0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PostPairReplicationPolicy.hpp; path = Sources/PostPairReplicationPolicy.hpp; sourceTree = SOURCE_ROOT; };
 		0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ReplicationCandidatePlanning.cpp; path = Sources/ReplicationCandidatePlanning.cpp; sourceTree = SOURCE_ROOT; };
@@ -711,6 +723,12 @@
 				0E7A000131A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.hpp */,
 				0E7A000231A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp */,
 				0E7A000331A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.hpp */,
+				0E7D000031D0000100AAA001 /* FeatureAblationPairEvaluation.cpp */,
+				0E7D000131D0000100AAA001 /* FeatureAblationPairEvaluation.hpp */,
+				0E7D000231D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp */,
+				0E7D000331D0000100AAA001 /* FeatureAblationPairEvaluationRepository.hpp */,
+				0E7D000431D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp */,
+				0E7D000531D0000100AAA001 /* FeatureAblationPairEvaluationService.hpp */,
 				0E7B000031B0000100AAA001 /* PostPairReplicationPolicy.cpp */,
 				0E7B000131B0000100AAA001 /* PostPairReplicationPolicy.hpp */,
 				0E7C000031C0000100AAA001 /* ReplicationCandidatePlanning.cpp */,
@@ -1123,6 +1141,9 @@
 				0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
 				0E7A000431A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
 				0E7A000631A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,
+				0E7D000631D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */,
+				0E7D000831D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */,
+				0E7D000A31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */,
 				0E7B000231B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
 				0E7C000231C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0851AB092F0A233A00C48FFE /* Tensor.cpp in Sources */,
@@ -1250,6 +1271,9 @@
 				0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
 				0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
 				0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,
+				0E7D000731D0000100AAA001 /* FeatureAblationPairEvaluation.cpp in Sources */,
+				0E7D000931D0000100AAA001 /* FeatureAblationPairEvaluationRepository.cpp in Sources */,
+				0E7D000B31D0000100AAA001 /* FeatureAblationPairEvaluationService.cpp in Sources */,
 				0E7B000331B0000100AAA001 /* PostPairReplicationPolicy.cpp in Sources */,
 				0E7C000331C0000100AAA001 /* ReplicationCandidatePlanning.cpp in Sources */,
 				0A1000032F70000100AAA001 /* Tensor.cpp in Sources */,

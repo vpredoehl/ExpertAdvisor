@@ -79,6 +79,7 @@
 #include "FeatureAblation.hpp"
 #include "TrainingObjective.hpp"
 #include "PairedTrainingObjectiveEvaluationService.hpp"
+#include "FeatureAblationPairEvaluationService.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -202,6 +203,7 @@ struct SchedulerOptions
     std::optional<std::pair<long long, long long>> compareRecommendationEvaluations;
     std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
     std::optional<std::pair<long long, long long>> compareTrainingObjectivePair;
+    std::optional<std::pair<long long, long long>> compareFeatureAblationPair;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -942,6 +944,9 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg{argv[i]};
+        if (arg == "--compare-feature-ablation-pair" ||
+            arg.rfind("--compare-feature-ablation-pair=", 0) == 0)
+            return true;
         if (arg == "--compare-training-objective-pair" ||
             arg == "--pair-primary-profitability-metric" ||
             arg == "--pair-min-profitability-improvement" ||
@@ -1939,6 +1944,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--compare-training-objective-pair")
             options.compareTrainingObjectivePair = ParsePositiveIdPair(
                 arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-feature-ablation-pair")
+            options.compareFeatureAblationPair =
+                EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(
+                    RequireNextArg(argc, argv, i, arg));
         else if (arg == "--pair-primary-profitability-metric")
             options.pairPrimaryProfitabilityMetric =
                 RequireNextArg(argc, argv, i, arg);
@@ -3637,6 +3646,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareTrainingObjectivePair = ParsePositiveIdPair(
                 "--compare-training-objective-pair", value);
         else if (SplitOptionWithValue(
+                     arg, "--compare-feature-ablation-pair", value))
+            options.compareFeatureAblationPair =
+                EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(value);
+        else if (SplitOptionWithValue(
                      arg, "--pair-primary-profitability-metric", value))
             options.pairPrimaryProfitabilityMetric = value;
         else if (SplitOptionWithValue(
@@ -3842,6 +3855,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareRecommendationEvaluations.has_value() ? 1 : 0) +
         (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
         (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
+        (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -24265,6 +24279,13 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
         << "Usage: " << exe
+        << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
+        << "Feature-ablation pair comparison validates the persisted consensus "
+        << "feature-family ablation, resolves exact FINAL inference and "
+        << "profitability evidence, and performs no database writes. Exit codes: "
+        << "0 complete comparison, 4 incomplete evidence, 3 invalid pair, "
+        << "2 database/tool error.\n"
+        << "Usage: " << exe
         << " --compare-training-objective-pair=CONTROL_ID:TREATMENT_ID "
         << "--pair-primary-profitability-metric=aggregate|average "
         << "--pair-min-profitability-improvement=VALUE "
@@ -25590,6 +25611,13 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         {
             PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
             return 0;
+        }
+        if (options.compareFeatureAblationPair)
+        {
+            EA::FeatureAblationPairEvaluation::ComparisonCommand command;
+            command.experimentIds = *options.compareFeatureAblationPair;
+            return EA::FeatureAblationPairEvaluation::RunComparisonCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
         }
         if (options.compareTrainingObjectivePair)
         {
