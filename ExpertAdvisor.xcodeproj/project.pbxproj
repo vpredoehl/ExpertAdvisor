@@ -39,6 +39,12 @@
 		0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E73000230E0000100AAA001 /* InferenceProfitabilityRepository.cpp */; };
 		0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
 		0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */; };
+		0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */; };
+		0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */; };
+		0E7F00123330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */; };
+		0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */; };
+		0E7F00143330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */; };
+		0E7F00153330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */; };
 		0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
 		0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */; };
 		0E7A000431A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */; };
@@ -595,6 +601,12 @@
 		0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = InferenceProfitabilityRepository.hpp; path = Sources/InferenceProfitabilityRepository.hpp; sourceTree = SOURCE_ROOT; };
 		0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityDistribution.cpp; path = Sources/ProfitabilityDistribution.cpp; sourceTree = SOURCE_ROOT; };
 		0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityDistribution.hpp; path = Sources/ProfitabilityDistribution.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerification.cpp; path = Sources/ProfitabilityVerification.cpp; sourceTree = SOURCE_ROOT; };
+		0E7F00013330000100AAA001 /* ProfitabilityVerification.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerification.hpp; path = Sources/ProfitabilityVerification.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerificationRepository.cpp; path = Sources/ProfitabilityVerificationRepository.cpp; sourceTree = SOURCE_ROOT; };
+		0E7F00033330000100AAA001 /* ProfitabilityVerificationRepository.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerificationRepository.hpp; path = Sources/ProfitabilityVerificationRepository.hpp; sourceTree = SOURCE_ROOT; };
+		0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ProfitabilityVerificationService.cpp; path = Sources/ProfitabilityVerificationService.cpp; sourceTree = SOURCE_ROOT; };
+		0E7F00053330000100AAA001 /* ProfitabilityVerificationService.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = ProfitabilityVerificationService.hpp; path = Sources/ProfitabilityVerificationService.hpp; sourceTree = SOURCE_ROOT; };
 		0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluation.cpp; path = Sources/PairedTrainingObjectiveEvaluation.cpp; sourceTree = SOURCE_ROOT; };
 		0E7900013190000100AAA001 /* PairedTrainingObjectiveEvaluation.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; name = PairedTrainingObjectiveEvaluation.hpp; path = Sources/PairedTrainingObjectiveEvaluation.hpp; sourceTree = SOURCE_ROOT; };
 		0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = PairedTrainingObjectiveEvaluationRepository.cpp; path = Sources/PairedTrainingObjectiveEvaluationRepository.cpp; sourceTree = SOURCE_ROOT; };
@@ -725,6 +737,12 @@
 				0E73000330E0000100AAA001 /* InferenceProfitabilityRepository.hpp */,
 				0E7800003180000100AAA001 /* ProfitabilityDistribution.cpp */,
 				0E7800013180000100AAA001 /* ProfitabilityDistribution.hpp */,
+				0E7F00003330000100AAA001 /* ProfitabilityVerification.cpp */,
+				0E7F00013330000100AAA001 /* ProfitabilityVerification.hpp */,
+				0E7F00023330000100AAA001 /* ProfitabilityVerificationRepository.cpp */,
+				0E7F00033330000100AAA001 /* ProfitabilityVerificationRepository.hpp */,
+				0E7F00043330000100AAA001 /* ProfitabilityVerificationService.cpp */,
+				0E7F00053330000100AAA001 /* ProfitabilityVerificationService.hpp */,
 				0E7900003190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp */,
 				0E7900013190000100AAA001 /* PairedTrainingObjectiveEvaluation.hpp */,
 				0E7A000031A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp */,
@@ -1150,6 +1168,9 @@
 				0E73000430E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
 				0E73000630E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0E7800023180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
+				0E7F00103330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
+				0E7F00123330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
+				0E7F00143330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */,
 				0E7900023190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
 				0E7A000431A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
 				0E7A000631A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,
@@ -1282,6 +1303,9 @@
 				0E73000530E0000100AAA001 /* InferenceProfitability.cpp in Sources */,
 				0E73000730E0000100AAA001 /* InferenceProfitabilityRepository.cpp in Sources */,
 				0E7800033180000100AAA001 /* ProfitabilityDistribution.cpp in Sources */,
+				0E7F00113330000100AAA001 /* ProfitabilityVerification.cpp in Sources */,
+				0E7F00133330000100AAA001 /* ProfitabilityVerificationRepository.cpp in Sources */,
+				0E7F00153330000100AAA001 /* ProfitabilityVerificationService.cpp in Sources */,
 				0E7900033190000100AAA001 /* PairedTrainingObjectiveEvaluation.cpp in Sources */,
 				0E7A000531A0000100AAA001 /* PairedTrainingObjectiveEvaluationRepository.cpp in Sources */,
 				0E7A000731A0000100AAA001 /* PairedTrainingObjectiveEvaluationService.cpp in Sources */,

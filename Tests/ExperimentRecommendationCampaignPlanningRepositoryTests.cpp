@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cctype>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -16,6 +17,30 @@
 #include <pqxx/pqxx>
 
 using namespace EA::ExperimentRecommendation;
+
+namespace EA::ExperimentRecommendation
+{
+// Repository/service tests link the narrow production units under test rather
+// than the full recommendation CLI service dependency graph.
+std::string RecommendationMachineText(const std::string& value)
+{
+    std::ostringstream escaped;
+    escaped << std::uppercase << std::hex;
+    for (const unsigned char ch : value)
+    {
+        const bool alphanumeric =
+            (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9');
+        if (alphanumeric || ch == '-' || ch == '_' || ch == '.' ||
+            ch == ':' || ch == '/' || ch == ';')
+            escaped << static_cast<char>(ch);
+        else
+            escaped << '%' << std::setw(2) << std::setfill('0')
+                    << static_cast<unsigned int>(ch);
+    }
+    return escaped.str() == "NULL" ? "%4E%55%4C%4C" : escaped.str();
+}
+} // namespace EA::ExperimentRecommendation
 
 namespace
 {
@@ -55,14 +80,14 @@ void InsertRecommendation(
     const std::string invocation = "campaign-invocation-" + std::to_string(id);
     transaction.exec(R"SQL(
 INSERT INTO experiment_recommendation(
-    recommendation_id,source_experiment_id,source_symbol,
+    recommendation_id,source_experiment_id,source_model_id,source_symbol,
     source_prediction_horizon,changed_parameter,source_leader_score,
     source_infer_accuracy,source_predicted_neutral_proportion,
     semantic_configuration_canonical,semantic_hash,
     invocation_configuration_canonical,invocation_hash) VALUES(
-    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);
+    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);
 )SQL", pqxx::params{
-        id, 500 + id, symbol, horizon, "core_lr_mult", leader, accuracy,
+        id, 500 + id, 1500 + id, symbol, horizon, "core_lr_mult", leader, accuracy,
         neutral, semantic, RecommendationCanonicalHash(semantic), invocation,
         RecommendationCanonicalHash(invocation)});
 }
@@ -80,10 +105,10 @@ void InsertMember(
 {
     transaction.exec(R"SQL(
 INSERT INTO experiment_recommendation_ranking_member VALUES(
-    $1,7,$2,$3,$4,$5,$6,$7,$8,'core_lr_mult');
+    $1,7,$2,$3,$4,$5,$6,$7,$8,$9,'core_lr_mult');
 )SQL", pqxx::params{
-        memberId, recommendationId, sourceExperimentId, ordinal, bucket,
-        score, symbol, horizon});
+        memberId, recommendationId, sourceExperimentId,
+        1000 + sourceExperimentId, ordinal, bucket, score, symbol, horizon});
 }
 
 } // namespace
@@ -149,6 +174,7 @@ CREATE TABLE experiment_recommendation_ranking_member(
     recommendation_ranking_snapshot_id bigint NOT NULL,
     recommendation_id bigint NOT NULL,
     source_experiment_id bigint NOT NULL,
+    source_model_id bigint,
     global_ordinal integer NOT NULL,
     bucket text NOT NULL,
     final_score double precision,
@@ -158,6 +184,7 @@ CREATE TABLE experiment_recommendation_ranking_member(
 CREATE TABLE experiment_recommendation(
     recommendation_id bigint PRIMARY KEY,
     source_experiment_id bigint NOT NULL,
+    source_model_id bigint,
     source_symbol text NOT NULL,
     source_prediction_horizon integer NOT NULL,
     changed_parameter text NOT NULL,

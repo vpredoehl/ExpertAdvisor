@@ -114,6 +114,7 @@ struct RecommendationCampaignCandidateInput
     std::optional<double> rankingScore;
     long long recommendationId = -1;
     long long sourceExperimentId = -1;
+    std::optional<long long> sourceModelId;
     std::string symbol;
     int predictionHorizon = 0;
     std::string family;

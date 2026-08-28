@@ -228,8 +228,10 @@ WHERE recommendation_ranking_snapshot_id=$1;
     std::string sql = R"SQL(
 SELECT rm.recommendation_ranking_member_id,rm.global_ordinal,rm.bucket,
        rm.final_score,rm.recommendation_id,rm.source_experiment_id,
+       rm.source_model_id,
        rm.symbol,rm.horizon,rm.family,e.target_epochs,
        r.source_experiment_id AS recommendation_source_experiment_id,
+       r.source_model_id AS recommendation_source_model_id,
        r.source_symbol AS recommendation_symbol,
        r.source_prediction_horizon AS recommendation_horizon,
        r.changed_parameter AS recommendation_family,
@@ -300,6 +302,8 @@ WHERE rm.recommendation_ranking_snapshot_id=$1
         candidate.recommendationId = row["recommendation_id"].as<long long>();
         candidate.sourceExperimentId =
             row["source_experiment_id"].as<long long>();
+        candidate.sourceModelId = OptionalValue<long long>(
+            row, "source_model_id");
         candidate.symbol = row["symbol"].as<std::string>();
         candidate.predictionHorizon = row["horizon"].as<int>();
         candidate.family = row["family"].as<std::string>();
@@ -320,6 +324,8 @@ WHERE rm.recommendation_ranking_snapshot_id=$1
         candidate.persistedProvenanceValid =
             candidate.sourceExperimentId ==
                 row["recommendation_source_experiment_id"].as<long long>() &&
+            candidate.sourceModelId == OptionalValue<long long>(
+                row, "recommendation_source_model_id") &&
             candidate.symbol ==
                 row["recommendation_symbol"].as<std::string>() &&
             candidate.predictionHorizon ==

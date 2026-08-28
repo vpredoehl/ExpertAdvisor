@@ -40,6 +40,7 @@
 #include "ContinuationPolicyInheritance.hpp"
 #include "ContinuationPolicyPersistence.hpp"
 #include "InferenceProfitabilityRepository.hpp"
+#include "ProfitabilityVerificationService.hpp"
 #include "ExperimentRecommendationService.hpp"
 #include "ExperimentRecommendationEvaluationService.hpp"
 #include "ExperimentRecommendationRankingService.hpp"
@@ -207,6 +208,8 @@ struct SchedulerOptions
     std::optional<std::pair<long long, long long>> compareFeatureAblationPair;
     std::optional<std::vector<std::pair<long long, long long>>>
         compareFeatureAblationReplications;
+    std::optional<std::vector<long long>> verifyProfitabilityExperimentIds;
+    std::optional<long long> campaignProfitabilityReadinessSnapshotId;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -947,6 +950,11 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg{argv[i]};
+        if (arg == "--verify-profitability-evidence" ||
+            arg.rfind("--verify-profitability-evidence=", 0) == 0 ||
+            arg == "--campaign-profitability-readiness" ||
+            arg.rfind("--campaign-profitability-readiness=", 0) == 0)
+            return true;
         if (arg == "--compare-feature-ablation-pair" ||
             arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
             arg == "--compare-feature-ablation-replications" ||
@@ -1874,6 +1882,24 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.generateExperimentReports = true;
         else if (arg == "--scheduler-status")
             options.schedulerStatus = true;
+        else if (arg == "--verify-profitability-evidence")
+        {
+            if (options.verifyProfitabilityExperimentIds)
+                throw std::invalid_argument(
+                    "--verify-profitability-evidence specified more than once");
+            options.verifyProfitabilityExperimentIds =
+                EA::ProfitabilityVerification::ParseDeclaredExperimentIds(
+                    RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--campaign-profitability-readiness")
+        {
+            if (options.campaignProfitabilityReadinessSnapshotId)
+                throw std::invalid_argument(
+                    "--campaign-profitability-readiness specified more than once");
+            options.campaignProfitabilityReadinessSnapshotId =
+                ParsePositiveLongLong(
+                    arg, RequireNextArg(argc, argv, i, arg));
+        }
         else if (arg == "--complete-scheduler-protocol-cutover")
             options.completeSchedulerProtocolCutover = true;
         else if (arg == "--scheduler-worker-attempt-id")
@@ -3791,6 +3817,26 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.modelInfoModelId = ParsePositiveLongLong("--model", value);
         else if (SplitOptionWithValue(arg, "--experiment-id", value))
             options.statusExperimentId = ParsePositiveLongLong("--experiment-id", value);
+        else if (SplitOptionWithValue(
+                     arg, "--verify-profitability-evidence", value))
+        {
+            if (options.verifyProfitabilityExperimentIds)
+                throw std::invalid_argument(
+                    "--verify-profitability-evidence specified more than once");
+            options.verifyProfitabilityExperimentIds =
+                EA::ProfitabilityVerification::ParseDeclaredExperimentIds(
+                    value);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--campaign-profitability-readiness", value))
+        {
+            if (options.campaignProfitabilityReadinessSnapshotId)
+                throw std::invalid_argument(
+                    "--campaign-profitability-readiness specified more than once");
+            options.campaignProfitabilityReadinessSnapshotId =
+                ParsePositiveLongLong(
+                    "--campaign-profitability-readiness", value);
+        }
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -3871,6 +3917,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
+        (options.verifyProfitabilityExperimentIds.has_value() ? 1 : 0) +
+        (options.campaignProfitabilityReadinessSnapshotId.has_value() ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -24294,6 +24342,19 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Usage: " << exe
         << " --scheduler-status [--log-level=quiet|summary|diagnostic]\n"
         << "Usage: " << exe
+        << " --verify-profitability-evidence=EXPERIMENT_ID[,EXPERIMENT_ID...]\n"
+        << "Exact-final profitability verification preserves declared order, "
+        << "rejects duplicate IDs, forbids checkpoint substitution, and uses "
+        << "one repeatable-read, read-only transaction. Exit codes: 0 all "
+        << "valid, 4 unavailable/incomplete evidence, 3 invalid/ambiguous "
+        << "evidence, 2 database/tool error, 1 argument error.\n"
+        << "Usage: " << exe
+        << " --campaign-profitability-readiness=RANKING_SNAPSHOT_ID\n"
+        << "Campaign profitability readiness validates frozen exact-FINAL "
+        << "provenance and renders a deterministic shadow ordering only. "
+        << "Current rank remains authoritative; live profitability weight and "
+        << "score contribution remain zero; activation is never performed.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
         << "Feature-ablation pair comparison validates the persisted consensus "
         << "feature-family ablation, resolves exact FINAL inference and "
@@ -25635,6 +25696,41 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
         {
             PrintExperimentSchedulerHelp(argc > 0 ? argv[0] : "LSTM_Release");
             return 0;
+        }
+        if (options.verifyProfitabilityExperimentIds)
+        {
+            try
+            {
+                return EA::ProfitabilityVerification::RunVerificationCommand(
+                    LstmDbConnectionString(),
+                    *options.verifyProfitabilityExperimentIds,
+                    std::cout,
+                    std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr << "PROFITABILITY_VERIFICATION_TOOL_ERROR"
+                          << ",error=" << error.what() << std::endl;
+                return 2;
+            }
+        }
+        if (options.campaignProfitabilityReadinessSnapshotId)
+        {
+            try
+            {
+                return EA::ProfitabilityVerification::
+                    RunCampaignReadinessCommand(
+                        LstmDbConnectionString(),
+                        *options.campaignProfitabilityReadinessSnapshotId,
+                        std::cout,
+                        std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr << "CAMPAIGN_PROFITABILITY_READINESS_TOOL_ERROR"
+                          << ",error=" << error.what() << std::endl;
+                return 2;
+            }
         }
         if (options.compareFeatureAblationPair)
         {
