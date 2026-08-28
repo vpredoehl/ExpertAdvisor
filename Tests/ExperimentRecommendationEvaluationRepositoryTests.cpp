@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
+#include <cstdio>
 #include <fstream>
 #include <future>
 #include <sstream>
@@ -133,6 +134,40 @@ int main()
             "donchian20_mode text NOT NULL DEFAULT 'enabled',"
             "donchian_lookback integer NOT NULL DEFAULT 20,"
             "feature_warmup_scope text NOT NULL DEFAULT 'full_history_warmup',"
+            "training_objective_canonical text NOT NULL DEFAULT "
+            "'training_objective_configuration_v1;schema_version=1;"
+            "objective_id=legacy_first_hit_weighted_ce_v1;"
+            "objective_family=up_neutral_down_first_hit_classification;"
+            "objective_version=1;loss_definition_version=1;"
+            "mode=legacy_first_hit_classification;"
+            "classification_loss=true_class_weighted_softmax_cross_entropy_v1;"
+            "classification_target=up_neutral_down_return_high_low_first_hit_strict_threshold_up_tie_v1;"
+            "class_index_order=down_0_neutral_1_up_2;"
+            "class_weight_semantics=true_class_weight_multiplies_loss_and_all_logit_components_v1;"
+            "class_weight_down=1;class_weight_neutral=1;class_weight_up=1;"
+            "softmax_loss_probability_floor=1e-12;"
+            "classification_logit_gradient_scale=0.1;"
+            "shared_core_classification_gradient_scale=4;"
+            "internal_loss_normalization=weighted_loss_sum_divided_by_true_class_weight_sum_v1;"
+            "calculate_batch_return_normalization=weighted_loss_sum_divided_by_example_count_v1;"
+            "gradient_normalization=all_calculate_batch_gradients_divided_by_true_class_weight_sum_v1;"
+            "batch_window_boundary=overlapping_windows_do_not_cross_outer_tensor_batch_v1;"
+            "optimizer_family=sgd;"
+            "optimizer_update=parameter_minus_learning_rate_times_gradient_v1;"
+            "learning_rate_contract=base_rate_and_parameter_group_multipliers_persisted_in_training_config_v1;"
+            "gradient_clipping_mode=componentwise_after_normalization_before_update;"
+            "gradient_clip_threshold=10;"
+            "nonfinite_gradient_policy=skip_parameter_update_v1;"
+            "weight_decay=none;"
+            "gradient_accumulation_precision=core_gradient_accumulation_double_head_gradient_accumulation_float_loss_accumulation_double_v1;"
+            "auxiliary_loss_mode=disabled;auxiliary_loss_coefficient=0;"
+            "regression_target_definition=NULL;"
+            "regression_normalization_identity=NULL;"
+            "robust_loss_definition=NULL;robust_loss_delta=NULL;"
+            "target_clipping_definition=none;"
+            "shared_gradient_combination=classification_only_v1;',"
+            "training_objective_hash text NOT NULL DEFAULT "
+            "'fnv1a64:65818f2e1fa1a324',"
             "status text NOT NULL,"
             "phase text NOT NULL,current_epoch integer,worker_pid integer,"
             "current_operation text,continuation_policy_enabled boolean NOT NULL,"
@@ -184,6 +219,8 @@ int main()
         setup.exec(ReadFile("Database/migrations/035_experiment_recommendation_ranking.sql"));
         setup.exec(ReadFile(
             "Database/migrations/077_campaign_manager_ranking_semantic_homogeneity.sql"));
+        setup.exec(ReadFile(
+            "Database/migrations/083_recommendation_evaluation_run_hash_identity.sql"));
         setup.exec(
             "ALTER TABLE experiment_recommendation_evaluation_result "
             "ADD final_profitability_provenance_version integer,"
@@ -409,22 +446,61 @@ int main()
 
         RecommendationEvaluationCommandRequest concurrentRequest = request;
         concurrentRequest.policy.scoringPolicy.leaderScoreWeight = 0.30;
+
+        struct ConcurrentEvaluationResult
+        {
+            int exitCode;
+            std::string output;
+            std::string errors;
+        };
+
         std::barrier concurrentStart{3};
         const auto concurrentEvaluation = [&] {
             concurrentStart.arrive_and_wait();
             std::ostringstream concurrentOutput;
             std::ostringstream concurrentErrors;
-            return RunEvaluateExperimentRecommendationsCommand(
-                runtimeConnectionString, concurrentRequest,
-                concurrentOutput, concurrentErrors);
+            const int exitCode =
+                RunEvaluateExperimentRecommendationsCommand(
+                    runtimeConnectionString, concurrentRequest,
+                    concurrentOutput, concurrentErrors);
+            return ConcurrentEvaluationResult{
+                exitCode,
+                concurrentOutput.str(),
+                concurrentErrors.str()};
         };
+
         auto firstConcurrent = std::async(
             std::launch::async, concurrentEvaluation);
         auto secondConcurrent = std::async(
             std::launch::async, concurrentEvaluation);
         concurrentStart.arrive_and_wait();
-        assert(firstConcurrent.get() == 0);
-        assert(secondConcurrent.get() == 0);
+
+        const auto firstConcurrentResult = firstConcurrent.get();
+        const auto secondConcurrentResult = secondConcurrent.get();
+
+        if (firstConcurrentResult.exitCode != 0 ||
+            secondConcurrentResult.exitCode != 0)
+        {
+            std::fprintf(
+                stderr,
+                "===== FIRST CONCURRENT EVALUATION =====\n"
+                "EXIT_CODE=%d\n"
+                "STDOUT:\n%s\n"
+                "STDERR:\n%s\n"
+                "===== SECOND CONCURRENT EVALUATION =====\n"
+                "EXIT_CODE=%d\n"
+                "STDOUT:\n%s\n"
+                "STDERR:\n%s\n",
+                firstConcurrentResult.exitCode,
+                firstConcurrentResult.output.c_str(),
+                firstConcurrentResult.errors.c_str(),
+                secondConcurrentResult.exitCode,
+                secondConcurrentResult.output.c_str(),
+                secondConcurrentResult.errors.c_str());
+        }
+
+        assert(firstConcurrentResult.exitCode == 0);
+        assert(secondConcurrentResult.exitCode == 0);
         assert(ListRecommendationEvaluationRuns(runtime, 10).size() == 3);
         assert(ListRecommendationEvaluations(runtime, filters).size() == 6);
 
@@ -496,6 +572,38 @@ int main()
                 conflictRunRequest.evidenceSnapshotCanonical);
         const auto conflictRun = BeginOrFindRecommendationEvaluationRun(
             runtime, conflictRunRequest);
+
+        // Retry with identical hash/canonical identity must reuse the same run.
+        const auto conflictRunRetry = BeginOrFindRecommendationEvaluationRun(
+            runtime, conflictRunRequest);
+        assert(!conflictRunRetry.created);
+        assert(conflictRunRetry.evaluationRunId ==
+               conflictRun.evaluationRunId);
+
+        // Hash-based lookup is only an accelerator. Reusing the same valid
+        // run identity with different valid persisted evidence must fail closed
+        // after the existing row is located.
+        auto retryMismatchRequest = conflictRunRequest;
+        retryMismatchRequest.evidenceSnapshotCanonical =
+            "different_conflict_target_snapshot";
+        retryMismatchRequest.evidenceSnapshotHash =
+            RecommendationEvaluationCanonicalHash(
+                retryMismatchRequest.evidenceSnapshotCanonical);
+
+        bool runRetryMismatchRejected = false;
+        try
+        {
+            (void)BeginOrFindRecommendationEvaluationRun(
+                runtime, retryMismatchRequest);
+        }
+        catch (const std::runtime_error& error)
+        {
+            runRetryMismatchRejected =
+                std::string{error.what()} ==
+                "recommendation_evaluation_run_retry_mismatch";
+        }
+        assert(runRetryMismatchRejected);
+
         auto firstConflictResult = RankRecommendationEvaluations({
             EvaluateExperimentRecommendation({}, loadedReady->input)}).front();
         const auto firstConflictPersisted = PersistRecommendationEvaluation(

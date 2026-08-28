@@ -437,7 +437,7 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
         "scoring_version,recommendation_scan_filter,recommendation_id_filter,"
         "requested_limit,evidence_snapshot_canonical,evidence_snapshot_hash) "
         "VALUES ('running',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) "
-        "ON CONFLICT (evaluation_run_identity_canonical) DO NOTHING "
+        "ON CONFLICT (evaluation_run_identity_hash) DO NOTHING "
         "RETURNING recommendation_evaluation_run_id,status;",
         pqxx::params{request.runIdentityCanonical, request.runIdentityHash,
             RecommendationEvaluationPolicyCanonicalText(request.policy),
@@ -465,8 +465,8 @@ RecommendationEvaluationRunBeginResult BeginOrFindRecommendationEvaluationRun(
             "scoring_policy_canonical,scoring_policy_hash,scoring_version,"
             "evidence_snapshot_canonical,evidence_snapshot_hash "
             "FROM experiment_recommendation_evaluation_run "
-            "WHERE evaluation_run_identity_canonical=$1;",
-            pqxx::params{request.runIdentityCanonical}).one_row();
+            "WHERE evaluation_run_identity_hash=$1;",
+            pqxx::params{request.runIdentityHash}).one_row();
         if (row["evaluation_run_identity_hash"].as<std::string>() !=
                 request.runIdentityHash ||
             row["evidence_snapshot_canonical"].as<std::string>() !=
@@ -554,7 +554,7 @@ RecommendationEvaluationPersistResult PersistRecommendationEvaluation(
         "evaluation_version,evaluator_version,scoring_policy_canonical,"
         "scoring_policy_hash,scoring_version "
         "FROM experiment_recommendation_evaluation_run "
-        "WHERE recommendation_evaluation_run_id=$1 FOR SHARE;",
+        "WHERE recommendation_evaluation_run_id=$1 FOR UPDATE;",
         pqxx::params{request.evaluationRunId});
     if (runStatusRows.empty())
         throw std::runtime_error("recommendation_evaluation_run_not_found");
