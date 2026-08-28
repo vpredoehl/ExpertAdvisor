@@ -532,6 +532,45 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
     return result;
 }
 
+std::string EvaluationIdentityCanonical(
+    const FeatureAblationPairEvaluation::ArmEvidence& control,
+    const FeatureAblationPairEvaluation::ArmEvidence& treatment,
+    const ComparisonResult& result)
+{
+    const auto optionalId = [](const std::optional<long long>& value)
+    {
+        return value ? std::to_string(*value) : std::string("NULL");
+    };
+    const auto observationId = [](
+        const FeatureAblationPairEvaluation::ArmEvidence& arm)
+    {
+        return arm.authoritative.profitability
+            ? std::to_string(arm.authoritative.profitability->observationId)
+            : std::string("NULL");
+    };
+    return "feature_ablation_pair_evaluation_v1;control_experiment_id=" +
+        std::to_string(control.authoritative.configuration.experimentId) +
+        ";treatment_experiment_id=" +
+        std::to_string(treatment.authoritative.configuration.experimentId) +
+        ";ablation_identity_hash=" + result.ablationIdentityHash +
+        ";control_final_inference_result_id=" +
+        optionalId(control.exactFinalInferenceResultId) +
+        ";treatment_final_inference_result_id=" +
+        optionalId(treatment.exactFinalInferenceResultId) +
+        ";control_profitability_observation_id=" + observationId(control) +
+        ";treatment_profitability_observation_id=" + observationId(treatment) +
+        ";disposition=" + DispositionText(result.disposition) + ";";
+}
+
+std::string EvaluationIdentityHash(
+    const FeatureAblationPairEvaluation::ArmEvidence& control,
+    const FeatureAblationPairEvaluation::ArmEvidence& treatment,
+    const ComparisonResult& result)
+{
+    return TrainingObjective::DeterministicHash(
+        EvaluationIdentityCanonical(control, treatment, result));
+}
+
 std::pair<long long, long long> ParseExperimentIdPair(std::string_view text)
 {
     const std::size_t separator = text.find(':');

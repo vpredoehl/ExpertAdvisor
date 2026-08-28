@@ -80,6 +80,7 @@
 #include "TrainingObjective.hpp"
 #include "PairedTrainingObjectiveEvaluationService.hpp"
 #include "FeatureAblationPairEvaluationService.hpp"
+#include "FeatureAblationReplicationEvaluationService.hpp"
 
 namespace EA::ExperimentScheduler
 {
@@ -204,6 +205,8 @@ struct SchedulerOptions
     std::optional<std::pair<long long, long long>> compareRecommendationRankingMembers;
     std::optional<std::pair<long long, long long>> compareTrainingObjectivePair;
     std::optional<std::pair<long long, long long>> compareFeatureAblationPair;
+    std::optional<std::vector<std::pair<long long, long long>>>
+        compareFeatureAblationReplications;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -945,7 +948,9 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
     {
         const std::string arg{argv[i]};
         if (arg == "--compare-feature-ablation-pair" ||
-            arg.rfind("--compare-feature-ablation-pair=", 0) == 0)
+            arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
+            arg == "--compare-feature-ablation-replications" ||
+            arg.rfind("--compare-feature-ablation-replications=", 0) == 0)
             return true;
         if (arg == "--compare-training-objective-pair" ||
             arg == "--pair-primary-profitability-metric" ||
@@ -1947,6 +1952,10 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         else if (arg == "--compare-feature-ablation-pair")
             options.compareFeatureAblationPair =
                 EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(
+                    RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--compare-feature-ablation-replications")
+            options.compareFeatureAblationReplications =
+                EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
                     RequireNextArg(argc, argv, i, arg));
         else if (arg == "--pair-primary-profitability-metric")
             options.pairPrimaryProfitabilityMetric =
@@ -3650,6 +3659,11 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.compareFeatureAblationPair =
                 EA::FeatureAblationPairEvaluation::ParseExperimentIdPair(value);
         else if (SplitOptionWithValue(
+                     arg, "--compare-feature-ablation-replications", value))
+            options.compareFeatureAblationReplications =
+                EA::FeatureAblationReplicationEvaluation::ParseExperimentIdPairs(
+                    value);
+        else if (SplitOptionWithValue(
                      arg, "--pair-primary-profitability-metric", value))
             options.pairPrimaryProfitabilityMetric = value;
         else if (SplitOptionWithValue(
@@ -3856,6 +3870,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareRecommendationRankingMembers.has_value() ? 1 : 0) +
         (options.compareTrainingObjectivePair.has_value() ? 1 : 0) +
         (options.compareFeatureAblationPair.has_value() ? 1 : 0) +
+        (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -24286,6 +24301,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "0 complete comparison, 4 incomplete evidence, 3 invalid pair, "
         << "2 database/tool error.\n"
         << "Usage: " << exe
+        << " --compare-feature-ablation-replications="
+        << "CONTROL_ID:TREATMENT_ID[,CONTROL_ID:TREATMENT_ID...]\n"
+        << "Replication aggregation preserves declared order, uses the "
+        << "versioned profitability-primary policy, performs no writes or "
+        << "activation, and separates software readiness from scientific "
+        << "decision. Exit codes: 0 all evidence complete, 4 incomplete or "
+        << "profitability unavailable, 3 invalid or missing evidence, "
+        << "2 database/tool error.\n"
+        << "Usage: " << exe
         << " --compare-training-objective-pair=CONTROL_ID:TREATMENT_ID "
         << "--pair-primary-profitability-metric=aggregate|average "
         << "--pair-min-profitability-improvement=VALUE "
@@ -25618,6 +25642,16 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             command.experimentIds = *options.compareFeatureAblationPair;
             return EA::FeatureAblationPairEvaluation::RunComparisonCommand(
                 LstmDbConnectionString(), command, std::cout, std::cerr);
+        }
+        if (options.compareFeatureAblationReplications)
+        {
+            EA::FeatureAblationReplicationEvaluation::ComparisonCommand command;
+            command.experimentIdPairs =
+                *options.compareFeatureAblationReplications;
+            return EA::FeatureAblationReplicationEvaluation::
+                RunComparisonCommand(
+                    LstmDbConnectionString(), command,
+                    std::cout, std::cerr);
         }
         if (options.compareTrainingObjectivePair)
         {

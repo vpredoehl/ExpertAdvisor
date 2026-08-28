@@ -186,6 +186,8 @@ fi
     "${repo_root}/Sources/FeatureAblationPairEvaluation.cpp" \
     "${repo_root}/Sources/FeatureAblationPairEvaluationRepository.cpp" \
     "${repo_root}/Sources/FeatureAblationPairEvaluationService.cpp" \
+    "${repo_root}/Sources/FeatureAblationReplicationEvaluation.cpp" \
+    "${repo_root}/Sources/FeatureAblationReplicationEvaluationService.cpp" \
     "${repo_root}/Sources/PairedTrainingObjectiveEvaluation.cpp" \
     "${repo_root}/Sources/PairedTrainingObjectiveEvaluationRepository.cpp" \
     "${repo_root}/Sources/InferenceProfitability.cpp" \

@@ -5,7 +5,9 @@
 
 #include <array>
 #include <cstddef>
+#include <map>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -81,6 +83,22 @@ struct EconomicEventFeatureValues
     std::array<float, kEconomicEventFeatureWidth> Ordered() const noexcept;
 };
 
+// Read-only row-level availability diagnostics. Provider identity never
+// changes model values, but retaining its distribution here makes the unified
+// selected-consensus provenance auditable in production verification.
+struct EconomicEventFeatureAvailabilityDiagnostics
+{
+    std::size_t completedBarCount = 0;
+    std::size_t relevantEventRowCount = 0;
+    std::size_t selectedConsensusRowCount = 0;
+    std::size_t scalarConsensusRowCount = 0;
+    std::size_t rangeConsensusRowCount = 0;
+    std::size_t missingConsensusRowCount = 0;
+    std::map<std::string, std::size_t> selectedConsensusProviderRowCounts;
+    bool operator==(const EconomicEventFeatureAvailabilityDiagnostics&) const =
+        default;
+};
+
 EconomicEventModelFamily MapEconomicEventModelFamily(
     std::string_view sourceAgency,
     std::string_view canonicalEventFamily);
@@ -110,6 +128,9 @@ public:
 
     std::size_t ConsumedEventCount() const noexcept;
 
+    const EconomicEventFeatureAvailabilityDiagnostics& Diagnostics()
+        const noexcept;
+
 private:
     struct MappedEvent
     {
@@ -131,6 +152,7 @@ private:
     std::optional<std::size_t> mostRecentReleasedEventIndex_;
 
     std::optional<PriceTP> previousBarStart_;
+    EconomicEventFeatureAvailabilityDiagnostics diagnostics_;
 };
 
 } // namespace EA::EconomicCalendar

@@ -1,6 +1,7 @@
 #include "EconomicEventFeatures.hpp"
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -137,6 +138,27 @@ double Normalize(
 
 
 template <typename MappedEvent>
+float NormalizedFloat(
+    const MappedEvent& event,
+    double canonicalValue)
+{
+    const double normalized = Normalize(event, canonicalValue);
+    if (!std::isfinite(normalized) ||
+        std::abs(normalized) >
+            static_cast<double>(std::numeric_limits<float>::max()))
+    {
+        throw std::invalid_argument(
+            "economic_event_consensus_normalized_value_not_finite_float");
+    }
+    const float result = static_cast<float>(normalized);
+    if (!std::isfinite(result))
+        throw std::invalid_argument(
+            "economic_event_consensus_normalized_value_not_finite_float");
+    return result;
+}
+
+
+template <typename MappedEvent>
 void SetConsensus(
     EconomicEventFeatureValues& values,
     const MappedEvent& event)
@@ -155,12 +177,12 @@ void SetConsensus(
 
     values.relevantEventHasConsensus = 1.0F;
     values.relevantEventConsensusLow =
-        static_cast<float>(Normalize(event, forecast.canonicalValueLow));
+        NormalizedFloat(event, forecast.canonicalValueLow);
     values.relevantEventConsensusHigh =
-        static_cast<float>(Normalize(
+        NormalizedFloat(
             event,
             forecast.canonicalValueHigh.value_or(
-                forecast.canonicalValueLow)));
+                forecast.canonicalValueLow));
     values.relevantEventConsensusIsRange =
         forecast.valueKind == "range" ? 1.0F : 0.0F;
 }
@@ -362,6 +384,9 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
 
         if (event.selectedConsensus)
         {
+            if (event.selectedConsensus->provider.empty())
+                throw std::invalid_argument(
+                    "economic_event_consensus_provider_missing");
             const EconomicEventConsensusValue& forecast =
                 event.selectedConsensus->forecast;
             if (!ValidValueShape(forecast))
@@ -371,6 +396,12 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
             (void)EconomicEventNormalizationScale(
                 event.eventFamily,
                 forecast.unit);
+            (void)NormalizedFloat(events_.back(),
+                                  forecast.canonicalValueLow);
+            (void)NormalizedFloat(
+                events_.back(),
+                forecast.canonicalValueHigh.value_or(
+                    forecast.canonicalValueLow));
         }
 
         previousEventTime = eventTime;
@@ -474,17 +505,38 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
         nextEventIndex_ < events_.size() &&
         events_[nextEventIndex_].timestamp == informationCutoff;
 
+    const MappedEvent* relevantEvent = nullptr;
     if (exactBoundaryEvent)
     {
         const std::size_t relevant =
             MostRelevantAtTimestamp(events_, nextEventIndex_);
-        SetConsensus(values, events_[relevant]);
+        relevantEvent = &events_[relevant];
     }
     else if (mostRecentReleasedEventIndex_)
     {
-        const MappedEvent& relevant =
-            events_[*mostRecentReleasedEventIndex_];
-        SetConsensus(values, relevant);
+        relevantEvent = &events_[*mostRecentReleasedEventIndex_];
+    }
+
+    ++diagnostics_.completedBarCount;
+    if (relevantEvent)
+    {
+        ++diagnostics_.relevantEventRowCount;
+        SetConsensus(values, *relevantEvent);
+        if (!relevantEvent->selectedConsensus)
+        {
+            ++diagnostics_.missingConsensusRowCount;
+        }
+        else
+        {
+            ++diagnostics_.selectedConsensusRowCount;
+            ++diagnostics_.selectedConsensusProviderRowCounts[
+                relevantEvent->selectedConsensus->provider];
+            if (relevantEvent->selectedConsensus->forecast.valueKind ==
+                "range")
+                ++diagnostics_.rangeConsensusRowCount;
+            else
+                ++diagnostics_.scalarConsensusRowCount;
+        }
     }
 
     previousBarStart_ = barStart;
@@ -496,6 +548,13 @@ std::size_t
 EconomicEventFeatureEngine::ConsumedEventCount() const noexcept
 {
     return nextEventIndex_;
+}
+
+
+const EconomicEventFeatureAvailabilityDiagnostics&
+EconomicEventFeatureEngine::Diagnostics() const noexcept
+{
+    return diagnostics_;
 }
 
 } // namespace EA::EconomicCalendar

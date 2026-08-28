@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -647,7 +648,40 @@ int main()
                 training.AdvanceCompletedBar(At(kBase + offset)).Ordered() ==
                 inference.AdvanceCompletedBar(At(kBase + offset)).Ordered());
         }
+        assert(training.Diagnostics() == inference.Diagnostics());
+        const auto& diagnostics = training.Diagnostics();
+        assert(diagnostics.completedBarCount == 4);
+        assert(diagnostics.relevantEventRowCount == 4);
+        assert(diagnostics.selectedConsensusRowCount == 4);
+        assert(diagnostics.scalarConsensusRowCount == 4);
+        assert(diagnostics.rangeConsensusRowCount == 0);
+        assert(diagnostics.missingConsensusRowCount == 0);
+        assert(diagnostics.selectedConsensusProviderRowCounts.count("OANDA") == 0);
+        assert(diagnostics.selectedConsensusProviderRowCounts.at("MYFXBOOK") == 4);
     }
+
+    // Selected consensus must preserve source identity, and normalized model
+    // channels must be representable as finite floats.
+    AssertInvalidArgument(
+        []
+        {
+            EconomicEvent missingProvider = ScalarConsensusEventAt(
+                kBase, "BLS", "CPI", "", 0.3, std::nullopt,
+                "percent", 1.0, "m/m");
+            EconomicEventFeatureEngine engine{{missingProvider}};
+            (void)engine;
+        });
+
+    AssertInvalidArgument(
+        []
+        {
+            EconomicEvent overflow = ScalarConsensusEventAt(
+                kBase, "BLS", "CPI", "OANDA",
+                std::numeric_limits<double>::max(), std::nullopt,
+                "percent", 1.0, "m/m");
+            EconomicEventFeatureEngine engine{{overflow}};
+            (void)engine;
+        });
 
     // Impossible canonical inputs and non-chronological use fail fast.
     AssertInvalidArgument(

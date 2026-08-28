@@ -95,6 +95,16 @@ struct ComparisonResult
 ComparisonResult Compare(const ArmEvidence& control,
                          const ArmEvidence& treatment);
 
+// Stable Phase 6 identity used both by the pair CLI and by Phase 7
+// replication aggregation. Keeping one authority prevents the aggregate
+// evaluator from reconstructing or approximating pair evidence identity.
+std::string EvaluationIdentityCanonical(const ArmEvidence& control,
+                                        const ArmEvidence& treatment,
+                                        const ComparisonResult& result);
+std::string EvaluationIdentityHash(const ArmEvidence& control,
+                                   const ArmEvidence& treatment,
+                                   const ComparisonResult& result);
+
 std::pair<long long, long long> ParseExperimentIdPair(std::string_view text);
 std::string DispositionText(Disposition value);
 

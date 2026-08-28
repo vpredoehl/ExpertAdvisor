@@ -51,8 +51,10 @@ After both workflows complete, these final-model fields must also match:
 - model, train-configuration, optimizer, and input-semantic metadata versions;
 - semantic input layout version and input-width expansion provenance;
 - normalization, class weights, label rule, target metadata;
-- optimizer type/update count/buffer counts and persisted learning-rate
-  multipliers;
+- optimizer type/buffer shapes and persisted learning-rate multipliers.
+  Final `optimizerUpdateCount` is deliberately not a compatibility field:
+  successful finite-gradient update counts are treatment outcomes and may
+  differ after a feature intervention;
 - persisted training symbol and range.
 
 Pending/running pairs can therefore be proven comparable at the experiment

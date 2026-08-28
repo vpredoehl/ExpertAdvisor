@@ -1,5 +1,6 @@
 #include "FeatureAblationPairEvaluationRepository.hpp"
 #include "FeatureAblationPairEvaluationService.hpp"
+#include "FeatureAblationReplicationEvaluationService.hpp"
 
 #include "FeatureAblation.hpp"
 #include "InferenceProfitabilityRepository.hpp"
@@ -18,6 +19,7 @@
 #include <pqxx/pqxx>
 
 namespace Feature = EA::FeatureAblationPairEvaluation;
+namespace Replication = EA::FeatureAblationReplicationEvaluation;
 namespace Objective = EA::TrainingObjective;
 namespace Profitability = EA::InferenceProfitability;
 
@@ -136,7 +138,8 @@ void InsertExperiment(pqxx::transaction_base& transaction,
 void InsertFinalClassificationEvidence(
     pqxx::transaction_base& transaction,
     const Ids& ids,
-    double accuracy)
+    double accuracy,
+    std::optional<double> persistedAnalysisAccuracy = std::nullopt)
 {
     transaction.exec(
         "INSERT INTO inference_eval_result("
@@ -151,7 +154,8 @@ void InsertFinalClassificationEvidence(
         "analysis_id,experiment_id,model_id,analysis_scope,analysis_status,"
         "infer_accuracy,accept_accuracy,accept_rate,leader_score) VALUES("
         "$1,$2,$3,'final','completed',$4,$5,0.65,$6);",
-        pqxx::params{ids.analysis, ids.experiment, ids.model, accuracy,
+        pqxx::params{ids.analysis, ids.experiment, ids.model,
+                     persistedAnalysisAccuracy.value_or(accuracy),
                      accuracy + 0.05, accuracy * 0.9});
 }
 
@@ -267,11 +271,16 @@ int main()
         const Ids noProfitTreatment{990642, 1990642, 2990642, 3990642};
         const Ids incompatibleControl{990651, 1990651, 2990651, 3990651};
         const Ids incompatibleTreatment{990652, 1990652, 2990652, 3990652};
+        const Ids accuracyMismatchControl{990661, 1990661, 2990661, 3990661};
+        const Ids accuracyMismatchTreatment{990662, 1990662, 2990662, 3990662};
 
         InsertExperiment(fixture, control, true);
         InsertExperiment(fixture, treatment, false);
-        InsertFinalEvidence(fixture, control, 0.61, 0.05);
-        InsertFinalEvidence(fixture, treatment, 0.64, 0.08);
+        InsertFinalClassificationEvidence(fixture, control, 0.6100004, 0.61);
+        InsertProfitabilityEvidence(fixture, control, 0.05);
+        InsertFinalClassificationEvidence(
+            fixture, treatment, 0.6400004, 0.64);
+        InsertProfitabilityEvidence(fixture, treatment, 0.08);
 
         InsertExperiment(fixture, pendingControl, true, false);
         InsertExperiment(fixture, pendingTreatment, false, false);
@@ -298,6 +307,15 @@ int main()
             "UPDATE experiment SET feature_warmup_scope='full_history_warmup' "
             "WHERE experiment_id=$1;",
             pqxx::params{incompatibleTreatment.experiment});
+
+        InsertExperiment(fixture, accuracyMismatchControl, true);
+        InsertExperiment(fixture, accuracyMismatchTreatment, false);
+        InsertFinalClassificationEvidence(
+            fixture, accuracyMismatchControl, 0.6100006, 0.61);
+        InsertProfitabilityEvidence(fixture, accuracyMismatchControl, 0.05);
+        InsertFinalClassificationEvidence(
+            fixture, accuracyMismatchTreatment, 0.6400004, 0.64);
+        InsertProfitabilityEvidence(fixture, accuracyMismatchTreatment, 0.08);
         fixture.commit();
     }
 
@@ -313,6 +331,48 @@ int main()
     assert(output.str().find("treatment_minus_control=") !=
            std::string::npos);
     assert(output.str().find("read_only=true") != std::string::npos);
+    assert(DatabaseDigest(connection) == before);
+
+    output.str("");
+    output.clear();
+    errors.str("");
+    errors.clear();
+    const int accuracyMismatchExit = Feature::RunComparisonCommand(
+        connectionString, {{990661, 990662}}, output, errors);
+    assert(accuracyMismatchExit == 3);
+    assert(errors.str().empty());
+    assert(output.str().find(
+               "control_inference_analysis_accuracy_mismatch") !=
+           std::string::npos);
+    assert(DatabaseDigest(connection) == before);
+
+    output.str("");
+    output.clear();
+    errors.str("");
+    errors.clear();
+    Replication::ComparisonCommand replicationCommand;
+    replicationCommand.experimentIdPairs = {
+        {990601, 990602}, {990611, 990612},
+        {990631, 990632}, {990641, 990642}};
+    const int replicationExit = Replication::RunComparisonCommand(
+        connectionString, replicationCommand, output, errors);
+    assert(replicationExit == 4);
+    assert(errors.str().empty());
+    assert(output.str().find(
+               "replication_decision=insufficient_evidence") !=
+           std::string::npos);
+    assert(output.str().find(
+               "productionization_software_ready=true") !=
+           std::string::npos);
+    assert(output.str().find(
+               "productionization_action=await_replication") !=
+           std::string::npos);
+    assert(output.str().find("ordinal=1,control_experiment_id=990601") !=
+           std::string::npos);
+    assert(output.str().find("ordinal=4,control_experiment_id=990641") !=
+           std::string::npos);
+    assert(output.str().find("activation_performed=false") !=
+           std::string::npos);
     assert(DatabaseDigest(connection) == before);
 
     output.str("");

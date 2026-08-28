@@ -163,30 +163,6 @@ void PrintArm(std::ostringstream& output,
                    : "NULL") << '\n';
 }
 
-std::string EvaluationIdentity(const ArmEvidence& control,
-                               const ArmEvidence& treatment,
-                               const ComparisonResult& result)
-{
-    const auto observationId = [](const ArmEvidence& arm)
-    {
-        return arm.authoritative.profitability
-            ? std::to_string(arm.authoritative.profitability->observationId)
-            : std::string("NULL");
-    };
-    return "feature_ablation_pair_evaluation_v1;control_experiment_id=" +
-        std::to_string(control.authoritative.configuration.experimentId) +
-        ";treatment_experiment_id=" +
-        std::to_string(treatment.authoritative.configuration.experimentId) +
-        ";ablation_identity_hash=" + result.ablationIdentityHash +
-        ";control_final_inference_result_id=" +
-        OptionalId(control.exactFinalInferenceResultId) +
-        ";treatment_final_inference_result_id=" +
-        OptionalId(treatment.exactFinalInferenceResultId) +
-        ";control_profitability_observation_id=" + observationId(control) +
-        ";treatment_profitability_observation_id=" + observationId(treatment) +
-        ";disposition=" + DispositionText(result.disposition) + ";";
-}
-
 } // namespace
 
 std::string RenderComparisonOutput(const ArmEvidence& control,
@@ -222,14 +198,12 @@ std::string RenderComparisonOutput(const ArmEvidence& control,
     PrintMetric(output, "accept_rate", result.acceptRate);
     PrintMetric(output, "neutral_proportion", result.neutralProportion);
     PrintMetric(output, "leader_score", result.leaderScore);
-    const std::string evaluationCanonical = EvaluationIdentity(
-        control, treatment, result);
     output << "FEATURE_ABLATION_PAIR_RESULT"
            << ",disposition=" << DispositionText(result.disposition)
            << ",invalid_reasons=" << Reasons(result.invalidReasons)
            << ",incomplete_reasons=" << Reasons(result.incompleteReasons)
            << ",evaluation_identity_hash="
-           << TrainingObjective::DeterministicHash(evaluationCanonical)
+           << EvaluationIdentityHash(control, treatment, result)
            << ",exit_code=" << ExitCode(result.disposition)
            << ",software_success=true\n";
     return output.str();
