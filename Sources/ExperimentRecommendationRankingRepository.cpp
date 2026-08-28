@@ -520,7 +520,7 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
         "distinct_evaluation_semantic_count,homogeneity_validation_result) "
         "VALUES ('running',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,"
         "$15,$16,2,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) "
-        "ON CONFLICT (ranking_snapshot_identity_canonical) DO NOTHING "
+        "ON CONFLICT (ranking_snapshot_identity_hash) DO NOTHING "
         "RETURNING recommendation_ranking_snapshot_id,status;",
         pqxx::params{request.snapshotIdentityCanonical,
             request.snapshotIdentityHash, policyCanonical, policyHash,
@@ -559,8 +559,8 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
         const pqxx::row row = transaction.exec(
             "SELECT " + SnapshotColumns() +
             " FROM experiment_recommendation_ranking_snapshot "
-            "WHERE ranking_snapshot_identity_canonical=$1;",
-            pqxx::params{request.snapshotIdentityCanonical}).one_row();
+            "WHERE ranking_snapshot_identity_hash=$1;",
+            pqxx::params{request.snapshotIdentityHash}).one_row();
         const PersistedRecommendationRankingSnapshot existing = MapSnapshot(row);
         if (existing.snapshotIdentityHash != request.snapshotIdentityHash ||
             existing.rankingPolicyCanonical != policyCanonical ||

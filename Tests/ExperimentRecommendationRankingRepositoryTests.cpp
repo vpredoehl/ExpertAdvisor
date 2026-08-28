@@ -200,6 +200,8 @@ int main()
                 "Database/migrations/035_experiment_recommendation_ranking.sql"));
             setup.exec(ReadFile(
                 "Database/migrations/077_campaign_manager_ranking_semantic_homogeneity.sql"));
+            setup.exec(ReadFile(
+                "Database/migrations/084_recommendation_ranking_snapshot_hash_identity.sql"));
             setup.exec("GRANT USAGE ON SCHEMA " + setup.quote_name(schema) +
                        " TO pqxx;");
             setup.exec("GRANT SELECT ON experiment,model,"
@@ -536,6 +538,20 @@ int main()
             RecommendationRankingPolicy{}, globalScope, 100, identity,
             RecommendationRankingCanonicalHash(identity), membership,
             RecommendationRankingCanonicalHash(membership), globalSemantics});
+
+        // Exact retry must resolve through the compact identity hash and reuse
+        // the existing snapshot. The complete canonical identity remains part
+        // of repository retry validation.
+        const auto atomicSnapshotRetry =
+            BeginOrFindRecommendationRankingSnapshot(runtime, {
+                RecommendationRankingPolicy{}, globalScope, 100, identity,
+                RecommendationRankingCanonicalHash(identity), membership,
+                RecommendationRankingCanonicalHash(membership),
+                globalSemantics});
+        assert(!atomicSnapshotRetry.created);
+        assert(atomicSnapshotRetry.snapshotId == atomicSnapshot.snapshotId);
+        assert(atomicSnapshotRetry.status == atomicSnapshot.status);
+
         auto ownershipMismatch = ranked;
         ownershipMismatch.front().evaluation.recommendationId += 1000;
         bool ownershipRejected = false;
