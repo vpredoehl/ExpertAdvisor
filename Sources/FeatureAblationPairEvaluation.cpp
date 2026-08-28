@@ -365,9 +365,17 @@ void ValidateClassification(const FeatureAblationPairEvaluation::ArmEvidence& ar
         else if (!Finite(*metric))
             Add(invalid, prefix + "classification_metric_nonfinite");
     }
+    // experiment_analysis_result.infer_accuracy is persisted at six
+    // decimal places, while inference_eval_result.accuracy retains the
+    // underlying full-precision ratio. Values representing the same result
+    // may therefore differ by at most half of one unit in the sixth decimal.
+    constexpr double kAnalysisAccuracyRoundingTolerance = 5.0e-7;
     if (value.accuracy && value.inferenceAccuracy &&
-        *value.accuracy != *value.inferenceAccuracy)
+        std::fabs(*value.accuracy - *value.inferenceAccuracy) >
+            kAnalysisAccuracyRoundingTolerance)
+    {
         Add(invalid, prefix + "inference_analysis_accuracy_mismatch");
+    }
 }
 
 void ValidateProfitability(const FeatureAblationPairEvaluation::ArmEvidence& arm,

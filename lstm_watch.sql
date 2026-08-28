@@ -62,7 +62,8 @@ SELECT
     ) AS train_running,
     count(*) FILTER (
         WHERE status = 'pending' AND phase = 'train'
-    ) AS train_pending
+    ) AS train_pending,
+    count(*) FILTER ( where status = 'paused' AND phase = 'train' ) AS train_paused
 FROM experiment;
 
 SELECT
@@ -73,4 +74,12 @@ SELECT
     (SELECT count(*) FROM experiment_checkpoint_eval
      WHERE status = 'running' AND phase = 'infer') AS cp_infer_running,
     (SELECT count(*) FROM experiment_checkpoint_eval
-     WHERE status = 'pending' AND phase = 'infer') AS cp_infer_pending;
+     WHERE status = 'pending' AND phase = 'infer') AS cp_infer_pending,
+    (SELECT count(*) FROM experiment
+     WHERE status = 'paused' AND phase = 'infer') AS cp_infer_paused;
+
+SELECT 
+	count(*) FILTER ( where phase = 'analyze' and status = 'running' ) as analyze_running,
+	count(*) FILTER ( where phase = 'analyze' and status = 'pending' ) as analyze_pending,
+	count(*) FILTER ( where phase = 'analyze' and status = 'paused' ) as analyze_paused
+FROM experiment;

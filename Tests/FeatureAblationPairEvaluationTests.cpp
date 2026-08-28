@@ -196,6 +196,31 @@ int main()
                 "optimizer_update_count_mismatch"));
     assert(Feature::ExitCode(updateCountDifference.disposition) == 0);
 
+    // Analysis persistence rounds inference accuracy to six decimal places.
+    // A discrepancy within half of one unit in the sixth decimal remains the
+    // same underlying inference result.
+    auto roundedAnalysisAccuracy = treatment;
+    roundedAnalysisAccuracy.authoritative.classification->accuracy =
+        *roundedAnalysisAccuracy.authoritative.classification->inferenceAccuracy +
+        3.7e-7;
+    const auto roundedAccuracyResult =
+        Feature::Compare(control, roundedAnalysisAccuracy);
+    assert(roundedAccuracyResult.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(!Has(roundedAccuracyResult.invalidReasons,
+                "treatment_inference_analysis_accuracy_mismatch"));
+
+    // A discrepancy beyond the six-decimal rounding boundary is a genuine
+    // consistency failure and must continue to fail closed.
+    auto inconsistentAnalysisAccuracy = treatment;
+    inconsistentAnalysisAccuracy.authoritative.classification->accuracy =
+        *inconsistentAnalysisAccuracy.authoritative.classification->inferenceAccuracy +
+        6.0e-7;
+    const auto inconsistentAccuracyResult =
+        Feature::Compare(control, inconsistentAnalysisAccuracy);
+    assert(Has(inconsistentAccuracyResult.invalidReasons,
+               "treatment_inference_analysis_accuracy_mismatch"));
+
     auto mismatch = treatment;
     mismatch.authoritative.configuration.symbol = "eurusdrmp";
     assert(Has(Feature::Compare(control, mismatch).invalidReasons,
