@@ -182,6 +182,20 @@ int main()
                      0.03) < 1.0e-15);
     assert(Feature::ExitCode(complete.disposition) == 0);
 
+    // optimizerUpdateCount is post-treatment optimizer behavior, not
+    // pre-treatment scientific configuration. A feature ablation can change
+    // gradient finiteness and therefore the number of successful SGD updates.
+    auto differentOptimizerUpdates = treatment;
+    differentOptimizerUpdates.authoritative.configuration.optimizerUpdateCount =
+        control.authoritative.configuration.optimizerUpdateCount - 3;
+    const auto updateCountDifference =
+        Feature::Compare(control, differentOptimizerUpdates);
+    assert(updateCountDifference.disposition ==
+           Feature::Disposition::ComparableComplete);
+    assert(!Has(updateCountDifference.invalidReasons,
+                "optimizer_update_count_mismatch"));
+    assert(Feature::ExitCode(updateCountDifference.disposition) == 0);
+
     auto mismatch = treatment;
     mismatch.authoritative.configuration.symbol = "eurusdrmp";
     assert(Has(Feature::Compare(control, mismatch).invalidReasons,

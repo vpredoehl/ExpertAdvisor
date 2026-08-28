@@ -180,7 +180,6 @@ void ValidateFinalModelPair(const ScientificConfiguration& control,
     EA_COMPARE_FIELD(optimizerMetadataSchemaVersion,
                      "optimizer_metadata_schema_mismatch");
     EA_COMPARE_FIELD(optimizerType, "optimizer_type_mismatch");
-    EA_COMPARE_FIELD(optimizerUpdateCount, "optimizer_update_count_mismatch");
     EA_COMPARE_FIELD(optimizerFirstMomentBufferCount,
                      "optimizer_first_moment_mismatch");
     EA_COMPARE_FIELD(optimizerSecondMomentBufferCount,
