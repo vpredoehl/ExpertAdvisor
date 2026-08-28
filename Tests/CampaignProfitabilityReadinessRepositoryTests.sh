@@ -73,6 +73,16 @@ CREATE TABLE inference_eval_result (
     completed_epochs bigint,
     accept_model boolean
 );
+CREATE TABLE experiment_recommendation_evaluation_run(
+    recommendation_evaluation_run_id bigint PRIMARY KEY,
+    status text NOT NULL,
+    evaluation_run_identity_canonical text NOT NULL,
+    evaluation_run_identity_hash text NOT NULL,
+    recommendations_evaluated integer NOT NULL,
+    recommendations_eligible integer NOT NULL,
+    recommendations_blocked integer NOT NULL,
+    evaluation_errors integer NOT NULL
+);
 CREATE TABLE experiment_recommendation_ranking_snapshot(
     recommendation_ranking_snapshot_id bigint PRIMARY KEY,
     status text NOT NULL,
@@ -81,6 +91,15 @@ CREATE TABLE experiment_recommendation_ranking_snapshot(
     ranking_policy_canonical text NOT NULL,
     ranking_policy_hash text NOT NULL,
     ranking_version integer NOT NULL,
+    scope_type text NOT NULL DEFAULT 'evaluation_run',
+    scope_canonical text NOT NULL DEFAULT 'legacy_scope',
+    scope_hash text NOT NULL DEFAULT 'legacy_scope_hash',
+    evaluation_run_filter bigint,
+    requested_limit integer NOT NULL DEFAULT 1000,
+    source_membership_canonical text NOT NULL DEFAULT
+        'experiment_recommendation_ranking_membership_v1;count=0',
+    source_membership_hash text NOT NULL DEFAULT 'legacy_membership_hash',
+    ranking_snapshot_identity_version integer NOT NULL DEFAULT 1,
     population_semantic_state text NOT NULL,
     scoring_semantic_canonical text,
     scoring_semantic_hash text,
@@ -91,11 +110,15 @@ CREATE TABLE experiment_recommendation_ranking_snapshot(
     distinct_scoring_semantic_count integer NOT NULL,
     distinct_evaluation_semantic_count integer NOT NULL,
     homogeneity_validation_result text NOT NULL,
-    member_count integer NOT NULL
+    member_count integer NOT NULL,
+    advisory_ready_count integer NOT NULL DEFAULT 0,
+    blocked_count integer NOT NULL DEFAULT 0,
+    non_actionable_count integer NOT NULL DEFAULT 0
 );
 CREATE TABLE experiment_recommendation_ranking_member(
     recommendation_ranking_member_id bigint PRIMARY KEY,
     recommendation_ranking_snapshot_id bigint NOT NULL,
+    recommendation_evaluation_result_id bigint,
     recommendation_id bigint NOT NULL,
     source_experiment_id bigint NOT NULL,
     source_model_id bigint,
@@ -120,6 +143,32 @@ CREATE TABLE experiment_recommendation(
     semantic_hash text NOT NULL,
     invocation_configuration_canonical text NOT NULL,
     invocation_hash text NOT NULL,
+    final_profitability_provenance_version integer,
+    source_final_inference_eval_result_id bigint,
+    source_final_profitability_observation_id bigint,
+    source_final_profitability_unavailable_reason text,
+    source_final_profitability_inference_scope text,
+    source_final_profitability_inference_start text,
+    source_final_profitability_inference_end text,
+    source_final_profitability_actionable_count bigint,
+    source_final_profitability_aggregate_return double precision,
+    source_final_profitability_average_return double precision,
+    source_final_profitability_metric_definition_hash text,
+    source_final_profitability_source_content_hash text,
+    source_final_profitability_observation_identity_hash text
+);
+CREATE TABLE experiment_recommendation_evaluation_result(
+    recommendation_evaluation_result_id bigint PRIMARY KEY,
+    recommendation_evaluation_run_id bigint NOT NULL,
+    recommendation_id bigint NOT NULL,
+    evaluation_identity_canonical text NOT NULL,
+    evaluation_identity_hash text NOT NULL,
+    source_experiment_id bigint NOT NULL,
+    source_model_id bigint,
+    final_score double precision,
+    eligibility text NOT NULL,
+    disposition text NOT NULL,
+    result_status text NOT NULL,
     final_profitability_provenance_version integer,
     source_final_inference_eval_result_id bigint,
     source_final_profitability_observation_id bigint,
@@ -181,31 +230,36 @@ GRANT SELECT ON campaign_read_sentinel TO "${test_user}";
 SQL
 
 mkdir -p "${build_dir}"
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libpqxx; then
-    read -r -a pqxx_cflags <<< "$(pkg-config --cflags libpqxx)"
-    read -r -a pqxx_libs <<< "$(pkg-config --libs libpqxx)"
-else
-    pqxx_prefix="$(brew --prefix libpqxx)"
-    libpq_prefix="$(brew --prefix libpq)"
-    pqxx_cflags=("-I${pqxx_prefix}/include" "-I${libpq_prefix}/include")
-    pqxx_libs=("-L${pqxx_prefix}/lib" "-L${libpq_prefix}/lib" -lpqxx -lpq)
-fi
+pqxx_prefix="/opt/homebrew/Cellar/libpqxx@7.10.1/7.10.1"
+libpq_prefix="/opt/homebrew/opt/libpq"
+pqxx_cflags=("-I${pqxx_prefix}/include" "-I${libpq_prefix}/include")
+pqxx_libs=(
+    "-L${pqxx_prefix}/lib" "-L${libpq_prefix}/lib"
+    "-Wl,-rpath,${pqxx_prefix}/lib" "-Wl,-rpath,${libpq_prefix}/lib"
+    -lpqxx -lpq
+)
 
 "${CXX:-clang++}" -std=c++20 -Wall -Wextra -Werror \
     -I"${repo_root}/Headers" -I"${repo_root}/Sources" \
     "${pqxx_cflags[@]}" \
     "${repo_root}/Sources/ExperimentRecommendation.cpp" \
+    "${repo_root}/Sources/ExperimentRecommendationScoring.cpp" \
+    "${repo_root}/Sources/ExperimentRecommendationEvaluation.cpp" \
+    "${repo_root}/Sources/ExperimentRecommendationRanking.cpp" \
     "${repo_root}/Sources/ExperimentRecommendationCampaignPlanning.cpp" \
     "${repo_root}/Sources/ExperimentRecommendationCampaignPlanningRepository.cpp" \
     "${repo_root}/Sources/ExperimentRecommendationConversionWorkflow.cpp" \
     "${repo_root}/Sources/ExperimentRecommendationConversionWorkflowRepository.cpp" \
     "${repo_root}/Sources/InferenceProfitability.cpp" \
     "${repo_root}/Sources/InferenceProfitabilityRepository.cpp" \
+    "${repo_root}/Sources/ProfitabilityDistribution.cpp" \
     "${repo_root}/Sources/ProfitabilityVerification.cpp" \
     "${repo_root}/Sources/ProfitabilityVerificationRepository.cpp" \
     "${repo_root}/Sources/ProfitabilityVerificationService.cpp" \
     "${repo_root}/Tests/CampaignProfitabilityReadinessRepositoryTests.cpp" \
     "${pqxx_libs[@]}" -o "${binary}"
+
+otool -L "${binary}" | grep -E 'pqxx|libpq'
 
 LSTM_DB_HOST="${db_host}" LSTM_DB_ADMIN_USER="${admin_user}" \
 LSTM_DB_NAME="${db_name}" "${binary}" setup

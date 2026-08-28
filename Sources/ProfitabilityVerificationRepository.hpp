@@ -11,4 +11,8 @@ EvidenceResult LoadAndVerifyExactFinalEvidence(
     pqxx::transaction_base& transaction,
     long long experimentId);
 
+CampaignProfitabilityShadowSource LoadCampaignProfitabilityShadowSource(
+    pqxx::transaction_base& transaction,
+    long long rankingSnapshotId);
+
 } // namespace EA::ProfitabilityVerification

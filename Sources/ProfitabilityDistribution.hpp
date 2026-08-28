@@ -208,4 +208,79 @@ ProfitabilityDistributionAnalysis AnalyzeProfitabilityDistribution(
     std::vector<ProfitabilityObservation> observations,
     const ProfitabilityNormalizationPolicy& policy = {});
 
+// Phase 9 snapshot-wide normalization is a deliberately separate shadow-only
+// contract. The Phase 3C distribution requires one exact comparability cohort;
+// a ranking snapshot may contain several symbols, horizons, and inference
+// windows. This policy reuses the version-1 empirical-midrank, sign-bounded,
+// support-reliability semantics over the snapshot's frozen populated evidence
+// without weakening the Phase 3C cohort contract.
+inline constexpr int kProfitabilityShadowNormalizationPolicyVersion = 1;
+
+struct ProfitabilityShadowNormalizationPolicy
+{
+    int version = kProfitabilityShadowNormalizationPolicyVersion;
+    std::size_t minimumAnalyzablePopulationSize = 5;
+    std::uint64_t supportHalfSaturationActionableCount = 100;
+};
+
+std::optional<std::string> ValidateProfitabilityShadowNormalizationPolicy(
+    const ProfitabilityShadowNormalizationPolicy& policy);
+std::string ProfitabilityShadowNormalizationPolicyCanonicalText(
+    const ProfitabilityShadowNormalizationPolicy& policy);
+std::string ProfitabilityShadowNormalizationPolicyHash(
+    const ProfitabilityShadowNormalizationPolicy& policy);
+
+struct ProfitabilityShadowNormalizationInput
+{
+    long long profitabilityObservationId = -1;
+    std::uint64_t actionableCount = 0;
+    std::optional<double>
+        averageTerminalHorizonLogReturnPerActionablePrediction;
+    std::string evidenceIdentityHash;
+};
+
+enum class ProfitabilityShadowNormalizationState
+{
+    available,
+    insufficientPopulation,
+    zeroActionable
+};
+
+std::string ProfitabilityShadowNormalizationStateText(
+    ProfitabilityShadowNormalizationState state);
+
+struct ProfitabilityShadowNormalizationResult
+{
+    long long profitabilityObservationId = -1;
+    ProfitabilityShadowNormalizationState state =
+        ProfitabilityShadowNormalizationState::insufficientPopulation;
+    std::string reason;
+    std::optional<double> rawProfitabilityMetric;
+    std::optional<double> empiricalMidrankPercentile;
+    std::optional<double> boundedCandidateMetric;
+    double supportReliability = 0.0;
+    std::optional<double> normalizedProfitabilityValue;
+    std::string canonical;
+    std::string hash;
+};
+
+struct ProfitabilityShadowNormalizationAnalysis
+{
+    std::string policyCanonical;
+    std::string policyHash;
+    std::string membershipCanonical;
+    std::string membershipHash;
+    std::size_t populatedEvidenceCount = 0;
+    std::size_t analyzableEvidenceCount = 0;
+    std::size_t zeroActionableCount = 0;
+    std::vector<ProfitabilityShadowNormalizationResult> results;
+    std::string canonical;
+    std::string hash;
+};
+
+ProfitabilityShadowNormalizationAnalysis
+AnalyzeProfitabilityShadowNormalization(
+    std::vector<ProfitabilityShadowNormalizationInput> inputs,
+    const ProfitabilityShadowNormalizationPolicy& policy = {});
+
 } // namespace EA::ExperimentRecommendation

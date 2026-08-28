@@ -2,6 +2,7 @@
 
 #include "ExperimentRecommendation.hpp"
 #include "InferenceProfitabilityRepository.hpp"
+#include "ProfitabilityDistribution.hpp"
 
 #include <optional>
 #include <string>
@@ -14,6 +15,8 @@ inline constexpr int kEvidenceContractVersion = 1;
 inline constexpr int kShadowRankingPolicyVersion = 1;
 inline constexpr double kLiveProfitabilityRankingWeight = 0.0;
 inline constexpr double kLiveProfitabilityScoreContribution = 0.0;
+inline constexpr int kWeightedShadowRankingPolicyVersion = 1;
+inline constexpr double kMaximumPhase9ProfitabilityShadowWeight = 0.05;
 static_assert(kLiveProfitabilityRankingWeight == 0.0);
 static_assert(kLiveProfitabilityScoreContribution == 0.0);
 
@@ -63,6 +66,13 @@ EvidenceResult EnforceFrozenCampaignEvidence(
         FinalProfitabilityEvidence>& frozen,
     EvidenceResult current);
 
+EvidenceResult ValidateFrozenCampaignEvidence(
+    long long sourceExperimentId,
+    const std::optional<long long>& sourceModelId,
+    const ExperimentRecommendation::RecommendationSource::
+        FinalProfitabilityEvidence& frozen,
+    const std::optional<InferenceProfitability::Observation>& observation);
+
 std::vector<long long> ParseDeclaredExperimentIds(const std::string& value);
 
 int ExitCode(const std::vector<EvidenceResult>& results);
@@ -84,7 +94,11 @@ struct ShadowCandidate
     long long rankingMemberId = -1;
     long long recommendationId = -1;
     long long sourceExperimentId = -1;
+    long long recommendationEvaluationResultId = -1;
+    long long recommendationEvaluationRunId = -1;
     std::optional<long long> sourceModelId;
+    std::string symbol;
+    int horizon = 0;
     int currentRank = 0;
     std::optional<double> currentScore;
     double leaderScore = 0.0;
@@ -112,6 +126,61 @@ struct ShadowRanking
 std::string ShadowRankingPolicyCanonicalText();
 std::string ShadowRankingPolicyHash();
 ShadowRanking BuildShadowRanking(std::vector<ShadowCandidate> candidates);
+
+std::vector<double> ParseProfitabilityShadowWeights(const std::string& value);
+
+struct WeightedShadowCandidate
+{
+    ShadowCandidate source;
+    std::string normalizationState;
+    std::string normalizationReason;
+    std::optional<double> empiricalMidrankPercentile;
+    std::optional<double> boundedCandidateMetric;
+    std::optional<double> supportReliability;
+    std::optional<double> normalizedProfitabilityValue;
+    std::optional<double> profitabilityContribution;
+    double shadowFinalScore = 0.0;
+    int shadowRank = 0;
+    int rankDelta = 0;
+    std::string canonical;
+    std::string hash;
+};
+
+struct WeightedShadowRanking
+{
+    int policyVersion = kWeightedShadowRankingPolicyVersion;
+    long long controlSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    double shadowWeight = 0.0;
+    std::string policyCanonical;
+    std::string policyHash;
+    ExperimentRecommendation::ProfitabilityShadowNormalizationAnalysis
+        normalization;
+    std::vector<WeightedShadowCandidate> candidates;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityShadowSource
+{
+    long long controlSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    std::string controlSnapshotIdentityCanonical;
+    std::string controlSnapshotIdentityHash;
+    std::string controlRankingPolicyCanonical;
+    std::string controlRankingPolicyHash;
+    int persistedMemberCount = 0;
+    std::vector<ShadowCandidate> candidates;
+};
+
+WeightedShadowRanking BuildWeightedShadowRanking(
+    std::vector<ShadowCandidate> candidates,
+    long long controlSnapshotId,
+    long long sourceEvaluationRunId,
+    const std::string& controlSnapshotIdentityHash,
+    double shadowWeight,
+    const ExperimentRecommendation::ProfitabilityShadowNormalizationPolicy&
+        normalizationPolicy = {});
 
 enum class ReadinessAction
 {

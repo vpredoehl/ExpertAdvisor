@@ -1,5 +1,7 @@
 #include "../Sources/ExperimentRecommendation.hpp"
+#include "../Sources/ExperimentRecommendationRanking.hpp"
 #include "../Sources/InferenceProfitabilityRepository.hpp"
+#include "../Sources/ProfitabilityVerificationRepository.hpp"
 #include "../Sources/ProfitabilityVerificationService.hpp"
 
 #include <cassert>
@@ -100,9 +102,18 @@ void InsertSnapshot(pqxx::transaction_base& transaction,
     const std::string evaluation =
         "profitability-readiness-evaluation-semantic";
     transaction.exec(
-        "INSERT INTO experiment_recommendation_ranking_snapshot VALUES("
+        "INSERT INTO experiment_recommendation_ranking_snapshot("
+        "recommendation_ranking_snapshot_id,status,"
+        "ranking_snapshot_identity_canonical,ranking_snapshot_identity_hash,"
+        "ranking_policy_canonical,ranking_policy_hash,ranking_version,"
+        "population_semantic_state,scoring_semantic_canonical,"
+        "scoring_semantic_hash,scoring_semantic_version,"
+        "evaluation_semantic_canonical,evaluation_semantic_hash,"
+        "evaluation_semantic_version,distinct_scoring_semantic_count,"
+        "distinct_evaluation_semantic_count,homogeneity_validation_result,"
+        "member_count,advisory_ready_count) VALUES("
         "$1,'completed',$2,$3,$4,$5,1,'verified_homogeneous',$6,$7,1,"
-        "$8,$9,1,1,1,'verified_homogeneous',$10);",
+        "$8,$9,1,1,1,'verified_homogeneous',$10,$10);",
         pqxx::params{
             snapshotId,
             identity, Recommendation::RecommendationCanonicalHash(identity),
@@ -201,14 +212,150 @@ void InsertMember(pqxx::transaction_base& transaction,
                   long long experimentId,
                   long long modelId,
                   int rank,
-                  double score)
+                  double score,
+                  std::optional<long long> evaluationResultId = std::nullopt)
 {
     transaction.exec(
-        "INSERT INTO experiment_recommendation_ranking_member VALUES("
-        "$1,$2,$3,$4,$5,$6,'advisory_ready',$7,'EURUSDRMP',5,"
+        "INSERT INTO experiment_recommendation_ranking_member("
+        "recommendation_ranking_member_id,recommendation_ranking_snapshot_id,"
+        "recommendation_evaluation_result_id,recommendation_id,"
+        "source_experiment_id,source_model_id,global_ordinal,bucket,"
+        "final_score,symbol,horizon,family) VALUES("
+        "$1,$2,$3,$4,$5,$6,$7,'advisory_ready',$8,'EURUSDRMP',5,"
         "'core_lr_mult');",
-        pqxx::params{memberId, snapshotId, recommendationId, experimentId,
-                     modelId, rank, score});
+        pqxx::params{memberId, snapshotId, evaluationResultId,
+                     recommendationId, experimentId, modelId, rank, score});
+}
+
+void InsertEvaluationResult(pqxx::transaction_base& transaction,
+                            long long evaluationResultId,
+                            long long recommendationId,
+                            long long experimentId,
+                            long long modelId,
+                            double score)
+{
+    const std::string identity =
+        "profitability-shadow-evaluation-" +
+        std::to_string(evaluationResultId);
+    transaction.exec(
+        "INSERT INTO experiment_recommendation_evaluation_result("
+        "recommendation_evaluation_result_id,recommendation_evaluation_run_id,"
+        "recommendation_id,evaluation_identity_canonical,"
+        "evaluation_identity_hash,source_experiment_id,source_model_id,"
+        "final_score,eligibility,disposition,result_status,"
+        "final_profitability_provenance_version,"
+        "source_final_inference_eval_result_id,"
+        "source_final_profitability_observation_id,"
+        "source_final_profitability_unavailable_reason,"
+        "source_final_profitability_inference_scope,"
+        "source_final_profitability_inference_start,"
+        "source_final_profitability_inference_end,"
+        "source_final_profitability_actionable_count,"
+        "source_final_profitability_aggregate_return,"
+        "source_final_profitability_average_return,"
+        "source_final_profitability_metric_definition_hash,"
+        "source_final_profitability_source_content_hash,"
+        "source_final_profitability_observation_identity_hash) "
+        "SELECT $1,6,recommendation_id,$2,$3,source_experiment_id,"
+        "source_model_id,$4,'eligible','advisory_ready','evaluated',"
+        "final_profitability_provenance_version,"
+        "source_final_inference_eval_result_id,"
+        "source_final_profitability_observation_id,"
+        "source_final_profitability_unavailable_reason,"
+        "source_final_profitability_inference_scope,"
+        "source_final_profitability_inference_start,"
+        "source_final_profitability_inference_end,"
+        "source_final_profitability_actionable_count,"
+        "source_final_profitability_aggregate_return,"
+        "source_final_profitability_average_return,"
+        "source_final_profitability_metric_definition_hash,"
+        "source_final_profitability_source_content_hash,"
+        "source_final_profitability_observation_identity_hash "
+        "FROM experiment_recommendation WHERE recommendation_id=$5 "
+        "AND source_experiment_id=$6 AND source_model_id=$7;",
+        pqxx::params{
+            evaluationResultId, identity,
+            Recommendation::RecommendationCanonicalHash(identity), score,
+            recommendationId, experimentId, modelId});
+}
+
+void InsertAuthoritativeShadowSnapshot(pqxx::transaction_base& transaction)
+{
+    const std::string runIdentity = "profitability-shadow-evaluation-run-6";
+    transaction.exec(
+        "INSERT INTO experiment_recommendation_evaluation_run VALUES("
+        "6,'completed',$1,$2,3,3,0,0);",
+        pqxx::params{
+            runIdentity,
+            Recommendation::RecommendationCanonicalHash(runIdentity)});
+    InsertEvaluationResult(transaction, 9001, 1002, 2, 20, 0.99);
+    InsertEvaluationResult(transaction, 9002, 1003, 3, 30, 0.75);
+    InsertEvaluationResult(transaction, 9003, 1001, 1, 10, 0.50);
+
+    const std::string membership =
+        "experiment_recommendation_ranking_membership_v1;count=3;"
+        "member[0].evaluation_identity=36:profitability-shadow-evaluation-9001;"
+        "member[0].evaluation_result_id=9001;"
+        "member[1].evaluation_identity=36:profitability-shadow-evaluation-9002;"
+        "member[1].evaluation_result_id=9002;"
+        "member[2].evaluation_identity=36:profitability-shadow-evaluation-9003;"
+        "member[2].evaluation_result_id=9003";
+    const Recommendation::RecommendationRankingPolicy policy;
+    Recommendation::RecommendationRankingScope scope;
+    scope.type = Recommendation::RecommendationRankingScopeType::evaluationRun;
+    scope.evaluationRunId = 6;
+    Recommendation::RecommendationRankingPopulationSemanticValidation semantics;
+    semantics.state = Recommendation::
+        RecommendationRankingPopulationSemanticState::verifiedHomogeneous;
+    const std::string scoring = "profitability-shadow-scoring-semantic-v1";
+    const std::string evaluation =
+        "profitability-shadow-evaluation-semantic-v1";
+    semantics.scoringIdentity = Recommendation::
+        RecommendationScoringSemanticIdentity{
+            scoring, Recommendation::RecommendationCanonicalHash(scoring), 1};
+    semantics.evaluationIdentity = Recommendation::
+        RecommendationEvaluationSemanticIdentity{
+            evaluation,
+            Recommendation::RecommendationCanonicalHash(evaluation), 1};
+    semantics.distinctScoringIdentityCount = 1;
+    semantics.distinctEvaluationIdentityCount = 1;
+    const std::string policyCanonical =
+        Recommendation::RecommendationRankingPolicyCanonicalText(policy);
+    const std::string scopeCanonical =
+        Recommendation::RecommendationRankingScopeCanonicalText(scope);
+    const std::string identity = Recommendation::
+        RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
+            policy, scope, 1000, membership, semantics);
+    transaction.exec(
+        "INSERT INTO experiment_recommendation_ranking_snapshot("
+        "recommendation_ranking_snapshot_id,status,"
+        "ranking_snapshot_identity_canonical,ranking_snapshot_identity_hash,"
+        "ranking_policy_canonical,ranking_policy_hash,ranking_version,"
+        "scope_type,scope_canonical,scope_hash,evaluation_run_filter,"
+        "requested_limit,source_membership_canonical,source_membership_hash,"
+        "ranking_snapshot_identity_version,population_semantic_state,"
+        "scoring_semantic_canonical,scoring_semantic_hash,"
+        "scoring_semantic_version,evaluation_semantic_canonical,"
+        "evaluation_semantic_hash,evaluation_semantic_version,"
+        "distinct_scoring_semantic_count,distinct_evaluation_semantic_count,"
+        "homogeneity_validation_result,member_count,advisory_ready_count,"
+        "blocked_count,non_actionable_count) VALUES("
+        "9,'completed',$1,$2,$3,$4,1,'evaluation_run',$5,$6,6,1000,"
+        "$7,$8,2,'verified_homogeneous',$9,$10,1,$11,$12,1,1,1,"
+        "'verified_homogeneous',3,3,0,0);",
+        pqxx::params{
+            identity, Recommendation::RecommendationCanonicalHash(identity),
+            policyCanonical,
+            Recommendation::RecommendationCanonicalHash(policyCanonical),
+            scopeCanonical,
+            Recommendation::RecommendationCanonicalHash(scopeCanonical),
+            membership, Recommendation::RecommendationCanonicalHash(membership),
+            scoring, Recommendation::RecommendationCanonicalHash(scoring),
+            evaluation,
+            Recommendation::RecommendationCanonicalHash(evaluation)});
+    InsertMember(transaction, 90001, 9, 1002, 2, 20, 1, 0.99, 9001);
+    InsertMember(transaction, 90002, 9, 1003, 3, 30, 2, 0.75, 9002);
+    InsertMember(transaction, 90003, 9, 1001, 1, 10, 3, 0.50, 9003);
 }
 
 void Setup()
@@ -236,6 +383,7 @@ void Setup()
     InsertRecommendation(
         transaction, 1004, 1, 10, 101, positive, "", true);
     InsertMember(transaction, 8001, 8, 1004, 1, 10, 1, 0.90);
+    InsertAuthoritativeShadowSnapshot(transaction);
     transaction.commit();
 }
 
@@ -293,6 +441,49 @@ void Verify()
         "campaign_profitability_activation_performed=false") !=
            std::string::npos);
 
+    {
+        pqxx::connection sourceConnection{connectionString};
+        pqxx::read_transaction sourceTransaction{sourceConnection};
+        const auto source = Verification::LoadCampaignProfitabilityShadowSource(
+            sourceTransaction, 9);
+        assert(source.controlSnapshotId == 9);
+        assert(source.sourceEvaluationRunId == 6);
+        assert(source.persistedMemberCount == 3);
+        assert(source.candidates.size() == 3);
+        assert(source.candidates[0].recommendationId == 1002);
+        assert(source.candidates[1].recommendationId == 1003);
+        assert(source.candidates[2].recommendationId == 1001);
+        assert(source.candidates[0].profitability.state ==
+               Verification::EvidenceState::valid);
+        assert(source.candidates[1].profitability.state ==
+               Verification::EvidenceState::unavailable);
+        assert(source.candidates[2].profitability.state ==
+               Verification::EvidenceState::valid);
+    }
+
+    output.str({});
+    output.clear();
+    assert(Verification::RunCampaignShadowRankingCommand(
+               connectionString, 9, {0.05, 0.01, 0.025}, output, errors) == 0);
+    const std::string shadow = output.str();
+    assert(shadow.find(
+        "shadow_only=true,control_snapshot_id=9,source_evaluation_run_id=6,"
+        "source_member_count=3,live_rank_authoritative=true,"
+        "live_profitability_weight=0,live_profitability_score_contribution=0,"
+        "activation=false,database_write=false,experiment_created=false,"
+        "experiment_queued=false,scheduler_modified=false") !=
+        std::string::npos);
+    assert(shadow.find("shadow_weight=0.01") != std::string::npos);
+    assert(shadow.find("shadow_weight=0.025") != std::string::npos);
+    assert(shadow.find("shadow_weight=0.050000000000000003") !=
+           std::string::npos);
+    assert(shadow.find("profitability_state=unavailable") !=
+           std::string::npos);
+    assert(shadow.find("normalization_state=explicitly_unavailable") !=
+           std::string::npos);
+    assert(shadow.find("profitability_contribution=NULL") !=
+           std::string::npos);
+
     pqxx::connection verifyConnection{connectionString};
     pqxx::read_transaction transaction{verifyConnection};
     assert(transaction.exec("SHOW transaction_read_only;")
@@ -302,7 +493,12 @@ void Verify()
                .one_row()[0].as<int>() == 4);
     assert(transaction.exec(
         "SELECT count(*) FROM experiment_recommendation_ranking_member;")
-               .one_row()[0].as<int>() == 4);
+               .one_row()[0].as<int>() == 7);
+    assert(transaction.exec(
+        "SELECT count(*) FROM experiment_recommendation_evaluation_result;")
+               .one_row()[0].as<int>() == 3);
+    assert(transaction.exec("SELECT count(*) FROM experiment;")
+               .one_row()[0].as<int>() == 3);
     const pqxx::row sentinel = transaction.exec(
         "SELECT last_value,is_called FROM campaign_read_sentinel;").one_row();
     assert(sentinel["last_value"].as<long long>() == 1);

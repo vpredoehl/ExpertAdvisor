@@ -701,4 +701,220 @@ ProfitabilityDistributionAnalysis AnalyzeProfitabilityDistribution(
     return analysis;
 }
 
+std::optional<std::string> ValidateProfitabilityShadowNormalizationPolicy(
+    const ProfitabilityShadowNormalizationPolicy& policy)
+{
+    if (policy.version != kProfitabilityShadowNormalizationPolicyVersion)
+        return "unsupported_profitability_shadow_normalization_policy_version";
+    if (policy.minimumAnalyzablePopulationSize < 2 ||
+        policy.minimumAnalyzablePopulationSize > 10000)
+        return "invalid_profitability_shadow_minimum_population";
+    if (policy.supportHalfSaturationActionableCount == 0)
+        return "invalid_profitability_shadow_support_half_saturation";
+    return std::nullopt;
+}
+
+std::string ProfitabilityShadowNormalizationPolicyCanonicalText(
+    const ProfitabilityShadowNormalizationPolicy& policy)
+{
+    if (const auto error =
+            ValidateProfitabilityShadowNormalizationPolicy(policy))
+        throw std::invalid_argument(*error);
+    return "campaign_profitability_shadow_normalization_policy_v1;version=" +
+        std::to_string(policy.version) +
+        ";scope=source_ranking_snapshot_frozen_populated_observations;"
+        "cross_context_population=explicit;"
+        "raw_metric=average_terminal_horizon_log_return_per_actionable_prediction;"
+        "empirical_percentile=midrank;"
+        "bounded_metric=negative:0.5*percentile,zero:0.5,positive:0.5+0.5*percentile;"
+        "support_reliability=actionable_count/(actionable_count+half_saturation);"
+        "normalized_value=support_reliability*(2*bounded_metric-1);"
+        "unavailable=excluded_from_population_and_no_contribution;"
+        "zero_actionable=valid_zero_aggregate_average_undefined_no_contribution;"
+        "minimum_analyzable_population_size=" +
+        std::to_string(policy.minimumAnalyzablePopulationSize) +
+        ";support_half_saturation_actionable_count=" +
+        std::to_string(policy.supportHalfSaturationActionableCount) +
+        ";base_phase3c_normalization_policy_hash=" +
+        ProfitabilityNormalizationPolicyHash({});
+}
+
+std::string ProfitabilityShadowNormalizationPolicyHash(
+    const ProfitabilityShadowNormalizationPolicy& policy)
+{
+    return RecommendationCanonicalHash(
+        ProfitabilityShadowNormalizationPolicyCanonicalText(policy));
+}
+
+std::string ProfitabilityShadowNormalizationStateText(
+    ProfitabilityShadowNormalizationState state)
+{
+    switch (state)
+    {
+        case ProfitabilityShadowNormalizationState::available:
+            return "available";
+        case ProfitabilityShadowNormalizationState::insufficientPopulation:
+            return "insufficient_population";
+        case ProfitabilityShadowNormalizationState::zeroActionable:
+            return "zero_actionable";
+    }
+    throw std::logic_error("unknown_profitability_shadow_normalization_state");
+}
+
+ProfitabilityShadowNormalizationAnalysis
+AnalyzeProfitabilityShadowNormalization(
+    std::vector<ProfitabilityShadowNormalizationInput> inputs,
+    const ProfitabilityShadowNormalizationPolicy& policy)
+{
+    if (const auto error =
+            ValidateProfitabilityShadowNormalizationPolicy(policy))
+        throw std::invalid_argument(*error);
+
+    std::sort(inputs.begin(), inputs.end(), [](const auto& left,
+                                               const auto& right) {
+        return std::tie(left.profitabilityObservationId,
+                        left.evidenceIdentityHash) <
+            std::tie(right.profitabilityObservationId,
+                     right.evidenceIdentityHash);
+    });
+    std::set<long long> observationIds;
+    std::set<std::string> evidenceHashes;
+    std::vector<double> values;
+    values.reserve(inputs.size());
+    for (const auto& input : inputs)
+    {
+        if (input.profitabilityObservationId <= 0 ||
+            input.evidenceIdentityHash.empty() ||
+            !observationIds.insert(input.profitabilityObservationId).second ||
+            !evidenceHashes.insert(input.evidenceIdentityHash).second)
+            throw std::invalid_argument(
+                "invalid_profitability_shadow_normalization_input_identity");
+        if (input.actionableCount == 0)
+        {
+            if (input.averageTerminalHorizonLogReturnPerActionablePrediction)
+                throw std::invalid_argument(
+                    "invalid_profitability_shadow_zero_actionable_average");
+            continue;
+        }
+        if (!input.averageTerminalHorizonLogReturnPerActionablePrediction ||
+            !std::isfinite(*input.
+                averageTerminalHorizonLogReturnPerActionablePrediction))
+            throw std::invalid_argument(
+                "invalid_profitability_shadow_average_metric");
+        const double value = *input.
+            averageTerminalHorizonLogReturnPerActionablePrediction;
+        values.push_back(value == 0.0 ? 0.0 : value);
+    }
+    std::sort(values.begin(), values.end());
+
+    ProfitabilityShadowNormalizationAnalysis analysis;
+    analysis.policyCanonical =
+        ProfitabilityShadowNormalizationPolicyCanonicalText(policy);
+    analysis.policyHash =
+        ProfitabilityShadowNormalizationPolicyHash(policy);
+    analysis.populatedEvidenceCount = inputs.size();
+    analysis.analyzableEvidenceCount = values.size();
+    analysis.zeroActionableCount = inputs.size() - values.size();
+    analysis.membershipCanonical =
+        "campaign_profitability_shadow_normalization_membership_v1;count=" +
+        std::to_string(inputs.size());
+    for (std::size_t index = 0; index < inputs.size(); ++index)
+    {
+        const auto& input = inputs[index];
+        analysis.membershipCanonical += ";member[" +
+            std::to_string(index) + "].observation_id=" +
+            std::to_string(input.profitabilityObservationId) +
+            ";member[" + std::to_string(index) + "].actionable_count=" +
+            std::to_string(input.actionableCount) +
+            ";member[" + std::to_string(index) + "].average=" +
+            OptionalDoubleText(input.
+                averageTerminalHorizonLogReturnPerActionablePrediction) +
+            ";member[" + std::to_string(index) + "].evidence_hash=" +
+            input.evidenceIdentityHash;
+    }
+    analysis.membershipHash =
+        RecommendationCanonicalHash(analysis.membershipCanonical);
+
+    const bool sufficient = values.size() >=
+        policy.minimumAnalyzablePopulationSize;
+    for (const auto& input : inputs)
+    {
+        ProfitabilityShadowNormalizationResult result;
+        result.profitabilityObservationId = input.profitabilityObservationId;
+        const long double support =
+            static_cast<long double>(input.actionableCount);
+        const long double half = static_cast<long double>(
+            policy.supportHalfSaturationActionableCount);
+        result.supportReliability = static_cast<double>(
+            support / (support + half));
+        if (input.actionableCount == 0)
+        {
+            result.state =
+                ProfitabilityShadowNormalizationState::zeroActionable;
+            result.reason =
+                "average_unavailable_zero_actionable_no_contribution";
+        }
+        else
+        {
+            const double raw = *input.
+                averageTerminalHorizonLogReturnPerActionablePrediction;
+            result.rawProfitabilityMetric = raw == 0.0 ? 0.0 : raw;
+            const auto lower = std::lower_bound(values.begin(), values.end(), raw);
+            const auto upper = std::upper_bound(values.begin(), values.end(), raw);
+            const long double less = static_cast<long double>(
+                std::distance(values.begin(), lower));
+            const long double equal = static_cast<long double>(
+                std::distance(lower, upper));
+            const double percentile = static_cast<double>(
+                (less + 0.5L * equal) /
+                static_cast<long double>(values.size()));
+            result.empiricalMidrankPercentile = percentile;
+            const double bounded = raw < 0.0 ? 0.5 * percentile
+                : raw > 0.0 ? 0.5 + 0.5 * percentile : 0.5;
+            result.boundedCandidateMetric = bounded;
+            result.state = sufficient
+                ? ProfitabilityShadowNormalizationState::available
+                : ProfitabilityShadowNormalizationState::insufficientPopulation;
+            result.reason = sufficient ? "available"
+                : "insufficient_analyzable_population_no_contribution";
+            if (sufficient)
+                result.normalizedProfitabilityValue =
+                    result.supportReliability * (2.0 * bounded - 1.0);
+        }
+        result.canonical =
+            "campaign_profitability_shadow_normalization_result_v1;"
+            "observation_id=" + std::to_string(result.profitabilityObservationId) +
+            ";state=" + ProfitabilityShadowNormalizationStateText(result.state) +
+            ";reason=" + LengthText(result.reason) +
+            ";raw_metric=" + OptionalDoubleText(result.rawProfitabilityMetric) +
+            ";empirical_midrank_percentile=" +
+            OptionalDoubleText(result.empiricalMidrankPercentile) +
+            ";bounded_candidate_metric=" +
+            OptionalDoubleText(result.boundedCandidateMetric) +
+            ";support_reliability=" +
+            CanonicalRecommendationDouble(result.supportReliability) +
+            ";normalized_profitability_value=" +
+            OptionalDoubleText(result.normalizedProfitabilityValue) +
+            ";policy_hash=" + analysis.policyHash +
+            ";membership_hash=" + analysis.membershipHash;
+        result.hash = RecommendationCanonicalHash(result.canonical);
+        analysis.results.push_back(std::move(result));
+    }
+    analysis.canonical =
+        "campaign_profitability_shadow_normalization_analysis_v1;policy=" +
+        LengthText(analysis.policyCanonical) +
+        ";membership=" + LengthText(analysis.membershipCanonical) +
+        ";populated_evidence_count=" +
+        std::to_string(analysis.populatedEvidenceCount) +
+        ";analyzable_evidence_count=" +
+        std::to_string(analysis.analyzableEvidenceCount) +
+        ";zero_actionable_count=" +
+        std::to_string(analysis.zeroActionableCount);
+    for (std::size_t index = 0; index < analysis.results.size(); ++index)
+        analysis.canonical += ";result[" + std::to_string(index) + "]=" +
+            LengthText(analysis.results[index].canonical);
+    analysis.hash = RecommendationCanonicalHash(analysis.canonical);
+    return analysis;
+}
+
 } // namespace EA::ExperimentRecommendation

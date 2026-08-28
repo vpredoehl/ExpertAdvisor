@@ -210,6 +210,8 @@ struct SchedulerOptions
         compareFeatureAblationReplications;
     std::optional<std::vector<long long>> verifyProfitabilityExperimentIds;
     std::optional<long long> campaignProfitabilityReadinessSnapshotId;
+    std::optional<long long> campaignProfitabilityShadowSnapshotId;
+    std::optional<std::vector<double>> campaignProfitabilityShadowWeights;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -953,7 +955,11 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
         if (arg == "--verify-profitability-evidence" ||
             arg.rfind("--verify-profitability-evidence=", 0) == 0 ||
             arg == "--campaign-profitability-readiness" ||
-            arg.rfind("--campaign-profitability-readiness=", 0) == 0)
+            arg.rfind("--campaign-profitability-readiness=", 0) == 0 ||
+            arg == "--shadow-rank-campaign-profitability" ||
+            arg.rfind("--shadow-rank-campaign-profitability=", 0) == 0 ||
+            arg == "--profitability-shadow-weights" ||
+            arg.rfind("--profitability-shadow-weights=", 0) == 0)
             return true;
         if (arg == "--compare-feature-ablation-pair" ||
             arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
@@ -1899,6 +1905,23 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.campaignProfitabilityReadinessSnapshotId =
                 ParsePositiveLongLong(
                     arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--shadow-rank-campaign-profitability")
+        {
+            if (options.campaignProfitabilityShadowSnapshotId)
+                throw std::invalid_argument(
+                    "--shadow-rank-campaign-profitability specified more than once");
+            options.campaignProfitabilityShadowSnapshotId =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--profitability-shadow-weights")
+        {
+            if (options.campaignProfitabilityShadowWeights)
+                throw std::invalid_argument(
+                    "--profitability-shadow-weights specified more than once");
+            options.campaignProfitabilityShadowWeights =
+                EA::ProfitabilityVerification::ParseProfitabilityShadowWeights(
+                    RequireNextArg(argc, argv, i, arg));
         }
         else if (arg == "--complete-scheduler-protocol-cutover")
             options.completeSchedulerProtocolCutover = true;
@@ -3837,6 +3860,26 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     "--campaign-profitability-readiness", value);
         }
+        else if (SplitOptionWithValue(
+                     arg, "--shadow-rank-campaign-profitability", value))
+        {
+            if (options.campaignProfitabilityShadowSnapshotId)
+                throw std::invalid_argument(
+                    "--shadow-rank-campaign-profitability specified more than once");
+            options.campaignProfitabilityShadowSnapshotId =
+                ParsePositiveLongLong(
+                    "--shadow-rank-campaign-profitability", value);
+        }
+        else if (SplitOptionWithValue(
+                     arg, "--profitability-shadow-weights", value))
+        {
+            if (options.campaignProfitabilityShadowWeights)
+                throw std::invalid_argument(
+                    "--profitability-shadow-weights specified more than once");
+            options.campaignProfitabilityShadowWeights =
+                EA::ProfitabilityVerification::ParseProfitabilityShadowWeights(
+                    value);
+        }
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -3919,6 +3962,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.compareFeatureAblationReplications.has_value() ? 1 : 0) +
         (options.verifyProfitabilityExperimentIds.has_value() ? 1 : 0) +
         (options.campaignProfitabilityReadinessSnapshotId.has_value() ? 1 : 0) +
+        (options.campaignProfitabilityShadowSnapshotId.has_value() ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -4906,6 +4950,37 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         throw std::invalid_argument(
             "--complete-scheduler-protocol-cutover requires --yes "
             "and does not accept --dry-run");
+    }
+    if (options.campaignProfitabilityShadowSnapshotId.has_value() !=
+        options.campaignProfitabilityShadowWeights.has_value())
+        throw std::invalid_argument(
+            "--shadow-rank-campaign-profitability requires "
+            "--profitability-shadow-weights and vice versa");
+    if (options.campaignProfitabilityShadowSnapshotId)
+    {
+        bool consumeValue = false;
+        for (int index = 1; index < argc; ++index)
+        {
+            const std::string argument = argv[index];
+            if (consumeValue)
+            {
+                consumeValue = false;
+                continue;
+            }
+            if (argument == "--shadow-rank-campaign-profitability" ||
+                argument == "--profitability-shadow-weights")
+            {
+                consumeValue = true;
+                continue;
+            }
+            if (argument.rfind(
+                    "--shadow-rank-campaign-profitability=", 0) == 0 ||
+                argument.rfind("--profitability-shadow-weights=", 0) == 0)
+                continue;
+            throw std::invalid_argument(
+                "--shadow-rank-campaign-profitability does not accept "
+                "unrelated option '" + argument + "'");
+        }
     }
     if (commandCount != 1)
         throw std::invalid_argument("expected exactly one experiment scheduler command");
@@ -24355,6 +24430,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Current rank remains authoritative; live profitability weight and "
         << "score contribution remain zero; activation is never performed.\n"
         << "Usage: " << exe
+        << " --shadow-rank-campaign-profitability=RANKING_SNAPSHOT_ID "
+        << "--profitability-shadow-weights=WEIGHT[,WEIGHT...]\n"
+        << "Campaign profitability weighted ranking is shadow-only and uses "
+        << "the exact frozen control snapshot/evaluation evidence. Current/live "
+        << "rank remains authoritative; live profitability weight and score "
+        << "contribution remain zero. It performs no activation, database write, "
+        << "experiment creation/queueing, or scheduler modification. Phase 9 "
+        << "accepts finite unique weights from 0 through 0.05.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
         << "Feature-ablation pair comparison validates the persisted consensus "
         << "feature-family ablation, resolves exact FINAL inference and "
@@ -25728,6 +25812,25 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             catch (const std::exception& error)
             {
                 std::cerr << "CAMPAIGN_PROFITABILITY_READINESS_TOOL_ERROR"
+                          << ",error=" << error.what() << std::endl;
+                return 2;
+            }
+        }
+        if (options.campaignProfitabilityShadowSnapshotId)
+        {
+            try
+            {
+                return EA::ProfitabilityVerification::
+                    RunCampaignShadowRankingCommand(
+                        LstmDbConnectionString(),
+                        *options.campaignProfitabilityShadowSnapshotId,
+                        *options.campaignProfitabilityShadowWeights,
+                        std::cout,
+                        std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr << "CAMPAIGN_PROFITABILITY_SHADOW_TOOL_ERROR"
                           << ",error=" << error.what() << std::endl;
                 return 2;
             }

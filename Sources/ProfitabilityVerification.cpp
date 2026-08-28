@@ -372,6 +372,57 @@ EvidenceResult EnforceFrozenCampaignEvidence(
     return current;
 }
 
+EvidenceResult ValidateFrozenCampaignEvidence(
+    long long sourceExperimentId,
+    const std::optional<long long>& sourceModelId,
+    const ExperimentRecommendation::RecommendationSource::
+        FinalProfitabilityEvidence& frozen,
+    const std::optional<InferenceProfitability::Observation>& observation)
+{
+    if (sourceExperimentId <= 0 ||
+        ExperimentRecommendation::ValidateRecommendationFinalProfitabilityEvidence(
+            frozen))
+        throw std::invalid_argument("invalid_frozen_campaign_profitability_evidence");
+    if (frozen.Available())
+    {
+        if (!sourceModelId || !observation ||
+            !frozen.finalInferenceEvalResultId || !frozen.inferenceStart ||
+            !frozen.inferenceEnd)
+            return ContractFailure(EvidenceResult{},
+                "populated_frozen_profitability_reference_incomplete");
+        ExpectedFinalEvidence expected{
+            sourceExperimentId, *sourceModelId,
+            *frozen.finalInferenceEvalResultId,
+            *frozen.inferenceStart, *frozen.inferenceEnd};
+        return EnforceFrozenCampaignEvidence(
+            sourceModelId, frozen,
+            ValidateExactFinalObservation(expected, observation));
+    }
+    if (observation)
+        return ContractFailure(EvidenceResult{},
+            "unavailable_frozen_profitability_has_observation");
+    EvidenceResult result;
+    result.experimentId = sourceExperimentId;
+    result.finalModelId = sourceModelId;
+    result.finalInferenceEvalResultId = frozen.finalInferenceEvalResultId;
+    result.state = EvidenceState::unavailable;
+    result.reason = frozen.unavailableReason;
+    result.evidenceIdentityCanonical =
+        "campaign_frozen_profitability_evidence_v1;";
+    AppendField(result.evidenceIdentityCanonical, "experiment_id",
+                std::to_string(sourceExperimentId));
+    AppendField(result.evidenceIdentityCanonical, "model_id",
+                OptionalId(sourceModelId));
+    AppendField(result.evidenceIdentityCanonical, "inference_result_id",
+                OptionalId(frozen.finalInferenceEvalResultId));
+    AppendField(result.evidenceIdentityCanonical, "state", "unavailable");
+    AppendField(result.evidenceIdentityCanonical, "reason",
+                frozen.unavailableReason);
+    result.evidenceIdentityHash = InferenceProfitability::DeterministicHash(
+        result.evidenceIdentityCanonical);
+    return result;
+}
+
 std::vector<long long> ParseDeclaredExperimentIds(const std::string& value)
 {
     if (value.empty())
@@ -523,6 +574,256 @@ ShadowRanking BuildShadowRanking(std::vector<ShadowCandidate> candidates)
     for (std::size_t index = 0; index < ranking.candidates.size(); ++index)
         AppendField(ranking.canonical,
                     "candidate[" + std::to_string(index) + "]",
+                    ranking.candidates[index].canonical);
+    ranking.hash = InferenceProfitability::DeterministicHash(ranking.canonical);
+    return ranking;
+}
+
+std::vector<double> ParseProfitabilityShadowWeights(const std::string& value)
+{
+    if (value.empty())
+        throw std::invalid_argument("profitability_shadow_weights_empty");
+    std::vector<double> weights;
+    std::set<double> unique;
+    std::size_t begin = 0;
+    while (begin <= value.size())
+    {
+        const std::size_t comma = value.find(',', begin);
+        const std::string_view token{value.data() + begin,
+            (comma == std::string::npos ? value.size() : comma) - begin};
+        if (token.empty())
+            throw std::invalid_argument("malformed_profitability_shadow_weight");
+        double weight = 0.0;
+        const auto parsed = std::from_chars(
+            token.data(), token.data() + token.size(), weight,
+            std::chars_format::general);
+        if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
+            !std::isfinite(weight))
+            throw std::invalid_argument("malformed_profitability_shadow_weight");
+        if (weight < 0.0)
+            throw std::invalid_argument("negative_profitability_shadow_weight");
+        if (weight > kMaximumPhase9ProfitabilityShadowWeight)
+            throw std::invalid_argument(
+                "profitability_shadow_weight_exceeds_phase9_upper_bound");
+        if (!unique.insert(weight == 0.0 ? 0.0 : weight).second)
+            throw std::invalid_argument("duplicate_profitability_shadow_weight");
+        weights.push_back(weight == 0.0 ? 0.0 : weight);
+        if (comma == std::string::npos) break;
+        begin = comma + 1;
+    }
+    std::sort(weights.begin(), weights.end());
+    return weights;
+}
+
+WeightedShadowRanking BuildWeightedShadowRanking(
+    std::vector<ShadowCandidate> candidates,
+    long long controlSnapshotId,
+    long long sourceEvaluationRunId,
+    const std::string& controlSnapshotIdentityHash,
+    double shadowWeight,
+    const ExperimentRecommendation::ProfitabilityShadowNormalizationPolicy&
+        normalizationPolicy)
+{
+    namespace Recommendation = EA::ExperimentRecommendation;
+    if (controlSnapshotId <= 0 || sourceEvaluationRunId <= 0 ||
+        !TaggedHash(controlSnapshotIdentityHash) || !std::isfinite(shadowWeight) ||
+        shadowWeight < 0.0 ||
+        shadowWeight > kMaximumPhase9ProfitabilityShadowWeight)
+        throw std::invalid_argument("invalid_weighted_profitability_shadow_policy");
+
+    std::set<long long> memberIds;
+    std::set<long long> recommendationIds;
+    std::set<long long> evaluationIds;
+    std::set<int> ranks;
+    std::map<long long,
+             Recommendation::ProfitabilityShadowNormalizationInput>
+        normalizationInputByObservation;
+    std::map<std::string, long long> observationByEvidenceIdentity;
+    std::vector<Recommendation::ProfitabilityShadowNormalizationInput>
+        normalizationInputs;
+    for (auto& candidate : candidates)
+    {
+        if (candidate.rankingMemberId <= 0 || candidate.recommendationId <= 0 ||
+            candidate.recommendationEvaluationResultId <= 0 ||
+            candidate.recommendationEvaluationRunId != sourceEvaluationRunId ||
+            candidate.sourceExperimentId <= 0 || candidate.currentRank <= 0 ||
+            candidate.symbol.empty() || candidate.horizon <= 0 ||
+            !candidate.currentScore || !std::isfinite(*candidate.currentScore) ||
+            !memberIds.insert(candidate.rankingMemberId).second ||
+            !recommendationIds.insert(candidate.recommendationId).second ||
+            !evaluationIds.insert(candidate.recommendationEvaluationResultId).second ||
+            !ranks.insert(candidate.currentRank).second)
+            throw std::invalid_argument(
+                "invalid_weighted_profitability_shadow_candidate");
+        candidate.profitabilitySign = Sign(candidate.profitability);
+        if (EvidenceStateIsInvalid(candidate.profitability.state))
+            throw std::invalid_argument(
+                "invalid_profitability_evidence_blocks_weighted_shadow");
+        if (candidate.profitability.state == EvidenceState::valid &&
+            candidate.profitability.observation)
+        {
+            const auto& observation = *candidate.profitability.observation;
+            Recommendation::ProfitabilityShadowNormalizationInput input{
+                observation.observationId,
+                observation.statistics.actionableCount,
+                observation.averageTerminalHorizonLogReturnPerActionablePrediction,
+                candidate.profitability.evidenceIdentityHash};
+            const auto [identity, identityInserted] =
+                observationByEvidenceIdentity.emplace(
+                    input.evidenceIdentityHash, input.profitabilityObservationId);
+            const auto [existing, observationInserted] =
+                normalizationInputByObservation.emplace(
+                    input.profitabilityObservationId, input);
+            if ((!identityInserted && identity->second !=
+                    input.profitabilityObservationId) ||
+                (!observationInserted &&
+                    (existing->second.actionableCount != input.actionableCount ||
+                     existing->second.
+                         averageTerminalHorizonLogReturnPerActionablePrediction !=
+                         input.
+                         averageTerminalHorizonLogReturnPerActionablePrediction ||
+                     existing->second.evidenceIdentityHash !=
+                         input.evidenceIdentityHash)))
+                throw std::invalid_argument(
+                    "conflicting_repeated_profitability_shadow_evidence");
+        }
+    }
+    if (ranks.size() != candidates.size() ||
+        (!ranks.empty() && (*ranks.begin() != 1 ||
+         *ranks.rbegin() != static_cast<int>(ranks.size()))))
+        throw std::invalid_argument(
+            "noncontiguous_weighted_profitability_control_ranks");
+    normalizationInputs.reserve(normalizationInputByObservation.size());
+    for (auto& [observationId, input] : normalizationInputByObservation)
+    {
+        (void)observationId;
+        normalizationInputs.push_back(std::move(input));
+    }
+
+    WeightedShadowRanking ranking;
+    ranking.controlSnapshotId = controlSnapshotId;
+    ranking.sourceEvaluationRunId = sourceEvaluationRunId;
+    ranking.shadowWeight = shadowWeight == 0.0 ? 0.0 : shadowWeight;
+    ranking.normalization = Recommendation::AnalyzeProfitabilityShadowNormalization(
+        std::move(normalizationInputs), normalizationPolicy);
+    ranking.policyCanonical =
+        "campaign_profitability_weighted_shadow_ranking_policy_v1;version=1;"
+        "shadow_only=true;activation=disabled;database_write=false;"
+        "control_snapshot_id=" + std::to_string(controlSnapshotId) +
+        ";control_snapshot_identity_hash=" + controlSnapshotIdentityHash +
+        ";source_evaluation_run_id=" + std::to_string(sourceEvaluationRunId) +
+        ";control_score=ranking_member_final_score;"
+        "shadow_score=control_score+profitability_contribution;"
+        "raw_metric=average_terminal_horizon_log_return_per_actionable_prediction;"
+        "profitability_contribution=shadow_weight*normalized_profitability_value;"
+        "shadow_weight=" + OptionalDouble(ranking.shadowWeight) +
+        ";phase9_shadow_weight_upper_bound=" +
+        OptionalDouble(kMaximumPhase9ProfitabilityShadowWeight) +
+        ";normalization_policy_hash=" + ranking.normalization.policyHash +
+        ";normalization_membership_hash=" + ranking.normalization.membershipHash +
+        ";repeated_candidate_evidence=deduplicated_by_observation_identity;"
+        "unavailable=explicit_no_contribution_control_score_retained;"
+        "zero_actionable=explicit_no_contribution_control_score_retained;"
+        "order=shadow_score_desc,control_rank_asc,ranking_member_id_asc;"
+        "rank_delta=control_rank-shadow_rank;live_rank_authoritative=true;"
+        "live_profitability_weight=0;live_profitability_score_contribution=0";
+    ranking.policyHash = InferenceProfitability::DeterministicHash(
+        ranking.policyCanonical);
+
+    std::map<long long, Recommendation::ProfitabilityShadowNormalizationResult>
+        normalizedByObservation;
+    for (const auto& result : ranking.normalization.results)
+        normalizedByObservation.emplace(result.profitabilityObservationId, result);
+    ranking.candidates.reserve(candidates.size());
+    for (auto& source : candidates)
+    {
+        WeightedShadowCandidate candidate;
+        candidate.source = std::move(source);
+        candidate.shadowFinalScore = *candidate.source.currentScore;
+        if (candidate.source.profitability.state == EvidenceState::valid &&
+            candidate.source.profitability.observation)
+        {
+            const auto found = normalizedByObservation.find(
+                candidate.source.profitability.observation->observationId);
+            if (found == normalizedByObservation.end())
+                throw std::logic_error("profitability_shadow_normalization_missing");
+            const auto& normalized = found->second;
+            candidate.normalizationState =
+                Recommendation::ProfitabilityShadowNormalizationStateText(
+                    normalized.state);
+            candidate.normalizationReason = normalized.reason;
+            candidate.empiricalMidrankPercentile =
+                normalized.empiricalMidrankPercentile;
+            candidate.boundedCandidateMetric = normalized.boundedCandidateMetric;
+            candidate.supportReliability = normalized.supportReliability;
+            candidate.normalizedProfitabilityValue =
+                normalized.normalizedProfitabilityValue;
+            if (candidate.normalizedProfitabilityValue)
+            {
+                candidate.profitabilityContribution = ranking.shadowWeight *
+                    *candidate.normalizedProfitabilityValue;
+                candidate.shadowFinalScore +=
+                    *candidate.profitabilityContribution;
+            }
+        }
+        else
+        {
+            candidate.normalizationState = "explicitly_unavailable";
+            candidate.normalizationReason =
+                candidate.source.profitability.reason;
+        }
+        ranking.candidates.push_back(std::move(candidate));
+    }
+    std::sort(ranking.candidates.begin(), ranking.candidates.end(),
+        [](const auto& left, const auto& right) {
+            if (left.shadowFinalScore != right.shadowFinalScore)
+                return left.shadowFinalScore > right.shadowFinalScore;
+            return std::tie(left.source.currentRank,
+                            left.source.rankingMemberId) <
+                std::tie(right.source.currentRank,
+                         right.source.rankingMemberId);
+        });
+    for (std::size_t index = 0; index < ranking.candidates.size(); ++index)
+    {
+        auto& candidate = ranking.candidates[index];
+        candidate.shadowRank = static_cast<int>(index) + 1;
+        candidate.rankDelta =
+            candidate.source.currentRank - candidate.shadowRank;
+        candidate.canonical =
+            "campaign_profitability_weighted_shadow_candidate_v1;";
+        AppendField(candidate.canonical, "ranking_member_id",
+                    std::to_string(candidate.source.rankingMemberId));
+        AppendField(candidate.canonical, "recommendation_id",
+                    std::to_string(candidate.source.recommendationId));
+        AppendField(candidate.canonical, "evaluation_result_id",
+                    std::to_string(
+                        candidate.source.recommendationEvaluationResultId));
+        AppendField(candidate.canonical, "control_rank",
+                    std::to_string(candidate.source.currentRank));
+        AppendField(candidate.canonical, "normalization_state",
+                    candidate.normalizationState);
+        AppendField(candidate.canonical, "normalized_profitability_value",
+                    OptionalDouble(candidate.normalizedProfitabilityValue));
+        AppendField(candidate.canonical, "profitability_contribution",
+                    OptionalDouble(candidate.profitabilityContribution));
+        AppendField(candidate.canonical, "shadow_final_score",
+                    OptionalDouble(candidate.shadowFinalScore));
+        AppendField(candidate.canonical, "shadow_rank",
+                    std::to_string(candidate.shadowRank));
+        AppendField(candidate.canonical, "rank_delta",
+                    std::to_string(candidate.rankDelta));
+        candidate.hash = InferenceProfitability::DeterministicHash(
+            candidate.canonical);
+    }
+    ranking.canonical =
+        "campaign_profitability_weighted_shadow_ranking_v1;";
+    AppendField(ranking.canonical, "policy", ranking.policyCanonical);
+    AppendField(ranking.canonical, "normalization",
+                ranking.normalization.canonical);
+    AppendField(ranking.canonical, "candidate_count",
+                std::to_string(ranking.candidates.size()));
+    for (std::size_t index = 0; index < ranking.candidates.size(); ++index)
+        AppendField(ranking.canonical, "candidate[" + std::to_string(index) + "]",
                     ranking.candidates[index].canonical);
     ranking.hash = InferenceProfitability::DeterministicHash(ranking.canonical);
     return ranking;

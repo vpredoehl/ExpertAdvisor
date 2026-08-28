@@ -19,4 +19,11 @@ int RunCampaignReadinessCommand(const std::string& connectionString,
                                 std::ostream& output,
                                 std::ostream& errors);
 
+int RunCampaignShadowRankingCommand(
+    const std::string& connectionString,
+    long long rankingSnapshotId,
+    const std::vector<double>& shadowWeights,
+    std::ostream& output,
+    std::ostream& errors);
+
 } // namespace EA::ProfitabilityVerification
