@@ -63,6 +63,22 @@ bool NearlyEqual(double left, double right)
         32.0 * std::numeric_limits<double>::epsilon() * scale;
 }
 
+bool NearlyEqualAccumulated(double left,
+                            double right,
+                            std::uint64_t termCount)
+{
+    const long double scale = std::max({
+        1.0L, std::abs(static_cast<long double>(left)),
+        std::abs(static_cast<long double>(right))});
+    const long double operations = std::max(
+        64.0L, 8.0L * static_cast<long double>(termCount));
+    const long double tolerance =
+        static_cast<long double>(std::numeric_limits<double>::epsilon()) *
+        operations * scale;
+    return std::abs(static_cast<long double>(left) -
+                    static_cast<long double>(right)) <= tolerance;
+}
+
 EvidenceResult Result(const ExpectedFinalEvidence& expected,
                       EvidenceState state,
                       std::string reason,
@@ -121,9 +137,11 @@ std::optional<std::string> ValidateValues(
         return "nonfinite_profitability_value";
     if (statistics.grossPositiveTerminalHorizonLogReturnSum < 0.0 ||
         statistics.grossNegativeTerminalHorizonLogReturnSum > 0.0 ||
-        !NearlyEqual(statistics.aggregateTerminalHorizonLogReturnSum,
-                     statistics.grossPositiveTerminalHorizonLogReturnSum +
-                         statistics.grossNegativeTerminalHorizonLogReturnSum))
+        !NearlyEqualAccumulated(
+            statistics.aggregateTerminalHorizonLogReturnSum,
+            statistics.grossPositiveTerminalHorizonLogReturnSum +
+                statistics.grossNegativeTerminalHorizonLogReturnSum,
+            statistics.actionableCount))
         return "inconsistent_profitability_returns";
     if (statistics.actionableCount == 0)
     {

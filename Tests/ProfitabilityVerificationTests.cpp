@@ -21,6 +21,19 @@ Verification::ExpectedFinalEvidence Expected()
     return {101, 201, 301, "2025-01-01", "2025-12-31"};
 }
 
+void BindObservationIdentity(Profitability::Observation& value)
+{
+    Profitability::ObservationRequest request;
+    request.provenance = value.provenance;
+    request.statistics = value.statistics;
+    request.sourceContentHash = value.sourceContentHash;
+    request.metricDefinitionCanonical = value.metricDefinitionCanonical;
+    value.observationIdentityCanonical =
+        Profitability::BuildObservationIdentityCanonical(request);
+    value.observationIdentityHash = Profitability::DeterministicHash(
+        value.observationIdentityCanonical);
+}
+
 Profitability::Observation Observation(double aggregate = 0.40,
                                        std::uint64_t actionable = 20)
 {
@@ -52,15 +65,7 @@ Profitability::Observation Observation(double aggregate = 0.40,
         Profitability::kMetricDefinitionCanonical;
     value.metricDefinitionHash = Profitability::MetricDefinitionHash();
     value.sourceContentHash = Profitability::DeterministicHash("source");
-    Profitability::ObservationRequest request;
-    request.provenance = value.provenance;
-    request.statistics = value.statistics;
-    request.sourceContentHash = value.sourceContentHash;
-    request.metricDefinitionCanonical = value.metricDefinitionCanonical;
-    value.observationIdentityCanonical =
-        Profitability::BuildObservationIdentityCanonical(request);
-    value.observationIdentityHash = Profitability::DeterministicHash(
-        value.observationIdentityCanonical);
+    BindObservationIdentity(value);
     value.createdAt = "2026-08-28 00:00:00+00";
     return value;
 }
@@ -189,6 +194,34 @@ int main()
     invalidCounts.statistics.actionableCount = 26;
     assert(Verification::ValidateExactFinalObservation(
                Expected(), invalidCounts).state ==
+           Verification::EvidenceState::invalidValues);
+
+    auto accumulatedReturns = Observation();
+    accumulatedReturns.statistics.predictionCount = 18334;
+    accumulatedReturns.statistics.actionableCount = 12011;
+    accumulatedReturns.statistics.winningActionableCount = 6000;
+    accumulatedReturns.statistics.losingActionableCount = 6011;
+    accumulatedReturns.statistics.grossPositiveTerminalHorizonLogReturnSum =
+        6.62603827126973;
+    accumulatedReturns.statistics.grossNegativeTerminalHorizonLogReturnSum =
+        -5.882329511385737;
+    accumulatedReturns.statistics.aggregateTerminalHorizonLogReturnSum =
+        0.7437087598839783;
+    accumulatedReturns.averageTerminalHorizonLogReturnPerActionablePrediction =
+        accumulatedReturns.statistics.aggregateTerminalHorizonLogReturnSum /
+        static_cast<double>(accumulatedReturns.statistics.actionableCount);
+    BindObservationIdentity(accumulatedReturns);
+    assert(Verification::ValidateExactFinalObservation(
+               Expected(), accumulatedReturns).state ==
+           Verification::EvidenceState::valid);
+
+    accumulatedReturns.statistics.aggregateTerminalHorizonLogReturnSum += 1e-6;
+    accumulatedReturns.averageTerminalHorizonLogReturnPerActionablePrediction =
+        accumulatedReturns.statistics.aggregateTerminalHorizonLogReturnSum /
+        static_cast<double>(accumulatedReturns.statistics.actionableCount);
+    BindObservationIdentity(accumulatedReturns);
+    assert(Verification::ValidateExactFinalObservation(
+               Expected(), accumulatedReturns).state ==
            Verification::EvidenceState::invalidValues);
 
     auto zeroActionable = Observation(0.0, 0);
