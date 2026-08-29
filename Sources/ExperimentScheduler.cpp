@@ -212,6 +212,7 @@ struct SchedulerOptions
     std::optional<long long> campaignProfitabilityReadinessSnapshotId;
     std::optional<long long> campaignProfitabilityShadowSnapshotId;
     std::optional<std::vector<double>> campaignProfitabilityShadowWeights;
+    std::optional<long long> campaignProfitabilityCalibrationSnapshotId;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -959,7 +960,9 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--shadow-rank-campaign-profitability" ||
             arg.rfind("--shadow-rank-campaign-profitability=", 0) == 0 ||
             arg == "--profitability-shadow-weights" ||
-            arg.rfind("--profitability-shadow-weights=", 0) == 0)
+            arg.rfind("--profitability-shadow-weights=", 0) == 0 ||
+            arg == "--calibrate-campaign-profitability" ||
+            arg.rfind("--calibrate-campaign-profitability=", 0) == 0)
             return true;
         if (arg == "--compare-feature-ablation-pair" ||
             arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
@@ -1922,6 +1925,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.campaignProfitabilityShadowWeights =
                 EA::ProfitabilityVerification::ParseProfitabilityShadowWeights(
                     RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--calibrate-campaign-profitability")
+        {
+            if (options.campaignProfitabilityCalibrationSnapshotId)
+                throw std::invalid_argument(
+                    "--calibrate-campaign-profitability specified more than once");
+            options.campaignProfitabilityCalibrationSnapshotId =
+                ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         }
         else if (arg == "--complete-scheduler-protocol-cutover")
             options.completeSchedulerProtocolCutover = true;
@@ -3880,6 +3891,16 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 EA::ProfitabilityVerification::ParseProfitabilityShadowWeights(
                     value);
         }
+        else if (SplitOptionWithValue(
+                     arg, "--calibrate-campaign-profitability", value))
+        {
+            if (options.campaignProfitabilityCalibrationSnapshotId)
+                throw std::invalid_argument(
+                    "--calibrate-campaign-profitability specified more than once");
+            options.campaignProfitabilityCalibrationSnapshotId =
+                ParsePositiveLongLong(
+                    "--calibrate-campaign-profitability", value);
+        }
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -3963,6 +3984,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.verifyProfitabilityExperimentIds.has_value() ? 1 : 0) +
         (options.campaignProfitabilityReadinessSnapshotId.has_value() ? 1 : 0) +
         (options.campaignProfitabilityShadowSnapshotId.has_value() ? 1 : 0) +
+        (options.campaignProfitabilityCalibrationSnapshotId.has_value() ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -4979,6 +5001,30 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 continue;
             throw std::invalid_argument(
                 "--shadow-rank-campaign-profitability does not accept "
+                "unrelated option '" + argument + "'");
+        }
+    }
+    if (options.campaignProfitabilityCalibrationSnapshotId)
+    {
+        bool consumeValue = false;
+        for (int index = 1; index < argc; ++index)
+        {
+            const std::string argument = argv[index];
+            if (consumeValue)
+            {
+                consumeValue = false;
+                continue;
+            }
+            if (argument == "--calibrate-campaign-profitability")
+            {
+                consumeValue = true;
+                continue;
+            }
+            if (argument.rfind(
+                    "--calibrate-campaign-profitability=", 0) == 0)
+                continue;
+            throw std::invalid_argument(
+                "--calibrate-campaign-profitability does not accept "
                 "unrelated option '" + argument + "'");
         }
     }
@@ -24439,6 +24485,13 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "experiment creation/queueing, or scheduler modification. Phase 9 "
         << "accepts finite unique weights from 0 through 0.05.\n"
         << "Usage: " << exe
+        << " --calibrate-campaign-profitability=RANKING_SNAPSHOT_ID\n"
+        << "Phase 10 performs the fixed 0 through 0.05 empirical sweep, exact "
+        << "coverage classification, anchor comparisons, stability analysis, "
+        << "and advisory production-readiness assessment in one repeatable-read, "
+        << "read-only transaction. It cannot backfill frozen evidence or modify "
+        << "ranking, recommendation, experiment, scheduler, or worker state.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
         << "Feature-ablation pair comparison validates the persisted consensus "
         << "feature-family ablation, resolves exact FINAL inference and "
@@ -25832,6 +25885,25 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             {
                 std::cerr << "CAMPAIGN_PROFITABILITY_SHADOW_TOOL_ERROR"
                           << ",error=" << error.what() << std::endl;
+                return 2;
+            }
+        }
+        if (options.campaignProfitabilityCalibrationSnapshotId)
+        {
+            try
+            {
+                return EA::ProfitabilityVerification::
+                    RunCampaignProfitabilityCalibrationCommand(
+                        LstmDbConnectionString(),
+                        *options.campaignProfitabilityCalibrationSnapshotId,
+                        std::cout,
+                        std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr
+                    << "CAMPAIGN_PROFITABILITY_CALIBRATION_TOOL_ERROR"
+                    << ",error=" << error.what() << std::endl;
                 return 2;
             }
         }

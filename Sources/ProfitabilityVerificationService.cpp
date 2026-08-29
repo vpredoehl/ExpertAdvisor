@@ -227,6 +227,27 @@ std::string IdList(const std::set<long long>& ids)
     return value.empty() ? "NONE" : value;
 }
 
+std::string IdList(const std::vector<long long>& ids)
+{
+    std::string value;
+    for (const long long id : ids)
+    {
+        if (!value.empty()) value += ':';
+        value += std::to_string(id);
+    }
+    return value.empty() ? "NONE" : value;
+}
+
+std::string OptionalWeight(const std::optional<double>& value)
+{
+    return value ? Number(*value) : "NULL";
+}
+
+bool SameWeight(double left, double right)
+{
+    return std::abs(left - right) <= 1e-12;
+}
+
 } // namespace
 
 int RunVerificationCommand(const std::string& connectionString,
@@ -734,6 +755,356 @@ int RunCampaignShadowRankingCommand(
            << ",rank_movement_nonmonotonic_members=" << rankNonmonotonic
            << ",rank_nonmonotonicity_may_reflect_competing_movements=true"
            << ",shadow_only=true,activation=false,database_write=false\n";
+    return 0;
+}
+
+int RunCampaignProfitabilityCalibrationCommand(
+    const std::string& connectionString,
+    long long rankingSnapshotId,
+    std::ostream& output,
+    std::ostream& errors)
+{
+    (void)errors;
+    if (rankingSnapshotId <= 0)
+        throw std::invalid_argument(
+            "invalid_campaign_profitability_calibration_snapshot_id");
+
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const CampaignProfitabilityCoverageAudit coverage =
+        LoadCampaignProfitabilityCoverageAudit(transaction, rankingSnapshotId);
+    const CampaignProfitabilityShadowSource source =
+        LoadCampaignProfitabilityShadowSource(transaction, rankingSnapshotId);
+    const std::vector<double> weights = Phase10ProfitabilityCalibrationWeights();
+    std::vector<WeightedShadowRanking> rankings;
+    rankings.reserve(weights.size());
+    for (const double weight : weights)
+        rankings.push_back(BuildWeightedShadowRanking(
+            source.candidates, source.controlSnapshotId,
+            source.sourceEvaluationRunId, source.controlSnapshotIdentityHash,
+            weight));
+    const ProfitabilityCalibrationReport report =
+        BuildProfitabilityCalibrationReport(rankings);
+    if (rankings.front().candidates.size() != source.candidates.size())
+        throw std::runtime_error("calibration_zero_weight_population_mismatch");
+    for (const auto& candidate : rankings.front().candidates)
+        if (candidate.shadowRank != candidate.source.currentRank ||
+            candidate.rankDelta != 0)
+            throw std::runtime_error(
+                "calibration_zero_weight_control_reproduction_failed");
+
+    const auto count = [&](const std::string& reason) {
+        const auto found = coverage.reasonCounts.find(reason);
+        return found == coverage.reasonCounts.end() ? std::size_t{0}
+                                                    : found->second;
+    };
+    const std::size_t valid = count("valid_profitability_observation");
+    std::size_t otherUnavailable = 0;
+    for (const auto& [reason, reasonCount] : coverage.reasonCounts)
+        if (reason != "valid_profitability_observation" &&
+            reason != "no_profitability_observation" &&
+            reason != "final_inference_context_mismatch" &&
+            reason != "no_exact_final_inference_result")
+            otherUnavailable += reasonCount;
+    const auto recoveryCount = [&](const std::string& recoveryClass) {
+        const auto found = coverage.recoveryClassCounts.find(recoveryClass);
+        return found == coverage.recoveryClassCounts.end()
+            ? std::size_t{0} : found->second;
+    };
+    const double overallCoverage = coverage.members.empty() ? 0.0
+        : 100.0 * valid / static_cast<double>(coverage.members.size());
+
+    output << "CAMPAIGN_PROFITABILITY_CALIBRATION_START"
+           << ",control_snapshot_id=" << report.controlSnapshotId
+           << ",source_evaluation_run_id=" << report.sourceEvaluationRunId
+           << ",population_size=" << source.persistedMemberCount
+           << ",grid_point_count=" << weights.size()
+           << ",report_hash=" << report.hash
+           << ",advisory=true,shadow_only=true,read_only=true"
+           << ",activation=false,production_ranking_modified=false"
+           << ",database_write=false,experiment_created=false"
+           << ",experiment_queued=false,scheduler_modified=false\n";
+    output << "CAMPAIGN_PROFITABILITY_COVERAGE_SUMMARY"
+           << ",control_snapshot_id=" << coverage.controlSnapshotId
+           << ",total_members=" << coverage.members.size()
+           << ",valid_profitability_observation=" << valid
+           << ",no_profitability_observation="
+           << count("no_profitability_observation")
+           << ",final_inference_context_mismatch="
+           << count("final_inference_context_mismatch")
+           << ",no_exact_final_inference_result="
+           << count("no_exact_final_inference_result")
+           << ",other_unavailable=" << otherUnavailable
+           << ",invalid_incomplete_provenance="
+           << recoveryCount("invalid_incomplete_provenance")
+           << ",overall_valid_coverage_percentage=" << Number(overallCoverage)
+           << ",before_valid_count=" << valid
+           << ",after_valid_count=" << valid
+           << ",backfill_performed=false,coverage_audit_hash="
+           << coverage.hash << ",read_only=true\n";
+    for (const auto& [reason, reasonCount] : coverage.reasonCounts)
+        output << "CAMPAIGN_PROFITABILITY_COVERAGE_REASON"
+               << ",control_snapshot_id=" << coverage.controlSnapshotId
+               << ",reason=" << MachineText(reason)
+               << ",member_count=" << reasonCount << '\n';
+    for (const auto& member : coverage.members)
+    {
+        const auto& frozen = member.frozenEvidence;
+        const std::string reason = member.validatedEvidence.state ==
+                EvidenceState::valid
+            ? "valid_profitability_observation"
+            : member.validatedEvidence.reason;
+        output << "CAMPAIGN_PROFITABILITY_COVERAGE_MEMBER"
+               << ",control_snapshot_id=" << coverage.controlSnapshotId
+               << ",control_rank=" << member.controlRank
+               << ",recommendation_id=" << member.recommendationId
+               << ",recommendation_evaluation_result_id="
+               << member.recommendationEvaluationResultId
+               << ",ranking_member_id=" << member.rankingMemberId
+               << ",source_experiment_id=" << member.sourceExperimentId
+               << ",source_model_id=" << OptionalId(member.sourceModelId)
+               << ",symbol=" << MachineText(member.symbol)
+               << ",horizon=" << member.horizon
+               << ",frozen_provenance_version=" << frozen.provenanceVersion
+               << ",frozen_final_inference_result_id="
+               << OptionalId(frozen.finalInferenceEvalResultId)
+               << ",frozen_profitability_observation_id="
+               << OptionalId(frozen.profitabilityObservationId)
+               << ",frozen_inference_scope="
+               << MachineText(frozen.inferenceScope)
+               << ",frozen_inference_start="
+               << (frozen.inferenceStart ? MachineText(*frozen.inferenceStart)
+                                         : "NULL")
+               << ",frozen_inference_end="
+               << (frozen.inferenceEnd ? MachineText(*frozen.inferenceEnd)
+                                       : "NULL")
+               << ",frozen_metric_definition_hash="
+               << (frozen.metricDefinitionHash
+                       ? *frozen.metricDefinitionHash : "NULL")
+               << ",frozen_source_content_hash="
+               << (frozen.sourceContentHash ? *frozen.sourceContentHash : "NULL")
+               << ",frozen_observation_identity_hash="
+               << (frozen.observationIdentityHash
+                       ? *frozen.observationIdentityHash : "NULL")
+               << ",unavailable_reason=" << MachineText(reason)
+               << ",recovery_class="
+               << CoverageRecoveryClassText(member.recoveryClass)
+               << ",exact_final_inference_result_exists="
+               << Boolean(member.exactFinalInferenceResultExists)
+               << ",any_final_inference_result_exists="
+               << Boolean(member.anyFinalInferenceResultExists)
+               << ",exact_final_profitability_observation_exists="
+               << Boolean(member.exactFinalProfitabilityObservationExists)
+               << ",any_inference_profitability_observation_exists="
+               << Boolean(member.anyInferenceProfitabilityObservationExists)
+               << ",frozen_snapshot_backfill_permitted=false"
+               << ",reconstruction_assessment="
+               << MachineText(member.reconstructionAssessment)
+               << ",member_hash=" << member.hash << '\n';
+    }
+
+    const auto renderMovement = [&](const char* prefix,
+                                    const CalibrationMovementStatistics& value) {
+        output << ',' << prefix << "_count=" << value.count
+               << ',' << prefix << "_moved_up=" << value.movedUp
+               << ',' << prefix << "_unchanged=" << value.unchanged
+               << ',' << prefix << "_moved_down=" << value.movedDown
+               << ',' << prefix << "_mean_rank_delta="
+               << Number(value.meanRankDelta);
+    };
+    for (const auto& point : report.weights)
+    {
+        const bool anchor = SameWeight(point.weight, 0.01) ||
+            SameWeight(point.weight, 0.025) || SameWeight(point.weight, 0.05);
+        output << "CAMPAIGN_PROFITABILITY_CALIBRATION_SWEEP_POINT"
+               << ",control_snapshot_id=" << report.controlSnapshotId
+               << ",weight=" << Number(point.weight)
+               << ",mandatory_anchor=" << Boolean(anchor)
+               << ",total_members=" << point.totalMembers
+               << ",valid_profitability_members="
+               << point.validProfitabilityMembers
+               << ",unavailable_members=" << point.unavailableMembers
+               << ",positive_profitability_members="
+               << point.positiveProfitabilityMembers
+               << ",negative_profitability_members="
+               << point.negativeProfitabilityMembers
+               << ",zero_profitability_members="
+               << point.zeroProfitabilityMembers
+               << ",moved_up=" << point.totalMovement.movedUp
+               << ",unchanged=" << point.totalMovement.unchanged
+               << ",moved_down=" << point.totalMovement.movedDown
+               << ",mean_absolute_rank_movement="
+               << Number(point.totalMovement.meanAbsoluteRankMovement)
+               << ",median_absolute_rank_movement="
+               << Number(point.totalMovement.medianAbsoluteRankMovement)
+               << ",p90_absolute_rank_movement="
+               << Number(point.totalMovement.p90AbsoluteRankMovement)
+               << ",maximum_upward_movement="
+               << point.totalMovement.maximumUpwardMovement
+               << ",maximum_downward_movement="
+               << point.totalMovement.maximumDownwardMovement;
+        renderMovement("positive", point.positiveMovement);
+        renderMovement("negative", point.negativeMovement);
+        renderMovement("unavailable", point.unavailableMovement);
+        output << ",ranking_hash=" << point.rankingHash
+               << ",point_hash=" << point.hash
+               << ",activation=false,production_ranking_modified=false\n";
+        if (anchor)
+            output << "CAMPAIGN_PROFITABILITY_CALIBRATION_WEIGHT"
+                   << ",control_snapshot_id=" << report.controlSnapshotId
+                   << ",weight=" << Number(point.weight)
+                   << ",point_hash=" << point.hash
+                   << ",direct_anchor_comparison=true,activation=false\n";
+        for (const auto& top : point.topN)
+            output << "CAMPAIGN_PROFITABILITY_CALIBRATION_TOP_N"
+                   << ",control_snapshot_id=" << report.controlSnapshotId
+                   << ",weight=" << Number(point.weight)
+                   << ",top_n=" << top.n
+                   << ",retained=" << top.retained
+                   << ",entered=" << top.entered
+                   << ",exited=" << top.exited
+                   << ",entrant_ids=" << IdList(top.entrantRecommendationIds)
+                   << ",exiting_ids=" << IdList(top.exitingRecommendationIds)
+                   << ",member_ids=" << IdList(top.memberRecommendationIds)
+                   << ",positive_count=" << top.positiveCount
+                   << ",negative_count=" << top.negativeCount
+                   << ",zero_count=" << top.zeroCount
+                   << ",unavailable_count=" << top.unavailableCount
+                   << ",valid_evidence_coverage_count="
+                   << top.validEvidenceCoverageCount
+                   << ",valid_evidence_coverage_percentage="
+                   << Number(top.validEvidenceCoveragePercentage) << '\n';
+    }
+
+    for (const auto& pair : report.anchorPairwise)
+        output << "CAMPAIGN_PROFITABILITY_CALIBRATION_PAIRWISE"
+               << ",control_snapshot_id=" << report.controlSnapshotId
+               << ",left_weight=" << Number(pair.leftWeight)
+               << ",right_weight=" << Number(pair.rightWeight)
+               << ",top_5_overlap=" << pair.topNOverlap.at(5)
+               << ",top_5_difference_recommendation_ids="
+               << IdList(pair.topNDifferenceRecommendationIds.at(5))
+               << ",top_10_overlap=" << pair.topNOverlap.at(10)
+               << ",top_10_difference_recommendation_ids="
+               << IdList(pair.topNDifferenceRecommendationIds.at(10))
+               << ",top_20_overlap=" << pair.topNOverlap.at(20)
+               << ",top_20_difference_recommendation_ids="
+               << IdList(pair.topNDifferenceRecommendationIds.at(20))
+               << ",ordinal_changes=" << pair.ordinalChanges
+               << ",mean_absolute_ordinal_difference="
+               << Number(pair.meanAbsoluteOrdinalDifference)
+               << ",largest_ordinal_difference="
+               << pair.largestOrdinalDifference
+               << ",largest_ordinal_difference_recommendation_ids="
+               << IdList(pair.largestOrdinalDifferenceRecommendationIds)
+               << ",pairwise_hash=" << pair.hash << '\n';
+
+    std::map<long long, std::pair<int, int>> rankRanges;
+    for (const auto& ranking : rankings)
+        for (const auto& candidate : ranking.candidates)
+        {
+            auto [found, inserted] = rankRanges.emplace(
+                candidate.source.recommendationId,
+                std::pair<int, int>{candidate.shadowRank, candidate.shadowRank});
+            if (!inserted)
+            {
+                found->second.first =
+                    std::min(found->second.first, candidate.shadowRank);
+                found->second.second =
+                    std::max(found->second.second, candidate.shadowRank);
+            }
+        }
+    for (const auto& [recommendationId, range] : rankRanges)
+        if (range.second - range.first >= 5)
+            output << "CAMPAIGN_PROFITABILITY_CALIBRATION_SENSITIVITY"
+                   << ",recommendation_id=" << recommendationId
+                   << ",best_rank=" << range.first
+                   << ",worst_rank=" << range.second
+                   << ",rank_span=" << range.second - range.first
+                   << ",material_rank_span_threshold=5\n";
+
+    output << "CAMPAIGN_PROFITABILITY_CALIBRATION_RESPONSE_CURVE"
+           << ",control_snapshot_id=" << report.controlSnapshotId
+           << ",first_best_top_5_weight="
+           << OptionalWeight(report.responseCurve.firstBestTop5Weight)
+           << ",first_top_10_at_least_9_weight="
+           << OptionalWeight(report.responseCurve.firstTop10AtLeastNineWeight)
+           << ",first_best_top_10_weight="
+           << OptionalWeight(report.responseCurve.firstBestTop10Weight)
+           << ",first_top_20_improvement_weight="
+           << OptionalWeight(report.responseCurve.firstTop20ImprovementWeight)
+           << ",membership_discontinuity_weights=";
+    for (std::size_t index = 0;
+         index < report.responseCurve.membershipDiscontinuityWeights.size();
+         ++index)
+    {
+        if (index > 0) output << ':';
+        output << Number(
+            report.responseCurve.membershipDiscontinuityWeights[index]);
+    }
+    output << ",response_curve_hash=" << report.responseCurve.hash << '\n';
+    for (const auto& region : report.responseCurve.stabilityRegions)
+        output << "CAMPAIGN_PROFITABILITY_CALIBRATION_STABILITY_REGION"
+               << ",top_n=" << region.topN
+               << ",first_weight=" << Number(region.firstWeight)
+               << ",last_weight=" << Number(region.lastWeight)
+               << ",grid_point_membership_stable=true"
+               << ",member_ids=" << IdList(region.memberRecommendationIds)
+               << '\n';
+    output << "CAMPAIGN_PROFITABILITY_CALIBRATION_MINIMUM_EFFECTIVE_WEIGHT"
+           << ",minimum_effective_weight="
+           << OptionalWeight(report.responseCurve.minimumEffectiveWeight)
+           << ",minimum_effective_region_end="
+           << OptionalWeight(report.responseCurve.minimumEffectiveRegionEnd)
+           << ",weight_0_025_inside_region="
+           << Boolean(report.responseCurve.provisional0025InsideMinimumEffectiveRegion)
+           << ",policy=smallest_weight_with_best_top5_top10_within_one_of_best_"
+              "top20_improved_no_positive_down_no_negative_up_and_less_churn_"
+              "than_0.05"
+           << ",assessment=" << report.responseCurve.assessment
+           << ",advisory_only=true,activation=false\n";
+    output << "CAMPAIGN_PROFITABILITY_CALIBRATION_ASSESSMENT"
+           << ",classification=provisional_in_sample_shadow_calibration"
+           << ",minimum_effective_weight="
+           << OptionalWeight(report.responseCurve.minimumEffectiveWeight)
+           << ",production_decision=false"
+           << ",temporal_out_of_sample_validation_required=true"
+           << ",future_realized_profitability_not_proven=true"
+           << ",activation=false,production_ranking_modified=false\n";
+
+    const ProfitabilityCalibrationWeight* readinessPoint = &report.weights.front();
+    if (report.responseCurve.minimumEffectiveWeight)
+        for (const auto& point : report.weights)
+            if (SameWeight(point.weight,
+                           *report.responseCurve.minimumEffectiveWeight))
+                readinessPoint = &point;
+    const auto topAt = [&](int n) -> const CalibrationTopN& {
+        const auto found = std::find_if(
+            readinessPoint->topN.begin(), readinessPoint->topN.end(),
+            [n](const auto& top) { return top.n == n; });
+        if (found == readinessPoint->topN.end())
+            throw std::logic_error("calibration_readiness_top_n_missing");
+        return *found;
+    };
+    output << "CAMPAIGN_PROFITABILITY_PRODUCTION_READINESS"
+           << ",control_snapshot_id=" << report.controlSnapshotId
+           << ",assessment_weight=" << Number(readinessPoint->weight)
+           << ",overall_valid_coverage_percentage=" << Number(overallCoverage)
+           << ",top_5_valid_coverage_percentage="
+           << Number(topAt(5).validEvidenceCoveragePercentage)
+           << ",top_10_valid_coverage_percentage="
+           << Number(topAt(10).validEvidenceCoveragePercentage)
+           << ",top_20_valid_coverage_percentage="
+           << Number(topAt(20).validEvidenceCoveragePercentage)
+           << ",repository_coverage_policy_defined=false"
+           << ",future_human_approved_coverage_policy_required=true"
+           << ",activation_ready=false"
+           << ",blockers=low_overall_coverage:missing_coverage_policy:"
+              "temporal_out_of_sample_validation_required"
+           << ",activation=false,production_ranking_modified=false"
+           << ",experiment_created=false,experiment_queued=false"
+           << ",scheduler_modified=false,database_write=false\n";
     return 0;
 }
 

@@ -484,4 +484,194 @@ ORDER BY rm.global_ordinal,rm.recommendation_ranking_member_id
     return source;
 }
 
+CampaignProfitabilityCoverageAudit LoadCampaignProfitabilityCoverageAudit(
+    pqxx::transaction_base& transaction,
+    long long rankingSnapshotId)
+{
+    const CampaignProfitabilityShadowSource source =
+        LoadCampaignProfitabilityShadowSource(transaction, rankingSnapshotId);
+    const pqxx::result rows = transaction.exec(R"SQL(
+SELECT rm.recommendation_ranking_member_id,
+       er.final_profitability_provenance_version,
+       er.source_final_inference_eval_result_id,
+       er.source_final_profitability_observation_id,
+       er.source_final_profitability_unavailable_reason,
+       er.source_final_profitability_inference_scope,
+       er.source_final_profitability_inference_start,
+       er.source_final_profitability_inference_end,
+       er.source_final_profitability_actionable_count,
+       er.source_final_profitability_aggregate_return,
+       er.source_final_profitability_average_return,
+       er.source_final_profitability_metric_definition_hash,
+       er.source_final_profitability_source_content_hash,
+       er.source_final_profitability_observation_identity_hash,
+       EXISTS (
+           SELECT 1 FROM inference_eval_result ier
+           WHERE ier.id=er.source_final_inference_eval_result_id
+             AND ier.status='completed' AND ier.inference_scope='final'
+             AND ier.checkpoint_eval_id IS NULL
+             AND ier.parent_experiment_id IS NULL
+       ) AS exact_final_result_exists,
+       EXISTS (
+           SELECT 1 FROM inference_eval_result ier
+           WHERE ier.model_id=rm.source_model_id
+             AND ier.status='completed' AND ier.inference_scope='final'
+             AND ier.checkpoint_eval_id IS NULL
+             AND ier.parent_experiment_id IS NULL
+       ) AS any_final_result_exists,
+       EXISTS (
+           SELECT 1 FROM inference_profitability_observation ipo
+           WHERE ipo.inference_eval_result_id=
+                     er.source_final_inference_eval_result_id
+             AND ipo.experiment_id=rm.source_experiment_id
+             AND ipo.model_id=rm.source_model_id
+             AND ipo.inference_scope='final'
+             AND ipo.checkpoint_eval_id IS NULL
+       ) AS exact_final_observation_exists,
+       EXISTS (
+           SELECT 1 FROM inference_profitability_observation ipo
+           WHERE ipo.model_id=rm.source_model_id
+       ) AS any_inference_observation_exists
+FROM experiment_recommendation_ranking_member rm
+JOIN experiment_recommendation_evaluation_result er
+  ON er.recommendation_evaluation_result_id=
+     rm.recommendation_evaluation_result_id
+WHERE rm.recommendation_ranking_snapshot_id=$1
+ORDER BY rm.global_ordinal,rm.recommendation_ranking_member_id
+)SQL", pqxx::params{rankingSnapshotId});
+    if (static_cast<std::size_t>(rows.size()) != source.candidates.size())
+        throw std::runtime_error("campaign_coverage_member_count_mismatch");
+
+    CampaignProfitabilityCoverageAudit audit;
+    audit.controlSnapshotId = source.controlSnapshotId;
+    audit.sourceEvaluationRunId = source.sourceEvaluationRunId;
+    audit.members.reserve(rows.size());
+    for (std::size_t index = 0;
+         index < static_cast<std::size_t>(rows.size()); ++index)
+    {
+        const auto& candidate = source.candidates[index];
+        const pqxx::row row = rows[index];
+        if (row["recommendation_ranking_member_id"].as<long long>() !=
+            candidate.rankingMemberId)
+            throw std::runtime_error("campaign_coverage_member_order_mismatch");
+        const auto frozen = MapFrozenEvidence(row, "");
+        if (!frozen)
+            throw std::runtime_error(
+                "campaign_coverage_legacy_incomplete_provenance");
+
+        CampaignProfitabilityCoverageMember member;
+        member.rankingMemberId = candidate.rankingMemberId;
+        member.recommendationId = candidate.recommendationId;
+        member.recommendationEvaluationResultId =
+            candidate.recommendationEvaluationResultId;
+        member.sourceExperimentId = candidate.sourceExperimentId;
+        member.sourceModelId = candidate.sourceModelId;
+        member.symbol = candidate.symbol;
+        member.horizon = candidate.horizon;
+        member.controlRank = candidate.currentRank;
+        member.frozenEvidence = *frozen;
+        member.validatedEvidence = candidate.profitability;
+        member.exactFinalInferenceResultExists =
+            row["exact_final_result_exists"].as<bool>();
+        member.anyFinalInferenceResultExists =
+            row["any_final_result_exists"].as<bool>();
+        member.exactFinalProfitabilityObservationExists =
+            row["exact_final_observation_exists"].as<bool>();
+        member.anyInferenceProfitabilityObservationExists =
+            row["any_inference_observation_exists"].as<bool>();
+        member.frozenSnapshotBackfillPermitted = false;
+
+        const std::string reason = member.validatedEvidence.state ==
+                EvidenceState::valid
+            ? "valid_profitability_observation"
+            : member.validatedEvidence.reason;
+        if (member.validatedEvidence.state == EvidenceState::valid)
+        {
+            member.recoveryClass = CoverageRecoveryClass::available;
+            member.reconstructionAssessment = "not_required";
+        }
+        else if (EvidenceStateIsInvalid(member.validatedEvidence.state) ||
+                 member.validatedEvidence.state == EvidenceState::incomplete)
+        {
+            member.recoveryClass =
+                CoverageRecoveryClass::invalidIncompleteProvenance;
+            member.reconstructionAssessment =
+                "fail_closed_no_substitution_or_backfill";
+        }
+        else if (reason == "no_profitability_observation" &&
+                 member.exactFinalInferenceResultExists)
+        {
+            member.recoveryClass =
+                CoverageRecoveryClass::recoverableHistoricalAbsence;
+            member.reconstructionAssessment =
+                "exact_final_replay_requires_separate_lifecycle_authority_"
+                "and_new_artifact_not_frozen_snapshot_backfill";
+        }
+        else if (reason == "final_inference_context_mismatch")
+        {
+            member.recoveryClass = CoverageRecoveryClass::contextMismatch;
+            member.reconstructionAssessment =
+                "not_recoverable_without_crossing_frozen_final_context";
+        }
+        else if (reason == "no_exact_final_inference_result")
+        {
+            member.recoveryClass = CoverageRecoveryClass::noExactFinalInference;
+            member.reconstructionAssessment =
+                "requires_separately_authorized_final_inference_lifecycle";
+        }
+        else
+        {
+            member.recoveryClass = CoverageRecoveryClass::otherUnavailable;
+            member.reconstructionAssessment =
+                "not_recoverable_without_reason_specific_authority";
+        }
+
+        const std::string frozenCanonical = ExperimentRecommendation::
+            RecommendationFinalProfitabilityEvidenceCanonicalText(
+                member.frozenEvidence);
+        member.canonical = "campaign_profitability_coverage_member_v1;";
+        member.canonical += "ranking_member_id=" +
+            std::to_string(member.rankingMemberId) + ";";
+        member.canonical += "recommendation_id=" +
+            std::to_string(member.recommendationId) + ";";
+        member.canonical += "evaluation_result_id=" +
+            std::to_string(member.recommendationEvaluationResultId) + ";";
+        member.canonical += "control_rank=" +
+            std::to_string(member.controlRank) + ";";
+        member.canonical += "frozen_evidence_hash=" +
+            ExperimentRecommendation::RecommendationCanonicalHash(
+                frozenCanonical) + ";";
+        member.canonical += "validated_evidence_hash=" +
+            member.validatedEvidence.evidenceIdentityHash + ";";
+        member.canonical += "reason=" + reason + ";recovery_class=" +
+            CoverageRecoveryClassText(member.recoveryClass) + ";";
+        member.canonical += "exact_final_result_exists=" +
+            std::string(member.exactFinalInferenceResultExists ? "true" : "false") +
+            ";any_final_result_exists=" +
+            std::string(member.anyFinalInferenceResultExists ? "true" : "false") +
+            ";exact_final_observation_exists=" +
+            std::string(member.exactFinalProfitabilityObservationExists
+                            ? "true" : "false") +
+            ";any_inference_observation_exists=" +
+            std::string(member.anyInferenceProfitabilityObservationExists
+                            ? "true" : "false") +
+            ";frozen_snapshot_backfill_permitted=false";
+        member.hash = InferenceProfitability::DeterministicHash(member.canonical);
+        ++audit.reasonCounts[reason];
+        ++audit.recoveryClassCounts[
+            CoverageRecoveryClassText(member.recoveryClass)];
+        audit.members.push_back(std::move(member));
+    }
+    audit.canonical = "campaign_profitability_coverage_audit_v1;";
+    audit.canonical += "control_snapshot_id=" +
+        std::to_string(audit.controlSnapshotId) + ";source_evaluation_run_id=" +
+        std::to_string(audit.sourceEvaluationRunId) + ";member_count=" +
+        std::to_string(audit.members.size()) + ";";
+    for (std::size_t index = 0; index < audit.members.size(); ++index)
+        audit.canonical += "member[" + std::to_string(index) + "]=" +
+            audit.members[index].hash + ";";
+    audit.hash = InferenceProfitability::DeterministicHash(audit.canonical);
+    return audit;
+}
+
 } // namespace EA::ProfitabilityVerification

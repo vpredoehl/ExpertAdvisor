@@ -441,6 +441,21 @@ void Verify()
         "campaign_profitability_activation_performed=false") !=
            std::string::npos);
 
+    output.str({});
+    output.clear();
+    bool calibrationRejectedInvalidProvenance = false;
+    try
+    {
+        (void)Verification::RunCampaignProfitabilityCalibrationCommand(
+            connectionString, 8, output, errors);
+    }
+    catch (const std::runtime_error&)
+    {
+        calibrationRejectedInvalidProvenance = true;
+    }
+    assert(calibrationRejectedInvalidProvenance);
+    assert(output.str().empty());
+
     {
         pqxx::connection sourceConnection{connectionString};
         pqxx::read_transaction sourceTransaction{sourceConnection};
@@ -459,6 +474,24 @@ void Verify()
                Verification::EvidenceState::unavailable);
         assert(source.candidates[2].profitability.state ==
                Verification::EvidenceState::valid);
+        const auto coverage =
+            Verification::LoadCampaignProfitabilityCoverageAudit(
+                sourceTransaction, 9);
+        assert(coverage.members.size() == 3);
+        assert(coverage.reasonCounts.at("valid_profitability_observation") == 2);
+        assert(coverage.reasonCounts.at("no_profitability_observation") == 1);
+        assert(coverage.recoveryClassCounts.at(
+                   "recoverable_historical_absence") == 1);
+        const auto& missing = coverage.members[1];
+        assert(missing.recommendationId == 1003);
+        assert(missing.exactFinalInferenceResultExists);
+        assert(missing.anyFinalInferenceResultExists);
+        assert(!missing.exactFinalProfitabilityObservationExists);
+        assert(!missing.anyInferenceProfitabilityObservationExists);
+        assert(missing.recoveryClass == Verification::CoverageRecoveryClass::
+                   recoverableHistoricalAbsence);
+        assert(!missing.frozenSnapshotBackfillPermitted);
+        assert(!coverage.hash.empty());
     }
 
     output.str({});
@@ -482,7 +515,45 @@ void Verify()
     assert(shadow.find("normalization_state=explicitly_unavailable") !=
            std::string::npos);
     assert(shadow.find("profitability_contribution=NULL") !=
-           std::string::npos);
+               std::string::npos);
+
+    output.str({});
+    output.clear();
+    assert(Verification::RunCampaignProfitabilityCalibrationCommand(
+               connectionString, 9, output, errors) == 0);
+    const std::string calibration = output.str();
+    assert(calibration.find(
+        "CAMPAIGN_PROFITABILITY_CALIBRATION_START,control_snapshot_id=9") !=
+        std::string::npos);
+    assert(calibration.find("grid_point_count=21") != std::string::npos);
+    assert(calibration.find(
+        "valid_profitability_observation=2,no_profitability_observation=1") !=
+        std::string::npos);
+    assert(calibration.find(
+        "recovery_class=recoverable_historical_absence") !=
+        std::string::npos);
+    assert(calibration.find(
+        "exact_final_inference_result_exists=true") != std::string::npos);
+    assert(calibration.find(
+        "frozen_snapshot_backfill_permitted=false") != std::string::npos);
+    assert(calibration.find(
+        "CAMPAIGN_PROFITABILITY_CALIBRATION_SWEEP_POINT") !=
+        std::string::npos);
+    assert(calibration.find("weight=0.025000000000000001") !=
+        std::string::npos);
+    assert(calibration.find(
+        "CAMPAIGN_PROFITABILITY_CALIBRATION_PAIRWISE") != std::string::npos);
+    assert(calibration.find(
+        "CAMPAIGN_PROFITABILITY_CALIBRATION_RESPONSE_CURVE") !=
+        std::string::npos);
+    assert(calibration.find(
+        "CAMPAIGN_PROFITABILITY_PRODUCTION_READINESS") != std::string::npos);
+    assert(calibration.find("activation_ready=false") != std::string::npos);
+    assert(calibration.find("database_write=false") != std::string::npos);
+    std::ostringstream repeatedOutput;
+    assert(Verification::RunCampaignProfitabilityCalibrationCommand(
+               connectionString, 9, repeatedOutput, errors) == 0);
+    assert(repeatedOutput.str() == calibration);
 
     pqxx::connection verifyConnection{connectionString};
     pqxx::read_transaction transaction{verifyConnection};

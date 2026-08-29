@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <limits>
 #include <locale>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>

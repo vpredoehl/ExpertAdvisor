@@ -14,6 +14,7 @@ libpq="/opt/homebrew/opt/libpq"
     "${repo_root}/Sources/InferenceProfitability.cpp" \
     "${repo_root}/Sources/InferenceProfitabilityRepository.cpp" \
     "${repo_root}/Sources/ProfitabilityDistribution.cpp" \
+    "${repo_root}/Sources/ProfitabilityCalibration.cpp" \
     "${repo_root}/Sources/ProfitabilityVerification.cpp" \
     "${repo_root}/Tests/ProfitabilityShadowRankingTests.cpp" \
     -L"${pqxx}/lib" -L"${libpq}/lib" \

@@ -291,5 +291,79 @@ int main()
             candidates, 5, 6, snapshotHash, 0.0500000001,
             normalizationPolicy);
     }));
+
+    const auto phase10Weights =
+        Verification::Phase10ProfitabilityCalibrationWeights();
+    assert(phase10Weights.size() == 21);
+    assert(phase10Weights.front() == 0.0);
+    assert(Close(phase10Weights[1], 0.0025));
+    assert(Close(phase10Weights[10], 0.025));
+    assert(Close(phase10Weights.back(), 0.05));
+
+    std::vector<Verification::ShadowCandidate> calibrationCandidates;
+    for (int rank = 1; rank <= 25; ++rank)
+    {
+        Verification::EvidenceResult evidence;
+        if (rank == 4 || rank == 5)
+            evidence = Evidence(
+                100 + rank, std::nullopt,
+                Verification::EvidenceState::unavailable);
+        else
+        {
+            const bool positive = (rank >= 6 && rank <= 18) || rank >= 23;
+            const double average = positive
+                ? 0.001 * static_cast<double>(rank)
+                : -0.001 * static_cast<double>(rank);
+            evidence = Evidence(
+                100 + rank, Observation(100 + rank, average, 100));
+        }
+        calibrationCandidates.push_back(Candidate(
+            100 + rank, rank,
+            1.0 - 0.001 * static_cast<double>(rank), evidence));
+    }
+    std::vector<Verification::WeightedShadowRanking> sweep;
+    for (const double weight : phase10Weights)
+        sweep.push_back(Verification::BuildWeightedShadowRanking(
+            calibrationCandidates, 5, 6, snapshotHash, weight));
+    const auto calibration =
+        Verification::BuildProfitabilityCalibrationReport(sweep);
+    assert(calibration.weights.size() == 21);
+    assert(calibration.anchorPairwise.size() == 3);
+    assert(calibration.weights.front().totalMovement.movedUp == 0);
+    assert(calibration.weights.front().totalMovement.unchanged == 25);
+    assert(calibration.weights.front().totalMovement.movedDown == 0);
+    assert(calibration.weights.front().validProfitabilityMembers == 23);
+    assert(calibration.weights.front().unavailableMembers == 2);
+    assert(calibration.weights[1].totalMovement.meanAbsoluteRankMovement >= 0.0);
+    assert(calibration.weights.back().totalMovement.p90AbsoluteRankMovement >=
+           calibration.weights.back().totalMovement.medianAbsoluteRankMovement);
+    assert(calibration.responseCurve.firstBestTop5Weight);
+    assert(calibration.responseCurve.firstTop10AtLeastNineWeight);
+    assert(calibration.responseCurve.firstBestTop10Weight);
+    assert(calibration.responseCurve.firstTop20ImprovementWeight);
+    assert(calibration.responseCurve.minimumEffectiveWeight);
+    assert(calibration.responseCurve.minimumEffectiveRegionEnd);
+    assert(!calibration.responseCurve.stabilityRegions.empty());
+    assert(!calibration.responseCurve.membershipDiscontinuityWeights.empty());
+    assert(!calibration.hash.empty());
+
+    std::vector<Verification::WeightedShadowRanking> repeatedSweep;
+    for (const double weight : phase10Weights)
+    {
+        auto input = calibrationCandidates;
+        std::reverse(input.begin(), input.end());
+        repeatedSweep.push_back(Verification::BuildWeightedShadowRanking(
+            input, 5, 6, snapshotHash, weight));
+    }
+    const auto repeatedCalibration =
+        Verification::BuildProfitabilityCalibrationReport(repeatedSweep);
+    assert(repeatedCalibration.canonical == calibration.canonical);
+    assert(repeatedCalibration.hash == calibration.hash);
+
+    auto invalidSweep = sweep;
+    invalidSweep.erase(invalidSweep.begin() + 4);
+    assert(Throws([&] {
+        (void)Verification::BuildProfitabilityCalibrationReport(invalidSweep);
+    }));
     return 0;
 }

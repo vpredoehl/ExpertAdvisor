@@ -26,4 +26,10 @@ int RunCampaignShadowRankingCommand(
     std::ostream& output,
     std::ostream& errors);
 
+int RunCampaignProfitabilityCalibrationCommand(
+    const std::string& connectionString,
+    long long rankingSnapshotId,
+    std::ostream& output,
+    std::ostream& errors);
+
 } // namespace EA::ProfitabilityVerification

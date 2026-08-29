@@ -253,6 +253,7 @@ pqxx_libs=(
     "${repo_root}/Sources/InferenceProfitability.cpp" \
     "${repo_root}/Sources/InferenceProfitabilityRepository.cpp" \
     "${repo_root}/Sources/ProfitabilityDistribution.cpp" \
+    "${repo_root}/Sources/ProfitabilityCalibration.cpp" \
     "${repo_root}/Sources/ProfitabilityVerification.cpp" \
     "${repo_root}/Sources/ProfitabilityVerificationRepository.cpp" \
     "${repo_root}/Sources/ProfitabilityVerificationService.cpp" \

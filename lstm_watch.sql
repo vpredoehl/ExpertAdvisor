@@ -71,6 +71,8 @@ SELECT
      WHERE status = 'running' AND phase = 'infer') AS final_infer_running,
     (SELECT count(*) FROM experiment
      WHERE status = 'pending' AND phase = 'infer') AS final_infer_pending,
+    (SELECT count(*) FROM experiment
+     WHERE status = 'paused' AND phase = 'infer') AS final_infer_paused,
     (SELECT count(*) FROM experiment_checkpoint_eval
      WHERE status = 'running' AND phase = 'infer') AS cp_infer_running,
     (SELECT count(*) FROM experiment_checkpoint_eval
