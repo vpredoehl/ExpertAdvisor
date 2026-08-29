@@ -27,4 +27,26 @@ CampaignProfitabilityTemporalCohort LoadCampaignProfitabilityTemporalCohort(
     pqxx::transaction_base& transaction,
     long long rankingSnapshotId);
 
+CampaignProfitabilityOutcomePreparation
+LoadCampaignProfitabilityOutcomePreparation(
+    pqxx::transaction_base& transaction,
+    const std::string& currentDate,
+    const std::string& artifactPath = kPhase12ArtifactPath);
+
+CampaignProfitabilityOutcomeJob LoadCampaignProfitabilityOutcomeExecutionJob(
+    pqxx::transaction_base& transaction,
+    const std::string& cohortHash,
+    long long sourceExperimentId,
+    long long sourceModelId,
+    const std::string& outcomeStart,
+    const std::string& outcomeEnd,
+    const std::string& jobHash,
+    const std::string& currentDate,
+    const std::string& artifactPath = kPhase12ArtifactPath);
+
+CampaignProfitabilityOutcomePersistResult
+PersistCampaignProfitabilityOutcomeIdempotently(
+    pqxx::transaction_base& transaction,
+    const CampaignProfitabilityOutcomePersistRequest& request);
+
 } // namespace EA::ProfitabilityVerification

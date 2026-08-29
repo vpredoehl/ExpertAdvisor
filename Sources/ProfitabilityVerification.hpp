@@ -5,6 +5,7 @@
 #include "ProfitabilityDistribution.hpp"
 
 #include <optional>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -19,6 +20,22 @@ inline constexpr double kLiveProfitabilityScoreContribution = 0.0;
 inline constexpr int kWeightedShadowRankingPolicyVersion = 1;
 inline constexpr double kMaximumPhase9ProfitabilityShadowWeight = 0.05;
 inline constexpr double kPhase11PrecommittedProfitabilityWeight = 0.025;
+inline constexpr const char* kPhase12ValidationCohortIdentityHash =
+    "fnv1a64:fe7aee4a1aed8a5e";
+inline constexpr const char* kPhase12ArtifactSha256 =
+    "8d2176ef26513f6b69d690fa5b550a870aab7190221bace24a18be9200a89bbc";
+inline constexpr const char* kPhase12ArtifactPath =
+    "docs/archive/phase11/forward-validation/"
+    "LSTM_ProfitabilityForwardValidation_Snapshot5_20260831_20260930.txt";
+inline constexpr long long kPhase12RankingSnapshotId = 5;
+inline constexpr long long kPhase12SourceEvaluationRunId = 6;
+inline constexpr const char* kPhase12OutcomeStart = "2026-08-31";
+inline constexpr const char* kPhase12OutcomeEnd = "2026-09-30";
+inline constexpr const char* kPhase12ControlRankingHash =
+    "fnv1a64:33527191afa4caec";
+inline constexpr const char* kPhase12CandidateRankingHash =
+    "fnv1a64:e4478d9578b1e8c9";
+inline constexpr int kPhase12MemberCount = 79;
 static_assert(kLiveProfitabilityRankingWeight == 0.0);
 static_assert(kLiveProfitabilityScoreContribution == 0.0);
 static_assert(kPhase11PrecommittedProfitabilityWeight == 0.025);
@@ -428,6 +445,95 @@ BuildCampaignProfitabilityForwardValidationPrecommit(
     const std::string& decisionTimestamp,
     const std::string& expectedOutcomeStart,
     const std::string& expectedOutcomeEnd);
+
+enum class OutcomeJobReadiness
+{
+    waitingForOutcomeData,
+    partiallyAvailable,
+    readyToExecute,
+    incompatibleSource
+};
+
+std::string OutcomeJobReadinessText(OutcomeJobReadiness value);
+
+struct CampaignProfitabilityOutcomeJob
+{
+    std::string validationCohortIdentityHash;
+    long long rankingSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    long long sourceExperimentId = -1;
+    long long sourceModelId = -1;
+    std::string symbol;
+    int horizon = 0;
+    std::string originalTrainStart;
+    std::string originalTrainEnd;
+    std::string originalInferenceStart;
+    std::string originalInferenceEnd;
+    std::string outcomeStart;
+    std::string outcomeEnd;
+    double threshold = 0.0;
+    int labelRuleId = 0;
+    int targetType = 0;
+    int windowSize = 0;
+    int inputWidth = 0;
+    std::string featureSemanticCanonical;
+    std::string featureSemanticHash;
+    std::string modelArtifactContentHash;
+    long long modelParameterRowCount = 0;
+    std::string modelLineageCanonical;
+    std::string modelLineageHash;
+    std::vector<long long> recommendationIds;
+    std::map<int, std::string> topNRoleByRecommendation;
+    std::string topNParticipation;
+    bool modelExists = false;
+    bool exactModelExperimentLink = false;
+    bool exactFinalSourceModel = false;
+    bool exactOriginalFinalInference = false;
+    bool checkpointSubstitution = false;
+    bool compatible = false;
+    std::string compatibilityState;
+    OutcomeJobReadiness readiness =
+        OutcomeJobReadiness::waitingForOutcomeData;
+    std::string metricDefinitionCanonical;
+    std::string metricDefinitionHash;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityOutcomePreparation
+{
+    std::string artifactPath;
+    std::string artifactSha256;
+    bool artifactIdentityVerified = false;
+    std::string currentDate;
+    std::vector<CampaignProfitabilityOutcomeJob> jobs;
+    std::vector<CampaignProfitabilityForwardValidationTopN> topN;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityOutcomePersistRequest
+{
+    CampaignProfitabilityOutcomeJob job;
+    double inferenceAccuracy = 0.0;
+    std::uint64_t predictionCount = 0;
+    std::uint64_t actionableCount = 0;
+    std::uint64_t winningActionableCount = 0;
+    std::uint64_t losingActionableCount = 0;
+    double grossPositiveReturn = 0.0;
+    double grossNegativeReturn = 0.0;
+    double aggregateReturn = 0.0;
+    std::optional<double> averageReturn;
+    std::string sourceContentHash;
+};
+
+struct CampaignProfitabilityOutcomePersistResult
+{
+    long long resultId = -1;
+    bool created = false;
+    std::string outcomeIdentityCanonical;
+    std::string outcomeIdentityHash;
+};
 
 WeightedShadowRanking BuildWeightedShadowRanking(
     std::vector<ShadowCandidate> candidates,

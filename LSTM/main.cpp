@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <signal.h>
+#include <ctime>
 #include <unistd.h>
 #include <pqxx/pqxx>
 
@@ -50,6 +51,7 @@
 #include "ModelInputExpansion.hpp"
 #include "ReturnFeatureHistory.hpp"
 #include "InferenceProfitabilityRepository.hpp"
+#include "ProfitabilityVerificationRepository.hpp"
 #include "EconomicEventImportService.hpp"
 #include "EconomicEventConsensusImport.hpp"
 #include "EconomicEventRepository.hpp"
@@ -3123,6 +3125,16 @@ std::string LstmDbConnectionString()
                    : dbModelName};
 }
 
+std::string CurrentUtcDate()
+{
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    std::ostringstream output;
+    output << std::put_time(&utc, "%Y-%m-%d");
+    return output.str();
+}
+
 std::optional<long long> ResolveSchedulerExperimentIdForCurrentProcess()
 {
     try
@@ -3769,6 +3781,16 @@ struct LaunchArgs
     bool forceInfer = false;
     bool lstmProfileHotspots = false;
     bool resumeExpandInputWidth = false;
+    struct FrozenOutcomeSpec
+    {
+        std::string cohortHash;
+        long long sourceExperimentId = -1;
+        long long sourceModelId = -1;
+        std::string outcomeStart;
+        std::string outcomeEnd;
+        std::string jobHash;
+    };
+    std::optional<FrozenOutcomeSpec> frozenOutcome;
 };
 
 struct LSTMHotspotProfileFinalizer
@@ -3813,6 +3835,34 @@ long long ParseModelIdArg(const std::string& value)
         throw std::invalid_argument("invalid --model value '" + value + "'; expected a positive integer model_id");
 
     return modelId;
+}
+
+LaunchArgs::FrozenOutcomeSpec ParseFrozenOutcomeSpec(const std::string& value)
+{
+    std::vector<std::string> fields;
+    std::size_t begin = 0;
+    for (;;)
+    {
+        const std::size_t comma = value.find(',', begin);
+        fields.push_back(value.substr(begin, comma - begin));
+        if (comma == std::string::npos) break;
+        begin = comma + 1;
+    }
+    if (fields.size() != 6 ||
+        std::any_of(fields.begin(), fields.end(),
+                    [](const std::string& field) { return field.empty(); }))
+        throw std::invalid_argument(
+            "--run-frozen-model-outcome-inference requires "
+            "COHORT_HASH,SOURCE_EXPERIMENT_ID,SOURCE_MODEL_ID,FROM_DATE,"
+            "TO_DATE,JOB_HASH");
+    LaunchArgs::FrozenOutcomeSpec spec;
+    spec.cohortHash = fields[0];
+    spec.sourceExperimentId = ParseModelIdArg(fields[1]);
+    spec.sourceModelId = ParseModelIdArg(fields[2]);
+    spec.outcomeStart = fields[3];
+    spec.outcomeEnd = fields[4];
+    spec.jobHash = fields[5];
+    return spec;
 }
 
 size_t ParsePositiveSizeArg(const std::string& optionName, const std::string& value)
@@ -3915,7 +3965,15 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
     {
         std::string arg{ argv[i] };
 
-        if (arg.rfind(kModelPrefix, 0) == 0)
+        if (arg.rfind("--run-frozen-model-outcome-inference=", 0) == 0)
+        {
+            if (parsed.frozenOutcome)
+                throw std::invalid_argument(
+                    "--run-frozen-model-outcome-inference specified more than once");
+            parsed.frozenOutcome = ParseFrozenOutcomeSpec(arg.substr(
+                std::string{"--run-frozen-model-outcome-inference="}.size()));
+        }
+        else if (arg.rfind(kModelPrefix, 0) == 0)
         {
             if (parsed.modelId.has_value())
                 throw std::invalid_argument("--model specified more than once");
@@ -4229,6 +4287,36 @@ LaunchArgs ParseLaunchArgs(int argc, const char* argv[])
                 positional.push_back(arg);
             }
         }
+    }
+
+    if (parsed.frozenOutcome)
+    {
+        const bool hasOverride = parsed.inferenceMode.has_value() ||
+            parsed.symbol.has_value() || parsed.modelId.has_value() ||
+            parsed.resumeModelId.has_value() || parsed.targetEpochs.has_value() ||
+            parsed.newModelName.has_value() || parsed.predictionHorizon.has_value() ||
+            parsed.thresholdLogret.has_value() || parsed.windowSize.has_value() ||
+            parsed.hiddenSize.has_value() || parsed.numLayers.has_value() ||
+            parsed.epochs.has_value() || parsed.coreLrMult.has_value() ||
+            parsed.headWeightLrMult.has_value() ||
+            parsed.headBiasLrMult.has_value() || parsed.checkpointEvery.has_value() ||
+            parsed.schedulerExperimentId.has_value() ||
+            parsed.schedulerCheckpointEvalId.has_value() ||
+            parsed.schedulerWorkerAttemptId.has_value() ||
+            parsed.trainingObjective.has_value() || parsed.inferAll ||
+            parsed.forceInfer || parsed.evalTrading ||
+            parsed.resumeExpandInputWidth || parsed.featureWarmupScope.has_value() ||
+            parsed.donchian20Mode.has_value() ||
+            parsed.donchianLookback.has_value() || !positional.empty();
+        if (hasOverride)
+            throw std::invalid_argument(
+                "--run-frozen-model-outcome-inference rejects training, model, "
+                "feature, scheduler, and inference semantic overrides");
+        parsed.inferenceMode = true;
+        parsed.modelId = parsed.frozenOutcome->sourceModelId;
+        parsed.fromDate = parsed.frozenOutcome->outcomeStart;
+        parsed.toDate = parsed.frozenOutcome->outcomeEnd;
+        return parsed;
     }
 
     if (parsed.trainingObjective.has_value())
@@ -7512,6 +7600,53 @@ int main(int argc, const char * argv[])
     pqxx::connection c_forex { ForexDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     pqxx::connection c_LSTM { LstmDbConnectionString() }; // "user = postgres password=pass123 hostaddr=127.0.0.1 port=5432." };
     std::string fromDate  { launchArgs.fromDate }, toDate { launchArgs.toDate };
+    std::optional<EA::ProfitabilityVerification::
+        CampaignProfitabilityOutcomeJob> frozenOutcomeJob;
+    if (launchArgs.frozenOutcome)
+    {
+        try
+        {
+            pqxx::read_transaction frozenRead{c_LSTM};
+            frozenRead.exec(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+            const auto& spec = *launchArgs.frozenOutcome;
+            frozenOutcomeJob = EA::ProfitabilityVerification::
+                LoadCampaignProfitabilityOutcomeExecutionJob(
+                    frozenRead, spec.cohortHash, spec.sourceExperimentId,
+                    spec.sourceModelId, spec.outcomeStart, spec.outcomeEnd,
+                    spec.jobHash, CurrentUtcDate());
+            std::cout
+                << "CAMPAIGN_PROFITABILITY_OUTCOME_EXECUTION_START"
+                << ",validation_cohort_identity_hash="
+                << frozenOutcomeJob->validationCohortIdentityHash
+                << ",ranking_snapshot_id=" << frozenOutcomeJob->rankingSnapshotId
+                << ",source_evaluation_run_id="
+                << frozenOutcomeJob->sourceEvaluationRunId
+                << ",source_experiment_id="
+                << frozenOutcomeJob->sourceExperimentId
+                << ",source_model_id=" << frozenOutcomeJob->sourceModelId
+                << ",symbol=" << frozenOutcomeJob->symbol
+                << ",horizon=" << frozenOutcomeJob->horizon
+                << ",outcome_start=" << frozenOutcomeJob->outcomeStart
+                << ",outcome_end=" << frozenOutcomeJob->outcomeEnd
+                << ",metric_hash=" << frozenOutcomeJob->metricDefinitionHash
+                << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+                << ",job_hash=" << frozenOutcomeJob->hash
+                << ",inference_scope=prospective_outcome"
+                << ",activation=false,live_profitability_weight=0"
+                << ",production_ranking_modified=false"
+                << ",recommendation_modified=false"
+                << ",ranking_snapshot_modified=false,training_started=false"
+                << ",experiment_created=false,experiment_queued=false"
+                << ",scheduler_modified=false" << std::endl;
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "CAMPAIGN_PROFITABILITY_OUTCOME_EXECUTION_REJECTED"
+                      << ",error=" << error.what() << std::endl;
+            return 1;
+        }
+    }
     EA::TrainingObjective::Configuration runtimeTrainingObjective =
         EA::TrainingObjective::Legacy();
     if (!gRuntimeInferenceMode && launchArgs.schedulerExperimentId.has_value())
@@ -7822,6 +7957,69 @@ int main(int argc, const char * argv[])
                 "select * from candlestick(" + forexDataRead.quote(rawPriceTableName) +
                 ", 15, 'minute', " + forexDataRead.quote(queryStart) + ", " +
                 forexDataRead.quote(toDate) + ") order by dt;";
+            if (frozenOutcomeJob)
+            {
+                const std::string coverageSql =
+                    "WITH bars AS (SELECT dt FROM candlestick(" +
+                    forexDataRead.quote(rawPriceTableName) +
+                    ",15,'minute'," + forexDataRead.quote(fromDate) + "," +
+                    forexDataRead.quote(toDate) + ")) "
+                    "SELECT min(dt)::text,max(dt)::text,count(*),"
+                    "COALESCE(min(dt) <= " + forexDataRead.quote(fromDate) +
+                    "::timestamp,false),COALESCE(max(dt) >= (" +
+                    forexDataRead.quote(toDate) +
+                    "::timestamp - interval '15 minutes'),false) FROM bars";
+                const pqxx::row coverage =
+                    forexDataRead.exec(coverageSql).one_row();
+                const long long barCount = coverage[2].as<long long>();
+                const bool coversStart = coverage[3].as<bool>();
+                const bool coversEnd = coverage[4].as<bool>();
+                const long long minimumBars = static_cast<long long>(
+                    window_size + prediction_horizon + 1);
+                const bool complete = coversStart && coversEnd &&
+                    barCount >= minimumBars;
+                std::cout
+                    << "CAMPAIGN_PROFITABILITY_OUTCOME_JOB_READINESS"
+                    << ",validation_cohort_identity_hash="
+                    << frozenOutcomeJob->validationCohortIdentityHash
+                    << ",ranking_snapshot_id="
+                    << frozenOutcomeJob->rankingSnapshotId
+                    << ",source_evaluation_run_id="
+                    << frozenOutcomeJob->sourceEvaluationRunId
+                    << ",source_experiment_id="
+                    << frozenOutcomeJob->sourceExperimentId
+                    << ",source_model_id=" << frozenOutcomeJob->sourceModelId
+                    << ",symbol=" << frozenOutcomeJob->symbol
+                    << ",horizon=" << frozenOutcomeJob->horizon
+                    << ",outcome_start=" << frozenOutcomeJob->outcomeStart
+                    << ",outcome_end=" << frozenOutcomeJob->outcomeEnd
+                    << ",metric_hash="
+                    << frozenOutcomeJob->metricDefinitionHash
+                    << ",source_content_hash=PENDING"
+                    << ",outcome_identity_hash=PENDING,job_hash="
+                    << frozenOutcomeJob->hash
+                    << ",readiness="
+                    << (complete ? "ready_to_execute" : "partially_available")
+                    << ",market_data_coverage_checked=true"
+                    << ",market_data_first="
+                    << (coverage[0].is_null() ? "NULL" :
+                        coverage[0].as<std::string>())
+                    << ",market_data_last="
+                    << (coverage[1].is_null() ? "NULL" :
+                        coverage[1].as<std::string>())
+                    << ",market_bar_count=" << barCount
+                    << ",minimum_required_bar_count=" << minimumBars
+                    << ",activation=false,live_profitability_weight=0"
+                    << ",production_ranking_modified=false"
+                    << ",recommendation_modified=false"
+                    << ",ranking_snapshot_modified=false"
+                    << ",training_started=false,experiment_created=false"
+                    << ",experiment_queued=false,scheduler_modified=false"
+                    << std::endl;
+                if (!complete)
+                    throw std::runtime_error(
+                        "campaign_profitability_outcome_market_data_incomplete");
+            }
             const std::string warmupCountQuery = fullHistoryWarmup
                 ? "select count(*) from candlestick(" +
                     forexDataRead.quote(rawPriceTableName) + ", 15, 'minute', " +
@@ -8049,6 +8247,131 @@ int main(int argc, const char * argv[])
                                            toDate,
                                            logicalOutputStartIndex,
                                            false);
+                if (frozenOutcomeJob)
+                {
+                    try
+                    {
+                        if (!loadedModelId ||
+                            *loadedModelId != frozenOutcomeJob->sourceModelId)
+                            throw std::runtime_error(
+                                "frozen_outcome_loaded_model_identity_mismatch");
+                        if (!evaluation.profitability)
+                            throw std::runtime_error(
+                                "frozen_outcome_profitability_statistics_missing");
+                        const auto& statistics = *evaluation.profitability;
+                        EA::ProfitabilityVerification::
+                            CampaignProfitabilityOutcomePersistRequest request;
+                        request.job = *frozenOutcomeJob;
+                        request.inferenceAccuracy = evaluation.accuracy;
+                        request.predictionCount = statistics.predictionCount;
+                        request.actionableCount = statistics.actionableCount;
+                        request.winningActionableCount =
+                            statistics.winningActionableCount;
+                        request.losingActionableCount =
+                            statistics.losingActionableCount;
+                        request.grossPositiveReturn =
+                            statistics.grossPositiveTerminalHorizonLogReturnSum;
+                        request.grossNegativeReturn =
+                            statistics.grossNegativeTerminalHorizonLogReturnSum;
+                        request.aggregateReturn =
+                            statistics.aggregateTerminalHorizonLogReturnSum;
+                        request.averageReturn = statistics.
+                            AverageTerminalHorizonLogReturnPerActionablePrediction();
+                        request.sourceContentHash =
+                            evaluation.profitabilitySourceContentHash;
+                        const auto persisted = EA::ProfitabilityVerification::
+                            PersistCampaignProfitabilityOutcomeIdempotently(
+                                runtimeDatabaseWork, request);
+                        const std::string identityPrefix =
+                            ",validation_cohort_identity_hash=" +
+                            frozenOutcomeJob->validationCohortIdentityHash +
+                            ",ranking_snapshot_id=" +
+                            std::to_string(frozenOutcomeJob->rankingSnapshotId) +
+                            ",source_evaluation_run_id=" +
+                            std::to_string(frozenOutcomeJob->sourceEvaluationRunId) +
+                            ",source_experiment_id=" +
+                            std::to_string(frozenOutcomeJob->sourceExperimentId) +
+                            ",source_model_id=" +
+                            std::to_string(frozenOutcomeJob->sourceModelId) +
+                            ",symbol=" + frozenOutcomeJob->symbol +
+                            ",horizon=" +
+                            std::to_string(frozenOutcomeJob->horizon) +
+                            ",outcome_start=" + frozenOutcomeJob->outcomeStart +
+                            ",outcome_end=" + frozenOutcomeJob->outcomeEnd +
+                            ",metric_hash=" +
+                            frozenOutcomeJob->metricDefinitionHash +
+                            ",source_content_hash=" +
+                            request.sourceContentHash +
+                            ",outcome_identity_hash=" +
+                            persisted.outcomeIdentityHash + ",job_hash=" +
+                            frozenOutcomeJob->hash;
+                        const char* safety =
+                            ",activation=false,live_profitability_weight=0"
+                            ",production_ranking_modified=false"
+                            ",recommendation_modified=false"
+                            ",ranking_snapshot_modified=false"
+                            ",training_started=false,experiment_created=false"
+                            ",experiment_queued=false,scheduler_modified=false";
+                        std::cout
+                            << "CAMPAIGN_PROFITABILITY_OUTCOME_INFERENCE"
+                            << identityPrefix
+                            << ",inference_scope=prospective_outcome"
+                            << ",inference_accuracy=" << evaluation.accuracy
+                            << ",prediction_count=" << statistics.predictionCount
+                            << safety << std::endl;
+                        std::cout
+                            << "CAMPAIGN_PROFITABILITY_OUTCOME_PROFITABILITY"
+                            << identityPrefix
+                            << ",aggregate_terminal_horizon_log_return_sum="
+                            << statistics.aggregateTerminalHorizonLogReturnSum
+                            << ",average_terminal_horizon_log_return_per_"
+                               "actionable_prediction="
+                            << (request.averageReturn
+                                    ? std::to_string(*request.averageReturn)
+                                    : "NULL")
+                            << ",actionable_count=" << statistics.actionableCount
+                            << ",winning_actionable_count="
+                            << statistics.winningActionableCount
+                            << ",losing_actionable_count="
+                            << statistics.losingActionableCount
+                            << safety << std::endl;
+                        std::cout
+                            << "CAMPAIGN_PROFITABILITY_OUTCOME_IDENTITY"
+                            << identityPrefix
+                            << ",prospective_outcome_result_id="
+                            << persisted.resultId
+                            << ",idempotent_existing="
+                            << (persisted.created ? "false" : "true")
+                            << ",final_evidence_modified=false"
+                            << ",checkpoint_evidence_used=false"
+                            << safety << std::endl;
+                        std::cout
+                            << "CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY"
+                            << identityPrefix
+                            << ",completed_outcome_count=1"
+                            << ",unique_model_outcome_count=1"
+                            << ",recommendation_count="
+                            << frozenOutcomeJob->recommendationIds.size()
+                            << safety << std::endl;
+                        runtimeDatabaseWork.commit();
+                    }
+                    catch (const std::exception& error)
+                    {
+                        std::cerr
+                            << "CAMPAIGN_PROFITABILITY_OUTCOME_PERSIST_FAILED"
+                            << ",source_experiment_id="
+                            << frozenOutcomeJob->sourceExperimentId
+                            << ",source_model_id="
+                            << frozenOutcomeJob->sourceModelId
+                            << ",error=" << error.what() << std::endl;
+                        return 1;
+                    }
+                    DiagnosticOut()
+                        << "prospective_outcome_infer=true; skipping FINAL "
+                           "inference persistence and model save"
+                        << std::endl;
+                    break;
+                }
                 if (schedulerInferenceContext.has_value())
                 {
                     try

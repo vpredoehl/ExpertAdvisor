@@ -16,6 +16,22 @@
 
 namespace EA::ProfitabilityVerification
 {
+
+std::string OutcomeJobReadinessText(OutcomeJobReadiness value)
+{
+    switch (value)
+    {
+        case OutcomeJobReadiness::waitingForOutcomeData:
+            return "waiting_for_outcome_data";
+        case OutcomeJobReadiness::partiallyAvailable:
+            return "partially_available";
+        case OutcomeJobReadiness::readyToExecute:
+            return "ready_to_execute";
+        case OutcomeJobReadiness::incompatibleSource:
+            return "incompatible_source";
+    }
+    throw std::logic_error("unknown_campaign_profitability_outcome_readiness");
+}
 namespace
 {
 

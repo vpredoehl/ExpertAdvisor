@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <ctime>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -64,6 +66,25 @@ std::string MachineText(std::string value)
         if (!safe) character = '_';
     }
     return value.empty() ? "NULL" : value;
+}
+
+std::string CurrentUtcDate()
+{
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    std::ostringstream output;
+    output << std::put_time(&utc, "%Y-%m-%d");
+    return output.str();
+}
+
+const char* OutcomeSafetyFields()
+{
+    return ",activation=false,live_profitability_weight=0"
+           ",production_ranking_modified=false,recommendation_modified=false"
+           ",ranking_snapshot_modified=false,training_started=false"
+           ",experiment_created=false,experiment_queued=false"
+           ",scheduler_modified=false";
 }
 
 void RenderEvidence(std::ostream& output, const EvidenceResult& result)
@@ -1358,6 +1379,188 @@ int RunCampaignProfitabilityForwardValidationPrecommitCommand(
            << ",experiment_created=false,experiment_queued=false"
            << ",scheduler_modified=false,worker_modified=false"
            << ",database_write=false\n";
+    return 0;
+}
+
+int RunCampaignProfitabilityOutcomePreparationCommand(
+    const std::string& connectionString,
+    const std::string& validationCohortIdentityHash,
+    std::ostream& output,
+    std::ostream& errors,
+    const std::string& artifactPath,
+    const std::string& currentDateOverride)
+{
+    (void)errors;
+    if (validationCohortIdentityHash !=
+        kPhase12ValidationCohortIdentityHash)
+        throw std::invalid_argument("phase12_validation_cohort_hash_mismatch");
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const auto preparation = LoadCampaignProfitabilityOutcomePreparation(
+        transaction,
+        currentDateOverride.empty() ? CurrentUtcDate() : currentDateOverride,
+        artifactPath);
+
+    const std::string common =
+        std::string{",validation_cohort_identity_hash="} +
+        kPhase12ValidationCohortIdentityHash +
+        ",ranking_snapshot_id=5,source_evaluation_run_id=6";
+    output << "CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY" << common
+           << ",protocol_version=1,artifact_path="
+           << MachineText(preparation.artifactPath)
+           << ",artifact_sha256=" << preparation.artifactSha256
+           << ",artifact_identity_verified="
+           << Boolean(preparation.artifactIdentityVerified)
+           << ",unique_source_model_job_count=" << preparation.jobs.size()
+           << ",recommendation_count=79,outcome_start="
+           << kPhase12OutcomeStart << ",outcome_end=" << kPhase12OutcomeEnd
+           << ",metric_hash=" << InferenceProfitability::MetricDefinitionHash()
+           << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+           << ",preparation_hash=" << preparation.hash
+           << ",future_outcome_execution_launched=false"
+           << OutcomeSafetyFields() << '\n';
+
+    std::size_t compatibleCount = 0;
+    std::size_t waitingCount = 0;
+    std::size_t readyCount = 0;
+    for (const auto& job : preparation.jobs)
+    {
+        compatibleCount += job.compatible ? 1U : 0U;
+        waitingCount += job.readiness ==
+            OutcomeJobReadiness::waitingForOutcomeData ? 1U : 0U;
+        readyCount += job.readiness == OutcomeJobReadiness::readyToExecute
+            ? 1U : 0U;
+        output << "CAMPAIGN_PROFITABILITY_OUTCOME_JOB" << common
+               << ",source_experiment_id=" << job.sourceExperimentId
+               << ",source_model_id=" << job.sourceModelId
+               << ",symbol=" << MachineText(job.symbol)
+               << ",horizon=" << job.horizon
+               << ",original_train_start=" << job.originalTrainStart
+               << ",original_train_end=" << job.originalTrainEnd
+               << ",original_final_inference_start="
+               << job.originalInferenceStart
+               << ",original_final_inference_end=" << job.originalInferenceEnd
+               << ",outcome_start=" << job.outcomeStart
+               << ",outcome_end=" << job.outcomeEnd
+               << ",threshold=" << Number(job.threshold)
+               << ",label_rule_id=" << job.labelRuleId
+               << ",target_type=" << job.targetType
+               << ",window_size=" << job.windowSize
+               << ",input_width=" << job.inputWidth
+               << ",feature_semantic_hash=" << job.featureSemanticHash
+               << ",model_lineage_hash=" << job.modelLineageHash
+               << ",model_artifact_content_hash="
+               << job.modelArtifactContentHash
+               << ",model_parameter_row_count=" << job.modelParameterRowCount
+               << ",recommendation_ids=" << IdList(job.recommendationIds)
+               << ",recommendation_count=" << job.recommendationIds.size()
+               << ",top_n_participation="
+               << MachineText(job.topNParticipation)
+               << ",model_artifact_available=" << Boolean(job.modelExists)
+               << ",exact_model_experiment_link="
+               << Boolean(job.exactModelExperimentLink)
+               << ",exact_final_source_model="
+               << Boolean(job.exactFinalSourceModel)
+               << ",exact_original_final_inference="
+               << Boolean(job.exactOriginalFinalInference)
+               << ",checkpoint_substitution="
+               << Boolean(job.checkpointSubstitution)
+               << ",compatibility_state="
+               << MachineText(job.compatibilityState)
+               << ",metric_hash=" << job.metricDefinitionHash
+               << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+               << ",job_hash=" << job.hash << OutcomeSafetyFields() << '\n';
+        output << "CAMPAIGN_PROFITABILITY_OUTCOME_JOB_READINESS" << common
+               << ",source_experiment_id=" << job.sourceExperimentId
+               << ",source_model_id=" << job.sourceModelId
+               << ",symbol=" << MachineText(job.symbol)
+               << ",horizon=" << job.horizon
+               << ",outcome_start=" << job.outcomeStart
+               << ",outcome_end=" << job.outcomeEnd
+               << ",metric_hash=" << job.metricDefinitionHash
+               << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+               << ",job_hash=" << job.hash
+               << ",readiness=" << OutcomeJobReadinessText(job.readiness)
+               << ",current_date=" << preparation.currentDate
+               << ",market_data_coverage_checked=false"
+               << ",reason="
+               << (job.readiness == OutcomeJobReadiness::waitingForOutcomeData
+                       ? "outcome_end_has_not_occurred"
+                       : MachineText(job.compatibilityState))
+               << OutcomeSafetyFields() << '\n';
+        output << "CAMPAIGN_PROFITABILITY_OUTCOME_EXECUTION_COMMAND" << common
+               << ",source_experiment_id=" << job.sourceExperimentId
+               << ",source_model_id=" << job.sourceModelId
+               << ",symbol=" << MachineText(job.symbol)
+               << ",horizon=" << job.horizon
+               << ",outcome_start=" << job.outcomeStart
+               << ",outcome_end=" << job.outcomeEnd
+               << ",metric_hash=" << job.metricDefinitionHash
+               << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+               << ",job_hash=" << job.hash
+               << ",command=./LSTM_Release%20"
+                  "--run-frozen-model-outcome-inference%3D"
+               << job.validationCohortIdentityHash << "%2C"
+               << job.sourceExperimentId << "%2C" << job.sourceModelId
+               << "%2C" << job.outcomeStart << "%2C" << job.outcomeEnd
+               << "%2C" << job.hash
+               << OutcomeSafetyFields() << '\n';
+    }
+
+    for (const auto& top : preparation.topN)
+    {
+        std::map<long long, long long> recommendationModel;
+        for (const auto& job : preparation.jobs)
+            for (long long recommendationId : job.recommendationIds)
+                recommendationModel[recommendationId] = job.sourceModelId;
+        const auto modelList = [&](const std::vector<long long>& ids) {
+            std::vector<long long> models;
+            for (long long id : ids) models.push_back(recommendationModel.at(id));
+            std::sort(models.begin(), models.end());
+            models.erase(std::unique(models.begin(), models.end()), models.end());
+            return IdList(models);
+        };
+        output << "CAMPAIGN_PROFITABILITY_OUTCOME_SELECTION_MAPPING" << common
+               << ",source_experiment_id=ALL,source_model_id=ALL"
+               << ",symbol=MULTIPLE,horizon=MULTIPLE"
+               << ",outcome_start=" << kPhase12OutcomeStart
+               << ",outcome_end=" << kPhase12OutcomeEnd
+               << ",metric_hash=" << InferenceProfitability::MetricDefinitionHash()
+               << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+               << ",top_n=" << top.n
+               << ",retained_recommendation_ids="
+               << IdList(top.retainedRecommendationIds)
+               << ",candidate_entrant_recommendation_ids="
+               << IdList(top.candidateOnlyEntrants)
+               << ",control_exit_recommendation_ids="
+               << IdList(top.controlOnlyExits)
+               << ",retained_unique_source_model_ids="
+               << modelList(top.retainedRecommendationIds)
+               << ",entrant_unique_source_model_ids="
+               << modelList(top.candidateOnlyEntrants)
+               << ",exit_unique_source_model_ids="
+               << modelList(top.controlOnlyExits)
+               << ",duplicate_recommendations_are_independent=false"
+               << ",phase13_contract=common_member_contribution_plus_entrant_"
+                  "contribution_minus_exit_contribution"
+               << ",candidate_minus_control_incremental_profitability=PENDING"
+               << ",outcome_coverage=PENDING,top_n_hash=" << top.hash
+               << OutcomeSafetyFields() << '\n';
+    }
+    output << "CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY" << common
+           << ",source_experiment_id=ALL,source_model_id=ALL"
+           << ",symbol=MULTIPLE,horizon=MULTIPLE,outcome_start="
+           << kPhase12OutcomeStart << ",outcome_end=" << kPhase12OutcomeEnd
+           << ",metric_hash=" << InferenceProfitability::MetricDefinitionHash()
+           << ",source_content_hash=PENDING,outcome_identity_hash=PENDING"
+           << ",unique_job_count=" << preparation.jobs.size()
+           << ",compatible_job_count=" << compatibleCount
+           << ",waiting_for_outcome_data_count=" << waitingCount
+           << ",ready_to_execute_count=" << readyCount
+           << ",completed_outcome_count=0"
+           << ",proof_future_outcome_not_executed=true"
+           << OutcomeSafetyFields() << '\n';
     return 0;
 }
 

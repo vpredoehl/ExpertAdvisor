@@ -45,4 +45,12 @@ int RunCampaignProfitabilityForwardValidationPrecommitCommand(
     std::ostream& output,
     std::ostream& errors);
 
+int RunCampaignProfitabilityOutcomePreparationCommand(
+    const std::string& connectionString,
+    const std::string& validationCohortIdentityHash,
+    std::ostream& output,
+    std::ostream& errors,
+    const std::string& artifactPath = kPhase12ArtifactPath,
+    const std::string& currentDateOverride = {});
+
 } // namespace EA::ProfitabilityVerification
