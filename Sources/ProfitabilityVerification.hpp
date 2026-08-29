@@ -18,8 +18,10 @@ inline constexpr double kLiveProfitabilityRankingWeight = 0.0;
 inline constexpr double kLiveProfitabilityScoreContribution = 0.0;
 inline constexpr int kWeightedShadowRankingPolicyVersion = 1;
 inline constexpr double kMaximumPhase9ProfitabilityShadowWeight = 0.05;
+inline constexpr double kPhase11PrecommittedProfitabilityWeight = 0.025;
 static_assert(kLiveProfitabilityRankingWeight == 0.0);
 static_assert(kLiveProfitabilityScoreContribution == 0.0);
+static_assert(kPhase11PrecommittedProfitabilityWeight == 0.025);
 
 enum class EvidenceState
 {
@@ -328,6 +330,104 @@ struct ProfitabilityCalibrationReport
 std::vector<double> Phase10ProfitabilityCalibrationWeights();
 ProfitabilityCalibrationReport BuildProfitabilityCalibrationReport(
     const std::vector<WeightedShadowRanking>& rankings);
+
+enum class TemporalCohortClassification
+{
+    admissibleTemporalHoldout,
+    insufficientRankingTimeProvenance,
+    insufficientSubsequentOutcome,
+    overlappingInputAndOutcomePeriod,
+    futureInformationLeakage,
+    contextOrIdentityMismatch,
+    otherFailClosed
+};
+
+std::string TemporalCohortClassificationText(
+    TemporalCohortClassification value);
+
+struct CampaignProfitabilityTemporalCohort
+{
+    long long rankingSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    std::string asOfTimestamp;
+    int totalCandidateCount = 0;
+    int validRankingTimeProfitabilityEvidenceCount = 0;
+    int unavailableRankingTimeEvidenceCount = 0;
+    int legitimateSubsequentOutcomeCount = 0;
+    int pointInTimeProvenanceViolationCount = 0;
+    int overlappingInputAndOutcomeCount = 0;
+    int futureInformationLeakageCount = 0;
+    int contextOrIdentityMismatchCount = 0;
+    std::map<std::string, std::size_t> rankingTimeUnavailableReasonCounts;
+    std::optional<std::string> rankingInputStart;
+    std::optional<std::string> rankingInputEnd;
+    std::optional<std::string> outcomeStart;
+    std::optional<std::string> outcomeEnd;
+    bool exactControlReconstruction = false;
+    bool rankingPopulationReconstructable = false;
+    TemporalCohortClassification classification =
+        TemporalCohortClassification::otherFailClosed;
+    std::string reason;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityTemporalFeasibilityAudit
+{
+    std::vector<CampaignProfitabilityTemporalCohort> cohorts;
+    std::map<std::string, std::size_t> classificationCounts;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityForwardValidationMember
+{
+    ShadowCandidate source;
+    int controlRank = 0;
+    int candidateRank = 0;
+    int rankDelta = 0;
+    bool evidenceAvailableAtSelectionTime = false;
+    std::string rankingTimeProfitabilityObservationIdentityHash;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityForwardValidationTopN
+{
+    int n = 0;
+    std::vector<long long> controlRecommendationIds;
+    std::vector<long long> candidateRecommendationIds;
+    std::vector<long long> retainedRecommendationIds;
+    std::vector<long long> candidateOnlyEntrants;
+    std::vector<long long> controlOnlyExits;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityForwardValidationPrecommit
+{
+    int protocolVersion = 1;
+    long long rankingSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    std::string decisionTimestamp;
+    std::string expectedOutcomeStart;
+    std::string expectedOutcomeEnd;
+    double controlWeight = 0.0;
+    double candidateWeight = kPhase11PrecommittedProfitabilityWeight;
+    std::string controlRankingHash;
+    std::string candidateRankingHash;
+    std::vector<CampaignProfitabilityForwardValidationMember> members;
+    std::vector<CampaignProfitabilityForwardValidationTopN> topN;
+    std::string canonical;
+    std::string hash;
+};
+
+CampaignProfitabilityForwardValidationPrecommit
+BuildCampaignProfitabilityForwardValidationPrecommit(
+    const CampaignProfitabilityShadowSource& source,
+    const std::string& decisionTimestamp,
+    const std::string& expectedOutcomeStart,
+    const std::string& expectedOutcomeEnd);
 
 WeightedShadowRanking BuildWeightedShadowRanking(
     std::vector<ShadowCandidate> candidates,

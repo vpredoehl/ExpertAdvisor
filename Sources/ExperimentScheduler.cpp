@@ -213,6 +213,9 @@ struct SchedulerOptions
     std::optional<long long> campaignProfitabilityShadowSnapshotId;
     std::optional<std::vector<double>> campaignProfitabilityShadowWeights;
     std::optional<long long> campaignProfitabilityCalibrationSnapshotId;
+    bool campaignProfitabilityTemporalValidation = false;
+    std::optional<std::tuple<long long, std::string, std::string>>
+        campaignProfitabilityForwardValidationPrecommit;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -962,7 +965,11 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--profitability-shadow-weights" ||
             arg.rfind("--profitability-shadow-weights=", 0) == 0 ||
             arg == "--calibrate-campaign-profitability" ||
-            arg.rfind("--calibrate-campaign-profitability=", 0) == 0)
+            arg.rfind("--calibrate-campaign-profitability=", 0) == 0 ||
+            arg == "--validate-campaign-profitability-temporal" ||
+            arg == "--prepare-campaign-profitability-forward-validation" ||
+            arg.rfind(
+                "--prepare-campaign-profitability-forward-validation=", 0) == 0)
             return true;
         if (arg == "--compare-feature-ablation-pair" ||
             arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
@@ -1648,6 +1655,26 @@ long long ParsePositiveLongLong(const std::string& optionName, const std::string
     return parsed;
 }
 
+std::tuple<long long, std::string, std::string>
+ParseCampaignProfitabilityForwardValidationSpec(const std::string& value)
+{
+    const std::size_t first = value.find(',');
+    const std::size_t second = first == std::string::npos
+        ? std::string::npos : value.find(',', first + 1);
+    if (first == std::string::npos || second == std::string::npos ||
+        value.find(',', second + 1) != std::string::npos || first == 0 ||
+        second == first + 1 || second + 1 == value.size())
+        throw std::invalid_argument(
+            "--prepare-campaign-profitability-forward-validation requires "
+            "RANKING_SNAPSHOT_ID,OUTCOME_START,OUTCOME_END");
+    return {
+        ParsePositiveLongLong(
+            "--prepare-campaign-profitability-forward-validation",
+            value.substr(0, first)),
+        value.substr(first + 1, second - first - 1),
+        value.substr(second + 1)};
+}
+
 long long ParseSignedLongLong(
     const std::string& optionName, const std::string& value)
 {
@@ -1933,6 +1960,23 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "--calibrate-campaign-profitability specified more than once");
             options.campaignProfitabilityCalibrationSnapshotId =
                 ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        }
+        else if (arg == "--validate-campaign-profitability-temporal")
+        {
+            if (options.campaignProfitabilityTemporalValidation)
+                throw std::invalid_argument(
+                    "--validate-campaign-profitability-temporal specified more than once");
+            options.campaignProfitabilityTemporalValidation = true;
+        }
+        else if (arg ==
+                 "--prepare-campaign-profitability-forward-validation")
+        {
+            if (options.campaignProfitabilityForwardValidationPrecommit)
+                throw std::invalid_argument(
+                    "--prepare-campaign-profitability-forward-validation specified more than once");
+            options.campaignProfitabilityForwardValidationPrecommit =
+                ParseCampaignProfitabilityForwardValidationSpec(
+                    RequireNextArg(argc, argv, i, arg));
         }
         else if (arg == "--complete-scheduler-protocol-cutover")
             options.completeSchedulerProtocolCutover = true;
@@ -3901,6 +3945,17 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 ParsePositiveLongLong(
                     "--calibrate-campaign-profitability", value);
         }
+        else if (SplitOptionWithValue(
+                     arg,
+                     "--prepare-campaign-profitability-forward-validation",
+                     value))
+        {
+            if (options.campaignProfitabilityForwardValidationPrecommit)
+                throw std::invalid_argument(
+                    "--prepare-campaign-profitability-forward-validation specified more than once");
+            options.campaignProfitabilityForwardValidationPrecommit =
+                ParseCampaignProfitabilityForwardValidationSpec(value);
+        }
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -3985,6 +4040,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.campaignProfitabilityReadinessSnapshotId.has_value() ? 1 : 0) +
         (options.campaignProfitabilityShadowSnapshotId.has_value() ? 1 : 0) +
         (options.campaignProfitabilityCalibrationSnapshotId.has_value() ? 1 : 0) +
+        (options.campaignProfitabilityTemporalValidation ? 1 : 0) +
+        (options.campaignProfitabilityForwardValidationPrecommit.has_value()
+             ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
         (options.showConversionProposalId.has_value() ? 1 : 0) +
@@ -5026,6 +5084,36 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             throw std::invalid_argument(
                 "--calibrate-campaign-profitability does not accept "
                 "unrelated option '" + argument + "'");
+        }
+    }
+    if (options.campaignProfitabilityTemporalValidation && argc != 2)
+        throw std::invalid_argument(
+            "--validate-campaign-profitability-temporal does not accept "
+            "unrelated options");
+    if (options.campaignProfitabilityForwardValidationPrecommit)
+    {
+        bool consumeValue = false;
+        for (int index = 1; index < argc; ++index)
+        {
+            const std::string argument = argv[index];
+            if (consumeValue)
+            {
+                consumeValue = false;
+                continue;
+            }
+            if (argument ==
+                "--prepare-campaign-profitability-forward-validation")
+            {
+                consumeValue = true;
+                continue;
+            }
+            if (argument.rfind(
+                    "--prepare-campaign-profitability-forward-validation=",
+                    0) == 0)
+                continue;
+            throw std::invalid_argument(
+                "--prepare-campaign-profitability-forward-validation does "
+                "not accept unrelated option '" + argument + "'");
         }
     }
     if (commandCount != 1)
@@ -24492,6 +24580,21 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "read-only transaction. It cannot backfill frozen evidence or modify "
         << "ranking, recommendation, experiment, scheduler, or worker state.\n"
         << "Usage: " << exe
+        << " --validate-campaign-profitability-temporal\n"
+        << "Phase 11 audits every immutable historical ranking snapshot for "
+        << "exact point-in-time reconstruction and strictly subsequent exact-"
+        << "identity FINAL profitability outcomes. Contaminated or incomplete "
+        << "cohorts fail closed; the precommitted candidate weight is 0.025 and "
+        << "is never selected from holdout outcomes. The command is read-only.\n"
+        << "Usage: " << exe
+        << " --prepare-campaign-profitability-forward-validation="
+           "RANKING_SNAPSHOT_ID,OUTCOME_START,OUTCOME_END\n"
+        << "Phase 11 emits a deterministic no-write forward-validation "
+        << "precommit for the exact zero-weight control and precommitted 0.025 "
+        << "shadow ranking. OUTCOME_START and OUTCOME_END are ISO dates and must "
+        << "be strictly after the immutable snapshot decision date. It neither "
+        << "launches outcome inference nor creates experiments or authority.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
         << "Feature-ablation pair comparison validates the persisted consensus "
         << "feature-family ablation, resolves exact FINAL inference and "
@@ -25903,6 +26006,41 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             {
                 std::cerr
                     << "CAMPAIGN_PROFITABILITY_CALIBRATION_TOOL_ERROR"
+                    << ",error=" << error.what() << std::endl;
+                return 2;
+            }
+        }
+        if (options.campaignProfitabilityTemporalValidation)
+        {
+            try
+            {
+                return EA::ProfitabilityVerification::
+                    RunCampaignProfitabilityTemporalValidationCommand(
+                        LstmDbConnectionString(), std::cout, std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr
+                    << "CAMPAIGN_PROFITABILITY_TEMPORAL_VALIDATION_TOOL_ERROR"
+                    << ",error=" << error.what() << std::endl;
+                return 2;
+            }
+        }
+        if (options.campaignProfitabilityForwardValidationPrecommit)
+        {
+            try
+            {
+                const auto& [snapshotId, outcomeStart, outcomeEnd] =
+                    *options.campaignProfitabilityForwardValidationPrecommit;
+                return EA::ProfitabilityVerification::
+                    RunCampaignProfitabilityForwardValidationPrecommitCommand(
+                        LstmDbConnectionString(), snapshotId, outcomeStart,
+                        outcomeEnd, std::cout, std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr
+                    << "CAMPAIGN_PROFITABILITY_FORWARD_VALIDATION_TOOL_ERROR"
                     << ",error=" << error.what() << std::endl;
                 return 2;
             }

@@ -365,5 +365,69 @@ int main()
     assert(Throws([&] {
         (void)Verification::BuildProfitabilityCalibrationReport(invalidSweep);
     }));
+
+    assert(Verification::kPhase11PrecommittedProfitabilityWeight == 0.025);
+    assert(Verification::TemporalCohortClassificationText(
+               Verification::TemporalCohortClassification::
+                   admissibleTemporalHoldout) ==
+           "admissible_temporal_holdout");
+    assert(Verification::TemporalCohortClassificationText(
+               Verification::TemporalCohortClassification::
+                   futureInformationLeakage) ==
+           "future_information_leakage");
+    Verification::CampaignProfitabilityShadowSource forwardSource;
+    forwardSource.controlSnapshotId = 5;
+    forwardSource.sourceEvaluationRunId = 6;
+    forwardSource.controlSnapshotIdentityHash = snapshotHash;
+    forwardSource.persistedMemberCount =
+        static_cast<int>(candidates.size());
+    forwardSource.candidates = candidates;
+    const auto precommit = Verification::
+        BuildCampaignProfitabilityForwardValidationPrecommit(
+            forwardSource, "2026-08-28T16:30:10.000000Z",
+            "2026-08-29", "2027-08-29");
+    assert(precommit.controlWeight == 0.0);
+    assert(precommit.candidateWeight == 0.025);
+    assert(precommit.members.size() == candidates.size());
+    assert(precommit.topN.size() == 3);
+    assert(precommit.topN[0].n == 5);
+    assert(precommit.topN[1].n == 10);
+    assert(precommit.topN[2].n == 20);
+    assert(!precommit.hash.empty());
+    assert(precommit.canonical.find("precommitted_candidate_weight=5:0.025") !=
+           std::string::npos);
+    assert(precommit.canonical.find("activation=5:false") !=
+           std::string::npos);
+    assert(precommit.canonical.find("live_profitability_weight=1:0") !=
+           std::string::npos);
+    auto reversedForwardSource = forwardSource;
+    std::reverse(reversedForwardSource.candidates.begin(),
+                 reversedForwardSource.candidates.end());
+    const auto repeatedPrecommit = Verification::
+        BuildCampaignProfitabilityForwardValidationPrecommit(
+            reversedForwardSource, "2026-08-28T16:30:10.000000Z",
+            "2026-08-29", "2027-08-29");
+    assert(repeatedPrecommit.canonical == precommit.canonical);
+    assert(repeatedPrecommit.hash == precommit.hash);
+    for (const auto& member : precommit.members)
+        assert(member.controlRank == member.source.currentRank);
+    assert(Throws([&] {
+        (void)Verification::
+            BuildCampaignProfitabilityForwardValidationPrecommit(
+                forwardSource, "2026-08-28T16:30:10.000000Z",
+                "2026-08-28", "2027-08-29");
+    }));
+    assert(Throws([&] {
+        (void)Verification::
+            BuildCampaignProfitabilityForwardValidationPrecommit(
+                forwardSource, "2026-08-28T16:30:10.000000Z",
+                "2027-08-29", "2027-08-29");
+    }));
+    assert(Throws([&] {
+        (void)Verification::
+            BuildCampaignProfitabilityForwardValidationPrecommit(
+                forwardSource, "2026-08-28T16:30:10.000000Z",
+                "2026-02-29", "2027-08-29");
+    }));
     return 0;
 }

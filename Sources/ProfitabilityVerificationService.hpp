@@ -32,4 +32,17 @@ int RunCampaignProfitabilityCalibrationCommand(
     std::ostream& output,
     std::ostream& errors);
 
+int RunCampaignProfitabilityTemporalValidationCommand(
+    const std::string& connectionString,
+    std::ostream& output,
+    std::ostream& errors);
+
+int RunCampaignProfitabilityForwardValidationPrecommitCommand(
+    const std::string& connectionString,
+    long long rankingSnapshotId,
+    const std::string& expectedOutcomeStart,
+    const std::string& expectedOutcomeEnd,
+    std::ostream& output,
+    std::ostream& errors);
+
 } // namespace EA::ProfitabilityVerification

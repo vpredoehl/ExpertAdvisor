@@ -71,7 +71,8 @@ CREATE TABLE inference_eval_result (
     from_date text NOT NULL,
     to_date text NOT NULL,
     completed_epochs bigint,
-    accept_model boolean
+    accept_model boolean,
+    completed_at timestamptz NOT NULL DEFAULT '2026-08-01 00:00:00+00'
 );
 CREATE TABLE experiment_recommendation_evaluation_run(
     recommendation_evaluation_run_id bigint PRIMARY KEY,
@@ -113,7 +114,8 @@ CREATE TABLE experiment_recommendation_ranking_snapshot(
     member_count integer NOT NULL,
     advisory_ready_count integer NOT NULL DEFAULT 0,
     blocked_count integer NOT NULL DEFAULT 0,
-    non_actionable_count integer NOT NULL DEFAULT 0
+    non_actionable_count integer NOT NULL DEFAULT 0,
+    completed_at timestamptz NOT NULL DEFAULT '2026-09-01 00:00:00+00'
 );
 CREATE TABLE experiment_recommendation_ranking_member(
     recommendation_ranking_member_id bigint PRIMARY KEY,
@@ -127,7 +129,8 @@ CREATE TABLE experiment_recommendation_ranking_member(
     final_score double precision,
     symbol text NOT NULL,
     horizon integer NOT NULL,
-    family text NOT NULL
+    family text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT '2026-08-01 00:00:00+00'
 );
 CREATE TABLE experiment_recommendation(
     recommendation_id bigint PRIMARY KEY,
@@ -155,7 +158,8 @@ CREATE TABLE experiment_recommendation(
     source_final_profitability_average_return double precision,
     source_final_profitability_metric_definition_hash text,
     source_final_profitability_source_content_hash text,
-    source_final_profitability_observation_identity_hash text
+    source_final_profitability_observation_identity_hash text,
+    created_at timestamptz NOT NULL DEFAULT '2026-08-01 00:00:00+00'
 );
 CREATE TABLE experiment_recommendation_evaluation_result(
     recommendation_evaluation_result_id bigint PRIMARY KEY,
@@ -181,7 +185,8 @@ CREATE TABLE experiment_recommendation_evaluation_result(
     source_final_profitability_average_return double precision,
     source_final_profitability_metric_definition_hash text,
     source_final_profitability_source_content_hash text,
-    source_final_profitability_observation_identity_hash text
+    source_final_profitability_observation_identity_hash text,
+    created_at timestamptz NOT NULL DEFAULT '2026-08-01 00:00:00+00'
 );
 CREATE TABLE experiment_recommendation_conversion_proposal(
     recommendation_conversion_proposal_id bigint PRIMARY KEY,

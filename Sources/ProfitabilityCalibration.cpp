@@ -1,6 +1,7 @@
 #include "ProfitabilityVerification.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iterator>
 #include <map>
@@ -478,6 +479,266 @@ ProfitabilityCalibrationReport BuildProfitabilityCalibrationReport(
                     report.anchorPairwise[index].canonical);
     report.hash = InferenceProfitability::DeterministicHash(report.canonical);
     return report;
+}
+
+std::string TemporalCohortClassificationText(
+    TemporalCohortClassification value)
+{
+    switch (value)
+    {
+        case TemporalCohortClassification::admissibleTemporalHoldout:
+            return "admissible_temporal_holdout";
+        case TemporalCohortClassification::insufficientRankingTimeProvenance:
+            return "insufficient_ranking_time_provenance";
+        case TemporalCohortClassification::insufficientSubsequentOutcome:
+            return "insufficient_subsequent_outcome";
+        case TemporalCohortClassification::overlappingInputAndOutcomePeriod:
+            return "overlapping_input_and_outcome_period";
+        case TemporalCohortClassification::futureInformationLeakage:
+            return "future_information_leakage";
+        case TemporalCohortClassification::contextOrIdentityMismatch:
+            return "context_or_identity_mismatch";
+        case TemporalCohortClassification::otherFailClosed:
+            return "other_fail_closed";
+    }
+    throw std::logic_error("unknown_temporal_cohort_classification");
+}
+
+namespace
+{
+
+bool IsIsoDate(const std::string& value)
+{
+    if (value.size() != 10 || value[4] != '-' || value[7] != '-') return false;
+    for (std::size_t index = 0; index < value.size(); ++index)
+        if (index != 4 && index != 7 &&
+            !std::isdigit(static_cast<unsigned char>(value[index])))
+            return false;
+    const int year = std::stoi(value.substr(0, 4));
+    const int month = std::stoi(value.substr(5, 2));
+    const int day = std::stoi(value.substr(8, 2));
+    if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    const int days[] = {0, 31, leap ? 29 : 28, 31, 30, 31, 30,
+                        31, 31, 30, 31, 30, 31};
+    return day <= days[month];
+}
+
+std::vector<long long> RankedIds(const WeightedShadowRanking& ranking, int n)
+{
+    std::vector<std::pair<int, long long>> ordered;
+    for (const auto& candidate : ranking.candidates)
+        if (candidate.shadowRank <= n)
+            ordered.emplace_back(candidate.shadowRank,
+                                 candidate.source.recommendationId);
+    std::sort(ordered.begin(), ordered.end());
+    std::vector<long long> result;
+    result.reserve(ordered.size());
+    for (const auto& [rank, recommendationId] : ordered)
+    {
+        (void)rank;
+        result.push_back(recommendationId);
+    }
+    return result;
+}
+
+std::vector<long long> SortedSetDifference(const std::vector<long long>& left,
+                                           const std::vector<long long>& right)
+{
+    std::set<long long> leftSet(left.begin(), left.end());
+    std::set<long long> rightSet(right.begin(), right.end());
+    std::vector<long long> result;
+    std::set_difference(leftSet.begin(), leftSet.end(),
+                        rightSet.begin(), rightSet.end(),
+                        std::back_inserter(result));
+    return result;
+}
+
+std::vector<long long> SortedSetIntersection(
+    const std::vector<long long>& left,
+    const std::vector<long long>& right)
+{
+    std::set<long long> leftSet(left.begin(), left.end());
+    std::set<long long> rightSet(right.begin(), right.end());
+    std::vector<long long> result;
+    std::set_intersection(leftSet.begin(), leftSet.end(),
+                          rightSet.begin(), rightSet.end(),
+                          std::back_inserter(result));
+    return result;
+}
+
+} // namespace
+
+CampaignProfitabilityForwardValidationPrecommit
+BuildCampaignProfitabilityForwardValidationPrecommit(
+    const CampaignProfitabilityShadowSource& source,
+    const std::string& decisionTimestamp,
+    const std::string& expectedOutcomeStart,
+    const std::string& expectedOutcomeEnd)
+{
+    if (source.controlSnapshotId <= 0 || source.sourceEvaluationRunId <= 0 ||
+        source.persistedMemberCount <= 0 || source.candidates.empty() ||
+        source.candidates.size() !=
+            static_cast<std::size_t>(source.persistedMemberCount) ||
+        decisionTimestamp.size() < 10 ||
+        !IsIsoDate(decisionTimestamp.substr(0, 10)) ||
+        !IsIsoDate(expectedOutcomeStart) || !IsIsoDate(expectedOutcomeEnd) ||
+        expectedOutcomeStart <= decisionTimestamp.substr(0, 10) ||
+        expectedOutcomeEnd <= expectedOutcomeStart)
+        throw std::invalid_argument(
+            "invalid_campaign_profitability_forward_validation_window");
+
+    const WeightedShadowRanking control = BuildWeightedShadowRanking(
+        source.candidates, source.controlSnapshotId,
+        source.sourceEvaluationRunId, source.controlSnapshotIdentityHash, 0.0);
+    const WeightedShadowRanking candidate = BuildWeightedShadowRanking(
+        source.candidates, source.controlSnapshotId,
+        source.sourceEvaluationRunId, source.controlSnapshotIdentityHash,
+        kPhase11PrecommittedProfitabilityWeight);
+    if (control.candidates.size() != source.candidates.size())
+        throw std::runtime_error("forward_validation_control_population_mismatch");
+    for (const auto& member : control.candidates)
+        if (member.shadowRank != member.source.currentRank ||
+            member.rankDelta != 0)
+            throw std::runtime_error(
+                "forward_validation_zero_weight_control_reproduction_failed");
+
+    std::map<long long, const WeightedShadowCandidate*> candidateById;
+    for (const auto& member : candidate.candidates)
+        if (!candidateById.emplace(member.source.recommendationId, &member).second)
+            throw std::runtime_error(
+                "forward_validation_duplicate_recommendation_identity");
+
+    CampaignProfitabilityForwardValidationPrecommit precommit;
+    precommit.rankingSnapshotId = source.controlSnapshotId;
+    precommit.sourceEvaluationRunId = source.sourceEvaluationRunId;
+    precommit.decisionTimestamp = decisionTimestamp;
+    precommit.expectedOutcomeStart = expectedOutcomeStart;
+    precommit.expectedOutcomeEnd = expectedOutcomeEnd;
+    precommit.controlRankingHash = control.hash;
+    precommit.candidateRankingHash = candidate.hash;
+    precommit.members.reserve(control.candidates.size());
+    for (const auto& controlMember : control.candidates)
+    {
+        const auto found = candidateById.find(
+            controlMember.source.recommendationId);
+        if (found == candidateById.end())
+            throw std::runtime_error(
+                "forward_validation_candidate_population_mismatch");
+        CampaignProfitabilityForwardValidationMember member;
+        member.source = controlMember.source;
+        member.controlRank = controlMember.shadowRank;
+        member.candidateRank = found->second->shadowRank;
+        member.rankDelta = member.controlRank - member.candidateRank;
+        member.evidenceAvailableAtSelectionTime =
+            member.source.profitability.state == EvidenceState::valid;
+        if (member.evidenceAvailableAtSelectionTime)
+        {
+            if (!member.source.profitability.observation)
+                throw std::runtime_error(
+                    "forward_validation_valid_evidence_observation_missing");
+            member.rankingTimeProfitabilityObservationIdentityHash =
+                member.source.profitability.observation->observationIdentityHash;
+        }
+        member.canonical =
+            "campaign_profitability_forward_validation_member_v1;";
+        AppendField(member.canonical, "ranking_member_id",
+                    std::to_string(member.source.rankingMemberId));
+        AppendField(member.canonical, "recommendation_id",
+                    std::to_string(member.source.recommendationId));
+        AppendField(member.canonical, "evaluation_result_id",
+                    std::to_string(
+                        member.source.recommendationEvaluationResultId));
+        AppendField(member.canonical, "source_experiment_id",
+                    std::to_string(member.source.sourceExperimentId));
+        AppendField(member.canonical, "source_model_id",
+                    member.source.sourceModelId
+                        ? std::to_string(*member.source.sourceModelId) : "NULL");
+        AppendField(member.canonical, "symbol", member.source.symbol);
+        AppendField(member.canonical, "horizon",
+                    std::to_string(member.source.horizon));
+        AppendField(member.canonical, "control_rank",
+                    std::to_string(member.controlRank));
+        AppendField(member.canonical, "candidate_rank",
+                    std::to_string(member.candidateRank));
+        AppendField(member.canonical, "ranking_evidence_hash",
+                    member.source.profitability.evidenceIdentityHash);
+        AppendField(member.canonical, "evidence_available_at_selection_time",
+                    member.evidenceAvailableAtSelectionTime ? "true" : "false");
+        AppendField(member.canonical, "expected_outcome_start",
+                    expectedOutcomeStart);
+        AppendField(member.canonical, "expected_outcome_end",
+                    expectedOutcomeEnd);
+        AppendField(member.canonical, "subsequent_outcome_identity", "PENDING");
+        member.hash = InferenceProfitability::DeterministicHash(member.canonical);
+        precommit.members.push_back(std::move(member));
+    }
+    std::sort(precommit.members.begin(), precommit.members.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.controlRank, left.source.rankingMemberId) <
+                   std::tie(right.controlRank, right.source.rankingMemberId);
+        });
+
+    for (const int n : {5, 10, 20})
+    {
+        CampaignProfitabilityForwardValidationTopN top;
+        top.n = n;
+        top.controlRecommendationIds = RankedIds(control, n);
+        top.candidateRecommendationIds = RankedIds(candidate, n);
+        top.retainedRecommendationIds = SortedSetIntersection(
+            top.controlRecommendationIds, top.candidateRecommendationIds);
+        top.candidateOnlyEntrants = SortedSetDifference(
+            top.candidateRecommendationIds, top.controlRecommendationIds);
+        top.controlOnlyExits = SortedSetDifference(
+            top.controlRecommendationIds, top.candidateRecommendationIds);
+        top.canonical =
+            "campaign_profitability_forward_validation_top_n_v1;";
+        AppendField(top.canonical, "n", std::to_string(n));
+        AppendField(top.canonical, "control_ids",
+                    IdVector(top.controlRecommendationIds));
+        AppendField(top.canonical, "candidate_ids",
+                    IdVector(top.candidateRecommendationIds));
+        AppendField(top.canonical, "retained_ids",
+                    IdVector(top.retainedRecommendationIds));
+        AppendField(top.canonical, "candidate_entrants",
+                    IdVector(top.candidateOnlyEntrants));
+        AppendField(top.canonical, "control_exits",
+                    IdVector(top.controlOnlyExits));
+        top.hash = InferenceProfitability::DeterministicHash(top.canonical);
+        precommit.topN.push_back(std::move(top));
+    }
+
+    precommit.canonical =
+        "campaign_profitability_forward_validation_precommit_v1;";
+    AppendField(precommit.canonical, "protocol_version",
+                std::to_string(precommit.protocolVersion));
+    AppendField(precommit.canonical, "ranking_snapshot_id",
+                std::to_string(precommit.rankingSnapshotId));
+    AppendField(precommit.canonical, "source_evaluation_run_id",
+                std::to_string(precommit.sourceEvaluationRunId));
+    AppendField(precommit.canonical, "decision_timestamp", decisionTimestamp);
+    AppendField(precommit.canonical, "expected_outcome_start",
+                expectedOutcomeStart);
+    AppendField(precommit.canonical, "expected_outcome_end",
+                expectedOutcomeEnd);
+    AppendField(precommit.canonical, "control_weight", "0");
+    AppendField(precommit.canonical, "precommitted_candidate_weight", "0.025");
+    AppendField(precommit.canonical, "control_ranking_hash", control.hash);
+    AppendField(precommit.canonical, "candidate_ranking_hash", candidate.hash);
+    for (std::size_t index = 0; index < precommit.members.size(); ++index)
+        AppendField(precommit.canonical,
+                    "member[" + std::to_string(index) + "]",
+                    precommit.members[index].hash);
+    for (std::size_t index = 0; index < precommit.topN.size(); ++index)
+        AppendField(precommit.canonical,
+                    "top_n[" + std::to_string(index) + "]",
+                    precommit.topN[index].hash);
+    AppendField(precommit.canonical, "activation", "false");
+    AppendField(precommit.canonical, "live_profitability_weight", "0");
+    AppendField(precommit.canonical, "database_write", "false");
+    precommit.hash = InferenceProfitability::DeterministicHash(
+        precommit.canonical);
+    return precommit;
 }
 
 } // namespace EA::ProfitabilityVerification

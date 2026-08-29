@@ -1108,4 +1108,257 @@ int RunCampaignProfitabilityCalibrationCommand(
     return 0;
 }
 
+int RunCampaignProfitabilityTemporalValidationCommand(
+    const std::string& connectionString,
+    std::ostream& output,
+    std::ostream& errors)
+{
+    (void)errors;
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const CampaignProfitabilityTemporalFeasibilityAudit audit =
+        LoadCampaignProfitabilityTemporalFeasibilityAudit(transaction);
+    const auto classificationCount = [&](const std::string& value) {
+        const auto found = audit.classificationCounts.find(value);
+        return found == audit.classificationCounts.end()
+            ? std::size_t{0} : found->second;
+    };
+    const std::size_t admissible = classificationCount(
+        "admissible_temporal_holdout");
+    output << "CAMPAIGN_PROFITABILITY_TEMPORAL_VALIDATION_START"
+           << ",protocol_version=1,precommitted_candidate_weight=0.025"
+           << ",control_weight=0,sensitivity_weights=0.0225:0.0275"
+           << ",sensitivity_non_selective=true,phase10_sweep_repeated=false"
+           << ",cohort_count=" << audit.cohorts.size()
+           << ",audit_hash=" << audit.hash
+           << ",read_only=true,activation=false,live_profitability_weight=0"
+           << ",production_ranking_modified=false"
+           << ",recommendation_modified=false"
+           << ",ranking_snapshot_modified=false"
+           << ",experiment_created=false,experiment_queued=false"
+           << ",scheduler_modified=false,worker_modified=false\n";
+    for (const auto& cohort : audit.cohorts)
+    {
+        const bool accepted = cohort.classification ==
+            TemporalCohortClassification::admissibleTemporalHoldout;
+        output << (accepted
+                ? "CAMPAIGN_PROFITABILITY_TEMPORAL_COHORT"
+                : "CAMPAIGN_PROFITABILITY_TEMPORAL_COHORT_REJECTED")
+               << ",ranking_snapshot_id=" << cohort.rankingSnapshotId
+               << ",source_evaluation_run_id="
+               << cohort.sourceEvaluationRunId
+               << ",as_of_timestamp=" << cohort.asOfTimestamp
+               << ",total_candidate_count=" << cohort.totalCandidateCount
+               << ",valid_ranking_time_profitability_evidence_count="
+               << cohort.validRankingTimeProfitabilityEvidenceCount
+               << ",unavailable_ranking_time_evidence_count="
+               << cohort.unavailableRankingTimeEvidenceCount
+               << ",legitimate_subsequent_outcome_count="
+               << cohort.legitimateSubsequentOutcomeCount
+               << ",ranking_input_start="
+               << (cohort.rankingInputStart
+                       ? *cohort.rankingInputStart : "NULL")
+               << ",ranking_input_end="
+               << (cohort.rankingInputEnd ? *cohort.rankingInputEnd : "NULL")
+               << ",outcome_start="
+               << (cohort.outcomeStart ? *cohort.outcomeStart : "NULL")
+               << ",outcome_end="
+               << (cohort.outcomeEnd ? *cohort.outcomeEnd : "NULL")
+               << ",point_in_time_provenance_violation_count="
+               << cohort.pointInTimeProvenanceViolationCount
+               << ",overlapping_input_and_outcome_count="
+               << cohort.overlappingInputAndOutcomeCount
+               << ",future_information_leakage_count="
+               << cohort.futureInformationLeakageCount
+               << ",context_or_identity_mismatch_count="
+               << cohort.contextOrIdentityMismatchCount
+               << ",ranking_population_reconstructable="
+               << Boolean(cohort.rankingPopulationReconstructable)
+               << ",zero_weight_control_reconstructed_exactly="
+               << Boolean(cohort.exactControlReconstruction)
+               << ",classification="
+               << TemporalCohortClassificationText(cohort.classification)
+               << ",reason=" << MachineText(cohort.reason)
+               << ",leakage_check="
+               << (cohort.futureInformationLeakageCount == 0 &&
+                           cohort.pointInTimeProvenanceViolationCount == 0
+                       ? "pass" : "fail_closed")
+               << ",cohort_hash=" << cohort.hash << '\n';
+        for (const auto& [reason, count] :
+             cohort.rankingTimeUnavailableReasonCounts)
+        {
+            if (reason == "valid_profitability_observation") continue;
+            output << "CAMPAIGN_PROFITABILITY_TEMPORAL_COVERAGE"
+                   << ",ranking_snapshot_id=" << cohort.rankingSnapshotId
+                   << ",unavailable_reason=" << MachineText(reason)
+                   << ",member_count=" << count
+                   << ",exact_final_only=true,checkpoint_substitution=false\n";
+        }
+    }
+    const std::string assessment = admissible == 0
+        ? "HISTORICAL_HOLDOUT_UNAVAILABLE_FORWARD_VALIDATION_REQUIRED"
+        : "TEMPORAL_VALIDATION_INCONCLUSIVE";
+    output << "CAMPAIGN_PROFITABILITY_TEMPORAL_AGGREGATE"
+           << ",admissible_cohort_count=" << admissible
+           << ",rejected_cohort_count=" << audit.cohorts.size() - admissible
+           << ",insufficient_ranking_time_provenance_count="
+           << classificationCount("insufficient_ranking_time_provenance")
+           << ",insufficient_subsequent_outcome_count="
+           << classificationCount("insufficient_subsequent_outcome")
+           << ",overlapping_input_and_outcome_period_count="
+           << classificationCount("overlapping_input_and_outcome_period")
+           << ",future_information_leakage_count="
+           << classificationCount("future_information_leakage")
+           << ",context_or_identity_mismatch_count="
+           << classificationCount("context_or_identity_mismatch")
+           << ",other_fail_closed_count="
+           << classificationCount("other_fail_closed")
+           << ",top_n_outcome_comparison_emitted=false"
+           << ",reason=no_admissible_temporal_holdout\n";
+    output << "CAMPAIGN_PROFITABILITY_PHASE11_ASSESSMENT"
+           << ",assessment=" << assessment
+           << ",candidate_weight=0.025,weight_selected_from_holdout=false"
+           << ",historical_top_5_result=unavailable"
+           << ",historical_top_10_result=unavailable"
+           << ",historical_top_20_result=unavailable"
+           << ",production_activation_authority=false"
+           << ",forward_validation_required=" << Boolean(admissible == 0)
+           << ",activation=false,live_profitability_weight=0"
+           << ",production_ranking_modified=false"
+           << ",recommendation_modified=false"
+           << ",ranking_snapshot_modified=false"
+           << ",experiment_created=false,experiment_queued=false"
+           << ",scheduler_modified=false,worker_modified=false\n";
+    output << "CAMPAIGN_PROFITABILITY_PRODUCTION_READINESS"
+           << ",phase=11,activation_ready=false"
+           << ",repository_coverage_policy_defined=false"
+           << ",blockers=no_admissible_temporal_holdout:"
+              "forward_validation_not_completed:coverage_policy_not_approved"
+           << ",activation=false,live_profitability_weight=0"
+           << ",production_ranking_modified=false"
+           << ",recommendation_modified=false"
+           << ",ranking_snapshot_modified=false"
+           << ",experiment_created=false,experiment_queued=false"
+           << ",scheduler_modified=false,worker_modified=false"
+           << ",database_write=false\n";
+    return 0;
+}
+
+int RunCampaignProfitabilityForwardValidationPrecommitCommand(
+    const std::string& connectionString,
+    long long rankingSnapshotId,
+    const std::string& expectedOutcomeStart,
+    const std::string& expectedOutcomeEnd,
+    std::ostream& output,
+    std::ostream& errors)
+{
+    (void)errors;
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const CampaignProfitabilityTemporalCohort cohort =
+        LoadCampaignProfitabilityTemporalCohort(transaction, rankingSnapshotId);
+    if (!cohort.rankingPopulationReconstructable ||
+        !cohort.exactControlReconstruction ||
+        cohort.pointInTimeProvenanceViolationCount != 0)
+        throw std::runtime_error(
+            "forward_validation_source_snapshot_not_point_in_time_reconstructable");
+    const CampaignProfitabilityShadowSource source =
+        LoadCampaignProfitabilityShadowSource(transaction, rankingSnapshotId);
+    const auto precommit = BuildCampaignProfitabilityForwardValidationPrecommit(
+        source, cohort.asOfTimestamp, expectedOutcomeStart, expectedOutcomeEnd);
+
+    output << "CAMPAIGN_PROFITABILITY_FORWARD_VALIDATION_PRECOMMIT"
+           << ",protocol_version=" << precommit.protocolVersion
+           << ",validation_cohort_identity_hash=" << precommit.hash
+           << ",ranking_snapshot_id=" << precommit.rankingSnapshotId
+           << ",source_evaluation_run_id="
+           << precommit.sourceEvaluationRunId
+           << ",decision_timestamp=" << precommit.decisionTimestamp
+           << ",control_weight=0,precommitted_candidate_weight=0.025"
+           << ",weight_selected_from_future_outcome=false"
+           << ",expected_outcome_start=" << precommit.expectedOutcomeStart
+           << ",expected_outcome_end=" << precommit.expectedOutcomeEnd
+           << ",control_ranking_hash=" << precommit.controlRankingHash
+           << ",candidate_ranking_hash=" << precommit.candidateRankingHash
+           << ",member_count=" << precommit.members.size()
+           << ",external_immutable_artifact_commit_required=true"
+           << ",database_persistence=false,activation=false"
+           << ",live_profitability_weight=0"
+           << ",production_ranking_modified=false"
+           << ",recommendation_modified=false"
+           << ",ranking_snapshot_modified=false"
+           << ",experiment_created=false,experiment_queued=false"
+           << ",scheduler_modified=false,worker_modified=false\n";
+    for (const auto& member : precommit.members)
+    {
+        const auto& observation = member.source.profitability.observation;
+        output << "CAMPAIGN_PROFITABILITY_ASOF_MEMBER"
+               << ",validation_cohort_identity_hash=" << precommit.hash
+               << ",ranking_member_id=" << member.source.rankingMemberId
+               << ",recommendation_id=" << member.source.recommendationId
+               << ",evaluation_result_id="
+               << member.source.recommendationEvaluationResultId
+               << ",source_experiment_id="
+               << member.source.sourceExperimentId
+               << ",source_model_id=" << OptionalId(member.source.sourceModelId)
+               << ",symbol=" << MachineText(member.source.symbol)
+               << ",horizon=" << member.source.horizon
+               << ",control_rank=" << member.controlRank
+               << ",candidate_rank=" << member.candidateRank
+               << ",rank_delta=" << member.rankDelta
+               << ",ranking_time_profitability_state="
+               << EvidenceStateText(member.source.profitability.state)
+               << ",ranking_time_profitability_sign="
+               << ProfitabilitySignText(member.source.profitabilitySign)
+               << ",ranking_time_profitability_value="
+               << (observation
+                       ? OptionalNumber(observation->
+                           averageTerminalHorizonLogReturnPerActionablePrediction)
+                       : "NULL")
+               << ",ranking_time_profitability_observation_id="
+               << (observation ? std::to_string(observation->observationId)
+                               : "NULL")
+               << ",ranking_time_profitability_observation_identity_hash="
+               << (member.rankingTimeProfitabilityObservationIdentityHash.empty()
+                       ? "NULL"
+                       : member.rankingTimeProfitabilityObservationIdentityHash)
+               << ",evidence_available_at_selection_time="
+               << Boolean(member.evidenceAvailableAtSelectionTime)
+               << ",subsequent_outcome_identity=PENDING"
+               << ",subsequent_outcome_start="
+               << precommit.expectedOutcomeStart
+               << ",subsequent_outcome_end=" << precommit.expectedOutcomeEnd
+               << ",leakage_check=pending_future_strictly_subsequent_outcome"
+               << ",member_hash=" << member.hash << '\n';
+    }
+    for (const auto& top : precommit.topN)
+        output << "CAMPAIGN_PROFITABILITY_TEMPORAL_TOP_N"
+               << ",validation_cohort_identity_hash=" << precommit.hash
+               << ",top_n=" << top.n
+               << ",control_selected_ids="
+               << IdList(top.controlRecommendationIds)
+               << ",candidate_selected_ids="
+               << IdList(top.candidateRecommendationIds)
+               << ",retained_ids=" << IdList(top.retainedRecommendationIds)
+               << ",candidate_only_entrants="
+               << IdList(top.candidateOnlyEntrants)
+               << ",control_only_exits=" << IdList(top.controlOnlyExits)
+               << ",outcome_status=pending,top_n_hash=" << top.hash << '\n';
+    output << "CAMPAIGN_PROFITABILITY_PHASE11_ASSESSMENT"
+           << ",assessment=HISTORICAL_HOLDOUT_UNAVAILABLE_FORWARD_VALIDATION_REQUIRED"
+           << ",forward_precommit_prepared=true"
+           << ",future_outcome_computation_launched=false"
+           << ",production_activation_authority=false"
+           << ",activation=false,live_profitability_weight=0"
+           << ",production_ranking_modified=false"
+           << ",recommendation_modified=false"
+           << ",ranking_snapshot_modified=false"
+           << ",experiment_created=false,experiment_queued=false"
+           << ",scheduler_modified=false,worker_modified=false"
+           << ",database_write=false\n";
+    return 0;
+}
+
 } // namespace EA::ProfitabilityVerification

@@ -674,4 +674,314 @@ ORDER BY rm.global_ordinal,rm.recommendation_ranking_member_id
     return audit;
 }
 
+CampaignProfitabilityTemporalCohort LoadCampaignProfitabilityTemporalCohort(
+    pqxx::transaction_base& transaction,
+    long long rankingSnapshotId)
+{
+    if (rankingSnapshotId <= 0)
+        throw std::invalid_argument("invalid_temporal_validation_snapshot_id");
+    const pqxx::result snapshots = transaction.exec(R"SQL(
+SELECT recommendation_ranking_snapshot_id,evaluation_run_filter,member_count,
+       to_char(completed_at AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS as_of_timestamp
+FROM experiment_recommendation_ranking_snapshot
+WHERE recommendation_ranking_snapshot_id=$1 AND status='completed'
+  AND completed_at IS NOT NULL
+)SQL", pqxx::params{rankingSnapshotId});
+    if (snapshots.empty())
+        throw std::runtime_error("temporal_validation_snapshot_not_found");
+    const pqxx::row snapshot = snapshots.one_row();
+
+    CampaignProfitabilityTemporalCohort cohort;
+    cohort.rankingSnapshotId = rankingSnapshotId;
+    cohort.sourceEvaluationRunId = OptionalValue<long long>(
+        snapshot, "evaluation_run_filter").value_or(-1);
+    cohort.totalCandidateCount = snapshot["member_count"].as<int>();
+    cohort.asOfTimestamp = snapshot["as_of_timestamp"].as<std::string>();
+
+    try
+    {
+        const CampaignProfitabilityCoverageAudit coverage =
+            LoadCampaignProfitabilityCoverageAudit(transaction,
+                                                    rankingSnapshotId);
+        const CampaignProfitabilityShadowSource source =
+            LoadCampaignProfitabilityShadowSource(transaction,
+                                                  rankingSnapshotId);
+        cohort.rankingPopulationReconstructable =
+            source.persistedMemberCount == cohort.totalCandidateCount &&
+            source.sourceEvaluationRunId == cohort.sourceEvaluationRunId;
+        cohort.rankingTimeUnavailableReasonCounts = coverage.reasonCounts;
+        for (const auto& member : coverage.members)
+        {
+            if (member.validatedEvidence.state == EvidenceState::valid)
+                ++cohort.validRankingTimeProfitabilityEvidenceCount;
+            else
+                ++cohort.unavailableRankingTimeEvidenceCount;
+            if (member.frozenEvidence.inferenceStart &&
+                (!cohort.rankingInputStart ||
+                 *member.frozenEvidence.inferenceStart <
+                     *cohort.rankingInputStart))
+                cohort.rankingInputStart =
+                    *member.frozenEvidence.inferenceStart;
+            if (member.frozenEvidence.inferenceEnd &&
+                (!cohort.rankingInputEnd ||
+                 *member.frozenEvidence.inferenceEnd > *cohort.rankingInputEnd))
+                cohort.rankingInputEnd = *member.frozenEvidence.inferenceEnd;
+        }
+        const WeightedShadowRanking control = BuildWeightedShadowRanking(
+            source.candidates, source.controlSnapshotId,
+            source.sourceEvaluationRunId, source.controlSnapshotIdentityHash,
+            0.0);
+        cohort.exactControlReconstruction =
+            control.candidates.size() == source.candidates.size();
+        for (const auto& member : control.candidates)
+            cohort.exactControlReconstruction =
+                cohort.exactControlReconstruction &&
+                member.shadowRank == member.source.currentRank &&
+                member.rankDelta == 0;
+    }
+    catch (const std::exception& error)
+    {
+        cohort.rankingPopulationReconstructable = false;
+        cohort.exactControlReconstruction = false;
+        cohort.validRankingTimeProfitabilityEvidenceCount = 0;
+        cohort.unavailableRankingTimeEvidenceCount =
+            cohort.totalCandidateCount;
+        cohort.reason = std::string{"ranking_reconstruction_failed:"} +
+            error.what();
+    }
+
+    const pqxx::row temporal = transaction.exec(R"SQL(
+WITH members AS (
+    SELECT s.completed_at AS cutoff,rm.recommendation_ranking_member_id,
+           rm.recommendation_id,rm.source_experiment_id,rm.source_model_id,
+           rm.symbol,rm.horizon,rm.created_at AS member_created_at,
+           r.created_at AS recommendation_created_at,
+           er.created_at AS evaluation_created_at,
+           er.source_final_inference_eval_result_id AS frozen_result_id,
+           er.source_final_profitability_observation_id AS frozen_observation_id,
+           er.source_final_profitability_inference_end AS ranking_input_end
+    FROM experiment_recommendation_ranking_snapshot s
+    JOIN experiment_recommendation_ranking_member rm
+      ON rm.recommendation_ranking_snapshot_id=
+         s.recommendation_ranking_snapshot_id
+    JOIN experiment_recommendation r
+      ON r.recommendation_id=rm.recommendation_id
+    JOIN experiment_recommendation_evaluation_result er
+      ON er.recommendation_evaluation_result_id=
+         rm.recommendation_evaluation_result_id
+    WHERE s.recommendation_ranking_snapshot_id=$1
+), observations AS (
+    SELECT m.*,o.profitability_observation_id,o.created_at AS outcome_created_at,
+           o.inference_start AS outcome_start,o.inference_end AS outcome_end,
+           o.experiment_id AS outcome_experiment_id,
+           o.model_id AS outcome_model_id,o.inference_scope AS outcome_scope,
+           o.checkpoint_eval_id AS outcome_checkpoint_eval_id,
+           o.metric_definition_hash,o.source_content_hash,
+           o.observation_identity_hash,ier.id AS outcome_result_id,
+           ier.completed_at AS outcome_result_completed_at,
+           ier.status AS outcome_result_status,
+           ier.inference_scope AS outcome_result_scope,
+           ier.checkpoint_eval_id AS outcome_result_checkpoint_eval_id,
+           ier.parent_experiment_id AS outcome_parent_experiment_id,
+           ier.model_id AS outcome_result_model_id,ier.symbol AS outcome_symbol,
+           ier.prediction_horizon AS outcome_horizon,
+           ier.from_date AS outcome_result_start,
+           ier.to_date AS outcome_result_end
+    FROM members m
+    LEFT JOIN inference_profitability_observation o
+      ON o.model_id=m.source_model_id
+    LEFT JOIN inference_eval_result ier
+      ON ier.id=o.inference_eval_result_id
+), marked AS (
+    SELECT *,
+      (outcome_created_at > cutoff) AS arrived_after_cutoff,
+      (outcome_experiment_id=source_experiment_id AND
+       outcome_model_id=source_model_id AND
+       outcome_result_model_id=source_model_id AND
+       outcome_scope='final' AND outcome_result_scope='final' AND
+       outcome_checkpoint_eval_id IS NULL AND
+       outcome_result_checkpoint_eval_id IS NULL AND
+       outcome_parent_experiment_id IS NULL AND
+       outcome_result_status='completed' AND outcome_symbol=symbol AND
+       outcome_horizon=horizon AND
+       outcome_result_start=outcome_start AND
+       outcome_result_end=outcome_end AND
+       metric_definition_hash=$2 AND source_content_hash IS NOT NULL AND
+       source_content_hash<>'' AND observation_identity_hash IS NOT NULL AND
+       observation_identity_hash<>'') AS exact_identity,
+      (outcome_start::date > cutoff::date AND
+       outcome_end::date > outcome_start::date) AS strictly_subsequent_period
+    FROM observations
+), per_member AS (
+    SELECT recommendation_ranking_member_id,
+      bool_or(arrived_after_cutoff AND exact_identity AND
+              strictly_subsequent_period AND
+              outcome_result_completed_at > cutoff) AS legitimate,
+      bool_or(arrived_after_cutoff AND exact_identity AND
+              (NOT strictly_subsequent_period OR
+               outcome_result_completed_at <= cutoff)) AS future_leakage,
+      bool_or(arrived_after_cutoff AND exact_identity AND ranking_input_end IS NOT NULL
+              AND outcome_start::date <= ranking_input_end::date) AS overlap,
+      bool_or(arrived_after_cutoff AND NOT exact_identity) AS identity_mismatch,
+      min(outcome_start) FILTER (
+          WHERE arrived_after_cutoff AND exact_identity AND
+                strictly_subsequent_period AND
+                outcome_result_completed_at > cutoff) AS valid_outcome_start,
+      max(outcome_end) FILTER (
+          WHERE arrived_after_cutoff AND exact_identity AND
+                strictly_subsequent_period AND
+                outcome_result_completed_at > cutoff) AS valid_outcome_end
+    FROM marked GROUP BY recommendation_ranking_member_id
+), provenance AS (
+    SELECT count(*) FILTER (
+        WHERE recommendation_created_at > cutoff OR
+              evaluation_created_at > cutoff OR member_created_at > cutoff OR
+              EXISTS (SELECT 1 FROM inference_eval_result ier
+                      WHERE ier.id=frozen_result_id AND
+                            ier.completed_at > cutoff) OR
+              EXISTS (SELECT 1 FROM inference_profitability_observation ipo
+                      WHERE ipo.profitability_observation_id=
+                            frozen_observation_id AND ipo.created_at > cutoff)
+    ) AS violation_count
+    FROM members
+)
+SELECT (SELECT violation_count FROM provenance) AS violation_count,
+       count(*) FILTER (WHERE legitimate) AS legitimate_count,
+       count(*) FILTER (WHERE future_leakage) AS future_leakage_count,
+       count(*) FILTER (WHERE overlap) AS overlap_count,
+       count(*) FILTER (WHERE identity_mismatch) AS mismatch_count,
+       min(valid_outcome_start) AS outcome_start,
+       max(valid_outcome_end) AS outcome_end
+FROM per_member
+)SQL", pqxx::params{rankingSnapshotId,
+                     InferenceProfitability::MetricDefinitionHash()}).one_row();
+    cohort.pointInTimeProvenanceViolationCount =
+        temporal["violation_count"].as<int>();
+    cohort.legitimateSubsequentOutcomeCount =
+        temporal["legitimate_count"].as<int>();
+    cohort.futureInformationLeakageCount =
+        temporal["future_leakage_count"].as<int>();
+    cohort.overlappingInputAndOutcomeCount =
+        temporal["overlap_count"].as<int>();
+    cohort.contextOrIdentityMismatchCount =
+        temporal["mismatch_count"].as<int>();
+    cohort.outcomeStart = OptionalValue<std::string>(temporal, "outcome_start");
+    cohort.outcomeEnd = OptionalValue<std::string>(temporal, "outcome_end");
+
+    if (!cohort.rankingPopulationReconstructable ||
+        !cohort.exactControlReconstruction)
+    {
+        cohort.classification = TemporalCohortClassification::
+            insufficientRankingTimeProvenance;
+        if (cohort.reason.empty())
+            cohort.reason = "authoritative_point_in_time_control_not_reconstructable";
+    }
+    else if (cohort.pointInTimeProvenanceViolationCount > 0)
+    {
+        cohort.classification =
+            TemporalCohortClassification::futureInformationLeakage;
+        cohort.reason = "ranking_population_contains_post_cutoff_evidence";
+    }
+    else if (cohort.legitimateSubsequentOutcomeCount == 0)
+    {
+        if (cohort.futureInformationLeakageCount > 0)
+        {
+            cohort.classification =
+                TemporalCohortClassification::futureInformationLeakage;
+            cohort.reason =
+                "later_arriving_record_does_not_have_subsequent_outcome_period";
+        }
+        else if (cohort.contextOrIdentityMismatchCount > 0)
+        {
+            cohort.classification =
+                TemporalCohortClassification::contextOrIdentityMismatch;
+            cohort.reason = "only_later_outcome_records_mismatch_exact_identity";
+        }
+        else
+        {
+            cohort.classification = TemporalCohortClassification::
+                insufficientSubsequentOutcome;
+            cohort.reason = "no_exact_strictly_subsequent_outcome_evidence";
+        }
+    }
+    else if (cohort.overlappingInputAndOutcomeCount > 0)
+    {
+        cohort.classification = TemporalCohortClassification::
+            overlappingInputAndOutcomePeriod;
+        cohort.reason = "ranking_input_and_outcome_period_overlap";
+    }
+    else if (cohort.legitimateSubsequentOutcomeCount <
+             cohort.totalCandidateCount)
+    {
+        cohort.classification = TemporalCohortClassification::
+            insufficientSubsequentOutcome;
+        cohort.reason = "subsequent_outcome_population_incomplete";
+    }
+    else
+    {
+        cohort.classification =
+            TemporalCohortClassification::admissibleTemporalHoldout;
+        cohort.reason = "exact_point_in_time_population_and_outcomes_available";
+    }
+
+    cohort.canonical = "campaign_profitability_temporal_cohort_v1;";
+    cohort.canonical += "snapshot_id=" + std::to_string(rankingSnapshotId) +
+        ";evaluation_run_id=" + std::to_string(cohort.sourceEvaluationRunId) +
+        ";as_of=" + cohort.asOfTimestamp +
+        ";candidate_count=" + std::to_string(cohort.totalCandidateCount) +
+        ";valid_ranking_evidence=" +
+        std::to_string(cohort.validRankingTimeProfitabilityEvidenceCount) +
+        ";unavailable_ranking_evidence=" +
+        std::to_string(cohort.unavailableRankingTimeEvidenceCount) +
+        ";subsequent_outcome_count=" +
+        std::to_string(cohort.legitimateSubsequentOutcomeCount) +
+        ";point_in_time_violations=" +
+        std::to_string(cohort.pointInTimeProvenanceViolationCount) +
+        ";overlap_count=" +
+        std::to_string(cohort.overlappingInputAndOutcomeCount) +
+        ";future_leakage_count=" +
+        std::to_string(cohort.futureInformationLeakageCount) +
+        ";context_mismatch_count=" +
+        std::to_string(cohort.contextOrIdentityMismatchCount) +
+        ";control_reconstruction=" +
+        (cohort.exactControlReconstruction ? "true" : "false") +
+        ";classification=" +
+        TemporalCohortClassificationText(cohort.classification) +
+        ";reason=" + cohort.reason;
+    cohort.hash = InferenceProfitability::DeterministicHash(cohort.canonical);
+    return cohort;
+}
+
+CampaignProfitabilityTemporalFeasibilityAudit
+LoadCampaignProfitabilityTemporalFeasibilityAudit(
+    pqxx::transaction_base& transaction)
+{
+    const pqxx::result snapshots = transaction.exec(R"SQL(
+SELECT recommendation_ranking_snapshot_id
+FROM experiment_recommendation_ranking_snapshot
+WHERE status='completed' AND completed_at IS NOT NULL
+ORDER BY recommendation_ranking_snapshot_id
+)SQL");
+    CampaignProfitabilityTemporalFeasibilityAudit audit;
+    audit.cohorts.reserve(snapshots.size());
+    for (const pqxx::row& row : snapshots)
+    {
+        auto cohort = LoadCampaignProfitabilityTemporalCohort(
+            transaction,
+            row["recommendation_ranking_snapshot_id"].as<long long>());
+        ++audit.classificationCounts[
+            TemporalCohortClassificationText(cohort.classification)];
+        audit.cohorts.push_back(std::move(cohort));
+    }
+    audit.canonical = "campaign_profitability_temporal_feasibility_audit_v1;";
+    audit.canonical += "cohort_count=" +
+        std::to_string(audit.cohorts.size()) + ";";
+    for (std::size_t index = 0; index < audit.cohorts.size(); ++index)
+        audit.canonical += "cohort[" + std::to_string(index) + "]=" +
+            audit.cohorts[index].hash + ";";
+    audit.hash = InferenceProfitability::DeterministicHash(audit.canonical);
+    return audit;
+}
+
 } // namespace EA::ProfitabilityVerification

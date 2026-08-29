@@ -4,6 +4,7 @@
 #include "../Sources/ProfitabilityVerificationRepository.hpp"
 #include "../Sources/ProfitabilityVerificationService.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <optional>
@@ -554,6 +555,105 @@ void Verify()
     assert(Verification::RunCampaignProfitabilityCalibrationCommand(
                connectionString, 9, repeatedOutput, errors) == 0);
     assert(repeatedOutput.str() == calibration);
+
+    {
+        pqxx::connection auditConnection{connectionString};
+        pqxx::read_transaction auditTransaction{auditConnection};
+        const auto temporalAudit = Verification::
+            LoadCampaignProfitabilityTemporalFeasibilityAudit(
+                auditTransaction);
+        assert(temporalAudit.cohorts.size() == 3);
+        assert(!temporalAudit.hash.empty());
+        const auto snapshot9 = std::find_if(
+            temporalAudit.cohorts.begin(), temporalAudit.cohorts.end(),
+            [](const auto& cohort) { return cohort.rankingSnapshotId == 9; });
+        assert(snapshot9 != temporalAudit.cohorts.end());
+        assert(snapshot9->rankingPopulationReconstructable);
+        assert(snapshot9->exactControlReconstruction);
+        assert(snapshot9->pointInTimeProvenanceViolationCount == 0);
+        assert(snapshot9->validRankingTimeProfitabilityEvidenceCount == 2);
+        assert(snapshot9->unavailableRankingTimeEvidenceCount == 1);
+        assert(snapshot9->legitimateSubsequentOutcomeCount == 0);
+        assert(snapshot9->classification == Verification::
+            TemporalCohortClassification::insufficientSubsequentOutcome);
+    }
+
+    output.str({});
+    output.clear();
+    assert(Verification::RunCampaignProfitabilityTemporalValidationCommand(
+               connectionString, output, errors) == 0);
+    const std::string temporal = output.str();
+    assert(temporal.find(
+        "CAMPAIGN_PROFITABILITY_TEMPORAL_VALIDATION_START") !=
+           std::string::npos);
+    assert(temporal.find("precommitted_candidate_weight=0.025") !=
+           std::string::npos);
+    assert(temporal.find("phase10_sweep_repeated=false") !=
+           std::string::npos);
+    assert(temporal.find(
+        "classification=insufficient_subsequent_outcome") !=
+           std::string::npos);
+    assert(temporal.find(
+        "assessment=HISTORICAL_HOLDOUT_UNAVAILABLE_FORWARD_VALIDATION_REQUIRED") !=
+           std::string::npos);
+    assert(temporal.find("historical_top_5_result=unavailable") !=
+           std::string::npos);
+    assert(temporal.find("live_profitability_weight=0") !=
+           std::string::npos);
+    assert(temporal.find("recommendation_modified=false") !=
+           std::string::npos);
+    assert(temporal.find("ranking_snapshot_modified=false") !=
+           std::string::npos);
+    assert(temporal.find("worker_modified=false") != std::string::npos);
+    std::ostringstream repeatedTemporal;
+    assert(Verification::RunCampaignProfitabilityTemporalValidationCommand(
+               connectionString, repeatedTemporal, errors) == 0);
+    assert(repeatedTemporal.str() == temporal);
+
+    output.str({});
+    output.clear();
+    assert(Verification::
+        RunCampaignProfitabilityForwardValidationPrecommitCommand(
+            connectionString, 9, "2026-09-02", "2027-09-02",
+            output, errors) == 0);
+    const std::string forward = output.str();
+    assert(forward.find(
+        "CAMPAIGN_PROFITABILITY_FORWARD_VALIDATION_PRECOMMIT") !=
+           std::string::npos);
+    assert(forward.find("control_weight=0,precommitted_candidate_weight=0.025") !=
+           std::string::npos);
+    assert(forward.find("weight_selected_from_future_outcome=false") !=
+           std::string::npos);
+    assert(forward.find("CAMPAIGN_PROFITABILITY_ASOF_MEMBER") !=
+           std::string::npos);
+    assert(forward.find("CAMPAIGN_PROFITABILITY_TEMPORAL_TOP_N") !=
+           std::string::npos);
+    assert(forward.find("subsequent_outcome_identity=PENDING") !=
+           std::string::npos);
+    assert(forward.find("experiment_created=false,experiment_queued=false") !=
+           std::string::npos);
+    assert(forward.find("scheduler_modified=false,worker_modified=false") !=
+           std::string::npos);
+    std::ostringstream repeatedForward;
+    assert(Verification::
+        RunCampaignProfitabilityForwardValidationPrecommitCommand(
+            connectionString, 9, "2026-09-02", "2027-09-02",
+            repeatedForward, errors) == 0);
+    assert(repeatedForward.str() == forward);
+    bool overlapRejected = false;
+    try
+    {
+        std::ostringstream rejected;
+        (void)Verification::
+            RunCampaignProfitabilityForwardValidationPrecommitCommand(
+                connectionString, 9, "2026-09-01", "2027-09-02",
+                rejected, errors);
+    }
+    catch (const std::invalid_argument&)
+    {
+        overlapRejected = true;
+    }
+    assert(overlapRejected);
 
     pqxx::connection verifyConnection{connectionString};
     pqxx::read_transaction transaction{verifyConnection};
