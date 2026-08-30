@@ -75,7 +75,11 @@ Economic-calendar enrichment persistence is created by:
   `economic_event_feature_release_actual` view exposes only the unique
   provenance-certified `initial` revision 0; later revisions remain auditable
   but cannot rewrite feature history. Runtime role `pqxx` receives read-only
-  access. No historical actual rows are fabricated or backfilled.
+  access. No historical actual rows are fabricated or backfilled. The Phase 9
+  operator workflow is documented in
+  `EconomicCalendar/LSTM_EconomicEventReleaseActualIngestion.md`; its write
+  mode is restricted to explicitly named disposable databases and remains
+  append-only.
 
 Experiment scheduling tables are created by:
 
