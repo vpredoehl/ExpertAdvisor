@@ -21,6 +21,7 @@ fi
     "${repo_root}/Sources/ExperimentRecommendation.cpp" \
     "${repo_root}/Sources/InferenceProfitability.cpp" \
     "${repo_root}/Sources/InferenceProfitabilityRepository.cpp" \
+    "${repo_root}/Sources/ProfitabilityDistribution.cpp" \
     "${repo_root}/Sources/ProfitabilityVerification.cpp" \
     "${repo_root}/Tests/ProfitabilityVerificationTests.cpp" \
     "${pqxx_libs[@]}" \

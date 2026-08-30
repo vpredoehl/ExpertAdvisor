@@ -27,6 +27,13 @@ inline constexpr const char* kPhase12ArtifactSha256 =
 inline constexpr const char* kPhase12ArtifactPath =
     "docs/archive/phase11/forward-validation/"
     "LSTM_ProfitabilityForwardValidation_Snapshot5_20260831_20260930.txt";
+inline constexpr const char* kPhase12PreparationArtifactPath =
+    "LSTM_CampaignManager_ProfitabilityFrozenModel_"
+    "ProspectiveOutcomeJobs_Phase12.txt";
+inline constexpr const char* kPhase12PreparationArtifactSha256 =
+    "441a1957ac2ffd53a0693e2332d2b9f7af1c1f9977ff688f9d8e043199f581e1";
+inline constexpr const char* kPhase12PreparationIdentityHash =
+    "fnv1a64:efeec6ea26199cc7";
 inline constexpr long long kPhase12RankingSnapshotId = 5;
 inline constexpr long long kPhase12SourceEvaluationRunId = 6;
 inline constexpr const char* kPhase12OutcomeStart = "2026-08-31";
@@ -534,6 +541,142 @@ struct CampaignProfitabilityOutcomePersistResult
     std::string outcomeIdentityCanonical;
     std::string outcomeIdentityHash;
 };
+
+// Phase 13 compares recommendation selection slots. A repeated recommendation
+// backed by one source model therefore retains its repeated selection weight,
+// while sourceModelId remains the unit of independent outcome evidence.
+struct CampaignProfitabilityProspectiveOutcome
+{
+    long long resultId = -1;
+    std::string validationCohortIdentityHash;
+    long long rankingSnapshotId = -1;
+    long long sourceEvaluationRunId = -1;
+    long long sourceExperimentId = -1;
+    long long sourceModelId = -1;
+    std::string outcomeStart;
+    std::string outcomeEnd;
+    std::string jobIdentityHash;
+    std::string featureSemanticHash;
+    std::string modelLineageHash;
+    std::string modelArtifactContentHash;
+    std::string metricDefinitionCanonical;
+    std::string metricDefinitionHash;
+    std::string sourceContentHash;
+    std::uint64_t predictionCount = 0;
+    std::uint64_t actionableCount = 0;
+    std::uint64_t winningActionableCount = 0;
+    std::uint64_t losingActionableCount = 0;
+    double grossPositiveReturn = 0.0;
+    double grossNegativeReturn = 0.0;
+    double aggregateReturn = 0.0;
+    std::optional<double> averageReturn;
+    std::string outcomeIdentityCanonical;
+    std::string outcomeIdentityHash;
+};
+
+enum class ProspectiveComparisonReadiness
+{
+    pendingOutcomes,
+    incompleteChangedSelectionCoverage,
+    comparisonComplete,
+    incompatibleSource,
+    artifactIdentityMismatch,
+    metricIdentityMismatch,
+    cohortIdentityMismatch,
+    outcomeWindowIdentityMismatch
+};
+
+std::string ProspectiveComparisonReadinessText(
+    ProspectiveComparisonReadiness value);
+
+struct CampaignProfitabilitySourceCoverage
+{
+    std::vector<long long> requiredSourceModelIds;
+    std::vector<long long> coveredSourceModelIds;
+    std::vector<long long> missingSourceModelIds;
+    std::vector<long long> incompatibleSourceModelIds;
+    int requiredCount = 0;
+    int coveredCount = 0;
+    double percentage = 0.0;
+};
+
+struct CampaignProfitabilityContribution
+{
+    int recommendationCount = 0;
+    int uniqueSourceModelCount = 0;
+    std::uint64_t predictionCount = 0;
+    std::uint64_t actionableCount = 0;
+    double aggregateReturn = 0.0;
+    std::optional<double> averageReturnPerActionablePrediction;
+};
+
+struct CampaignProfitabilityProspectiveTopNComparison
+{
+    int n = 0;
+    std::vector<long long> controlRecommendationIds;
+    std::vector<long long> candidateRecommendationIds;
+    std::vector<long long> retainedRecommendationIds;
+    std::vector<long long> entrantRecommendationIds;
+    std::vector<long long> exitRecommendationIds;
+    std::map<long long, std::vector<long long>>
+        recommendationIdsBySourceModel;
+    std::vector<long long> controlSourceModelIds;
+    std::vector<long long> candidateSourceModelIds;
+    std::vector<long long> retainedSourceModelIds;
+    std::vector<long long> entrantSourceModelIds;
+    std::vector<long long> exitSourceModelIds;
+    CampaignProfitabilitySourceCoverage changedSelectionCoverage;
+    std::optional<CampaignProfitabilityContribution> entrantContribution;
+    std::optional<CampaignProfitabilityContribution> exitContribution;
+    std::optional<double> candidateMinusControlIncrementalProfitability;
+    ProspectiveComparisonReadiness readiness =
+        ProspectiveComparisonReadiness::pendingOutcomes;
+    std::vector<std::string> blockingReasons;
+    bool final = false;
+    std::string canonical;
+    std::string hash;
+};
+
+struct CampaignProfitabilityProspectiveComparisonRequest
+{
+    std::string validationCohortIdentityHash;
+    std::string phase11ArtifactSha256;
+    std::string phase12PreparationArtifactSha256;
+    std::string phase12PreparationIdentityHash;
+    std::string metricDefinitionCanonical;
+    std::string metricDefinitionHash;
+    std::string outcomeStart;
+    std::string outcomeEnd;
+    std::string currentDate;
+    CampaignProfitabilityOutcomePreparation preparation;
+    std::vector<CampaignProfitabilityProspectiveOutcome> outcomes;
+};
+
+struct CampaignProfitabilityProspectiveComparison
+{
+    int protocolVersion = 1;
+    std::string validationCohortIdentityHash;
+    std::string phase11ArtifactSha256;
+    std::string phase12PreparationArtifactSha256;
+    std::string phase12PreparationIdentityHash;
+    std::string metricDefinitionCanonical;
+    std::string metricDefinitionHash;
+    std::string outcomeStart;
+    std::string outcomeEnd;
+    std::string currentDate;
+    CampaignProfitabilitySourceCoverage fullFrozenCohortCoverage;
+    std::vector<CampaignProfitabilityProspectiveTopNComparison> topN;
+    ProspectiveComparisonReadiness readiness =
+        ProspectiveComparisonReadiness::pendingOutcomes;
+    std::vector<std::string> blockingReasons;
+    bool final = false;
+    std::string canonical;
+    std::string hash;
+};
+
+CampaignProfitabilityProspectiveComparison
+BuildCampaignProfitabilityProspectiveComparison(
+    CampaignProfitabilityProspectiveComparisonRequest request);
 
 WeightedShadowRanking BuildWeightedShadowRanking(
     std::vector<ShadowCandidate> candidates,

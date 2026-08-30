@@ -92,6 +92,48 @@ void VerifyPhase12Artifact(const std::string& path,
         throw std::runtime_error("phase12_committed_artifact_record_count_mismatch");
 }
 
+std::string VerifyPhase12PreparationArtifact(const std::string& path)
+{
+    std::string content;
+    const std::string sha256 = Sha256File(path, content);
+    if (sha256 != kPhase12PreparationArtifactSha256)
+        throw std::runtime_error(
+            "phase13_phase12_preparation_artifact_sha256_mismatch");
+    const std::string expectedHeader =
+        std::string{"CAMPAIGN_PROFITABILITY_OUTCOME_SUMMARY,"}
+        + "validation_cohort_identity_hash=" +
+        kPhase12ValidationCohortIdentityHash +
+        ",ranking_snapshot_id=5,source_evaluation_run_id=6,";
+    if (!content.starts_with(expectedHeader) ||
+        content.find(std::string{"artifact_sha256="} +
+                     kPhase12ArtifactSha256) == std::string::npos ||
+        content.find(std::string{"preparation_hash="} +
+                     kPhase12PreparationIdentityHash) == std::string::npos ||
+        content.find(std::string{"outcome_start="} + kPhase12OutcomeStart +
+                     ",outcome_end=" + kPhase12OutcomeEnd) ==
+            std::string::npos ||
+        content.find(std::string{"metric_hash="} +
+                     InferenceProfitability::MetricDefinitionHash()) ==
+            std::string::npos)
+        throw std::runtime_error(
+            "phase13_phase12_preparation_artifact_contract_mismatch");
+    std::size_t jobCount = 0;
+    std::size_t selectionCount = 0;
+    std::istringstream lines{content};
+    for (std::string line; std::getline(lines, line);)
+    {
+        if (line.starts_with("CAMPAIGN_PROFITABILITY_OUTCOME_JOB,"))
+            ++jobCount;
+        if (line.starts_with(
+                "CAMPAIGN_PROFITABILITY_OUTCOME_SELECTION_MAPPING,"))
+            ++selectionCount;
+    }
+    if (jobCount != 23 || selectionCount != 3)
+        throw std::runtime_error(
+            "phase13_phase12_preparation_artifact_record_count_mismatch");
+    return sha256;
+}
+
 bool TaggedHash(const std::string& value)
 {
     if (value.size() != 24 || value.rfind("fnv1a64:", 0) != 0) return false;
@@ -1352,6 +1394,109 @@ ORDER BY param_name COLLATE "C",row_idx,col_idx
     preparation.hash = InferenceProfitability::DeterministicHash(
         preparation.canonical);
     return preparation;
+}
+
+CampaignProfitabilityProspectiveComparison
+LoadCampaignProfitabilityProspectiveComparison(
+    pqxx::transaction_base& transaction,
+    const std::string& currentDate,
+    const std::string& phase11ArtifactPath,
+    const std::string& phase12PreparationArtifactPath)
+{
+    const std::string phase12PreparationSha256 =
+        VerifyPhase12PreparationArtifact(phase12PreparationArtifactPath);
+    CampaignProfitabilityProspectiveComparisonRequest request;
+    request.validationCohortIdentityHash =
+        kPhase12ValidationCohortIdentityHash;
+    request.phase11ArtifactSha256 = kPhase12ArtifactSha256;
+    request.phase12PreparationArtifactSha256 = phase12PreparationSha256;
+    request.phase12PreparationIdentityHash =
+        kPhase12PreparationIdentityHash;
+    request.metricDefinitionCanonical =
+        InferenceProfitability::kMetricDefinitionCanonical;
+    request.metricDefinitionHash = InferenceProfitability::MetricDefinitionHash();
+    request.outcomeStart = kPhase12OutcomeStart;
+    request.outcomeEnd = kPhase12OutcomeEnd;
+    request.currentDate = currentDate;
+    request.preparation = LoadCampaignProfitabilityOutcomePreparation(
+        transaction, currentDate, phase11ArtifactPath);
+
+    const bool outcomeTableExists = !transaction.exec(R"SQL(
+SELECT to_regclass('public.campaign_profitability_prospective_outcome_result')
+       AS outcome_table
+)SQL").one_row()["outcome_table"].is_null();
+    const pqxx::result rows = outcomeTableExists ? transaction.exec(R"SQL(
+SELECT prospective_outcome_result_id,validation_cohort_identity_hash,
+       ranking_snapshot_id,source_evaluation_run_id,source_experiment_id,
+       source_model_id,outcome_start::text,outcome_end::text,
+       job_identity_hash,feature_semantic_hash,model_lineage_hash,
+       model_artifact_content_hash,metric_definition_canonical,
+       metric_definition_hash,source_content_hash,prediction_count,
+       actionable_count,winning_actionable_count,losing_actionable_count,
+       gross_positive_terminal_horizon_log_return_sum,
+       gross_negative_terminal_horizon_log_return_sum,
+       aggregate_terminal_horizon_log_return_sum,
+       average_terminal_horizon_log_return_per_actionable_prediction,
+       outcome_identity_canonical,outcome_identity_hash
+FROM campaign_profitability_prospective_outcome_result
+WHERE validation_cohort_identity_hash=$1
+ORDER BY source_model_id,source_experiment_id,
+         prospective_outcome_result_id
+)SQL", pqxx::params{kPhase12ValidationCohortIdentityHash}) : pqxx::result{};
+    request.outcomes.reserve(rows.size());
+    for (const pqxx::row& row : rows)
+    {
+        CampaignProfitabilityProspectiveOutcome outcome;
+        outcome.resultId =
+            row["prospective_outcome_result_id"].as<long long>();
+        outcome.validationCohortIdentityHash =
+            row["validation_cohort_identity_hash"].as<std::string>();
+        outcome.rankingSnapshotId = row["ranking_snapshot_id"].as<long long>();
+        outcome.sourceEvaluationRunId =
+            row["source_evaluation_run_id"].as<long long>();
+        outcome.sourceExperimentId =
+            row["source_experiment_id"].as<long long>();
+        outcome.sourceModelId = row["source_model_id"].as<long long>();
+        outcome.outcomeStart = row["outcome_start"].as<std::string>();
+        outcome.outcomeEnd = row["outcome_end"].as<std::string>();
+        outcome.jobIdentityHash =
+            row["job_identity_hash"].as<std::string>();
+        outcome.featureSemanticHash =
+            row["feature_semantic_hash"].as<std::string>();
+        outcome.modelLineageHash =
+            row["model_lineage_hash"].as<std::string>();
+        outcome.modelArtifactContentHash =
+            row["model_artifact_content_hash"].as<std::string>();
+        outcome.metricDefinitionCanonical =
+            row["metric_definition_canonical"].as<std::string>();
+        outcome.metricDefinitionHash =
+            row["metric_definition_hash"].as<std::string>();
+        outcome.sourceContentHash =
+            row["source_content_hash"].as<std::string>();
+        outcome.predictionCount = static_cast<std::uint64_t>(
+            row["prediction_count"].as<long long>());
+        outcome.actionableCount = static_cast<std::uint64_t>(
+            row["actionable_count"].as<long long>());
+        outcome.winningActionableCount = static_cast<std::uint64_t>(
+            row["winning_actionable_count"].as<long long>());
+        outcome.losingActionableCount = static_cast<std::uint64_t>(
+            row["losing_actionable_count"].as<long long>());
+        outcome.grossPositiveReturn =
+            row["gross_positive_terminal_horizon_log_return_sum"].as<double>();
+        outcome.grossNegativeReturn =
+            row["gross_negative_terminal_horizon_log_return_sum"].as<double>();
+        outcome.aggregateReturn =
+            row["aggregate_terminal_horizon_log_return_sum"].as<double>();
+        outcome.averageReturn = OptionalValue<double>(
+            row,
+            "average_terminal_horizon_log_return_per_actionable_prediction");
+        outcome.outcomeIdentityCanonical =
+            row["outcome_identity_canonical"].as<std::string>();
+        outcome.outcomeIdentityHash =
+            row["outcome_identity_hash"].as<std::string>();
+        request.outcomes.push_back(std::move(outcome));
+    }
+    return BuildCampaignProfitabilityProspectiveComparison(std::move(request));
 }
 
 CampaignProfitabilityOutcomeJob LoadCampaignProfitabilityOutcomeExecutionJob(

@@ -217,6 +217,7 @@ struct SchedulerOptions
     std::optional<std::tuple<long long, std::string, std::string>>
         campaignProfitabilityForwardValidationPrecommit;
     std::optional<std::string> campaignProfitabilityOutcomePreparationCohort;
+    std::optional<std::string> campaignProfitabilityProspectiveComparisonCohort;
     std::optional<std::string> pairPrimaryProfitabilityMetric;
     std::optional<double> pairMinimumProfitabilityImprovement;
     std::optional<double> pairMaximumProfitabilityWorsening;
@@ -972,7 +973,9 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind(
                 "--prepare-campaign-profitability-forward-validation=", 0) == 0 ||
             arg == "--prepare-campaign-profitability-outcome-jobs" ||
-            arg.rfind("--prepare-campaign-profitability-outcome-jobs=", 0) == 0)
+            arg.rfind("--prepare-campaign-profitability-outcome-jobs=", 0) == 0 ||
+            arg == "--compare-campaign-profitability-prospective" ||
+            arg.rfind("--compare-campaign-profitability-prospective=", 0) == 0)
             return true;
         if (arg == "--compare-feature-ablation-pair" ||
             arg.rfind("--compare-feature-ablation-pair=", 0) == 0 ||
@@ -1987,6 +1990,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 throw std::invalid_argument(
                     "--prepare-campaign-profitability-outcome-jobs specified more than once");
             options.campaignProfitabilityOutcomePreparationCohort =
+                RequireNextArg(argc, argv, i, arg);
+        }
+        else if (arg == "--compare-campaign-profitability-prospective")
+        {
+            if (options.campaignProfitabilityProspectiveComparisonCohort)
+                throw std::invalid_argument(
+                    "--compare-campaign-profitability-prospective specified more than once");
+            options.campaignProfitabilityProspectiveComparisonCohort =
                 RequireNextArg(argc, argv, i, arg);
         }
         else if (arg == "--complete-scheduler-protocol-cutover")
@@ -3975,6 +3986,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                     "--prepare-campaign-profitability-outcome-jobs specified more than once");
             options.campaignProfitabilityOutcomePreparationCohort = value;
         }
+        else if (SplitOptionWithValue(
+                     arg, "--compare-campaign-profitability-prospective", value))
+        {
+            if (options.campaignProfitabilityProspectiveComparisonCohort)
+                throw std::invalid_argument(
+                    "--compare-campaign-profitability-prospective specified more than once");
+            options.campaignProfitabilityProspectiveComparisonCohort = value;
+        }
         else if (arg.rfind("--", 0) == 0)
             throw std::invalid_argument("unknown scheduler option '" + arg + "'");
         else
@@ -4063,6 +4082,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.campaignProfitabilityForwardValidationPrecommit.has_value()
              ? 1 : 0) +
         (options.campaignProfitabilityOutcomePreparationCohort.has_value()
+             ? 1 : 0) +
+        (options.campaignProfitabilityProspectiveComparisonCohort.has_value()
              ? 1 : 0) +
         (options.approveConversionProposalId.has_value() ? 1 : 0) +
         (options.rejectConversionProposalId.has_value() ? 1 : 0) +
@@ -5154,6 +5175,26 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 continue;
             throw std::invalid_argument(
                 "--prepare-campaign-profitability-outcome-jobs does not accept unrelated option '" +
+                argument + "'");
+        }
+    }
+    if (options.campaignProfitabilityProspectiveComparisonCohort)
+    {
+        bool consumeValue = false;
+        for (int index = 1; index < argc; ++index)
+        {
+            const std::string argument = argv[index];
+            if (consumeValue) { consumeValue = false; continue; }
+            if (argument == "--compare-campaign-profitability-prospective")
+            {
+                consumeValue = true;
+                continue;
+            }
+            if (argument.rfind(
+                    "--compare-campaign-profitability-prospective=", 0) == 0)
+                continue;
+            throw std::invalid_argument(
+                "--compare-campaign-profitability-prospective does not accept unrelated option '" +
                 argument + "'");
         }
     }
@@ -24643,6 +24684,15 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "commands. It is repeatable-read and read-only; it never runs "
         << "inference, training, scheduling, ranking, or activation.\n"
         << "Usage: " << exe
+        << " --compare-campaign-profitability-prospective="
+           "VALIDATION_COHORT_IDENTITY_HASH\n"
+        << "Phase 13 verifies the immutable Phase 11/12 artifacts and reads "
+        << "persisted frozen-model outcomes to compare the precommitted "
+        << "Top-5/10/20 candidate and control selections. It fails closed on "
+        << "identity, metric, window, compatibility, or changed-source "
+        << "coverage gaps and remains pending until the window is complete. "
+        << "The command is repeatable-read and read-only.\n"
+        << "Usage: " << exe
         << " --compare-feature-ablation-pair=CONTROL_ID:TREATMENT_ID\n"
         << "Feature-ablation pair comparison validates the persisted consensus "
         << "feature-family ablation, resolves exact FINAL inference and "
@@ -26107,6 +26157,24 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             {
                 std::cerr
                     << "CAMPAIGN_PROFITABILITY_OUTCOME_PREPARATION_TOOL_ERROR"
+                    << ",error=" << error.what() << std::endl;
+                return 2;
+            }
+        }
+        if (options.campaignProfitabilityProspectiveComparisonCohort)
+        {
+            try
+            {
+                return EA::ProfitabilityVerification::
+                    RunCampaignProfitabilityProspectiveComparisonCommand(
+                        LstmDbConnectionString(),
+                        *options.campaignProfitabilityProspectiveComparisonCohort,
+                        std::cout, std::cerr);
+            }
+            catch (const std::exception& error)
+            {
+                std::cerr
+                    << "CAMPAIGN_PROFITABILITY_PROSPECTIVE_COMPARISON_TOOL_ERROR"
                     << ",error=" << error.what() << std::endl;
                 return 2;
             }

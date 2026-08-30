@@ -1564,4 +1564,185 @@ int RunCampaignProfitabilityOutcomePreparationCommand(
     return 0;
 }
 
+int RunCampaignProfitabilityProspectiveComparisonCommand(
+    const std::string& connectionString,
+    const std::string& validationCohortIdentityHash,
+    std::ostream& output,
+    std::ostream& errors,
+    const std::string& phase11ArtifactPath,
+    const std::string& phase12PreparationArtifactPath,
+    const std::string& currentDateOverride)
+{
+    (void)errors;
+    if (validationCohortIdentityHash !=
+        kPhase12ValidationCohortIdentityHash)
+        throw std::invalid_argument("phase13_validation_cohort_hash_mismatch");
+    pqxx::connection connection{connectionString};
+    pqxx::read_transaction transaction{connection};
+    transaction.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
+    const auto comparison = LoadCampaignProfitabilityProspectiveComparison(
+        transaction,
+        currentDateOverride.empty() ? CurrentUtcDate() : currentDateOverride,
+        phase11ArtifactPath, phase12PreparationArtifactPath);
+
+    const auto coverageFields = [](const CampaignProfitabilitySourceCoverage& c,
+                                   const std::string& prefix) {
+        std::ostringstream rendered;
+        rendered << prefix << "required_source_model_ids="
+                 << IdList(c.requiredSourceModelIds)
+                 << ',' << prefix << "covered_source_model_ids="
+                 << IdList(c.coveredSourceModelIds)
+                 << ',' << prefix << "missing_source_model_ids="
+                 << IdList(c.missingSourceModelIds)
+                 << ',' << prefix << "incompatible_source_model_ids="
+                 << IdList(c.incompatibleSourceModelIds)
+                 << ',' << prefix << "required_source_model_count="
+                 << c.requiredCount
+                 << ',' << prefix << "covered_source_model_count="
+                 << c.coveredCount
+                 << ',' << prefix << "coverage_percentage="
+                 << Number(c.percentage);
+        return rendered.str();
+    };
+    const auto reasons = [](const std::vector<std::string>& values) {
+        std::string rendered;
+        for (const auto& value : values)
+        {
+            if (!rendered.empty()) rendered.push_back(':');
+            rendered += MachineText(value);
+        }
+        return rendered.empty() ? std::string{"NONE"} : rendered;
+    };
+    const std::string common =
+        std::string{",validation_cohort_identity_hash="} +
+        comparison.validationCohortIdentityHash +
+        ",ranking_snapshot_id=5,source_evaluation_run_id=6" +
+        ",phase11_artifact_sha256=" + comparison.phase11ArtifactSha256 +
+        ",phase12_preparation_artifact_sha256=" +
+        comparison.phase12PreparationArtifactSha256 +
+        ",phase12_preparation_identity_hash=" +
+        comparison.phase12PreparationIdentityHash +
+        ",metric_hash=" + comparison.metricDefinitionHash +
+        ",outcome_start=" + comparison.outcomeStart +
+        ",outcome_end=" + comparison.outcomeEnd;
+
+    output << "CAMPAIGN_PROFITABILITY_PROSPECTIVE_COMPARISON_SUMMARY"
+           << common << ",current_date=" << comparison.currentDate
+           << ",readiness="
+           << ProspectiveComparisonReadinessText(comparison.readiness)
+           << ",blocking_reasons=" << reasons(comparison.blockingReasons)
+           << ",final=" << Boolean(comparison.final)
+           << ",comparison_identity_hash=" << comparison.hash
+           << OutcomeSafetyFields() << ",database_write=false\n";
+    output << "CAMPAIGN_PROFITABILITY_PROSPECTIVE_FULL_COHORT_COVERAGE"
+           << common << ',' << coverageFields(
+                  comparison.fullFrozenCohortCoverage, "")
+           << ",coverage_scope=all_23_frozen_source_models"
+           << ",known_incompatible_source_model_id=499"
+           << ",known_incompatible_reason=model_lineage_ambiguous"
+           << OutcomeSafetyFields() << ",database_write=false\n";
+
+    for (const auto& top : comparison.topN)
+    {
+        std::string duplicateRelationships;
+        for (const auto& [modelId, recommendationIds] :
+             top.recommendationIdsBySourceModel)
+        {
+            if (recommendationIds.size() < 2) continue;
+            if (!duplicateRelationships.empty())
+                duplicateRelationships.push_back('|');
+            duplicateRelationships += std::to_string(modelId) + ':' +
+                IdList(recommendationIds);
+        }
+        if (duplicateRelationships.empty()) duplicateRelationships = "NONE";
+        output << "CAMPAIGN_PROFITABILITY_PROSPECTIVE_TOP_N" << common
+               << ",top_n=" << top.n
+               << ",control_recommendation_ids="
+               << IdList(top.controlRecommendationIds)
+               << ",candidate_recommendation_ids="
+               << IdList(top.candidateRecommendationIds)
+               << ",retained_recommendation_ids="
+               << IdList(top.retainedRecommendationIds)
+               << ",entrant_recommendation_ids="
+               << IdList(top.entrantRecommendationIds)
+               << ",exit_recommendation_ids="
+               << IdList(top.exitRecommendationIds)
+               << ",control_recommendation_count="
+               << top.controlRecommendationIds.size()
+               << ",candidate_recommendation_count="
+               << top.candidateRecommendationIds.size()
+               << ",control_unique_source_model_ids="
+               << IdList(top.controlSourceModelIds)
+               << ",candidate_unique_source_model_ids="
+               << IdList(top.candidateSourceModelIds)
+               << ",retained_unique_source_model_ids="
+               << IdList(top.retainedSourceModelIds)
+               << ",entrant_unique_source_model_ids="
+               << IdList(top.entrantSourceModelIds)
+               << ",exit_unique_source_model_ids="
+               << IdList(top.exitSourceModelIds)
+               << ",duplicate_source_relationships="
+               << duplicateRelationships
+               << ",economic_weighting=recommendation_selection_slot"
+               << ",statistical_evidence_unit=unique_source_model"
+               << ",duplicate_recommendations_are_independent=false"
+               << ",common_member_contribution=cancelled_not_recomputed"
+               << ",common_member_contribution_cancels=true"
+               << ',' << coverageFields(
+                      top.changedSelectionCoverage, "changed_selection_")
+               << ",entrant_aggregate_return="
+               << (top.entrantContribution
+                       ? Number(top.entrantContribution->aggregateReturn)
+                       : "PENDING")
+               << ",entrant_prediction_count="
+               << (top.entrantContribution
+                       ? std::to_string(top.entrantContribution->predictionCount)
+                       : "PENDING")
+               << ",entrant_actionable_count="
+               << (top.entrantContribution
+                       ? std::to_string(top.entrantContribution->actionableCount)
+                       : "PENDING")
+               << ",entrant_average_return_per_actionable_prediction="
+               << (top.entrantContribution
+                       ? OptionalNumber(top.entrantContribution->
+                             averageReturnPerActionablePrediction)
+                       : "PENDING")
+               << ",exit_aggregate_return="
+               << (top.exitContribution
+                       ? Number(top.exitContribution->aggregateReturn)
+                       : "PENDING")
+               << ",exit_prediction_count="
+               << (top.exitContribution
+                       ? std::to_string(top.exitContribution->predictionCount)
+                       : "PENDING")
+               << ",exit_actionable_count="
+               << (top.exitContribution
+                       ? std::to_string(top.exitContribution->actionableCount)
+                       : "PENDING")
+               << ",exit_average_return_per_actionable_prediction="
+               << (top.exitContribution
+                       ? OptionalNumber(top.exitContribution->
+                             averageReturnPerActionablePrediction)
+                       : "PENDING")
+               << ",candidate_minus_control_incremental_profitability="
+               << (top.candidateMinusControlIncrementalProfitability
+                       ? Number(*top.candidateMinusControlIncrementalProfitability)
+                       : "PENDING")
+               << ",incremental_per_actionable_profitability=NOT_DEFINED"
+               << ",readiness="
+               << ProspectiveComparisonReadinessText(top.readiness)
+               << ",blocking_reasons=" << reasons(top.blockingReasons)
+               << ",final=" << Boolean(top.final)
+               << ",top_n_comparison_hash=" << top.hash
+               << OutcomeSafetyFields() << ",database_write=false\n";
+    }
+    if (comparison.final) return 0;
+    if (comparison.readiness ==
+            ProspectiveComparisonReadiness::pendingOutcomes ||
+        comparison.readiness == ProspectiveComparisonReadiness::
+            incompleteChangedSelectionCoverage)
+        return 4;
+    return 3;
+}
+
 } // namespace EA::ProfitabilityVerification

@@ -33,6 +33,14 @@ LoadCampaignProfitabilityOutcomePreparation(
     const std::string& currentDate,
     const std::string& artifactPath = kPhase12ArtifactPath);
 
+CampaignProfitabilityProspectiveComparison
+LoadCampaignProfitabilityProspectiveComparison(
+    pqxx::transaction_base& transaction,
+    const std::string& currentDate,
+    const std::string& phase11ArtifactPath = kPhase12ArtifactPath,
+    const std::string& phase12PreparationArtifactPath =
+        kPhase12PreparationArtifactPath);
+
 CampaignProfitabilityOutcomeJob LoadCampaignProfitabilityOutcomeExecutionJob(
     pqxx::transaction_base& transaction,
     const std::string& cohortHash,

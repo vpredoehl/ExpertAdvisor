@@ -96,6 +96,14 @@ bool NearlyEqualAccumulated(double left,
                     static_cast<long double>(right)) <= tolerance;
 }
 
+std::string CanonicalNumber(double value)
+{
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << std::setprecision(17) << (value == 0.0 ? 0.0 : value);
+    return output.str();
+}
+
 EvidenceResult Result(const ExpectedFinalEvidence& expected,
                       EvidenceState state,
                       std::string reason,
@@ -844,6 +852,721 @@ WeightedShadowRanking BuildWeightedShadowRanking(
                     ranking.candidates[index].canonical);
     ranking.hash = InferenceProfitability::DeterministicHash(ranking.canonical);
     return ranking;
+}
+
+std::string ProspectiveComparisonReadinessText(
+    ProspectiveComparisonReadiness value)
+{
+    switch (value)
+    {
+        case ProspectiveComparisonReadiness::pendingOutcomes:
+            return "pending_outcomes";
+        case ProspectiveComparisonReadiness::
+            incompleteChangedSelectionCoverage:
+            return "incomplete_changed_selection_coverage";
+        case ProspectiveComparisonReadiness::comparisonComplete:
+            return "comparison_complete";
+        case ProspectiveComparisonReadiness::incompatibleSource:
+            return "incompatible_source";
+        case ProspectiveComparisonReadiness::artifactIdentityMismatch:
+            return "artifact_identity_mismatch";
+        case ProspectiveComparisonReadiness::metricIdentityMismatch:
+            return "metric_identity_mismatch";
+        case ProspectiveComparisonReadiness::cohortIdentityMismatch:
+            return "cohort_identity_mismatch";
+        case ProspectiveComparisonReadiness::outcomeWindowIdentityMismatch:
+            return "outcome_window_identity_mismatch";
+    }
+    throw std::logic_error(
+        "unknown_campaign_profitability_prospective_comparison_readiness");
+}
+
+CampaignProfitabilityProspectiveComparison
+BuildCampaignProfitabilityProspectiveComparison(
+    CampaignProfitabilityProspectiveComparisonRequest request)
+{
+    if (request.currentDate.size() != 10)
+        throw std::invalid_argument("phase13_current_date_invalid");
+
+    const auto sortedUnique = [](std::vector<long long> values) {
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+        return values;
+    };
+    const auto idText = [](const std::vector<long long>& values) {
+        std::string result;
+        for (long long value : values)
+        {
+            if (!result.empty()) result.push_back(':');
+            result += std::to_string(value);
+        }
+        return result;
+    };
+    const auto addReason = [](std::vector<std::string>& reasons,
+                              const std::string& reason) {
+        if (std::find(reasons.begin(), reasons.end(), reason) == reasons.end())
+            reasons.push_back(reason);
+    };
+    const auto exactTopN = [](const CampaignProfitabilityForwardValidationTopN&
+                                  top) {
+        if (top.n == 5)
+            return top.controlRecommendationIds ==
+                       std::vector<long long>{359, 404, 416, 361, 360} &&
+                top.candidateRecommendationIds ==
+                       std::vector<long long>{416, 404, 418, 417, 410} &&
+                top.retainedRecommendationIds ==
+                       std::vector<long long>{404, 416} &&
+                top.candidateOnlyEntrants ==
+                       std::vector<long long>{410, 417, 418} &&
+                top.controlOnlyExits ==
+                       std::vector<long long>{359, 360, 361};
+        if (top.n == 10)
+            return top.controlRecommendationIds == std::vector<long long>{
+                       359, 404, 416, 361, 360, 406, 405, 378, 410, 418} &&
+                top.candidateRecommendationIds == std::vector<long long>{
+                       416, 404, 418, 417, 410, 406, 405, 359, 407, 411} &&
+                top.retainedRecommendationIds == std::vector<long long>{
+                       359, 404, 405, 406, 410, 416, 418} &&
+                top.candidateOnlyEntrants ==
+                       std::vector<long long>{407, 411, 417} &&
+                top.controlOnlyExits ==
+                       std::vector<long long>{360, 361, 378};
+        if (top.n == 20)
+            return top.controlRecommendationIds == std::vector<long long>{
+                       359, 404, 416, 361, 360, 406, 405, 378, 410, 418,
+                       417, 368, 380, 379, 411, 412, 370, 369, 362, 407} &&
+                top.candidateRecommendationIds == std::vector<long long>{
+                       416, 404, 418, 417, 410, 406, 405, 359, 407, 411,
+                       412, 361, 360, 378, 368, 409, 408, 362, 380, 379} &&
+                top.retainedRecommendationIds == std::vector<long long>{
+                       359, 360, 361, 362, 368, 378, 379, 380, 404, 405,
+                       406, 407, 410, 411, 412, 416, 417, 418} &&
+                top.candidateOnlyEntrants ==
+                       std::vector<long long>{408, 409} &&
+                top.controlOnlyExits ==
+                       std::vector<long long>{369, 370};
+        return false;
+    };
+
+    CampaignProfitabilityProspectiveComparison result;
+    result.validationCohortIdentityHash =
+        request.validationCohortIdentityHash;
+    result.phase11ArtifactSha256 = request.phase11ArtifactSha256;
+    result.phase12PreparationArtifactSha256 =
+        request.phase12PreparationArtifactSha256;
+    result.phase12PreparationIdentityHash =
+        request.phase12PreparationIdentityHash;
+    result.metricDefinitionCanonical = request.metricDefinitionCanonical;
+    result.metricDefinitionHash = request.metricDefinitionHash;
+    result.outcomeStart = request.outcomeStart;
+    result.outcomeEnd = request.outcomeEnd;
+    result.currentDate = request.currentDate;
+
+    std::sort(request.preparation.jobs.begin(), request.preparation.jobs.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.sourceModelId, left.sourceExperimentId) <
+                std::tie(right.sourceModelId, right.sourceExperimentId);
+        });
+    std::sort(request.preparation.topN.begin(), request.preparation.topN.end(),
+        [](const auto& left, const auto& right) { return left.n < right.n; });
+    std::sort(request.outcomes.begin(), request.outcomes.end(),
+        [](const auto& left, const auto& right) {
+            return std::tie(left.sourceModelId, left.sourceExperimentId,
+                            left.outcomeIdentityHash) <
+                std::tie(right.sourceModelId, right.sourceExperimentId,
+                         right.outcomeIdentityHash);
+        });
+
+    std::map<long long, const CampaignProfitabilityOutcomeJob*> jobByModel;
+    std::map<long long, long long> modelByRecommendation;
+    std::size_t recommendationCount = 0;
+    bool duplicateJobModel = false;
+    bool duplicateRecommendation = false;
+    for (const auto& job : request.preparation.jobs)
+    {
+        if (!jobByModel.emplace(job.sourceModelId, &job).second)
+            duplicateJobModel = true;
+        recommendationCount += job.recommendationIds.size();
+        for (long long recommendationId : job.recommendationIds)
+            if (!modelByRecommendation.emplace(
+                    recommendationId, job.sourceModelId).second)
+                duplicateRecommendation = true;
+    }
+
+    ProspectiveComparisonReadiness contractFailure =
+        ProspectiveComparisonReadiness::comparisonComplete;
+    std::string contractFailureReason;
+    const auto failContract = [&](ProspectiveComparisonReadiness readiness,
+                                  const std::string& reason) {
+        if (contractFailure ==
+            ProspectiveComparisonReadiness::comparisonComplete)
+        {
+            contractFailure = readiness;
+            contractFailureReason = reason;
+        }
+    };
+    if (request.validationCohortIdentityHash !=
+            kPhase12ValidationCohortIdentityHash ||
+        !request.preparation.artifactIdentityVerified ||
+        request.preparation.jobs.size() != 23 ||
+        recommendationCount != kPhase12MemberCount || duplicateJobModel ||
+        duplicateRecommendation || request.preparation.topN.size() != 3 ||
+        !std::all_of(request.preparation.topN.begin(),
+                     request.preparation.topN.end(), exactTopN) ||
+        std::any_of(request.preparation.jobs.begin(),
+                    request.preparation.jobs.end(), [](const auto& job) {
+                        return job.validationCohortIdentityHash !=
+                                kPhase12ValidationCohortIdentityHash ||
+                            job.rankingSnapshotId != kPhase12RankingSnapshotId ||
+                            job.sourceEvaluationRunId !=
+                                kPhase12SourceEvaluationRunId;
+                    }))
+        failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch,
+                     "frozen_cohort_contract_mismatch");
+
+    const std::array<std::pair<long long, long long>, 10>
+        changedRecommendationSources{{
+            {359, 999}, {360, 999}, {361, 999}, {369, 1029}, {370, 1029},
+            {407, 1658}, {408, 1658}, {409, 1658}, {410, 1702},
+            {417, 1660}}};
+    for (const auto& [recommendationId, sourceModelId] :
+         changedRecommendationSources)
+    {
+        const auto found = modelByRecommendation.find(recommendationId);
+        if (found == modelByRecommendation.end() ||
+            found->second != sourceModelId)
+            failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch,
+                         "frozen_changed_source_mapping_mismatch");
+    }
+    const auto recommendation418 = modelByRecommendation.find(418);
+    const auto recommendation411 = modelByRecommendation.find(411);
+    const auto recommendation378 = modelByRecommendation.find(378);
+    if (recommendation418 == modelByRecommendation.end() ||
+        recommendation418->second != 1660 ||
+        recommendation411 == modelByRecommendation.end() ||
+        recommendation411->second != 1702 ||
+        recommendation378 == modelByRecommendation.end() ||
+        recommendation378->second != 1015)
+        failContract(ProspectiveComparisonReadiness::cohortIdentityMismatch,
+                     "frozen_changed_source_mapping_mismatch");
+    if (request.phase11ArtifactSha256 != kPhase12ArtifactSha256 ||
+        request.preparation.artifactSha256 != kPhase12ArtifactSha256 ||
+        request.phase12PreparationArtifactSha256 !=
+            kPhase12PreparationArtifactSha256 ||
+        request.phase12PreparationIdentityHash !=
+            kPhase12PreparationIdentityHash ||
+        request.preparation.hash != kPhase12PreparationIdentityHash)
+        failContract(ProspectiveComparisonReadiness::artifactIdentityMismatch,
+                     "phase11_or_phase12_artifact_identity_mismatch");
+    if (request.metricDefinitionCanonical !=
+            InferenceProfitability::kMetricDefinitionCanonical ||
+        request.metricDefinitionHash !=
+            InferenceProfitability::MetricDefinitionHash() ||
+        std::any_of(request.preparation.jobs.begin(),
+                    request.preparation.jobs.end(), [](const auto& job) {
+                        return job.metricDefinitionCanonical !=
+                                InferenceProfitability::
+                                    kMetricDefinitionCanonical ||
+                            job.metricDefinitionHash !=
+                                InferenceProfitability::MetricDefinitionHash();
+                    }))
+        failContract(ProspectiveComparisonReadiness::metricIdentityMismatch,
+                     "profitability_metric_identity_mismatch");
+    if (request.outcomeStart != kPhase12OutcomeStart ||
+        request.outcomeEnd != kPhase12OutcomeEnd ||
+        std::any_of(request.preparation.jobs.begin(),
+                    request.preparation.jobs.end(), [](const auto& job) {
+                        return job.outcomeStart != kPhase12OutcomeStart ||
+                            job.outcomeEnd != kPhase12OutcomeEnd;
+                    }))
+        failContract(
+            ProspectiveComparisonReadiness::outcomeWindowIdentityMismatch,
+            "prospective_outcome_window_identity_mismatch");
+
+    struct ValidatedOutcome
+    {
+        const CampaignProfitabilityProspectiveOutcome* value = nullptr;
+        std::optional<ProspectiveComparisonReadiness> failure;
+        std::string reason;
+    };
+    std::map<long long, ValidatedOutcome> outcomeByModel;
+    for (const auto& outcome : request.outcomes)
+    {
+        auto& validated = outcomeByModel[outcome.sourceModelId];
+        if (validated.value != nullptr)
+        {
+            validated.failure =
+                ProspectiveComparisonReadiness::artifactIdentityMismatch;
+            validated.reason = "duplicate_outcome_for_source_model";
+            continue;
+        }
+        validated.value = &outcome;
+        const auto jobIt = jobByModel.find(outcome.sourceModelId);
+        if (jobIt == jobByModel.end() ||
+            jobIt->second->sourceExperimentId != outcome.sourceExperimentId)
+        {
+            validated.failure =
+                ProspectiveComparisonReadiness::cohortIdentityMismatch;
+            validated.reason = "outcome_source_not_in_frozen_cohort";
+            continue;
+        }
+        const auto& job = *jobIt->second;
+        if (outcome.validationCohortIdentityHash !=
+                kPhase12ValidationCohortIdentityHash ||
+            outcome.rankingSnapshotId != kPhase12RankingSnapshotId ||
+            outcome.sourceEvaluationRunId != kPhase12SourceEvaluationRunId)
+        {
+            validated.failure =
+                ProspectiveComparisonReadiness::cohortIdentityMismatch;
+            validated.reason = "outcome_cohort_identity_mismatch";
+        }
+        else if (outcome.outcomeStart != kPhase12OutcomeStart ||
+                 outcome.outcomeEnd != kPhase12OutcomeEnd)
+        {
+            validated.failure = ProspectiveComparisonReadiness::
+                outcomeWindowIdentityMismatch;
+            validated.reason = "outcome_window_identity_mismatch";
+        }
+        else if (outcome.metricDefinitionCanonical !=
+                     InferenceProfitability::kMetricDefinitionCanonical ||
+                 outcome.metricDefinitionHash !=
+                     InferenceProfitability::MetricDefinitionHash())
+        {
+            validated.failure =
+                ProspectiveComparisonReadiness::metricIdentityMismatch;
+            validated.reason = "outcome_metric_identity_mismatch";
+        }
+        else if (outcome.jobIdentityHash != job.hash ||
+                 outcome.featureSemanticHash != job.featureSemanticHash ||
+                 outcome.modelLineageHash != job.modelLineageHash ||
+                 outcome.modelArtifactContentHash !=
+                     job.modelArtifactContentHash ||
+                 !TaggedHash(outcome.sourceContentHash) ||
+                 !TaggedHash(outcome.outcomeIdentityHash) ||
+                 InferenceProfitability::DeterministicHash(
+                     outcome.outcomeIdentityCanonical) !=
+                     outcome.outcomeIdentityHash)
+        {
+            validated.failure =
+                ProspectiveComparisonReadiness::artifactIdentityMismatch;
+            validated.reason = "outcome_provenance_identity_mismatch";
+        }
+        else if (outcome.actionableCount > outcome.predictionCount ||
+                 outcome.winningActionableCount +
+                         outcome.losingActionableCount >
+                     outcome.actionableCount ||
+                 !std::isfinite(outcome.grossPositiveReturn) ||
+                 !std::isfinite(outcome.grossNegativeReturn) ||
+                 !std::isfinite(outcome.aggregateReturn) ||
+                 outcome.grossPositiveReturn < 0.0 ||
+                 outcome.grossNegativeReturn > 0.0 ||
+                 !NearlyEqualAccumulated(
+                     outcome.aggregateReturn,
+                     outcome.grossPositiveReturn +
+                         outcome.grossNegativeReturn,
+                     outcome.actionableCount) ||
+                 (outcome.actionableCount == 0) !=
+                     !outcome.averageReturn.has_value() ||
+                 (outcome.averageReturn &&
+                  (!std::isfinite(*outcome.averageReturn) ||
+                   !NearlyEqual(
+                       *outcome.averageReturn,
+                       outcome.aggregateReturn /
+                           static_cast<double>(outcome.actionableCount)))))
+        {
+            validated.failure =
+                ProspectiveComparisonReadiness::artifactIdentityMismatch;
+            validated.reason = "outcome_statistics_contract_invalid";
+        }
+        else
+        {
+            const std::string statistics =
+                "prediction_count=" + std::to_string(outcome.predictionCount) +
+                ";actionable_count=" +
+                std::to_string(outcome.actionableCount) +
+                ";winning_actionable_count=" +
+                std::to_string(outcome.winningActionableCount) +
+                ";losing_actionable_count=" +
+                std::to_string(outcome.losingActionableCount) +
+                ";aggregate_return=" + CanonicalNumber(outcome.aggregateReturn) +
+                ";average_return=" +
+                (outcome.averageReturn
+                     ? CanonicalNumber(*outcome.averageReturn)
+                     : "NULL");
+            const std::string expectedCanonical =
+                "campaign_profitability_prospective_outcome_v1;job_hash=" +
+                job.hash + ";cohort_hash=" +
+                job.validationCohortIdentityHash +
+                ";source_experiment_id=" +
+                std::to_string(job.sourceExperimentId) +
+                ";source_model_id=" + std::to_string(job.sourceModelId) +
+                ";outcome_start=" + job.outcomeStart + ";outcome_end=" +
+                job.outcomeEnd + ";metric_definition_hash=" +
+                job.metricDefinitionHash + ";source_content_hash=" +
+                outcome.sourceContentHash + ";" + statistics;
+            if (outcome.outcomeIdentityCanonical != expectedCanonical)
+            {
+                validated.failure =
+                    ProspectiveComparisonReadiness::artifactIdentityMismatch;
+                validated.reason = "outcome_identity_canonical_mismatch";
+            }
+        }
+    }
+
+    const auto outcomeAvailable = [&](long long modelId) {
+        const auto found = outcomeByModel.find(modelId);
+        return found != outcomeByModel.end() && found->second.value &&
+            !found->second.failure;
+    };
+    const auto coverageFor = [&](std::vector<long long> models) {
+        CampaignProfitabilitySourceCoverage coverage;
+        coverage.requiredSourceModelIds = sortedUnique(std::move(models));
+        for (long long modelId : coverage.requiredSourceModelIds)
+        {
+            const auto job = jobByModel.find(modelId);
+            if (job == jobByModel.end() || !job->second->compatible)
+                coverage.incompatibleSourceModelIds.push_back(modelId);
+            else if (outcomeAvailable(modelId))
+                coverage.coveredSourceModelIds.push_back(modelId);
+            else
+                coverage.missingSourceModelIds.push_back(modelId);
+        }
+        coverage.requiredCount = static_cast<int>(
+            coverage.requiredSourceModelIds.size());
+        coverage.coveredCount = static_cast<int>(
+            coverage.coveredSourceModelIds.size());
+        coverage.percentage = coverage.requiredCount == 0 ? 100.0 :
+            100.0 * static_cast<double>(coverage.coveredCount) /
+                static_cast<double>(coverage.requiredCount);
+        return coverage;
+    };
+
+    std::vector<long long> allModels;
+    for (const auto& [modelId, job] : jobByModel)
+    {
+        (void)job;
+        allModels.push_back(modelId);
+    }
+    result.fullFrozenCohortCoverage = coverageFor(allModels);
+
+    const auto modelsForRecommendations = [&](const std::vector<long long>& ids) {
+        std::vector<long long> models;
+        for (long long id : ids)
+        {
+            const auto found = modelByRecommendation.find(id);
+            if (found == modelByRecommendation.end())
+            {
+                failContract(
+                    ProspectiveComparisonReadiness::cohortIdentityMismatch,
+                    "top_n_recommendation_not_in_frozen_cohort");
+                continue;
+            }
+            models.push_back(found->second);
+        }
+        return sortedUnique(std::move(models));
+    };
+    const auto contributionFor = [&](const std::vector<long long>& ids) {
+        CampaignProfitabilityContribution contribution;
+        contribution.recommendationCount = static_cast<int>(ids.size());
+        std::vector<long long> models;
+        for (long long id : ids)
+        {
+            const long long modelId = modelByRecommendation.at(id);
+            models.push_back(modelId);
+            const auto& outcome = *outcomeByModel.at(modelId).value;
+            contribution.predictionCount += outcome.predictionCount;
+            contribution.actionableCount += outcome.actionableCount;
+            contribution.aggregateReturn += outcome.aggregateReturn;
+        }
+        contribution.uniqueSourceModelCount = static_cast<int>(
+            sortedUnique(std::move(models)).size());
+        if (contribution.actionableCount != 0)
+            contribution.averageReturnPerActionablePrediction =
+                contribution.aggregateReturn /
+                static_cast<double>(contribution.actionableCount);
+        return contribution;
+    };
+
+    for (const auto& frozenTop : request.preparation.topN)
+    {
+        CampaignProfitabilityProspectiveTopNComparison top;
+        top.n = frozenTop.n;
+        top.controlRecommendationIds = frozenTop.controlRecommendationIds;
+        top.candidateRecommendationIds = frozenTop.candidateRecommendationIds;
+        top.retainedRecommendationIds = frozenTop.retainedRecommendationIds;
+        top.entrantRecommendationIds = frozenTop.candidateOnlyEntrants;
+        top.exitRecommendationIds = frozenTop.controlOnlyExits;
+        top.controlSourceModelIds = modelsForRecommendations(
+            top.controlRecommendationIds);
+        top.candidateSourceModelIds = modelsForRecommendations(
+            top.candidateRecommendationIds);
+        top.retainedSourceModelIds = modelsForRecommendations(
+            top.retainedRecommendationIds);
+        top.entrantSourceModelIds = modelsForRecommendations(
+            top.entrantRecommendationIds);
+        top.exitSourceModelIds = modelsForRecommendations(
+            top.exitRecommendationIds);
+        std::vector<long long> changedModels = top.entrantSourceModelIds;
+        changedModels.insert(changedModels.end(), top.exitSourceModelIds.begin(),
+                             top.exitSourceModelIds.end());
+        top.changedSelectionCoverage = coverageFor(std::move(changedModels));
+        std::vector<long long> selectedIds = top.controlRecommendationIds;
+        selectedIds.insert(selectedIds.end(),
+                           top.candidateRecommendationIds.begin(),
+                           top.candidateRecommendationIds.end());
+        selectedIds = sortedUnique(std::move(selectedIds));
+        for (long long recommendationId : selectedIds)
+            top.recommendationIdsBySourceModel[
+                modelByRecommendation.at(recommendationId)].push_back(
+                    recommendationId);
+
+        if (contractFailure !=
+            ProspectiveComparisonReadiness::comparisonComplete)
+        {
+            top.readiness = contractFailure;
+            addReason(top.blockingReasons, contractFailureReason);
+        }
+        else if (!top.changedSelectionCoverage.incompatibleSourceModelIds.empty())
+        {
+            top.readiness = ProspectiveComparisonReadiness::incompatibleSource;
+            addReason(top.blockingReasons,
+                      "changed_selection_contains_incompatible_source");
+        }
+        else
+        {
+            for (long long modelId :
+                 top.changedSelectionCoverage.requiredSourceModelIds)
+            {
+                const auto outcome = outcomeByModel.find(modelId);
+                if (outcome != outcomeByModel.end() && outcome->second.failure)
+                {
+                    top.readiness = *outcome->second.failure;
+                    addReason(top.blockingReasons, outcome->second.reason);
+                    break;
+                }
+            }
+            if (top.blockingReasons.empty() &&
+                request.currentDate <= kPhase12OutcomeEnd)
+            {
+                top.readiness =
+                    ProspectiveComparisonReadiness::pendingOutcomes;
+                addReason(top.blockingReasons,
+                          "precommitted_outcome_window_not_complete");
+            }
+            else if (top.blockingReasons.empty() &&
+                     !top.changedSelectionCoverage.missingSourceModelIds.empty())
+            {
+                top.readiness = ProspectiveComparisonReadiness::
+                    incompleteChangedSelectionCoverage;
+                addReason(top.blockingReasons,
+                          "changed_selection_outcome_coverage_incomplete");
+            }
+            else if (top.blockingReasons.empty())
+            {
+                top.entrantContribution = contributionFor(
+                    top.entrantRecommendationIds);
+                top.exitContribution = contributionFor(
+                    top.exitRecommendationIds);
+                top.candidateMinusControlIncrementalProfitability =
+                    top.entrantContribution->aggregateReturn -
+                    top.exitContribution->aggregateReturn;
+                top.readiness =
+                    ProspectiveComparisonReadiness::comparisonComplete;
+                top.final = true;
+            }
+        }
+
+        top.canonical =
+            "campaign_profitability_prospective_top_n_comparison_v1;";
+        AppendField(top.canonical, "n", std::to_string(top.n));
+        AppendField(top.canonical, "control_recommendations",
+                    idText(top.controlRecommendationIds));
+        AppendField(top.canonical, "candidate_recommendations",
+                    idText(top.candidateRecommendationIds));
+        AppendField(top.canonical, "retained_recommendations",
+                    idText(top.retainedRecommendationIds));
+        AppendField(top.canonical, "entrant_recommendations",
+                    idText(top.entrantRecommendationIds));
+        AppendField(top.canonical, "exit_recommendations",
+                    idText(top.exitRecommendationIds));
+        AppendField(top.canonical, "entrant_source_models",
+                    idText(top.entrantSourceModelIds));
+        AppendField(top.canonical, "exit_source_models",
+                    idText(top.exitSourceModelIds));
+        AppendField(top.canonical, "control_source_models",
+                    idText(top.controlSourceModelIds));
+        AppendField(top.canonical, "candidate_source_models",
+                    idText(top.candidateSourceModelIds));
+        AppendField(top.canonical, "retained_source_models",
+                    idText(top.retainedSourceModelIds));
+        AppendField(top.canonical, "changed_coverage_required_models",
+                    idText(top.changedSelectionCoverage.requiredSourceModelIds));
+        AppendField(top.canonical, "changed_coverage_covered_models",
+                    idText(top.changedSelectionCoverage.coveredSourceModelIds));
+        AppendField(top.canonical, "changed_coverage_missing_models",
+                    idText(top.changedSelectionCoverage.missingSourceModelIds));
+        AppendField(top.canonical, "changed_coverage_incompatible_models",
+                    idText(top.changedSelectionCoverage.
+                               incompatibleSourceModelIds));
+        AppendField(top.canonical, "changed_coverage_required",
+                    std::to_string(
+                        top.changedSelectionCoverage.requiredCount));
+        AppendField(top.canonical, "changed_coverage_covered",
+                    std::to_string(top.changedSelectionCoverage.coveredCount));
+        AppendField(top.canonical, "readiness",
+                    ProspectiveComparisonReadinessText(top.readiness));
+        AppendField(top.canonical, "entrant_contribution",
+                    top.entrantContribution
+                        ? OptionalDouble(
+                              top.entrantContribution->aggregateReturn)
+                        : "PENDING");
+        AppendField(top.canonical, "entrant_prediction_count",
+                    top.entrantContribution
+                        ? std::to_string(
+                              top.entrantContribution->predictionCount)
+                        : "PENDING");
+        AppendField(top.canonical, "entrant_actionable_count",
+                    top.entrantContribution
+                        ? std::to_string(
+                              top.entrantContribution->actionableCount)
+                        : "PENDING");
+        AppendField(top.canonical, "entrant_average_return",
+                    top.entrantContribution
+                        ? OptionalDouble(top.entrantContribution->
+                              averageReturnPerActionablePrediction)
+                        : "PENDING");
+        AppendField(top.canonical, "exit_contribution",
+                    top.exitContribution
+                        ? OptionalDouble(top.exitContribution->aggregateReturn)
+                        : "PENDING");
+        AppendField(top.canonical, "exit_prediction_count",
+                    top.exitContribution
+                        ? std::to_string(top.exitContribution->predictionCount)
+                        : "PENDING");
+        AppendField(top.canonical, "exit_actionable_count",
+                    top.exitContribution
+                        ? std::to_string(top.exitContribution->actionableCount)
+                        : "PENDING");
+        AppendField(top.canonical, "exit_average_return",
+                    top.exitContribution
+                        ? OptionalDouble(top.exitContribution->
+                              averageReturnPerActionablePrediction)
+                        : "PENDING");
+        AppendField(top.canonical, "incremental_profitability",
+                    top.candidateMinusControlIncrementalProfitability
+                        ? OptionalDouble(
+                              *top.candidateMinusControlIncrementalProfitability)
+                        : "PENDING");
+        for (long long modelId :
+             top.changedSelectionCoverage.coveredSourceModelIds)
+            AppendField(top.canonical,
+                        "outcome_identity_model_" +
+                            std::to_string(modelId),
+                        outcomeByModel.at(modelId).value->outcomeIdentityHash);
+        for (std::size_t index = 0; index < top.blockingReasons.size(); ++index)
+            AppendField(top.canonical,
+                        "blocking_reason[" + std::to_string(index) + "]",
+                        top.blockingReasons[index]);
+        top.hash = InferenceProfitability::DeterministicHash(top.canonical);
+        result.topN.push_back(std::move(top));
+    }
+
+    result.final = !result.topN.empty() &&
+        std::all_of(result.topN.begin(), result.topN.end(), [](const auto& top) {
+            return top.final;
+        });
+    if (contractFailure !=
+        ProspectiveComparisonReadiness::comparisonComplete)
+    {
+        result.readiness = contractFailure;
+        addReason(result.blockingReasons, contractFailureReason);
+    }
+    else if (result.final)
+        result.readiness =
+            ProspectiveComparisonReadiness::comparisonComplete;
+    else
+    {
+        result.readiness = ProspectiveComparisonReadiness::pendingOutcomes;
+        const auto priority = [](ProspectiveComparisonReadiness readiness) {
+            switch (readiness)
+            {
+                case ProspectiveComparisonReadiness::comparisonComplete:
+                    return 0;
+                case ProspectiveComparisonReadiness::pendingOutcomes:
+                    return 1;
+                case ProspectiveComparisonReadiness::
+                    incompleteChangedSelectionCoverage:
+                    return 2;
+                case ProspectiveComparisonReadiness::incompatibleSource:
+                    return 3;
+                case ProspectiveComparisonReadiness::artifactIdentityMismatch:
+                case ProspectiveComparisonReadiness::metricIdentityMismatch:
+                case ProspectiveComparisonReadiness::cohortIdentityMismatch:
+                case ProspectiveComparisonReadiness::
+                    outcomeWindowIdentityMismatch:
+                    return 4;
+            }
+            return 4;
+        };
+        for (const auto& top : result.topN)
+            if (priority(top.readiness) > priority(result.readiness))
+                result.readiness = top.readiness;
+        for (const auto& top : result.topN)
+            for (const auto& reason : top.blockingReasons)
+                addReason(result.blockingReasons,
+                          "top_" + std::to_string(top.n) + ":" + reason);
+    }
+    result.canonical =
+        "campaign_profitability_prospective_comparison_v1;";
+    AppendField(result.canonical, "protocol_version",
+                std::to_string(result.protocolVersion));
+    AppendField(result.canonical, "cohort_hash",
+                result.validationCohortIdentityHash);
+    AppendField(result.canonical, "phase11_artifact_sha256",
+                result.phase11ArtifactSha256);
+    AppendField(result.canonical, "phase12_artifact_sha256",
+                result.phase12PreparationArtifactSha256);
+    AppendField(result.canonical, "phase12_preparation_hash",
+                result.phase12PreparationIdentityHash);
+    AppendField(result.canonical, "metric_hash", result.metricDefinitionHash);
+    AppendField(result.canonical, "outcome_start", result.outcomeStart);
+    AppendField(result.canonical, "outcome_end", result.outcomeEnd);
+    AppendField(result.canonical, "current_date", result.currentDate);
+    AppendField(result.canonical, "full_coverage_required",
+                std::to_string(result.fullFrozenCohortCoverage.requiredCount));
+    AppendField(result.canonical, "full_coverage_covered",
+                std::to_string(result.fullFrozenCohortCoverage.coveredCount));
+    AppendField(result.canonical, "full_coverage_required_models",
+                idText(result.fullFrozenCohortCoverage.requiredSourceModelIds));
+    AppendField(result.canonical, "full_coverage_covered_models",
+                idText(result.fullFrozenCohortCoverage.coveredSourceModelIds));
+    AppendField(result.canonical, "full_coverage_missing_models",
+                idText(result.fullFrozenCohortCoverage.missingSourceModelIds));
+    AppendField(result.canonical, "full_coverage_incompatible_models",
+                idText(result.fullFrozenCohortCoverage.
+                           incompatibleSourceModelIds));
+    for (long long modelId :
+         result.fullFrozenCohortCoverage.coveredSourceModelIds)
+        AppendField(result.canonical,
+                    "full_outcome_identity_model_" +
+                        std::to_string(modelId),
+                    outcomeByModel.at(modelId).value->outcomeIdentityHash);
+    for (std::size_t index = 0; index < result.topN.size(); ++index)
+        AppendField(result.canonical,
+                    "top_n[" + std::to_string(index) + "]",
+                    result.topN[index].hash);
+    AppendField(result.canonical, "readiness",
+                ProspectiveComparisonReadinessText(result.readiness));
+    for (std::size_t index = 0; index < result.blockingReasons.size(); ++index)
+        AppendField(result.canonical,
+                    "blocking_reason[" + std::to_string(index) + "]",
+                    result.blockingReasons[index]);
+    AppendField(result.canonical, "final", result.final ? "true" : "false");
+    AppendField(result.canonical, "activation", "false");
+    AppendField(result.canonical, "live_profitability_weight", "0");
+    AppendField(result.canonical, "database_write", "false");
+    result.hash = InferenceProfitability::DeterministicHash(result.canonical);
+    return result;
 }
 
 std::string ReadinessActionText(ReadinessAction action)

@@ -53,4 +53,14 @@ int RunCampaignProfitabilityOutcomePreparationCommand(
     const std::string& artifactPath = kPhase12ArtifactPath,
     const std::string& currentDateOverride = {});
 
+int RunCampaignProfitabilityProspectiveComparisonCommand(
+    const std::string& connectionString,
+    const std::string& validationCohortIdentityHash,
+    std::ostream& output,
+    std::ostream& errors,
+    const std::string& phase11ArtifactPath = kPhase12ArtifactPath,
+    const std::string& phase12PreparationArtifactPath =
+        kPhase12PreparationArtifactPath,
+    const std::string& currentDateOverride = {});
+
 } // namespace EA::ProfitabilityVerification
