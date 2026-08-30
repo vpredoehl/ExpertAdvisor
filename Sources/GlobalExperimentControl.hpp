@@ -200,6 +200,14 @@ std::unique_ptr<ProcessOperations> CreateNativeProcessOperationsForTesting(
 ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
                                       ProcessOperations& processes);
 
+// Scheduler admission may validate a pending experiment only after it has
+// locked and verified the exact authoritative stopped worker attempt. This
+// retains every native process-identity check used for active workers and
+// additionally requires the observed process to be stopped.
+ValidatedWorker ValidateStoppedWorkerForSchedulerAdmission(
+    const ManagedWorker& worker,
+    ProcessOperations& processes);
+
 // Classifies scheduler worker processes against their distinct authoritative
 // experiment or checkpoint-evaluation rows. Checkpoint-tagged commands are
 // never authorized by an experiment row, even if a PID or model happens to
@@ -224,6 +232,11 @@ SignalOutcome PauseWorker(const ManagedWorker& worker,
                           ProcessOperations& processes);
 SignalOutcome ResumeWorker(const ManagedWorker& worker,
                            ProcessOperations& processes);
+// The caller must hold scheduler authority and an exact durable stopped-attempt
+// verification for this worker. Ordinary resume callers must use ResumeWorker.
+SignalOutcome ResumeStoppedWorkerForSchedulerAdmission(
+    const ManagedWorker& worker,
+    ProcessOperations& processes);
 SignalOutcome CancelWorker(const ManagedWorker& worker,
                            bool resumeFirst,
                            std::chrono::milliseconds grace,
@@ -290,6 +303,13 @@ int RunCommandWithProcessOperationsForTesting(
     std::ostream& error,
     ProcessOperations& processes);
 
+struct ExperimentPauseCommand
+{
+    long long experimentId = -1;
+    bool dryRun = false;
+    bool confirmed = false;
+};
+
 struct ExperimentResumeCommand
 {
     long long experimentId = -1;
@@ -323,8 +343,21 @@ int RunWorkerAttemptReconciliationCommandWithProcessOperationsForTesting(
     std::ostream& error,
     ProcessOperations& processes);
 
-// Preserves lifecycle-paused resume behavior and adds an audited selective
-// release path for a running worker suspended by the current global pause.
+// Individual pause retains exact worker identity and in-memory state while
+// releasing scheduler capacity. Resume only queues priority admission; it
+// never sends SIGCONT directly.
+int RunExperimentPauseCommand(const std::string& connectionString,
+                              const ExperimentPauseCommand& command,
+                              std::ostream& output,
+                              std::ostream& error);
+
+int RunExperimentPauseCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const ExperimentPauseCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes);
+
 int RunExperimentResumeCommand(const std::string& connectionString,
                                const ExperimentResumeCommand& command,
                                std::ostream& output,

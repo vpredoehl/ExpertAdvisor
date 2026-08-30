@@ -471,7 +471,8 @@ SignalOutcome PauseWorkerAuthorized(
 SignalOutcome ResumeWorkerAuthorized(
     const ManagedWorker& worker,
     ProcessOperations& processes,
-    const SignalAuthorization& authorize);
+    const SignalAuthorization& authorize,
+    bool stoppedSchedulerAdmission = false);
 SignalOutcome CancelWorkerAuthorized(
     const ManagedWorker& worker,
     bool resumeFirst,
@@ -1415,105 +1416,6 @@ std::optional<DbTarget> LoadExperimentResumeTarget(
     return target;
 }
 
-bool ActiveManagedPhase(const std::string& phase)
-{
-    return phase == "train" || phase == "infer" || phase == "analyze";
-}
-
-bool HasMatchingPauseEvidence(pqxx::transaction_base& transaction,
-                              const DbTarget& target,
-                              long long pauseRequestId)
-{
-    pqxx::result rows = transaction.exec_params(
-        "SELECT 1 "
-        "FROM experiment_admin_worker_outcome o "
-        "JOIN experiment_admin_request r ON r.request_id=o.request_id "
-        "WHERE o.request_id=$1 AND o.worker_identity=$2 "
-        "AND o.worker_kind='experiment' AND o.experiment_id=$3 "
-        "AND o.phase=$4 AND o.lifecycle_status='running' "
-        "AND o.worker_pid=$5 AND o.worker_process_group_id=$6 "
-        "AND o.worker_process_start_identity=$7 "
-        "AND o.worker_executable=$8 AND o.worker_command_line=$9 "
-        "AND o.identity_result='validated' "
-        "AND o.signal_result IN ('signaled','already_requested_state') "
-        "AND o.outcome_status='completed' "
-        "AND r.action='pause_all' "
-        "AND r.status IN ('completed','partial') LIMIT 1;",
-        pauseRequestId,
-        target.workerIdentity,
-        target.worker.experimentId,
-        target.worker.phase,
-        target.worker.pid > 0 ? std::optional<int>{target.worker.pid}
-                              : std::optional<int>{},
-        target.worker.processGroupId,
-        target.worker.processStartIdentity,
-        target.worker.executable,
-        target.worker.commandLine);
-    return !rows.empty();
-}
-
-std::optional<long long> CompletedSelectiveReleaseRequestId(
-    pqxx::transaction_base& transaction,
-    long long experimentId,
-    long long pauseRequestId)
-{
-    pqxx::result rows = transaction.exec_params(
-        "SELECT r.request_id FROM experiment_admin_request r "
-        "JOIN experiment_admin_worker_outcome o "
-        "ON o.request_id=r.request_id "
-        "WHERE r.action='resume_experiment' "
-        "AND r.target_experiment_id=$1 "
-        "AND r.status='completed' "
-        "AND o.source_pause_request_id=$2 "
-        "AND o.outcome_status='completed' "
-        "AND o.signal_result IN ('signaled','already_requested_state') "
-        "LIMIT 1;",
-        experimentId,
-        pauseRequestId);
-    if (rows.empty())
-        return std::nullopt;
-    return rows[0][0].as<long long>();
-}
-
-std::optional<DbTarget> LoadSelectiveResumePlan(
-    pqxx::transaction_base& transaction,
-    long long requestId)
-{
-    pqxx::result rows = transaction.exec_params(
-        "SELECT worker_identity,experiment_id,phase,lifecycle_status,"
-        "worker_pid,worker_process_group_id,worker_process_start_identity,"
-        "worker_executable,worker_command_line,source_pause_request_id,"
-        "worker_attempt_id,outcome_status "
-        "FROM experiment_admin_worker_outcome "
-        "WHERE request_id=$1 AND worker_kind='experiment';",
-        requestId);
-    if (rows.empty())
-        return std::nullopt;
-
-    DbTarget target;
-    target.workerIdentity = rows[0][0].as<std::string>();
-    target.worker.experimentId = rows[0][1].as<long long>();
-    target.worker.phase = rows[0][2].as<std::string>();
-    target.worker.lifecycleStatus = rows[0][3].as<std::string>();
-    if (!rows[0][4].is_null())
-        target.worker.pid = rows[0][4].as<int>();
-    if (!rows[0][5].is_null())
-        target.worker.processGroupId = rows[0][5].as<int>();
-    if (!rows[0][6].is_null())
-        target.worker.processStartIdentity = rows[0][6].as<std::string>();
-    if (!rows[0][7].is_null())
-        target.worker.executable = rows[0][7].as<std::string>();
-    if (!rows[0][8].is_null())
-        target.worker.commandLine = rows[0][8].as<std::string>();
-    if (!rows[0][9].is_null())
-        target.sourcePauseRequestId = rows[0][9].as<long long>();
-    if (!rows[0][10].is_null())
-        target.worker.workerAttemptId = rows[0][10].as<long long>();
-    target.resumeBeforeAction = true;
-    target.frozenReplayTarget = true;
-    target.plan = rows[0][11].as<std::string>();
-    return target;
-}
 
 bool OwnsActiveRequest(pqxx::transaction_base& transaction,
                        long long requestId,
@@ -1838,129 +1740,6 @@ SignalOutcome ApplyTargetSignal(const DbTarget& target,
         authorize);
 }
 
-struct SelectiveAccounting
-{
-    std::string action;
-    std::string status;
-    int targetCount = 0;
-    int successfulCount = 0;
-    int alreadySatisfiedCount = 0;
-    int missingCount = 0;
-    int rejectedCount = 0;
-    int failedCount = 0;
-    std::string identityResult = "not_checked";
-    std::string signalResult = "not_attempted";
-    std::string outcomeStatus = "planned";
-    std::string workerIdentity;
-    std::string requestedSignal;
-    std::string detail;
-};
-
-SelectiveAccounting LoadSelectiveAccounting(
-    pqxx::transaction_base& transaction,
-    long long requestId)
-{
-    const pqxx::row row = transaction.exec_params(
-        "SELECT r.action,r.status,r.target_count,r.successful_count,"
-        "r.already_satisfied_count,r.missing_count,r.rejected_count,"
-        "r.failed_count,o.identity_result,o.signal_result,o.outcome_status,"
-        "o.worker_identity,COALESCE(o.requested_signal,''),"
-        "COALESCE(o.detail,'') "
-        "FROM experiment_admin_request r "
-        "JOIN experiment_admin_worker_outcome o ON o.request_id=r.request_id "
-        "WHERE r.request_id=$1 AND o.worker_kind='experiment';",
-        requestId).one_row();
-    SelectiveAccounting accounting;
-    accounting.action = row[0].as<std::string>();
-    accounting.status = row[1].as<std::string>();
-    accounting.targetCount = row[2].as<int>();
-    accounting.successfulCount = row[3].as<int>();
-    accounting.alreadySatisfiedCount = row[4].as<int>();
-    accounting.missingCount = row[5].as<int>();
-    accounting.rejectedCount = row[6].as<int>();
-    accounting.failedCount = row[7].as<int>();
-    accounting.identityResult = row[8].as<std::string>();
-    accounting.signalResult = row[9].as<std::string>();
-    accounting.outcomeStatus = row[10].as<std::string>();
-    accounting.workerIdentity = row[11].as<std::string>();
-    accounting.requestedSignal = row[12].as<std::string>();
-    accounting.detail = row[13].as<std::string>();
-    return accounting;
-}
-
-std::string SelectiveResultFromAccounting(
-    const SelectiveAccounting& accounting,
-    bool replay)
-{
-    if (accounting.status == "pending" ||
-        accounting.status == "applying")
-        return "pending";
-    if (accounting.outcomeStatus == "failed")
-    {
-        if (accounting.signalResult == "signaled")
-            return "stale_control_evidence";
-        if (accounting.rejectedCount > 0)
-            return "identity_validation_failed";
-        return "signal_failed";
-    }
-    if (accounting.signalResult == "signaled")
-        return replay ? "already_resumed"
-                      : "globally_suspended_worker_resumed";
-    if (accounting.signalResult == "already_requested_state")
-        return "already_resumed";
-    if (accounting.signalResult == "process_missing")
-        return "worker_departed";
-    return "signal_failed";
-}
-
-void PrintSelectiveResult(std::ostream& output,
-                          long long experimentId,
-                          long long requestId,
-                          long long pauseRequestId,
-                          const SelectiveAccounting& accounting,
-                          bool replay,
-                          bool signalAttempted)
-{
-    output << "SCHEDULER_CONTROL_RESULT,request_id=" << requestId
-           << ",action=" << accounting.action
-           << ",status=" << accounting.status
-           << ",result="
-           << SelectiveResultFromAccounting(accounting, replay)
-           << ",replay=" << (replay ? 1 : 0)
-           << ",signal_attempted=" << (signalAttempted ? 1 : 0)
-           << ",target_count=" << accounting.targetCount
-           << ",successful_count=" << accounting.successfulCount
-           << ",already_satisfied_count="
-           << accounting.alreadySatisfiedCount
-           << ",missing_count=" << accounting.missingCount
-           << ",rejected_count=" << accounting.rejectedCount
-           << ",failed_count=" << accounting.failedCount
-           << ",experiment_id="
-           << experimentId
-           << ",source_pause_request_id=" << pauseRequestId
-           << ",global_state=paused"
-           << "\n"
-           << "SCHEDULER_CONTROL_OUTCOME,request_id=" << requestId
-           << ",worker_identity=" << accounting.workerIdentity
-           << ",identity_result=" << accounting.identityResult
-           << ",outcome_status=" << accounting.outcomeStatus
-           << ",signal_result=" << accounting.signalResult
-           << ",requested_signal=" << accounting.requestedSignal
-           << ",detail=" << accounting.detail << "\n";
-}
-
-std::string PersistedSignalResult(const SignalOutcome& outcome)
-{
-    if (outcome.result == "unsafe_process_group" ||
-        outcome.result == "inspection_failed" ||
-        outcome.result == "permission_denied")
-    {
-        if (outcome.result == "permission_denied")
-            return "permission_failure";
-        return "identity_validation_failed";
-    }
-    return outcome.result;
-}
 
 std::string PersistedRequestResult(const std::string& status)
 {
@@ -2463,15 +2242,52 @@ std::unique_ptr<ProcessOperations> CreateNativeProcessOperationsForTesting(
     return std::make_unique<PosixProcessOperations>(std::move(backend));
 }
 
-ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
-                                      ProcessOperations& processes)
+namespace
+{
+
+enum class ManagedWorkerLifecyclePrecondition
+{
+    Active,
+    SchedulerStoppedAdmission,
+    PausedStopReconciliation
+};
+
+ValidatedWorker ValidateManagedWorkerWithLifecyclePrecondition(
+    const ManagedWorker& worker,
+    ProcessOperations& processes,
+    ManagedWorkerLifecyclePrecondition precondition)
 {
     ValidatedWorker result;
     result.worker = worker;
-    if (worker.lifecycleStatus != "running" || worker.pid <= 0)
+    const bool activeLifecycle = worker.lifecycleStatus == "running";
+    const bool exactStoppedAdmissionLifecycle =
+        worker.lifecycleStatus == "pending" &&
+        worker.attemptLifecycleState == "stopped" &&
+        worker.workerAttemptId.has_value() &&
+        worker.workerKind == "experiment" &&
+        worker.capacityClass == worker.phase &&
+        !worker.launchAttemptIdentity.empty();
+    const bool exactPausedStopLifecycle =
+        worker.lifecycleStatus == "paused" &&
+        worker.attemptLifecycleState == "stopped" &&
+        worker.workerAttemptId.has_value() &&
+        worker.workerKind == "experiment" &&
+        worker.capacityClass == worker.phase &&
+        !worker.launchAttemptIdentity.empty();
+    bool lifecycleAllowed = activeLifecycle;
+    if (precondition ==
+        ManagedWorkerLifecyclePrecondition::SchedulerStoppedAdmission)
+        lifecycleAllowed = exactStoppedAdmissionLifecycle;
+    else if (precondition ==
+             ManagedWorkerLifecyclePrecondition::PausedStopReconciliation)
+        lifecycleAllowed = exactPausedStopLifecycle;
+    if (!lifecycleAllowed || worker.pid <= 0)
     {
         result.identity = IdentityResult::StalePid;
-        result.detail = "database_row_is_not_an_active_managed_worker";
+        result.detail = precondition ==
+                            ManagedWorkerLifecyclePrecondition::Active
+            ? "database_row_is_not_an_active_managed_worker"
+            : "database_row_is_not_an_authoritative_stopped_worker";
         return result;
     }
     result.observation = processes.Observe(worker.pid);
@@ -2571,9 +2387,37 @@ ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
         result.detail = "unsafe_or_scheduler_process_group";
         return result;
     }
+    if (precondition != ManagedWorkerLifecyclePrecondition::Active &&
+        !result.observation.stopped)
+    {
+        result.identity = IdentityResult::IdentityValidationFailed;
+        result.detail = "authoritative_stopped_worker_is_not_stopped";
+        return result;
+    }
     result.identity = IdentityResult::Validated;
     result.detail = "validated";
     return result;
+}
+
+} // namespace
+
+ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
+                                      ProcessOperations& processes)
+{
+    return ValidateManagedWorkerWithLifecyclePrecondition(
+        worker,
+        processes,
+        ManagedWorkerLifecyclePrecondition::Active);
+}
+
+ValidatedWorker ValidateStoppedWorkerForSchedulerAdmission(
+    const ManagedWorker& worker,
+    ProcessOperations& processes)
+{
+    return ValidateManagedWorkerWithLifecyclePrecondition(
+        worker,
+        processes,
+        ManagedWorkerLifecyclePrecondition::SchedulerStoppedAdmission);
 }
 
 std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
@@ -2789,10 +2633,13 @@ SignalOutcome PauseWorkerAuthorized(
 SignalOutcome ResumeWorkerAuthorized(
     const ManagedWorker& worker,
     ProcessOperations& processes,
-    const SignalAuthorization& authorize)
+    const SignalAuthorization& authorize,
+    bool stoppedSchedulerAdmission)
 {
     SignalOutcome outcome;
-    const ValidatedWorker validated = ValidateManagedWorker(worker, processes);
+    const ValidatedWorker validated = stoppedSchedulerAdmission
+        ? ValidateStoppedWorkerForSchedulerAdmission(worker, processes)
+        : ValidateManagedWorker(worker, processes);
     outcome.identity = validated.identity;
     outcome.detail = validated.detail;
     if (validated.identity != IdentityResult::Validated)
@@ -3002,6 +2849,14 @@ SignalOutcome ResumeWorker(const ManagedWorker& worker,
 {
     return ResumeWorkerAuthorized(
         worker, processes, SignalAuthorization{});
+}
+
+SignalOutcome ResumeStoppedWorkerForSchedulerAdmission(
+    const ManagedWorker& worker,
+    ProcessOperations& processes)
+{
+    return ResumeWorkerAuthorized(
+        worker, processes, SignalAuthorization{}, true);
 }
 
 SignalOutcome CancelWorker(const ManagedWorker& worker,
@@ -4095,6 +3950,298 @@ bool ReconcileActiveCancellation(pqxx::work& transaction,
     return true;
 }
 
+int RunPriorityQueueGlobalControl(
+    const std::string& connectionString,
+    const Command& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    const bool pause = command.action == Action::PauseAll;
+    const char* const action = pause ? "pause_all" : "resume_all";
+    const bool willApply = command.confirmed && !command.dryRun;
+    const std::string owner = command.invocationIdentity.empty()
+        ? std::string{"pid:"} + std::to_string(::getpid())
+        : command.invocationIdentity;
+
+    pqxx::connection connection{connectionString};
+    pqxx::work transaction{connection};
+    transaction.exec(willApply
+        ? "SET TRANSACTION READ WRITE;"
+        : "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+    if (willApply)
+        EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(
+            transaction);
+    AcquireCoordinationLock(transaction);
+    const ControlSnapshot snapshot = LoadControlSnapshot(transaction);
+    if (snapshot.activeRequestId)
+    {
+        error << "GLOBAL_EXPERIMENT_CONTROL_REJECTED,reason="
+                 "conflicting_administrative_request_active,request_id="
+              << *snapshot.activeRequestId << "\n";
+        transaction.commit();
+        return 1;
+    }
+
+    std::vector<DbTarget> targets = LoadTargets(transaction);
+    targets.erase(
+        std::remove_if(
+            targets.begin(),
+            targets.end(),
+            [&](const DbTarget& target) {
+                if (target.checkpointWorker ||
+                    (target.worker.phase != "train" &&
+                     target.worker.phase != "infer"))
+                    return true;
+                if (pause)
+                    return target.worker.lifecycleStatus == "paused";
+                return !snapshot.currentPauseRequestId ||
+                       target.workerGlobalPauseRequestId !=
+                           snapshot.currentPauseRequestId ||
+                       target.worker.lifecycleStatus != "paused";
+            }),
+        targets.end());
+
+    output << "GLOBAL_EXPERIMENT_CONTROL_"
+           << (command.dryRun ? "DRY_RUN" : "ATTEMPT")
+           << ",action=" << action
+           << ",previous_state=" << snapshot.desiredState
+           << ",resulting_state=" << (pause ? "paused" : "running")
+           << ",targets=" << targets.size()
+           << ",signals=" << (pause ? "verified_SIGSTOP" : "none")
+           << "\n";
+    if (command.dryRun)
+    {
+        transaction.commit();
+        return 0;
+    }
+    if (!command.confirmed)
+    {
+        output << "Use --yes to apply.\n";
+        transaction.commit();
+        return 0;
+    }
+
+    const long long requestId = transaction.exec_params(
+        "INSERT INTO experiment_admin_request("
+        "action,invocation_identity,requester_identity,application_owner,"
+        "application_lease_until,previous_global_state,resulting_global_state,"
+        "scheduler_running_observed,target_count) "
+        "VALUES($1,$2,$3,$2,now()+interval '30 seconds',$4,$5,$6,$7) "
+        "RETURNING request_id;",
+        action,
+        owner,
+        command.requesterIdentity.value_or(CurrentRequester()),
+        snapshot.desiredState,
+        pause ? "paused" : "running",
+        SchedulerObservedRunning(),
+        static_cast<int>(targets.size()))[0][0].as<long long>();
+
+    const pqxx::result gated = transaction.exec_params(
+        "UPDATE experiment_global_control SET desired_state=$1,"
+        "active_request_id=$2,current_pause_request_id=CASE WHEN $3 THEN $2 "
+        "ELSE current_pause_request_id END,revision=revision+1,updated_at=now() "
+        "WHERE singleton RETURNING singleton;",
+        pause ? "paused" : "running",
+        requestId,
+        pause);
+    RequireAffectedRows(gated, 1, "priority_queue_global_control_gate");
+
+    if (!pause)
+    {
+        const long long pauseRequestId =
+            snapshot.currentPauseRequestId.value_or(-1);
+        for (DbTarget& target : targets)
+        {
+            target.sourcePauseRequestId = pauseRequestId;
+            InsertOutcome(
+                transaction,
+                requestId,
+                target,
+                "completed",
+                "none",
+                "globally_paused_experiment_queued_for_admission");
+            const pqxx::result queued = transaction.exec_params(
+                "UPDATE experiment SET status='pending',resume_requested=true,"
+                "worker_global_pause_request_id=NULL,updated_at=clock_timestamp() "
+                "WHERE experiment_id=$1 AND status='paused' "
+                "AND worker_global_pause_request_id=$2 "
+                "RETURNING experiment_id;",
+                target.worker.experimentId,
+                pauseRequestId);
+            RequireAffectedRows(queued, 1, "resume_all_queue_member");
+        }
+        UpdateRequestAccounting(transaction, requestId, false, owner, action);
+        const pqxx::result completed = transaction.exec_params(
+            "UPDATE experiment_global_control SET active_request_id=NULL,"
+            "current_pause_request_id=NULL,revision=revision+1,updated_at=now() "
+            "WHERE singleton AND active_request_id=$1 "
+            "AND current_pause_request_id=$2 RETURNING singleton;",
+            requestId,
+            pauseRequestId);
+        RequireAffectedRows(completed, 1, "resume_all_complete_gate");
+        transaction.exec_params(
+            "UPDATE experiment_admin_request SET application_lease_until=NULL "
+            "WHERE request_id=$1 AND application_owner=$2;",
+            requestId,
+            owner);
+        transaction.commit();
+        output << "GLOBAL_EXPERIMENT_CONTROL_SUMMARY,request_id="
+               << requestId
+               << ",action=resume_all,status=completed,target_count="
+               << targets.size()
+               << ",resume_requested_count=" << targets.size()
+               << ",signal_attempted=0,global_state=running\n";
+        return 0;
+    }
+
+    int stoppedCount = 0;
+    int pendingCount = 0;
+    int missingCount = 0;
+    int failedCount = 0;
+    for (DbTarget& target : targets)
+    {
+        if (target.worker.lifecycleStatus == "pending" &&
+            !target.worker.workerAttemptId)
+        {
+            InsertOutcome(
+                transaction,
+                requestId,
+                target,
+                "completed",
+                "none",
+                "pending_experiment_paused_before_dispatch");
+            const pqxx::result paused = transaction.exec_params(
+                "UPDATE experiment SET status='paused',resume_requested=false,"
+                "worker_control_state='paused',worker_global_pause_request_id=$1,"
+                "updated_at=clock_timestamp() WHERE experiment_id=$2 "
+                "AND status='pending' AND active_scheduler_worker_attempt_id IS NULL "
+                "RETURNING experiment_id;",
+                requestId,
+                target.worker.experimentId);
+            RequireAffectedRows(paused, 1, "pause_all_pending_member");
+            ++pendingCount;
+            continue;
+        }
+        if ((target.worker.lifecycleStatus != "running" &&
+             target.worker.lifecycleStatus != "pending") ||
+            !target.worker.workerAttemptId)
+            continue;
+
+        InsertOutcome(
+            transaction,
+            requestId,
+            target,
+            "planned",
+            "none",
+            "worker_validation_and_pause_planned");
+        const auto exact = LockExactTargetForMutation(
+            transaction, target, true);
+        SignalOutcome signal;
+        if (!exact)
+        {
+            signal.identity = IdentityResult::IdentityValidationFailed;
+            signal.result = "identity_validation_failed";
+            signal.detail = "exact_active_worker_attempt_verification_failed";
+        }
+        else
+        {
+            signal = PauseWorker(target.worker, processes);
+            if (signal.success)
+            {
+                const pqxx::result stopped = transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='stopped',last_observed_at=clock_timestamp(),"
+                    "signal_number=$1,reconciliation_result='global_pause',"
+                    "diagnostic='verified_process_group_stopped' "
+                    "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
+                    "('spawned','running','observed','stopped') "
+                    "RETURNING worker_attempt_id;",
+                    signal.signals.empty()
+                        ? std::optional<int>{}
+                        : std::optional<int>{signal.signals.back()},
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(stopped, 1, "pause_all_stop_attempt");
+                const pqxx::result paused = transaction.exec_params(
+                    "UPDATE experiment SET status='paused',resume_requested=false,"
+                    "worker_control_state='paused',worker_global_pause_request_id=$1,"
+                    "updated_at=clock_timestamp() WHERE experiment_id=$2 "
+                    "AND status IN ('running','pending') "
+                    "AND active_scheduler_worker_attempt_id=$3 "
+                    "RETURNING experiment_id;",
+                    requestId,
+                    target.worker.experimentId,
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(paused, 1, "pause_all_running_member");
+                ++stoppedCount;
+            }
+            else if (signal.identity == IdentityResult::ProcessMissing)
+            {
+                const pqxx::result retired = transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
+                    "reconciliation_result='global_pause_process_missing',"
+                    "diagnostic='exact_process_absence_observed' "
+                    "WHERE worker_attempt_id=$1 AND lifecycle_state IN "
+                    "('spawned','running','observed','stopped') "
+                    "RETURNING worker_attempt_id;",
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(retired, 1, "pause_all_missing_attempt");
+                const pqxx::result paused = transaction.exec_params(
+                    "UPDATE experiment SET status='paused',resume_requested=false,"
+                    "worker_control_state='paused',worker_global_pause_request_id=$1,"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "worker_process_start_identity=NULL,worker_executable=NULL,"
+                    "worker_command_line=NULL,active_scheduler_worker_attempt_id=NULL,"
+                    "updated_at=clock_timestamp() WHERE experiment_id=$2 "
+                    "AND status IN ('running','pending') "
+                    "AND active_scheduler_worker_attempt_id=$3 "
+                    "RETURNING experiment_id;",
+                    requestId,
+                    target.worker.experimentId,
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(paused, 1, "pause_all_missing_member");
+                ++missingCount;
+            }
+        }
+        if (!signal.success &&
+            signal.identity != IdentityResult::ProcessMissing)
+            ++failedCount;
+        UpdateSignalOutcome(
+            transaction,
+            requestId,
+            target,
+            signal,
+            false,
+            owner,
+            action);
+    }
+
+    UpdateRequestAccounting(transaction, requestId, false, owner, action);
+    const std::string status = failedCount == 0 ? "completed" : "partial";
+    const pqxx::result cleared = transaction.exec_params(
+        "UPDATE experiment_global_control SET active_request_id=NULL,"
+        "revision=revision+1,updated_at=now() "
+        "WHERE singleton AND active_request_id=$1 RETURNING singleton;",
+        requestId);
+    RequireAffectedRows(cleared, 1, "pause_all_complete_gate");
+    transaction.exec_params(
+        "UPDATE experiment_admin_request SET application_lease_until=NULL "
+        "WHERE request_id=$1 AND application_owner=$2;",
+        requestId,
+        owner);
+    transaction.commit();
+    output << "GLOBAL_EXPERIMENT_CONTROL_SUMMARY,request_id=" << requestId
+           << ",action=pause_all,status=" << status
+           << ",target_count=" << targets.size()
+           << ",stopped_workers=" << stoppedCount
+           << ",pending_paused=" << pendingCount
+           << ",missing_reconciled=" << missingCount
+           << ",failed_count=" << failedCount
+           << ",global_state=paused\n";
+    return failedCount == 0 ? 0 : 1;
+}
+
 int RunCommand(const std::string& connectionString,
                const Command& command,
                std::ostream& output,
@@ -4117,6 +4264,12 @@ int RunCommandWithProcessOperationsForTesting(
         error << "GLOBAL_EXPERIMENT_CONTROL_REJECTED,reason="
               << *validation << "\n";
         return 1;
+    }
+    if (command.action == Action::PauseAll ||
+        command.action == Action::ResumeAll)
+    {
+        return RunPriorityQueueGlobalControl(
+            connectionString, command, output, error, processes);
     }
 
     std::vector<DbTarget> targets;
@@ -5320,6 +5473,244 @@ int RunCommandWithProcessOperationsForTesting(
     return RequestExitCodeForPersistedStatus(finalPersistedStatus);
 }
 
+
+int RunExperimentPauseCommand(const std::string& connectionString,
+                              const ExperimentPauseCommand& command,
+                              std::ostream& output,
+                              std::ostream& error)
+{
+    PosixProcessOperations processes;
+    return RunExperimentPauseCommandWithProcessOperationsForTesting(
+        connectionString, command, output, error, processes);
+}
+
+int RunExperimentPauseCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const ExperimentPauseCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    if (command.experimentId <= 0)
+    {
+        error << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+              << command.experimentId
+              << ",reason=invalid_experiment_id\n";
+        return 1;
+    }
+
+    const bool willApply = command.confirmed && !command.dryRun;
+    pqxx::connection connection{connectionString};
+    pqxx::work transaction{connection};
+    transaction.exec(willApply
+        ? "SET TRANSACTION READ WRITE;"
+        : "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+    if (willApply)
+        EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(
+            transaction);
+    AcquireCoordinationLock(transaction);
+    const ControlSnapshot control = LoadControlSnapshot(transaction);
+    if (control.activeRequestId)
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+               << command.experimentId
+               << ",reason=conflicting_administrative_request_active\n";
+        transaction.commit();
+        return 1;
+    }
+
+    const std::optional<DbTarget> loaded =
+        LoadExperimentResumeTarget(transaction, command.experimentId, false);
+    if (!loaded)
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+               << command.experimentId << ",reason=experiment_not_found\n";
+        transaction.commit();
+        return 1;
+    }
+    DbTarget target = *loaded;
+    output << "SCHEDULER_CONTROL_ATTEMPT,action=pause,experiment_id="
+           << target.worker.experimentId
+           << ",current_status=" << target.worker.lifecycleStatus
+           << ",current_phase=" << target.worker.phase << "\n";
+
+    if (target.worker.lifecycleStatus != "pending" &&
+        target.worker.lifecycleStatus != "running" &&
+        target.worker.lifecycleStatus != "paused")
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+               << target.worker.experimentId
+               << ",reason=terminal_experiment_cannot_be_paused\n";
+        transaction.commit();
+        return 1;
+    }
+    if (target.worker.lifecycleStatus == "running" &&
+        target.worker.phase != "train" && target.worker.phase != "infer")
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+               << target.worker.experimentId
+               << ",reason=running_pause_requires_train_or_infer\n";
+        transaction.commit();
+        return 1;
+    }
+
+    const bool hasBoundWorker = target.worker.workerAttemptId.has_value();
+    if (target.worker.lifecycleStatus == "running" && !hasBoundWorker)
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+               << target.worker.experimentId
+               << ",reason=running_worker_attempt_not_authoritatively_bound\n";
+        transaction.commit();
+        return 1;
+    }
+    if (command.dryRun)
+    {
+        output << "SCHEDULER_CONTROL_DRY_RUN,action=pause,experiment_id="
+               << target.worker.experimentId
+               << ",new_status=paused,resume_requested=false"
+               << ",worker_action="
+               << (hasBoundWorker ? "validate_then_sigstop" : "none")
+               << "\n";
+        transaction.commit();
+        return 0;
+    }
+    if (!command.confirmed)
+    {
+        output << "Use --yes to apply.\n";
+        transaction.commit();
+        return 0;
+    }
+
+    std::string workerState = "none";
+    if (hasBoundWorker)
+    {
+        const auto exact = LockExactTargetForMutation(
+            transaction, target, true);
+        if (!exact)
+        {
+            output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+                   << target.worker.experimentId
+                   << ",reason=exact_active_worker_attempt_verification_failed\n";
+            transaction.commit();
+            return 1;
+        }
+
+        SignalOutcome signal;
+        if (target.worker.lifecycleStatus == "paused")
+        {
+            const ValidatedWorker validated =
+                ValidateManagedWorkerWithLifecyclePrecondition(
+                    target.worker,
+                    processes,
+                    ManagedWorkerLifecyclePrecondition::
+                        PausedStopReconciliation);
+            signal.identity = validated.identity;
+            signal.detail = validated.detail;
+            if (validated.identity == IdentityResult::Validated)
+            {
+                signal.result = "already_requested_state";
+                signal.success = true;
+            }
+            else
+            {
+                signal.result =
+                    validated.identity == IdentityResult::ProcessMissing
+                    ? "process_missing"
+                    : (validated.identity == IdentityResult::PermissionDenied
+                           ? "permission_failure"
+                           : ToString(validated.identity));
+            }
+        }
+        else
+        {
+            signal = PauseWorker(target.worker, processes);
+        }
+        if (signal.identity == IdentityResult::ProcessMissing)
+        {
+            const pqxx::result retired = transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt SET "
+                "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
+                "last_observed_at=clock_timestamp(),"
+                "reconciliation_result='pause_process_missing',"
+                "diagnostic='exact_process_absence_observed' "
+                "WHERE worker_attempt_id=$1 AND lifecycle_state IN "
+                "('spawned','running','observed','stopped') "
+                "RETURNING worker_attempt_id;",
+                *target.worker.workerAttemptId);
+            RequireAffectedRows(retired, 1, "pause_missing_worker_attempt");
+            const pqxx::result paused = transaction.exec_params(
+                "UPDATE experiment SET status='paused',resume_requested=false,"
+                "worker_control_state='paused',worker_pid=NULL,"
+                "worker_process_group_id=NULL,worker_process_start_identity=NULL,"
+                "worker_executable=NULL,worker_command_line=NULL,"
+                "worker_global_pause_request_id=NULL,"
+                "active_scheduler_worker_attempt_id=NULL,updated_at=clock_timestamp() "
+                "WHERE experiment_id=$1 AND active_scheduler_worker_attempt_id=$2 "
+                "AND status IN ('pending','running','paused') "
+                "RETURNING experiment_id;",
+                target.worker.experimentId,
+                *target.worker.workerAttemptId);
+            RequireAffectedRows(paused, 1, "pause_missing_worker_lifecycle");
+            workerState = "none";
+        }
+        else if (signal.success)
+        {
+            const pqxx::result stopped = transaction.exec_params(
+                "UPDATE experiment_scheduler_worker_attempt SET "
+                "lifecycle_state='stopped',last_observed_at=clock_timestamp(),"
+                "signal_number=$1,reconciliation_result='paused_by_operator',"
+                "diagnostic='verified_process_group_stopped' "
+                "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
+                "('spawned','running','observed','stopped') "
+                "RETURNING worker_attempt_id;",
+                signal.signals.empty()
+                    ? std::optional<int>{}
+                    : std::optional<int>{signal.signals.back()},
+                *target.worker.workerAttemptId);
+            RequireAffectedRows(stopped, 1, "pause_stop_worker_attempt");
+            const pqxx::result paused = transaction.exec_params(
+                "UPDATE experiment SET status='paused',resume_requested=false,"
+                "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+                "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+                "AND active_scheduler_worker_attempt_id=$2 "
+                "AND status IN ('pending','running','paused') "
+                "RETURNING experiment_id;",
+                target.worker.experimentId,
+                *target.worker.workerAttemptId);
+            RequireAffectedRows(paused, 1, "pause_stopped_worker_lifecycle");
+            workerState = "stopped";
+        }
+        else
+        {
+            output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
+                   << target.worker.experimentId
+                   << ",reason=" << signal.result
+                   << ",detail=" << signal.detail << "\n";
+            transaction.commit();
+            return 1;
+        }
+    }
+    else
+    {
+        const pqxx::result paused = transaction.exec_params(
+            "UPDATE experiment SET status='paused',resume_requested=false,"
+            "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+            "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+            "AND status IN ('pending','paused') "
+            "AND active_scheduler_worker_attempt_id IS NULL "
+            "RETURNING experiment_id;",
+            target.worker.experimentId);
+        RequireAffectedRows(paused, 1, "pause_nonexecuting_experiment");
+    }
+
+    transaction.commit();
+    output << "SCHEDULER_CONTROL_APPLIED,action=pause,experiment_id="
+           << target.worker.experimentId
+           << ",new_status=paused,resume_requested=false,worker_state="
+           << workerState << ",active_slot_released=true\n";
+    return 0;
+}
+
 int RunExperimentResumeCommand(const std::string& connectionString,
                                const ExperimentResumeCommand& command,
                                std::ostream& output,
@@ -5337,509 +5728,101 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
     std::ostream& error,
     ProcessOperations& processes)
 {
+    (void)processes;
     if (command.experimentId <= 0)
     {
         error << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
-              << command.experimentId
-              << ",reason=invalid_experiment_id,result=invalid_lifecycle\n";
+              << command.experimentId << ",reason=invalid_experiment_id\n";
         return 1;
     }
-
     const bool willApply = command.confirmed && !command.dryRun;
-    const std::string invocationIdentity =
-        command.invocationIdentity.empty()
-            ? std::string{"pid:"} + std::to_string(::getpid())
-            : command.invocationIdentity;
-    const bool schedulerRunningObserved =
-        willApply ? SchedulerObservedRunning() : false;
-    long long requestId = -1;
-    long long pauseRequestId = -1;
-    DbTarget target;
-    bool retrying = false;
-    bool alreadyAccounted = false;
-    std::ostringstream deferredMachineOutput;
-
+    pqxx::connection connection{connectionString};
+    pqxx::work transaction{connection};
+    transaction.exec(willApply
+        ? "SET TRANSACTION READ WRITE;"
+        : "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+    if (willApply)
+        EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(
+            transaction);
+    AcquireCoordinationLock(transaction);
+    const ControlSnapshot control = LoadControlSnapshot(transaction);
+    if (control.activeRequestId)
     {
-        pqxx::connection connection{connectionString};
-        pqxx::work transaction{connection};
-        transaction.exec(willApply
-            ? "SET TRANSACTION READ WRITE;"
-            : "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
-        AcquireCoordinationLock(transaction);
-        const ControlSnapshot snapshot = LoadControlSnapshot(transaction);
-        const auto loaded = LoadExperimentResumeTarget(
-            transaction, command.experimentId, willApply);
-        auto reject = [&](const std::string& reason) {
-            output << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
-                   << command.experimentId
-                   << ",reason=" << reason << ",result=" << reason << "\n";
-        };
-
-        if (snapshot.activeRequestId)
-        {
-            std::string activeSql =
-                "SELECT action,target_experiment_id,application_owner,"
-                "application_lease_until IS NOT NULL "
-                "AND application_lease_until>now() "
-                "FROM experiment_admin_request "
-                "WHERE request_id=$1";
-            if (willApply)
-                activeSql += " FOR UPDATE";
-            pqxx::result active = transaction.exec_params(
-                activeSql,
-                *snapshot.activeRequestId);
-            const bool sameRequest =
-                !active.empty() &&
-                active[0][0].as<std::string>() == "resume_experiment" &&
-                !active[0][1].is_null() &&
-                active[0][1].as<long long>() == command.experimentId;
-            const bool ownedByOther =
-                sameRequest && active[0][3].as<bool>() &&
-                !active[0][2].is_null() &&
-                active[0][2].as<std::string>() != invocationIdentity;
-            if (!sameRequest || ownedByOther || !willApply)
-            {
-                reject(ownedByOther
-                    ? "administrative_request_application_in_progress"
-                    : "conflicting_administrative_request_active");
-                transaction.commit();
-                return 1;
-            }
-            requestId = *snapshot.activeRequestId;
-            retrying = true;
-            const std::optional<DbTarget> persistedPlan =
-                LoadSelectiveResumePlan(transaction, requestId);
-            if (!persistedPlan || !persistedPlan->sourcePauseRequestId)
-            {
-                reject("stale_control_evidence");
-                transaction.commit();
-                return 1;
-            }
-            target = *persistedPlan;
-            pauseRequestId = *target.sourcePauseRequestId;
-            if (snapshot.desiredState != "paused" ||
-                snapshot.currentPauseRequestId !=
-                    std::optional<long long>{pauseRequestId})
-            {
-                reject("stale_control_evidence");
-                transaction.commit();
-                return 1;
-            }
-            const pqxx::result claimed = transaction.exec_params(
-                "UPDATE experiment_admin_request r "
-                "SET application_owner=$1,"
-                "application_lease_until=now()+interval '30 seconds' "
-                "FROM experiment_global_control c "
-                "WHERE r.request_id=$2 AND r.action='resume_experiment' "
-                "AND c.singleton AND c.active_request_id=r.request_id "
-                "AND c.current_pause_request_id=$3 "
-                "AND (r.application_owner=$1 "
-                "OR r.application_lease_until IS NULL "
-                "OR r.application_lease_until<=now());",
-                invocationIdentity,
-                requestId,
-                pauseRequestId);
-            RequireAffectedRows(
-                claimed, 1, "claim_selective_resume_request");
-            LoadAuthoritativeTargetState(
-                transaction, requestId, Action::ResumeAll, target);
-            alreadyAccounted =
-                target.plan == "completed";
-            deferredMachineOutput
-                << "SCHEDULER_CONTROL_ATTEMPT,action=resume,experiment_id="
-                << command.experimentId
-                << ",current_status="
-                << (loaded ? loaded->worker.lifecycleStatus : "missing")
-                << ",current_phase="
-                << (loaded ? loaded->worker.phase : target.worker.phase)
-                << "\n";
-            transaction.commit();
-        }
-        else
-        {
-            if (!loaded)
-            {
-                output << "SCHEDULER_CONTROL_REJECTED,action=resume,"
-                       << "experiment_id=" << command.experimentId
-                       << ",reason=experiment_not_found,"
-                       << "result=invalid_lifecycle\n";
-                transaction.commit();
-                return 1;
-            }
-            target = *loaded;
-            deferredMachineOutput
-                << "SCHEDULER_CONTROL_ATTEMPT,action=resume,experiment_id="
-                << target.worker.experimentId
-                << ",current_status=" << target.worker.lifecycleStatus
-                << ",current_phase=" << target.worker.phase << "\n";
-
-            if (target.worker.lifecycleStatus == "paused")
-            {
-                deferredMachineOutput
-                    << "Experiment " << target.worker.experimentId << "\n"
-                    << "Current: status=paused phase="
-                    << target.worker.phase
-                    << "\nRequested: status=pending phase="
-                    << target.worker.phase << "\n";
-                if (command.dryRun)
-                {
-                    deferredMachineOutput
-                        << "SCHEDULER_CONTROL_DRY_RUN,action=resume,"
-                        << "experiment_id=" << target.worker.experimentId
-                        << ",new_status=pending,new_phase="
-                        << target.worker.phase
-                        << ",result=lifecycle_resumed\n";
-                    transaction.commit();
-                    output << deferredMachineOutput.str();
-                    return 0;
-                }
-                if (!command.confirmed)
-                {
-                    deferredMachineOutput << "Use --yes to apply.\n";
-                    transaction.commit();
-                    output << deferredMachineOutput.str();
-                    return 0;
-                }
-                const pqxx::result lifecycleResumed =
-                    transaction.exec_params(
-                    "UPDATE experiment SET status='pending',updated_at=now() "
-                    "WHERE experiment_id=$1 AND status='paused';",
-                    target.worker.experimentId);
-                RequireAffectedRows(
-                    lifecycleResumed, 1, "resume_paused_experiment_lifecycle");
-                deferredMachineOutput
-                    << "SCHEDULER_CONTROL_APPLIED,action=resume,"
-                    << "experiment_id=" << target.worker.experimentId
-                    << ",new_status=pending,new_phase="
-                    << target.worker.phase
-                    << ",result=lifecycle_resumed\n";
-                transaction.commit();
-                output << deferredMachineOutput.str();
-                return 0;
-            }
-            if (target.worker.lifecycleStatus != "running" ||
-                !ActiveManagedPhase(target.worker.phase))
-            {
-                reject("invalid_lifecycle");
-                transaction.commit();
-                return 1;
-            }
-            if (!snapshot.currentPauseRequestId ||
-                !target.workerGlobalPauseRequestId)
-            {
-                reject("not_globally_suspended");
-                transaction.commit();
-                return 1;
-            }
-            pauseRequestId = *snapshot.currentPauseRequestId;
-            if (*target.workerGlobalPauseRequestId != pauseRequestId ||
-                snapshot.desiredState != "paused")
-            {
-                reject("stale_control_evidence");
-                transaction.commit();
-                return 1;
-            }
-            if (!target.resumeBeforeAction)
-            {
-                if (const auto completedRequestId =
-                        CompletedSelectiveReleaseRequestId(
-                            transaction,
-                            command.experimentId,
-                            pauseRequestId))
-                {
-                    const SelectiveAccounting accounting =
-                        LoadSelectiveAccounting(
-                            transaction, *completedRequestId);
-                    transaction.commit();
-                    output << deferredMachineOutput.str();
-                    PrintSelectiveResult(
-                        output,
-                        command.experimentId,
-                        *completedRequestId,
-                        pauseRequestId,
-                        accounting,
-                        true,
-                        false);
-                    return RequestExitCodeForPersistedStatus(
-                        accounting.status);
-                }
-                reject("not_globally_suspended");
-                transaction.commit();
-                return 1;
-            }
-            if (!HasMatchingPauseEvidence(
-                    transaction, target, pauseRequestId))
-            {
-                reject("stale_control_evidence");
-                transaction.commit();
-                return 1;
-            }
-
-            deferredMachineOutput
-                << "SCHEDULER_CONTROL_TRANSITION,action=resume,"
-                << "experiment_id=" << target.worker.experimentId
-                << ",control_state=paused->running,"
-                << "lifecycle_status=running"
-                << ",phase=" << target.worker.phase
-                << ",source_pause_request_id=" << pauseRequestId << "\n";
-            if (command.dryRun)
-            {
-                const ValidatedWorker dryValidation =
-                    ValidateManagedWorker(target.worker, processes);
-                const std::string intendedSignal =
-                    dryValidation.identity == IdentityResult::Validated &&
-                            dryValidation.observation.stopped
-                        ? "SIGCONT"
-                        : "none";
-                deferredMachineOutput
-                    << "SCHEDULER_CONTROL_DRY_RUN,action=resume,"
-                    << "experiment_id=" << target.worker.experimentId
-                    << ",result=globally_suspended_worker_resumed"
-                    << ",identity=" << ToString(dryValidation.identity)
-                    << ",intended_signal=" << intendedSignal
-                    << ",global_state=paused\n";
-                transaction.commit();
-                output << deferredMachineOutput.str();
-                return 0;
-            }
-            if (!command.confirmed)
-            {
-                deferredMachineOutput << "Use --yes to apply.\n";
-                transaction.commit();
-                output << deferredMachineOutput.str();
-                return 0;
-            }
-
-            target.sourcePauseRequestId = pauseRequestId;
-            requestId = transaction.exec_params(
-                "INSERT INTO experiment_admin_request ("
-                "action,target_experiment_id,invocation_identity,"
-                "requester_identity,application_owner,application_lease_until,"
-                "previous_global_state,resulting_global_state,"
-                "scheduler_running_observed,target_count) "
-                "VALUES ('resume_experiment',$1,$2,$3,$2,"
-                "now()+interval '30 seconds','paused','paused',$4,1) "
-                "RETURNING request_id;",
-                command.experimentId,
-                invocationIdentity,
-                command.requesterIdentity.value_or(CurrentRequester()),
-                schedulerRunningObserved)[0][0].as<long long>();
-            InsertOutcome(
-                transaction, requestId, target, "planned", "none",
-                "selective_global_pause_release_planned");
-            const pqxx::result gated = transaction.exec_params(
-                "UPDATE experiment_global_control SET active_request_id=$1,"
-                "revision=revision+1,updated_at=now() "
-                "WHERE singleton AND desired_state='paused' "
-                "AND current_pause_request_id=$2 "
-                "AND active_request_id IS NULL;",
-                requestId,
-                pauseRequestId);
-            RequireAffectedRows(
-                gated, 1, "activate_selective_resume_request");
-            transaction.commit();
-        }
-    }
-
-    if (retrying)
-        deferredMachineOutput
-            << "SCHEDULER_CONTROL_RETRY,action=resume,experiment_id="
-            << command.experimentId << ",request_id=" << requestId
-            << ",persisted_plan=1\n";
-
-    SignalOutcome signal;
-    bool signalAttempted = false;
-    bool postSignalPredicateMismatch = false;
-    if (!alreadyAccounted && target.worker.pid <= 0)
-    {
-        signal.identity = IdentityResult::ProcessMissing;
-        signal.result = "process_missing";
-        signal.detail = "globally_suspended_worker_pid_missing";
-    }
-    else if (!alreadyAccounted)
-    {
-        signal = target.frozenReplayTarget &&
-                         !target.authoritativeExactMatch
-            ? FrozenTargetAuthorizationFailure(target, processes)
-            : ResumeWorkerAuthorized(
-                  target.worker,
-                  processes,
-                  ExactAttemptSignalAuthorization(
-                      connectionString,
-                      requestId,
-                      invocationIdentity,
-                      "resume_experiment",
-                      processes));
-        signalAttempted = !signal.signals.empty();
-    }
-
-    SelectiveAccounting accounting;
-    {
-        pqxx::connection connection{connectionString};
-        pqxx::work transaction{connection};
-        transaction.exec("SET TRANSACTION READ WRITE;");
-        AcquireCoordinationLock(transaction);
-        if (!OwnsActiveRequest(
-                transaction,
-                requestId,
-                invocationIdentity,
-                "resume_experiment",
-                pauseRequestId))
-        {
-            error << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
-                  << command.experimentId
-                  << ",request_id=" << requestId
-                  << ",reason=administrative_request_ownership_lost"
-                  << ",result=administrative_request_ownership_lost"
-                  << ",replay=" << (retrying ? 1 : 0)
-                  << ",signal_attempted=" << (signalAttempted ? 1 : 0)
-                  << "\n";
-            transaction.commit();
-            return 1;
-        }
-
-        if (!alreadyAccounted)
-        {
-            const auto exactSelectiveAttempt =
-                target.authoritativeExactTerminalDeparture
-                    ? std::optional<
-                          EA::SchedulerOwnership::ExactAttemptSnapshot>{}
-                    : LockExactTargetForMutation(
-                          transaction, target, true);
-            if (!exactSelectiveAttempt &&
-                !target.authoritativeExactTerminalDeparture)
-            {
-                postSignalPredicateMismatch = true;
-                signal.success = false;
-                signal.identity =
-                    IdentityResult::IdentityValidationFailed;
-                signal.result = "identity_validation_failed";
-                signal.detail =
-                    "exact_active_attempt_changed_after_selective_resume";
-            }
-            std::ostringstream signalList;
-            for (size_t i = 0; i < signal.signals.size(); ++i)
-            {
-                if (i)
-                    signalList << "|";
-                signalList << signal.signals[i];
-            }
-            if (signal.success && exactSelectiveAttempt)
-            {
-                const pqxx::result released = transaction.exec_params(
-                    "UPDATE experiment SET worker_control_state='running',"
-                    "updated_at=now() WHERE experiment_id=$1 "
-                    "AND status='running' AND phase=$3 AND worker_pid=$4 "
-                    "AND worker_process_group_id IS NOT DISTINCT FROM $5 "
-                    "AND worker_process_start_identity IS NOT DISTINCT FROM $6 "
-                    "AND worker_executable IS NOT DISTINCT FROM $7 "
-                    "AND worker_command_line IS NOT DISTINCT FROM $8 "
-                    "AND worker_control_state='paused' "
-                    "AND worker_global_pause_request_id=$2 "
-                    "AND active_scheduler_worker_attempt_id=$9;",
-                    target.worker.experimentId,
-                    pauseRequestId,
-                    target.worker.phase,
-                    target.worker.pid,
-                    target.worker.processGroupId,
-                    target.worker.processStartIdentity,
-                    target.worker.executable,
-                    target.worker.commandLine,
-                    target.worker.workerAttemptId);
-                if (released.affected_rows() != 1)
-                {
-                    postSignalPredicateMismatch = true;
-                    signal.success = false;
-                    signal.identity =
-                        IdentityResult::IdentityValidationFailed;
-                    signal.detail =
-                        "worker_state_changed_after_validated_resume_signal";
-                }
-            }
-            const bool safelyReconciled =
-                signal.success;
-            const pqxx::result outcomeUpdated = transaction.exec_params(
-                "UPDATE experiment_admin_worker_outcome SET "
-                "identity_result=$1,signal_result=$2,requested_signal=$3,"
-                "outcome_status=$4,detail=$5,updated_at=now() "
-                "WHERE request_id=$6 AND worker_identity=$7 "
-                "AND outcome_status IN ('planned','failed','partial') "
-                "AND EXISTS (SELECT 1 FROM experiment_admin_request r "
-                "JOIN experiment_global_control c "
-                "ON c.active_request_id=r.request_id "
-                "WHERE c.singleton AND r.request_id=$6 "
-                "AND r.application_owner=$8 "
-                "AND r.action='resume_experiment' "
-                "AND r.application_lease_until>now() "
-                "AND c.current_pause_request_id=$9);",
-                ToString(signal.identity),
-                PersistedSignalResult(signal),
-                signalList.str().empty()
-                    ? std::optional<std::string>{}
-                    : std::optional<std::string>{signalList.str()},
-                safelyReconciled ? "completed" : "failed",
-                signal.detail,
-                requestId,
-                target.workerIdentity,
-                invocationIdentity,
-                pauseRequestId);
-            RequireAffectedRows(
-                outcomeUpdated,
-                1,
-                "persist_selective_resume_outcome");
-        }
-        UpdateRequestAccounting(
-            transaction,
-            requestId,
-            false,
-            invocationIdentity,
-            "resume_experiment");
-        accounting = LoadSelectiveAccounting(transaction, requestId);
-        const bool unresolved =
-            HasUnresolvedWorkerOutcome(transaction, requestId);
-        if (accounting.status == "completed" && !unresolved)
-        {
-            const pqxx::result gateCleared = transaction.exec_params(
-                "UPDATE experiment_global_control c "
-                "SET active_request_id=NULL,revision=revision+1,"
-                "updated_at=now() "
-                "FROM experiment_admin_request r "
-                "WHERE c.singleton AND c.active_request_id=$1 "
-                "AND c.current_pause_request_id=$3 "
-                "AND r.request_id=c.active_request_id "
-                "AND r.application_owner=$2 "
-                "AND r.action='resume_experiment' "
-                "AND r.application_lease_until>now();",
-                requestId,
-                invocationIdentity,
-                pauseRequestId);
-            RequireAffectedRows(
-                gateCleared, 1, "clear_selective_resume_gate");
-        }
-        if (!postSignalPredicateMismatch)
-        {
-            const pqxx::result leaseCleared = transaction.exec_params(
-                "UPDATE experiment_admin_request "
-                "SET application_lease_until=NULL "
-                "WHERE request_id=$1 AND application_owner=$2;",
-                requestId,
-                invocationIdentity);
-            RequireAffectedRows(
-                leaseCleared, 1, "release_selective_resume_lease");
-        }
+        output << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
+               << command.experimentId
+               << ",reason=conflicting_administrative_request_active\n";
         transaction.commit();
+        return 1;
     }
+    const pqxx::result rows = transaction.exec_params(
+        "SELECT status,phase,scheduler_priority,resume_requested,"
+        "active_scheduler_worker_attempt_id FROM experiment "
+        "WHERE experiment_id=$1;",
+        command.experimentId);
+    if (rows.empty())
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
+               << command.experimentId << ",reason=experiment_not_found\n";
+        transaction.commit();
+        return 1;
+    }
+    const std::string status = rows[0][0].as<std::string>();
+    const std::string phase = rows[0][1].as<std::string>();
+    const std::string priority = rows[0][2].as<std::string>();
+    const bool requested = rows[0][3].as<bool>();
+    const bool stoppedWorker = !rows[0][4].is_null();
+    output << "SCHEDULER_CONTROL_ATTEMPT,action=resume,experiment_id="
+           << command.experimentId << ",current_status=" << status
+           << ",current_phase=" << phase << "\n";
 
-    output << deferredMachineOutput.str();
-    PrintSelectiveResult(
-        output,
-        command.experimentId,
-        requestId,
-        pauseRequestId,
-        accounting,
-        retrying,
-        signalAttempted);
-    return RequestExitCodeForPersistedStatus(accounting.status);
+    const bool idempotentPending = status == "pending" && requested;
+    const bool idempotentRunning = status == "running" && !requested;
+    if (status != "paused" && !idempotentPending && !idempotentRunning)
+    {
+        output << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
+               << command.experimentId << ",reason=resume_requires_paused_status\n";
+        transaction.commit();
+        return 1;
+    }
+    if (command.dryRun)
+    {
+        output << "SCHEDULER_CONTROL_DRY_RUN,action=resume,experiment_id="
+               << command.experimentId
+               << ",new_status=" << (idempotentRunning ? "running" : "pending")
+               << ",resume_requested="
+               << (idempotentRunning ? "false" : "true")
+               << ",signal=none\n";
+        transaction.commit();
+        return 0;
+    }
+    if (!command.confirmed)
+    {
+        output << "Use --yes to apply.\n";
+        transaction.commit();
+        return 0;
+    }
+    if (status == "paused")
+    {
+        const pqxx::result resumed = transaction.exec_params(
+            "UPDATE experiment SET status='pending',resume_requested=true,"
+            "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+            "AND status='paused' RETURNING experiment_id;",
+            command.experimentId);
+        RequireAffectedRows(resumed, 1, "queue_experiment_resume");
+    }
+    transaction.commit();
+    output << "SCHEDULER_CONTROL_APPLIED,action=resume,experiment_id="
+           << command.experimentId
+           << ",new_status=" << (idempotentRunning ? "running" : "pending")
+           << ",priority=" << priority
+           << ",resume_requested="
+           << (idempotentRunning ? "false" : "true")
+           << ",worker_state=" << (stoppedWorker ? "stopped" : "none")
+           << ",signal=none,result="
+           << ((idempotentPending || idempotentRunning)
+                   ? "already_satisfied" : "queued_for_admission")
+           << "\n";
+    return 0;
 }
 
 } // namespace EA::GlobalExperimentControl

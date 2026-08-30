@@ -78,6 +78,8 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/071_resume_input_width_expansion.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment_global_control(singleton,desired_state)
 VALUES(true,'running') ON CONFLICT(singleton) DO NOTHING;

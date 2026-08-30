@@ -124,6 +124,7 @@ struct SchedulerOptions
     bool inferBeforeCancel = false;
     std::optional<long long> pauseExperimentId;
     std::optional<long long> resumeExperimentId;
+    std::optional<std::pair<long long, std::string>> setExperimentPriority;
     std::optional<long long> cancelExperimentId;
     std::optional<long long> retryFailedExperimentId;
     std::optional<long long> retryCheckpointEvalId;
@@ -504,6 +505,9 @@ struct ExperimentRow
     bool resumeExpandInputWidth = false;
     EA::TrainingObjective::Configuration trainingObjective =
         EA::TrainingObjective::Legacy();
+    std::string schedulerPriority = "normal";
+    bool resumeRequested = false;
+    std::optional<long long> activeWorkerAttemptId;
 };
 
 struct ChildResult
@@ -1024,12 +1028,15 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--stop-all-experiments" ||
             arg == "--pause-all-experiments" ||
             arg == "--resume-all-experiments" ||
+            arg == "--pause-all" ||
+            arg == "--resume-all" ||
             arg == "--cancel-all-experiments" ||
             arg == "--immediate" ||
             arg == "--after-next-checkpoint" ||
             arg == "--infer-before-cancel" ||
             arg == "--pause-experiment" ||
             arg == "--resume-experiment" ||
+            arg == "--set-experiment-priority" ||
             arg == "--cancel-experiment" ||
             arg == "--retry-failed-experiment" ||
             arg == "--retry-checkpoint-eval" ||
@@ -1229,6 +1236,7 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--reconcile-worker-attempt=", 0) == 0 ||
             arg.rfind("--pause-experiment=", 0) == 0 ||
             arg.rfind("--resume-experiment=", 0) == 0 ||
+            arg.rfind("--set-experiment-priority=", 0) == 0 ||
             arg.rfind("--cancel-experiment=", 0) == 0 ||
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
             arg.rfind("--retry-checkpoint-eval=", 0) == 0 ||
@@ -2121,9 +2129,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
                 arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--stop-all-experiments")
             options.stopAllExperiments = true;
-        else if (arg == "--pause-all-experiments")
+        else if (arg == "--pause-all-experiments" || arg == "--pause-all")
             options.pauseAllExperiments = true;
-        else if (arg == "--resume-all-experiments")
+        else if (arg == "--resume-all-experiments" || arg == "--resume-all")
             options.resumeAllExperiments = true;
         else if (arg == "--cancel-all-experiments")
             options.cancelAllExperiments = true;
@@ -2137,6 +2145,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.pauseExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--resume-experiment")
             options.resumeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--set-experiment-priority")
+            options.setExperimentPriority = ParseExperimentConfigPair(
+                arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--cancel-experiment")
             options.cancelExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--retry-failed-experiment")
@@ -3247,6 +3258,9 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.pauseExperimentId = ParsePositiveLongLong("--pause-experiment", value);
         else if (SplitOptionWithValue(arg, "--resume-experiment", value))
             options.resumeExperimentId = ParsePositiveLongLong("--resume-experiment", value);
+        else if (SplitOptionWithValue(arg, "--set-experiment-priority", value))
+            options.setExperimentPriority = ParseExperimentConfigPair(
+                "--set-experiment-priority", value);
         else if (SplitOptionWithValue(arg, "--cancel-experiment", value))
             options.cancelExperimentId = ParsePositiveLongLong("--cancel-experiment", value);
         else if (SplitOptionWithValue(arg, "--retry-failed-experiment", value))
@@ -4003,6 +4017,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
     if (options.autoQueueContinuations)
         options.autoEvaluateContinuations = true;
 
+    if (options.setExperimentPriority)
+    {
+        const std::string& priority = options.setExperimentPriority->second;
+        if (priority != "high" && priority != "normal" && priority != "low")
+            throw std::invalid_argument(
+                "--set-experiment-priority requires high, normal, or low");
+    }
+
     const int commandCount =
         (options.modelInfo ? 1 : 0) +
         (options.compactStatus ? 1 : 0) +
@@ -4029,6 +4051,7 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.cancelAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
         (options.resumeExperimentId.has_value() ? 1 : 0) +
+        (options.setExperimentPriority.has_value() ? 1 : 0) +
         (options.cancelExperimentId.has_value() ? 1 : 0) +
         (options.retryFailedExperimentId.has_value() ? 1 : 0) +
         (options.retryCheckpointEvalId.has_value() ? 1 : 0) +
@@ -5764,6 +5787,12 @@ bool RequireSchedulerTables(pqxx::work& w)
         missing.push_back(
             "experiment.operator_forced_final_inference_rerun_requested");
     }
+    if (TableExists(w, "experiment") &&
+        !ColumnExists(w, "experiment", "scheduler_priority"))
+        missing.push_back("experiment.scheduler_priority");
+    if (TableExists(w, "experiment") &&
+        !ColumnExists(w, "experiment", "resume_requested"))
+        missing.push_back("experiment.resume_requested");
     if (TableExists(w, "experiment_checkpoint_eval") &&
         !ColumnExists(
             w,
@@ -7495,6 +7524,15 @@ ExperimentRow RowToExperiment(const pqxx::row& row)
     return experiment;
 }
 
+ExperimentRow RowToPendingExperiment(const pqxx::row& row)
+{
+    ExperimentRow experiment = RowToExperiment(row);
+    experiment.schedulerPriority = row[24].as<std::string>();
+    experiment.resumeRequested = row[25].as<bool>();
+    experiment.activeWorkerAttemptId = OptionalLongLongCell(row, 26);
+    return experiment;
+}
+
 std::vector<ExperimentRow> LoadPendingExperiments(
     pqxx::work& w,
     const std::string& phase,
@@ -7505,7 +7543,8 @@ std::vector<ExperimentRow> LoadPendingExperiments(
         "core_lr_mult, head_lr_mult, target_epochs, checkpoint_interval, "
         "train_start::text, train_end::text, infer_start::text, infer_end::text, "
         "last_model_id, resume_model_id, train_log_path, infer_log_path, analysis_log_path, "
-        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash "
+        "donchian20_mode,feature_warmup_scope,donchian_lookback,feature_ablation_mask,resume_expand_input_width,training_objective_canonical,training_objective_hash,"
+        "scheduler_priority,resume_requested,active_scheduler_worker_attempt_id "
         "FROM experiment "
         "WHERE status = 'pending' AND phase = $1 ";
     if (cancellationOnly)
@@ -7514,13 +7553,17 @@ std::vector<ExperimentRow> LoadPendingExperiments(
             " SELECT active_request_id FROM experiment_global_control "
             " WHERE singleton=true) "
             "AND cancel_after_checkpoint_epoch IS NOT NULL ";
-    sql += "ORDER BY updated_at ASC, experiment_id ASC;";
+    sql +=
+        "ORDER BY resume_requested DESC,"
+        "CASE scheduler_priority WHEN 'high' THEN 0 "
+        "WHEN 'normal' THEN 1 ELSE 2 END ASC,"
+        "updated_at ASC,experiment_id ASC;";
     pqxx::result rows = w.exec_params(sql, phase);
 
     std::vector<ExperimentRow> experiments;
     experiments.reserve(rows.size());
     for (const auto& row : rows)
-        experiments.push_back(RowToExperiment(row));
+        experiments.push_back(RowToPendingExperiment(row));
     return experiments;
 }
 
@@ -7983,6 +8026,15 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
 {
     const std::string action = SchedulerControlActionName(options);
     const long long experimentId = SchedulerControlExperimentId(options);
+    if (options.pauseExperimentId.has_value())
+    {
+        EA::GlobalExperimentControl::ExperimentPauseCommand command;
+        command.experimentId = experimentId;
+        command.dryRun = options.dryRun;
+        command.confirmed = options.yes;
+        return EA::GlobalExperimentControl::RunExperimentPauseCommand(
+            LstmDbConnectionString(), command, std::cout, std::cerr);
+    }
     if (options.resumeExperimentId.has_value())
     {
         EA::GlobalExperimentControl::ExperimentResumeCommand command;
@@ -8072,6 +8124,37 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
             : std::nullopt);
     PrintSchedulerControlApplied(action, experimentId, newStatus, newPhase);
     w.commit();
+    return 0;
+}
+
+int RunSetExperimentPriorityCommand(const SchedulerOptions& options)
+{
+    const auto& [experimentId, priority] = *options.setExperimentPriority;
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    EA::GlobalExperimentControl::AcquireCoordinationLock(transaction);
+    const pqxx::result updated = transaction.exec_params(
+        "UPDATE experiment SET scheduler_priority=$1,"
+        "updated_at=clock_timestamp() WHERE experiment_id=$2 "
+        "RETURNING status,phase,resume_requested;",
+        priority,
+        experimentId);
+    if (updated.empty())
+    {
+        std::cout << "SCHEDULER_PRIORITY_REJECTED,experiment_id="
+                  << experimentId << ",reason=experiment_not_found\n";
+        transaction.commit();
+        return 1;
+    }
+    transaction.commit();
+    std::cout << "SCHEDULER_PRIORITY_SET,experiment_id=" << experimentId
+              << ",priority=" << priority
+              << ",status=" << updated[0][0].as<std::string>()
+              << ",phase=" << updated[0][1].as<std::string>()
+              << ",resume_requested="
+              << (updated[0][2].as<bool>() ? "true" : "false")
+              << std::endl;
     return 0;
 }
 
@@ -9100,6 +9183,206 @@ int CountGlobalWorkerCapacity(
         capacityClass).one_row()[0].as<int>();
 }
 
+enum class StoppedWorkerAdmissionResult
+{
+    NotApplicable,
+    Admitted,
+    MissingProcessFallbackReady,
+    DeferredNoCapacity,
+    DeferredUnsafe
+};
+
+StoppedWorkerAdmissionResult AdmitStoppedExperimentWorker(
+    const SchedulerOptions& options,
+    const ExperimentRow& experiment,
+    const std::string& phase,
+    int maximumCapacity)
+{
+    if (!experiment.activeWorkerAttemptId ||
+        !experiment.resumeRequested)
+        return StoppedWorkerAdmissionResult::NotApplicable;
+
+    pqxx::connection connection{LstmDbConnectionString()};
+    pqxx::work transaction{connection};
+    SetTransactionReadWrite(transaction);
+    RequireAndRefreshSchedulerAuthority(transaction, options);
+    if (!SchedulerLaunchAllowed(transaction, phase))
+    {
+        transaction.commit();
+        return StoppedWorkerAdmissionResult::DeferredUnsafe;
+    }
+    if (!SchedulerWorkerCapacityHasSlot(
+            maximumCapacity,
+            CountGlobalWorkerCapacity(transaction, phase)))
+    {
+        transaction.commit();
+        return StoppedWorkerAdmissionResult::DeferredNoCapacity;
+    }
+
+    const pqxx::result lifecycle = transaction.exec_params(
+        "SELECT status,phase,resume_requested,"
+        "active_scheduler_worker_attempt_id "
+        "FROM experiment WHERE experiment_id=$1;",
+        experiment.experimentId);
+    if (lifecycle.size() != 1 ||
+        lifecycle[0][0].as<std::string>() != "pending" ||
+        lifecycle[0][1].as<std::string>() != phase ||
+        !lifecycle[0][2].as<bool>() ||
+        lifecycle[0][3].is_null() ||
+        lifecycle[0][3].as<long long>() !=
+            *experiment.activeWorkerAttemptId)
+    {
+        transaction.commit();
+        return StoppedWorkerAdmissionResult::DeferredUnsafe;
+    }
+
+    EA::SchedulerOwnership::ExactAttemptExpectation expected;
+    expected.workerAttemptId = *experiment.activeWorkerAttemptId;
+    expected.experimentId = experiment.experimentId;
+    expected.workerKind = "experiment";
+    expected.lifecyclePhase = phase;
+    expected.capacityClass = phase;
+    expected.requiredLifecycleState = "stopped";
+    expected.requireSignalable = true;
+    expected.requireCompleteProcessIdentity = true;
+    const auto exact =
+        EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+            transaction, expected, true);
+    if (!exact)
+    {
+        std::cout << "SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",worker_attempt_id="
+                  << *experiment.activeWorkerAttemptId
+                  << ",phase=" << phase
+                  << ",reason=exact_attempt_verification_failed"
+                  << std::endl;
+        transaction.commit();
+        return StoppedWorkerAdmissionResult::DeferredUnsafe;
+    }
+
+    EA::GlobalExperimentControl::ManagedWorker worker;
+    worker.workerAttemptId = exact->workerAttemptId;
+    worker.workerKind = exact->workerKind;
+    worker.capacityClass = exact->capacityClass;
+    worker.attemptLifecycleState = exact->lifecycleState;
+    worker.launchAttemptIdentity = exact->launchAttemptIdentity;
+    worker.experimentId = exact->experimentId;
+    worker.phase = exact->lifecyclePhase;
+    worker.lifecycleStatus = exact->lifecycleStatus;
+    worker.pid = *exact->workerPid;
+    worker.processGroupId = exact->processGroupId;
+    worker.executable = exact->canonicalExecutablePath;
+    worker.commandLine = exact->commandLine;
+    worker.processStartIdentity = exact->processStartIdentity;
+
+    auto processes =
+        EA::GlobalExperimentControl::CreateNativeProcessOperations();
+    const EA::GlobalExperimentControl::SignalOutcome signal =
+        EA::GlobalExperimentControl::
+            ResumeStoppedWorkerForSchedulerAdmission(worker, *processes);
+    if (signal.identity ==
+        EA::GlobalExperimentControl::IdentityResult::ProcessMissing)
+    {
+        pqxx::result retired = transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt SET "
+            "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
+            "last_observed_at=clock_timestamp(),"
+            "observed_by_scheduler_invocation_id=$1,"
+            "reconciled_at=clock_timestamp(),"
+            "reconciled_by_scheduler_invocation_id=$1,"
+            "reconciliation_result='stopped_process_missing',"
+            "diagnostic='resume_priority_preserved_for_restart' "
+            "WHERE worker_attempt_id=$2 AND lifecycle_state='stopped' "
+            "RETURNING worker_attempt_id;",
+            options.schedulerAuthority.schedulerInvocationId,
+            exact->workerAttemptId);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            retired, "retire_missing_stopped_worker_attempt");
+        pqxx::result detached = transaction.exec_params(
+            "UPDATE experiment SET worker_pid=NULL,"
+            "worker_process_group_id=NULL,"
+            "worker_process_start_identity=NULL,worker_executable=NULL,"
+            "worker_command_line=NULL,worker_control_state='running',"
+            "active_scheduler_worker_attempt_id=NULL,"
+            "updated_at=clock_timestamp() "
+            "WHERE experiment_id=$1 AND status='pending' "
+            "AND phase=$2 AND resume_requested=true "
+            "AND active_scheduler_worker_attempt_id=$3 "
+            "RETURNING experiment_id;",
+            experiment.experimentId,
+            phase,
+            exact->workerAttemptId);
+        EA::SchedulerOwnership::RequireAffectedExactlyOne(
+            detached, "detach_missing_stopped_worker_attempt");
+        transaction.commit();
+        std::cout << "SCHEDULER_STOPPED_WORKER_MISSING"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",worker_attempt_id=" << exact->workerAttemptId
+                  << ",phase=" << phase
+                  << ",resume_requested=true"
+                  << ",fallback=checkpoint_restart"
+                  << std::endl;
+        return StoppedWorkerAdmissionResult::MissingProcessFallbackReady;
+    }
+    if (!signal.success)
+    {
+        transaction.exec_params(
+            "UPDATE experiment_scheduler_worker_attempt SET "
+            "lifecycle_state='identity_ambiguous',"
+            "last_observed_at=clock_timestamp(),"
+            "observed_by_scheduler_invocation_id=$1,"
+            "reconciliation_result='stopped_resume_rejected',"
+            "diagnostic=$2 WHERE worker_attempt_id=$3 "
+            "AND lifecycle_state='stopped';",
+            options.schedulerAuthority.schedulerInvocationId,
+            signal.detail.empty() ? signal.result : signal.detail,
+            exact->workerAttemptId);
+        transaction.commit();
+        std::cout << "SCHEDULER_STOPPED_WORKER_ADMISSION_DEFERRED"
+                  << ",experiment_id=" << experiment.experimentId
+                  << ",worker_attempt_id=" << exact->workerAttemptId
+                  << ",phase=" << phase
+                  << ",reason=" << signal.result
+                  << std::endl;
+        return StoppedWorkerAdmissionResult::DeferredUnsafe;
+    }
+
+    pqxx::result activated = transaction.exec_params(
+        "UPDATE experiment_scheduler_worker_attempt SET "
+        "lifecycle_state='running',last_observed_at=clock_timestamp(),"
+        "observed_by_scheduler_invocation_id=$1,"
+        "reconciliation_result='stopped_worker_admitted',"
+        "diagnostic='capacity_acquired_before_sigcont' "
+        "WHERE worker_attempt_id=$2 AND lifecycle_state='stopped' "
+        "RETURNING worker_attempt_id;",
+        options.schedulerAuthority.schedulerInvocationId,
+        exact->workerAttemptId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        activated, "activate_admitted_stopped_worker_attempt");
+    pqxx::result running = transaction.exec_params(
+        "UPDATE experiment SET status='running',resume_requested=false,"
+        "worker_control_state='running',worker_global_pause_request_id=NULL,"
+        "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+        "AND status='pending' AND phase=$2 AND resume_requested=true "
+        "AND active_scheduler_worker_attempt_id=$3 "
+        "RETURNING experiment_id;",
+        experiment.experimentId,
+        phase,
+        exact->workerAttemptId);
+    EA::SchedulerOwnership::RequireAffectedExactlyOne(
+        running, "activate_admitted_stopped_worker_lifecycle");
+    transaction.commit();
+    std::cout << "SCHEDULER_STOPPED_WORKER_ADMITTED"
+              << ",experiment_id=" << experiment.experimentId
+              << ",worker_attempt_id=" << exact->workerAttemptId
+              << ",phase=" << phase
+              << ",signal=" << signal.result
+              << ",resume_requested=false"
+              << std::endl;
+    return StoppedWorkerAdmissionResult::Admitted;
+}
+
 std::string GenerateWorkerLaunchIdentity(
     const SchedulerOptions& options,
     const std::string& commandIdentity)
@@ -9210,7 +9493,7 @@ ReserveExperimentWorkerAttempt(
                    : "analysis_log_path");
     const std::string claimSql =
         std::string{
-        "UPDATE experiment SET status='running',"
+        "UPDATE experiment SET status='running',resume_requested=false,"
         "started_at=COALESCE(started_at,clock_timestamp()),"
         "worker_started_at=clock_timestamp(),worker_pid=NULL,"
         "worker_process_group_id=NULL,"
@@ -17169,7 +17452,7 @@ int RecoverOrphanedRunningExperiments(
         "FROM experiment_scheduler_worker_attempt "
         "WHERE lifecycle_state IN "
         "('reserved','spawned','running','observed',"
-        "'identity_ambiguous') "
+        "'stopped','identity_ambiguous') "
         "ORDER BY worker_attempt_id FOR UPDATE;");
     const pqxx::row protocol = transaction.exec(
         "SELECT cutover_state,"
@@ -17689,14 +17972,21 @@ int RecoverOrphanedRunningExperiments(
                         experimentId);
             }
 
+            const bool remainsStopped =
+                identityMatches && state == "stopped" &&
+                observation.stopped;
+            const bool unexpectedlyExecuting =
+                identityMatches && state == "stopped" &&
+                !observation.stopped;
             transaction.exec_params(
                 "UPDATE experiment_scheduler_worker_attempt SET "
                 "lifecycle_state=$1,last_observed_at=clock_timestamp(),"
                 "observed_by_scheduler_invocation_id=$2,"
                 "reconciliation_result=$3,diagnostic=$4 "
                 "WHERE worker_attempt_id=$5;",
-                identityMatches ? "observed"
-                                : "identity_ambiguous",
+                identityMatches
+                    ? (remainsStopped ? "stopped" : "observed")
+                    : "identity_ambiguous",
                 options.schedulerAuthority.schedulerInvocationId,
                 identityMatches ? "valid_process_observed"
                                 : "identity_mismatch",
@@ -17704,6 +17994,19 @@ int RecoverOrphanedRunningExperiments(
                     ? "live_worker_observed_without_relaunch"
                     : "pid_reuse_or_worker_identity_mismatch",
                 attemptId);
+            if (unexpectedlyExecuting && !checkpointEvalId)
+            {
+                transaction.exec_params(
+                    "UPDATE experiment SET status='running',"
+                    "resume_requested=false,worker_control_state='running',"
+                    "updated_at=clock_timestamp() "
+                    "WHERE experiment_id=$1 AND phase=$2 "
+                    "AND status IN ('paused','pending') "
+                    "AND active_scheduler_worker_attempt_id=$3;",
+                    experimentId,
+                    phase,
+                    attemptId);
+            }
             std::cout
                 << (identityMatches
                         ? "SCHEDULER_PRIOR_WORKER_OBSERVED"
@@ -17711,9 +18014,76 @@ int RecoverOrphanedRunningExperiments(
                 << ",worker_attempt_id=" << attemptId
                 << ",experiment_id=" << experimentId
                 << ",pid=" << pid
-                << ",capacity_consumed=1"
+                << ",capacity_consumed="
+                << (remainsStopped ? 0 : 1)
                 << std::endl;
             continue;
+        }
+
+        if (state == "stopped" && !checkpointEvalId)
+        {
+            const pqxx::result stoppedLifecycle =
+                transaction.exec_params(
+                    "SELECT status,resume_requested FROM experiment "
+                    "WHERE experiment_id=$1 AND phase=$2 "
+                    "AND status IN ('paused','pending') "
+                    "AND active_scheduler_worker_attempt_id=$3 "
+                    "FOR UPDATE;",
+                    experimentId,
+                    phase,
+                    attemptId);
+            if (stoppedLifecycle.size() == 1)
+            {
+                pqxx::result retired = transaction.exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='abandoned',"
+                    "completed_at=clock_timestamp(),"
+                    "last_observed_at=clock_timestamp(),"
+                    "observed_by_scheduler_invocation_id=$1,"
+                    "reconciled_at=clock_timestamp(),"
+                    "reconciled_by_scheduler_invocation_id=$1,"
+                    "reconciliation_result='stopped_process_missing',"
+                    "diagnostic='resume_priority_preserved_for_restart' "
+                    "WHERE worker_attempt_id=$2 "
+                    "AND lifecycle_state='stopped' "
+                    "RETURNING worker_attempt_id;",
+                    options.schedulerAuthority.schedulerInvocationId,
+                    attemptId);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    retired,
+                    "reconcile_missing_stopped_worker_attempt");
+                pqxx::result detached = transaction.exec_params(
+                    "UPDATE experiment SET worker_pid=NULL,"
+                    "worker_process_group_id=NULL,"
+                    "worker_process_start_identity=NULL,"
+                    "worker_executable=NULL,worker_command_line=NULL,"
+                    "worker_control_state=CASE WHEN status='paused' "
+                    "THEN 'paused' ELSE 'running' END,"
+                    "active_scheduler_worker_attempt_id=NULL,"
+                    "updated_at=clock_timestamp() "
+                    "WHERE experiment_id=$1 AND phase=$2 "
+                    "AND status IN ('paused','pending') "
+                    "AND active_scheduler_worker_attempt_id=$3 "
+                    "RETURNING experiment_id;",
+                    experimentId,
+                    phase,
+                    attemptId);
+                EA::SchedulerOwnership::RequireAffectedExactlyOne(
+                    detached,
+                    "detach_reconciled_missing_stopped_worker_attempt");
+                std::cout
+                    << "SCHEDULER_STOPPED_WORKER_RECONCILED"
+                    << ",worker_attempt_id=" << attemptId
+                    << ",experiment_id=" << experimentId
+                    << ",phase=" << phase
+                    << ",resume_requested="
+                    << (stoppedLifecycle[0][1].as<bool>()
+                            ? "true" : "false")
+                    << ",result=process_missing_restart_eligible"
+                    << std::endl;
+                ++reconciled;
+                continue;
+            }
         }
 
         // A missing process is destructive evidence only when the exact
@@ -17765,7 +18135,7 @@ int RecoverOrphanedRunningExperiments(
                 "WHERE a.worker_attempt_id=$1 "
                 "AND a.lifecycle_state IN "
                 "('reserved','spawned','running','observed',"
-                "'identity_ambiguous') "
+                "'stopped','identity_ambiguous') "
                 "AND NOT EXISTS (SELECT 1 FROM experiment e "
                 " WHERE e.active_scheduler_worker_attempt_id="
                 "a.worker_attempt_id) "
@@ -17928,7 +18298,7 @@ int RecoverOrphanedRunningExperiments(
             "reconciliation_result=$3,diagnostic=$4 "
             "WHERE a.worker_attempt_id=$5 "
             "AND a.lifecycle_state IN "
-            "('spawned','running','observed',"
+            "('spawned','running','observed','stopped',"
             "'identity_ambiguous') "
             "AND EXISTS ("
             " SELECT 1 FROM experiment e "
@@ -20320,6 +20690,46 @@ int RunTrainJobs(
 
     for (const ExperimentRow& job : jobs)
     {
+        if (!options.dryRun && job.activeWorkerAttemptId)
+        {
+            const StoppedWorkerAdmissionResult admission =
+                AdmitStoppedExperimentWorker(
+                    options, job, "train", options.maxTrainProcs);
+            if (admission == StoppedWorkerAdmissionResult::Admitted)
+            {
+                ++stats.launched;
+                continue;
+            }
+            if (admission ==
+                StoppedWorkerAdmissionResult::DeferredNoCapacity)
+            {
+                ++stats.skipped;
+                LogSkip(
+                    "train",
+                    job.experimentId,
+                    "global_train_slots_full_stopped_worker_waiting",
+                    logState,
+                    options.schedulerVerbose);
+                break;
+            }
+            if (admission ==
+                StoppedWorkerAdmissionResult::DeferredUnsafe ||
+                admission ==
+                    StoppedWorkerAdmissionResult::NotApplicable)
+            {
+                ++stats.skipped;
+                LogSkip(
+                    "train",
+                    job.experimentId,
+                    "stopped_worker_admission_deferred",
+                    logState,
+                    options.schedulerVerbose);
+                continue;
+            }
+            // Positive process absence detached the old exact attempt while
+            // deliberately preserving resume_requested. Continue through the
+            // normal checkpoint/restart reservation path in this same turn.
+        }
         if (options.dryRun)
         {
             if (stats.launched >= stats.freeSlots)
@@ -20458,6 +20868,43 @@ int RunInferJobs(
 
     for (const ExperimentRow& job : jobs)
     {
+        if (!options.dryRun && job.activeWorkerAttemptId)
+        {
+            const StoppedWorkerAdmissionResult admission =
+                AdmitStoppedExperimentWorker(
+                    options, job, "infer", options.maxInferProcs);
+            if (admission == StoppedWorkerAdmissionResult::Admitted)
+            {
+                ++stats.launched;
+                continue;
+            }
+            if (admission ==
+                StoppedWorkerAdmissionResult::DeferredNoCapacity)
+            {
+                ++stats.skipped;
+                LogSkip(
+                    "infer",
+                    job.experimentId,
+                    "global_infer_slots_full_stopped_worker_waiting",
+                    logState,
+                    options.schedulerVerbose);
+                break;
+            }
+            if (admission ==
+                StoppedWorkerAdmissionResult::DeferredUnsafe ||
+                admission ==
+                    StoppedWorkerAdmissionResult::NotApplicable)
+            {
+                ++stats.skipped;
+                LogSkip(
+                    "infer",
+                    job.experimentId,
+                    "stopped_worker_admission_deferred",
+                    logState,
+                    options.schedulerVerbose);
+                continue;
+            }
+        }
         bool eligible = true;
         {
             pqxx::connection connection{LstmDbConnectionString()};
@@ -24723,15 +25170,16 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Exit 0 includes every scientific disposition; exit 3 is a "
         << "missing, ambiguous, or invalid evidence contract.\n"
         << "Usage: " << exe
-        << " --pause-all-experiments [--dry-run | --yes]\n"
+        << " --pause-all-experiments|--pause-all [--dry-run | --yes]\n"
         << "Usage: " << exe
-        << " --resume-all-experiments [--dry-run | --yes]\n"
+        << " --resume-all-experiments|--resume-all [--dry-run | --yes]\n"
         << "Usage: " << exe
         << " --cancel-all-experiments (--immediate | --after-next-checkpoint) "
         << "[--infer-before-cancel] [--dry-run | --yes]\n"
         << "Global controls are database-authoritative and work without a running "
-        << "scheduler. Pause/resume signal only identity-validated managed process "
-        << "groups. Cancellation uses durable checkpoints for optional inference.\n"
+        << "scheduler. Pause stops identity-validated train/infer workers; resume "
+        << "queues generation members for capacity-limited scheduler admission. "
+        << "Cancellation uses durable checkpoints for optional inference.\n"
         << "Usage: " << exe
         << " --generate-experiment-reports [--experiment-report-dir=PATH]\n"
         << "Usage: " << exe
@@ -24752,6 +25200,10 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << " --pause-experiment=ID | --resume-experiment=ID | --cancel-experiment=ID | "
         << "--retry-failed-experiment=ID | --requeue-inference=ID | --requeue-analysis=ID "
         << "[--dry-run] [--yes]\n"
+        << "Usage: " << exe
+        << " --set-experiment-priority=ID:high|normal|low\n"
+        << "Individual resume queues pending work with temporary resume priority; "
+        << "SIGCONT occurs only after compatible scheduler capacity is admitted.\n"
         << "Usage: " << exe
         << " --retry-checkpoint-eval=CHECKPOINT_EVAL_ID [--dry-run]\n"
         << "Usage: " << exe
@@ -26404,6 +26856,8 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return ListExperimentModels(*options.listExperimentModelsId);
         if (options.listExperimentLineageId.has_value())
             return ListExperimentLineage(*options.listExperimentLineageId, options.includeParentModels);
+        if (options.setExperimentPriority.has_value())
+            return RunSetExperimentPriorityCommand(options);
         if (options.pauseExperimentId.has_value() ||
             options.resumeExperimentId.has_value() ||
             options.cancelExperimentId.has_value() ||

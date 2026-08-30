@@ -119,13 +119,13 @@ inline bool IsActiveAttemptState(const std::string& state) noexcept
 {
     return state == "reserved" || state == "spawned" ||
            state == "running" || state == "observed" ||
-           state == "identity_ambiguous";
+           state == "stopped" || state == "identity_ambiguous";
 }
 
 inline bool IsSignalableAttemptState(const std::string& state) noexcept
 {
     return state == "spawned" || state == "running" ||
-           state == "observed";
+           state == "observed" || state == "stopped";
 }
 
 inline void SetCorrectedSchedulerProtocolSession(
@@ -290,7 +290,10 @@ inline std::optional<ExactAttemptSnapshot> LockAndVerifyExactActiveAttempt(
             ? "infer"
             : expected.lifecyclePhase;
     const bool activeLifecycle =
-        snapshot.lifecycleStatus == "running" &&
+        ((snapshot.lifecycleStatus == "running") ||
+         (snapshot.lifecycleState == "stopped" &&
+          (snapshot.lifecycleStatus == "paused" ||
+           snapshot.lifecycleStatus == "pending"))) &&
         snapshot.lifecycleRowPhase == requiredPhase;
     const bool exactWorkerTerminalLifecycle =
         expected.allowTerminalLifecycle &&

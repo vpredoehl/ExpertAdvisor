@@ -73,6 +73,8 @@ int main()
         assert(!WorkerAttemptConsumesCapacity(state));
         assert(WorkerAttemptIsTerminal(state));
     }
+    assert(!WorkerAttemptConsumesCapacity("stopped"));
+    assert(!WorkerAttemptIsTerminal("stopped"));
     assert(!WorkerAttemptConsumesCapacity("unsupported"));
     assert(!WorkerAttemptIsTerminal("unsupported"));
 

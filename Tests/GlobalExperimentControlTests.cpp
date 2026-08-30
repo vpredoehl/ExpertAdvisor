@@ -535,6 +535,75 @@ int main()
     assert(ValidateManagedWorker(inactive, processes).identity ==
            IdentityResult::StalePid);
 
+    // Ordinary process control remains running-only. Scheduler admission has a
+    // separate, exact stopped-attempt precondition and still validates every
+    // native process identity component before SIGCONT.
+    ManagedWorker pendingStopped = Worker();
+    pendingStopped.workerAttemptId = 623;
+    pendingStopped.workerKind = "experiment";
+    pendingStopped.capacityClass = "train";
+    pendingStopped.attemptLifecycleState = "stopped";
+    pendingStopped.launchAttemptIdentity = "launch-attempt-623";
+    pendingStopped.lifecycleStatus = "pending";
+    pendingStopped.commandLine =
+        "/tmp/LSTM_Release --train --scheduler-experiment-id=42 "
+        "--scheduler-worker-attempt-id=623";
+    ProcessObservation stoppedObservation =
+        Observation(*pendingStopped.commandLine);
+    stoppedObservation.stopped = true;
+    FakeProcesses stoppedProcesses;
+    stoppedProcesses.observations.emplace(1200, stoppedObservation);
+    assert(ValidateManagedWorker(pendingStopped, stoppedProcesses).identity ==
+           IdentityResult::StalePid);
+    assert(ValidateStoppedWorkerForSchedulerAdmission(
+               pendingStopped, stoppedProcesses).identity ==
+           IdentityResult::Validated);
+    SignalOutcome stoppedResume =
+        ResumeStoppedWorkerForSchedulerAdmission(
+            pendingStopped, stoppedProcesses);
+    assert(stoppedResume.success);
+    assert((stoppedProcesses.signals ==
+            std::vector<std::pair<int, int>>{{1200, SIGCONT}}));
+
+    ManagedWorker pausedStopped = pendingStopped;
+    pausedStopped.lifecycleStatus = "paused";
+    assert(ValidateManagedWorker(pausedStopped, stoppedProcesses).identity ==
+           IdentityResult::StalePid);
+    assert(ValidateStoppedWorkerForSchedulerAdmission(
+               pausedStopped, stoppedProcesses).identity ==
+           IdentityResult::StalePid);
+
+    auto stoppedIdentityResult = [&](const ProcessObservation& observation) {
+        FakeProcesses identityProcesses;
+        identityProcesses.observations.emplace(1200, observation);
+        return ValidateStoppedWorkerForSchedulerAdmission(
+                   pendingStopped, identityProcesses).identity;
+    };
+    ProcessObservation mismatchedStopped = stoppedObservation;
+    mismatchedStopped.pid = 1201;
+    assert(stoppedIdentityResult(mismatchedStopped) ==
+           IdentityResult::IdentityValidationFailed);
+    mismatchedStopped = stoppedObservation;
+    mismatchedStopped.executable = "/tmp/other_LSTM_Release";
+    assert(stoppedIdentityResult(mismatchedStopped) ==
+           IdentityResult::IdentityValidationFailed);
+    mismatchedStopped = stoppedObservation;
+    mismatchedStopped.commandLine += " --unexpected-argument";
+    assert(stoppedIdentityResult(mismatchedStopped) ==
+           IdentityResult::IdentityValidationFailed);
+    mismatchedStopped = stoppedObservation;
+    mismatchedStopped.processStartIdentity = "1700000001:654321";
+    assert(stoppedIdentityResult(mismatchedStopped) ==
+           IdentityResult::IdentityValidationFailed);
+    mismatchedStopped = stoppedObservation;
+    mismatchedStopped.processGroupId = 1201;
+    assert(stoppedIdentityResult(mismatchedStopped) ==
+           IdentityResult::IdentityValidationFailed);
+    mismatchedStopped = stoppedObservation;
+    mismatchedStopped.stopped = false;
+    assert(stoppedIdentityResult(mismatchedStopped) ==
+           IdentityResult::IdentityValidationFailed);
+
     {
         FakeProcesses classifierProcesses;
         ManagedWorker normal = Worker();
