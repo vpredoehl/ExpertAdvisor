@@ -351,11 +351,58 @@ run_control --resume-campaign-materialization=887003 --yes >"${test_dir}/resume-
 test "$(scalar "SELECT status||':'||resume_requested FROM experiment WHERE experiment_id=887121")" = 'pending:true'
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
 
-# Exact live PID with a stale start identity is rejected without signalling.
+# Campaign re-pause retains the exact stopped worker awaiting admission. Its
+# dry run does not mutate durable provenance, ownership, attempt state, or the
+# stopped process.
+repause_attempt="$(scalar "SELECT active_scheduler_worker_attempt_id FROM experiment WHERE experiment_id=887121")"
+repause_signal="$(scalar "SELECT signal_number FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=9887121")"
+repause_operations="$(scalar "SELECT count(*) FROM experiment_campaign_materialization_control_operation")"
+repause_active_ownership="$(scalar "SELECT count(*) FROM experiment_campaign_materialization_pause_ownership WHERE experiment_id=887121 AND ownership_state='active'")"
+repause_dry_run_state="$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887121")"
+repause_dry_run_result=0
+run_control --pause-campaign-materialization=887003 --dry-run \
+    >"${test_dir}/repause-workers-dry-run.out" 2>&1 || repause_dry_run_result=$?
+test "${repause_dry_run_result}" = 1
+grep -q 'outcome=changed_by_group_pause,changed=1,reason=would_retain_stopped_worker' "${test_dir}/repause-workers-dry-run.out"
+test "${repause_operations}" = "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_control_operation")"
+test "${repause_active_ownership}" = "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_pause_ownership WHERE experiment_id=887121 AND ownership_state='active'")"
+test "${repause_dry_run_state}" = "$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887121")"
+[[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
+repause_result=0
+run_control --pause-campaign-materialization=887003 --yes \
+    >"${test_dir}/repause-workers.out" 2>&1 || repause_result=$?
+test "${repause_result}" = 1
+grep -q 'outcome=changed_by_group_pause,changed=1,reason=stopped_worker_retained' "${test_dir}/repause-workers.out"
+test "$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887121")" = \
+    "paused:false:low:${repause_attempt}:stopped:${repause_signal}"
+test "$(scalar "SELECT outcome_kind||':'||changed_by_operation||':'||identity_result FROM experiment_campaign_materialization_control_outcome o JOIN experiment_campaign_materialization_control_member m USING(campaign_materialization_control_member_id) WHERE m.experiment_id=887121 ORDER BY campaign_materialization_control_outcome_id DESC LIMIT 1")" = 'changed_by_group_pause:true:validated'
+test "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_pause_ownership WHERE experiment_id=887121 AND ownership_state='active'")" = 1
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=887121")" = 1
+[[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
+
+# A pending stopped attempt with a stale exact identity fails closed without
+# changing lifecycle or signalling the controlled process.
 insert_materialization 887004 1 8871000 8871100
 launch_worker 887131 9887131
 persist_worker 2 887131 9887131 running
 link_member 8871101 8871201 887131
+run_control --pause-experiment=887131 --yes >"${test_dir}/stale-setup-pause.out"
+run_control --resume-experiment=887131 --yes >"${test_dir}/stale-setup-resume.out"
+[[ "$(ps -o state= -p "${worker_pids[2]}" | tr -d ' ')" == T* ]]
+individual_repause_attempt="$(scalar "SELECT active_scheduler_worker_attempt_id FROM experiment WHERE experiment_id=887131")"
+individual_repause_signal="$(scalar "SELECT signal_number FROM experiment_scheduler_worker_attempt WHERE worker_attempt_id=9887131")"
+individual_repause_state="$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887131")"
+run_control --pause-experiment=887131 --dry-run >"${test_dir}/individual-repause-dry-run.out"
+grep -q 'worker_action=validate_and_retain_stopped' "${test_dir}/individual-repause-dry-run.out"
+test "${individual_repause_state}" = "$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887131")"
+[[ "$(ps -o state= -p "${worker_pids[2]}" | tr -d ' ')" == T* ]]
+run_control --pause-experiment=887131 --yes >"${test_dir}/individual-repause.out"
+grep -q 'new_status=paused,resume_requested=false,worker_state=stopped' "${test_dir}/individual-repause.out"
+test "$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887131")" = \
+    "paused:false:low:${individual_repause_attempt}:stopped:${individual_repause_signal}"
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt WHERE experiment_id=887131")" = 1
+[[ "$(ps -o state= -p "${worker_pids[2]}" | tr -d ' ')" == T* ]]
+run_control --resume-experiment=887131 --yes >"${test_dir}/stale-setup-second-resume.out"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "SELECT set_config('expertadvisor.scheduler_protocol_generation','52',false); UPDATE experiment_scheduler_worker_attempt SET worker_process_start_identity='stale:start' WHERE worker_attempt_id=9887131; UPDATE experiment SET worker_process_start_identity='stale:start' WHERE experiment_id=887131;"
 stale_result=0
@@ -363,8 +410,9 @@ run_control --pause-campaign-materialization=887004 --yes \
     >"${test_dir}/stale-pid.out" 2>&1 || stale_result=$?
 test "${stale_result}" = 1
 grep -q 'identity_failure_count=1' "${test_dir}/stale-pid.out"
-test "$(scalar "SELECT status FROM experiment WHERE experiment_id=887131")" = running
-[[ "$(ps -o state= -p "${worker_pids[2]}" | tr -d ' ')" != T* ]]
+test "$(scalar "SELECT e.status||':'||e.resume_requested||':'||e.active_scheduler_worker_attempt_id||':'||a.lifecycle_state FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id=887131")" = 'pending:true:9887131:stopped'
+test "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_pause_ownership WHERE experiment_id=887131 AND ownership_state='active'")" = 0
+[[ "$(ps -o state= -p "${worker_pids[2]}" | tr -d ' ')" == T* ]]
 
 # Process disappearance after a durable group pause preserves resume priority
 # and the stopped attempt for scheduler admission/restart fallback.
@@ -393,6 +441,48 @@ run_control --resume-campaign-materialization=887006 --yes \
 test "${predicate_result}" = 1
 grep -q 'resume_predicate_mismatch_count=1' "${test_dir}/resume-predicate.out"
 test "$(scalar "SELECT status||':'||resume_requested FROM experiment WHERE experiment_id=887151")" = 'completed:false'
+
+# A later unexpected database exception rolls back group provenance and state;
+# every process newly SIGSTOP'd by the aborted transaction is compensated.
+insert_materialization 887008 2 8872200 8872300
+launch_worker 887171 9887171
+persist_worker 4 887171 9887171 running
+link_member 8872301 8872401 887171
+launch_worker 887172 9887172
+persist_worker 5 887172 9887172 running
+link_member 8872302 8872402 887172
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+CREATE FUNCTION campaign_pause_fault_after_sigstop() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.worker_attempt_id = 9887172 AND
+       NEW.reconciliation_result = 'paused_by_campaign_materialization' THEN
+        RAISE EXCEPTION 'injected campaign pause persistence failure';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER campaign_pause_fault_after_sigstop
+BEFORE UPDATE ON experiment_scheduler_worker_attempt
+FOR EACH ROW EXECUTE FUNCTION campaign_pause_fault_after_sigstop();
+SQL
+rollback_result=0
+run_control --pause-campaign-materialization=887008 --yes \
+    >"${test_dir}/rollback-compensation.out" 2>&1 || rollback_result=$?
+test "${rollback_result}" = 2
+test "$(grep -c 'ROLLBACK_COMPENSATION.*restored=1' "${test_dir}/rollback-compensation.out")" = 2
+for index in 4 5; do
+    for _ in {1..100}; do
+        rollback_state="$(ps -o state= -p "${worker_pids[${index}]}" | tr -d ' ')"
+        [[ "${rollback_state}" != T* ]] && break
+        sleep 0.02
+    done
+    [[ "${rollback_state}" != T* ]]
+done
+test "$(scalar "SELECT string_agg(e.experiment_id||':'||e.status||':'||e.resume_requested||':'||a.lifecycle_state,',' ORDER BY e.experiment_id) FROM experiment e JOIN experiment_scheduler_worker_attempt a ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id WHERE e.experiment_id IN (887171,887172)")" = \
+    '887171:running:false:running,887172:running:false:running'
+test "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_control_operation WHERE recommendation_campaign_materialization_id=887008")" = 0
+test "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_pause_ownership WHERE experiment_id IN (887171,887172)")" = 0
 
 test "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_control_operation WHERE resolution_status='resolved'")" -ge 10
 test "$(scalar "SELECT count(*) FROM experiment_campaign_materialization_control_member m LEFT JOIN experiment_campaign_materialization_control_outcome o USING(campaign_materialization_control_member_id) WHERE o.campaign_materialization_control_outcome_id IS NULL")" = 0

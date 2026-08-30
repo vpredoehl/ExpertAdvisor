@@ -2630,6 +2630,29 @@ SignalOutcome PauseWorkerAuthorized(
     return outcome;
 }
 
+SignalOutcome RetainStoppedWorkerForPause(
+    const ManagedWorker& worker,
+    ProcessOperations& processes)
+{
+    SignalOutcome outcome;
+    const ValidatedWorker validated =
+        ValidateStoppedWorkerForSchedulerAdmission(worker, processes);
+    outcome.identity = validated.identity;
+    outcome.detail = validated.detail;
+    if (validated.identity != IdentityResult::Validated)
+    {
+        outcome.result = validated.identity == IdentityResult::ProcessMissing
+            ? "process_missing"
+            : (validated.identity == IdentityResult::PermissionDenied
+                   ? "permission_failure"
+                   : ToString(validated.identity));
+        return outcome;
+    }
+    outcome.result = "already_requested_state";
+    outcome.success = true;
+    return outcome;
+}
+
 SignalOutcome ResumeWorkerAuthorized(
     const ManagedWorker& worker,
     ProcessOperations& processes,
@@ -5970,7 +5993,8 @@ void ApplyCampaignPauseMember(
     long long operationId,
     CampaignControlTarget& member,
     ProcessOperations& processes,
-    CampaignControlSummary& summary)
+    CampaignControlSummary& summary,
+    std::vector<ManagedWorker>* newlyStoppedWorkers)
 {
     if (!member.experimentId || !member.target)
     {
@@ -6034,11 +6058,13 @@ void ApplyCampaignPauseMember(
     std::string workerReason = "pending_experiment_paused";
     if (hasWorker)
     {
+        const bool retainStoppedWorker =
+            status == "pending" &&
+            target.worker.attemptLifecycleState == "stopped";
         if (!transaction)
         {
             const ValidatedWorker validated =
-                target.worker.attemptLifecycleState == "stopped" &&
-                        status == "pending"
+                retainStoppedWorker
                     ? ValidateStoppedWorkerForSchedulerAdmission(
                           target.worker, processes)
                     : ValidateManagedWorker(target.worker, processes);
@@ -6063,8 +6089,12 @@ void ApplyCampaignPauseMember(
             ++summary.changed;
             return;
         }
+        const auto exact = transaction
+            ? LockExactTargetForMutation(*transaction, target, true)
+            : std::nullopt;
         if (transaction &&
-            !LockExactTargetForMutation(*transaction, target, true))
+            (!exact || (retainStoppedWorker &&
+                        exact->lifecycleState != "stopped")))
         {
             RecordSimpleCampaignOutcome(
                 transaction, output, operationId, member, "identity_failure",
@@ -6072,7 +6102,13 @@ void ApplyCampaignPauseMember(
                 "exact_active_worker_attempt_verification_failed", summary);
             return;
         }
-        const SignalOutcome signal = PauseWorker(target.worker, processes);
+        const SignalOutcome signal = retainStoppedWorker
+            ? RetainStoppedWorkerForPause(target.worker, processes)
+            : PauseWorker(target.worker, processes);
+        if (signal.success && newlyStoppedWorkers &&
+            std::find(signal.signals.begin(), signal.signals.end(), SIGSTOP) !=
+                signal.signals.end())
+            newlyStoppedWorkers->push_back(target.worker);
         identityResult = ToString(signal.identity);
         if (signal.identity == IdentityResult::ProcessMissing)
         {
@@ -6118,15 +6154,19 @@ void ApplyCampaignPauseMember(
                 const pqxx::result stopped = transaction->exec_params(
                     "UPDATE experiment_scheduler_worker_attempt SET "
                     "lifecycle_state='stopped',"
-                    "last_observed_at=clock_timestamp(),signal_number=$1,"
+                    "last_observed_at=clock_timestamp(),"
+                    "signal_number=COALESCE($1,signal_number),"
                     "reconciliation_result='paused_by_campaign_materialization',"
-                    "diagnostic='verified_process_group_stopped' "
-                    "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
+                    "diagnostic=$2 "
+                    "WHERE worker_attempt_id=$3 AND lifecycle_state IN "
                     "('spawned','running','observed','stopped') "
                     "RETURNING worker_attempt_id;",
                     signal.signals.empty()
                         ? std::optional<int>{}
                         : std::optional<int>{signal.signals.back()},
+                    retainStoppedWorker
+                        ? "authoritative_stopped_worker_retained"
+                        : "verified_process_group_stopped",
                     *target.worker.workerAttemptId);
                 RequireAffectedRows(
                     stopped, 1, "campaign_pause_stop_worker_attempt");
@@ -6280,6 +6320,28 @@ void PrintCampaignControlSummary(
            << summary.resumePredicateMismatch << "\n";
 }
 
+void CompensateCampaignPauseRollback(
+    const std::vector<ManagedWorker>& newlyStoppedWorkers,
+    ProcessOperations& processes,
+    std::ostream& error)
+{
+    for (auto worker = newlyStoppedWorkers.rbegin();
+         worker != newlyStoppedWorkers.rend(); ++worker)
+    {
+        const SignalOutcome resumed = ResumeWorker(*worker, processes);
+        error << "CAMPAIGN_MATERIALIZATION_CONTROL_ROLLBACK_COMPENSATION"
+              << ",experiment_id=" << worker->experimentId
+              << ",worker_attempt_id="
+              << worker->workerAttemptId.value_or(-1)
+              << ",result=" << resumed.result
+              << ",restored="
+              << ((resumed.success ||
+                   resumed.identity == IdentityResult::ProcessMissing)
+                      ? 1 : 0)
+              << "\n";
+    }
+}
+
 int RunCampaignMaterializationControlCommand(
     const std::string& connectionString,
     const CampaignMaterializationControlCommand& command,
@@ -6354,27 +6416,40 @@ int RunCampaignMaterializationControlCommand(
                 transaction, operationId, member);
     }
     CampaignControlSummary summary;
-    for (CampaignControlTarget& member : resolution.targets)
+    std::vector<ManagedWorker> newlyStoppedWorkers;
+    newlyStoppedWorkers.reserve(resolution.targets.size());
+    try
     {
-        if (pause)
-            ApplyCampaignPauseMember(
-                willApply ? &transaction : nullptr, output, operationId,
-                member, processes, summary);
-        else
-            ApplyCampaignResumeMember(
-                willApply ? &transaction : nullptr, output, operationId,
-                member, summary);
+        for (CampaignControlTarget& member : resolution.targets)
+        {
+            if (pause)
+                ApplyCampaignPauseMember(
+                    willApply ? &transaction : nullptr, output, operationId,
+                    member, processes, summary,
+                    willApply ? &newlyStoppedWorkers : nullptr);
+            else
+                ApplyCampaignResumeMember(
+                    willApply ? &transaction : nullptr, output, operationId,
+                    member, summary);
+        }
+        const std::string result = command.dryRun
+            ? "dry_run"
+            : (!command.confirmed
+                   ? "confirmation_required"
+                   : (summary.Failed() ? "partial_failure" : "applied"));
+        PrintCampaignControlSummary(
+            output, action, command.materializationId, operationId,
+            resolution.targets.size(), summary, result);
+        if (!command.dryRun && !command.confirmed)
+            output << "Use --yes to apply.\n";
     }
-    const std::string result = command.dryRun
-        ? "dry_run"
-        : (!command.confirmed
-               ? "confirmation_required"
-               : (summary.Failed() ? "partial_failure" : "applied"));
-    PrintCampaignControlSummary(
-        output, action, command.materializationId, operationId,
-        resolution.targets.size(), summary, result);
-    if (!command.dryRun && !command.confirmed)
-        output << "Use --yes to apply.\n";
+    catch (...)
+    {
+        transaction.abort();
+        CompensateCampaignPauseRollback(
+            newlyStoppedWorkers, processes, error);
+        throw;
+    }
     transaction.commit();
     return summary.Failed() ? 1 : 0;
 }
@@ -6504,6 +6579,9 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
     }
 
     const bool hasBoundWorker = target.worker.workerAttemptId.has_value();
+    const bool retainStoppedWorker =
+        target.worker.lifecycleStatus == "pending" &&
+        target.worker.attemptLifecycleState == "stopped";
     if (target.worker.lifecycleStatus == "running" && !hasBoundWorker)
     {
         output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
@@ -6518,7 +6596,9 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
                << target.worker.experimentId
                << ",new_status=paused,resume_requested=false"
                << ",worker_action="
-               << (hasBoundWorker ? "validate_then_sigstop" : "none")
+               << (retainStoppedWorker
+                       ? "validate_and_retain_stopped"
+                       : (hasBoundWorker ? "validate_then_sigstop" : "none"))
                << "\n";
         transaction.commit();
         return 0;
@@ -6535,7 +6615,8 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
     {
         const auto exact = LockExactTargetForMutation(
             transaction, target, true);
-        if (!exact)
+        if (!exact || (retainStoppedWorker &&
+                       exact->lifecycleState != "stopped"))
         {
             output << "SCHEDULER_CONTROL_REJECTED,action=pause,experiment_id="
                    << target.worker.experimentId
@@ -6569,6 +6650,10 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
                            ? "permission_failure"
                            : ToString(validated.identity));
             }
+        }
+        else if (retainStoppedWorker)
+        {
+            signal = RetainStoppedWorkerForPause(target.worker, processes);
         }
         else
         {
@@ -6607,14 +6692,17 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
             const pqxx::result stopped = transaction.exec_params(
                 "UPDATE experiment_scheduler_worker_attempt SET "
                 "lifecycle_state='stopped',last_observed_at=clock_timestamp(),"
-                "signal_number=$1,reconciliation_result='paused_by_operator',"
-                "diagnostic='verified_process_group_stopped' "
-                "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
+                "signal_number=COALESCE($1,signal_number),"
+                "reconciliation_result='paused_by_operator',diagnostic=$2 "
+                "WHERE worker_attempt_id=$3 AND lifecycle_state IN "
                 "('spawned','running','observed','stopped') "
                 "RETURNING worker_attempt_id;",
                 signal.signals.empty()
                     ? std::optional<int>{}
                     : std::optional<int>{signal.signals.back()},
+                retainStoppedWorker
+                    ? "authoritative_stopped_worker_retained"
+                    : "verified_process_group_stopped",
                 *target.worker.workerAttemptId);
             RequireAffectedRows(stopped, 1, "pause_stop_worker_attempt");
             const pqxx::result paused = transaction.exec_params(

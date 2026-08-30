@@ -253,6 +253,44 @@ test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
     WHERE experiment_id=861001")" = "pending:true"
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
 
+# Re-pausing an exact stopped worker awaiting scheduler admission retains the
+# attempt and process identity, clears resume priority, and sends no SIGSTOP.
+repause_attempt="$(scalar "SELECT active_scheduler_worker_attempt_id FROM
+    experiment WHERE experiment_id=861001")"
+repause_signal="$(scalar "SELECT signal_number FROM
+    experiment_scheduler_worker_attempt WHERE worker_attempt_id=9861001")"
+repause_dry_run_state="$(scalar "SELECT e.status||':'||
+    e.resume_requested::text||':'||e.scheduler_priority||':'||
+    e.active_scheduler_worker_attempt_id::text||':'||a.lifecycle_state||':'||
+    COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN
+    experiment_scheduler_worker_attempt a ON a.worker_attempt_id=
+    e.active_scheduler_worker_attempt_id WHERE e.experiment_id=861001")"
+run_cli --pause-experiment=861001 --dry-run |
+    grep -q 'worker_action=validate_and_retain_stopped'
+test "${repause_dry_run_state}" = "$(scalar "SELECT e.status||':'||
+    e.resume_requested::text||':'||e.scheduler_priority||':'||
+    e.active_scheduler_worker_attempt_id::text||':'||a.lifecycle_state||':'||
+    COALESCE(a.signal_number::text,'NULL') FROM experiment e JOIN
+    experiment_scheduler_worker_attempt a ON a.worker_attempt_id=
+    e.active_scheduler_worker_attempt_id WHERE e.experiment_id=861001")"
+[[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
+run_cli --pause-experiment=861001 --yes |
+    grep -q 'new_status=paused,resume_requested=false,worker_state=stopped'
+test "$(scalar "SELECT e.status||':'||e.resume_requested::text||':'||
+    e.scheduler_priority||':'||e.active_scheduler_worker_attempt_id::text||':'||
+    a.lifecycle_state||':'||COALESCE(a.signal_number::text,'NULL')
+    FROM experiment e JOIN experiment_scheduler_worker_attempt a ON
+    a.worker_attempt_id=e.active_scheduler_worker_attempt_id
+    WHERE e.experiment_id=861001")" = \
+    "paused:false:low:${repause_attempt}:stopped:${repause_signal}"
+test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt
+    WHERE experiment_id=861001")" = 1
+[[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" == T* ]]
+run_cli --resume-experiment=861001 --yes |
+    grep -q 'queued_for_admission'
+test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
+    WHERE experiment_id=861001")" = "pending:true"
+
 # Release only the disposable capacity fixture, then prove the resumed low
 # priority worker gets the next slot ahead of an ordinary high-priority row.
 kill -TERM -- "-${worker_pgids[1]}"
