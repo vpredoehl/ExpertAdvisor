@@ -96,7 +96,79 @@ int main()
             "'{\"provider\":\"MYFXBOOK\"}','4530000','parsed','scalar',"
             "4530000,4530000,'count',1,'missing','missing' "
             "FROM economic_event WHERE source_event_id='range-jolts';");
+        write.exec(
+            "INSERT INTO economic_event_release_actual ("
+            "economic_event_id,source_agency,source_observation_id,"
+            "publication_state,revision_sequence,available_at,retrieved_at,"
+            "source_url,source_artifact_path,source_artifact_sha256,"
+            "semantic_contract,source_provenance,actual_raw,actual_value_kind,"
+            "actual_value_low,actual_canonical_value_low,actual_unit,"
+            "actual_scale) SELECT economic_event_id,'BLS','bls:jolts:initial',"
+            "'initial',0,event_timestamp_utc + interval '1 microsecond',"
+            "'2026-08-29 00:00:00+00',"
+            "'https://www.bls.gov/news.release/jolts.nr0.htm',"
+            "'fixture/bls-jolts-initial.html',repeat('b',64),"
+            "'bls_jolts_initial_actual_v1','{\"provider\":\"BLS\"}',"
+            "'5000','scalar',5000,5000000,'count',1000 "
+            "FROM economic_event WHERE source_event_id='range-jolts';");
+        write.exec(
+            "INSERT INTO economic_event_release_actual ("
+            "economic_event_id,source_agency,source_observation_id,"
+            "publication_state,revision_sequence,available_at,retrieved_at,"
+            "source_url,source_artifact_path,source_artifact_sha256,"
+            "semantic_contract,source_provenance,actual_raw,actual_value_kind,"
+            "actual_value_low,actual_canonical_value_low,actual_unit,"
+            "actual_scale) SELECT economic_event_id,'BLS','bls:jolts:revision:1',"
+            "'revision',1,event_timestamp_utc + interval '1 day',"
+            "'2026-08-29 00:00:00+00',"
+            "'https://www.bls.gov/news.release/jolts.nr0.htm',"
+            "'fixture/bls-jolts-revision.html',repeat('c',64),"
+            "'bls_jolts_revision_actual_v1','{\"provider\":\"BLS\"}',"
+            "'5100','scalar',5100,5100000,'count',1000 "
+            "FROM economic_event WHERE source_event_id='range-jolts';");
         write.commit();
+    }
+
+    // The actual store is immutable, rejects non-authoritative source agency,
+    // and keeps revision sequence causally ordered.
+    for (const std::string& statement : {
+        "UPDATE economic_event_release_actual SET actual_raw='changed' "
+        "WHERE source_observation_id='bls:jolts:initial'",
+        "INSERT INTO economic_event_release_actual (economic_event_id,"
+        "source_agency,source_observation_id,publication_state,"
+        "revision_sequence,available_at,retrieved_at,source_url,"
+        "source_artifact_path,source_artifact_sha256,semantic_contract,"
+        "source_provenance,actual_raw,actual_value_kind,actual_value_low,"
+        "actual_canonical_value_low,actual_unit,actual_scale) SELECT "
+        "economic_event_id,'BEA','wrong-agency','revision',2,"
+        "event_timestamp_utc + interval '2 days','2026-08-29 00:00:00+00',"
+        "'https://www.bls.gov/example','fixture/wrong',repeat('d',64),"
+        "'fixture_v1','{}','1','scalar',1,1,'count',1 FROM economic_event "
+        "WHERE source_event_id='range-jolts'",
+        "INSERT INTO economic_event_release_actual (economic_event_id,"
+        "source_agency,source_observation_id,publication_state,"
+        "revision_sequence,available_at,retrieved_at,source_url,"
+        "source_artifact_path,source_artifact_sha256,semantic_contract,"
+        "source_provenance,actual_raw,actual_value_kind,actual_value_low,"
+        "actual_canonical_value_low,actual_unit,actual_scale) SELECT "
+        "economic_event_id,'BLS','out-of-order','revision',2,"
+        "event_timestamp_utc + interval '12 hours','2026-08-29 00:00:00+00',"
+        "'https://www.bls.gov/example','fixture/order',repeat('e',64),"
+        "'fixture_v1','{}','1','scalar',1,1,'count',1 FROM economic_event "
+        "WHERE source_event_id='range-jolts'"})
+    {
+        bool rejected = false;
+        try
+        {
+            pqxx::work invalid{connection};
+            invalid.exec(statement);
+            invalid.commit();
+        }
+        catch (const pqxx::sql_error&)
+        {
+            rejected = true;
+        }
+        assert(rejected);
     }
 
     pqxx::read_transaction read{connection};
@@ -110,6 +182,7 @@ int main()
     assert(halfOpenEvents.front().selectedConsensus->provider == "OANDA");
     assert(!halfOpenEvents.front().selectedConsensus
                 ->unprovenProviderActual);
+    assert(!halfOpenEvents.front().releaseActual);
 
     // The base observation really does contain a populated historical OANDA
     // actual. Schema 082 deliberately does not expose it through the selected
@@ -144,6 +217,23 @@ int main()
     assert(events[4].selectedConsensus->provider == "MYFXBOOK");
     assert(!events[4].selectedConsensus->unprovenProviderActual);
     assert(events[4].selectedConsensus->forecast.canonicalValueLow == 4530000.0);
+    assert(events[4].releaseActual);
+    assert(events[4].releaseActual->actual.canonicalValueLow == 5000000.0);
+    assert(events[4].releaseActual->availableAtUnixMicros % 1000000LL == 1);
+    assert(events[4].releaseActual->sourceAgency == "BLS");
+    assert(events[4].releaseActual->sourceObservationId ==
+           "bls:jolts:initial");
+    assert(events[4].releaseActual->sourceArtifactSha256 ==
+           std::string(64, 'b'));
+    assert(read.query_value<long long>(
+        "SELECT count(*) FROM economic_event_release_actual") == 2);
+    assert(read.query_value<double>(
+        "SELECT actual_canonical_value_low "
+        "FROM economic_event_feature_release_actual") == 5000000.0);
+    assert(read.query_value<std::string>(
+        "SELECT source_observation_id "
+        "FROM economic_event_feature_release_actual") ==
+           "bls:jolts:initial");
 
     constexpr std::int64_t firstBarStart = 1'700'000'000;
     EconomicEventFeatureEngine engine{events};
@@ -157,6 +247,10 @@ int main()
     assert(first.releasedEventSurprise == 0.0F);
     assert(first.releasedEventSurpriseAbs == 0.0F);
     assert(first.releasedEventSurpriseDirection == 0.0F);
+    assert(first.authoritativeInitialHasSurprise == 0.0F);
+    assert(first.authoritativeInitialSurprise == 0.0F);
+    assert(first.authoritativeInitialSurpriseAbs == 0.0F);
+    assert(first.authoritativeInitialSurpriseDirection == 0.0F);
     assert(Near(first.inflationRecencyDecay,
                 std::exp(-4500.0 / 86400.0)));
     assert(Near(first.employmentRecencyDecay,
@@ -171,6 +265,10 @@ int main()
     assert(second.releasedEventSurprise == 0.0F);
     assert(second.releasedEventSurpriseAbs == 0.0F);
     assert(second.releasedEventSurpriseDirection == 0.0F);
+    assert(second.authoritativeInitialHasSurprise == 1.0F);
+    assert(Near(second.authoritativeInitialSurprise, 0.047));
+    assert(Near(second.authoritativeInitialSurpriseAbs, 0.047));
+    assert(second.authoritativeInitialSurpriseDirection == 1.0F);
 
     return 0;
 }

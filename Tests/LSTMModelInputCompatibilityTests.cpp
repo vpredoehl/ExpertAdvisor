@@ -34,7 +34,7 @@ int main()
     static_assert(return_autocorrelation_feature_size == 49);
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
-    static_assert(feature_size == 67);
+    static_assert(feature_size == 71);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -53,7 +53,8 @@ int main()
     static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
-    static_assert(EA::kCurrentModelInputWidth == 71);
+    static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
+    static_assert(EA::kCurrentModelInputWidth == 75);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -275,8 +276,8 @@ int main()
     assert(returnAutocorrelationInput[returnAutocorrelationCol] ==
            physicalTensor[returnAutocorrelationCol]);
 
-    // Phase 2 appends exactly the ten economic-event Tensor features. The old
-    // width remains a registered projection and cannot silently consume them.
+    // The current contract appends economic-event, consensus, and certified
+    // release-actual features. Every predecessor remains a registered prefix.
     const auto economicEvents = EA::ResolveModelInputContract(
         EA::kCurrentModelInputWidth, physicalTensor.size());
     assert(economicEvents.tensorFeatureCount == feature_size);
@@ -290,6 +291,18 @@ int main()
            physicalTensor[inflationEventCol]);
     assert(economicEventInput[consumerDemandRecencyDecayCol] ==
            physicalTensor[consumerDemandRecencyDecayCol]);
+
+    const auto consensusEvents = EA::ResolveModelInputContract(
+        EA::kEconomicEventConsensusModelInputWidth, physicalTensor.size());
+    assert(consensusEvents.tensorFeatureCount ==
+           consensus_economic_event_feature_size);
+    std::vector<float> consensusWidthInput(
+        EA::kEconomicEventConsensusModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        consensusWidthInput.data(), physicalTensor.data(), consensusEvents);
+    for (std::size_t i = 0; i < consensus_economic_event_feature_size; ++i)
+        assert(consensusWidthInput[i] == physicalTensor[i]);
+    assert(consensusWidthInput[authoritativeInitialHasSurpriseCol] == -1.0f);
 
     // The consensus control retains the current width and zeros exactly the
     // four active consensus channels.  The economic prefix and reserved
@@ -311,6 +324,34 @@ int main()
     for (std::size_t col = releasedEventHasSurpriseCol;
          col < feature_size; ++col)
         assert(consensusControl[col] == economicEventInput[col]);
+
+    const auto releaseActualAblation = EA::FeatureAblationMask::Parse(
+        std::string{EA::kEconomicEventReleaseActualAblationMaskText});
+    assert(releaseActualAblation.CanonicalText() ==
+           EA::kEconomicEventReleaseActualAblationMaskText);
+    std::vector<float> releaseActualControl(
+        EA::kCurrentModelInputWidth, -1.0f);
+    EA::CopyTensorFeaturesForModelInput(
+        releaseActualControl.data(), physicalTensor.data(), economicEvents,
+        releaseActualAblation);
+    for (std::size_t col = 0; col < authoritativeInitialHasSurpriseCol; ++col)
+        assert(releaseActualControl[col] == economicEventInput[col]);
+    for (std::size_t col = authoritativeInitialHasSurpriseCol;
+         col <= authoritativeInitialSurpriseDirectionCol; ++col)
+        assert(releaseActualControl[col] == 0.0f);
+
+    bool releaseActualMaskRejectedByWidth71 = false;
+    try
+    {
+        EA::CopyTensorFeaturesForModelInput(
+            consensusWidthInput.data(), physicalTensor.data(), consensusEvents,
+            releaseActualAblation);
+    }
+    catch (const std::runtime_error&)
+    {
+        releaseActualMaskRejectedByWidth71 = true;
+    }
+    assert(releaseActualMaskRejectedByWidth71);
 
     const auto unrelatedAblation = EA::FeatureAblationMask::Parse(
         "return_autocorrelation");
@@ -445,7 +486,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75";
     }
     assert(unsupportedRejected);
 

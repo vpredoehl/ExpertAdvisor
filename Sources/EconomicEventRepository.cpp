@@ -123,12 +123,44 @@ EconomicEvent MapEconomicEvent(const pqxx::row& row)
         event.selectedConsensus = std::move(selected);
     }
 
+    if (!row["release_actual_value_low"].is_null())
+    {
+        EconomicEventReleaseActual actual;
+        actual.actual.valueKind =
+            row["release_actual_value_kind"].as<std::string>();
+        actual.actual.canonicalValueLow =
+            row["release_actual_value_low"].as<double>();
+        actual.actual.canonicalValueHigh = OptionalValue<double>(
+            row, "release_actual_value_high");
+        actual.actual.unit =
+            row["release_actual_unit"].as<std::string>();
+        actual.actual.scale =
+            row["release_actual_scale"].as<double>();
+        actual.actual.qualifier = OptionalValue<std::string>(
+            row, "release_actual_qualifier");
+        actual.availableAtUnixMicros =
+            row["release_actual_available_at_unix_micros"]
+                .as<std::int64_t>();
+        actual.sourceAgency =
+            row["release_actual_source_agency"].as<std::string>();
+        actual.sourceObservationId =
+            row["release_actual_source_observation_id"].as<std::string>();
+        actual.sourceArtifactPath =
+            row["release_actual_source_artifact_path"].as<std::string>();
+        actual.sourceArtifactSha256 =
+            row["release_actual_source_artifact_sha256"].as<std::string>();
+        actual.semanticContract =
+            row["release_actual_semantic_contract"].as<std::string>();
+        event.releaseActual = std::move(actual);
+    }
+
     return event;
 }
 
 std::string EconomicEventProjection(
     std::string_view eventRelation,
-    std::string_view consensusRelation)
+    std::string_view consensusRelation,
+    std::string_view releaseActualRelation)
 {
     const std::string prefix = eventRelation.empty()
         ? std::string{}
@@ -136,6 +168,9 @@ std::string EconomicEventProjection(
     const std::string consensusPrefix = consensusRelation.empty()
         ? std::string{}
         : std::string{consensusRelation} + ".";
+    const std::string releaseActualPrefix = releaseActualRelation.empty()
+        ? std::string{}
+        : std::string{releaseActualRelation} + ".";
 
     return
         prefix + "economic_event_id, " +
@@ -163,7 +198,30 @@ std::string EconomicEventProjection(
         consensusPrefix + "consensus_unit, " +
         consensusPrefix + "consensus_scale, " +
         consensusPrefix + "consensus_qualifier, " +
-        consensusPrefix + "consensus_source ";
+        consensusPrefix + "consensus_source, " +
+        "ROUND(EXTRACT(EPOCH FROM " + releaseActualPrefix +
+            "available_at) * 1000000)::bigint "
+            "AS release_actual_available_at_unix_micros, " +
+        releaseActualPrefix + "actual_value_kind "
+            "AS release_actual_value_kind, " +
+        releaseActualPrefix + "actual_canonical_value_low "
+            "AS release_actual_value_low, " +
+        releaseActualPrefix + "actual_canonical_value_high "
+            "AS release_actual_value_high, " +
+        releaseActualPrefix + "actual_unit AS release_actual_unit, " +
+        releaseActualPrefix + "actual_scale AS release_actual_scale, " +
+        releaseActualPrefix +
+            "actual_qualifier AS release_actual_qualifier, " +
+        releaseActualPrefix +
+            "source_agency AS release_actual_source_agency, " +
+        releaseActualPrefix +
+            "source_observation_id AS release_actual_source_observation_id, " +
+        releaseActualPrefix +
+            "source_artifact_path AS release_actual_source_artifact_path, " +
+        releaseActualPrefix +
+            "source_artifact_sha256 AS release_actual_source_artifact_sha256, " +
+        releaseActualPrefix +
+            "semantic_contract AS release_actual_semantic_contract ";
 }
 
 std::vector<EconomicEvent> MapEconomicEvents(const pqxx::result& rows)
@@ -215,9 +273,11 @@ std::vector<EconomicEvent> LoadEconomicEvents(
     // depends on the active PostgreSQL session timezone.
     //
     const pqxx::result rows = transaction.exec(
-        "SELECT " + EconomicEventProjection("e", "c") +
+        "SELECT " + EconomicEventProjection("e", "c", "a") +
         "FROM economic_event e "
         "LEFT JOIN economic_event_selected_consensus c "
+        "USING (economic_event_id) "
+        "LEFT JOIN economic_event_feature_release_actual a "
         "USING (economic_event_id) "
         "WHERE e.currency = $1 "
         "AND e.event_timestamp_utc >= $2::timestamptz "
@@ -265,9 +325,11 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
         "WHERE e.currency = $1 "
         "AND e.event_timestamp_utc >= $2::timestamptz "
         "AND e.event_timestamp_utc <= $3::timestamptz"
-        ") SELECT " + EconomicEventProjection("e", "c") +
+        ") SELECT " + EconomicEventProjection("e", "c", "a") +
         "FROM selected_event e "
         "LEFT JOIN economic_event_selected_consensus c "
+        "USING (economic_event_id) "
+        "LEFT JOIN economic_event_feature_release_actual a "
         "USING (economic_event_id) "
         "ORDER BY e.event_timestamp_utc ASC, e.economic_event_id ASC;",
         pqxx::params{

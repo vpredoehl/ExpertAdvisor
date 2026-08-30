@@ -116,12 +116,28 @@ inline constexpr std::size_t releasedEventSurpriseAbsCol =
 inline constexpr std::size_t releasedEventSurpriseDirectionCol =
     economicEventFeatureStartCol + static_cast<std::size_t>(
         EA::EconomicCalendar::EconomicEventFeatureIndex::releasedEventSurpriseDirection);
+inline constexpr std::size_t authoritativeInitialHasSurpriseCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::authoritativeInitialHasSurprise);
+inline constexpr std::size_t authoritativeInitialSurpriseCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::authoritativeInitialSurprise);
+inline constexpr std::size_t authoritativeInitialSurpriseAbsCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::authoritativeInitialSurpriseAbs);
+inline constexpr std::size_t authoritativeInitialSurpriseDirectionCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::authoritativeInitialSurpriseDirection);
 inline constexpr std::size_t pre_consensus_economic_event_feature_size =
     economicEventFeatureStartCol +
     EA::EconomicCalendar::kPreConsensusEconomicEventFeatureWidth;
-inline constexpr std::size_t economic_event_feature_size =
+inline constexpr std::size_t consensus_economic_event_feature_size =
     economicEventFeatureStartCol +
-    EA::EconomicCalendar::kEconomicEventFeatureWidth;
+    EA::EconomicCalendar::kPreConsensusEconomicEventFeatureWidth +
+    EA::EconomicCalendar::kEconomicEventConsensusFeatureWidth;
+inline constexpr std::size_t economic_event_feature_size =
+    consensus_economic_event_feature_size +
+    EA::EconomicCalendar::kEconomicEventReleaseActualFeatureWidth;
 inline constexpr std::size_t feature_size =
     economic_event_feature_size;
 
@@ -131,5 +147,7 @@ static_assert(feature_size == return_autocorrelation_feature_size +
               EA::EconomicCalendar::kEconomicEventFeatureWidth);
 static_assert(relevantEventHasConsensusCol ==
               pre_consensus_economic_event_feature_size);
+static_assert(authoritativeInitialHasSurpriseCol ==
+              consensus_economic_event_feature_size);
 
 #endif /* FeatureLayout_hpp */

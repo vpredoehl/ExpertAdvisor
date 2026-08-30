@@ -37,6 +37,21 @@ struct EconomicEventSelectedConsensus
     std::string provider;
 };
 
+// One provenance-certified authoritative initial-release actual.  Secondary
+// provider actual fields are deliberately not accepted here.  Later revisions
+// remain in economic_event_release_actual but are excluded from the feature
+// view so they cannot rewrite historical release surprise.
+struct EconomicEventReleaseActual
+{
+    EconomicEventConsensusValue actual;
+    std::int64_t availableAtUnixMicros = 0;
+    std::string sourceAgency;
+    std::string sourceObservationId;
+    std::string sourceArtifactPath;
+    std::string sourceArtifactSha256;
+    std::string semanticContract;
+};
+
 struct EconomicEvent
 {
     long long economicEventId = 0;
@@ -66,6 +81,11 @@ struct EconomicEvent
     // Populated only by the provider-neutral selected-consensus abstraction.
     // Events without a selected forecast remain std::nullopt.
     std::optional<EconomicEventSelectedConsensus> selectedConsensus;
+
+    // Populated only from economic_event_feature_release_actual.  This is the
+    // authoritative initial observation with an explicit causal known-at
+    // instant; persisted revisions are never selected into model features.
+    std::optional<EconomicEventReleaseActual> releaseActual;
 };
 
 bool EconomicEventSchemaExists(

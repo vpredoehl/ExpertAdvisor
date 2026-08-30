@@ -108,11 +108,11 @@ void TestTensorIntegrationAndContracts()
 {
     static_assert(causalReturnDirectionImbalanceCol == 43);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 67);
+    static_assert(feature_size == 71);
     static_assert(EA::kCausalReturnSignPersistenceModelInputWidth == 47);
     static_assert(EA::kCausalReturnDirectionImbalanceModelInputWidth == 48);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 71);
+    static_assert(EA::kCurrentModelInputWidth == 75);
 
     Tensor tensor{"causal-return-direction-imbalance"};
     for (std::size_t index = 0; index < 8; ++index)

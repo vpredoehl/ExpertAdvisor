@@ -53,6 +53,9 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" \
     -f "$ROOT/Database/migrations/082_economic_event_consensus_provider_provenance.sql" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/088_economic_event_release_actual_provenance.sql" >/dev/null
 
 if [[ -e "$ROOT/Database/migrations/083_economic_event_selected_consensus_release_semantics.sql" ]]; then
     printf 'unexpected migration 083 remains in deployment set\n' >&2
@@ -69,9 +72,20 @@ if [[ "$actual_view_columns" != "$expected_view_columns" ]]; then
     exit 4
 fi
 
-printf 'DISPOSABLE_SCHEMA_END=082\n'
+actual_feature_view_columns="$(psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" \
+    --username="$DB_USER" --dbname="$DB_NAME" -tAc \
+    "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'economic_event_feature_release_actual';")"
+expected_feature_view_columns="economic_event_release_actual_id,economic_event_id,available_at,actual_value_kind,actual_canonical_value_low,actual_canonical_value_high,actual_unit,actual_scale,actual_qualifier,source_agency,source_observation_id,source_artifact_path,source_artifact_sha256,semantic_contract,source_provenance"
+if [[ "$actual_feature_view_columns" != "$expected_feature_view_columns" ]]; then
+    printf 'schema-088 feature-actual projection mismatch: %s\n' \
+        "$actual_feature_view_columns" >&2
+    exit 5
+fi
+
+printf 'DISPOSABLE_SCHEMA_END=088\n'
 printf 'MIGRATION_083_APPLIED=false\n'
 printf 'SELECTED_CONSENSUS_VIEW_082_ONLY=true\n'
+printf 'FEATURE_RELEASE_ACTUAL_VIEW_088=true\n'
 
 LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" LSTM_DB_NAME="$DB_NAME" \
     "$BIN"

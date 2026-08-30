@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 4;
+inline constexpr int kModelInputSemanticLayoutVersion = 5;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -36,12 +36,13 @@ struct ModelInputSemanticLayoutRegistryEntry
 // at the time a model is saved.  Append-only additions add a new entry whose
 // predecessor is the prior current version; old entries and their fixed
 // maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 4>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 5>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
         {3, kEconomicEventModelInputWidth, 2},
         {4, kEconomicEventConsensusModelInputWidth, 3},
+        {5, kEconomicEventReleaseActualModelInputWidth, 4},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -184,7 +185,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 35>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 39>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -224,6 +225,14 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 35>
         {releasedEventSurpriseAbsCol, "released_event_surprise_abs"},
         {releasedEventSurpriseDirectionCol,
          "released_event_surprise_direction"},
+        {authoritativeInitialHasSurpriseCol,
+         "authoritative_initial_has_surprise"},
+        {authoritativeInitialSurpriseCol,
+         "authoritative_initial_surprise"},
+        {authoritativeInitialSurpriseAbsCol,
+         "authoritative_initial_surprise_abs"},
+        {authoritativeInitialSurpriseDirectionCol,
+         "authoritative_initial_surprise_direction"},
     }};
 
 struct InputWidthExpansionPlan

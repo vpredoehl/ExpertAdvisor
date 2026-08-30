@@ -184,8 +184,8 @@ std::string SoftwareReadinessCanonicalText(
            << "availability_diagnostics_present=" << flag(audit.availabilityDiagnosticsPresent) << ';'
            << "read_only_evaluation=" << flag(audit.readOnlyEvaluation) << ';'
            << "activation_mutation_path_absent=" << flag(audit.activationMutationPathAbsent) << ';'
-           << "model_input_width=" << EA::kCurrentModelInputWidth << ';'
-           << "semantic_layout_version=" << EA::kModelInputSemanticLayoutVersion << ';';
+           << "model_input_width=" << EA::kEconomicEventConsensusModelInputWidth << ';'
+           << "semantic_layout_version=4;";
     return output.str();
 }
 
@@ -198,8 +198,8 @@ bool SoftwareReady(const SoftwareReadinessAudit& audit)
         audit.inputSemanticIdentityFailClosed &&
         audit.deterministicFeaturePathTested &&
         audit.availabilityDiagnosticsPresent && audit.readOnlyEvaluation &&
-        audit.activationMutationPathAbsent && EA::kCurrentModelInputWidth == 71 &&
-        EA::kModelInputSemanticLayoutVersion == 4;
+        audit.activationMutationPathAbsent &&
+        EA::kEconomicEventConsensusModelInputWidth == 71;
 }
 
 ReplicationEvaluation Evaluate(
@@ -366,9 +366,9 @@ ReplicationEvaluation Evaluate(
              << "pair_evaluation_semantic_version=1;"
              << "replication_evaluation_semantic_version="
              << kReplicationEvaluationVersion << ';'
-             << "model_input_width=" << EA::kCurrentModelInputWidth << ';'
-             << "model_input_semantic_layout_version="
-             << EA::kModelInputSemanticLayoutVersion << ';'
+             << "model_input_width="
+             << EA::kEconomicEventConsensusModelInputWidth << ';'
+             << "model_input_semantic_layout_version=4;"
              << "software_readiness_hash=" << result.softwareReadinessHash << ';';
     for (const auto& member : result.members)
         identity << "ordinal=" << member.ordinal

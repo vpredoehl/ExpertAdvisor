@@ -92,6 +92,31 @@ EconomicEvent RangeConsensusEventAt(
 }
 
 
+void AttachInitialActual(
+    EconomicEvent& event,
+    std::int64_t availableAtSeconds,
+    double actual,
+    std::string unit,
+    double sourceScale,
+    std::optional<std::string> qualifier = std::nullopt)
+{
+    EconomicEventReleaseActual releaseActual;
+    releaseActual.actual = EconomicEventConsensusValue{
+        "scalar", actual, std::nullopt, std::move(unit), sourceScale,
+        std::move(qualifier)};
+    releaseActual.availableAtUnixMicros =
+        availableAtSeconds * 1000000LL;
+    releaseActual.sourceAgency = event.sourceAgency;
+    releaseActual.sourceObservationId =
+        "fixture:initial:" + std::to_string(availableAtSeconds);
+    releaseActual.sourceArtifactPath = "fixture/authoritative-release.html";
+    releaseActual.sourceArtifactSha256 = std::string(64, 'a');
+    releaseActual.semanticContract =
+        "authoritative_initial_release_actual_v1";
+    event.releaseActual = std::move(releaseActual);
+}
+
+
 bool Near(
     float actual,
     double expected,
@@ -122,6 +147,16 @@ void AssertReservedSurpriseZero(
 }
 
 
+void AssertAuthoritativeSurpriseZero(
+    const EconomicEventFeatureValues& values)
+{
+    assert(values.authoritativeInitialHasSurprise == 0.0F);
+    assert(values.authoritativeInitialSurprise == 0.0F);
+    assert(values.authoritativeInitialSurpriseAbs == 0.0F);
+    assert(values.authoritativeInitialSurpriseDirection == 0.0F);
+}
+
+
 template <typename Function>
 void AssertInvalidArgument(Function&& function)
 {
@@ -147,7 +182,8 @@ int main()
     static_assert(kEconomicEventModelFamilyCount == 5);
     static_assert(kPreConsensusEconomicEventFeatureWidth == 10);
     static_assert(kEconomicEventConsensusFeatureWidth == 8);
-    static_assert(kEconomicEventFeatureWidth == 18);
+    static_assert(kEconomicEventReleaseActualFeatureWidth == 4);
+    static_assert(kEconomicEventFeatureWidth == 22);
 
     // All eleven authoritative canonical families map explicitly.
     const std::array mappings{
@@ -468,12 +504,17 @@ int main()
         values.releasedEventSurprise = 16.0F;
         values.releasedEventSurpriseAbs = 17.0F;
         values.releasedEventSurpriseDirection = 18.0F;
+        values.authoritativeInitialHasSurprise = 19.0F;
+        values.authoritativeInitialSurprise = 20.0F;
+        values.authoritativeInitialSurpriseAbs = 21.0F;
+        values.authoritativeInitialSurpriseDirection = 22.0F;
 
         const std::array<float, kEconomicEventFeatureWidth> expected{
             1.0F, 2.0F, 3.0F, 4.0F, 5.0F,
             6.0F, 7.0F, 8.0F, 9.0F, 10.0F,
             11.0F, 12.0F, 13.0F, 14.0F,
-            15.0F, 16.0F, 17.0F, 18.0F};
+            15.0F, 16.0F, 17.0F, 18.0F,
+            19.0F, 20.0F, 21.0F, 22.0F};
 
         assert(values.Ordered() == expected);
     }
@@ -526,6 +567,199 @@ int main()
             engine.AdvanceCompletedBar(At(kBase + 1800));
         assert(released.relevantEventHasConsensus == 1.0F);
         AssertReservedSurpriseZero(released);
+    }
+
+    // A separately persisted authoritative initial actual is still invisible
+    // immediately before release and at the exact completed-bar cutoff. It
+    // first activates surprise after its strict known-at boundary.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase + 1800, "BLS", "PPI", "OANDA", 0.2, 9.9,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(
+            event, kBase + 1800, 0.5, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine engine{{event}};
+
+        AssertAllZero(engine.AdvanceCompletedBar(At(kBase)));
+
+        const auto exactRelease =
+            engine.AdvanceCompletedBar(At(kBase + 900));
+        assert(exactRelease.relevantEventHasConsensus == 1.0F);
+        AssertReservedSurpriseZero(exactRelease);
+        AssertAuthoritativeSurpriseZero(exactRelease);
+
+        const auto postRelease =
+            engine.AdvanceCompletedBar(At(kBase + 1800));
+        AssertReservedSurpriseZero(postRelease);
+        assert(postRelease.authoritativeInitialHasSurprise == 1.0F);
+        assert(Near(postRelease.authoritativeInitialSurprise, 0.03));
+        assert(Near(postRelease.authoritativeInitialSurpriseAbs, 0.03));
+        assert(postRelease.authoritativeInitialSurpriseDirection == 1.0F);
+    }
+
+    // An initial value published after the scheduled event remains unavailable
+    // through an exact availability cutoff. Ingestion/retrieval time is not
+    // substituted for this explicit source-backed instant.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase, "CENSUS", "RETAIL_SALES", "MYFXBOOK", 0.4,
+            std::nullopt, "percent", 1.0, "m/m");
+        AttachInitialActual(
+            event, kBase + 1800, -0.1, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine engine{{event}};
+
+        const auto before = engine.AdvanceCompletedBar(At(kBase));
+        AssertReservedSurpriseZero(before);
+        AssertAuthoritativeSurpriseZero(before);
+        const auto exactAvailability =
+            engine.AdvanceCompletedBar(At(kBase + 900));
+        AssertReservedSurpriseZero(exactAvailability);
+        AssertAuthoritativeSurpriseZero(exactAvailability);
+        const auto after = engine.AdvanceCompletedBar(At(kBase + 1800));
+        AssertReservedSurpriseZero(after);
+        assert(after.authoritativeInitialHasSurprise == 1.0F);
+        assert(Near(after.authoritativeInitialSurprise, -0.05));
+        assert(Near(after.authoritativeInitialSurpriseAbs, 0.05));
+        assert(after.authoritativeInitialSurpriseDirection == -1.0F);
+        const auto& diagnostics = engine.Diagnostics();
+        assert(diagnostics.notYetAvailableInitialActualRowCount == 2);
+        assert(diagnostics.availableSurpriseRowCount == 1);
+        assert(diagnostics.initialActualSourceRowCounts.at("CENSUS") == 3);
+    }
+
+    // Presence distinguishes a legitimate zero surprise from unavailable
+    // surprise. Provider actuals still cannot compete with the authoritative
+    // initial observation.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase, "BEA", "GDP", "OANDA", 2.0, 7.0,
+            "percent", 1.0);
+        AttachInitialActual(
+            event, kBase, 2.0, "percent", 1.0);
+        EconomicEventFeatureEngine engine{{event}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+        AssertReservedSurpriseZero(values);
+        assert(values.authoritativeInitialHasSurprise == 1.0F);
+        assert(values.authoritativeInitialSurprise == 0.0F);
+        assert(values.authoritativeInitialSurpriseAbs == 0.0F);
+        assert(values.authoritativeInitialSurpriseDirection == 0.0F);
+    }
+
+    // A provenance-certified actual with incompatible qualifier semantics
+    // fails closed instead of manufacturing a surprise.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.3, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(
+            event, kBase, 3.1, "percent", 1.0, "y/y");
+        EconomicEventFeatureEngine engine{{event}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+        AssertReservedSurpriseZero(values);
+        AssertAuthoritativeSurpriseZero(values);
+        assert(engine.Diagnostics().incompatibleInitialActualRowCount == 1);
+    }
+
+    // Microsecond availability is compared without truncation. An actual one
+    // microsecond after a completed-bar cutoff is not visible at that cutoff.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.2, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(
+            event, kBase + 1800, 0.4, "percent", 1.0, "m/m");
+        ++event.releaseActual->availableAtUnixMicros;
+        EconomicEventFeatureEngine engine{{event}};
+
+        AssertAuthoritativeSurpriseZero(
+            engine.AdvanceCompletedBar(At(kBase)));
+        AssertAuthoritativeSurpriseZero(
+            engine.AdvanceCompletedBar(At(kBase + 900)));
+        const auto after =
+            engine.AdvanceCompletedBar(At(kBase + 1800));
+        assert(after.authoritativeInitialHasSurprise == 1.0F);
+        assert(Near(after.authoritativeInitialSurprise, 0.02));
+    }
+
+    // Unit, value-shape, and qualifier contracts must agree. Each mismatch is
+    // unavailable rather than a numeric surprise or an exception.
+    {
+        std::vector<EconomicEvent> incompatible;
+
+        EconomicEvent unit = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.3, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(unit, kBase, 400.0, "count", 1.0, "m/m");
+        incompatible.push_back(std::move(unit));
+
+        EconomicEvent range = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.3, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(range, kBase, 0.4, "percent", 1.0, "m/m");
+        range.releaseActual->actual.valueKind = "range";
+        range.releaseActual->actual.canonicalValueHigh = 0.5;
+        incompatible.push_back(std::move(range));
+
+        for (const EconomicEvent& event : incompatible)
+        {
+            EconomicEventFeatureEngine engine{{event}};
+            const auto values = engine.AdvanceCompletedBar(At(kBase));
+            AssertAuthoritativeSurpriseZero(values);
+            assert(
+                engine.Diagnostics().incompatibleInitialActualRowCount == 1);
+        }
+    }
+
+    // Scale is the audited raw-to-canonical multiplier, not a second unit.
+    // Different positive source encodings remain compatible after both have
+    // been converted to the same canonical unit.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase, "BLS", "JOLTS", "MYFXBOOK", 4'530'000.0,
+            std::nullopt, "count", 1.0);
+        AttachInitialActual(
+            event, kBase, 5'000'000.0, "count", 1000.0);
+        EconomicEventFeatureEngine engine{{event}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+        assert(values.authoritativeInitialHasSurprise == 1.0F);
+        assert(Near(values.authoritativeInitialSurprise, 0.047));
+    }
+
+    // A certified actual cannot substitute for a missing selected forecast,
+    // and the absence is not mislabeled as semantic incompatibility.
+    {
+        EconomicEvent event = EventAt(kBase, "BLS", "CPI");
+        AttachInitialActual(
+            event, kBase, 0.4, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine engine{{event}};
+        const auto values = engine.AdvanceCompletedBar(At(kBase));
+        AssertAuthoritativeSurpriseZero(values);
+        assert(engine.Diagnostics().missingConsensusRowCount == 1);
+        assert(engine.Diagnostics().incompatibleInitialActualRowCount == 0);
+    }
+
+    // Numeric zero remains present for either side of the subtraction.
+    {
+        EconomicEvent zeroForecast = ScalarConsensusEventAt(
+            kBase, "BLS", "PPI", "OANDA", 0.0, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(
+            zeroForecast, kBase, 0.5, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine forecastEngine{{zeroForecast}};
+        const auto forecastValues =
+            forecastEngine.AdvanceCompletedBar(At(kBase));
+        assert(forecastValues.authoritativeInitialHasSurprise == 1.0F);
+        assert(Near(forecastValues.authoritativeInitialSurprise, 0.05));
+
+        EconomicEvent zeroActual = ScalarConsensusEventAt(
+            kBase, "BLS", "PPI", "OANDA", 0.5, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachInitialActual(
+            zeroActual, kBase, 0.0, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine actualEngine{{zeroActual}};
+        const auto actualValues = actualEngine.AdvanceCompletedBar(At(kBase));
+        assert(actualValues.authoritativeInitialHasSurprise == 1.0F);
+        assert(Near(actualValues.authoritativeInitialSurprise, -0.05));
     }
 
     // Neither OANDA nor Myfxbook provider actual presence proves first-release
@@ -669,6 +903,31 @@ int main()
                 kBase, "BLS", "CPI", "", 0.3, std::nullopt,
                 "percent", 1.0, "m/m");
             EconomicEventFeatureEngine engine{{missingProvider}};
+            (void)engine;
+        });
+
+    AssertInvalidArgument(
+        []
+        {
+            EconomicEvent event = ScalarConsensusEventAt(
+                kBase, "BLS", "CPI", "OANDA", 0.3, std::nullopt,
+                "percent", 1.0, "m/m");
+            AttachInitialActual(
+                event, kBase - 1, 0.4, "percent", 1.0, "m/m");
+            EconomicEventFeatureEngine engine{{event}};
+            (void)engine;
+        });
+
+    AssertInvalidArgument(
+        []
+        {
+            EconomicEvent event = ScalarConsensusEventAt(
+                kBase, "BLS", "CPI", "OANDA", 0.3, std::nullopt,
+                "percent", 1.0, "m/m");
+            AttachInitialActual(
+                event, kBase, 0.4, "percent", 1.0, "m/m");
+            event.releaseActual->sourceAgency = "BEA";
+            EconomicEventFeatureEngine engine{{event}};
             (void)engine;
         });
 

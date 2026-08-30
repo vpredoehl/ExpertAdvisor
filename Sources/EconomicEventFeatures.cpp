@@ -1,6 +1,8 @@
 #include "EconomicEventFeatures.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -29,6 +31,19 @@ PriceTP ValidatedEventTime(
     return PriceTP{
         std::chrono::seconds{
             event.eventTimestampUnixMicros / 1000000LL}};
+}
+
+
+bool IsLowerHexSha256(std::string_view value)
+{
+    return value.size() == 64 &&
+        std::all_of(
+            value.begin(), value.end(),
+            [](unsigned char character)
+            {
+                return std::isdigit(character) != 0 ||
+                    (character >= 'a' && character <= 'f');
+            });
 }
 
 
@@ -188,6 +203,67 @@ void SetConsensus(
 }
 
 
+bool CompatibleScalarSurprise(
+    const EconomicEventSelectedConsensus& selected,
+    const EconomicEventReleaseActual& releaseActual)
+{
+    const EconomicEventConsensusValue& forecast = selected.forecast;
+    const EconomicEventConsensusValue& actual = releaseActual.actual;
+
+    return
+        ValidValueShape(actual) &&
+        forecast.valueKind == "scalar" &&
+        actual.valueKind == "scalar" &&
+        forecast.unit == actual.unit &&
+        forecast.qualifier == actual.qualifier;
+}
+
+
+enum class SurpriseDisposition
+{
+    missingActual,
+    notYetAvailable,
+    missingForecast,
+    incompatible,
+    available,
+};
+
+
+template <typename MappedEvent>
+SurpriseDisposition SetSurprise(
+    EconomicEventFeatureValues& values,
+    const MappedEvent& event,
+    std::int64_t informationCutoffUnixMicros)
+{
+    if (!event.releaseActual)
+        return SurpriseDisposition::missingActual;
+
+    if (!(event.releaseActual->availableAtUnixMicros <
+          informationCutoffUnixMicros))
+        return SurpriseDisposition::notYetAvailable;
+
+    if (!event.selectedConsensus)
+        return SurpriseDisposition::missingForecast;
+
+    if (!CompatibleScalarSurprise(
+            *event.selectedConsensus,
+            event.releaseActual->provenance))
+        return SurpriseDisposition::incompatible;
+
+    const double difference =
+        event.releaseActual->provenance.actual.canonicalValueLow -
+        event.selectedConsensus->forecast.canonicalValueLow;
+    const float normalized = NormalizedFloat(event, difference);
+
+    values.authoritativeInitialHasSurprise = 1.0F;
+    values.authoritativeInitialSurprise = normalized;
+    values.authoritativeInitialSurpriseAbs = std::abs(normalized);
+    values.authoritativeInitialSurpriseDirection =
+        normalized > 0.0F ? 1.0F : normalized < 0.0F ? -1.0F : 0.0F;
+    return SurpriseDisposition::available;
+}
+
+
 template <typename MappedEvent>
 bool MoreRelevantAtSameTimestamp(
     const MappedEvent& candidate,
@@ -246,6 +322,10 @@ EconomicEventFeatureValues::Ordered() const noexcept
         releasedEventSurprise,
         releasedEventSurpriseAbs,
         releasedEventSurpriseDirection,
+        authoritativeInitialHasSurprise,
+        authoritativeInitialSurprise,
+        authoritativeInitialSurpriseAbs,
+        authoritativeInitialSurpriseDirection,
     };
 }
 
@@ -371,6 +451,30 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
                 "economic_event_features_must_be_chronological");
         }
 
+        std::optional<MappedReleaseActual> releaseActual;
+        if (event.releaseActual)
+        {
+            if (
+                event.releaseActual->availableAtUnixMicros <
+                    event.eventTimestampUnixMicros ||
+                event.releaseActual->sourceAgency != event.sourceAgency ||
+                event.releaseActual->sourceObservationId.empty() ||
+                event.releaseActual->sourceArtifactPath.empty() ||
+                !IsLowerHexSha256(
+                    event.releaseActual->sourceArtifactSha256) ||
+                event.releaseActual->semanticContract.empty() ||
+                event.releaseActual->actual.unit.empty() ||
+                !ValidValueShape(event.releaseActual->actual))
+            {
+                throw std::invalid_argument(
+                    "economic_event_release_actual_provenance_invalid");
+            }
+
+            releaseActual = MappedReleaseActual{
+                event.releaseActual->availableAtUnixMicros,
+                *event.releaseActual};
+        }
+
         events_.push_back(
             MappedEvent{
                 event.economicEventId,
@@ -380,7 +484,8 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
                     event.eventFamily),
                 event.eventFamily,
                 event.eventImportance,
-                event.selectedConsensus});
+                event.selectedConsensus,
+                std::move(releaseActual)});
 
         if (event.selectedConsensus)
         {
@@ -423,6 +528,9 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
 
     const PriceTP informationCutoff =
         barStart + kEconomicEventBarDuration;
+    const std::int64_t informationCutoffUnixMicros =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            informationCutoff.time_since_epoch()).count();
 
     EconomicEventFeatureValues values;
 
@@ -536,6 +644,40 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
                 ++diagnostics_.rangeConsensusRowCount;
             else
                 ++diagnostics_.scalarConsensusRowCount;
+        }
+
+        if (relevantEvent->releaseActual)
+        {
+            ++diagnostics_.selectedInitialActualRowCount;
+            ++diagnostics_.initialActualSourceRowCounts[
+                relevantEvent->releaseActual->provenance.sourceAgency];
+        }
+
+        if (!exactBoundaryEvent)
+        {
+            switch (SetSurprise(
+                values, *relevantEvent, informationCutoffUnixMicros))
+            {
+                case SurpriseDisposition::missingActual:
+                    break;
+                case SurpriseDisposition::notYetAvailable:
+                    ++diagnostics_.notYetAvailableInitialActualRowCount;
+                    break;
+                case SurpriseDisposition::missingForecast:
+                    // missingConsensusRowCount already describes this row;
+                    // absence is not a semantic incompatibility.
+                    break;
+                case SurpriseDisposition::incompatible:
+                    ++diagnostics_.incompatibleInitialActualRowCount;
+                    break;
+                case SurpriseDisposition::available:
+                    ++diagnostics_.availableSurpriseRowCount;
+                    break;
+            }
+        }
+        else if (relevantEvent->releaseActual)
+        {
+            ++diagnostics_.notYetAvailableInitialActualRowCount;
         }
     }
 

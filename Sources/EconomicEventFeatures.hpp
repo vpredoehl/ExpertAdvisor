@@ -71,14 +71,21 @@ struct EconomicEventFeatureValues
     float relevantEventConsensusHigh = 0.0F;
     float relevantEventConsensusIsRange = 0.0F;
 
-    // Reserved append-only channels. Persisted provider actuals do not prove
-    // first-release/revision provenance, so the current v4 contract leaves all
-    // four values zero for every event. They may be activated only by a future
-    // explicit persisted release-time actual provenance contract.
+    // Closed semantic-layout-v4 channels. Width-71 models were trained while
+    // these positions were reserved zeros, so they remain zero permanently.
     float releasedEventHasSurprise = 0.0F;
     float releasedEventSurprise = 0.0F;
     float releasedEventSurpriseAbs = 0.0F;
     float releasedEventSurpriseDirection = 0.0F;
+
+    // Semantic-layout-v5 append. These activate only for a scalar selected
+    // forecast paired with the provenance-certified authoritative initial
+    // actual after its strict available-at boundary. Provider actuals, later
+    // revisions, ranges, and incompatible semantics remain unavailable.
+    float authoritativeInitialHasSurprise = 0.0F;
+    float authoritativeInitialSurprise = 0.0F;
+    float authoritativeInitialSurpriseAbs = 0.0F;
+    float authoritativeInitialSurpriseDirection = 0.0F;
 
     std::array<float, kEconomicEventFeatureWidth> Ordered() const noexcept;
 };
@@ -95,6 +102,11 @@ struct EconomicEventFeatureAvailabilityDiagnostics
     std::size_t rangeConsensusRowCount = 0;
     std::size_t missingConsensusRowCount = 0;
     std::map<std::string, std::size_t> selectedConsensusProviderRowCounts;
+    std::size_t selectedInitialActualRowCount = 0;
+    std::size_t notYetAvailableInitialActualRowCount = 0;
+    std::size_t incompatibleInitialActualRowCount = 0;
+    std::size_t availableSurpriseRowCount = 0;
+    std::map<std::string, std::size_t> initialActualSourceRowCounts;
     bool operator==(const EconomicEventFeatureAvailabilityDiagnostics&) const =
         default;
 };
@@ -132,6 +144,15 @@ public:
         const noexcept;
 
 private:
+    struct MappedReleaseActual
+    {
+        // Preserve the database's microsecond timestamp exactly. Converting
+        // it to the second-resolution market timestamp would risk making a
+        // sub-second publication visible before its actual known-at instant.
+        std::int64_t availableAtUnixMicros = 0;
+        EconomicEventReleaseActual provenance;
+    };
+
     struct MappedEvent
     {
         long long economicEventId = 0;
@@ -141,6 +162,7 @@ private:
         std::string eventFamily;
         int eventImportance = 0;
         std::optional<EconomicEventSelectedConsensus> selectedConsensus;
+        std::optional<MappedReleaseActual> releaseActual;
     };
 
     std::vector<MappedEvent> events_;

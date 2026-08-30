@@ -66,9 +66,16 @@ Economic-calendar enrichment persistence is created by:
   database contract required by semantic-layout-v4 consensus features.
   Provider `actual` fields are intentionally not projected into model inputs:
   persisted observations do not prove original release-time rather than later
-  revised actual provenance. The four append-only surprise channels therefore
-  remain reserved zero values, and no migration after 082 is required for the
-  consensus-only Phase-4 runtime.
+  revised actual provenance. The four semantic-layout-v4 surprise channels
+  therefore remain permanently reserved zero values.
+- `088_economic_event_release_actual_provenance.sql`: adds immutable,
+  authoritative release-actual observations with unique revision sequence,
+  exact causal `available_at`, source observation/artifact identity, audited
+  raw-to-canonical scale, and enforced source-agency/release ordering. The
+  `economic_event_feature_release_actual` view exposes only the unique
+  provenance-certified `initial` revision 0; later revisions remain auditable
+  but cannot rewrite feature history. Runtime role `pqxx` receives read-only
+  access. No historical actual rows are fabricated or backfilled.
 
 Experiment scheduling tables are created by:
 

@@ -25,12 +25,18 @@ enum class EconomicEventFeatureIndex : std::size_t
     releasedEventSurprise = 15,
     releasedEventSurpriseAbs = 16,
     releasedEventSurpriseDirection = 17,
+    authoritativeInitialHasSurprise = 18,
+    authoritativeInitialSurprise = 19,
+    authoritativeInitialSurpriseAbs = 20,
+    authoritativeInitialSurpriseDirection = 21,
 };
 
 inline constexpr std::size_t kPreConsensusEconomicEventFeatureWidth = 10;
 inline constexpr std::size_t kEconomicEventConsensusFeatureWidth = 8;
+inline constexpr std::size_t kEconomicEventReleaseActualFeatureWidth = 4;
 inline constexpr std::size_t kEconomicEventFeatureWidth =
     kPreConsensusEconomicEventFeatureWidth +
-    kEconomicEventConsensusFeatureWidth;
+    kEconomicEventConsensusFeatureWidth +
+    kEconomicEventReleaseActualFeatureWidth;
 
 } // namespace EA::EconomicCalendar

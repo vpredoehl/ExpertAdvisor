@@ -23,7 +23,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 15> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 19> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -39,6 +39,13 @@ inline constexpr std::array<AblatableFeature, 15> kAblatableFeatures{{
     {"relevant_event_consensus_low", relevantEventConsensusLowCol},
     {"relevant_event_consensus_high", relevantEventConsensusHighCol},
     {"relevant_event_consensus_is_range", relevantEventConsensusIsRangeCol},
+    {"authoritative_initial_has_surprise",
+     authoritativeInitialHasSurpriseCol},
+    {"authoritative_initial_surprise", authoritativeInitialSurpriseCol},
+    {"authoritative_initial_surprise_abs",
+     authoritativeInitialSurpriseAbsCol},
+    {"authoritative_initial_surprise_direction",
+     authoritativeInitialSurpriseDirectionCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -50,6 +57,12 @@ inline constexpr std::array<AblatableFeature, 15> kAblatableFeatures{{
 inline constexpr std::string_view kEconomicEventConsensusAblationMaskText =
     "relevant_event_has_consensus,relevant_event_consensus_low,"
     "relevant_event_consensus_high,relevant_event_consensus_is_range";
+
+inline constexpr std::string_view
+    kEconomicEventReleaseActualAblationMaskText =
+        "authoritative_initial_has_surprise,authoritative_initial_surprise,"
+        "authoritative_initial_surprise_abs,"
+        "authoritative_initial_surprise_direction";
 
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.
