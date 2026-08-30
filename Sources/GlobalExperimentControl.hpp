@@ -308,11 +308,22 @@ struct ExperimentPauseCommand
     long long experimentId = -1;
     bool dryRun = false;
     bool confirmed = false;
+    std::string invocationIdentity;
+    std::optional<std::string> requesterIdentity;
 };
 
 struct ExperimentResumeCommand
 {
     long long experimentId = -1;
+    bool dryRun = false;
+    bool confirmed = false;
+    std::string invocationIdentity;
+    std::optional<std::string> requesterIdentity;
+};
+
+struct CampaignMaterializationControlCommand
+{
+    long long materializationId = -1;
     bool dryRun = false;
     bool confirmed = false;
     std::string invocationIdentity;
@@ -366,6 +377,32 @@ int RunExperimentResumeCommand(const std::string& connectionString,
 int RunExperimentResumeCommandWithProcessOperationsForTesting(
     const std::string& connectionString,
     const ExperimentResumeCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes);
+
+int RunCampaignMaterializationPauseCommand(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error);
+
+int RunCampaignMaterializationPauseCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes);
+
+int RunCampaignMaterializationResumeCommand(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error);
+
+int RunCampaignMaterializationResumeCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
     std::ostream& output,
     std::ostream& error,
     ProcessOperations& processes);

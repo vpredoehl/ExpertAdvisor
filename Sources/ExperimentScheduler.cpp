@@ -124,6 +124,8 @@ struct SchedulerOptions
     bool inferBeforeCancel = false;
     std::optional<long long> pauseExperimentId;
     std::optional<long long> resumeExperimentId;
+    std::optional<long long> pauseCampaignMaterializationId;
+    std::optional<long long> resumeCampaignMaterializationId;
     std::optional<std::pair<long long, std::string>> setExperimentPriority;
     std::optional<long long> cancelExperimentId;
     std::optional<long long> retryFailedExperimentId;
@@ -1036,6 +1038,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg == "--infer-before-cancel" ||
             arg == "--pause-experiment" ||
             arg == "--resume-experiment" ||
+            arg == "--pause-campaign-materialization" ||
+            arg == "--resume-campaign-materialization" ||
             arg == "--set-experiment-priority" ||
             arg == "--cancel-experiment" ||
             arg == "--retry-failed-experiment" ||
@@ -1236,6 +1240,8 @@ bool IsExperimentSchedulerCommandImpl(int argc, const char* argv[])
             arg.rfind("--reconcile-worker-attempt=", 0) == 0 ||
             arg.rfind("--pause-experiment=", 0) == 0 ||
             arg.rfind("--resume-experiment=", 0) == 0 ||
+            arg.rfind("--pause-campaign-materialization=", 0) == 0 ||
+            arg.rfind("--resume-campaign-materialization=", 0) == 0 ||
             arg.rfind("--set-experiment-priority=", 0) == 0 ||
             arg.rfind("--cancel-experiment=", 0) == 0 ||
             arg.rfind("--retry-failed-experiment=", 0) == 0 ||
@@ -2145,6 +2151,12 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.pauseExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--resume-experiment")
             options.resumeExperimentId = ParsePositiveLongLong(arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--pause-campaign-materialization")
+            options.pauseCampaignMaterializationId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
+        else if (arg == "--resume-campaign-materialization")
+            options.resumeCampaignMaterializationId = ParsePositiveLongLong(
+                arg, RequireNextArg(argc, argv, i, arg));
         else if (arg == "--set-experiment-priority")
             options.setExperimentPriority = ParseExperimentConfigPair(
                 arg, RequireNextArg(argc, argv, i, arg));
@@ -3258,6 +3270,14 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
             options.pauseExperimentId = ParsePositiveLongLong("--pause-experiment", value);
         else if (SplitOptionWithValue(arg, "--resume-experiment", value))
             options.resumeExperimentId = ParsePositiveLongLong("--resume-experiment", value);
+        else if (SplitOptionWithValue(
+                     arg, "--pause-campaign-materialization", value))
+            options.pauseCampaignMaterializationId = ParsePositiveLongLong(
+                "--pause-campaign-materialization", value);
+        else if (SplitOptionWithValue(
+                     arg, "--resume-campaign-materialization", value))
+            options.resumeCampaignMaterializationId = ParsePositiveLongLong(
+                "--resume-campaign-materialization", value);
         else if (SplitOptionWithValue(arg, "--set-experiment-priority", value))
             options.setExperimentPriority = ParseExperimentConfigPair(
                 "--set-experiment-priority", value);
@@ -4051,6 +4071,8 @@ SchedulerOptions ParseSchedulerArgs(int argc, const char* argv[])
         (options.cancelAllExperiments ? 1 : 0) +
         (options.pauseExperimentId.has_value() ? 1 : 0) +
         (options.resumeExperimentId.has_value() ? 1 : 0) +
+        (options.pauseCampaignMaterializationId.has_value() ? 1 : 0) +
+        (options.resumeCampaignMaterializationId.has_value() ? 1 : 0) +
         (options.setExperimentPriority.has_value() ? 1 : 0) +
         (options.cancelExperimentId.has_value() ? 1 : 0) +
         (options.retryFailedExperimentId.has_value() ? 1 : 0) +
@@ -8125,6 +8147,36 @@ int RunSchedulerControlCommand(const SchedulerOptions& options)
     PrintSchedulerControlApplied(action, experimentId, newStatus, newPhase);
     w.commit();
     return 0;
+}
+
+int RunCampaignMaterializationSchedulerControlCommand(
+    const SchedulerOptions& options)
+{
+    const bool pause = options.pauseCampaignMaterializationId.has_value();
+    EA::GlobalExperimentControl::CampaignMaterializationControlCommand command;
+    command.materializationId = pause
+        ? *options.pauseCampaignMaterializationId
+        : *options.resumeCampaignMaterializationId;
+    command.dryRun = options.dryRun;
+    command.confirmed = options.yes;
+    const auto invocationStarted =
+        std::chrono::system_clock::now().time_since_epoch();
+    command.invocationIdentity =
+        std::string{"pid:"} + std::to_string(::getpid()) +
+        ";started_ns:" +
+        std::to_string(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                invocationStarted).count()) +
+        ";action:" + (pause ? "pause" : "resume") +
+        ";materialization:" + std::to_string(command.materializationId) +
+        ";executable:" + options.selfPath;
+    if (pause)
+        return EA::GlobalExperimentControl::
+            RunCampaignMaterializationPauseCommand(
+                LstmDbConnectionString(), command, std::cout, std::cerr);
+    return EA::GlobalExperimentControl::
+        RunCampaignMaterializationResumeCommand(
+            LstmDbConnectionString(), command, std::cout, std::cerr);
 }
 
 int RunSetExperimentPriorityCommand(const SchedulerOptions& options)
@@ -25205,6 +25257,12 @@ void PrintExperimentSchedulerHelp(const char* executable)
         << "Individual resume queues pending work with temporary resume priority; "
         << "SIGCONT occurs only after compatible scheduler capacity is admitted.\n"
         << "Usage: " << exe
+        << " --pause-campaign-materialization=ID | "
+        << "--resume-campaign-materialization=ID [--dry-run | --yes]\n"
+        << "Campaign-materialization pause freezes the immutable manifest and "
+        << "controls only exactly resolved experiments. Resume releases only "
+        << "group-owned pauses into ordinary capacity-limited priority admission.\n"
+        << "Usage: " << exe
         << " --retry-checkpoint-eval=CHECKPOINT_EVAL_ID [--dry-run]\n"
         << "Usage: " << exe
         << " --evaluate-checkpoint-policy=CHECKPOINT_EVAL_ID\n"
@@ -26858,6 +26916,9 @@ int RunExperimentSchedulerCli(int argc, const char* argv[])
             return ListExperimentLineage(*options.listExperimentLineageId, options.includeParentModels);
         if (options.setExperimentPriority.has_value())
             return RunSetExperimentPriorityCommand(options);
+        if (options.pauseCampaignMaterializationId.has_value() ||
+            options.resumeCampaignMaterializationId.has_value())
+            return RunCampaignMaterializationSchedulerControlCommand(options);
         if (options.pauseExperimentId.has_value() ||
             options.resumeExperimentId.has_value() ||
             options.cancelExperimentId.has_value() ||

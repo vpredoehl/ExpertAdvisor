@@ -5474,6 +5474,955 @@ int RunCommandWithProcessOperationsForTesting(
 }
 
 
+struct CampaignControlTarget
+{
+    long long materializationMemberId = -1;
+    int memberOrdinal = -1;
+    long long proposalId = -1;
+    std::optional<long long> executionId;
+    std::optional<long long> activationId;
+    std::optional<long long> experimentId;
+    std::optional<long long> sourcePauseOperationId;
+    std::optional<DbTarget> target;
+    long long controlMemberId = -1;
+};
+
+struct CampaignControlResolution
+{
+    int expectedMemberCount = 0;
+    std::optional<long long> sourcePauseOperationId;
+    std::vector<CampaignControlTarget> targets;
+    std::string failureReason;
+};
+
+struct CampaignControlSummary
+{
+    int changed = 0;
+    int alreadyPaused = 0;
+    int terminalNonApplicable = 0;
+    int unresolvedFailed = 0;
+    int identityFailure = 0;
+    int notGroupOwned = 0;
+    int resumePredicateMismatch = 0;
+
+    bool Failed() const
+    {
+        return unresolvedFailed != 0 || identityFailure != 0 ||
+               resumePredicateMismatch != 0;
+    }
+};
+
+std::string CampaignControlActor(
+    const CampaignMaterializationControlCommand& command)
+{
+    return command.requesterIdentity.value_or(CurrentRequester());
+}
+
+std::string CampaignControlInvocation(
+    const CampaignMaterializationControlCommand& command,
+    const char* action)
+{
+    if (!command.invocationIdentity.empty())
+        return command.invocationIdentity;
+    return std::string{"campaign_materialization_"} + action + ":pid:" +
+           std::to_string(::getpid()) + ":materialization:" +
+           std::to_string(command.materializationId);
+}
+
+bool ValidateCampaignTargetPopulation(CampaignControlResolution& resolution)
+{
+    if (resolution.expectedMemberCount <= 0)
+    {
+        resolution.failureReason = "invalid_materialization_member_count";
+        return false;
+    }
+    if (resolution.targets.size() !=
+        static_cast<size_t>(resolution.expectedMemberCount))
+    {
+        resolution.failureReason = "incomplete_materialization_member_set";
+        return false;
+    }
+    std::vector<long long> memberIds;
+    std::vector<long long> proposalIds;
+    std::vector<long long> experimentIds;
+    memberIds.reserve(resolution.targets.size());
+    proposalIds.reserve(resolution.targets.size());
+    for (size_t index = 0; index < resolution.targets.size(); ++index)
+    {
+        const CampaignControlTarget& target = resolution.targets[index];
+        if (target.memberOrdinal != static_cast<int>(index + 1))
+        {
+            resolution.failureReason =
+                "non_contiguous_materialization_member_ordinals";
+            return false;
+        }
+        memberIds.push_back(target.materializationMemberId);
+        proposalIds.push_back(target.proposalId);
+        if (target.experimentId)
+            experimentIds.push_back(*target.experimentId);
+        if (target.executionId.has_value() != target.experimentId.has_value())
+        {
+            resolution.failureReason =
+                "conversion_execution_experiment_identity_incomplete";
+            return false;
+        }
+        if (target.activationId && !target.executionId)
+        {
+            resolution.failureReason =
+                "conversion_activation_execution_identity_incomplete";
+            return false;
+        }
+    }
+    auto duplicated = [](std::vector<long long> values) {
+        std::sort(values.begin(), values.end());
+        return std::adjacent_find(values.begin(), values.end()) != values.end();
+    };
+    if (duplicated(memberIds) || duplicated(proposalIds) ||
+        duplicated(experimentIds))
+    {
+        resolution.failureReason = "duplicated_materialization_identity";
+        return false;
+    }
+    return true;
+}
+
+CampaignControlResolution ResolveCampaignPauseTargets(
+    pqxx::transaction_base& transaction,
+    long long materializationId,
+    bool forUpdate)
+{
+    CampaignControlResolution resolution;
+    const pqxx::result manifest = transaction.exec_params(
+        "SELECT selected_member_count FROM "
+        "experiment_recommendation_campaign_materialization "
+        "WHERE recommendation_campaign_materialization_id=$1;",
+        materializationId);
+    if (manifest.empty())
+    {
+        resolution.failureReason = "materialization_not_found";
+        return resolution;
+    }
+    resolution.expectedMemberCount = manifest[0][0].as<int>();
+    const pqxx::result rows = transaction.exec_params(
+        "SELECT m.recommendation_campaign_materialization_member_id,"
+        "m.member_ordinal,m.recommendation_conversion_proposal_id,"
+        "x.recommendation_conversion_execution_id,"
+        "a.recommendation_conversion_activation_id,x.experiment_id "
+        "FROM experiment_recommendation_campaign_materialization_member m "
+        "LEFT JOIN experiment_recommendation_conversion_execution x "
+        "ON x.recommendation_conversion_proposal_id="
+        "m.recommendation_conversion_proposal_id "
+        "LEFT JOIN experiment_recommendation_conversion_activation a "
+        "ON a.recommendation_conversion_execution_id="
+        "x.recommendation_conversion_execution_id "
+        "AND a.recommendation_conversion_proposal_id="
+        "m.recommendation_conversion_proposal_id "
+        "AND a.experiment_id=x.experiment_id "
+        "WHERE m.recommendation_campaign_materialization_id=$1 "
+        "ORDER BY m.member_ordinal;",
+        materializationId);
+    resolution.targets.reserve(rows.size());
+    for (const pqxx::row& row : rows)
+    {
+        CampaignControlTarget target;
+        target.materializationMemberId = row[0].as<long long>();
+        target.memberOrdinal = row[1].as<int>();
+        target.proposalId = row[2].as<long long>();
+        if (!row[3].is_null())
+            target.executionId = row[3].as<long long>();
+        if (!row[4].is_null())
+            target.activationId = row[4].as<long long>();
+        if (!row[5].is_null())
+            target.experimentId = row[5].as<long long>();
+        resolution.targets.push_back(std::move(target));
+    }
+    if (!ValidateCampaignTargetPopulation(resolution))
+        return resolution;
+    for (CampaignControlTarget& target : resolution.targets)
+    {
+        if (!target.experimentId)
+            continue;
+        target.target = LoadExperimentResumeTarget(
+            transaction, *target.experimentId, forUpdate);
+        if (!target.target)
+        {
+            resolution.failureReason =
+                "conversion_execution_experiment_missing";
+            return resolution;
+        }
+    }
+    return resolution;
+}
+
+CampaignControlResolution ResolveCampaignResumeTargets(
+    pqxx::transaction_base& transaction,
+    long long materializationId,
+    bool forUpdate)
+{
+    CampaignControlResolution resolution;
+    const pqxx::result pause = transaction.exec_params(
+        "SELECT campaign_materialization_control_operation_id,"
+        "expected_member_count FROM "
+        "experiment_campaign_materialization_control_operation "
+        "WHERE recommendation_campaign_materialization_id=$1 "
+        "AND action='pause' AND resolution_status='resolved' "
+        "ORDER BY campaign_materialization_control_operation_id DESC LIMIT 1;",
+        materializationId);
+    if (pause.empty())
+    {
+        const pqxx::result manifest = transaction.exec_params(
+            "SELECT selected_member_count FROM "
+            "experiment_recommendation_campaign_materialization "
+            "WHERE recommendation_campaign_materialization_id=$1;",
+            materializationId);
+        resolution.failureReason = manifest.empty()
+            ? "materialization_not_found"
+            : "no_frozen_group_pause_population";
+        if (!manifest.empty())
+            resolution.expectedMemberCount = manifest[0][0].as<int>();
+        return resolution;
+    }
+    resolution.sourcePauseOperationId = pause[0][0].as<long long>();
+    resolution.expectedMemberCount = pause[0][1].as<int>();
+    const pqxx::result rows = transaction.exec_params(
+        "SELECT pm.recommendation_campaign_materialization_member_id,"
+        "pm.member_ordinal,pm.recommendation_conversion_proposal_id,"
+        "pm.recommendation_conversion_execution_id,"
+        "pm.recommendation_conversion_activation_id,"
+        "COALESCE(o.experiment_id,pm.experiment_id),o.pause_operation_id "
+        "FROM experiment_campaign_materialization_control_member pm "
+        "LEFT JOIN experiment_campaign_materialization_pause_ownership o "
+        "ON o.recommendation_campaign_materialization_member_id="
+        "pm.recommendation_campaign_materialization_member_id "
+        "AND o.ownership_state='active' "
+        "WHERE pm.campaign_materialization_control_operation_id=$1 "
+        "ORDER BY pm.member_ordinal;",
+        *resolution.sourcePauseOperationId);
+    resolution.targets.reserve(rows.size());
+    for (const pqxx::row& row : rows)
+    {
+        CampaignControlTarget target;
+        target.materializationMemberId = row[0].as<long long>();
+        target.memberOrdinal = row[1].as<int>();
+        target.proposalId = row[2].as<long long>();
+        if (!row[3].is_null())
+            target.executionId = row[3].as<long long>();
+        if (!row[4].is_null())
+            target.activationId = row[4].as<long long>();
+        if (!row[5].is_null())
+            target.experimentId = row[5].as<long long>();
+        if (!row[6].is_null())
+            target.sourcePauseOperationId = row[6].as<long long>();
+        resolution.targets.push_back(std::move(target));
+    }
+    if (!ValidateCampaignTargetPopulation(resolution))
+        return resolution;
+    for (CampaignControlTarget& target : resolution.targets)
+    {
+        if (!target.experimentId)
+            continue;
+        target.target = LoadExperimentResumeTarget(
+            transaction, *target.experimentId, forUpdate);
+        if (!target.target)
+        {
+            resolution.failureReason = "frozen_experiment_missing";
+            return resolution;
+        }
+    }
+    return resolution;
+}
+
+long long InsertCampaignControlOperation(
+    pqxx::transaction_base& transaction,
+    const CampaignMaterializationControlCommand& command,
+    const char* action,
+    int expectedMemberCount,
+    const std::string& resolutionStatus,
+    const std::string& resolutionReason)
+{
+    return transaction.exec_params(
+        "INSERT INTO experiment_campaign_materialization_control_operation("
+        "recommendation_campaign_materialization_id,action,"
+        "invocation_identity,requester_identity,expected_member_count,"
+        "resolution_status,resolution_reason) VALUES($1,$2,$3,$4,$5,$6,$7) "
+        "RETURNING campaign_materialization_control_operation_id;",
+        command.materializationId,
+        action,
+        CampaignControlInvocation(command, action),
+        CampaignControlActor(command),
+        expectedMemberCount,
+        resolutionStatus,
+        resolutionReason)[0][0].as<long long>();
+}
+
+long long InsertCampaignControlMember(
+    pqxx::transaction_base& transaction,
+    long long operationId,
+    const CampaignControlTarget& member)
+{
+    std::optional<std::string> status;
+    std::optional<std::string> phase;
+    std::optional<std::string> priority;
+    std::optional<bool> resumeRequested;
+    std::optional<long long> workerAttemptId;
+    std::optional<std::string> workerAttemptState;
+    if (member.target)
+    {
+        status = member.target->worker.lifecycleStatus;
+        phase = member.target->worker.phase;
+        const pqxx::row state = transaction.exec_params(
+            "SELECT scheduler_priority,resume_requested FROM experiment "
+            "WHERE experiment_id=$1;",
+            member.target->worker.experimentId).one_row();
+        priority = state[0].as<std::string>();
+        resumeRequested = state[1].as<bool>();
+        workerAttemptId = member.target->worker.workerAttemptId;
+        if (!member.target->worker.attemptLifecycleState.empty())
+            workerAttemptState =
+                member.target->worker.attemptLifecycleState;
+    }
+    return transaction.exec_params(
+        "INSERT INTO experiment_campaign_materialization_control_member("
+        "campaign_materialization_control_operation_id,"
+        "recommendation_campaign_materialization_member_id,member_ordinal,"
+        "recommendation_conversion_proposal_id,"
+        "recommendation_conversion_execution_id,"
+        "recommendation_conversion_activation_id,experiment_id,"
+        "source_pause_operation_id,pre_status,pre_phase,"
+        "pre_scheduler_priority,pre_resume_requested,worker_attempt_id,"
+        "worker_attempt_lifecycle_state) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) "
+        "RETURNING campaign_materialization_control_member_id;",
+        operationId,
+        member.materializationMemberId,
+        member.memberOrdinal,
+        member.proposalId,
+        member.executionId,
+        member.activationId,
+        member.experimentId,
+        member.sourcePauseOperationId,
+        status,
+        phase,
+        priority,
+        resumeRequested,
+        workerAttemptId,
+        workerAttemptState)[0][0].as<long long>();
+}
+
+void InsertCampaignControlOutcome(
+    pqxx::transaction_base& transaction,
+    long long operationId,
+    const CampaignControlTarget& member,
+    const std::string& outcomeKind,
+    bool changed,
+    const std::optional<std::string>& identityResult,
+    const std::optional<std::string>& resultingStatus,
+    const std::optional<std::string>& resultingPhase,
+    const std::optional<bool>& resultingResumeRequested,
+    const std::optional<long long>& resultingWorkerAttemptId,
+    const std::string& reason)
+{
+    const pqxx::result inserted = transaction.exec_params(
+        "INSERT INTO experiment_campaign_materialization_control_outcome("
+        "campaign_materialization_control_operation_id,"
+        "campaign_materialization_control_member_id,outcome_kind,"
+        "changed_by_operation,identity_result,resulting_status,"
+        "resulting_phase,resulting_resume_requested,"
+        "resulting_worker_attempt_id,reason) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) "
+        "RETURNING campaign_materialization_control_outcome_id;",
+        operationId,
+        member.controlMemberId,
+        outcomeKind,
+        changed,
+        identityResult,
+        resultingStatus,
+        resultingPhase,
+        resultingResumeRequested,
+        resultingWorkerAttemptId,
+        reason);
+    RequireAffectedRows(inserted, 1, "insert_campaign_control_outcome");
+}
+
+void PrintCampaignMemberOutcome(
+    std::ostream& output,
+    long long operationId,
+    const CampaignControlTarget& member,
+    const std::string& outcomeKind,
+    bool changed,
+    const std::string& reason)
+{
+    output << "CAMPAIGN_MATERIALIZATION_CONTROL_OUTCOME"
+           << ",operation_id="
+           << (operationId > 0 ? std::to_string(operationId) : "NULL")
+           << ",materialization_member_id="
+           << member.materializationMemberId
+           << ",member_ordinal=" << member.memberOrdinal
+           << ",experiment_id="
+           << (member.experimentId
+                   ? std::to_string(*member.experimentId) : "NULL")
+           << ",outcome=" << outcomeKind
+           << ",changed=" << (changed ? 1 : 0)
+           << ",reason=" << reason << "\n";
+}
+
+void RecordSimpleCampaignOutcome(
+    pqxx::transaction_base* transaction,
+    std::ostream& output,
+    long long operationId,
+    const CampaignControlTarget& member,
+    const std::string& outcomeKind,
+    bool changed,
+    const std::optional<std::string>& identityResult,
+    const std::string& reason,
+    CampaignControlSummary& summary)
+{
+    std::optional<std::string> status;
+    std::optional<std::string> phase;
+    std::optional<bool> resumeRequested;
+    std::optional<long long> workerAttemptId;
+    if (member.target)
+    {
+        status = member.target->worker.lifecycleStatus;
+        phase = member.target->worker.phase;
+        workerAttemptId = member.target->worker.workerAttemptId;
+        if (transaction)
+        {
+            const pqxx::row current = transaction->exec_params(
+                "SELECT status,phase,resume_requested,"
+                "active_scheduler_worker_attempt_id FROM experiment "
+                "WHERE experiment_id=$1;",
+                member.target->worker.experimentId).one_row();
+            status = current[0].as<std::string>();
+            phase = current[1].as<std::string>();
+            resumeRequested = current[2].as<bool>();
+            workerAttemptId = current[3].is_null()
+                ? std::nullopt
+                : std::optional<long long>{current[3].as<long long>()};
+        }
+    }
+    if (transaction)
+        InsertCampaignControlOutcome(
+            *transaction, operationId, member, outcomeKind, changed,
+            identityResult, status, phase, resumeRequested, workerAttemptId,
+            reason);
+    PrintCampaignMemberOutcome(
+        output, operationId, member, outcomeKind, changed, reason);
+    if (changed)
+        ++summary.changed;
+    else if (outcomeKind == "already_paused")
+        ++summary.alreadyPaused;
+    else if (outcomeKind == "terminal_non_applicable")
+        ++summary.terminalNonApplicable;
+    else if (outcomeKind == "unresolved_failed")
+        ++summary.unresolvedFailed;
+    else if (outcomeKind == "identity_failure")
+        ++summary.identityFailure;
+    else if (outcomeKind == "not_group_owned")
+        ++summary.notGroupOwned;
+    else if (outcomeKind == "resume_predicate_mismatch")
+        ++summary.resumePredicateMismatch;
+}
+
+void AcquireCampaignPauseOwnership(
+    pqxx::transaction_base& transaction,
+    long long pauseOperationId,
+    const CampaignControlTarget& member)
+{
+    const pqxx::result inserted = transaction.exec_params(
+        "INSERT INTO experiment_campaign_materialization_pause_ownership("
+        "pause_operation_id,pause_control_member_id,"
+        "recommendation_campaign_materialization_member_id,experiment_id,"
+        "ownership_state) VALUES($1,$2,$3,$4,'active') "
+        "RETURNING campaign_materialization_pause_ownership_id;",
+        pauseOperationId,
+        member.controlMemberId,
+        member.materializationMemberId,
+        *member.experimentId);
+    RequireAffectedRows(inserted, 1, "acquire_campaign_pause_ownership");
+}
+
+void SupersedeCampaignPauseOwnership(
+    pqxx::transaction_base& transaction,
+    long long experimentId,
+    const char* action,
+    const std::string& actor)
+{
+    if (!transaction.exec(
+            "SELECT to_regclass("
+            "'experiment_campaign_materialization_pause_ownership') "
+            "IS NOT NULL;")[0][0].as<bool>())
+        return;
+    (void)transaction.exec_params(
+        "UPDATE experiment_campaign_materialization_pause_ownership "
+        "SET ownership_state='superseded',"
+        "superseded_at=clock_timestamp(),superseded_action=$2,"
+        "superseded_by=$3 WHERE experiment_id=$1 "
+        "AND ownership_state='active';",
+        experimentId,
+        action,
+        actor);
+}
+
+void ApplyCampaignPauseMember(
+    pqxx::transaction_base* transaction,
+    std::ostream& output,
+    long long operationId,
+    CampaignControlTarget& member,
+    ProcessOperations& processes,
+    CampaignControlSummary& summary)
+{
+    if (!member.experimentId || !member.target)
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member,
+            "terminal_non_applicable", false, std::nullopt,
+            "materialization_member_has_no_conversion_execution",
+            summary);
+        return;
+    }
+    DbTarget& target = *member.target;
+    const std::string& status = target.worker.lifecycleStatus;
+    const std::string& phase = target.worker.phase;
+    if (status == "paused")
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member, "already_paused",
+            false, std::nullopt, "already_paused_not_claimed_by_operation",
+            summary);
+        return;
+    }
+    if (status == "completed" || status == "failed" ||
+        status == "cancelled" ||
+        (phase != "train" && phase != "infer"))
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member,
+            "terminal_non_applicable", false, std::nullopt,
+            (phase == "analyze" ? "analyze_phase_not_pausable" :
+                                   "terminal_experiment_not_pausable"),
+            summary);
+        return;
+    }
+    if (status != "pending" && status != "running")
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member, "unresolved_failed",
+            false, std::nullopt, "unsupported_experiment_lifecycle", summary);
+        return;
+    }
+    const bool hasWorker = target.worker.workerAttemptId.has_value();
+    if (status == "running" && !hasWorker)
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member, "unresolved_failed",
+            false, std::nullopt,
+            "running_worker_attempt_not_authoritatively_bound", summary);
+        return;
+    }
+    if (hasWorker && target.worker.attemptLifecycleState ==
+                         "identity_ambiguous")
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member, "identity_failure",
+            false, std::string{"identity_ambiguous"},
+            "worker_attempt_identity_ambiguous", summary);
+        return;
+    }
+
+    std::optional<std::string> identityResult;
+    std::string workerReason = "pending_experiment_paused";
+    if (hasWorker)
+    {
+        if (!transaction)
+        {
+            const ValidatedWorker validated =
+                target.worker.attemptLifecycleState == "stopped" &&
+                        status == "pending"
+                    ? ValidateStoppedWorkerForSchedulerAdmission(
+                          target.worker, processes)
+                    : ValidateManagedWorker(target.worker, processes);
+            identityResult = ToString(validated.identity);
+            if (validated.identity != IdentityResult::Validated &&
+                validated.identity != IdentityResult::ProcessMissing)
+            {
+                RecordSimpleCampaignOutcome(
+                    nullptr, output, operationId, member,
+                    "identity_failure", false, identityResult,
+                    validated.detail, summary);
+                return;
+            }
+            workerReason = validated.identity == IdentityResult::ProcessMissing
+                ? "would_pause_for_checkpoint_restart"
+                : (validated.observation.stopped
+                       ? "would_retain_stopped_worker"
+                       : "would_validate_then_sigstop");
+            PrintCampaignMemberOutcome(
+                output, operationId, member, "changed_by_group_pause", true,
+                workerReason);
+            ++summary.changed;
+            return;
+        }
+        if (transaction &&
+            !LockExactTargetForMutation(*transaction, target, true))
+        {
+            RecordSimpleCampaignOutcome(
+                transaction, output, operationId, member, "identity_failure",
+                false, std::string{"identity_validation_failed"},
+                "exact_active_worker_attempt_verification_failed", summary);
+            return;
+        }
+        const SignalOutcome signal = PauseWorker(target.worker, processes);
+        identityResult = ToString(signal.identity);
+        if (signal.identity == IdentityResult::ProcessMissing)
+        {
+            workerReason = "exact_worker_process_missing_paused_for_restart";
+            if (transaction)
+            {
+                const pqxx::result retired = transaction->exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='abandoned',completed_at=clock_timestamp(),"
+                    "last_observed_at=clock_timestamp(),"
+                    "reconciliation_result='campaign_pause_process_missing',"
+                    "diagnostic='exact_process_absence_observed' "
+                    "WHERE worker_attempt_id=$1 AND lifecycle_state IN "
+                    "('spawned','running','observed','stopped') "
+                    "RETURNING worker_attempt_id;",
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(
+                    retired, 1, "campaign_pause_missing_worker_attempt");
+                const pqxx::result paused = transaction->exec_params(
+                    "UPDATE experiment SET status='paused',"
+                    "resume_requested=false,worker_control_state='paused',"
+                    "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "worker_process_start_identity=NULL,worker_executable=NULL,"
+                    "worker_command_line=NULL,worker_global_pause_request_id=NULL,"
+                    "active_scheduler_worker_attempt_id=NULL,"
+                    "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "AND status IN ('pending','running') "
+                    "RETURNING experiment_id;",
+                    *member.experimentId,
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(
+                    paused, 1, "campaign_pause_missing_worker_lifecycle");
+            }
+        }
+        else if (signal.success)
+        {
+            workerReason = signal.result == "already_requested_state"
+                ? "stopped_worker_retained"
+                : "verified_process_group_stopped";
+            if (transaction)
+            {
+                const pqxx::result stopped = transaction->exec_params(
+                    "UPDATE experiment_scheduler_worker_attempt SET "
+                    "lifecycle_state='stopped',"
+                    "last_observed_at=clock_timestamp(),signal_number=$1,"
+                    "reconciliation_result='paused_by_campaign_materialization',"
+                    "diagnostic='verified_process_group_stopped' "
+                    "WHERE worker_attempt_id=$2 AND lifecycle_state IN "
+                    "('spawned','running','observed','stopped') "
+                    "RETURNING worker_attempt_id;",
+                    signal.signals.empty()
+                        ? std::optional<int>{}
+                        : std::optional<int>{signal.signals.back()},
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(
+                    stopped, 1, "campaign_pause_stop_worker_attempt");
+                const pqxx::result paused = transaction->exec_params(
+                    "UPDATE experiment SET status='paused',"
+                    "resume_requested=false,worker_control_state='paused',"
+                    "worker_global_pause_request_id=NULL,"
+                    "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+                    "AND active_scheduler_worker_attempt_id=$2 "
+                    "AND status IN ('pending','running') "
+                    "RETURNING experiment_id;",
+                    *member.experimentId,
+                    *target.worker.workerAttemptId);
+                RequireAffectedRows(
+                    paused, 1, "campaign_pause_stopped_worker_lifecycle");
+            }
+        }
+        else
+        {
+            RecordSimpleCampaignOutcome(
+                transaction, output, operationId, member, "identity_failure",
+                false, identityResult, signal.detail.empty()
+                    ? signal.result : signal.result + ":" + signal.detail,
+                summary);
+            return;
+        }
+    }
+    else if (transaction)
+    {
+        const pqxx::result paused = transaction->exec_params(
+            "UPDATE experiment SET status='paused',resume_requested=false,"
+            "worker_control_state='paused',worker_global_pause_request_id=NULL,"
+            "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+            "AND status='pending' "
+            "AND active_scheduler_worker_attempt_id IS NULL "
+            "RETURNING experiment_id;",
+            *member.experimentId);
+        RequireAffectedRows(paused, 1, "campaign_pause_pending_experiment");
+    }
+
+    if (transaction)
+    {
+        InsertCampaignControlOutcome(
+            *transaction, operationId, member, "changed_by_group_pause", true,
+            identityResult, std::string{"paused"}, phase, false,
+            hasWorker ? target.worker.workerAttemptId : std::nullopt,
+            workerReason);
+        AcquireCampaignPauseOwnership(*transaction, operationId, member);
+    }
+    PrintCampaignMemberOutcome(
+        output, operationId, member, "changed_by_group_pause", true,
+        workerReason);
+    ++summary.changed;
+}
+
+void ApplyCampaignResumeMember(
+    pqxx::transaction_base* transaction,
+    std::ostream& output,
+    long long operationId,
+    CampaignControlTarget& member,
+    CampaignControlSummary& summary)
+{
+    if (!member.sourcePauseOperationId)
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member, "not_group_owned",
+            false, std::nullopt, "no_active_group_pause_ownership", summary);
+        return;
+    }
+    if (!member.experimentId || !member.target ||
+        member.target->worker.lifecycleStatus != "paused")
+    {
+        RecordSimpleCampaignOutcome(
+            transaction, output, operationId, member,
+            "resume_predicate_mismatch", false, std::nullopt,
+            "owned_experiment_no_longer_paused", summary);
+        return;
+    }
+    if (transaction)
+    {
+        const pqxx::result ownership = transaction->exec_params(
+            "SELECT campaign_materialization_pause_ownership_id FROM "
+            "experiment_campaign_materialization_pause_ownership "
+            "WHERE pause_operation_id=$1 "
+            "AND recommendation_campaign_materialization_member_id=$2 "
+            "AND experiment_id=$3 AND ownership_state='active' FOR UPDATE;",
+            *member.sourcePauseOperationId,
+            member.materializationMemberId,
+            *member.experimentId);
+        if (ownership.size() != 1)
+        {
+            RecordSimpleCampaignOutcome(
+                transaction, output, operationId, member,
+                "resume_predicate_mismatch", false, std::nullopt,
+                "exact_group_pause_ownership_mismatch", summary);
+            return;
+        }
+        const pqxx::result resumed = transaction->exec_params(
+            "UPDATE experiment SET status='pending',resume_requested=true,"
+            "updated_at=clock_timestamp() WHERE experiment_id=$1 "
+            "AND status='paused' RETURNING experiment_id;",
+            *member.experimentId);
+        RequireAffectedRows(resumed, 1, "campaign_resume_queue_experiment");
+        InsertCampaignControlOutcome(
+            *transaction, operationId, member, "released_by_group_resume", true,
+            std::nullopt, std::string{"pending"},
+            member.target->worker.phase, true,
+            member.target->worker.workerAttemptId,
+            "queued_for_capacity_limited_scheduler_admission");
+        const pqxx::result consumed = transaction->exec_params(
+            "UPDATE experiment_campaign_materialization_pause_ownership "
+            "SET ownership_state='consumed',consumed_at=clock_timestamp(),"
+            "consumed_resume_operation_id=$2 "
+            "WHERE campaign_materialization_pause_ownership_id=$1 "
+            "AND ownership_state='active' "
+            "RETURNING campaign_materialization_pause_ownership_id;",
+            ownership[0][0].as<long long>(),
+            operationId);
+        RequireAffectedRows(consumed, 1, "consume_campaign_pause_ownership");
+    }
+    PrintCampaignMemberOutcome(
+        output, operationId, member, "released_by_group_resume", true,
+        "queued_for_capacity_limited_scheduler_admission");
+    ++summary.changed;
+}
+
+void PrintCampaignControlSummary(
+    std::ostream& output,
+    const char* action,
+    long long materializationId,
+    long long operationId,
+    size_t targetCount,
+    const CampaignControlSummary& summary,
+    const std::string& result)
+{
+    output << "CAMPAIGN_MATERIALIZATION_CONTROL_SUMMARY"
+           << ",operation_id="
+           << (operationId > 0 ? std::to_string(operationId) : "NULL")
+           << ",materialization_id=" << materializationId
+           << ",action=" << action
+           << ",result=" << result
+           << ",target_count=" << targetCount
+           << ",changed_count=" << summary.changed
+           << ",already_paused_count=" << summary.alreadyPaused
+           << ",terminal_non_applicable_count="
+           << summary.terminalNonApplicable
+           << ",unresolved_failed_count=" << summary.unresolvedFailed
+           << ",identity_failure_count=" << summary.identityFailure
+           << ",not_group_owned_count=" << summary.notGroupOwned
+           << ",resume_predicate_mismatch_count="
+           << summary.resumePredicateMismatch << "\n";
+}
+
+int RunCampaignMaterializationControlCommand(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    bool pause,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    const char* action = pause ? "pause" : "resume";
+    if (command.materializationId <= 0)
+    {
+        error << "CAMPAIGN_MATERIALIZATION_CONTROL_REJECTED"
+              << ",materialization_id=" << command.materializationId
+              << ",action=" << action
+              << ",reason=invalid_materialization_id\n";
+        return 1;
+    }
+    const bool willApply = command.confirmed && !command.dryRun;
+    pqxx::connection connection{connectionString};
+    pqxx::work transaction{connection};
+    transaction.exec(willApply
+        ? "SET TRANSACTION READ WRITE;"
+        : "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;");
+    if (willApply)
+        EA::SchedulerOwnership::SetCorrectedSchedulerProtocolSession(
+            transaction);
+    AcquireCoordinationLock(transaction);
+    const ControlSnapshot control = LoadControlSnapshot(transaction);
+    if (control.activeRequestId)
+    {
+        output << "CAMPAIGN_MATERIALIZATION_CONTROL_REJECTED"
+               << ",materialization_id=" << command.materializationId
+               << ",action=" << action
+               << ",reason=conflicting_administrative_request_active\n";
+        transaction.commit();
+        return 1;
+    }
+    CampaignControlResolution resolution = pause
+        ? ResolveCampaignPauseTargets(
+              transaction, command.materializationId, willApply)
+        : ResolveCampaignResumeTargets(
+              transaction, command.materializationId, willApply);
+    if (!resolution.failureReason.empty())
+    {
+        long long operationId = -1;
+        if (willApply && resolution.expectedMemberCount > 0 &&
+            resolution.failureReason != "materialization_not_found")
+        {
+            operationId = InsertCampaignControlOperation(
+                transaction, command, action,
+                resolution.expectedMemberCount, "failed",
+                resolution.failureReason);
+        }
+        output << "CAMPAIGN_MATERIALIZATION_CONTROL_REJECTED"
+               << ",operation_id="
+               << (operationId > 0 ? std::to_string(operationId) : "NULL")
+               << ",materialization_id=" << command.materializationId
+               << ",action=" << action
+               << ",reason=" << resolution.failureReason << "\n";
+        transaction.commit();
+        return 1;
+    }
+
+    long long operationId = -1;
+    if (willApply)
+    {
+        operationId = InsertCampaignControlOperation(
+            transaction, command, action, resolution.expectedMemberCount,
+            "resolved", "exact_frozen_member_population_resolved");
+        for (CampaignControlTarget& member : resolution.targets)
+            member.controlMemberId = InsertCampaignControlMember(
+                transaction, operationId, member);
+    }
+    CampaignControlSummary summary;
+    for (CampaignControlTarget& member : resolution.targets)
+    {
+        if (pause)
+            ApplyCampaignPauseMember(
+                willApply ? &transaction : nullptr, output, operationId,
+                member, processes, summary);
+        else
+            ApplyCampaignResumeMember(
+                willApply ? &transaction : nullptr, output, operationId,
+                member, summary);
+    }
+    const std::string result = command.dryRun
+        ? "dry_run"
+        : (!command.confirmed
+               ? "confirmation_required"
+               : (summary.Failed() ? "partial_failure" : "applied"));
+    PrintCampaignControlSummary(
+        output, action, command.materializationId, operationId,
+        resolution.targets.size(), summary, result);
+    if (!command.dryRun && !command.confirmed)
+        output << "Use --yes to apply.\n";
+    transaction.commit();
+    return summary.Failed() ? 1 : 0;
+}
+
+int RunCampaignMaterializationPauseCommand(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error)
+{
+    PosixProcessOperations processes;
+    return RunCampaignMaterializationControlCommand(
+        connectionString, command, true, output, error, processes);
+}
+
+int RunCampaignMaterializationPauseCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    return RunCampaignMaterializationControlCommand(
+        connectionString, command, true, output, error, processes);
+}
+
+int RunCampaignMaterializationResumeCommand(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error)
+{
+    PosixProcessOperations processes;
+    return RunCampaignMaterializationControlCommand(
+        connectionString, command, false, output, error, processes);
+}
+
+int RunCampaignMaterializationResumeCommandWithProcessOperationsForTesting(
+    const std::string& connectionString,
+    const CampaignMaterializationControlCommand& command,
+    std::ostream& output,
+    std::ostream& error,
+    ProcessOperations& processes)
+{
+    return RunCampaignMaterializationControlCommand(
+        connectionString, command, false, output, error, processes);
+}
+
 int RunExperimentPauseCommand(const std::string& connectionString,
                               const ExperimentPauseCommand& command,
                               std::ostream& output,
@@ -5703,6 +6652,12 @@ int RunExperimentPauseCommandWithProcessOperationsForTesting(
         RequireAffectedRows(paused, 1, "pause_nonexecuting_experiment");
     }
 
+    SupersedeCampaignPauseOwnership(
+        transaction,
+        target.worker.experimentId,
+        "pause",
+        command.requesterIdentity.value_or(CurrentRequester()));
+
     transaction.commit();
     output << "SCHEDULER_CONTROL_APPLIED,action=pause,experiment_id="
            << target.worker.experimentId
@@ -5810,6 +6765,11 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
             command.experimentId);
         RequireAffectedRows(resumed, 1, "queue_experiment_resume");
     }
+    SupersedeCampaignPauseOwnership(
+        transaction,
+        command.experimentId,
+        "resume",
+        command.requesterIdentity.value_or(CurrentRequester()));
     transaction.commit();
     output << "SCHEDULER_CONTROL_APPLIED,action=resume,experiment_id="
            << command.experimentId
