@@ -4,6 +4,25 @@ Phase 10 extends the fail-closed Phase 9 operator workflow for migration 088.
 It does not change the Phase 8 width-75 feature contract, apply migration 088
 to production, or write authoritative actuals to production.
 
+Phase 11 adds a PCE-only production-readiness artifact workflow.  It remains
+read-only in PostgreSQL and has no database commit option:
+
+```sh
+python3 EconomicCalendar/prepare_pce_production_import.py \
+  --db LSTM \
+  --manifest-output /tmp/pce-production-import.jsonl \
+  --audit-output /tmp/pce-production-readiness.json \
+  --sql-output /tmp/pce-production-import.sql
+```
+
+The JSONL contains exactly the migration-088 insert fields in canonical
+availability/event/observation order.  The audit records every current catalog
+identity and selected-consensus classification, the exact fail-closed source
+exclusions, coverage, and the SHA-256 of the complete manifest bytes.  The SQL
+is a single append-only transaction with no update, delete, upsert, or conflict
+suppression.  It is review material only; applying migration 088 and importing
+PCE remain separate future operator gates.
+
 ## Supported source contract
 
 The unchanged Census implementation supports `RETAIL_SALES` and

@@ -185,7 +185,14 @@ INSERT_COLUMNS = (
 
 
 def build_insert_sql(decisions: Sequence[ImportDecision]) -> str:
-    rows = [decision for decision in decisions if decision.decision == "matched"]
+    rows = sorted(
+        (decision for decision in decisions if decision.decision == "matched"),
+        key=lambda decision: (
+            canonical_instant(decision.candidate.available_at),
+            int(decision.matched_economic_event_id or -1),
+            decision.candidate.source_observation_id,
+        ),
+    )
     if not rows:
         return "BEGIN;\nCOMMIT;\n"
     values = []
