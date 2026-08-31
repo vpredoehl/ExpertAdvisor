@@ -72,8 +72,33 @@ diff -ru "$FIRST" "$REPEAT"
 test "$(wc -l < "$FIRST/bls-initial-actual-manifest.jsonl" | tr -d ' ')" = "786"
 test "$(shasum -a 256 "$FIRST/bls-initial-actual-manifest.jsonl" | awk '{print $1}')" = \
     "cd4a124979cde17c65d3550d8b28293650aada458ae10f4a2fa288f547583420"
-test "$(shasum -a 256 "$FIRST/bls-initial-actual-import.sql" | awk '{print $1}')" = \
+CERTIFIED_SQL="$ROOT/AuditEvidence/AuthoritativeEconomicCalendar/Phase17/2026-08-31/bls-initial-actual-import.sql"
+test "$(shasum -a 256 "$CERTIFIED_SQL" | awk '{print $1}')" = \
     "4622f334bb2fd196287e768e1863745a70ed5fb4e09274cf594fdce85a7cc1a9"
+
+source_bls_count="$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
+    --dbname="$DB_NAME" -tAc \
+    "SELECT count(*) FROM economic_event_release_actual WHERE source_agency='BLS';")"
+case "$source_bls_count" in
+    0)
+        source_state="pre_import"
+        test "$(shasum -a 256 "$FIRST/bls-initial-actual-import.sql" | awk '{print $1}')" = \
+            "4622f334bb2fd196287e768e1863745a70ed5fb4e09274cf594fdce85a7cc1a9"
+        test "$(jq -r '.payload.expected_insert_count' "$FIRST/bls-coverage-audit.json")" = "786"
+        test "$(jq -r '.payload.duplicate_identical_count' "$FIRST/bls-coverage-audit.json")" = "0"
+        ;;
+    786)
+        source_state="post_import"
+        test "$(cat "$FIRST/bls-initial-actual-import.sql")" = $'BEGIN;\nCOMMIT;'
+        test "$(jq -r '.payload.expected_insert_count' "$FIRST/bls-coverage-audit.json")" = "0"
+        test "$(jq -r '.payload.duplicate_identical_count' "$FIRST/bls-coverage-audit.json")" = "786"
+        ;;
+    *)
+        printf 'unexpected production BLS row count: %s\n' "$source_bls_count" >&2
+        exit 1
+        ;;
+esac
+test "$(jq -r '.payload.conflict_count' "$FIRST/bls-coverage-audit.json")" = "0"
 if grep -Eiq '\b(UPDATE|DELETE|UPSERT)\b|ON[[:space:]]+CONFLICT' \
     "$FIRST/bls-initial-actual-import.sql"; then
     echo "BLS import plan is not INSERT-only" >&2
@@ -126,4 +151,5 @@ printf 'PHASE17_EXACT_DUPLICATE_IDEMPOTENCY=PASS\n'
 printf 'PHASE17_FEATURE_VIEW_INITIAL_REVISION_ZERO_ONLY=PASS\n'
 printf 'PHASE17_CAUSAL_AVAILABILITY=PASS\n'
 printf 'PHASE17_APPEND_ONLY_GUARDS=PASS\n'
+printf 'PHASE17_SOURCE_STATE=%s\n' "$source_state"
 printf 'PHASE17_DISPOSABLE_DATABASE_DROPPED=%s\n' "$DB_NAME"
