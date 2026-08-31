@@ -23,6 +23,15 @@ is a single append-only transaction with no update, delete, upsert, or conflict
 suppression.  It is review material only; applying migration 088 and importing
 PCE remain separate future operator gates.
 
+Phase 12 validates that reviewed package against the unchanged width-75 feature
+contract.  Repository queries now exclude an initial actual unless its
+persisted `available_at` is strictly before the requested information upper
+bound, and the feature engine repeats the same predicate for every completed
+bar.  The migration-088 feature view continues to expose only revision zero;
+later revisions remain immutable audit evidence and never replace the initial
+surprise.  This validation does not deploy migration 088 or import the package
+into production.
+
 ## Supported source contract
 
 The unchanged Census implementation supports `RETAIL_SALES` and

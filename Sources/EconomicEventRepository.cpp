@@ -277,8 +277,9 @@ std::vector<EconomicEvent> LoadEconomicEvents(
         "FROM economic_event e "
         "LEFT JOIN economic_event_selected_consensus c "
         "USING (economic_event_id) "
-        "LEFT JOIN economic_event_feature_release_actual a "
-        "USING (economic_event_id) "
+        "LEFT JOIN economic_event_feature_release_actual a ON "
+        "a.economic_event_id = e.economic_event_id "
+        "AND a.available_at < $3::timestamptz "
         "WHERE e.currency = $1 "
         "AND e.event_timestamp_utc >= $2::timestamptz "
         "AND e.event_timestamp_utc < $3::timestamptz "
@@ -307,7 +308,11 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     // each stream's latest prior row lets the shared C++ mapper select the
     // truly latest model-family timestamp without duplicating that mapping in
     // SQL. The disjoint UNION ALL then includes every event required while
-    // target bars are processed.
+    // target bars are processed.  The release-actual join is also bounded by
+    // the range's information upper bound.  This prevents an authoritative
+    // observation that was not yet knowable anywhere in the requested range
+    // from crossing the repository boundary.  The chronological feature
+    // engine retains the same strict check for each individual completed bar.
     const pqxx::result rows = transaction.exec(
         "WITH prior_canonical_stream AS ("
         "SELECT DISTINCT ON (source_agency, event_family) "
@@ -329,8 +334,9 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
         "FROM selected_event e "
         "LEFT JOIN economic_event_selected_consensus c "
         "USING (economic_event_id) "
-        "LEFT JOIN economic_event_feature_release_actual a "
-        "USING (economic_event_id) "
+        "LEFT JOIN economic_event_feature_release_actual a ON "
+        "a.economic_event_id = e.economic_event_id "
+        "AND a.available_at < $3::timestamptz "
         "ORDER BY e.event_timestamp_utc ASC, e.economic_event_id ASC;",
         pqxx::params{
             currency,

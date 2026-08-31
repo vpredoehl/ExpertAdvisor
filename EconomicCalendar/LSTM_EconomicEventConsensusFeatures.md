@@ -2,11 +2,25 @@
 
 ## Source and causal boundary
 
-`LoadEconomicEventsForFeatureRange` performs one ordered range query over
-`economic_event` with left joins to `economic_event_selected_consensus` and
-`economic_event_feature_release_actual`. Feature code does not select a
-provider, a latest actual, or an unselected consensus observation. Provider and
-authoritative source identity are retained only for diagnostics/provenance.
+`LSTM/main.cpp` opens a read-only transaction and calls
+`LoadEconomicEventsForFeatureRange(currency, query_start, observation_end)`.
+That repository performs one ordered query over `economic_event`, joins the
+single `economic_event_selected_consensus` row, and joins
+`economic_event_feature_release_actual` only when
+`available_at < observation_end`. It never selects a latest actual or an
+unselected consensus observation. `Tensor::Add` then passes each completed
+15-minute bar to `EconomicEventFeatureEngine`, whose ordered values are copied
+unchanged into Tensor columns 49 through 70 and then into the registered model
+input prefix appropriate to the persisted model width.
+
+The calendar supplies event time. The selected-consensus view supplies the
+forecast. Provider `previous` and `actual` fields remain immutable evidence in
+`economic_event_consensus`, but neither is projected into the feature row:
+`previous` has no model channel, and provider actual lacks certified
+initial-release provenance. The only actual eligible for model input is the
+authoritative initial row from migration 088. Surprise is derived in C++ as
+normalized canonical `actual - forecast`; no persisted or provider-computed
+surprise is loaded.
 
 The persisted consensus rows do not contain a historical `known_at` instant for
 each forecast revision. Therefore, the final selected forecast is not projected
@@ -19,6 +33,14 @@ cutoff `bar_start + 15 minutes`:
 - semantic-layout-v4 surprise remains unavailable at every cutoff;
 - semantic-layout-v5 surprise is visible only when the certified initial
   actual has `available_at < information_cutoff`. Equality remains invisible.
+
+The strict inequality matches the existing half-open completed-bar contract:
+information published exactly on the next bar boundary belongs to the next
+bar, never the preceding completed observation. SQL rejects actuals unavailable
+anywhere in the requested range; the feature engine repeats the same check for
+every bar inside a multi-bar range. Query repetition against the same snapshot
+therefore produces identical values without loading a current/latest value and
+trying to reconstruct history afterward.
 
 ## DOL/ETA Weekly Claims treatment
 
@@ -111,6 +133,12 @@ artifact path/SHA-256, semantic contract, and nonempty JSON provenance are
 mandatory. Raw values must reproduce canonical values through their persisted
 positive scale.
 
+Revisions remain append-only audit evidence. They are never selected by the
+current v5 feature view, even after their own availability time, so a later
+revision cannot alter any earlier or later v5 initial-surprise value. Supporting
+revision-aware model channels would require a separately versioned future
+contract; the runtime does not infer one.
+
 Semantic layout v5 appends four channels at Tensor columns 67 through 70:
 
 | Column | Name | Encoding |
@@ -129,6 +157,32 @@ numeric zero, so equal numeric values set `has_surprise=1` with zero magnitude.
 FOMC range consensus preserves both endpoints and sets the range bit. No
 midpoint or interval-subtraction rule is invented, so range surprise remains
 unavailable.
+
+Missing actual, missing forecast, a range on either side, unit/qualifier
+mismatch, malformed provenance, unsupported family, unsupported document, and
+inexact source language never fall back to provider actual, a revision, another
+series, another unit, or an inferred number. Existing presence-bit semantics
+remain authoritative: unavailable surprise is four zeros, while a genuine
+zero difference has `authoritative_initial_has_surprise=1`.
+
+## Production coverage validated for Phase 12
+
+The Phase 11 reviewed PCE package contains 183 provenance-certified BEA
+current-dollar PCE month-over-month scalar initials from 2010-02-01 through
+2026-06-25. All match the v5 `scalar`/`percent`/`m/m` runtime contract. Of
+these, 168 have compatible selected consensus and can produce surprise; 15
+lack consensus and fail closed. For the historical 2010 through 2024 target,
+167 of 179 events have certified initials (93.2961%) and 152 are jointly usable
+(84.9162%). Post-2025, 16 of 17 are certified and jointly usable (94.1176%).
+
+Remaining gaps are explicit: 12 historical and one post-2025 PCE source
+observations are excluded (12 inexact “less than 0.1 percent” values and one
+combined-month release), and 15 otherwise certified PCE initials lack selected
+consensus. BLS CPI, Employment, PPI, and JOLTS; Federal Reserve FOMC actuals;
+and DOL/ETA Weekly Claims remain unsupported for authoritative surprise for the
+source-archive or scalar-compatibility reasons documented in the ingestion
+contract. Phase 12 does not deploy migration 088 or import the reviewed PCE
+manifest into production.
 
 ## Width and ancestry
 

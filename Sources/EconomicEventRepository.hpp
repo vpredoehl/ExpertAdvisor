@@ -104,6 +104,9 @@ std::vector<EconomicEvent> LoadEconomicEvents(
 // avoids an arbitrary recency lookback and remains one ordered database query.
 // The inclusive end boundary supplies consensus to the final completed bar
 // when a release occurs exactly at that bar's information cutoff.
+// Authoritative initial actuals are projected only when available_at is
+// strictly before endUtc; per-bar feature evaluation repeats that causal
+// check at each completed observation cutoff.
 std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     pqxx::transaction_base& transaction,
     const std::string& currency,
