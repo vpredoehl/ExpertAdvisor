@@ -20,15 +20,22 @@ import subprocess
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 
 UTC = dt.timezone.utc
 CENSUS_SUPPORTED_FAMILIES = ("DURABLE_GOODS", "RETAIL_SALES")
 BEA_SUPPORTED_FAMILIES = ("GDP", "PCE")
+BLS_SUPPORTED_FAMILIES = ("CPI", "EMPLOYMENT", "PPI", "JOLTS")
 SUPPORTED_FAMILIES = CENSUS_SUPPORTED_FAMILIES
 SEMANTIC_CONTRACT = "census_advance_release_headline_mom_percent_v1"
 BEA_GDP_SEMANTIC_CONTRACT = "bea_real_gdp_annualized_quarterly_percent_v1"
 BEA_PCE_SEMANTIC_CONTRACT = "bea_current_dollar_pce_mom_percent_v1"
+BLS_CPI_SEMANTIC_CONTRACT = "bls_cpi_u_all_items_sa_mom_percent_v1"
+BLS_EMPLOYMENT_SEMANTIC_CONTRACT = "bls_total_nonfarm_payroll_sa_change_v1"
+BLS_PPI_FINISHED_GOODS_SEMANTIC_CONTRACT = "bls_ppi_finished_goods_sa_mom_percent_v1"
+BLS_PPI_FINAL_DEMAND_SEMANTIC_CONTRACT = "bls_ppi_final_demand_sa_mom_percent_v1"
+BLS_JOLTS_SEMANTIC_CONTRACT = "bls_jolts_total_nonfarm_job_openings_sa_level_v1"
 
 
 def canonical_instant(value: str | dt.datetime) -> str:
@@ -100,6 +107,24 @@ class BeaArtifact:
 
 
 @dataclasses.dataclass(frozen=True)
+class BlsArtifact:
+    event_family: str
+    reference_period: str
+    release_date: str
+    source_url: str
+    canonical_source_url: str
+    path: pathlib.Path
+    repository_path: str
+    source_event_id: str
+    available_at: str
+    retrieved_at: str
+    first_archive_admission_at: str
+    sha256: str
+    source_release_identity: str
+    release_timestamp_evidence: str
+
+
+@dataclasses.dataclass(frozen=True)
 class ReleaseActualCandidate:
     source_family: str
     candidate_event_family: str
@@ -146,6 +171,11 @@ class ReleaseActualCandidate:
             SEMANTIC_CONTRACT: ("CENSUS", "percent", "m/m"),
             BEA_GDP_SEMANTIC_CONTRACT: ("BEA", "percent", None),
             BEA_PCE_SEMANTIC_CONTRACT: ("BEA", "percent", "m/m"),
+            BLS_CPI_SEMANTIC_CONTRACT: ("BLS", "percent", "m/m"),
+            BLS_EMPLOYMENT_SEMANTIC_CONTRACT: ("BLS", "count", None),
+            BLS_PPI_FINISHED_GOODS_SEMANTIC_CONTRACT: ("BLS", "percent", "m/m"),
+            BLS_PPI_FINAL_DEMAND_SEMANTIC_CONTRACT: ("BLS", "percent", "m/m"),
+            BLS_JOLTS_SEMANTIC_CONTRACT: ("BLS", "count", None),
         }
         expected = expected_semantics.get(self.semantic_contract)
         if expected is None:
@@ -154,6 +184,8 @@ class ReleaseActualCandidate:
             error = (
                 "census_semantics_invalid"
                 if self.semantic_contract == SEMANTIC_CONTRACT
+                else "bls_semantics_invalid"
+                if self.source_agency == "BLS"
                 else "bea_semantics_invalid"
             )
             raise ValueError(error)
@@ -166,6 +198,8 @@ class ReleaseActualCandidate:
             if self.source_agency == "CENSUS"
             else re.match(r"^https://www\.bea\.gov/", self.source_url)
             if self.source_agency == "BEA"
+            else re.match(r"^https://www\.bls\.gov/news\.release/archives/", self.source_url)
+            if self.source_agency == "BLS"
             else None
         )
         if not authoritative_url:
@@ -284,7 +318,7 @@ def read_artifact_text(path: pathlib.Path, pdftotext: str = "pdftotext") -> tupl
 def read_bea_artifact_text(path: pathlib.Path) -> tuple[str, str]:
     if path.suffix.lower() == ".txt":
         return path.read_text(encoding="utf-8"), "text_fixture_v1"
-    if path.suffix.lower() != ".html":
+    if path.suffix.lower() not in {".htm", ".html"}:
         raise ValueError("unsupported_document_type")
     raw = path.read_text(encoding="utf-8", errors="replace")
     text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
@@ -299,7 +333,7 @@ def _signed(direction: str | None, numeric: str) -> Decimal:
         value = Decimal(numeric)
     except InvalidOperation as error:
         raise ValueError("actual_numeric_invalid") from error
-    if direction and direction.lower().startswith("decreas"):
+    if direction and re.search(r"\b(?:decreas|declin|fell|down)\w*\b", direction.lower()):
         value = -value
     return value
 
@@ -688,6 +722,311 @@ def extract_bea_candidates(
         )]
 
 
+def _bls_release_identity(artifact: BlsArtifact, text: str) -> str:
+    normalized = _clean_text(text)
+    release_date = dt.date.fromisoformat(artifact.release_date)
+    date_text = f"{release_date.strftime('%B')} {release_date.day}, {release_date.year}"
+    expected_time = "10:00 a.m." if artifact.event_family == "JOLTS" else "8:30 a.m."
+    evidence = artifact.release_timestamp_evidence
+    identity_text = lambda value: " ".join(re.findall(r"[a-z0-9:]+", value.lower()))
+    if (
+        identity_text(expected_time) not in identity_text(evidence)
+        or identity_text(date_text) not in identity_text(evidence)
+    ):
+        raise ValueError("missing_initial_provenance:manifest_release_timestamp_not_proven")
+    release_prefix = normalized[:20000]
+    if (
+        identity_text(expected_time) not in identity_text(release_prefix)
+        or identity_text(date_text) not in identity_text(release_prefix)
+    ):
+        raise ValueError("missing_initial_provenance:artifact_release_timestamp_not_proven")
+    if artifact.reference_period.lower() not in release_prefix.lower():
+        raise ValueError("missing_initial_provenance:artifact_reference_period_not_proven")
+    return f"{expected_time} ET {date_text}"
+
+
+def _unique_bls_value(
+    matches: Sequence[tuple[Decimal, str, str]], rejection: str
+) -> tuple[Decimal, str, str]:
+    if not matches:
+        raise ValueError("unsupported_semantics:" + rejection + "_not_proven")
+    values = {value for value, _, _ in matches}
+    if len(values) != 1:
+        raise ValueError("unsupported_semantics:" + rejection + "_ambiguous")
+    return matches[0]
+
+
+def _bls_cpi_actual(reference_period: str, text: str) -> tuple[Decimal, str, str]:
+    normalized = _clean_text(text)
+    headline = re.search(
+        r"(?P<headline>(?:On a seasonally adjusted basis, )?"
+        r"(?:The )?(?:[A-Z][a-z]+ )?Consumer Price Index for All Urban Consumers \(CPI-U\) "
+        r".{0,320}?the U\.S\. Bureau of Labor Statistics reported today\.)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if not headline or "seasonally adjusted basis" not in headline.group("headline").lower():
+        raise ValueError("unsupported_semantics:cpi_u_all_items_sa_mom_headline_not_proven")
+    movement = re.compile(
+        r"(?P<direction>increased|rose|declined|decreased|fell) "
+        r"(?P<value>[0-9]+(?:\.[0-9]+)?) percent",
+        re.IGNORECASE,
+    )
+    unchanged = re.compile(r"was unchanged", re.IGNORECASE)
+    matches: list[tuple[Decimal, str, str]] = []
+    for match in movement.finditer(headline.group("headline")):
+        value = _signed(match.group("direction"), match.group("value"))
+        matches.append((value, match.group(0), headline.group("headline")))
+    for match in unchanged.finditer(headline.group("headline")):
+        matches.append((Decimal("0"), match.group(0), headline.group("headline")))
+    return _unique_bls_value(matches, "cpi_u_all_items_sa_mom_headline")
+
+
+def _bls_employment_actual(
+    reference_period: str, text: str
+) -> tuple[Decimal, str, str]:
+    month, year = map(re.escape, reference_period.split())
+    normalized = _clean_text(text)
+    if re.search(
+        r"BLS reissued this news release",
+        normalized[:30000],
+        re.IGNORECASE,
+    ):
+        raise ValueError("missing_initial_provenance:employment_release_reissued")
+    release = re.search(
+        rf"THE EMPLOYMENT SITUATION\s*-+\s*{month} {year} "
+        r"(?P<headline>.{0,6000}?)(?:Household Survey Data|"
+        r"This news release presents statistics from two monthly surveys)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if not release:
+        raise ValueError("unsupported_semantics:total_nonfarm_payroll_current_month_not_proven")
+    headline = release.group("headline")
+    movement = re.compile(
+        r"(?:Total )?[Nn]onfarm payroll employment "
+        r"(?P<direction>rose|increased|declined|decreased|fell|grew|"
+        r"edged up|edged down) "
+        r"(?:by )?(?P<value>[0-9][0-9,.]*)"
+        r"(?: (?P<unit>million|thousand))?\b",
+        re.IGNORECASE,
+    )
+    matches: list[tuple[Decimal, str, str]] = []
+    for match in movement.finditer(headline):
+        value = Decimal(match.group("value").replace(",", ""))
+        unit = (match.group("unit") or "count").lower()
+        if unit == "million":
+            value *= Decimal("1000")
+        elif unit == "count":
+            value /= Decimal("1000")
+        value = _signed(match.group("direction"), canonical_decimal(value))
+        matches.append((value, match.group(0), release.group(0)))
+
+    parenthetical = re.compile(
+        r"(?:Total )?[Nn]onfarm payroll employment.{0,120}?"
+        r"\((?P<signed>[+\-]?[0-9,]+)\)",
+        re.IGNORECASE,
+    )
+    for match in parenthetical.finditer(headline):
+        value = Decimal(match.group("signed").replace(",", "")) / Decimal("1000")
+        matches.append((value, match.group(0), release.group(0)))
+    return _unique_bls_value(matches, "total_nonfarm_payroll_current_month")
+
+
+def _bls_ppi_actual(
+    artifact: BlsArtifact, text: str
+) -> tuple[Decimal, str, str, str]:
+    month = re.escape(artifact.reference_period.split()[0])
+    normalized = _clean_text(text)
+    headline = re.search(
+        r"(?P<headline>The Producer Price Index for "
+        r"(?P<statistic>final demand|finished goods) .{0,320}?"
+        r"the U\.S\. Bureau of Labor Statistics reported today\.)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if not headline or "seasonally adjusted" not in headline.group("headline").lower():
+        raise ValueError("unsupported_semantics:ppi_headline_sa_mom_not_proven")
+    movement = re.compile(
+        r"(?P<direction>rose|advanced|increased|fell|declined|decreased|"
+        r"moved up|moved down|edged up|edged down|inched up|inched down) "
+        r"(?P<value>[0-9]+(?:\.[0-9]+)?) percent",
+        re.IGNORECASE,
+    )
+    unchanged = re.compile(r"was unchanged", re.IGNORECASE)
+    matches: list[tuple[Decimal, str, str, str]] = []
+    for match in movement.finditer(headline.group("headline")):
+        value = _signed(match.group("direction"), match.group("value"))
+        matches.append((value, match.group(0), headline.group("headline"), headline.group("statistic").lower()))
+    for match in unchanged.finditer(headline.group("headline")):
+        matches.append((Decimal("0"), match.group(0), headline.group("headline"), headline.group("statistic").lower()))
+    if not matches:
+        raise ValueError("unsupported_semantics:ppi_headline_sa_mom_not_proven")
+    identities = {(row[0], row[3]) for row in matches}
+    if len(identities) != 1:
+        raise ValueError("unsupported_semantics:ppi_headline_sa_mom_ambiguous")
+    value, raw, evidence, statistic = matches[0]
+    expected = "final demand" if artifact.release_date >= "2014-02-19" else "finished goods"
+    if statistic != expected:
+        raise ValueError("unsupported_semantics:ppi_historical_regime_mismatch")
+    contract = (
+        BLS_PPI_FINAL_DEMAND_SEMANTIC_CONTRACT
+        if statistic == "final demand"
+        else BLS_PPI_FINISHED_GOODS_SEMANTIC_CONTRACT
+    )
+    return value, raw, evidence, contract
+
+
+def _bls_jolts_actual(
+    reference_period: str, text: str
+) -> tuple[Decimal, str, str]:
+    normalized = _clean_text(text)
+    month, year = reference_period.split()
+    headline = re.search(
+        rf"(?:There were (?P<old_value>[0-9]+(?:\.[0-9]+)?) million job openings "
+        rf"on the last business day of {re.escape(month)}(?: {year})?|"
+        r"The number of job openings.{0,100}?"
+        r"(?P<new_value>[0-9]+(?:\.[0-9]+)?) million "
+        rf"(?:.{{0,50}}?on the last business day of|in) {re.escape(month)})"
+        r".{0,100}?the U\.S\. Bureau of Labor Statistics reported today",
+        normalized,
+        re.IGNORECASE,
+    )
+    table = re.search(
+        r"Table A\. Job openings, hires, and total separations by industry, "
+        r"seasonally adjusted.{0,1800}?LEVELS?\s*(?:BY INDUSTRY)?\s*"
+        r"[^a-z0-9]{0,300}\(in thousands\).{0,500}?"
+        r"Total(?:\([a-z0-9]+\))?(?: nonfarm)?"
+        r"(?:\.{2,}\|)?\s*"
+        r"(?P<prior_year>[0-9,]+)(?:\s*\|)?\s*(?P<prior_month>[0-9,]+)"
+        r"(?:\s*\|)?\s*"
+        r"(?P<current>[0-9,]+)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if not table:
+        raise ValueError("unsupported_semantics:jolts_table_a_current_level_not_proven")
+    table_context = table.group(0)
+    if month[:3].lower() not in table_context.lower() or year not in table_context:
+        raise ValueError("unsupported_semantics:jolts_table_a_reference_period_mismatch")
+    current_thousands = Decimal(table.group("current").replace(",", ""))
+    if headline:
+        headline_millions = Decimal(headline.group("old_value") or headline.group("new_value"))
+        if (current_thousands / Decimal("1000")).quantize(Decimal("0.1")) != headline_millions:
+            raise ValueError("unsupported_semantics:jolts_headline_table_value_mismatch")
+    raw = table.group("current") + " thousand job openings"
+    evidence = ((headline.group(0) + " | ") if headline else "") + table.group(0)
+    return current_thousands, raw, evidence
+
+
+def _bls_candidate(
+    artifact: BlsArtifact,
+    value: Decimal,
+    raw: str,
+    evidence: str,
+    contract: str,
+    statistic: str,
+    release_identity_evidence: str,
+) -> ReleaseActualCandidate:
+    scale = Decimal("1000") if artifact.event_family in {"EMPLOYMENT", "JOLTS"} else Decimal("1")
+    normalized = canonical_decimal(value)
+    canonical = canonical_decimal(value * scale)
+    period_key = artifact.reference_period.lower().replace(" ", "-")
+    observation = (
+        f"bls:{artifact.event_family.lower()}:{period_key}:initial:0:"
+        f"{artifact.sha256[:20]}"
+    )
+    provenance = {
+        "adapter": "bls_archived_release_actual_v1",
+        "artifact_sha256": artifact.sha256,
+        "canonical_event_source_url": artifact.canonical_source_url,
+        "evidence_excerpt": evidence,
+        "first_archive_admission_at": artifact.first_archive_admission_at,
+        "headline_statistic": statistic,
+        "publication_evidence": "official_bls_archived_release_current_reference_period",
+        "reference_period": artifact.reference_period,
+        "release_identity_evidence": release_identity_evidence,
+        "source_release_identity": artifact.source_release_identity,
+        "retrieved_at_basis": "browser_capture_manifest_first_archive_admission",
+    }
+    return ReleaseActualCandidate(
+        source_family="BLS",
+        candidate_event_family=artifact.event_family,
+        candidate_source_event_id=artifact.source_event_id,
+        candidate_reference_period=artifact.reference_period,
+        source_agency="BLS",
+        source_observation_id=observation,
+        publication_state="initial",
+        revision_sequence=0,
+        available_at=artifact.available_at,
+        retrieved_at=artifact.retrieved_at,
+        source_url=artifact.source_url,
+        source_artifact_path=artifact.repository_path,
+        source_artifact_sha256=artifact.sha256,
+        semantic_contract=contract,
+        source_provenance=provenance,
+        actual_raw=raw,
+        actual_value_kind="scalar",
+        actual_value_low=normalized,
+        actual_value_high=None,
+        actual_canonical_value_low=canonical,
+        actual_canonical_value_high=None,
+        actual_unit="count" if artifact.event_family in {"EMPLOYMENT", "JOLTS"} else "percent",
+        actual_scale=canonical_decimal(scale),
+        actual_qualifier=None if artifact.event_family in {"EMPLOYMENT", "JOLTS"} else "m/m",
+    )
+
+
+def extract_bls_candidates(
+    artifact: BlsArtifact,
+    text_reader: Callable[[pathlib.Path], tuple[str, str]] = read_bea_artifact_text,
+) -> tuple[list[ReleaseActualCandidate], list[Rejection]]:
+    try:
+        text, _ = text_reader(artifact.path)
+        release_identity = _bls_release_identity(artifact, text)
+        if artifact.event_family == "CPI":
+            value, raw, evidence = _bls_cpi_actual(artifact.reference_period, text)
+            contract = BLS_CPI_SEMANTIC_CONTRACT
+            statistic = "cpi_u_all_items_seasonally_adjusted_month_over_month"
+        elif artifact.event_family == "EMPLOYMENT":
+            value, raw, evidence = _bls_employment_actual(artifact.reference_period, text)
+            contract = BLS_EMPLOYMENT_SEMANTIC_CONTRACT
+            statistic = "total_nonfarm_payroll_employment_seasonally_adjusted_change"
+        elif artifact.event_family == "PPI":
+            value, raw, evidence, contract = _bls_ppi_actual(artifact, text)
+            statistic = (
+                "ppi_final_demand_seasonally_adjusted_month_over_month"
+                if contract == BLS_PPI_FINAL_DEMAND_SEMANTIC_CONTRACT
+                else "ppi_finished_goods_seasonally_adjusted_month_over_month"
+            )
+        elif artifact.event_family == "JOLTS":
+            value, raw, evidence = _bls_jolts_actual(artifact.reference_period, text)
+            contract = BLS_JOLTS_SEMANTIC_CONTRACT
+            statistic = "jolts_total_nonfarm_job_openings_seasonally_adjusted_level"
+        else:
+            raise ValueError("unsupported_semantics:bls_family_not_supported")
+        return [
+            _bls_candidate(
+                artifact, value, raw, evidence, contract, statistic, release_identity
+            )
+        ], []
+    except (OSError, ValueError) as error:
+        message = str(error)
+        decision = "unsupported"
+        if message.startswith("missing_initial_provenance"):
+            decision = "missing_initial_provenance"
+        elif message.startswith("unsupported_semantics"):
+            decision = "invalid_semantics"
+        return [], [Rejection(
+            source_family="BLS",
+            artifact=artifact.repository_path,
+            candidate_event_family=artifact.event_family,
+            candidate_reference_period=artifact.reference_period,
+            decision=decision,
+            rejection_reason=message,
+        )]
+
+
 def match_candidates(
     candidates: Iterable[ReleaseActualCandidate],
     events: Sequence[EconomicEvent],
@@ -724,8 +1063,18 @@ def match_candidates(
             decisions.append(ImportDecision(candidate, "invalid_semantics", None, "canonical_event_identity_mismatch"))
             continue
         if event.source_url != candidate.source_url and candidate.publication_state == "initial":
-            decisions.append(ImportDecision(candidate, "invalid_semantics", None, "canonical_source_url_mismatch"))
-            continue
+            bls_archive_identity = (
+                candidate.source_agency == "BLS"
+                and re.match(
+                    r"^https://www\.bls\.gov/news\.release/archives/",
+                    candidate.source_url,
+                )
+                and candidate.source_provenance.get("canonical_event_source_url")
+                == event.source_url
+            )
+            if not bls_archive_identity:
+                decisions.append(ImportDecision(candidate, "invalid_semantics", None, "canonical_source_url_mismatch"))
+                continue
         if canonical_instant(candidate.available_at) < canonical_instant(event.event_timestamp_utc):
             decisions.append(ImportDecision(candidate, "invalid_semantics", None, "available_at_predates_event"))
             continue
@@ -1022,3 +1371,87 @@ def load_bea_artifacts(
                 )
     artifacts.sort(key=lambda row: (row.available_at, row.event_family, row.reference_period))
     return artifacts, initial_by_quarter
+
+
+def load_bls_artifacts(
+    repo_root: pathlib.Path,
+    manifest_path: pathlib.Path,
+    events: Sequence[EconomicEvent],
+) -> list[BlsArtifact]:
+    event_by_identity: dict[tuple[str, str, str], list[EconomicEvent]] = defaultdict(list)
+    eastern = ZoneInfo("America/New_York")
+    for event in events:
+        if event.source_agency != "BLS" or event.event_family not in BLS_SUPPORTED_FAMILIES:
+            continue
+        instant = dt.datetime.fromisoformat(event.event_timestamp_utc.replace("Z", "+00:00"))
+        release_date = instant.astimezone(eastern).date().isoformat()
+        event_by_identity[(event.event_family, release_date, event.reference_period or "")].append(event)
+
+    rows = [
+        json.loads(line)
+        for line in manifest_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    artifacts: list[BlsArtifact] = []
+    seen_urls: set[str] = set()
+    raw_root = (manifest_path.parent / "releases").resolve()
+    for row in rows:
+        if row.get("artifact_kind") != "release":
+            continue
+        family = str(row.get("bls_family", ""))
+        if family not in BLS_SUPPORTED_FAMILIES:
+            raise ValueError("bls_manifest_family_invalid")
+        source_url = str(row.get("source_url", ""))
+        if source_url in seen_urls:
+            raise ValueError("bls_manifest_source_url_duplicate")
+        seen_urls.add(source_url)
+        if not re.match(
+            rf"^https://www\.bls\.gov/news\.release/archives/"
+            rf"(?:cpi|empsit|ppi|jolts)_\d{{8}}\.htm$",
+            source_url,
+        ):
+            raise ValueError("bls_manifest_source_url_invalid")
+        release_date = str(row.get("release_date", ""))
+        reference_period = str(row.get("reference_period", ""))
+        try:
+            dt.date.fromisoformat(release_date)
+            dt.datetime.strptime(reference_period, "%B %Y")
+        except ValueError as error:
+            raise ValueError("bls_manifest_release_identity_invalid") from error
+        matches = event_by_identity.get((family, release_date, reference_period), [])
+        if len(matches) != 1:
+            reason = "missing" if not matches else "ambiguous"
+            raise ValueError(f"bls_canonical_event_identity_{reason}:{family}:{release_date}")
+        event = matches[0]
+        repository_path = str(row.get("immutable_local_path", ""))
+        artifact_path = (repo_root / repository_path).resolve()
+        if raw_root not in artifact_path.parents or not artifact_path.is_file():
+            raise ValueError("bls_artifact_path_invalid:" + repository_path)
+        digest = sha256_file(artifact_path)
+        if digest != row.get("sha256"):
+            raise ValueError("bls_artifact_hash_mismatch:" + repository_path)
+        retrieved_at = canonical_instant(str(row.get("retrieved_at", "")))
+        first_admission = canonical_instant(str(row.get("first_archive_admission_at", "")))
+        if first_admission > retrieved_at:
+            raise ValueError("bls_first_archive_admission_after_retrieval")
+        timestamp_evidence = row.get("release_timestamp_evidence")
+        if not isinstance(timestamp_evidence, str) or not timestamp_evidence:
+            raise ValueError("bls_release_timestamp_evidence_missing")
+        artifacts.append(BlsArtifact(
+            event_family=family,
+            reference_period=reference_period,
+            release_date=release_date,
+            source_url=source_url,
+            canonical_source_url=event.source_url,
+            path=artifact_path,
+            repository_path=repository_path,
+            source_event_id=event.source_event_id,
+            available_at=canonical_instant(event.event_timestamp_utc),
+            retrieved_at=retrieved_at,
+            first_archive_admission_at=first_admission,
+            sha256=digest,
+            source_release_identity=str(row.get("source_release_identity", "")),
+            release_timestamp_evidence=timestamp_evidence,
+        ))
+    artifacts.sort(key=lambda row: (row.available_at, row.event_family, row.reference_period))
+    return artifacts

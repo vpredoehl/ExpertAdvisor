@@ -83,10 +83,27 @@ HTML evidence, SHA-256, first Git archive admission, and exact headline text
 are preserved in provenance. PCE annual-revision material is not assigned a
 synthetic sequence; Phase 10 emits only the directly published monthly initial.
 
+Phase 17 adds release-specific BLS contracts backed by the retained official
+archive pages in `EconomicCalendar/raw/bls`:
+
+- `CPI`: CPI-U all items, seasonally adjusted month-over-month percent change.
+- `EMPLOYMENT`: seasonally adjusted total nonfarm payroll employment change;
+  explicit reissues are excluded from the initial-release boundary.
+- `PPI`: seasonally adjusted finished-goods month-over-month percent change
+  before the historical transition and final-demand month-over-month percent
+  change afterward.
+- `JOLTS`: seasonally adjusted total-nonfarm job-openings level.
+
+Each BLS candidate requires exact production catalog identity, release-time and
+reference-period evidence, retained bytes matching the manifest SHA-256, and a
+family-specific headline or table proof. The general Phase 10 importer includes
+this corpus only when `--bls-manifest` is supplied. The dedicated
+`prepare_bls_production_import.py` workflow defaults to the retained manifest,
+reads production with `default_transaction_read_only=on`, and emits review-only
+append-only SQL; it does not import BLS actuals.
+
 ## Deliberately unsupported families
 
-- BLS CPI, Employment, PPI, and JOLTS: the repository has no local historical
-  authoritative release-value archive (`raw/bls` is absent).
 - Federal Reserve FOMC: statements contain target ranges, while Phase 8
   surprise requires a compatible scalar consensus/actual pair.
 - DOL/ETA Weekly Claims: no local authoritative historical source archive is

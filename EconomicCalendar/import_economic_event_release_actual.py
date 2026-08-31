@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, Sequence
 
 from release_actual_ingestion import (
     BeaArtifact,
+    BlsArtifact,
     CensusArtifact,
     Consensus,
     EconomicEvent,
@@ -25,8 +26,10 @@ from release_actual_ingestion import (
     coverage_audit,
     deterministic_json_lines,
     extract_bea_candidates,
+    extract_bls_candidates,
     extract_census_candidates,
     load_bea_artifacts,
+    load_bls_artifacts,
     load_census_artifacts,
     match_candidates,
 )
@@ -235,7 +238,7 @@ def audit_with_artifact_inventory(
     consensus: Sequence[Consensus],
     decisions: Sequence[ImportDecision],
     rejections: Sequence[Rejection],
-    artifacts: Sequence[CensusArtifact | BeaArtifact],
+    artifacts: Sequence[CensusArtifact | BeaArtifact | BlsArtifact],
 ) -> dict[str, object]:
     report = coverage_audit(events, consensus, decisions, rejections)
     event_by_source = {event.source_event_id: event for event in events}
@@ -290,13 +293,10 @@ def audit_with_artifact_inventory(
     report["adapter_scope"] = {
         "supported": {
             "BEA": ["GDP", "PCE"],
+            "BLS": ["CPI", "EMPLOYMENT", "JOLTS", "PPI"],
             "CENSUS": ["DURABLE_GOODS", "RETAIL_SALES"],
         },
         "unsupported": {
-            "BLS": {
-                "families": ["CPI", "EMPLOYMENT", "EMPLOYMENT_ANNUAL", "JOLTS", "PPI"],
-                "reason": "no local authoritative historical release-value archive exists",
-            },
             "DOL_ETA": {
                 "families": ["WEEKLY_CLAIMS"],
                 "reason": "no local authoritative historical source archive exists",
@@ -321,6 +321,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--census-prepared", type=pathlib.Path)
     parser.add_argument("--bea-canonical", type=pathlib.Path)
     parser.add_argument("--bea-prepared", type=pathlib.Path)
+    parser.add_argument("--bls-manifest", type=pathlib.Path)
     parser.add_argument("--dry-run-output", type=pathlib.Path, required=True)
     parser.add_argument("--coverage-output", type=pathlib.Path, required=True)
     parser.add_argument("--commit", action="store_true")
@@ -347,6 +348,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         repo_root, bea_canonical, bea_prepared, bea_admissions
     )
 
+    events, consensus, existing = load_database(args.db)
+    bls_artifacts: list[BlsArtifact] = []
+    if args.bls_manifest:
+        bls_artifacts = load_bls_artifacts(
+            repo_root, args.bls_manifest.resolve(), events
+        )
+
     candidates: list[ReleaseActualCandidate] = []
     rejections = []
     for artifact in artifacts:
@@ -357,12 +365,16 @@ def main(argv: Iterable[str] | None = None) -> int:
         found, rejected = extract_bea_candidates(artifact, gdp_initial_by_quarter)
         candidates.extend(found)
         rejections.extend(rejected)
+    for artifact in bls_artifacts:
+        found, rejected = extract_bls_candidates(artifact)
+        candidates.extend(found)
+        rejections.extend(rejected)
 
-    events, consensus, existing = load_database(args.db)
     decisions = match_candidates(candidates, events, existing)
     write_new(args.dry_run_output, deterministic_json_lines(decisions, rejections))
     coverage = audit_with_artifact_inventory(
-        events, consensus, decisions, rejections, [*artifacts, *bea_artifacts]
+        events, consensus, decisions, rejections,
+        [*artifacts, *bea_artifacts, *bls_artifacts]
     )
     write_new(
         args.coverage_output,
@@ -375,7 +387,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     for rejection in rejections:
         counts[rejection.decision] = counts.get(rejection.decision, 0) + 1
     print("Phase 10 authoritative release-actual workflow")
-    print(f"Artifacts: {len(artifacts) + len(bea_artifacts)}")
+    print(f"Artifacts: {len(artifacts) + len(bea_artifacts) + len(bls_artifacts)}")
     print(f"Candidates: {len(candidates)}")
     print("Decisions: " + json.dumps(counts, sort_keys=True))
     print(f"Dry run: {args.dry_run_output.resolve()}")
