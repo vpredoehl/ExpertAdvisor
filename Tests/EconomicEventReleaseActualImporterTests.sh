@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
-DB_NAME="ea_release_actual_phase9_${$}"
+DB_NAME="ea_release_actual_phase10_${$}"
 
 case "$DB_NAME" in
-    ea_release_actual_phase9_[0-9]*) ;;
+    ea_release_actual_phase10_[0-9]*) ;;
     *) exit 90 ;;
 esac
 
@@ -50,7 +50,7 @@ INSERT INTO economic_event (
 );
 SQL
 
-PGHOST="$DB_HOST" PGUSER="$DB_USER" PHASE9_DB="$DB_NAME" \
+PGHOST="$DB_HOST" PGUSER="$DB_USER" PHASE10_DB="$DB_NAME" \
 PYTHONPATH="$ROOT/EconomicCalendar" python3 - <<'PY'
 import os
 import pathlib
@@ -86,7 +86,7 @@ candidates, rejected = extract_census_candidates(artifact, {
 })
 assert not rejected
 initial = [row for row in candidates if row.publication_state == "initial"]
-database = os.environ["PHASE9_DB"]
+database = os.environ["PHASE10_DB"]
 events, _, existing = load_database(database)
 first = match_candidates(initial, events, existing)
 assert [row.decision for row in first] == ["matched"]
@@ -112,6 +112,6 @@ fi
 
 cleanup
 trap - EXIT
-printf 'PHASE9_UNIT_TESTS=PASS\n'
-printf 'PHASE9_DISPOSABLE_IMPORT=PASS\n'
-printf 'PHASE9_DISPOSABLE_DATABASE_DROPPED=%s\n' "$DB_NAME"
+printf 'PHASE10_UNIT_TESTS=PASS\n'
+printf 'PHASE10_DISPOSABLE_IMPORT=PASS\n'
+printf 'PHASE10_DISPOSABLE_DATABASE_DROPPED=%s\n' "$DB_NAME"

@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_HOST="${LSTM_DB_HOST:-127.0.0.1}"
 DB_USER="${LSTM_DB_USER:-pqxx}"
-DB_NAME="ea_release_actual_corpus_${$}"
+DB_NAME="ea_release_actual_phase10_corpus_${$}"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ea-release-actual-corpus.XXXXXX")"
 EVENT_SEED="$TEMP_DIR/economic_event.csv"
 DRY_RUN="$TEMP_DIR/dry-run.jsonl"
 COVERAGE="$TEMP_DIR/coverage.json"
 
 case "$DB_NAME" in
-    ea_release_actual_corpus_[0-9]*) ;;
+    ea_release_actual_phase10_corpus_[0-9]*) ;;
     *) exit 90 ;;
 esac
 
@@ -24,19 +24,21 @@ cleanup() {
 trap cleanup EXIT
 
 python3 - "$ROOT/EconomicCalendar/raw/census/census_import_prepared.csv" \
-    "$EVENT_SEED" <<'PY'
+    "$ROOT/EconomicCalendar/raw/bea/bea_import_prepared.csv" "$EVENT_SEED" <<'PY'
 import csv
 import sys
 
-source_path, output_path = sys.argv[1:]
+source_paths, output_path = sys.argv[1:-1], sys.argv[-1]
 columns = [
     "economic_event_id", "currency", "event_family", "event_timestamp_utc",
     "source_agency", "source_event_id", "source_url", "reference_period",
     "event_importance", "historical_time_confidence", "source_release_date",
     "source_release_time", "source_timezone",
 ]
-with open(source_path, newline="", encoding="utf-8-sig") as source:
-    rows = list(csv.DictReader(source))
+rows = []
+for source_path in source_paths:
+    with open(source_path, newline="", encoding="utf-8-sig") as source:
+        rows.extend(csv.DictReader(source))
 with open(output_path, "w", newline="", encoding="utf-8") as output:
     writer = csv.DictWriter(output, fieldnames=columns)
     writer.writeheader()
@@ -78,7 +80,7 @@ run_importer() {
 }
 
 FIRST_DRY_RUN="$(run_importer)"
-grep -Fq 'Decisions: {"invalid_semantics": 14, "matched": 676, "unsupported": 1}' \
+grep -Fq 'Decisions: {"invalid_semantics": 27, "matched": 1056, "unsupported": 1}' \
     <<< "$FIRST_DRY_RUN"
 test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
     -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "0"
@@ -86,19 +88,19 @@ test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
 FIRST_IMPORT="$(run_importer --commit --allow-disposable-write)"
 grep -Fq 'RESULT: COMMITTED TO EXPLICIT DISPOSABLE DATABASE' <<< "$FIRST_IMPORT"
 test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
-    -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "676"
+    -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "1056"
 test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
-    -tAc 'SELECT count(*) FROM economic_event_feature_release_actual;')" = "384"
+    -tAc 'SELECT count(*) FROM economic_event_feature_release_actual;')" = "634"
 
 SECOND_IMPORT="$(run_importer --commit --allow-disposable-write)"
-grep -Fq 'Decisions: {"duplicate_identical": 676, "invalid_semantics": 14, "unsupported": 1}' \
+grep -Fq 'Decisions: {"duplicate_identical": 1056, "invalid_semantics": 27, "unsupported": 1}' \
     <<< "$SECOND_IMPORT"
 test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
-    -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "676"
+    -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "1056"
 
 cleanup
 trap - EXIT
-printf 'PHASE9_HISTORICAL_CORPUS_DRY_RUN=PASS\n'
-printf 'PHASE9_HISTORICAL_CORPUS_IMPORT=PASS\n'
-printf 'PHASE9_HISTORICAL_CORPUS_IDEMPOTENCY=PASS\n'
-printf 'PHASE9_HISTORICAL_CORPUS_DISPOSABLE_DATABASE_DROPPED=%s\n' "$DB_NAME"
+printf 'PHASE10_HISTORICAL_CORPUS_DRY_RUN=PASS\n'
+printf 'PHASE10_HISTORICAL_CORPUS_IMPORT=PASS\n'
+printf 'PHASE10_HISTORICAL_CORPUS_IDEMPOTENCY=PASS\n'
+printf 'PHASE10_HISTORICAL_CORPUS_DISPOSABLE_DATABASE_DROPPED=%s\n' "$DB_NAME"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dry-run, audit, and disposable-database import for Phase 9 actuals."""
+"""Dry-run, audit, and disposable-database import for Phase 10 actuals."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import sys
 from typing import Iterable, Mapping, Sequence
 
 from release_actual_ingestion import (
+    BeaArtifact,
     CensusArtifact,
     Consensus,
     EconomicEvent,
@@ -23,7 +24,9 @@ from release_actual_ingestion import (
     canonical_instant,
     coverage_audit,
     deterministic_json_lines,
+    extract_bea_candidates,
     extract_census_candidates,
+    load_bea_artifacts,
     load_census_artifacts,
     match_candidates,
 )
@@ -225,7 +228,7 @@ def audit_with_artifact_inventory(
     consensus: Sequence[Consensus],
     decisions: Sequence[ImportDecision],
     rejections: Sequence[Rejection],
-    artifacts: Sequence[CensusArtifact],
+    artifacts: Sequence[CensusArtifact | BeaArtifact],
 ) -> dict[str, object]:
     report = coverage_audit(events, consensus, decisions, rejections)
     event_by_source = {event.source_event_id: event for event in events}
@@ -279,24 +282,21 @@ def audit_with_artifact_inventory(
 
     report["adapter_scope"] = {
         "supported": {
+            "BEA": ["GDP", "PCE"],
             "CENSUS": ["DURABLE_GOODS", "RETAIL_SALES"],
         },
         "unsupported": {
-            "BEA": {
-                "families": ["GDP", "PCE"],
-                "reason": "estimate/statistic-specific initial and revision semantics not adjudicated in Phase 9",
-            },
             "BLS": {
                 "families": ["CPI", "EMPLOYMENT", "EMPLOYMENT_ANNUAL", "JOLTS", "PPI"],
-                "reason": "local schedules prove release identity and time but no local authoritative value artifacts exist",
+                "reason": "no local authoritative historical release-value archive exists",
             },
             "DOL_ETA": {
                 "families": ["WEEKLY_CLAIMS"],
-                "reason": "repository has adapters and fixtures but no local historical source archive",
+                "reason": "no local authoritative historical source archive exists",
             },
             "FEDERAL_RESERVE": {
                 "families": ["FOMC"],
-                "reason": "statement target ranges are not compatible with Phase 8 scalar surprise semantics",
+                "reason": "persisted consensus is predominantly range-valued and width-75 surprise is scalar-only",
             },
         },
     }
@@ -306,12 +306,14 @@ def audit_with_artifact_inventory(
 def main(argv: Iterable[str] | None = None) -> int:
     default_root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(
-        description="Census authoritative initial/revision actual dry-run and import workflow"
+        description="Authoritative initial/revision actual dry-run and import workflow"
     )
     parser.add_argument("--db", required=True)
     parser.add_argument("--repo-root", type=pathlib.Path, default=default_root)
     parser.add_argument("--census-manifest", type=pathlib.Path)
     parser.add_argument("--census-prepared", type=pathlib.Path)
+    parser.add_argument("--bea-canonical", type=pathlib.Path)
+    parser.add_argument("--bea-prepared", type=pathlib.Path)
     parser.add_argument("--dry-run-output", type=pathlib.Path, required=True)
     parser.add_argument("--coverage-output", type=pathlib.Path, required=True)
     parser.add_argument("--commit", action="store_true")
@@ -327,10 +329,25 @@ def main(argv: Iterable[str] | None = None) -> int:
         repo_root, manifest, prepared, admissions
     )
 
+    bea_root = repo_root / "EconomicCalendar" / "raw" / "bea"
+    bea_canonical = (args.bea_canonical or bea_root / "bea_canonical_events.csv").resolve()
+    bea_prepared = (args.bea_prepared or bea_root / "bea_import_prepared.csv").resolve()
+    bea_admissions = git_archive_admissions(repo_root, bea_root / "releases")
+    bea_admissions.update(
+        git_archive_admissions(repo_root, bea_root / "recovery_v2" / "releases")
+    )
+    bea_artifacts, gdp_initial_by_quarter = load_bea_artifacts(
+        repo_root, bea_canonical, bea_prepared, bea_admissions
+    )
+
     candidates: list[ReleaseActualCandidate] = []
     rejections = []
     for artifact in artifacts:
         found, rejected = extract_census_candidates(artifact, source_ids)
+        candidates.extend(found)
+        rejections.extend(rejected)
+    for artifact in bea_artifacts:
+        found, rejected = extract_bea_candidates(artifact, gdp_initial_by_quarter)
         candidates.extend(found)
         rejections.extend(rejected)
 
@@ -338,7 +355,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     decisions = match_candidates(candidates, events, existing)
     write_new(args.dry_run_output, deterministic_json_lines(decisions, rejections))
     coverage = audit_with_artifact_inventory(
-        events, consensus, decisions, rejections, artifacts
+        events, consensus, decisions, rejections, [*artifacts, *bea_artifacts]
     )
     write_new(
         args.coverage_output,
@@ -350,8 +367,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         counts[decision.decision] = counts.get(decision.decision, 0) + 1
     for rejection in rejections:
         counts[rejection.decision] = counts.get(rejection.decision, 0) + 1
-    print("Phase 9 authoritative release-actual workflow")
-    print(f"Artifacts: {len(artifacts)}")
+    print("Phase 10 authoritative release-actual workflow")
+    print(f"Artifacts: {len(artifacts) + len(bea_artifacts)}")
     print(f"Candidates: {len(candidates)}")
     print("Decisions: " + json.dumps(counts, sort_keys=True))
     print(f"Dry run: {args.dry_run_output.resolve()}")
@@ -373,5 +390,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        print(f"PHASE9_RELEASE_ACTUAL_FAILED: {error}", file=sys.stderr)
+        print(f"PHASE10_RELEASE_ACTUAL_FAILED: {error}", file=sys.stderr)
         raise SystemExit(1)

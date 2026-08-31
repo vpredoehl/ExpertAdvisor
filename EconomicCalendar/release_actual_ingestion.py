@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed authoritative economic release-actual ingestion primitives.
 
-Phase 9 intentionally supports only Census advance RETAIL_SALES and
-DURABLE_GOODS artifacts.  The module is local-artifact-only; PostgreSQL and
+Phase 10 extends the proven Phase 9 Census path with source-specific BEA GDP
+and PCE adapters.  The module remains local-artifact-only; PostgreSQL and
 command-line orchestration live in import_economic_event_release_actual.py.
 """
 
@@ -12,6 +12,7 @@ import csv
 import dataclasses
 import datetime as dt
 import hashlib
+import html
 import json
 import pathlib
 import re
@@ -22,8 +23,12 @@ from typing import Callable, Iterable, Mapping, Sequence
 
 
 UTC = dt.timezone.utc
-SUPPORTED_FAMILIES = ("DURABLE_GOODS", "RETAIL_SALES")
+CENSUS_SUPPORTED_FAMILIES = ("DURABLE_GOODS", "RETAIL_SALES")
+BEA_SUPPORTED_FAMILIES = ("GDP", "PCE")
+SUPPORTED_FAMILIES = CENSUS_SUPPORTED_FAMILIES
 SEMANTIC_CONTRACT = "census_advance_release_headline_mom_percent_v1"
+BEA_GDP_SEMANTIC_CONTRACT = "bea_real_gdp_annualized_quarterly_percent_v1"
+BEA_PCE_SEMANTIC_CONTRACT = "bea_current_dollar_pce_mom_percent_v1"
 
 
 def canonical_instant(value: str | dt.datetime) -> str:
@@ -80,6 +85,21 @@ class CensusArtifact:
 
 
 @dataclasses.dataclass(frozen=True)
+class BeaArtifact:
+    event_family: str
+    reference_period: str
+    source_url: str
+    path: pathlib.Path
+    repository_path: str
+    source_event_id: str
+    available_at: str
+    retrieved_at: str
+    archive_commit: str
+    sha256: str
+    title: str
+
+
+@dataclasses.dataclass(frozen=True)
 class ReleaseActualCandidate:
     source_family: str
     candidate_event_family: str
@@ -116,19 +136,39 @@ class ReleaseActualCandidate:
         else:
             raise ValueError("publication_state_invalid")
         if self.actual_value_kind != "scalar" or self.actual_value_high is not None:
-            raise ValueError("census_value_shape_unsupported")
+            raise ValueError("actual_value_shape_unsupported")
         raw = Decimal(self.actual_value_low)
         scale = Decimal(self.actual_scale)
         canonical = Decimal(self.actual_canonical_value_low)
         if scale <= 0 or raw * scale != canonical:
             raise ValueError("raw_canonical_scaling_invalid")
-        if self.actual_unit != "percent" or self.actual_qualifier != "m/m":
-            raise ValueError("census_semantics_invalid")
+        expected_semantics = {
+            SEMANTIC_CONTRACT: ("CENSUS", "percent", "m/m"),
+            BEA_GDP_SEMANTIC_CONTRACT: ("BEA", "percent", None),
+            BEA_PCE_SEMANTIC_CONTRACT: ("BEA", "percent", "m/m"),
+        }
+        expected = expected_semantics.get(self.semantic_contract)
+        if expected is None:
+            raise ValueError("semantic_contract_unsupported")
+        if (self.source_agency, self.actual_unit, self.actual_qualifier) != expected:
+            error = (
+                "census_semantics_invalid"
+                if self.semantic_contract == SEMANTIC_CONTRACT
+                else "bea_semantics_invalid"
+            )
+            raise ValueError(error)
         if canonical_instant(self.retrieved_at) < canonical_instant(self.available_at):
             raise ValueError("retrieved_at_predates_available_at")
         if not re.fullmatch(r"[0-9a-f]{64}", self.source_artifact_sha256):
             raise ValueError("source_sha256_invalid")
-        if not re.match(r"^https://www2?\.census\.gov/", self.source_url):
+        authoritative_url = (
+            re.match(r"^https://www2?\.census\.gov/", self.source_url)
+            if self.source_agency == "CENSUS"
+            else re.match(r"^https://www\.bea\.gov/", self.source_url)
+            if self.source_agency == "BEA"
+            else None
+        )
+        if not authoritative_url:
             raise ValueError("source_url_not_authoritative")
 
     def persisted_values(self, economic_event_id: int) -> dict[str, object]:
@@ -239,6 +279,19 @@ def read_artifact_text(path: pathlib.Path, pdftotext: str = "pdftotext") -> tupl
     ).stdout.splitlines()
     extractor = " ".join(version[0].split()) if version else "pdftotext_unknown"
     return result.stdout, extractor
+
+
+def read_bea_artifact_text(path: pathlib.Path) -> tuple[str, str]:
+    if path.suffix.lower() == ".txt":
+        return path.read_text(encoding="utf-8"), "text_fixture_v1"
+    if path.suffix.lower() != ".html":
+        raise ValueError("unsupported_document_type")
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    normalized = " ".join(text.split())
+    if not normalized:
+        raise ValueError("html_extraction_empty")
+    return normalized, "python_html_text_v1"
 
 
 def _signed(direction: str | None, numeric: str) -> Decimal:
@@ -422,6 +475,211 @@ def extract_census_candidates(
             decision = "invalid_semantics"
         return [], [Rejection(
             source_family="CENSUS",
+            artifact=artifact.repository_path,
+            candidate_event_family=artifact.event_family,
+            candidate_reference_period=artifact.reference_period,
+            decision=decision,
+            rejection_reason=message,
+        )]
+
+
+def _bea_estimate_identity(reference_period: str) -> tuple[str, str]:
+    match = re.fullmatch(
+        r"(Q[1-4] [0-9]{4}) (Advance|Initial|Second|Third|Updated)",
+        reference_period,
+    )
+    if not match:
+        raise ValueError("reference_period_unsupported")
+    return match.group(1), match.group(2).lower()
+
+
+def _bea_gdp_actual(
+    reference_period: str, text: str
+) -> tuple[Decimal, str, str, str]:
+    quarter, estimate = _bea_estimate_identity(reference_period)
+    expected_marker = {
+        "advance": "advance",
+        "initial": "initial",
+        "second": "second",
+        "third": "third",
+        "updated": "updated",
+    }[estimate]
+    normalized = _clean_text(text)
+    pattern = re.compile(
+        r"Real gross domestic product(?: \(GDP\))?.{0,260}?"
+        r"(?P<direction>increased|decreased) at an annual rate of "
+        r"(?P<value>[0-9]+(?:\.[0-9]+)?) percent.{0,260}?"
+        rf"(?:the [\"']?{expected_marker}[\"']? estimate|according to the "
+        rf"[\"']?{expected_marker}[\"']? estimate)",
+        re.IGNORECASE,
+    )
+    match = pattern.search(normalized)
+    if not match:
+        raise ValueError("unsupported_semantics:real_gdp_annualized_headline_not_proven")
+    value = _signed(match.group("direction"), match.group("value"))
+    raw = f"{match.group('direction')} at an annual rate of {match.group('value')} percent"
+    return value, raw, match.group(0), quarter
+
+
+def _bea_pce_actual(reference_period: str, text: str) -> tuple[Decimal, str, str]:
+    try:
+        dt.datetime.strptime(reference_period, "%B %Y")
+    except ValueError as error:
+        raise ValueError("unsupported_semantics:pce_single_month_reference_not_proven") from error
+    normalized = _clean_text(text)
+    pattern = re.compile(
+        r"personal consumption expenditures(?: \(PCE\))? "
+        r"(?P<direction>increased|decreased) "
+        r"\$[0-9,.]+ (?:billion|trillion)(?:,? or)?\s*"
+        r"(?:\((?P<paren>[+\-]?[0-9]+(?:\.[0-9]+)?) percent\)|"
+        r"(?P<plain>[+\-]?[0-9]+(?:\.[0-9]+)?) percent)",
+        re.IGNORECASE,
+    )
+    match = pattern.search(normalized)
+    if not match:
+        if re.search(
+            r"personal consumption expenditures \(PCE\).{0,120}?less than 0\.1 percent",
+            normalized,
+            re.IGNORECASE,
+        ):
+            raise ValueError("unsupported_semantics:pce_less_than_scalar_not_exact")
+        raise ValueError("unsupported_semantics:current_dollar_pce_mom_headline_not_proven")
+    numeric = match.group("paren") or match.group("plain")
+    direction = match.group("direction")
+    if numeric.startswith("-") and not direction.lower().startswith("decreas"):
+        raise ValueError("unsupported_semantics:pce_direction_sign_conflict")
+    if numeric.startswith("+") and direction.lower().startswith("decreas"):
+        raise ValueError("unsupported_semantics:pce_direction_sign_conflict")
+    value = _signed(direction, numeric.lstrip("+-"))
+    return value, match.group(0), match.group(0)
+
+
+def _bea_candidate(
+    artifact: BeaArtifact,
+    candidate_reference_period: str,
+    candidate_source_event_id: str,
+    publication_state: str,
+    revision_sequence: int,
+    value: Decimal,
+    raw: str,
+    evidence: str,
+    extractor: str,
+    statistic: str,
+) -> ReleaseActualCandidate:
+    normalized = canonical_decimal(value)
+    contract = (
+        BEA_GDP_SEMANTIC_CONTRACT
+        if artifact.event_family == "GDP"
+        else BEA_PCE_SEMANTIC_CONTRACT
+    )
+    qualifier = None if artifact.event_family == "GDP" else "m/m"
+    period_key = candidate_reference_period.lower().replace(" ", "-")
+    observation = (
+        f"bea:{artifact.event_family.lower()}:{period_key}:"
+        f"{publication_state}:{revision_sequence}:{artifact.sha256[:20]}"
+    )
+    provenance = {
+        "adapter": "bea_release_actual_v1",
+        "archive_admission_commit": artifact.archive_commit,
+        "artifact_sha256": artifact.sha256,
+        "evidence_excerpt": evidence,
+        "extractor": extractor,
+        "headline_statistic": statistic,
+        "publication_evidence": (
+            "advance_or_initial_estimate_headline"
+            if publication_state == "initial"
+            else "later_estimate_headline_for_same_quarter"
+        ),
+        "reference_period": candidate_reference_period,
+        "source_release_reference_period": artifact.reference_period,
+        "retrieved_at_basis": "first_git_archive_admission_committer_timestamp",
+    }
+    return ReleaseActualCandidate(
+        source_family="BEA",
+        candidate_event_family=artifact.event_family,
+        candidate_source_event_id=candidate_source_event_id,
+        candidate_reference_period=candidate_reference_period,
+        source_agency="BEA",
+        source_observation_id=observation,
+        publication_state=publication_state,
+        revision_sequence=revision_sequence,
+        available_at=artifact.available_at,
+        retrieved_at=artifact.retrieved_at,
+        source_url=artifact.source_url,
+        source_artifact_path=artifact.repository_path,
+        source_artifact_sha256=artifact.sha256,
+        semantic_contract=contract,
+        source_provenance=provenance,
+        actual_raw=raw,
+        actual_value_kind="scalar",
+        actual_value_low=normalized,
+        actual_value_high=None,
+        actual_canonical_value_low=normalized,
+        actual_canonical_value_high=None,
+        actual_unit="percent",
+        actual_scale="1",
+        actual_qualifier=qualifier,
+    )
+
+
+def extract_bea_candidates(
+    artifact: BeaArtifact,
+    gdp_initial_by_quarter: Mapping[str, tuple[str, str]],
+    text_reader: Callable[[pathlib.Path], tuple[str, str]] = read_bea_artifact_text,
+) -> tuple[list[ReleaseActualCandidate], list[Rejection]]:
+    try:
+        text, extractor = text_reader(artifact.path)
+        if artifact.event_family == "PCE":
+            value, raw, evidence = _bea_pce_actual(artifact.reference_period, text)
+            return [_bea_candidate(
+                artifact,
+                artifact.reference_period,
+                artifact.source_event_id,
+                "initial",
+                0,
+                value,
+                raw,
+                evidence,
+                extractor,
+                "current_dollar_personal_consumption_expenditures",
+            )], []
+
+        value, raw, evidence, quarter = _bea_gdp_actual(
+            artifact.reference_period, text
+        )
+        _, estimate = _bea_estimate_identity(artifact.reference_period)
+        if estimate in {"advance", "initial"}:
+            target_reference = artifact.reference_period
+            target_source_id = artifact.source_event_id
+            state, sequence = "initial", 0
+        else:
+            target = gdp_initial_by_quarter.get(quarter)
+            if target is None:
+                raise ValueError("missing_initial_provenance:gdp_advance_event_missing")
+            target_reference, target_source_id = target
+            state = "revision"
+            sequence = {"second": 1, "updated": 1, "third": 2}[estimate]
+        return [_bea_candidate(
+            artifact,
+            target_reference,
+            target_source_id,
+            state,
+            sequence,
+            value,
+            raw,
+            evidence,
+            extractor,
+            "real_gdp_annualized_quarter_over_quarter",
+        )], []
+    except (OSError, ValueError) as error:
+        message = str(error)
+        decision = "unsupported"
+        if message.startswith("missing_initial_provenance"):
+            decision = "missing_initial_provenance"
+        elif message.startswith("unsupported_semantics"):
+            decision = "invalid_semantics"
+        return [], [Rejection(
+            source_family="BEA",
             artifact=artifact.repository_path,
             candidate_event_family=artifact.event_family,
             candidate_reference_period=artifact.reference_period,
@@ -633,7 +891,7 @@ def coverage_audit(
             by_year[key] = summarize(event.event_family, year_events)
 
     return {
-        "contract": "economic_event_release_actual_phase9_coverage_v1",
+        "contract": "economic_event_release_actual_phase10_coverage_v1",
         "generated_from": "deterministic_local_artifacts_plus_read_only_catalog",
         "target_period": {"start_inclusive": start_at, "end_exclusive": end_at},
         "families": target,
@@ -696,3 +954,71 @@ def load_census_artifacts(
         ))
     artifacts.sort(key=lambda row: (row.available_at, row.event_family, row.reference_period))
     return artifacts, source_ids
+
+
+def load_bea_artifacts(
+    repo_root: pathlib.Path,
+    canonical_path: pathlib.Path,
+    prepared_path: pathlib.Path,
+    admissions: Mapping[str, tuple[str, str]],
+) -> tuple[list[BeaArtifact], dict[str, tuple[str, str]]]:
+    with prepared_path.open(newline="", encoding="utf-8-sig") as source:
+        prepared = list(csv.DictReader(source))
+    prepared_by_key = {
+        (row["event_family"], canonical_instant(row["event_timestamp_utc"])): row
+        for row in prepared
+    }
+
+    with canonical_path.open(newline="", encoding="utf-8-sig") as source:
+        canonical = list(csv.DictReader(source))
+    artifacts: list[BeaArtifact] = []
+    initial_by_quarter: dict[str, tuple[str, str]] = {}
+    for row in canonical:
+        family = row["event_family"]
+        if family not in BEA_SUPPORTED_FAMILIES:
+            continue
+        key = (family, canonical_instant(row["event_timestamp_utc"]))
+        prepared_row = prepared_by_key.get(key)
+        if prepared_row is None or prepared_row["source_url"] != row["url"]:
+            raise ValueError("bea_canonical_identity_mismatch")
+        release_directory = (
+            canonical_path.parent / "releases"
+            if row["source_set"] == "base"
+            else canonical_path.parent / "recovery_v2" / "releases"
+        )
+        artifact_path = (release_directory / row["filename"]).resolve()
+        if release_directory.resolve() not in artifact_path.parents or not artifact_path.is_file():
+            raise ValueError("bea_artifact_path_invalid")
+        repository_path = artifact_path.relative_to(repo_root.resolve()).as_posix()
+        admission = admissions.get(repository_path)
+        if admission is None:
+            raise ValueError("bea_artifact_archive_admission_missing:" + repository_path)
+        commit, retrieved_at = admission
+        artifact = BeaArtifact(
+            event_family=family,
+            reference_period=prepared_row["reference_period"],
+            source_url=row["url"],
+            path=artifact_path,
+            repository_path=repository_path,
+            source_event_id=prepared_row["source_event_id"],
+            available_at=canonical_instant(prepared_row["event_timestamp_utc"]),
+            retrieved_at=canonical_instant(retrieved_at),
+            archive_commit=commit,
+            sha256=sha256_file(artifact_path),
+            title=row["title"],
+        )
+        artifacts.append(artifact)
+        if family == "GDP":
+            try:
+                quarter, estimate = _bea_estimate_identity(artifact.reference_period)
+            except ValueError:
+                continue
+            if estimate in {"advance", "initial"}:
+                if quarter in initial_by_quarter:
+                    raise ValueError("bea_gdp_initial_identity_ambiguous:" + quarter)
+                initial_by_quarter[quarter] = (
+                    artifact.reference_period,
+                    artifact.source_event_id,
+                )
+    artifacts.sort(key=lambda row: (row.available_at, row.event_family, row.reference_period))
+    return artifacts, initial_by_quarter

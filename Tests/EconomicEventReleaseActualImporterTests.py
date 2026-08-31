@@ -15,12 +15,14 @@ sys.path.insert(0, str(ROOT / "EconomicCalendar"))
 
 from import_economic_event_release_actual import build_insert_sql  # noqa: E402
 from release_actual_ingestion import (  # noqa: E402
+    BeaArtifact,
     CensusArtifact,
     Consensus,
     EconomicEvent,
     ReleaseActualCandidate,
     coverage_audit,
     deterministic_json_lines,
+    extract_bea_candidates,
     extract_census_candidates,
     match_candidates,
     read_artifact_text,
@@ -59,6 +61,29 @@ def event(
     return EconomicEvent(
         event_id, agency, family, timestamp, source_id,
         "https://www.census.gov/economic-indicators/fixture.pdf", reference,
+    )
+
+
+def bea_artifact(
+    name: str,
+    family: str,
+    reference: str,
+    available: str,
+    source_id: str,
+) -> BeaArtifact:
+    path = FIXTURES / name
+    return BeaArtifact(
+        event_family=family,
+        reference_period=reference,
+        source_url="https://www.bea.gov/news/fixture",
+        path=path,
+        repository_path=path.relative_to(ROOT).as_posix(),
+        source_event_id=source_id,
+        available_at=available,
+        retrieved_at=RETRIEVED_AT,
+        archive_commit="8a740a78a8c8ff10c8afd04c2d1c6eb6dfbbbb86",
+        sha256=sha256_file(path),
+        title=reference,
     )
 
 
@@ -204,6 +229,89 @@ class ReleaseActualImporterTests(unittest.TestCase):
         self.assertNotIn("ON CONFLICT", sql)
         self.assertTrue(sql.startswith("BEGIN;"))
         self.assertTrue(sql.endswith("COMMIT;\n"))
+
+
+class BeaReleaseActualImporterTests(unittest.TestCase):
+    def test_gdp_advance_is_initial_and_second_is_only_revision(self) -> None:
+        initial_artifact = bea_artifact(
+            "bea_gdp_advance.txt", "GDP", "Q4 2009 Advance",
+            "2010-01-29T13:30:00Z", "bea:gdp:q4-2009-advance",
+        )
+        revision_artifact = bea_artifact(
+            "bea_gdp_second.txt", "GDP", "Q4 2009 Second",
+            "2010-02-26T13:30:00Z", "bea:gdp:q4-2009-second",
+        )
+        identity = {"Q4 2009": ("Q4 2009 Advance", "bea:gdp:q4-2009-advance")}
+        initials, rejected = extract_bea_candidates(initial_artifact, identity)
+        revisions, revision_rejected = extract_bea_candidates(revision_artifact, identity)
+        self.assertEqual(rejected + revision_rejected, [])
+        self.assertEqual(
+            (initials[0].publication_state, initials[0].revision_sequence,
+             initials[0].actual_value_low, initials[0].actual_qualifier),
+            ("initial", 0, "5.7", None),
+        )
+        self.assertEqual(
+            (revisions[0].publication_state, revisions[0].revision_sequence,
+             revisions[0].candidate_source_event_id,
+             revisions[0].candidate_reference_period,
+             revisions[0].actual_value_low),
+            ("revision", 1, "bea:gdp:q4-2009-advance", "Q4 2009 Advance", "5.9"),
+        )
+
+    def test_gdp_revision_without_advance_provenance_fails_closed(self) -> None:
+        artifact = bea_artifact(
+            "bea_gdp_second.txt", "GDP", "Q4 2009 Second",
+            "2010-02-26T13:30:00Z", "bea:gdp:q4-2009-second",
+        )
+        rows, rejected = extract_bea_candidates(artifact, {})
+        self.assertEqual(rows, [])
+        self.assertEqual(rejected[0].decision, "missing_initial_provenance")
+
+    def test_pce_selects_nominal_expenditures_not_price_index(self) -> None:
+        artifact = bea_artifact(
+            "bea_pce_initial.txt", "PCE", "December 2009",
+            "2010-02-01T13:30:00Z", "bea:pce:december-2009",
+        )
+        rows, rejected = extract_bea_candidates(artifact, {})
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].actual_value_low, "0.2")
+        self.assertEqual(rows[0].actual_qualifier, "m/m")
+        self.assertIn("current_dollar_personal_consumption_expenditures",
+                      rows[0].source_provenance["headline_statistic"])
+
+    def test_bea_wrong_unit_qualifier_and_authority_are_rejected(self) -> None:
+        artifact = bea_artifact(
+            "bea_pce_initial.txt", "PCE", "December 2009",
+            "2010-02-01T13:30:00Z", "bea:pce:december-2009",
+        )
+        row = extract_bea_candidates(artifact, {})[0][0]
+        with self.assertRaisesRegex(ValueError, "bea_semantics_invalid"):
+            dataclasses.replace(row, actual_unit="count")
+        with self.assertRaisesRegex(ValueError, "bea_semantics_invalid"):
+            dataclasses.replace(row, actual_qualifier="y/y")
+        with self.assertRaisesRegex(ValueError, "source_url_not_authoritative"):
+            dataclasses.replace(row, source_url="https://example.com/release")
+
+    def test_bea_matching_preserves_sha_causality_and_is_deterministic(self) -> None:
+        artifact = bea_artifact(
+            "bea_pce_initial.txt", "PCE", "December 2009",
+            "2010-02-01T13:30:00Z", "bea:pce:december-2009",
+        )
+        row = extract_bea_candidates(artifact, {})[0][0]
+        canonical = EconomicEvent(
+            20, "BEA", "PCE", "2010-02-01T13:30:00Z",
+            "bea:pce:december-2009", "https://www.bea.gov/news/fixture",
+            "December 2009",
+        )
+        decisions = match_candidates([row], [canonical])
+        self.assertEqual(decisions[0].decision, "matched")
+        self.assertEqual(row.source_artifact_sha256, artifact.sha256)
+        self.assertGreater(row.retrieved_at, row.available_at)
+        self.assertEqual(
+            deterministic_json_lines(decisions, []),
+            deterministic_json_lines(decisions, []),
+        )
 
 
 if __name__ == "__main__":
