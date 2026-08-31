@@ -35,6 +35,13 @@ Applied migrations are tracked in `schema_migrations`:
 - `checksum text not null`
 - `applied_at timestamptz not null default now()`
 
+For each unapplied migration, the runner commits the migration SQL and its
+`schema_migrations` row in one transaction. Historical migration files that
+wrap their complete body in `BEGIN`/`COMMIT` retain their checked-in bytes and
+checksum; the runner removes only that matched outer wrapper at execution time.
+Any other top-level transaction-control statement fails closed so migration SQL
+cannot commit separately from its ledger row.
+
 Economic-calendar enrichment persistence is created by:
 
 - `081_economic_event_consensus.sql`: one immutable, audited secondary-source
