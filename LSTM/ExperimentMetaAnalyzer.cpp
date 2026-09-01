@@ -26,6 +26,7 @@
 #include "Donchian20Mode.hpp"
 #include "DonchianLookback.hpp"
 #include "FeatureWarmupScope.hpp"
+#include "ModelInputExpansion.hpp"
 #include "RunMetadata.hpp"
 #include "SupportedSymbols.hpp"
 #include "TrainingObjective.hpp"
@@ -1495,6 +1496,13 @@ std::vector<NextExperimentRecommendation> BuildNextExperimentRecommendations(con
 std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
                                                                  const NextExperimentRecommendation& rec)
 {
+    if (!ColumnExists(w, "experiment", "model_input_width") ||
+        !ColumnExists(w, "experiment",
+                      "model_input_semantic_layout_version"))
+    {
+        throw std::runtime_error(
+            "model input identity migration required; run ./migrate_lstm_db.sh");
+    }
     pqxx::result rows = w.exec(
         "SELECT experiment_id "
         "FROM experiment "
@@ -1518,6 +1526,10 @@ std::optional<long long> FindExistingExperimentForRecommendation(pqxx::work& w,
         "AND training_objective_canonical = " + w.quote(
             EA::TrainingObjective::CanonicalText(
                 EA::TrainingObjective::Legacy())) + " "
+        "AND model_input_width = " +
+            std::to_string(EA::kCurrentModelInputWidth) + " "
+        "AND model_input_semantic_layout_version = " +
+            std::to_string(EA::kModelInputSemanticLayoutVersion) + " "
         "ORDER BY experiment_id ASC LIMIT 1;");
     if (rows.empty())
         return std::nullopt;
@@ -1537,7 +1549,8 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at, "
-        << "donchian20_mode, feature_warmup_scope, donchian_lookback";
+        << "donchian20_mode, feature_warmup_scope, donchian_lookback, "
+        << "model_input_width, model_input_semantic_layout_version";
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataColumns(sql);
     sql << ") VALUES ("
@@ -1557,7 +1570,9 @@ long long InsertMetaRecommendationExperiment(pqxx::work& w,
         << "'pending','train',now(),"
         << w.quote(Donchian20ModeText(kDefaultDonchian20Mode)) << ","
         << w.quote(FeatureWarmupScopeText(kDefaultFeatureWarmupScope)) << ","
-        << DonchianLookbackDatabaseValue(kDefaultDonchianLookback);
+        << DonchianLookbackDatabaseValue(kDefaultDonchianLookback) << ","
+        << EA::kCurrentModelInputWidth << ","
+        << EA::kModelInputSemanticLayoutVersion;
     if (includeRunMetadata)
         EA::RunMetadata::AppendRunMetadataValues(sql, w, runMetadata, schemaVersion);
     sql << ") RETURNING experiment_id;";

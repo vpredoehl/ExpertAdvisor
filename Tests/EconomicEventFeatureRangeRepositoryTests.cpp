@@ -39,6 +39,26 @@ int main()
         " user=" + EnvironmentOr("LSTM_DB_USER", "pqxx") +
         " dbname=" + EnvironmentOr("LSTM_DB_NAME", "invalid")};
 
+    // A completely absent feature corpus is a source/history failure, not a
+    // legitimate no-event interval whose semantic value happens to be zero.
+    {
+        pqxx::read_transaction emptyRead{connection};
+        bool unavailableRejected = false;
+        try
+        {
+            (void)LoadEconomicEventsForFeatureRange(
+                emptyRead, "USD", "2023-11-14 00:00:00+00",
+                "2023-11-15 00:00:00+00");
+        }
+        catch (const std::runtime_error& error)
+        {
+            unavailableRejected =
+                std::string{error.what()} ==
+                "economic_event_feature_source_history_unavailable:USD";
+        }
+        assert(unavailableRejected);
+    }
+
     {
         pqxx::work write{connection};
         write.exec(
@@ -127,6 +147,17 @@ int main()
             "'5100','scalar',5100,5100000,'count',1000 "
             "FROM economic_event WHERE source_event_id='range-jolts';");
         write.commit();
+    }
+
+    // Corpus availability is independent of interval occupancy. Once USD
+    // history exists, a range before the first event remains a legitimate
+    // event-free interval.
+    {
+        pqxx::read_transaction eventFreeRead{connection};
+        const auto eventFree = LoadEconomicEventsForFeatureRange(
+            eventFreeRead, "USD", "2020-01-01 00:00:00+00",
+            "2020-01-02 00:00:00+00");
+        assert(eventFree.empty());
     }
 
     // The actual store is immutable, rejects non-authoritative source agency,

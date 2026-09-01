@@ -25,18 +25,23 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Database/migrations/078_operator_forced_final_inference_rerun.sql"
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/089_lstm_model_input_identity.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -f "${repo_root}/Tests/InputWidthExpansionMigrationTests.sql"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Tests/LSTMModelInputIdentityMigrationTests.sql"
 
 source_experiment_id="$(psql -X -At -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment(
     symbol,prediction_horizon,c_next_threshold,core_lr_mult,head_lr_mult,
     target_epochs,checkpoint_interval,train_start,train_end,infer_start,
     infer_end,status,phase,duplicate_nonce,donchian20_mode,
-    feature_warmup_scope,donchian_lookback,feature_ablation_mask
+    feature_warmup_scope,donchian_lookback,feature_ablation_mask,
+    model_input_width,model_input_semantic_layout_version
 ) VALUES(
     'expansionfixture',4,0.0008,1.0,1.0,40,20,
     '2020-01-01','2021-01-01','2021-01-01','2022-01-01',
-    'completed','done',900001,'enabled','legacy_cold_boundary',20,''
+    'completed','done',900001,'enabled','legacy_cold_boundary',20,'',51,5
 ) RETURNING experiment_id;
 SQL
 )"
@@ -118,6 +123,16 @@ test "$(psql -X -At -q -d "${test_db}" -c \
     "SELECT count(*) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = 2
 test "$(psql -X -At -q -d "${test_db}" -c \
     "SELECT string_agg(resume_expand_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = 'false,true'
+test "$(psql -X -At -q -d "${test_db}" -c \
+    "SELECT string_agg(model_input_width::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '51,75'
+test "$(psql -X -At -q -d "${test_db}" -c \
+    "SELECT string_agg(model_input_semantic_layout_version::text,',' ORDER BY resume_expand_input_width) FROM experiment WHERE resume_model_id=${source_model_id} AND target_epochs=80")" = '5,5'
+
+LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
+    --queue-experiment --symbol=eurusdrmp --prediction-horizon=4 \
+    --target-epochs=1 >"${test_dir}/fresh.out" 2>&1
+test "$(psql -X -At -q -d "${test_db}" -c \
+    "SELECT model_input_width::text || ':' || model_input_semantic_layout_version::text FROM experiment WHERE symbol='eurusdrmp' AND target_epochs=1 ORDER BY experiment_id DESC LIMIT 1")" = '75:5'
 
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --resume-model-id="${source_model_id}" \
@@ -127,26 +142,30 @@ LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
 grep -q 'feature_ablation_mask=historical_level_proximity' \
     "${test_dir}/ablation.out"
 
-# A semantic marker is optional only for models that predate the marker.  Once
-# present, incompatible semantics fail closed for expansion but ordinary resume
-# still follows the historical-width path.
+# A semantic marker is optional only for models that predate the marker. Once
+# present, incompatible semantics fail closed for ordinary resume and explicit
+# expansion alike.
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
     -v source_model_id="${source_model_id}" <<'SQL'
 INSERT INTO matrix(model_id,param_name,n_rows,n_cols,row_idx,col_idx,value)
 VALUES(:source_model_id,'model_input_semantics_meta',1,2,0,0,1.0),
       (:source_model_id,'model_input_semantics_meta',1,2,0,1,999.0);
 SQL
+set +e
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --resume-model-id="${source_model_id}" \
     --target-epochs=82 --dry-run >"${test_dir}/ordinary-semantic.out" 2>&1
-set +e
+ordinary_incompatible_status=$?
 LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
     --queue-experiment --resume-model-id="${source_model_id}" \
     --resume-expand-input-width --target-epochs=82 --dry-run \
     >"${test_dir}/incompatible-semantic.out" 2>&1
 incompatible_status=$?
 set -e
+test "${ordinary_incompatible_status}" -ne 0
 test "${incompatible_status}" -ne 0
+grep -q 'MODEL_INPUT_EXPANSION_SEMANTIC_METADATA_INCOMPATIBLE' \
+    "${test_dir}/ordinary-semantic.out"
 grep -q 'MODEL_INPUT_EXPANSION_SEMANTIC_METADATA_INCOMPATIBLE' \
     "${test_dir}/incompatible-semantic.out"
 

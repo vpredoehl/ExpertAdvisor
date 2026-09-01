@@ -303,6 +303,20 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
 {
     ValidateCurrency(currency);
 
+    // An event-free interval is a valid feature state, but an entirely absent
+    // currency corpus is not. Fail before constructing Tensor rows so a
+    // missing/unloaded source cannot masquerade as legitimate zero-valued
+    // economic-event features. Missing relations, views, privileges, and query
+    // failures continue to surface as their original database errors.
+    const pqxx::result sourceAvailability = transaction.exec(
+        "SELECT 1 FROM economic_event WHERE currency = $1 LIMIT 1;",
+        pqxx::params{currency});
+    if (sourceAvailability.empty())
+    {
+        throw std::runtime_error(
+            "economic_event_feature_source_history_unavailable:" + currency);
+    }
+
     // DISTINCT ON seeds one latest row for every authoritative canonical
     // stream. Several canonical streams may map to one model family; retaining
     // each stream's latest prior row lets the shared C++ mapper select the

@@ -205,35 +205,56 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 39>
         {causalRollingRangeExpansionCol, "rolling_range_expansion"},
         {historicalLevelProximityCol, "historical_level_proximity"},
         {returnAutocorrelationCol, "return_autocorrelation"},
-        {inflationEventCol, "inflation_event"},
-        {employmentEventCol, "employment_event"},
-        {growthEventCol, "growth_event"},
-        {fedPolicyEventCol, "fed_policy_event"},
-        {consumerDemandEventCol, "consumer_demand_event"},
-        {inflationRecencyDecayCol, "inflation_recency_decay"},
-        {employmentRecencyDecayCol, "employment_recency_decay"},
-        {growthRecencyDecayCol, "growth_recency_decay"},
-        {fedPolicyRecencyDecayCol, "fed_policy_recency_decay"},
-        {consumerDemandRecencyDecayCol, "consumer_demand_recency_decay"},
-        {relevantEventHasConsensusCol, "relevant_event_has_consensus"},
-        {relevantEventConsensusLowCol, "relevant_event_consensus_low"},
-        {relevantEventConsensusHighCol, "relevant_event_consensus_high"},
+        {inflationEventCol, EA::EconomicCalendar::kEconomicEventFeatureNames[0]},
+        {employmentEventCol, EA::EconomicCalendar::kEconomicEventFeatureNames[1]},
+        {growthEventCol, EA::EconomicCalendar::kEconomicEventFeatureNames[2]},
+        {fedPolicyEventCol, EA::EconomicCalendar::kEconomicEventFeatureNames[3]},
+        {consumerDemandEventCol, EA::EconomicCalendar::kEconomicEventFeatureNames[4]},
+        {inflationRecencyDecayCol, EA::EconomicCalendar::kEconomicEventFeatureNames[5]},
+        {employmentRecencyDecayCol, EA::EconomicCalendar::kEconomicEventFeatureNames[6]},
+        {growthRecencyDecayCol, EA::EconomicCalendar::kEconomicEventFeatureNames[7]},
+        {fedPolicyRecencyDecayCol, EA::EconomicCalendar::kEconomicEventFeatureNames[8]},
+        {consumerDemandRecencyDecayCol, EA::EconomicCalendar::kEconomicEventFeatureNames[9]},
+        {relevantEventHasConsensusCol, EA::EconomicCalendar::kEconomicEventFeatureNames[10]},
+        {relevantEventConsensusLowCol, EA::EconomicCalendar::kEconomicEventFeatureNames[11]},
+        {relevantEventConsensusHighCol, EA::EconomicCalendar::kEconomicEventFeatureNames[12]},
         {relevantEventConsensusIsRangeCol,
-         "relevant_event_consensus_is_range"},
-        {releasedEventHasSurpriseCol, "released_event_has_surprise"},
-        {releasedEventSurpriseCol, "released_event_surprise"},
-        {releasedEventSurpriseAbsCol, "released_event_surprise_abs"},
+         EA::EconomicCalendar::kEconomicEventFeatureNames[13]},
+        {releasedEventHasSurpriseCol, EA::EconomicCalendar::kEconomicEventFeatureNames[14]},
+        {releasedEventSurpriseCol, EA::EconomicCalendar::kEconomicEventFeatureNames[15]},
+        {releasedEventSurpriseAbsCol, EA::EconomicCalendar::kEconomicEventFeatureNames[16]},
         {releasedEventSurpriseDirectionCol,
-         "released_event_surprise_direction"},
+         EA::EconomicCalendar::kEconomicEventFeatureNames[17]},
         {authoritativeInitialHasSurpriseCol,
-         "authoritative_initial_has_surprise"},
+         EA::EconomicCalendar::kEconomicEventFeatureNames[18]},
         {authoritativeInitialSurpriseCol,
-         "authoritative_initial_surprise"},
+         EA::EconomicCalendar::kEconomicEventFeatureNames[19]},
         {authoritativeInitialSurpriseAbsCol,
-         "authoritative_initial_surprise_abs"},
+         EA::EconomicCalendar::kEconomicEventFeatureNames[20]},
         {authoritativeInitialSurpriseDirectionCol,
-         "authoritative_initial_surprise_direction"},
+         EA::EconomicCalendar::kEconomicEventFeatureNames[21]},
     }};
+
+constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()
+{
+    for (std::size_t index = 0; index < kAppendedTensorFeatureSemantics.size();
+         ++index)
+    {
+        const auto& semantic = kAppendedTensorFeatureSemantics[index];
+        if (semantic.column != legacy_feature_size + index ||
+            semantic.name.empty())
+            return false;
+        for (std::size_t prior = 0; prior < index; ++prior)
+        {
+            if (kAppendedTensorFeatureSemantics[prior].column == semantic.column ||
+                kAppendedTensorFeatureSemantics[prior].name == semantic.name)
+                return false;
+        }
+    }
+    return true;
+}
+
+static_assert(AppendedTensorFeatureSemanticsAreUniqueAndOrdered());
 
 struct InputWidthExpansionPlan
 {

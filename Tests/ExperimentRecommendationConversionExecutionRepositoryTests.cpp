@@ -172,6 +172,8 @@ int main()
                 "(donchian20_mode IN ('enabled','zero_ablation')),"
                 "feature_warmup_scope text NOT NULL DEFAULT 'full_history_warmup',"
                 "donchian_lookback integer NOT NULL DEFAULT 20,"
+                "model_input_width integer NOT NULL,"
+                "model_input_semantic_layout_version integer NOT NULL,"
                 "updated_at timestamptz NOT NULL DEFAULT now(),"
                 "worker_pid integer,current_operation text,current_epoch integer,marker text);"
                 "CREATE UNIQUE INDEX experiment_unique_identity_uidx ON experiment("
@@ -181,20 +183,28 @@ int main()
                 "checkpoint_interval,train_start,train_end,"
                 "coalesce(infer_start,'-infinity'::timestamptz),"
                 "coalesce(infer_end,'-infinity'::timestamptz),"
-                "coalesce(resume_model_id,-1),donchian20_mode,feature_warmup_scope,donchian_lookback,duplicate_nonce) "
+                "coalesce(resume_model_id,-1),donchian20_mode,feature_warmup_scope,donchian_lookback,"
+                "model_input_width,model_input_semantic_layout_version,duplicate_nonce) "
                 "WHERE status<>'cancelled';"
                 "CREATE TABLE model(model_id bigint PRIMARY KEY,marker text NOT NULL);"
+                "CREATE TABLE matrix(model_id bigint NOT NULL,param_name text NOT NULL,"
+                "n_rows integer NOT NULL,n_cols integer NOT NULL,row_idx integer NOT NULL,"
+                "col_idx integer NOT NULL,value double precision NOT NULL);"
                 "CREATE TABLE experiment_recommendation("
                 "recommendation_id bigint PRIMARY KEY,source_experiment_id bigint NOT NULL "
                 "REFERENCES experiment(experiment_id),status text NOT NULL);"
                 "INSERT INTO experiment(experiment_id,symbol,prediction_horizon,"
                 "c_next_threshold,core_lr_mult,head_lr_mult,target_epochs,"
                 "checkpoint_interval,train_start,train_end,infer_start,infer_end,"
-                "resume_model_id,status,phase,marker) VALUES (17,'eurusd',12,"
+                "resume_model_id,status,phase,marker,model_input_width,"
+                "model_input_semantic_layout_version) VALUES (17,'eurusd',12,"
                 "0.001,1,5,120,15,'2010-01-01 America/Chicago',"
                 "'2025-01-01 America/Chicago','2025-01-01 America/Chicago',"
-                "'2026-01-01 America/Chicago',77,'paused','train','unchanged');"
+                "'2026-01-01 America/Chicago',77,'paused','train','unchanged',51,5);"
                 "INSERT INTO model VALUES (77,'unchanged');"
+                "INSERT INTO matrix VALUES "
+                "(77,'model_meta',1,3,0,0,1),(77,'model_meta',1,3,0,1,51),"
+                "(77,'model_meta',1,3,0,2,1),(77,'param',52,4,0,0,0);"
                 "INSERT INTO experiment_recommendation VALUES (42,17,'approved');");
             for (const char* migration : {
                      "Database/migrations/036_experiment_recommendation_conversion_proposal.sql",
@@ -208,6 +218,7 @@ int main()
             setup.exec(ReadFile(
                 "Tests/ExperimentRecommendationConversionExecutionMigrationTests.sql"));
             setup.exec("GRANT SELECT,INSERT ON experiment TO pqxx;"
+                       "GRANT SELECT ON matrix TO pqxx;"
                        "GRANT USAGE ON SEQUENCE experiment_experiment_id_seq "
                        "TO pqxx;");
             setup.exec("GRANT USAGE ON SCHEMA " + setup.quote_name(schema) +
@@ -327,7 +338,9 @@ int main()
             verify.exec("SET LOCAL search_path TO " + verify.quote_name(schema) + ";");
             const pqxx::row row = verify.exec(
                 "SELECT status,phase,worker_pid,current_operation,current_epoch,"
-                "invocation_mode,marker FROM experiment WHERE experiment_id=$1;",
+                "invocation_mode,marker,model_input_width,"
+                "model_input_semantic_layout_version FROM experiment WHERE "
+                "experiment_id=$1;",
                 pqxx::params{created.execution->experimentId}).one_row();
             assert(row["status"].as<std::string>() == "paused");
             assert(row["phase"].as<std::string>() == "train");
@@ -337,6 +350,8 @@ int main()
             assert(row["invocation_mode"].as<std::string>() ==
                    "recommendation_conversion");
             assert(row["marker"].is_null());
+            assert(row["model_input_width"].as<int>() == 51);
+            assert(row["model_input_semantic_layout_version"].as<int>() == 5);
         }
 
         // A later review reversal does not duplicate or erase a completed

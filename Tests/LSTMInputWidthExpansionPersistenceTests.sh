@@ -48,6 +48,8 @@ cp "${repo_root}/DerivedData/Development/Build/Products/Debug/MetaNN_metal.metal
 createdb "${test_db}"
 pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}"
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/089_lstm_model_input_identity.sql"
 LSTM_DB_NAME="${test_db}" "${test_dir}/persistence_test"
 
 printf '%s\n' 'LSTMInputWidthExpansionPersistenceTests passed'

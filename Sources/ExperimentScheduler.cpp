@@ -6649,10 +6649,54 @@ std::string ResolveExperimentCanonicalSymbol(pqxx::work& w,
     throw std::runtime_error("resume-model-id is missing train_symbol_meta and --symbol was not supplied for legacy fallback");
 }
 
+struct QueuedModelInputIdentity
+{
+    std::size_t width = EA::kCurrentModelInputWidth;
+    int semanticLayoutVersion = EA::kModelInputSemanticLayoutVersion;
+};
+
+QueuedModelInputIdentity ResolveQueuedModelInputIdentity(
+    pqxx::work& w, const SchedulerOptions& options)
+{
+    if (!ColumnExists(w, "experiment", "model_input_width") ||
+        !ColumnExists(w, "experiment",
+                      "model_input_semantic_layout_version"))
+    {
+        throw std::runtime_error(
+            "model input identity migration required; run ./migrate_lstm_db.sh");
+    }
+
+    QueuedModelInputIdentity identity;
+    if (options.resumeModelId.has_value())
+    {
+        (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
+            w, *options.resumeModelId);
+        const std::size_t sourceWidth =
+            DBIO::PgModelIO::loadRequiredModelMeta(
+                w, *options.resumeModelId).inputWidth;
+        identity.width = options.resumeExpandInputWidth
+            ? EA::kCurrentModelInputWidth : sourceWidth;
+    }
+    (void)EA::ContractForModelInputWidth(identity.width);
+    if (!EA::IsModelInputSemanticLayoutWidthCompatible(
+            identity.semanticLayoutVersion, identity.width,
+            EA::kModelInputSemanticLayoutRegistry,
+            EA::kRegisteredModelInputWidths,
+            EA::kModelInputSemanticLayoutVersion,
+            EA::kCurrentModelInputWidth, false))
+    {
+        throw std::runtime_error(
+            "queued model input identity is incompatible with this binary");
+    }
+    return identity;
+}
+
 std::string DuplicateWhereClause(pqxx::work& w,
                                         const SchedulerOptions& options,
                                         const std::string& canonicalSymbol)
 {
+    const QueuedModelInputIdentity inputIdentity =
+        ResolveQueuedModelInputIdentity(w, options);
     std::ostringstream sql;
     sql << "symbol = " << w.quote(canonicalSymbol)
         << " AND prediction_horizon = " << *options.predictionHorizon
@@ -6681,6 +6725,9 @@ std::string DuplicateWhereClause(pqxx::work& w,
             EA::TrainingObjective::Identity(options.trainingObjective))
         << " AND training_objective_canonical = " << w.quote(
             EA::TrainingObjective::CanonicalText(options.trainingObjective))
+        << " AND model_input_width = " << inputIdentity.width
+        << " AND model_input_semantic_layout_version = "
+        << inputIdentity.semanticLayoutVersion
         << " AND status <> 'cancelled'";
     return sql.str();
 }
@@ -6689,6 +6736,8 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
                                              const SchedulerOptions& options,
                                              const std::string& canonicalSymbol)
 {
+    const QueuedModelInputIdentity inputIdentity =
+        ResolveQueuedModelInputIdentity(w, options);
     std::ostringstream sql;
     sql << "symbol = " << w.quote(canonicalSymbol)
         << " AND prediction_horizon = " << *options.predictionHorizon
@@ -6707,6 +6756,9 @@ std::string QueueDuplicateWhereClause(pqxx::work& w,
             EA::TrainingObjective::Identity(options.trainingObjective))
         << " AND training_objective_canonical = " << w.quote(
             EA::TrainingObjective::CanonicalText(options.trainingObjective))
+        << " AND model_input_width = " << inputIdentity.width
+        << " AND model_input_semantic_layout_version = "
+        << inputIdentity.semanticLayoutVersion
         << " AND train_start = " << w.quote(*options.trainStart) << "::timestamptz"
         << " AND train_end = " << w.quote(*options.trainEnd) << "::timestamptz"
         << " AND status NOT IN ('failed', 'cancelled')";
@@ -6724,6 +6776,8 @@ long long InsertExperimentRecord(pqxx::work& w,
                                         const std::string& canonicalSymbol,
                                         long long duplicateNonce)
 {
+    const QueuedModelInputIdentity inputIdentity =
+        ResolveQueuedModelInputIdentity(w, options);
     const bool includeRunMetadata = EA::RunMetadata::ExperimentRunMetadataColumnsExist(w);
     const bool hasDonchian20Mode = ColumnExists(w, "experiment", "donchian20_mode");
     if (!hasDonchian20Mode)
@@ -6776,7 +6830,7 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "symbol, prediction_horizon, c_next_threshold, core_lr_mult, head_lr_mult, "
         << "target_epochs, checkpoint_interval, train_start, train_end, infer_start, infer_end, "
         << "resume_model_id, duplicate_nonce, status, phase, updated_at";
-    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity";
+    sql << ", donchian20_mode, feature_warmup_scope, donchian_lookback, feature_ablation_mask, resume_expand_input_width, training_objective_canonical, training_objective_hash, training_objective_id, training_objective_version, loss_definition_version, auxiliary_loss_mode, auxiliary_loss_coefficient, regression_target_definition, regression_normalization_identity, robust_loss_definition, robust_loss_delta, target_clipping_definition, objective_normalization_identity, model_input_width, model_input_semantic_layout_version";
     if (hasCheckpointInferEnabled)
         sql << ", checkpoint_infer_enabled";
     if (hasOpportunisticCheckpointInfer)
@@ -6851,7 +6905,9 @@ long long InsertExperimentRecord(pqxx::work& w,
         << "," << w.quote(
             EA::TrainingObjective::AuxiliaryEnabled(options.trainingObjective)
                 ? "classification_weighted_ce_plus_unweighted_coefficient_huber__loss_and_gradients_by_true_class_weight_sum__calculate_batch_return_by_example_count_v1"
-                : "weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1");
+                : "weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1")
+        << "," << inputIdentity.width
+        << "," << inputIdentity.semanticLayoutVersion;
     if (hasCheckpointInferEnabled)
         sql << "," << (options.queueCheckpointInfer ? "true" : "false");
     if (hasOpportunisticCheckpointInfer)
@@ -7140,6 +7196,8 @@ int QueueExperiments(const SchedulerOptions& rawOptions)
         if (rawOptions.headLrMult.has_value())
             ThrowQueueResumeInvalid("head_lr_override_not_allowed_in_resume", *options.resumeModelId);
         const QueueResumeMeta meta = LoadQueueResumeMeta(w, *options.resumeModelId);
+        (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
+            w, *options.resumeModelId);
         if (options.resumeExpandInputWidth)
             DBIO::PgModelIO::validateModelInputSemanticsForExpansion(
                 w, *options.resumeModelId);
@@ -14013,16 +14071,25 @@ std::optional<long long> FindEquivalentContinuationExperiment(
     long long sourceModelId,
     int targetEpochs)
 {
+    (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
+        w, sourceModelId);
+    const std::size_t sourceInputWidth =
+        DBIO::PgModelIO::loadRequiredModelMeta(
+            w, sourceModelId).inputWidth;
     pqxx::result rows = w.exec_params(
         "SELECT experiment_id FROM experiment "
         "WHERE experiment_id <> $1 "
         "AND resume_model_id = $2 "
         "AND target_epochs = $3 "
+        "AND model_input_width = $4 "
+        "AND model_input_semantic_layout_version = $5 "
         "ORDER BY (continuation_source_model_id IS NOT NULL) DESC, experiment_id ASC "
         "LIMIT 1;",
         sourceExperimentId,
         sourceModelId,
-        targetEpochs);
+        targetEpochs,
+        sourceInputWidth,
+        EA::kModelInputSemanticLayoutVersion);
     if (rows.empty())
         return std::nullopt;
     return rows[0][0].as<long long>();

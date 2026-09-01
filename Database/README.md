@@ -87,6 +87,11 @@ Economic-calendar enrichment persistence is created by:
   `EconomicCalendar/LSTM_EconomicEventReleaseActualIngestion.md`; its write
   mode is restricted to explicitly named disposable databases and remains
   append-only.
+- `089_lstm_model_input_identity.sql`: leaves historical experiments with a
+  `NULL`/`NULL` legacy identity and requires every newly inserted experiment
+  to persist its expected LSTM input width and append-only semantic-layout
+  version. Partial identities and later identity mutation are rejected, and
+  both fields participate in the existing experiment duplicate identity.
 
 Experiment scheduling tables are created by:
 

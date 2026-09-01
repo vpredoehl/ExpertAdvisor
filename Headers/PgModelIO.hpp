@@ -164,6 +164,55 @@ public:
         );
     }
 
+    static void validateExperimentModelInputIdentityForSave(
+        pqxx::work& w, long long modelId, const EA::LSTM& lstm)
+    {
+        const pqxx::result columns = w.exec(
+            "SELECT column_name FROM information_schema.columns WHERE "
+            "table_schema='public' AND table_name='experiment' AND "
+            "column_name IN ('model_input_width',"
+            "'model_input_semantic_layout_version');");
+        if (columns.empty()) return; // Legacy pre-089 schema.
+        if (columns.size() != 2)
+            throw std::runtime_error(
+                "experiment_model_input_identity_schema_incomplete");
+
+        const pqxx::result rows = w.exec_params(
+            "SELECT m.experiment_id,e.model_input_width,"
+            "e.model_input_semantic_layout_version FROM model m LEFT JOIN "
+            "experiment e ON e.experiment_id=m.experiment_id WHERE "
+            "m.model_id=$1;", modelId);
+        if (rows.empty())
+            throw std::runtime_error(
+                "model_not_found_for_experiment_model_input_identity");
+        if (rows[0][0].is_null()) return;
+        if (rows[0][1].is_null() && rows[0][2].is_null())
+            return; // Model belongs to a legacy pre-089 experiment.
+        if (rows[0][1].is_null() || rows[0][2].is_null())
+            throw std::runtime_error(
+                "experiment_model_input_identity_incomplete");
+
+        const std::size_t expectedWidth = rows[0][1].as<std::size_t>();
+        const int layoutVersion = rows[0][2].as<int>();
+        const std::size_t actualWidth =
+            static_cast<std::size_t>(lstm.InputFeatureCount());
+        if (actualWidth != expectedWidth ||
+            !EA::IsModelInputSemanticLayoutWidthCompatible(
+                layoutVersion, expectedWidth,
+                EA::kModelInputSemanticLayoutRegistry,
+                EA::kRegisteredModelInputWidths,
+                EA::kModelInputSemanticLayoutVersion,
+                EA::kCurrentModelInputWidth, false))
+        {
+            throw std::runtime_error(
+                "EXPERIMENT_MODEL_INPUT_IDENTITY_MISMATCH,model_id=" +
+                std::to_string(modelId) + ",expected_n_in=" +
+                std::to_string(expectedWidth) + ",actual_n_in=" +
+                std::to_string(actualWidth) + ",semantic_layout=" +
+                std::to_string(layoutVersion));
+        }
+    }
+
     // Save all LSTM learnable parameters
     static void saveAll(pqxx::work& w,
                         long long modelId,
@@ -184,6 +233,7 @@ public:
     {
         EA::TrainingObjective::RequireResumeCompatible(
             lstm.trainingObjective, trainingObjective);
+        validateExperimentModelInputIdentityForSave(w, modelId, lstm);
         saveParameter(w, modelId, "param",            lstm.param);
         saveParameter(w, modelId, "bias",             lstm.bias);
         saveParameter(w, modelId, "returnHeadWeight", lstm.returnHeadWeight);
@@ -339,7 +389,7 @@ public:
     // the durable mapping into the compile-time append-only registry.  Once a
     // marker exists, an expansion must fail closed on any semantic mismatch.
     static std::optional<EA::InputWidthExpansionProvenance>
-    validateModelInputSemanticsForExpansion(pqxx::work& w,
+    validateModelInputSemanticsForExpansion(pqxx::transaction_base& w,
                                             long long modelId)
     {
         const std::size_t persistedInputWidth =
@@ -377,6 +427,21 @@ public:
         }
         return validateInputWidthExpansionLineageIfPresent(
             w, modelId, persistedInputWidth);
+    }
+
+    // Ordinary resume and inference must honor a marker once one is present,
+    // not merely its structural model width. Marker-less historical models
+    // retain the established registered-width compatibility path.
+    static std::optional<EA::InputWidthExpansionProvenance>
+    validateModelInputSemanticsForLoad(pqxx::transaction_base& w,
+                                       long long modelId)
+    {
+        const pqxx::result marker = w.exec(
+            "SELECT 1 FROM matrix WHERE model_id=$1 "
+            "AND param_name='model_input_semantics_meta' LIMIT 1;",
+            pqxx::params{modelId});
+        if (marker.empty()) return std::nullopt;
+        return validateModelInputSemanticsForExpansion(w, modelId);
     }
 
     static void saveInputWidthExpansionMeta(
@@ -440,7 +505,7 @@ public:
     }
 
     static EA::InputWidthExpansionProvenance loadRequiredInputWidthExpansionMeta(
-        pqxx::work& w,
+        pqxx::transaction_base& w,
         long long modelId)
     {
         return EA::ParseInputWidthExpansionProvenance(
@@ -449,7 +514,7 @@ public:
 
     static std::optional<EA::InputWidthExpansionProvenance>
     validateInputWidthExpansionLineageIfPresent(
-        pqxx::work& w,
+        pqxx::transaction_base& w,
         long long modelId,
         std::size_t persistedInputWidth)
     {
@@ -466,7 +531,7 @@ public:
     }
 
     static void validateInputWidthExpansionLineage(
-        pqxx::work& w,
+        pqxx::transaction_base& w,
         long long modelId,
         std::size_t persistedInputWidth,
         const EA::InputWidthExpansionProvenance& provenance)
@@ -632,7 +697,7 @@ private:
         saveParameter(w, modelId, paramName, meta);
     }
 
-    static std::string decodeAsciiMeta(pqxx::work& w,
+    static std::string decodeAsciiMeta(pqxx::transaction_base& w,
                                        long long modelId,
                                        const std::string& paramName)
     {
@@ -661,7 +726,7 @@ public:
     // Load model_meta and prove that its structural width agrees with the
     // persisted input parameter matrix.  model_meta is written from that
     // matrix by saveModelMeta, so this is the persisted model contract.
-    static PersistedModelMeta loadRequiredModelMeta(pqxx::work& w,
+    static PersistedModelMeta loadRequiredModelMeta(pqxx::transaction_base& w,
                                                     long long modelId)
     {
         const auto dims = loadParameterDims(w, modelId, "model_meta");
@@ -717,7 +782,7 @@ public:
         catch (...) { return false;   }
     }
 
-    static ParamDims loadParameterDims(pqxx::work& w,
+    static ParamDims loadParameterDims(pqxx::transaction_base& w,
                                        long long modelId,
                                        const std::string& paramName)
     {
@@ -729,7 +794,7 @@ public:
         return { r[0][0].as<int>(), r[0][1].as<int>() };
     }
 
-    static std::vector<double> loadParameterValues(pqxx::work& w,
+    static std::vector<double> loadParameterValues(pqxx::transaction_base& w,
                                                    long long modelId,
                                                    const std::string& paramName)
     {
@@ -894,6 +959,7 @@ public:
                         EA::LSTM& lstm,
                         bool expandInputWidth = false)
     {
+        (void)validateModelInputSemanticsForLoad(w, modelId);
         const auto trainingObjective = loadTrainingObjectiveMeta(w, modelId);
         const std::optional<PersistedModelMeta> sourceMeta =
             expandInputWidth

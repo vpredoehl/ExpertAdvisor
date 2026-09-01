@@ -2,6 +2,7 @@
 
 #include "ExperimentRecommendationConversionProposalReviewRepository.hpp"
 #include "ExperimentRecommendationRepository.hpp"
+#include "PgModelIO.hpp"
 
 #include <locale>
 #include <sstream>
@@ -200,13 +201,22 @@ long long InsertPausedExperiment(
     const ExperimentInvocationConfiguration& invocation)
 {
     const auto& configuration = invocation.configuration;
+    std::size_t modelInputWidth = EA::kCurrentModelInputWidth;
+    if (invocation.resumeModelId)
+    {
+        (void)DBIO::PgModelIO::validateModelInputSemanticsForLoad(
+            transaction, *invocation.resumeModelId);
+        modelInputWidth = DBIO::PgModelIO::loadRequiredModelMeta(
+            transaction, *invocation.resumeModelId).inputWidth;
+    }
     return transaction.exec(
         "INSERT INTO experiment (symbol,prediction_horizon,c_next_threshold,"
         "core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,"
         "train_start,train_end,infer_start,infer_end,resume_model_id,"
         "duplicate_nonce,status,phase,invocation_mode,donchian20_mode,"
         "donchian_lookback,feature_warmup_scope,training_objective_canonical,"
-        "training_objective_hash,updated_at) VALUES ("
+        "training_objective_hash,model_input_width,"
+        "model_input_semantic_layout_version,updated_at) VALUES ("
         "$1,$2,$3,$4,$5,$6,$7,"
         "($8::date::timestamp AT TIME ZONE $13),"
         "($9::date::timestamp AT TIME ZONE $13),"
@@ -214,7 +224,7 @@ long long InsertPausedExperiment(
         "($10::date::timestamp AT TIME ZONE $13) END,"
         "CASE WHEN $11::text IS NULL THEN NULL ELSE "
         "($11::date::timestamp AT TIME ZONE $13) END,"
-        "$12,0,'paused','train','recommendation_conversion',$14,$15,$16,$17,$18,now()) "
+        "$12,0,'paused','train','recommendation_conversion',$14,$15,$16,$17,$18,$19,$20,now()) "
         "RETURNING experiment_id;",
         pqxx::params{
             configuration.symbol, configuration.predictionHorizon,
@@ -230,7 +240,9 @@ long long InsertPausedExperiment(
             EA::TrainingObjective::CanonicalText(
                 configuration.trainingObjective),
             EA::TrainingObjective::Identity(
-                configuration.trainingObjective)})
+                configuration.trainingObjective),
+            modelInputWidth,
+            EA::kModelInputSemanticLayoutVersion})
         .one_row()[0].as<long long>();
 }
 

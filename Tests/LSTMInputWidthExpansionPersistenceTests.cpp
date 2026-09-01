@@ -59,6 +59,34 @@ void ExpectFailureContaining(Callable&& callable, const std::string& marker)
     }
 }
 
+EA::EconomicCalendar::EconomicEvent ProvenEconomicEvent(
+    std::int64_t eventSeconds)
+{
+    using namespace EA::EconomicCalendar;
+    EconomicEvent event;
+    event.economicEventId = 20;
+    event.currency = "USD";
+    event.sourceAgency = "BEA";
+    event.eventFamily = "PCE";
+    event.eventTimestampUnixMicros = eventSeconds * 1'000'000LL;
+    EconomicEventSelectedConsensus selected;
+    selected.provider = "OANDA";
+    selected.forecast = EconomicEventConsensusValue{
+        "scalar", 0.3, std::nullopt, "percent", 1.0, std::nullopt};
+    event.selectedConsensus = std::move(selected);
+    EconomicEventReleaseActual actual;
+    actual.actual = EconomicEventConsensusValue{
+        "scalar", 0.5, std::nullopt, "percent", 1.0, std::nullopt};
+    actual.availableAtUnixMicros = eventSeconds * 1'000'000LL;
+    actual.sourceAgency = "BEA";
+    actual.sourceObservationId = "phase20:initial";
+    actual.sourceArtifactPath = "phase20/release.html";
+    actual.sourceArtifactSha256 = std::string(64, 'a');
+    actual.semanticContract = "phase20_initial_actual_v1";
+    event.releaseActual = std::move(actual);
+    return event;
+}
+
 } // namespace
 
 int main()
@@ -68,7 +96,9 @@ int main()
     window_size = 4;
     prediction_horizon = 1;
 
-    Tensor tensor{"eurusdrmp"};
+    Tensor tensor{"eurusdrmp", kDefaultDonchian20Mode,
+                  kDefaultDonchianLookback,
+                  {ProvenEconomicEvent(10 * 900)}};
     for (std::size_t i = 0; i < 96; ++i)
     {
         const float close = 1.0f + 0.0005f * static_cast<float>(i) +
@@ -80,6 +110,37 @@ int main()
         bar.tickVolume = 100.0f + static_cast<float>((i * 17) % 53);
         tensor.Add(bar);
     }
+
+    // ProvenEconomicEvent(10 * 900) falls in the bar whose start timestamp
+    // is 10 * 900.  Tensor bars are generated at (i + 1) * 900, so that is
+    // Tensor row 9.  The occurrence indicator is intentionally one only on
+    // the containing bar, not on the following bar.
+    const auto postReleaseRow = MetaNN::LowerAccess(*(tensor.begin() + 9));
+    const float* postRelease = postReleaseRow.RawMemory();
+    assert(postRelease[inflationEventCol] == 1.0F);
+    assert(postRelease[authoritativeInitialHasSurpriseCol] == 1.0F);
+    assert(postRelease[authoritativeInitialSurpriseCol] != 0.0F);
+
+    // A newly initialized width-75 model consumes the same nonzero event row
+    // through both production inference and training tensor-copy paths.
+    EA::LSTM freshWidth75{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kCurrentModelInputWidth};
+    assert(freshWidth75.InputFeatureCount() == 75);
+    assert(freshWidth75.param.Shape()[0] ==
+           EA::kCurrentModelInputWidth + hidden_size);
+    const auto freshProbabilities = freshWidth75.PredictNextDirectionProbs(
+        tensor.GetWindow(tensor.begin() + 48));
+    float probabilitySum = 0.0F;
+    for (const float probability : freshProbabilities)
+    {
+        assert(std::isfinite(probability));
+        probabilitySum += probability;
+    }
+    assert(std::fabs(probabilitySum - 1.0F) < 1.0e-5F);
+    const std::size_t freshUpdatesBefore = freshWidth75.optimizerUpdateCount;
+    (void)freshWidth75.CalculateBatch(tensor.GetBatchClamped(0), 0);
+    assert(freshWidth75.optimizerUpdateCount > freshUpdatesBefore);
 
     EA::LSTM source{
         tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
@@ -141,6 +202,73 @@ int main()
         "hostaddr=" + EnvironmentOr("LSTM_DB_HOST", "127.0.0.1") +
         " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
     pqxx::connection connection{connectionString};
+
+    long long freshWidth75ModelId = -1;
+    {
+        pqxx::work transaction{connection};
+        const long long experimentId = transaction.exec(
+            "INSERT INTO experiment(symbol,prediction_horizon,"
+            "c_next_threshold,target_epochs,checkpoint_interval,train_start,"
+            "train_end,status,phase,duplicate_nonce,model_input_width,"
+            "model_input_semantic_layout_version) VALUES "
+            "('eurusdrmp',1,0.0,1,0,'2020-01-01','2021-01-01',"
+            "'pending','train',2090001,75,5) RETURNING experiment_id;")
+            .one_row()[0].as<long long>();
+        freshWidth75ModelId = DBIO::PgModelIO::createModel(
+            transaction, "phase20-fresh-width75-event-smoke",
+            "nonzero authoritative economic-event fixture", experimentId);
+        DBIO::PgModelIO::saveAll(
+            transaction, freshWidth75ModelId, freshWidth75, "eurusdrmp",
+            "2020-01-01", "2021-01-01");
+        transaction.commit();
+    }
+
+    ExpectFailureContaining(
+        [&] {
+            pqxx::work transaction{connection};
+            const long long experimentId = transaction.exec(
+                "INSERT INTO experiment(symbol,prediction_horizon,"
+                "c_next_threshold,target_epochs,checkpoint_interval,"
+                "train_start,train_end,status,phase,duplicate_nonce,"
+                "model_input_width,model_input_semantic_layout_version) "
+                "VALUES ('eurusdrmp',1,0.0,1,0,'2020-01-01',"
+                "'2021-01-01','pending','train',2090002,75,5) "
+                "RETURNING experiment_id;")
+                .one_row()[0].as<long long>();
+            const long long modelId = DBIO::PgModelIO::createModel(
+                transaction, "phase20-identity-width-mismatch",
+                "must fail before parameter persistence", experimentId);
+            DBIO::PgModelIO::saveAll(
+                transaction, modelId, source, "eurusdrmp",
+                "2020-01-01", "2021-01-01");
+        },
+        "EXPERIMENT_MODEL_INPUT_IDENTITY_MISMATCH");
+
+    EA::LSTM freshWidth75Reloaded{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kCurrentModelInputWidth};
+    {
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION READ ONLY;");
+        DBIO::PgModelIO::loadAll(
+            transaction, freshWidth75ModelId, freshWidth75Reloaded);
+        const auto meta = DBIO::PgModelIO::loadRequiredModelMeta(
+            transaction, freshWidth75ModelId);
+        assert(meta.inputWidth == EA::kCurrentModelInputWidth);
+        transaction.commit();
+    }
+    AssertExact(freshWidth75.param, freshWidth75Reloaded.param);
+    AssertExact(freshWidth75.bias, freshWidth75Reloaded.bias);
+    AssertExact(
+        freshWidth75.returnHeadDirWeight,
+        freshWidth75Reloaded.returnHeadDirWeight);
+    AssertExact(
+        freshWidth75.returnHeadDirBias,
+        freshWidth75Reloaded.returnHeadDirBias);
+    assert(freshWidth75.PredictNextDirectionProbs(
+               tensor.GetWindow(tensor.begin() + 48)) ==
+           freshWidth75Reloaded.PredictNextDirectionProbs(
+               tensor.GetWindow(tensor.begin() + 48)));
 
     long long sourceModelId = -1;
     {
@@ -279,6 +407,66 @@ int main()
         assert(values == std::vector<double>({1.0, 5.0}));
         transaction.commit();
     }
+
+    // Marker-bearing ordinary loads enforce semantic identity just as explicit
+    // expansion does. A width-compatible parameter matrix cannot hide an
+    // incompatible economic-event layout marker.
+    long long incompatibleSemanticModelId = -1;
+    {
+        pqxx::work transaction{connection};
+        incompatibleSemanticModelId = DBIO::PgModelIO::createModel(
+            transaction, "ordinary-load-incompatible-semantics",
+            "isolated fixture");
+        DBIO::PgModelIO::saveAll(
+            transaction, incompatibleSemanticModelId, source, "eurusdrmp",
+            "2020-01-01", "2021-01-01");
+        transaction.exec(
+            "UPDATE matrix SET value=999 WHERE model_id=$1 AND "
+            "param_name='model_input_semantics_meta' AND row_idx=0 AND "
+            "col_idx=1;",
+            pqxx::params{incompatibleSemanticModelId});
+        transaction.commit();
+    }
+    ExpectFailureContaining(
+        [&] {
+            EA::LSTM incompatible{
+                tensor, 1.0f, 0.0f,
+                EA::LSTM::TargetType::UpNeutralDownReturn,
+                EA::kSessionPhaseModelInputWidth};
+            pqxx::work transaction{connection};
+            transaction.exec("SET TRANSACTION READ ONLY;");
+            DBIO::PgModelIO::loadAll(
+                transaction, incompatibleSemanticModelId, incompatible);
+        },
+        "SEMANTIC_METADATA_INCOMPATIBLE");
+
+    long long markerlessHistoricalModelId = -1;
+    {
+        pqxx::work transaction{connection};
+        markerlessHistoricalModelId = DBIO::PgModelIO::createModel(
+            transaction, "ordinary-load-markerless-historical",
+            "isolated pre-semantic-marker fixture");
+        DBIO::PgModelIO::saveAll(
+            transaction, markerlessHistoricalModelId, source, "eurusdrmp",
+            "2020-01-01", "2021-01-01");
+        transaction.exec(
+            "DELETE FROM matrix WHERE model_id=$1 AND "
+            "param_name='model_input_semantics_meta';",
+            pqxx::params{markerlessHistoricalModelId});
+        transaction.commit();
+    }
+    EA::LSTM markerlessHistorical{
+        tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
+        EA::kSessionPhaseModelInputWidth};
+    {
+        pqxx::work transaction{connection};
+        transaction.exec("SET TRANSACTION READ ONLY;");
+        DBIO::PgModelIO::loadAll(
+            transaction, markerlessHistoricalModelId,
+            markerlessHistorical);
+        transaction.commit();
+    }
+    AssertExact(source.param, markerlessHistorical.param);
 
     EA::LSTM ordinaryLegacy{
         tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,

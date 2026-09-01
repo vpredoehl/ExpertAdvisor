@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <string_view>
 
 namespace EA::EconomicCalendar
 {
@@ -38,5 +40,35 @@ inline constexpr std::size_t kEconomicEventFeatureWidth =
     kPreConsensusEconomicEventFeatureWidth +
     kEconomicEventConsensusFeatureWidth +
     kEconomicEventReleaseActualFeatureWidth;
+
+// Authoritative append-only names in the exact order returned by
+// EconomicEventFeatureValues::Ordered(). Persisted expansion provenance and
+// experiment/model feature identity use this registry rather than maintaining
+// a second spelling of the economic-event layout.
+inline constexpr std::array<std::string_view, kEconomicEventFeatureWidth>
+    kEconomicEventFeatureNames{{
+        "inflation_event",
+        "employment_event",
+        "growth_event",
+        "fed_policy_event",
+        "consumer_demand_event",
+        "inflation_recency_decay",
+        "employment_recency_decay",
+        "growth_recency_decay",
+        "fed_policy_recency_decay",
+        "consumer_demand_recency_decay",
+        "relevant_event_has_consensus",
+        "relevant_event_consensus_low",
+        "relevant_event_consensus_high",
+        "relevant_event_consensus_is_range",
+        "released_event_has_surprise",
+        "released_event_surprise",
+        "released_event_surprise_abs",
+        "released_event_surprise_direction",
+        "authoritative_initial_has_surprise",
+        "authoritative_initial_surprise",
+        "authoritative_initial_surprise_abs",
+        "authoritative_initial_surprise_direction",
+    }};
 
 } // namespace EA::EconomicCalendar

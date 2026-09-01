@@ -4651,6 +4651,74 @@ EA::FeatureAblationMask LoadSchedulerFeatureAblationMask(
     return EA::FeatureAblationMask::Parse(rows[0][0].as<std::string>());
 }
 
+struct SchedulerModelInputIdentity
+{
+    long long experimentId = -1;
+    std::size_t width = 0;
+    int semanticLayoutVersion = 0;
+};
+
+std::optional<SchedulerModelInputIdentity> LoadSchedulerModelInputIdentity(
+    pqxx::work& w, const LaunchArgs& launchArgs)
+{
+    std::optional<long long> experimentId = launchArgs.schedulerExperimentId;
+    if (launchArgs.schedulerCheckpointEvalId.has_value())
+    {
+        const pqxx::result rows = w.exec_params(
+            "SELECT COALESCE(parent_experiment_id,experiment_id) FROM "
+            "experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            *launchArgs.schedulerCheckpointEvalId);
+        if (rows.empty())
+            throw std::runtime_error(
+                "checkpoint_eval_not_found_for_model_input_identity");
+        experimentId = rows[0][0].as<long long>();
+    }
+    if (!experimentId.has_value()) return std::nullopt;
+
+    const bool hasWidth = SchedulerExperimentColumnExists(
+        w, "model_input_width");
+    const bool hasLayout = SchedulerExperimentColumnExists(
+        w, "model_input_semantic_layout_version");
+    if (!hasWidth && !hasLayout) return std::nullopt;
+    if (hasWidth != hasLayout)
+        throw std::runtime_error(
+            "experiment_model_input_identity_schema_incomplete");
+
+    const pqxx::result rows = w.exec_params(
+        "SELECT model_input_width,model_input_semantic_layout_version "
+        "FROM experiment WHERE experiment_id=$1;", *experimentId);
+    if (rows.empty())
+        throw std::runtime_error(
+            "experiment_not_found_for_model_input_identity");
+    if (rows[0][0].is_null() && rows[0][1].is_null())
+        return std::nullopt; // Legacy pre-089 experiment.
+    if (rows[0][0].is_null() || rows[0][1].is_null())
+        throw std::runtime_error(
+            "experiment_model_input_identity_incomplete");
+
+    SchedulerModelInputIdentity identity{
+        *experimentId,
+        rows[0][0].as<std::size_t>(),
+        rows[0][1].as<int>()};
+    (void)EA::ContractForModelInputWidth(identity.width);
+    if (!EA::IsModelInputSemanticLayoutWidthCompatible(
+            identity.semanticLayoutVersion, identity.width,
+            EA::kModelInputSemanticLayoutRegistry,
+            EA::kRegisteredModelInputWidths,
+            EA::kModelInputSemanticLayoutVersion,
+            EA::kCurrentModelInputWidth, false))
+    {
+        throw std::runtime_error(
+            "experiment_model_input_identity_incompatible");
+    }
+    std::cout << "MODEL_INPUT_IDENTITY_ACTIVE"
+              << ",experiment_id=" << identity.experimentId
+              << ",model_input_width=" << identity.width
+              << ",semantic_layout=" << identity.semanticLayoutVersion
+              << std::endl;
+    return identity;
+}
+
 void ValidateSchedulerModelFeatureAblationMask(
     const EA::FeatureAblationMask& modelMask,
     const EA::FeatureAblationMask& schedulerMask,
@@ -7857,9 +7925,12 @@ int main(int argc, const char * argv[])
             configurationRead, launchArgs, runtimeDonchianLookback);
 
         std::optional<EA::FeatureAblationMask> schedulerFeatureAblationMask;
+        std::optional<SchedulerModelInputIdentity> schedulerModelInputIdentity;
         if (launchArgs.schedulerExperimentId.has_value() ||
             launchArgs.schedulerCheckpointEvalId.has_value())
         {
+            schedulerModelInputIdentity =
+                LoadSchedulerModelInputIdentity(configurationRead, launchArgs);
             schedulerFeatureAblationMask =
                 LoadSchedulerFeatureAblationMask(configurationRead, launchArgs);
             if (resumeConfig.has_value())
@@ -8066,7 +8137,7 @@ int main(int argc, const char * argv[])
             forexDataRead.commit();
             if (logicalOutputStartIndex > t.RowCount())
                 throw std::runtime_error("feature warmup query returned more rows than the source tensor");
-            const std::optional<std::size_t> persistedModelInputWidth =
+            std::optional<std::size_t> persistedModelInputWidth =
                 resumeConfig.has_value()
                     ? std::optional<std::size_t>{
                           resumeConfig->expandInputWidthRequested
@@ -8076,6 +8147,23 @@ int main(int argc, const char * argv[])
                     : (inferenceConfig.has_value()
                            ? std::optional<std::size_t>{static_cast<std::size_t>(inferenceConfig->modelInputWidth)}
                            : std::nullopt);
+            if (schedulerModelInputIdentity.has_value())
+            {
+                if (persistedModelInputWidth.has_value() &&
+                    *persistedModelInputWidth !=
+                        schedulerModelInputIdentity->width)
+                {
+                    throw std::runtime_error(
+                        "scheduler_model_input_width_mismatch:experiment=" +
+                        std::to_string(
+                            schedulerModelInputIdentity->experimentId) +
+                        ",expected=" + std::to_string(
+                            schedulerModelInputIdentity->width) +
+                        ",model=" +
+                        std::to_string(*persistedModelInputWidth));
+                }
+                persistedModelInputWidth = schedulerModelInputIdentity->width;
+            }
             if (persistedModelInputWidth.has_value())
             {
                 try

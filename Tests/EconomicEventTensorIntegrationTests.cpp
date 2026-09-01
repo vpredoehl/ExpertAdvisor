@@ -150,6 +150,13 @@ int main()
     static_assert(EA::kEconomicEventModelInputWidth == 63);
     static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
     static_assert(EA::kCurrentModelInputWidth == 75);
+    static_assert(kEconomicEventFeatureNames.size() ==
+                  kEconomicEventFeatureWidth);
+    assert(kEconomicEventFeatureNames.front() == "inflation_event");
+    assert(kEconomicEventFeatureNames[18] ==
+           "authoritative_initial_has_surprise");
+    assert(kEconomicEventFeatureNames.back() ==
+           "authoritative_initial_surprise_direction");
     static_assert(EA::kCurrentModelInputWidth ==
                   EA::kEconomicEventModelInputWidth +
                   kEconomicEventConsensusFeatureWidth +
