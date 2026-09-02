@@ -34,13 +34,15 @@ status is never used to represent Unix suspension.
 
 Migration ``049_global_pause_selective_resume.sql`` adds a durable pause
 generation (``current_pause_request_id``), per-worker association with that
-generation, a targeted ``resume_experiment`` administrative request shape, and
-frozen executable/command evidence in worker outcomes. An association plus
-``worker_control_state=paused`` means the exact worker remains suspended by
-that pause. The same association plus ``worker_control_state=running`` means it
-was selectively released while global dispatch remains paused.
+generation, the historical targeted ``resume_experiment`` request shape, and
+frozen executable/command evidence in worker outcomes. Migration
+``086_scheduler_pause_resume_priority.sql`` supersedes direct-signal selective
+resume with persistent scheduler priority and an admission-safe ``stopped``
+worker-attempt state. A current generation association identifies the pause
+that owns the worker; a selectively resumed experiment may retain that
+association while it is ``pending`` admission.
 
-The applying invocation owns a short renewable database lease.  A concurrent
+Cancellation and legacy replay requests own a short renewable database lease. A concurrent
 same-shaped invocation is rejected while that lease is live; after an
 interrupted invocation's lease expires, the same command can claim and resume
 only its still-planned outcomes. Every post-signal accounting, worker-state
@@ -99,7 +101,9 @@ identity before making the worker administratively manageable.  Before every
   group.
 
 Workers use ``setsid()``, so a validated worker group can be signaled without
-including the scheduler.  Pause sends ``SIGSTOP`` and resume sends ``SIGCONT``.
+including the scheduler. Pause sends ``SIGSTOP``. Selective resume sends no
+signal; the scheduler sends ``SIGCONT`` only after the queued experiment wins
+admission and its exact stopped attempt and native process identity validate.
 Immediate cancellation sends ``SIGCONT`` first for a database-recorded stopped
 worker, revalidates all identity components, then sends ``SIGTERM``.  After the
 bounded grace period it revalidates all components again and waits for the
@@ -122,64 +126,55 @@ conservatively rediscover and adopt the exact worker.
 Pause and resume semantics
 --------------------------
 
-Pause persists ``desired_state=paused`` before signaling.  Zero-worker pause
-succeeds, and a repeated pause is an idempotent, auditable success.  A stopped
-worker remains lifecycle ``running`` in its existing phase while its separate
-``worker_control_state`` is ``paused``.  The scheduler does not reclaim it or
-classify it as failed.
+Pause-all persists a new pause generation and stops exact active experiment
+workers with ``SIGSTOP``. Pending experiments are moved to ``paused`` before
+dispatch. A stopped durable attempt remains the authoritative active attempt,
+but its ``stopped`` state does not consume scheduler capacity. Checkpoint
+workers are not converted to the migration-086 stopped-attempt state; the
+global scheduler gate prevents new checkpoint work while paused.
 
-``--resume-experiment=ID`` retains the existing lifecycle behavior for an
-experiment whose lifecycle status is ``paused``: it returns the experiment to
-``pending``. When lifecycle status is ``running``, the same command may instead
-selectively release the primary managed worker only when its frozen PID,
-process group, executable, command, process-start identity, experiment, phase,
-and successful pause outcome all match the current pause generation. The
-command creates a targeted administrative request, temporarily occupies the
-existing active-request gate, revalidates the process, and sends ``SIGCONT``
-only to that worker group. It records the release durably but leaves
-``desired_state=paused`` and therefore cannot dispatch queued phases,
-checkpoint inference, continuation work, or replacement workers.
+``--resume-experiment=ID`` is a scheduler-admission request. For a paused
+experiment it atomically changes ``status`` to ``pending`` and sets
+``resume_requested=true``. It preserves scheduler priority, the exact stopped
+attempt, process identity, worker control state, and any global pause-generation
+association. It does not create a ``resume_experiment`` administrative request,
+claim an application lease, occupy ``active_request_id``, inspect the native
+process, or send ``SIGCONT``.
 
-An exact active selective-resume request is recovered before ordinary
-new-command lifecycle validation. Thus a replay can finish accounting after
-``SIGCONT`` even if scheduler reaping has since made the worker pending,
-completed, failed, cancelled, or otherwise departed. A positively absent frozen
-worker reports ``worker_departed`` and is durably reconciled. A changed
-lifecycle slot or replacement process remains unresolved and is never signaled
-or credited.
+Before releasing a paused row that has a stopped attempt, selective resume
+locks and verifies the exact attempt ID, experiment, phase, capacity class,
+stopped lifecycle state, canonical command identity, and complete agreement
+between attempt-side and experiment-side PID, process group, process-start
+identity, executable, and command. Any mismatch returns
+``reason=stale_control_evidence``, performs no mutation or signal, and creates
+no request merely to report the rejection.
 
-Replaying a successful selective release reports ``already_resumed`` without
-another signal. Machine output keeps the original ``request_id`` together with
-its authoritative persisted ``status``, ``signal_result``, and request
-counters; ``replay`` and ``signal_attempted`` separately describe this
-invocation. A running worker with no current pause association reports
-``not_globally_suspended``. Missing processes, mismatched frozen evidence,
-identity-validation failures, stale control evidence, ownership loss, and
-signaling failures are reported separately. ``--dry-run`` validates and reports
-the intended ``SIGCONT`` without inserting a request, changing worker state, or
-signaling.
+The scheduler orders pending work by ``resume_requested``, then
+``scheduler_priority``, update time, and experiment ID. A retained stopped
+attempt can be admitted only after the scheduler owns authority, the global
+gate permits launch, capacity is available, and exact durable and native
+process identity validate. Admission sends ``SIGCONT``, changes the attempt to
+``running``, changes the experiment to ``running``, clears
+``resume_requested`` and the pause-generation association, and does not create
+a second attempt. If the stopped process is positively absent, the scheduler
+abandons and detaches that exact attempt while preserving
+``resume_requested=true``, then uses the ordinary checkpoint/restart path.
+Unsafe or ambiguous evidence remains deferred and is never signaled.
 
-Resume-all persists ``desired_state=running`` while the active request
-continues to block scheduler launches. It reconstructs the complete generation
-from frozen pause outcomes, revalidates every stopped worker, and sends
-``SIGCONT`` only to an exact validated group still suspended by that
-generation. Its audit covers every successfully stopped primary and checkpoint
-inference member: selectively released or already reconciled members are
-recorded as already satisfied, positively absent members are recorded as
-missing/departed, and only exact still-stopped members receive ``SIGCONT``.
-Missing current rows do not erase the frozen replay plan.
+A repeated selective resume of ``pending,resume_requested=true`` or an already
+running experiment is an idempotent success with
+``result=already_satisfied``. Terminal work is rejected and cannot be
+resurrected. Concurrent selective resumes serialize on the shared coordination
+lock: one queues the row and the other observes the satisfied state; neither
+creates a leased request or double-admits the experiment.
 
-If any member is live stopped, replacement-occupied, stale, uninspectable, or
-otherwise unresolved, its ``worker_global_pause_request_id`` (and the
-generation's ``current_pause_request_id``) remains intact. The request remains
-partial behind ``active_request_id`` even though ``desired_state`` is already
-``running``. Consequently train, inference, analysis, checkpoint inference,
-continuation, and replacement dispatch all remain blocked. The current pause
-generation and active gate are cleared only after every applicable member is
-positively reconciled. With no scheduler, existing workers continue but queued
-work waits for a future scheduler. A later pause-all creates a new pause
-generation and suspends selectively released workers again.
-
+Resume-all changes the global desired state to ``running``, queues every
+paused member of the current generation with ``resume_requested=true``, clears
+generation ownership, and sends no eager ``SIGCONT``. Members already queued
+by selective resume remain queued. Consequently a selectively rejected
+stale-evidence row does not leave an unresolved selective request that blocks
+resume-all; resume-all may queue it, but scheduler admission still fails closed
+until exact evidence is safe or the process is positively absent.
 Cancellation semantics
 ----------------------
 
@@ -233,14 +228,19 @@ audit only from authorized durable checkpoint and inference evidence.
 Machine-readable results and exit status
 ----------------------------------------
 
-Applied and replayed global-control commands emit their final machine result
-only after the accounting transaction commits. The summary fields are
+Applied and replayed leased global-control commands emit their final machine
+result only after the accounting transaction commits. The summary fields are
 ``request_id``, ``action``, ``status``, ``result``, ``replay``,
 ``signal_attempted``, ``target_count``, ``successful_count``,
 ``already_satisfied_count``, ``missing_count``, ``rejected_count``, and
-``failed_count``. ``action`` is the exact persisted value, including
-``resume_experiment``. ``replay`` and ``signal_attempted`` describe only the
-current invocation; all counts and status come from the committed request row.
+``failed_count``. ``replay`` and ``signal_attempted`` describe only the current
+invocation; all counts and status come from the committed request row.
+
+Selective resume instead emits ``SCHEDULER_CONTROL_APPLIED`` with the resulting
+status, persistent priority, ``resume_requested`` value, retained worker state,
+``signal=none``, and either ``result=queued_for_admission`` or
+``result=already_satisfied``. A stale exact-attempt mismatch emits
+``SCHEDULER_CONTROL_REJECTED`` with ``reason=stale_control_evidence``.
 
 Each worker line contains ``worker_identity``, ``identity_result``,
 ``outcome_status``, ``signal_result``, ``requested_signal``, and ``detail``.
@@ -262,10 +262,11 @@ output exposes the same fields.
 Crashes leave the active request and per-worker plans visible.  Scheduler
 restart reconstructs its launch gate and cancellation-inference authority from
 the database.  Repeating the same command shape resumes any still-planned
-signals from that persisted request.  Selective replay uses the frozen request
-plan before inspecting the worker's newer lifecycle state, and
-already-accounted outcomes are not reapplied.  Duplicate completed pause/resume
-commands remain idempotent and auditable.  Before rejecting a conflicting new
+signals from a persisted cancellation request. Selective resume recovery is the
+ordinary idempotent lifecycle operation: ``pending,resume_requested=true`` is
+already satisfied, while terminal lifecycle states are rejected. Duplicate
+completed global pause/resume commands remain idempotent and auditable. Before
+rejecting a conflicting new
 administrative command,
 reconciliation atomically retires an active cancellation whose worker outcomes
 are already terminal; genuinely active requests are still rejected.  Partial

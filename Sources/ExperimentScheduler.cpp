@@ -747,6 +747,7 @@ struct SchedulerDetectedWorker
     std::string kind;
     std::string command;
     SchedulerProcessResource resource;
+    bool stopped = false;
 };
 
 struct SchedulerUnmanagedWorker
@@ -793,9 +794,21 @@ struct SchedulerWorkerAccounting
     int managedTrain = 0;
     int managedInfer = 0;
     int managedAnalyze = 0;
+    int managedRunningTrain = 0;
+    int managedRunningInfer = 0;
+    int managedRunningAnalyze = 0;
+    int managedPausedTrain = 0;
+    int managedPausedInfer = 0;
+    int managedPausedAnalyze = 0;
     int unmanagedTrain = 0;
     int unmanagedInfer = 0;
     int unmanagedAnalyze = 0;
+    int identityMismatchTrain = 0;
+    int identityMismatchInfer = 0;
+    int identityMismatchAnalyze = 0;
+    int expectedMissingTrain = 0;
+    int expectedMissingInfer = 0;
+    int expectedMissingAnalyze = 0;
     SchedulerResourceAggregate managedTrainResources;
     SchedulerResourceAggregate managedInferResources;
     SchedulerResourceAggregate managedAnalysisResources;
@@ -803,6 +816,8 @@ struct SchedulerWorkerAccounting
     SchedulerResourceAggregate unmanagedInferResources;
     SchedulerResourceAggregate unmanagedAnalysisResources;
     std::vector<SchedulerUnmanagedWorker> unmanagedWorkers;
+    std::vector<EA::GlobalExperimentControl::SchedulerWorkerClassification>
+        workerClassifications;
 };
 
 struct SchedulerIntelligenceRecord
@@ -5941,13 +5956,16 @@ SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(
     int pid,
     int processGroupId,
     const std::string& processStartIdentity,
-    const std::string& canonicalExecutable)
+    const std::string& canonicalExecutable,
+    EA::GlobalExperimentControl::ProcessObservation* observed = nullptr)
 {
     std::unique_ptr<EA::GlobalExperimentControl::ProcessOperations>
         processes =
             EA::GlobalExperimentControl::CreateNativeProcessOperations();
     const EA::GlobalExperimentControl::ProcessObservation observation =
         processes->Observe(pid);
+    if (observed != nullptr)
+        *observed = observation;
     if (observation.inspectionSucceeded && !observation.exists)
         return SchedulerOwnerProcessEvidence::Missing;
     if (!observation.inspectionSucceeded)
@@ -5968,6 +5986,21 @@ SchedulerOwnerProcessEvidence InspectSchedulerOwnerProcess(
         return SchedulerOwnerProcessEvidence::IdentityMismatch;
     }
     return SchedulerOwnerProcessEvidence::Valid;
+}
+
+const char* SchedulerOwnerProcessEvidenceText(
+    SchedulerOwnerProcessEvidence evidence)
+{
+    switch (evidence)
+    {
+        case SchedulerOwnerProcessEvidence::Valid: return "validated";
+        case SchedulerOwnerProcessEvidence::Missing: return "process_missing";
+        case SchedulerOwnerProcessEvidence::IdentityMismatch:
+            return "identity_mismatch";
+        case SchedulerOwnerProcessEvidence::Ambiguous:
+            return "inspection_ambiguous";
+    }
+    return "inspection_ambiguous";
 }
 
 const char* SchedulerTakeoverDecisionText(
@@ -21995,7 +22028,8 @@ std::optional<double> LoadSystemMemoryUsedMb()
 SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
 {
     SchedulerStatusProcessSnapshot snapshot;
-    const std::string psOutput = ReadCommandOutput("ps -axo pid=,pcpu=,pmem=,rss=,command= 2>/dev/null");
+    const std::string psOutput = ReadCommandOutput(
+        "ps -axo pid=,pcpu=,pmem=,rss=,state=,command= 2>/dev/null");
     snapshot.systemMemoryTotalMb = LoadSystemMemoryTotalMb();
     snapshot.systemMemoryUsedMb = LoadSystemMemoryUsedMb();
     if (psOutput.empty())
@@ -22013,10 +22047,12 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         double cpuPercent = 0.0;
         double memPercent = 0.0;
         long long rssKb = 0;
+        std::string processState;
         lineStream >> pid;
         lineStream >> cpuPercent;
         lineStream >> memPercent;
         lineStream >> rssKb;
+        lineStream >> processState;
         std::string command;
         std::getline(lineStream, command);
         if (pid <= 0)
@@ -22077,7 +22113,10 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         {
             ++snapshot.trainWorkers;
             AddResourceToAggregate(snapshot.trainResources, resource);
-            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{pid, "train", command, resource});
+            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{
+                pid, "train", command, resource,
+                !processState.empty() &&
+                    (processState[0] == 'T' || processState[0] == 't')});
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.trainPidByExperiment[*experimentId] = pid;
         }
@@ -22085,7 +22124,10 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         {
             ++snapshot.inferWorkers;
             AddResourceToAggregate(snapshot.inferResources, resource);
-            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{pid, "infer", command, resource});
+            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{
+                pid, "infer", command, resource,
+                !processState.empty() &&
+                    (processState[0] == 'T' || processState[0] == 't')});
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.inferPidByExperiment[*experimentId] = pid;
         }
@@ -22094,7 +22136,10 @@ SchedulerStatusProcessSnapshot LoadSchedulerStatusProcessSnapshot()
         {
             ++snapshot.analysisWorkers;
             AddResourceToAggregate(snapshot.analysisResources, resource);
-            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{pid, "analyze", command, resource});
+            snapshot.workerProcesses.push_back(SchedulerDetectedWorker{
+                pid, "analyze", command, resource,
+                !processState.empty() &&
+                    (processState[0] == 'T' || processState[0] == 't')});
             if (const auto experimentId = ExtractExperimentIdFromCommand(command))
                 snapshot.analysisPidByExperiment[*experimentId] = pid;
         }
@@ -22643,18 +22688,45 @@ std::vector<EA::GlobalExperimentControl::ManagedWorker>
 LoadAuthoritativeSchedulerWorkers(pqxx::work& w)
 {
     pqxx::result rows = w.exec(
-        "SELECT experiment_id,NULL::bigint AS checkpoint_eval_id,"
-        "status,phase,worker_pid,worker_process_group_id,worker_executable,"
-        "worker_command_line,worker_process_start_identity "
-        "FROM experiment "
-        "WHERE status='running' AND phase IN ('train','infer','analyze') "
+        "SELECT e.experiment_id,NULL::bigint AS checkpoint_eval_id,"
+        "e.status,e.phase,a.worker_pid,a.worker_process_group_id,"
+        "a.canonical_executable_path,a.command_line,"
+        "a.worker_process_start_identity,a.worker_attempt_id,"
+        "a.worker_kind,a.capacity_class,a.ownership_origin,"
+        "a.lifecycle_state,"
+        "a.launch_attempt_identity,"
+        "(e.worker_pid IS NOT DISTINCT FROM a.worker_pid AND "
+        " e.worker_process_group_id IS NOT DISTINCT FROM "
+        "     a.worker_process_group_id AND "
+        " e.worker_process_start_identity IS NOT DISTINCT FROM "
+        "     a.worker_process_start_identity AND "
+        " e.worker_executable IS NOT DISTINCT FROM "
+        "     a.canonical_executable_path AND "
+        " e.worker_command_line IS NOT DISTINCT FROM a.command_line) "
+        "FROM experiment e "
+        "JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+        "WHERE e.status IN ('running','paused') "
+        "AND e.phase IN ('train','infer','analyze') "
         "UNION ALL "
-        "SELECT COALESCE(parent_experiment_id,experiment_id),"
-        "checkpoint_eval_id,status,'checkpoint_infer',worker_pid,"
-        "worker_process_group_id,worker_executable,worker_command_line,"
-        "worker_process_start_identity "
-        "FROM experiment_checkpoint_eval "
-        "WHERE status='running' AND phase='infer' "
+        "SELECT COALESCE(ce.parent_experiment_id,ce.experiment_id),"
+        "ce.checkpoint_eval_id,ce.status,'checkpoint_infer',a.worker_pid,"
+        "a.worker_process_group_id,a.canonical_executable_path,"
+        "a.command_line,a.worker_process_start_identity,"
+        "a.worker_attempt_id,a.worker_kind,a.capacity_class,"
+        "a.ownership_origin,a.lifecycle_state,a.launch_attempt_identity,"
+        "(ce.worker_pid IS NOT DISTINCT FROM a.worker_pid AND "
+        " ce.worker_process_group_id IS NOT DISTINCT FROM "
+        "     a.worker_process_group_id AND "
+        " ce.worker_process_start_identity IS NOT DISTINCT FROM "
+        "     a.worker_process_start_identity AND "
+        " ce.worker_executable IS NOT DISTINCT FROM "
+        "     a.canonical_executable_path AND "
+        " ce.worker_command_line IS NOT DISTINCT FROM a.command_line) "
+        "FROM experiment_checkpoint_eval ce "
+        "JOIN experiment_scheduler_worker_attempt a "
+        "ON a.worker_attempt_id=ce.active_scheduler_worker_attempt_id "
+        "WHERE ce.status='running' AND ce.phase='infer' "
         "ORDER BY 1,2 NULLS FIRST;");
 
     std::vector<EA::GlobalExperimentControl::ManagedWorker> workers;
@@ -22673,6 +22745,13 @@ LoadAuthoritativeSchedulerWorkers(pqxx::work& w)
         worker.executable = OptionalStringCell(row, 6);
         worker.commandLine = OptionalStringCell(row, 7);
         worker.processStartIdentity = OptionalStringCell(row, 8);
+        worker.workerAttemptId = OptionalLongLongCell(row, 9);
+        worker.workerKind = row[10].as<std::string>();
+        worker.capacityClass = row[11].as<std::string>();
+        worker.ownershipOrigin = row[12].as<std::string>();
+        worker.attemptLifecycleState = row[13].as<std::string>();
+        worker.launchAttemptIdentity = row[14].as<std::string>();
+        worker.authoritativeBindingMatches = row[15].as<bool>();
         workers.push_back(std::move(worker));
     }
     return workers;
@@ -23765,7 +23844,8 @@ SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
                 process.command,
                 process.resource.cpuPercent,
                 process.resource.memPercent,
-                process.resource.rssMb});
+                process.resource.rssMb,
+                process.stopped});
     }
     const auto classifications =
         EA::GlobalExperimentControl::ClassifySchedulerWorkers(
@@ -23786,9 +23866,21 @@ SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
     accounting.managedTrain = summary.managedTrain.workers;
     accounting.managedInfer = summary.managedInfer.workers;
     accounting.managedAnalyze = summary.managedAnalyze.workers;
+    accounting.managedRunningTrain = summary.managedRunningTrain.workers;
+    accounting.managedRunningInfer = summary.managedRunningInfer.workers;
+    accounting.managedRunningAnalyze = summary.managedRunningAnalyze.workers;
+    accounting.managedPausedTrain = summary.managedPausedTrain.workers;
+    accounting.managedPausedInfer = summary.managedPausedInfer.workers;
+    accounting.managedPausedAnalyze = summary.managedPausedAnalyze.workers;
     accounting.unmanagedTrain = summary.unmanagedTrain.workers;
     accounting.unmanagedInfer = summary.unmanagedInfer.workers;
     accounting.unmanagedAnalyze = summary.unmanagedAnalyze.workers;
+    accounting.identityMismatchTrain = summary.identityMismatchTrain.workers;
+    accounting.identityMismatchInfer = summary.identityMismatchInfer.workers;
+    accounting.identityMismatchAnalyze = summary.identityMismatchAnalyze.workers;
+    accounting.expectedMissingTrain = summary.expectedMissingTrain.workers;
+    accounting.expectedMissingInfer = summary.expectedMissingInfer.workers;
+    accounting.expectedMissingAnalyze = summary.expectedMissingAnalyze.workers;
     copyAggregate(
         summary.managedTrain, accounting.managedTrainResources);
     copyAggregate(
@@ -23802,11 +23894,12 @@ SchedulerWorkerAccounting ComputeSchedulerWorkerAccounting(
     copyAggregate(
         summary.unmanagedAnalyze, accounting.unmanagedAnalysisResources);
 
+    accounting.workerClassifications = classifications;
     for (size_t i = 0; i < processes.workerProcesses.size(); ++i)
     {
         const auto& process = processes.workerProcesses[i];
         const auto& classification = classifications[i];
-        if (classification.managed)
+        if (classification.managed || classification.authoritative)
             continue;
         accounting.unmanagedWorkers.push_back(SchedulerUnmanagedWorker{
             process.pid,
@@ -24197,6 +24290,18 @@ std::vector<std::string> BuildSchedulerStatusWarnings(const SchedulerStatusProce
         warnings.push_back("analysis worker count exceeds max-analyze-procs");
     if (!accounting.unmanagedWorkers.empty())
         warnings.push_back("unmanaged LSTM_Release worker processes detected: " + std::to_string(accounting.unmanagedWorkers.size()));
+    const int identityMismatches = accounting.identityMismatchTrain +
+        accounting.identityMismatchInfer + accounting.identityMismatchAnalyze;
+    if (identityMismatches > 0)
+        warnings.push_back(
+            "authoritative worker identity mismatches detected: " +
+            std::to_string(identityMismatches));
+    const int expectedMissing = accounting.expectedMissingTrain +
+        accounting.expectedMissingInfer + accounting.expectedMissingAnalyze;
+    if (expectedMissing > 0)
+        warnings.push_back(
+            "expected worker processes missing: " +
+            std::to_string(expectedMissing));
 
     if (processes.systemMemoryUsedMb.has_value() &&
         processes.systemMemoryTotalMb.has_value() &&
@@ -24626,7 +24731,8 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         "COALESCE(l.expires_at::text,'NULL'),l.transition_reason,"
         "(l.expires_at IS NOT NULL "
         " AND l.expires_at<=clock_timestamp()) AS expired,"
-        "COALESCE(i.canonical_executable_path,'NULL') "
+        "COALESCE(i.canonical_executable_path,'NULL'),"
+        "i.process_pid,i.process_group_id,i.process_start_identity "
         "FROM experiment_scheduler_lease l "
         "LEFT JOIN experiment_scheduler_invocation i "
         "ON i.scheduler_invocation_id="
@@ -24662,12 +24768,12 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         "SELECT "
         "count(*) FILTER (WHERE a.lifecycle_state IN "
         " ('reserved','spawned','running','observed',"
-        "  'identity_ambiguous') "
+        "  'stopped','identity_ambiguous') "
         " AND a.scheduler_invocation_id="
         "     l.owner_scheduler_invocation_id) AS current_owner,"
         "count(*) FILTER (WHERE a.lifecycle_state IN "
         " ('reserved','spawned','running','observed',"
-        "  'identity_ambiguous') "
+        "  'stopped','identity_ambiguous') "
         " AND a.scheduler_invocation_id IS DISTINCT FROM "
         "     l.owner_scheduler_invocation_id) AS prior_or_legacy,"
         "count(*) FILTER (WHERE a.lifecycle_state='reserved') "
@@ -24688,7 +24794,7 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
         "FROM experiment_scheduler_worker_attempt a "
         "WHERE a.lifecycle_state IN "
         "('reserved','spawned','running','observed',"
-        "'identity_ambiguous') "
+        "'stopped','identity_ambiguous') "
         "ORDER BY a.worker_attempt_id;");
     pqxx::result unresolvedLegacyNoPid = w.exec(
         "SELECT capacity_class,count(*) "
@@ -24721,6 +24827,37 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
             return std::string{"unknown"};
         return std::string{*enabled ? "enabled" : "disabled"};
     };
+    SchedulerOwnerProcessEvidence schedulerExecutableEvidence =
+        SchedulerOwnerProcessEvidence::Ambiguous;
+    EA::GlobalExperimentControl::ProcessObservation
+        schedulerOwnerObservation;
+    const std::string schedulerCanonicalExecutable =
+        schedulerLease.size() == 1
+            ? schedulerLease[0][8].as<std::string>()
+            : "NULL";
+    if (schedulerLease.size() == 1 &&
+        schedulerLease[0][0].as<std::string>() == "active" &&
+        schedulerCanonicalExecutable != "NULL" &&
+        !schedulerLease[0][9].is_null() &&
+        !schedulerLease[0][10].is_null() &&
+        !schedulerLease[0][11].is_null())
+    {
+        schedulerExecutableEvidence = InspectSchedulerOwnerProcess(
+            schedulerLease[0][9].as<int>(),
+            schedulerLease[0][10].as<int>(),
+            schedulerLease[0][11].as<std::string>(),
+            schedulerCanonicalExecutable,
+            &schedulerOwnerObservation);
+    }
+    const std::string schedulerObservedExecutable =
+        schedulerOwnerObservation.executable.empty()
+            ? "NULL" : schedulerOwnerObservation.executable;
+    const std::string schedulerExecutableIdentityMatch =
+        schedulerExecutableEvidence == SchedulerOwnerProcessEvidence::Valid
+            ? "1"
+            : (schedulerExecutableEvidence ==
+                       SchedulerOwnerProcessEvidence::Ambiguous
+                   ? "unknown" : "0");
 
     std::cout << "Scheduler Status\n";
     if (schedulerLease.size() == 1)
@@ -24748,7 +24885,13 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << schedulerProtocol[0][5].as<int>()
                   << "\n";
     }
-    std::cout << "Canonical executable: " << options.selfPath << "\n";
+    std::cout << "Status reporter executable: " << options.selfPath << "\n"
+              << "Scheduler canonical executable: "
+              << schedulerCanonicalExecutable << "\n"
+              << "Scheduler executable identity: "
+              << SchedulerOwnerProcessEvidenceText(
+                     schedulerExecutableEvidence)
+              << " observed=" << schedulerObservedExecutable << "\n";
     if (attemptOwnershipCounts.size() == 1)
     {
         std::cout << "Durable workers: current_owner="
@@ -24846,9 +24989,29 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
               << " infer=" << workerAccounting.managedInfer
               << " analyze=" << workerAccounting.managedAnalyze
               << "\n"
+              << "  managed running train="
+              << workerAccounting.managedRunningTrain
+              << " infer=" << workerAccounting.managedRunningInfer
+              << " analyze=" << workerAccounting.managedRunningAnalyze
+              << "\n"
+              << "  managed paused train="
+              << workerAccounting.managedPausedTrain
+              << " infer=" << workerAccounting.managedPausedInfer
+              << " analyze=" << workerAccounting.managedPausedAnalyze
+              << "\n"
               << "  unmanaged train=" << workerAccounting.unmanagedTrain
               << " infer=" << workerAccounting.unmanagedInfer
               << " analyze=" << workerAccounting.unmanagedAnalyze
+              << "\n"
+              << "  identity mismatch train="
+              << workerAccounting.identityMismatchTrain
+              << " infer=" << workerAccounting.identityMismatchInfer
+              << " analyze=" << workerAccounting.identityMismatchAnalyze
+              << "\n"
+              << "  expected missing train="
+              << workerAccounting.expectedMissingTrain
+              << " infer=" << workerAccounting.expectedMissingInfer
+              << " analyze=" << workerAccounting.expectedMissingAnalyze
               << "\n";
 
     PrintSchedulerResourceUsage(processes, workerAccounting);
@@ -24906,8 +25069,23 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                       << (schedulerLease[0][7].as<bool>() ? 1 : 0)
                       << ",canonical_executable_path="
                       << schedulerLease[0][8].as<std::string>()
+                      << ",scheduler_canonical_executable_path="
+                      << schedulerCanonicalExecutable
                       << std::endl;
         }
+        std::cout << "SCHEDULER_STATUS_EXECUTABLE_IDENTITY"
+                  << ",status_reporter_executable_path="
+                  << options.selfPath
+                  << ",scheduler_canonical_executable_path="
+                  << schedulerCanonicalExecutable
+                  << ",scheduler_observed_executable_path="
+                  << schedulerObservedExecutable
+                  << ",scheduler_identity_result="
+                  << SchedulerOwnerProcessEvidenceText(
+                         schedulerExecutableEvidence)
+                  << ",scheduler_identity_match="
+                  << schedulerExecutableIdentityMatch
+                  << std::endl;
         if (schedulerProtocol.size() == 1)
         {
             std::cout
@@ -25037,9 +25215,33 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                   << ",managed_train_workers=" << workerAccounting.managedTrain
                   << ",managed_infer_workers=" << workerAccounting.managedInfer
                   << ",managed_analysis_workers=" << workerAccounting.managedAnalyze
+                  << ",managed_running_train_workers="
+                  << workerAccounting.managedRunningTrain
+                  << ",managed_running_infer_workers="
+                  << workerAccounting.managedRunningInfer
+                  << ",managed_running_analysis_workers="
+                  << workerAccounting.managedRunningAnalyze
+                  << ",managed_paused_train_workers="
+                  << workerAccounting.managedPausedTrain
+                  << ",managed_paused_infer_workers="
+                  << workerAccounting.managedPausedInfer
+                  << ",managed_paused_analysis_workers="
+                  << workerAccounting.managedPausedAnalyze
                   << ",unmanaged_train_workers=" << workerAccounting.unmanagedTrain
                   << ",unmanaged_infer_workers=" << workerAccounting.unmanagedInfer
                   << ",unmanaged_analysis_workers=" << workerAccounting.unmanagedAnalyze
+                  << ",identity_mismatch_train_workers="
+                  << workerAccounting.identityMismatchTrain
+                  << ",identity_mismatch_infer_workers="
+                  << workerAccounting.identityMismatchInfer
+                  << ",identity_mismatch_analysis_workers="
+                  << workerAccounting.identityMismatchAnalyze
+                  << ",expected_missing_train_workers="
+                  << workerAccounting.expectedMissingTrain
+                  << ",expected_missing_infer_workers="
+                  << workerAccounting.expectedMissingInfer
+                  << ",expected_missing_analysis_workers="
+                  << workerAccounting.expectedMissingAnalyze
                   << ",poll_seconds=" << OptionalIntText(processes.schedulerPollSeconds)
                   << ",max_train_procs=" << OptionalIntText(processes.maxTrainProcs)
                   << ",max_infer_procs=" << OptionalIntText(processes.maxInferProcs)
@@ -25115,6 +25317,47 @@ int PrintSchedulerStatus(const SchedulerOptions& options)
                       << ",kind=" << worker.kind
                       << ",reason=" << worker.reason
                       << ",command=" << worker.command
+                      << std::endl;
+        }
+        for (const auto& worker :
+             workerAccounting.workerClassifications)
+        {
+            std::cout << "SCHEDULER_STATUS_WORKER"
+                      << ",pid=" << worker.pid
+                      << ",kind=" << worker.kind
+                      << ",managed=" << (worker.managed ? 1 : 0)
+                      << ",authoritative="
+                      << (worker.authoritative ? 1 : 0)
+                      << ",detected=" << (worker.detected ? 1 : 0)
+                      << ",execution_state="
+                      << EA::GlobalExperimentControl::ToString(
+                             worker.executionState)
+                      << ",lifecycle_status="
+                      << (worker.lifecycleStatus.empty()
+                              ? "NULL" : worker.lifecycleStatus)
+                      << ",attempt_state="
+                      << (worker.attemptLifecycleState.empty()
+                              ? "NULL" : worker.attemptLifecycleState)
+                      << ",identity_result="
+                      << EA::GlobalExperimentControl::ToString(
+                             worker.identity)
+                      << ",executable_identity_match="
+                      << (worker.executableIdentityMatch
+                              ? (*worker.executableIdentityMatch ? "1" : "0")
+                              : "unknown")
+                      << ",canonical_executable_path="
+                      << worker.expectedExecutable.value_or("NULL")
+                      << ",observed_executable_path="
+                      << worker.observedExecutable.value_or("NULL")
+                      << ",experiment_id="
+                      << (worker.experimentId
+                              ? std::to_string(*worker.experimentId)
+                              : "NULL")
+                      << ",checkpoint_eval_id="
+                      << (worker.checkpointEvalId
+                              ? std::to_string(*worker.checkpointEvalId)
+                              : "NULL")
+                      << ",reason=" << worker.reason
                       << std::endl;
         }
         std::cout << "SCHEDULER_STATUS_COUNT"

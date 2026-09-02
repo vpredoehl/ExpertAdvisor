@@ -285,6 +285,22 @@ identity, and exact attempt records are exposed as
 `SCHEDULER_STATUS_OWNERSHIP`, `SCHEDULER_STATUS_GLOBAL_CAPACITY`,
 `SCHEDULER_STATUS_WORKER_OWNERSHIP`, and
 `SCHEDULER_STATUS_WORKER_ATTEMPT`.
+`SCHEDULER_STATUS_EXECUTABLE_IDENTITY` distinguishes the executable running
+the status command from the lease-owning scheduler's canonical executable and
+the executable observed for that exact scheduler process. The legacy
+`SCHEDULER_STATUS_OWNERSHIP.canonical_executable_path` field remains the
+lease-owning scheduler invocation path and is identical to the additive
+`scheduler_canonical_executable_path` field.
+
+`SCHEDULER_STATUS_WORKER` reports one coherent runtime identity result per
+discovered or expected worker. `managed` is granted only after the exact
+durable PID, process group, kernel start identity, command/work identity, and
+canonical executable all validate. `execution_state` independently reports
+`running`, `stopped`, `missing`, or `unknown`. Therefore an exact stopped
+attempt bound to a paused experiment is `managed=1,execution_state=stopped`,
+whereas a foreign stopped process remains unmanaged, an expected dead process
+is authoritative/missing, and a live identity mismatch is reported separately
+from unmanaged work.
 
 ### 8.3 Human output
 
@@ -293,6 +309,9 @@ completed work without overstating process observation.
 Scheduler status lists active checkpoint inference jobs separately and reports
 only processes that fail both experiment and checkpoint-evaluation ownership
 validation as unmanaged.
+Managed totals include both executing and intentionally stopped workers;
+additive managed-running and managed-paused counters expose that split without
+changing the legacy managed totals.
 
 ## 9. Testing
 

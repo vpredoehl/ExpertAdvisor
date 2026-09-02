@@ -230,10 +230,11 @@ SchedulerWorkerCandidate Candidate(
     const std::string& command,
     double cpuPercent = 0.0,
     double memPercent = 0.0,
-    double rssMb = 0.0)
+    double rssMb = 0.0,
+    bool stopped = false)
 {
     return SchedulerWorkerCandidate{
-        pid, kind, command, cpuPercent, memPercent, rssMb};
+        pid, kind, command, cpuPercent, memPercent, rssMb, stopped};
 }
 
 int main()
@@ -569,9 +570,99 @@ int main()
     pausedStopped.lifecycleStatus = "paused";
     assert(ValidateManagedWorker(pausedStopped, stoppedProcesses).identity ==
            IdentityResult::StalePid);
+    assert(ValidatePausedManagedWorker(
+               pausedStopped, stoppedProcesses).identity ==
+           IdentityResult::Validated);
     assert(ValidateStoppedWorkerForSchedulerAdmission(
                pausedStopped, stoppedProcesses).identity ==
            IdentityResult::StalePid);
+
+    // Ownership and execution state are independent. An exact paused/stopped
+    // attempt remains managed, retains the canonical executable comparison,
+    // and is not included in unmanaged totals.
+    {
+        const auto classified = ClassifySchedulerWorkers(
+            {Candidate(
+                pausedStopped.pid, "train", *pausedStopped.commandLine,
+                0.0, 0.0, 10.0, true)},
+            {pausedStopped},
+            stoppedProcesses);
+        assert(classified.size() == 1);
+        assert(classified[0].managed);
+        assert(classified[0].authoritative);
+        assert(classified[0].executionState ==
+               ProcessExecutionState::Stopped);
+        assert(classified[0].lifecycleStatus == "paused");
+        assert(classified[0].attemptLifecycleState == "stopped");
+        assert(classified[0].executableIdentityMatch ==
+               std::optional<bool>{true});
+        const auto summary = SummarizeSchedulerWorkers(classified);
+        assert(summary.managedTrain.workers == 1);
+        assert(summary.managedPausedTrain.workers == 1);
+        assert(summary.managedRunningTrain.workers == 0);
+        assert(summary.unmanagedTrain.workers == 0);
+        assert(summary.identityMismatchTrain.workers == 0);
+    }
+
+    // A stopped foreign process is still foreign; stopped state alone grants
+    // no scheduler ownership.
+    {
+        const auto classified = ClassifySchedulerWorkers(
+            {Candidate(
+                1300, "train",
+                "/tmp/LSTM_Release --train --scheduler-experiment-id=999",
+                0.0, 0.0, 10.0, true)},
+            {pausedStopped},
+            stoppedProcesses);
+        assert(classified.size() == 2);
+        assert(!classified[0].managed);
+        assert(!classified[0].authoritative);
+        assert(classified[0].executionState ==
+               ProcessExecutionState::Stopped);
+        assert(classified[1].authoritative);
+        assert(classified[1].managed);
+        const auto summary = SummarizeSchedulerWorkers(classified);
+        assert(summary.unmanagedTrain.workers == 1);
+        assert(summary.managedPausedTrain.workers == 1);
+    }
+
+    // A paused exact attempt whose process has died is reported as expected
+    // and missing, never as an unmanaged process.
+    {
+        FakeProcesses deadProcesses;
+        const auto classified = ClassifySchedulerWorkers(
+            {}, {pausedStopped}, deadProcesses);
+        assert(classified.size() == 1);
+        assert(!classified[0].managed);
+        assert(classified[0].authoritative);
+        assert(!classified[0].detected);
+        assert(classified[0].identity == IdentityResult::ProcessMissing);
+        assert(classified[0].executionState ==
+               ProcessExecutionState::Missing);
+        const auto summary = SummarizeSchedulerWorkers(classified);
+        assert(summary.expectedMissingTrain.workers == 1);
+        assert(summary.unmanagedTrain.workers == 0);
+    }
+
+    // Status reconstructs identity from both the lifecycle row and exact
+    // attempt; disagreement fails closed before process ownership is granted.
+    {
+        ManagedWorker inconsistent = pausedStopped;
+        inconsistent.authoritativeBindingMatches = false;
+        const auto classified = ClassifySchedulerWorkers(
+            {Candidate(
+                inconsistent.pid, "train", *inconsistent.commandLine,
+                0.0, 0.0, 10.0, true)},
+            {inconsistent},
+            stoppedProcesses);
+        assert(classified.size() == 1);
+        assert(!classified[0].managed);
+        assert(classified[0].authoritative);
+        assert(classified[0].reason ==
+               "lifecycle_and_worker_attempt_identity_mismatch");
+        assert(SummarizeSchedulerWorkers(classified)
+                   .identityMismatchTrain.workers == 1);
+    }
 
     auto stoppedIdentityResult = [&](const ProcessObservation& observation) {
         FakeProcesses identityProcesses;
@@ -786,6 +877,23 @@ int main()
         assert(
             reused[0].identity ==
             IdentityResult::IdentityValidationFailed);
+
+        classifierProcesses.observations[1201] =
+            ObservationFor(checkpoint, *checkpoint.commandLine);
+        classifierProcesses.observations[1201].executable =
+            "/tmp/foreign_LSTM_Release";
+        const auto executableMismatch = ClassifySchedulerWorkers(
+            {Candidate(1201, "infer", *checkpoint.commandLine)},
+            {checkpoint},
+            classifierProcesses);
+        assert(!executableMismatch[0].managed);
+        assert(executableMismatch[0].authoritative);
+        assert(executableMismatch[0].reason ==
+               "executable_identity_mismatch");
+        assert(executableMismatch[0].executableIdentityMatch ==
+               std::optional<bool>{false});
+        assert(SummarizeSchedulerWorkers(executableMismatch)
+                   .identityMismatchInfer.workers == 1);
 
         classifierProcesses.observations[1201] =
             ObservationFor(checkpoint, *checkpoint.commandLine);

@@ -517,30 +517,48 @@ void LoadAuthoritativeTargetState(pqxx::transaction_base& transaction,
     if (target.checkpointWorker)
     {
         rows = transaction.exec_params(
-            "SELECT status,phase,worker_pid,worker_process_group_id,"
-            "worker_process_start_identity,worker_executable,"
-            "worker_command_line,worker_control_state,"
-            "worker_global_pause_request_id,cancellation_request_id,"
-            "active_scheduler_worker_attempt_id "
-            "FROM experiment_checkpoint_eval WHERE checkpoint_eval_id=$1;",
+            "SELECT ce.status,ce.phase,ce.worker_pid,"
+            "ce.worker_process_group_id,ce.worker_process_start_identity,"
+            "ce.worker_executable,ce.worker_command_line,"
+            "ce.worker_control_state,ce.worker_global_pause_request_id,"
+            "ce.cancellation_request_id,"
+            "ce.active_scheduler_worker_attempt_id,a.lifecycle_state,"
+            "a.launch_attempt_identity,a.ownership_origin "
+            "FROM experiment_checkpoint_eval ce "
+            "LEFT JOIN experiment_scheduler_worker_attempt a ON "
+            "a.worker_attempt_id=ce.active_scheduler_worker_attempt_id "
+            "WHERE ce.checkpoint_eval_id=$1;",
             *target.checkpointEvalId);
     }
     else
     {
         rows = transaction.exec_params(
-            "SELECT status,phase,worker_pid,worker_process_group_id,"
-            "worker_process_start_identity,worker_executable,"
-            "worker_command_line,worker_control_state,"
-            "worker_global_pause_request_id,cancellation_request_id,"
-            "active_scheduler_worker_attempt_id "
-            "FROM experiment WHERE experiment_id=$1;",
+            "SELECT e.status,e.phase,e.worker_pid,"
+            "e.worker_process_group_id,e.worker_process_start_identity,"
+            "e.worker_executable,e.worker_command_line,"
+            "e.worker_control_state,e.worker_global_pause_request_id,"
+            "e.cancellation_request_id,"
+            "e.active_scheduler_worker_attempt_id,a.lifecycle_state,"
+            "a.launch_attempt_identity,a.ownership_origin "
+            "FROM experiment e "
+            "LEFT JOIN experiment_scheduler_worker_attempt a ON "
+            "a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
+            "WHERE e.experiment_id=$1;",
             target.worker.experimentId);
     }
     target.authoritativeRowExists = !rows.empty();
+    const bool authoritativeStoppedCancellation =
+        action == Action::CancelAll && !rows.empty() &&
+        (rows[0][0].as<std::string>() == "pending" ||
+         rows[0][0].as<std::string>() == "paused") &&
+        !rows[0][10].is_null() && !rows[0][11].is_null() &&
+        rows[0][11].as<std::string>() == "stopped";
     target.authoritativeActive =
-        !rows.empty() && rows[0][0].as<std::string>() == "running" &&
-        (!target.checkpointWorker ||
-         rows[0][1].as<std::string>() == "infer");
+        !rows.empty() &&
+        ((rows[0][0].as<std::string>() == "running" &&
+          (!target.checkpointWorker ||
+           rows[0][1].as<std::string>() == "infer")) ||
+         authoritativeStoppedCancellation);
     target.authoritativePendingCancellation =
         action == Action::CancelAll && !target.checkpointWorker &&
         !rows.empty() && rows[0][0].as<std::string>() == "pending" &&
@@ -658,6 +676,15 @@ void LoadAuthoritativeTargetState(pqxx::transaction_base& transaction,
 
     if (target.authoritativeExactMatch)
     {
+        if (!rows[0][11].is_null())
+            target.worker.attemptLifecycleState =
+                rows[0][11].as<std::string>();
+        if (!rows[0][12].is_null())
+            target.worker.launchAttemptIdentity =
+                rows[0][12].as<std::string>();
+        if (!rows[0][13].is_null())
+            target.worker.ownershipOrigin =
+                rows[0][13].as<std::string>();
         target.resumeBeforeAction =
             rows[0][7].as<std::string>() == "paused";
         if (!rows[0][8].is_null())
@@ -679,7 +706,7 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         "cp.completed_epoch, cp.model_id,cp.same_epoch_count,"
         "e.active_scheduler_worker_attempt_id,"
         "a.worker_kind,a.capacity_class,a.lifecycle_state,"
-        "a.launch_attempt_identity "
+        "a.launch_attempt_identity,a.ownership_origin "
         "FROM experiment e "
         "LEFT JOIN experiment_scheduler_worker_attempt a "
         "ON a.worker_attempt_id=e.active_scheduler_worker_attempt_id "
@@ -748,6 +775,9 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         if (!row[22].is_null())
             target.worker.launchAttemptIdentity =
                 row[22].as<std::string>();
+        if (!row[23].is_null())
+            target.worker.ownershipOrigin =
+                row[23].as<std::string>();
         targets.push_back(std::move(target));
     }
 
@@ -759,7 +789,7 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         "ce.checkpoint_eval_id,ce.checkpoint_epoch,ce.checkpoint_model_id,"
         "ce.active_scheduler_worker_attempt_id,"
         "a.worker_kind,a.capacity_class,a.lifecycle_state,"
-        "a.launch_attempt_identity "
+        "a.launch_attempt_identity,a.ownership_origin "
         "FROM experiment_checkpoint_eval ce "
         "LEFT JOIN experiment_scheduler_worker_attempt a "
         "ON a.worker_attempt_id=ce.active_scheduler_worker_attempt_id "
@@ -803,6 +833,9 @@ std::vector<DbTarget> LoadTargets(pqxx::transaction_base& transaction)
         if (!row[15].is_null())
             target.worker.launchAttemptIdentity =
                 row[15].as<std::string>();
+        if (!row[16].is_null())
+            target.worker.ownershipOrigin =
+                row[16].as<std::string>();
         target.checkpointWorker = true;
         target.workerIdentity =
             "checkpoint_eval:" + std::to_string(*target.checkpointEvalId);
@@ -1732,9 +1765,14 @@ SignalOutcome ApplyTargetSignal(const DbTarget& target,
     if (action == Action::ResumeAll)
         return ResumeWorkerAuthorized(
             target.worker, processes, authorize);
+    const bool stoppedExactWorker =
+        (target.worker.lifecycleStatus == "pending" ||
+         target.worker.lifecycleStatus == "paused") &&
+        target.worker.attemptLifecycleState == "stopped" &&
+        target.worker.workerAttemptId.has_value();
     return CancelWorkerAuthorized(
         target.worker,
-        target.resumeBeforeAction,
+        target.resumeBeforeAction || stoppedExactWorker,
         terminationGrace,
         processes,
         authorize);
@@ -2171,6 +2209,18 @@ const char* ToString(IdentityResult result)
     return "inspection_failed";
 }
 
+const char* ToString(ProcessExecutionState state)
+{
+    switch (state)
+    {
+        case ProcessExecutionState::Unknown: return "unknown";
+        case ProcessExecutionState::Running: return "running";
+        case ProcessExecutionState::Stopped: return "stopped";
+        case ProcessExecutionState::Missing: return "missing";
+    }
+    return "unknown";
+}
+
 std::optional<std::string> ValidateCommand(const Command& command)
 {
     if (command.action == Action::CancelAll)
@@ -2249,7 +2299,8 @@ enum class ManagedWorkerLifecyclePrecondition
 {
     Active,
     SchedulerStoppedAdmission,
-    PausedStopReconciliation
+    PausedStopReconciliation,
+    ResumedStoppedCancellation
 };
 
 ValidatedWorker ValidateManagedWorkerWithLifecyclePrecondition(
@@ -2281,13 +2332,27 @@ ValidatedWorker ValidateManagedWorkerWithLifecyclePrecondition(
     else if (precondition ==
              ManagedWorkerLifecyclePrecondition::PausedStopReconciliation)
         lifecycleAllowed = exactPausedStopLifecycle;
+    else if (precondition ==
+             ManagedWorkerLifecyclePrecondition::ResumedStoppedCancellation)
+        lifecycleAllowed =
+            exactStoppedAdmissionLifecycle || exactPausedStopLifecycle;
     if (!lifecycleAllowed || worker.pid <= 0)
     {
         result.identity = IdentityResult::StalePid;
-        result.detail = precondition ==
-                            ManagedWorkerLifecyclePrecondition::Active
-            ? "database_row_is_not_an_active_managed_worker"
-            : "database_row_is_not_an_authoritative_stopped_worker";
+        result.detail =
+            precondition == ManagedWorkerLifecyclePrecondition::Active
+                ? "database_row_is_not_an_active_managed_worker"
+                : (precondition ==
+                           ManagedWorkerLifecyclePrecondition::
+                               ResumedStoppedCancellation
+                       ? "database_row_is_not_a_resumed_authoritative_stopped_worker"
+                       : "database_row_is_not_an_authoritative_stopped_worker");
+        return result;
+    }
+    if (!worker.authoritativeBindingMatches)
+    {
+        result.identity = IdentityResult::IdentityValidationFailed;
+        result.detail = "lifecycle_and_worker_attempt_identity_mismatch";
         return result;
     }
     result.observation = processes.Observe(worker.pid);
@@ -2343,6 +2408,7 @@ ValidatedWorker ValidateManagedWorkerWithLifecyclePrecondition(
         return result;
     }
     if (worker.workerAttemptId &&
+        worker.ownershipOrigin != "legacy_unverified" &&
         !ContainsExactOptionValue(
             result.observation.commandLine,
             "--scheduler-worker-attempt-id",
@@ -2387,8 +2453,12 @@ ValidatedWorker ValidateManagedWorkerWithLifecyclePrecondition(
         result.detail = "unsafe_or_scheduler_process_group";
         return result;
     }
-    if (precondition != ManagedWorkerLifecyclePrecondition::Active &&
-        !result.observation.stopped)
+    const bool requiresStoppedObservation =
+        precondition ==
+            ManagedWorkerLifecyclePrecondition::SchedulerStoppedAdmission ||
+        precondition ==
+            ManagedWorkerLifecyclePrecondition::PausedStopReconciliation;
+    if (requiresStoppedObservation && !result.observation.stopped)
     {
         result.identity = IdentityResult::IdentityValidationFailed;
         result.detail = "authoritative_stopped_worker_is_not_stopped";
@@ -2420,13 +2490,101 @@ ValidatedWorker ValidateStoppedWorkerForSchedulerAdmission(
         ManagedWorkerLifecyclePrecondition::SchedulerStoppedAdmission);
 }
 
+ValidatedWorker ValidatePausedManagedWorker(
+    const ManagedWorker& worker,
+    ProcessOperations& processes)
+{
+    return ValidateManagedWorkerWithLifecyclePrecondition(
+        worker,
+        processes,
+        ManagedWorkerLifecyclePrecondition::PausedStopReconciliation);
+}
+
+ValidatedWorker ValidateResumedStoppedWorkerForCancellation(
+    const ManagedWorker& worker,
+    ProcessOperations& processes)
+{
+    return ValidateManagedWorkerWithLifecyclePrecondition(
+        worker,
+        processes,
+        ManagedWorkerLifecyclePrecondition::ResumedStoppedCancellation);
+}
+
+namespace
+{
+
+ProcessExecutionState ExecutionStateFor(
+    const ProcessObservation& observation,
+    bool candidateStopped = false)
+{
+    if (observation.inspectionSucceeded)
+    {
+        if (!observation.exists)
+            return ProcessExecutionState::Missing;
+        return observation.stopped
+            ? ProcessExecutionState::Stopped
+            : ProcessExecutionState::Running;
+    }
+    if (observation.exists)
+        return candidateStopped
+            ? ProcessExecutionState::Stopped
+            : ProcessExecutionState::Unknown;
+    return ProcessExecutionState::Unknown;
+}
+
+ValidatedWorker ValidateWorkerForStatusClassification(
+    const ManagedWorker& worker,
+    ProcessOperations& processes)
+{
+    if (worker.lifecycleStatus == "paused")
+        return ValidatePausedManagedWorker(worker, processes);
+    return ValidateManagedWorker(worker, processes);
+}
+
+void PopulateAuthoritativeClassification(
+    SchedulerWorkerClassification& classification,
+    const ManagedWorker& worker,
+    ProcessOperations& processes,
+    bool candidateStopped)
+{
+    classification.authoritative = true;
+    classification.experimentId = worker.experimentId;
+    classification.checkpointEvalId = worker.checkpointEvalId;
+    classification.lifecycleStatus = worker.lifecycleStatus;
+    classification.attemptLifecycleState = worker.attemptLifecycleState;
+    classification.expectedExecutable = worker.executable;
+    const ValidatedWorker validated =
+        ValidateWorkerForStatusClassification(worker, processes);
+    classification.identity = validated.identity;
+    classification.executionState =
+        ExecutionStateFor(validated.observation, candidateStopped);
+    if (!validated.observation.executable.empty())
+        classification.observedExecutable = validated.observation.executable;
+    if (classification.expectedExecutable &&
+        classification.observedExecutable)
+    {
+        classification.executableIdentityMatch =
+            *classification.expectedExecutable ==
+            *classification.observedExecutable;
+    }
+    classification.managed =
+        validated.identity == IdentityResult::Validated;
+    classification.reason = classification.managed
+        ? "validated"
+        : validated.detail;
+}
+
+} // namespace
+
 std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
     const std::vector<SchedulerWorkerCandidate>& candidates,
     const std::vector<ManagedWorker>& authoritativeWorkers,
     ProcessOperations& processes)
 {
     std::vector<SchedulerWorkerClassification> classifications;
-    classifications.reserve(candidates.size());
+    classifications.reserve(candidates.size() + authoritativeWorkers.size());
+    std::vector<bool> representedAuthorities(
+        authoritativeWorkers.size(), false);
 
     for (const SchedulerWorkerCandidate& candidate : candidates)
     {
@@ -2436,13 +2594,20 @@ std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
         classification.cpuPercent = candidate.cpuPercent;
         classification.memPercent = candidate.memPercent;
         classification.rssMb = candidate.rssMb;
+        classification.executionState = candidate.stopped
+            ? ProcessExecutionState::Stopped
+            : ProcessExecutionState::Running;
 
         const bool checkpointTagged =
             candidate.commandLine.find("--scheduler-checkpoint-eval-id") !=
             std::string::npos;
-        std::vector<const ManagedWorker*> matches;
-        for (const ManagedWorker& worker : authoritativeWorkers)
+        std::vector<size_t> matches;
+        for (size_t workerIndex = 0;
+             workerIndex < authoritativeWorkers.size();
+             ++workerIndex)
         {
+            const ManagedWorker& worker =
+                authoritativeWorkers[workerIndex];
             const std::string expectedKind =
                 worker.phase == "checkpoint_infer" ? "infer" : worker.phase;
             if (worker.pid != candidate.pid ||
@@ -2460,7 +2625,7 @@ std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
             {
                 continue;
             }
-            matches.push_back(&worker);
+            matches.push_back(workerIndex);
         }
 
         if (matches.empty())
@@ -2478,9 +2643,16 @@ std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
             continue;
         }
 
-        const ManagedWorker& worker = *matches.front();
+        const size_t workerIndex = matches.front();
+        representedAuthorities[workerIndex] = true;
+        const ManagedWorker& worker = authoritativeWorkers[workerIndex];
+        classification.authoritative = true;
         classification.experimentId = worker.experimentId;
         classification.checkpointEvalId = worker.checkpointEvalId;
+        classification.lifecycleStatus = worker.lifecycleStatus;
+        classification.attemptLifecycleState =
+            worker.attemptLifecycleState;
+        classification.expectedExecutable = worker.executable;
         if (!worker.commandLine || worker.commandLine->empty() ||
             !ContainsWorkerIdentity(
                 *worker.commandLine, worker.experimentId, worker.phase) ||
@@ -2497,14 +2669,37 @@ std::vector<SchedulerWorkerClassification> ClassifySchedulerWorkers(
             continue;
         }
 
-        const ValidatedWorker validated =
-            ValidateManagedWorker(worker, processes);
-        classification.identity = validated.identity;
-        classification.managed =
-            validated.identity == IdentityResult::Validated;
-        classification.reason = classification.managed
-            ? "validated"
-            : validated.detail;
+        PopulateAuthoritativeClassification(
+            classification, worker, processes, candidate.stopped);
+        classifications.push_back(std::move(classification));
+    }
+
+    // Candidate discovery is command-oriented. Exact authoritative rows are
+    // also observed directly so a dead expected worker is not collapsed into
+    // either "no worker" or "unmanaged" merely because no process candidate
+    // exists for its PID.
+    for (size_t workerIndex = 0;
+         workerIndex < authoritativeWorkers.size();
+         ++workerIndex)
+    {
+        if (representedAuthorities[workerIndex])
+            continue;
+        const ManagedWorker& worker = authoritativeWorkers[workerIndex];
+        const bool pidRepresented = std::any_of(
+            candidates.begin(), candidates.end(),
+            [&](const SchedulerWorkerCandidate& candidate) {
+                return candidate.pid == worker.pid;
+            });
+        if (pidRepresented)
+            continue;
+
+        SchedulerWorkerClassification classification;
+        classification.pid = worker.pid;
+        classification.kind = worker.phase == "checkpoint_infer"
+            ? "infer" : worker.phase;
+        classification.detected = false;
+        PopulateAuthoritativeClassification(
+            classification, worker, processes, false);
         classifications.push_back(std::move(classification));
     }
     return classifications;
@@ -2517,30 +2712,87 @@ SchedulerWorkerClassificationSummary SummarizeSchedulerWorkers(
     for (const auto& classification : classifications)
     {
         SchedulerWorkerAggregate* aggregate = nullptr;
+        SchedulerWorkerAggregate* stateAggregate = nullptr;
         if (classification.kind == "train")
         {
-            aggregate = classification.managed
-                ? &summary.managedTrain
-                : &summary.unmanagedTrain;
+            if (classification.managed)
+            {
+                aggregate = &summary.managedTrain;
+                if (classification.executionState ==
+                    ProcessExecutionState::Running)
+                    stateAggregate = &summary.managedRunningTrain;
+                else if (classification.executionState ==
+                             ProcessExecutionState::Stopped &&
+                         classification.lifecycleStatus == "paused")
+                    stateAggregate = &summary.managedPausedTrain;
+            }
+            else if (classification.authoritative)
+            {
+                aggregate = classification.executionState ==
+                                ProcessExecutionState::Missing
+                    ? &summary.expectedMissingTrain
+                    : &summary.identityMismatchTrain;
+            }
+            else
+                aggregate = &summary.unmanagedTrain;
         }
         else if (classification.kind == "infer")
         {
-            aggregate = classification.managed
-                ? &summary.managedInfer
-                : &summary.unmanagedInfer;
+            if (classification.managed)
+            {
+                aggregate = &summary.managedInfer;
+                if (classification.executionState ==
+                    ProcessExecutionState::Running)
+                    stateAggregate = &summary.managedRunningInfer;
+                else if (classification.executionState ==
+                             ProcessExecutionState::Stopped &&
+                         classification.lifecycleStatus == "paused")
+                    stateAggregate = &summary.managedPausedInfer;
+            }
+            else if (classification.authoritative)
+            {
+                aggregate = classification.executionState ==
+                                ProcessExecutionState::Missing
+                    ? &summary.expectedMissingInfer
+                    : &summary.identityMismatchInfer;
+            }
+            else
+                aggregate = &summary.unmanagedInfer;
         }
         else if (classification.kind == "analyze")
         {
-            aggregate = classification.managed
-                ? &summary.managedAnalyze
-                : &summary.unmanagedAnalyze;
+            if (classification.managed)
+            {
+                aggregate = &summary.managedAnalyze;
+                if (classification.executionState ==
+                    ProcessExecutionState::Running)
+                    stateAggregate = &summary.managedRunningAnalyze;
+                else if (classification.executionState ==
+                             ProcessExecutionState::Stopped &&
+                         classification.lifecycleStatus == "paused")
+                    stateAggregate = &summary.managedPausedAnalyze;
+            }
+            else if (classification.authoritative)
+            {
+                aggregate = classification.executionState ==
+                                ProcessExecutionState::Missing
+                    ? &summary.expectedMissingAnalyze
+                    : &summary.identityMismatchAnalyze;
+            }
+            else
+                aggregate = &summary.unmanagedAnalyze;
         }
         if (aggregate == nullptr)
             continue;
-        ++aggregate->workers;
-        aggregate->cpuPercent += classification.cpuPercent;
-        aggregate->memPercent += classification.memPercent;
-        aggregate->rssMb += classification.rssMb;
+        const auto add = [&](SchedulerWorkerAggregate& target) {
+            ++target.workers;
+            target.cpuPercent += classification.cpuPercent;
+            target.memPercent += classification.memPercent;
+            target.rssMb += classification.rssMb;
+        };
+        add(*aggregate);
+        if (stateAggregate != nullptr)
+            add(*stateAggregate);
     }
     return summary;
 }
@@ -2722,7 +2974,31 @@ SignalOutcome CancelWorkerAuthorized(
     const SignalAuthorization& authorize)
 {
     SignalOutcome outcome;
-    ValidatedWorker validated = ValidateManagedWorker(worker, processes);
+    const bool stoppedSchedulerAdmission =
+        worker.lifecycleStatus == "pending" &&
+        worker.attemptLifecycleState == "stopped" &&
+        worker.workerAttemptId.has_value();
+    const bool pausedStoppedWorker =
+        worker.lifecycleStatus == "paused" &&
+        worker.attemptLifecycleState == "stopped" &&
+        worker.workerAttemptId.has_value();
+
+    const auto validateInitialWorker = [&]() {
+        if (stoppedSchedulerAdmission)
+            return ValidateStoppedWorkerForSchedulerAdmission(
+                worker, processes);
+        if (pausedStoppedWorker)
+            return ValidatePausedManagedWorker(worker, processes);
+        return ValidateManagedWorker(worker, processes);
+    };
+    const auto validatePostResumeWorker = [&]() {
+        if (stoppedSchedulerAdmission || pausedStoppedWorker)
+            return ValidateResumedStoppedWorkerForCancellation(
+                worker, processes);
+        return ValidateManagedWorker(worker, processes);
+    };
+
+    ValidatedWorker validated = validateInitialWorker();
     outcome.identity = validated.identity;
     outcome.detail = validated.detail;
     if (validated.identity != IdentityResult::Validated)
@@ -2766,7 +3042,9 @@ SignalOutcome CancelWorkerAuthorized(
             return outcome;
         }
     }
-    validated = ValidateManagedWorker(worker, processes);
+    validated = resumeFirst
+        ? validatePostResumeWorker()
+        : validateInitialWorker();
     if (validated.identity != IdentityResult::Validated)
     {
         outcome.identity = validated.identity;
@@ -2817,7 +3095,9 @@ SignalOutcome CancelWorkerAuthorized(
     // destructive escalation. A missing leader makes the group unsafe to
     // signal because its identity can no longer be proven.
     const ValidatedWorker beforeKill =
-        ValidateManagedWorker(worker, processes);
+        resumeFirst
+            ? validatePostResumeWorker()
+            : validateInitialWorker();
     if (beforeKill.identity != IdentityResult::Validated)
     {
         outcome.identity = beforeKill.identity;
@@ -4095,13 +4375,27 @@ int RunPriorityQueueGlobalControl(
             RequireAffectedRows(queued, 1, "resume_all_queue_member");
         }
         UpdateRequestAccounting(transaction, requestId, false, owner, action);
+
+        // Selectively resumed members may already be pending while still
+        // carrying this global-pause generation. Retire the generation from
+        // every remaining experiment/checkpoint member before releasing the
+        // global gate.
+        if (snapshot.currentPauseRequestId)
+        {
+            ClearPauseGenerationAfterResolvedRequest(
+                transaction,
+                requestId,
+                pauseRequestId,
+                owner,
+                action);
+        }
+
         const pqxx::result completed = transaction.exec_params(
             "UPDATE experiment_global_control SET active_request_id=NULL,"
-            "current_pause_request_id=NULL,revision=revision+1,updated_at=now() "
+            "revision=revision+1,updated_at=now() "
             "WHERE singleton AND active_request_id=$1 "
-            "AND current_pause_request_id=$2 RETURNING singleton;",
-            requestId,
-            pauseRequestId);
+            "AND current_pause_request_id IS NULL RETURNING singleton;",
+            requestId);
         RequireAffectedRows(completed, 1, "resume_all_complete_gate");
         transaction.exec_params(
             "UPDATE experiment_admin_request SET application_lease_until=NULL "
@@ -4158,10 +4452,14 @@ int RunPriorityQueueGlobalControl(
             "planned",
             "none",
             "worker_validation_and_pause_planned");
+        const bool retainStoppedWorker =
+            target.worker.lifecycleStatus == "pending" &&
+            target.worker.attemptLifecycleState == "stopped";
         const auto exact = LockExactTargetForMutation(
             transaction, target, true);
         SignalOutcome signal;
-        if (!exact)
+        if (!exact ||
+            (retainStoppedWorker && exact->lifecycleState != "stopped"))
         {
             signal.identity = IdentityResult::IdentityValidationFailed;
             signal.result = "identity_validation_failed";
@@ -4169,7 +4467,9 @@ int RunPriorityQueueGlobalControl(
         }
         else
         {
-            signal = PauseWorker(target.worker, processes);
+            signal = retainStoppedWorker
+                ? RetainStoppedWorkerForPause(target.worker, processes)
+                : PauseWorker(target.worker, processes);
             if (signal.success)
             {
                 const pqxx::result stopped = transaction.exec_params(
@@ -4680,7 +4980,14 @@ int RunCommandWithProcessOperationsForTesting(
                 target.worker.experimentId);
             RequireAffectedRows(
                 assigned, 1, "assign_experiment_cancellation_request");
-            if (target.worker.lifecycleStatus != "running")
+            const bool stoppedExactWorker =
+                (target.worker.lifecycleStatus == "pending" ||
+                 target.worker.lifecycleStatus == "paused") &&
+                target.worker.attemptLifecycleState == "stopped" &&
+                target.worker.workerAttemptId.has_value();
+
+            if (target.worker.lifecycleStatus != "running" &&
+                !stoppedExactWorker)
             {
                 const pqxx::result cancelledQueued = transaction.exec_params(
                     "UPDATE experiment SET status='cancelled',"
@@ -4702,7 +5009,8 @@ int RunCommandWithProcessOperationsForTesting(
             const bool afterCheckpoint =
                 command.cancellationMode ==
                     CancellationMode::AfterNextCheckpoint &&
-                target.worker.phase == "train";
+                target.worker.phase == "train" &&
+                !stoppedExactWorker;
             if (afterCheckpoint)
             {
                 target.cancellationCheckpoint = NextCancellationCheckpoint(
@@ -5048,7 +5356,14 @@ int RunCommandWithProcessOperationsForTesting(
             transaction.commit();
             continue;
         }
-        if (target.worker.lifecycleStatus != "running")
+        const bool stoppedExactWorker =
+            (target.worker.lifecycleStatus == "pending" ||
+             target.worker.lifecycleStatus == "paused") &&
+            target.worker.attemptLifecycleState == "stopped" &&
+            target.worker.workerAttemptId.has_value();
+
+        if (target.worker.lifecycleStatus != "running" &&
+            !stoppedExactWorker)
             continue;
         if (target.plan == "already_satisfied" ||
             target.plan == "already_accounted")
@@ -5237,7 +5552,7 @@ int RunCommandWithProcessOperationsForTesting(
                     "diagnostic=$2 "
                     "WHERE a.worker_attempt_id=$3 "
                     "AND a.lifecycle_state IN "
-                    "('spawned','running','observed') "
+                    "('spawned','running','observed','stopped') "
                     "AND EXISTS ("
                     " SELECT 1 FROM experiment e "
                     " WHERE $4::bigint IS NULL "
@@ -5271,6 +5586,7 @@ int RunCommandWithProcessOperationsForTesting(
                 cancelled = transaction.exec_params(
                     "UPDATE experiment_checkpoint_eval SET status='failed',"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "worker_global_pause_request_id=NULL,"
                     "active_scheduler_worker_attempt_id=NULL,"
                     "completed_at=now(),updated_at=now(),"
                     "error_message='cancelled_by_global_request' "
@@ -5302,12 +5618,14 @@ int RunCommandWithProcessOperationsForTesting(
                     "completed_at=COALESCE(completed_at,now()),"
                     "cancellation_completed_at=now(),"
                     "worker_pid=NULL,worker_process_group_id=NULL,"
+                    "worker_global_pause_request_id=NULL,"
                     "active_scheduler_worker_attempt_id=NULL,"
                     "current_operation=$10,"
                     "error_message=CASE WHEN $1 THEN "
                     "'cancelled_after_sigkill' ELSE 'cancelled_by_global_request' END,"
                     "updated_at=now() WHERE experiment_id=$2 "
-                    "AND status='running' AND phase=$3 AND worker_pid=$4 "
+                    "AND status IN ('running','pending','paused') "
+                    "AND phase=$3 AND worker_pid=$4 "
                     "AND worker_process_group_id IS NOT DISTINCT FROM $5 "
                     "AND worker_process_start_identity IS NOT DISTINCT FROM $6 "
                     "AND worker_executable IS NOT DISTINCT FROM $7 "
@@ -6814,6 +7132,34 @@ int RunExperimentResumeCommandWithProcessOperationsForTesting(
     const std::string priority = rows[0][2].as<std::string>();
     const bool requested = rows[0][3].as<bool>();
     const bool stoppedWorker = !rows[0][4].is_null();
+
+    if (status == "paused" && stoppedWorker)
+    {
+        const long long workerAttemptId = rows[0][4].as<long long>();
+        EA::SchedulerOwnership::ExactAttemptExpectation expected;
+        expected.workerAttemptId = workerAttemptId;
+        expected.experimentId = command.experimentId;
+        expected.workerKind = "experiment";
+        expected.lifecyclePhase = phase;
+        expected.capacityClass = phase;
+        expected.requiredLifecycleState = "stopped";
+        expected.requireCompleteProcessIdentity = true;
+        const auto exact =
+            EA::SchedulerOwnership::LockAndVerifyExactActiveAttempt(
+                transaction, expected, willApply);
+        const std::string expectedCommandIdentity =
+            "experiment:" + std::to_string(command.experimentId) +
+            ":" + phase;
+        if (!exact || exact->commandIdentity != expectedCommandIdentity)
+        {
+            output << "SCHEDULER_CONTROL_REJECTED,action=resume,experiment_id="
+                   << command.experimentId
+                   << ",reason=stale_control_evidence\n";
+            transaction.commit();
+            return 1;
+        }
+    }
+
     output << "SCHEDULER_CONTROL_ATTEMPT,action=resume,experiment_id="
            << command.experimentId << ",current_status=" << status
            << ",current_phase=" << phase << "\n";

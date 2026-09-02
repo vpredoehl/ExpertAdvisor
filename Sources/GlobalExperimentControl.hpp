@@ -103,6 +103,7 @@ struct ManagedWorker
     std::optional<long long> workerAttemptId;
     std::string workerKind;
     std::string capacityClass;
+    std::string ownershipOrigin;
     std::string attemptLifecycleState;
     std::string launchAttemptIdentity;
     long long experimentId = -1;
@@ -114,6 +115,11 @@ struct ManagedWorker
     std::optional<std::string> executable;
     std::optional<std::string> commandLine;
     std::optional<std::string> processStartIdentity;
+    // Status readers that reconstruct a worker from the lifecycle row and its
+    // exact active durable attempt set this false if those two persisted
+    // identities disagree. Runtime control paths already enforce the same
+    // invariant while locking the exact attempt.
+    bool authoritativeBindingMatches = true;
 };
 
 enum class IdentityResult
@@ -125,6 +131,14 @@ enum class IdentityResult
     UnsafeProcessGroup,
     PermissionDenied,
     InspectionFailed
+};
+
+enum class ProcessExecutionState
+{
+    Unknown,
+    Running,
+    Stopped,
+    Missing
 };
 
 struct ValidatedWorker
@@ -143,6 +157,7 @@ struct SchedulerWorkerCandidate
     double cpuPercent = 0.0;
     double memPercent = 0.0;
     double rssMb = 0.0;
+    bool stopped = false;
 };
 
 struct SchedulerWorkerClassification
@@ -150,10 +165,18 @@ struct SchedulerWorkerClassification
     int pid = -1;
     std::string kind;
     bool managed = false;
+    bool authoritative = false;
+    bool detected = true;
     IdentityResult identity = IdentityResult::IdentityValidationFailed;
+    ProcessExecutionState executionState = ProcessExecutionState::Unknown;
     std::string reason;
+    std::string lifecycleStatus;
+    std::string attemptLifecycleState;
     std::optional<long long> experimentId;
     std::optional<long long> checkpointEvalId;
+    std::optional<std::string> expectedExecutable;
+    std::optional<std::string> observedExecutable;
+    std::optional<bool> executableIdentityMatch;
     double cpuPercent = 0.0;
     double memPercent = 0.0;
     double rssMb = 0.0;
@@ -172,9 +195,21 @@ struct SchedulerWorkerClassificationSummary
     SchedulerWorkerAggregate managedTrain;
     SchedulerWorkerAggregate managedInfer;
     SchedulerWorkerAggregate managedAnalyze;
+    SchedulerWorkerAggregate managedRunningTrain;
+    SchedulerWorkerAggregate managedRunningInfer;
+    SchedulerWorkerAggregate managedRunningAnalyze;
+    SchedulerWorkerAggregate managedPausedTrain;
+    SchedulerWorkerAggregate managedPausedInfer;
+    SchedulerWorkerAggregate managedPausedAnalyze;
     SchedulerWorkerAggregate unmanagedTrain;
     SchedulerWorkerAggregate unmanagedInfer;
     SchedulerWorkerAggregate unmanagedAnalyze;
+    SchedulerWorkerAggregate identityMismatchTrain;
+    SchedulerWorkerAggregate identityMismatchInfer;
+    SchedulerWorkerAggregate identityMismatchAnalyze;
+    SchedulerWorkerAggregate expectedMissingTrain;
+    SchedulerWorkerAggregate expectedMissingInfer;
+    SchedulerWorkerAggregate expectedMissingAnalyze;
 };
 
 class ProcessOperations
@@ -205,6 +240,14 @@ ValidatedWorker ValidateManagedWorker(const ManagedWorker& worker,
 // retains every native process-identity check used for active workers and
 // additionally requires the observed process to be stopped.
 ValidatedWorker ValidateStoppedWorkerForSchedulerAdmission(
+    const ManagedWorker& worker,
+    ProcessOperations& processes);
+
+// Status/reconciliation validation for an experiment whose lifecycle is
+// paused and whose exact active durable attempt is stopped. This uses the same
+// complete PID/PGID/start/command/executable validation as resume admission,
+// but retains the paused lifecycle as a distinct ownership state.
+ValidatedWorker ValidatePausedManagedWorker(
     const ManagedWorker& worker,
     ProcessOperations& processes);
 
@@ -410,5 +453,6 @@ int RunCampaignMaterializationResumeCommandWithProcessOperationsForTesting(
 const char* ToString(Action action);
 const char* ToString(CancellationMode mode);
 const char* ToString(IdentityResult result);
+const char* ToString(ProcessExecutionState state);
 
 } // namespace EA::GlobalExperimentControl

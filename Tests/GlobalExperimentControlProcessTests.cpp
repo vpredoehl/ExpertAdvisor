@@ -1397,50 +1397,6 @@ long long SeedRequest(pqxx::connection& connection,
     return requestId;
 }
 
-long long SeedActiveSelectiveRequest(pqxx::connection& connection,
-                                     long long experimentId,
-                                     long long pauseRequestId,
-                                     const std::string& owner)
-{
-    pqxx::work transaction{connection};
-    const long long requestId = transaction.exec_params(
-        "INSERT INTO experiment_admin_request ("
-        "action,target_experiment_id,invocation_identity,"
-        "requester_identity,application_owner,application_lease_until,status,"
-        "previous_global_state,resulting_global_state,target_count) "
-        "VALUES ('resume_experiment',$1,$2,'crash-fixture-requester',$2,"
-        "now()-interval '1 second','applying','paused','paused',1) "
-        "RETURNING request_id;",
-        experimentId,
-        owner)[0][0].as<long long>();
-    transaction.exec_params(
-        "INSERT INTO experiment_admin_worker_outcome ("
-        "request_id,worker_identity,experiment_id,worker_kind,phase,"
-        "lifecycle_status,worker_pid,worker_process_group_id,"
-        "worker_process_start_identity,worker_executable,worker_command_line,"
-        "worker_attempt_id,source_pause_request_id,inference_action,"
-        "outcome_status,detail) "
-        "SELECT $1,worker_identity,experiment_id,worker_kind,phase,"
-        "lifecycle_status,worker_pid,worker_process_group_id,"
-        "worker_process_start_identity,worker_executable,worker_command_line,"
-        "worker_attempt_id,$2,'none','planned',"
-        "'selective_global_pause_release_planned' "
-        "FROM experiment_admin_worker_outcome "
-        "WHERE request_id=$2 AND worker_identity=$3;",
-        requestId,
-        pauseRequestId,
-        "experiment:" + std::to_string(experimentId));
-    transaction.exec_params(
-        "UPDATE experiment_global_control SET active_request_id=$1,"
-        "revision=revision+1,updated_at=now() "
-        "WHERE singleton AND desired_state='paused' "
-        "AND current_pause_request_id=$2;",
-        requestId,
-        pauseRequestId);
-    transaction.commit();
-    return requestId;
-}
-
 Command ReplayCommand(
     Action action,
     const std::string& identity,
@@ -1505,186 +1461,52 @@ void CleanupWorker(const ManagedWorker& worker, ProcessOperations& processes)
     AssertGroupExited(worker);
 }
 
-void TestPlanCommittedBeforeSignal(const std::string& selfPath,
-                                   const std::string& connectionString,
-                                   pqxx::connection& connection)
+void TestCancellationAfterSignalBeforeAccounting(
+    const std::string& selfPath,
+    const std::string& connectionString,
+    pqxx::connection& connection)
 {
     RecordingNativeProcesses processes;
     const ManagedWorker worker =
-        SpawnWorker(selfPath, processes, 700001);
+        SpawnWorker(selfPath, processes, 700004);
     const long long requestId =
-        SeedRequest(connection, Action::PauseAll, worker, "planned");
+        SeedRequest(connection, Action::CancelAll, worker, "planned");
+
+    const SignalOutcome terminated = CancelWorker(
+        worker, false, std::chrono::milliseconds(300), processes);
+    CHECK(terminated.success);
+    CHECK(terminated.signals == std::vector<int>{SIGTERM});
+    CHECK((processes.signals ==
+           std::vector<std::pair<int, int>>{
+               {*worker.processGroupId, SIGTERM}}));
+    AssertGroupExited(worker);
+    processes.signals.clear();
 
     std::string replayOutput;
     CHECK(Replay(
               connectionString,
-              ReplayCommand(Action::PauseAll, "crash-window-replay-plan"),
+              ReplayCommand(
+                  Action::CancelAll, "crash-window-replay-terminated"),
               processes,
               replayOutput) == 0);
-    CHECK(replayOutput.find(
-              "GLOBAL_EXPERIMENT_CONTROL_RETRY,request_id=" +
-              std::to_string(requestId)) != std::string::npos);
-    CHECK((processes.signals ==
-           std::vector<std::pair<int, int>>{
-               {*worker.processGroupId, SIGSTOP}}));
-    CHECK(WaitUntil(
-        [&] { return processes.Observe(worker.pid).stopped; }));
+    CHECK(processes.signals.empty());
     CheckStableIdentities(connection, requestId, worker.experimentId);
     CHECK(Scalar(
               connection,
-              "SELECT requested_signal FROM "
-              "experiment_admin_worker_outcome WHERE request_id=" +
-                  std::to_string(requestId)) == std::to_string(SIGSTOP));
+              "SELECT identity_result||':'||signal_result||':'||"
+              "outcome_status FROM experiment_admin_worker_outcome "
+              "WHERE request_id=" + std::to_string(requestId)) ==
+          "process_missing:process_missing:completed");
     CHECK(Scalar(
               connection,
-              "SELECT signal_result||':'||outcome_status FROM "
-              "experiment_admin_worker_outcome WHERE request_id=" +
-                  std::to_string(requestId)) == "signaled:completed");
-    CHECK(Scalar(
-              connection,
-              "SELECT status FROM experiment_admin_request WHERE request_id=" +
-                  std::to_string(requestId)) == "completed");
+              "SELECT status FROM experiment WHERE "
+              "experiment_id=700004") == "cancelled");
     CHECK(Scalar(
               connection,
               "SELECT active_request_id IS NULL FROM "
               "experiment_global_control WHERE singleton") == "t");
 
-    CleanupWorker(worker, processes);
     ResetCrashFixtures(connection);
-}
-
-void TestAfterSignalBeforeAccounting(const std::string& selfPath,
-                                     const std::string& connectionString,
-                                     pqxx::connection& connection)
-{
-    {
-        RecordingNativeProcesses processes;
-        const ManagedWorker worker =
-            SpawnWorker(selfPath, processes, 700002);
-        const long long requestId =
-            SeedRequest(connection, Action::PauseAll, worker, "planned");
-        CHECK(PauseWorker(worker, processes).success);
-        CHECK((processes.signals ==
-               std::vector<std::pair<int, int>>{
-                   {*worker.processGroupId, SIGSTOP}}));
-        CHECK(WaitUntil(
-            [&] { return processes.Observe(worker.pid).stopped; }));
-        processes.signals.clear();
-
-        std::string replayOutput;
-        CHECK(Replay(
-                  connectionString,
-                  ReplayCommand(
-                      Action::PauseAll, "crash-window-replay-paused"),
-                  processes,
-                  replayOutput) == 0);
-        CHECK(processes.signals.empty());
-        CheckStableIdentities(connection, requestId, worker.experimentId);
-        CHECK(Scalar(
-                  connection,
-                  "SELECT signal_result||':'||outcome_status FROM "
-                  "experiment_admin_worker_outcome WHERE request_id=" +
-                      std::to_string(requestId)) ==
-              "already_requested_state:completed");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT requested_signal IS NULL FROM "
-                  "experiment_admin_worker_outcome WHERE request_id=" +
-                      std::to_string(requestId)) == "t");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT worker_control_state FROM experiment WHERE "
-                  "experiment_id=700002") == "paused");
-        CleanupWorker(worker, processes);
-        ResetCrashFixtures(connection);
-    }
-
-    {
-        RecordingNativeProcesses processes;
-        const ManagedWorker worker =
-            SpawnWorker(selfPath, processes, 700003);
-        CHECK(PauseWorker(worker, processes).success);
-        CHECK(WaitUntil(
-            [&] { return processes.Observe(worker.pid).stopped; }));
-        const long long requestId = SeedRequest(
-            connection, Action::ResumeAll, worker, "planned", "paused");
-        CHECK(ResumeWorker(worker, processes).success);
-        CHECK((processes.signals ==
-               std::vector<std::pair<int, int>>{
-                   {*worker.processGroupId, SIGSTOP},
-                   {*worker.processGroupId, SIGCONT}}));
-        CHECK(WaitUntil([&] {
-            const ProcessObservation observation =
-                processes.Observe(worker.pid);
-            return observation.exists && observation.inspectionSucceeded &&
-                   !observation.stopped;
-        }));
-        processes.signals.clear();
-
-        std::string replayOutput;
-        CHECK(Replay(
-                  connectionString,
-                  ReplayCommand(
-                      Action::ResumeAll, "crash-window-replay-running"),
-                  processes,
-                  replayOutput) == 0);
-        CHECK(processes.signals.empty());
-        CheckStableIdentities(connection, requestId, worker.experimentId);
-        CHECK(Scalar(
-                  connection,
-                  "SELECT signal_result||':'||outcome_status FROM "
-                  "experiment_admin_worker_outcome WHERE request_id=" +
-                      std::to_string(requestId)) ==
-              "already_requested_state:completed");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT worker_control_state FROM experiment WHERE "
-                  "experiment_id=700003") == "running");
-        CleanupWorker(worker, processes);
-        ResetCrashFixtures(connection);
-    }
-
-    {
-        RecordingNativeProcesses processes;
-        const ManagedWorker worker =
-            SpawnWorker(selfPath, processes, 700004);
-        const long long requestId =
-            SeedRequest(connection, Action::CancelAll, worker, "planned");
-        const SignalOutcome terminated = CancelWorker(
-            worker, false, std::chrono::milliseconds(300), processes);
-        CHECK(terminated.success);
-        CHECK(terminated.signals == std::vector<int>{SIGTERM});
-        CHECK((processes.signals ==
-               std::vector<std::pair<int, int>>{
-                   {*worker.processGroupId, SIGTERM}}));
-        AssertGroupExited(worker);
-        processes.signals.clear();
-
-        std::string replayOutput;
-        CHECK(Replay(
-                  connectionString,
-                  ReplayCommand(
-                      Action::CancelAll, "crash-window-replay-terminated"),
-                  processes,
-                  replayOutput) == 0);
-        CHECK(processes.signals.empty());
-        CheckStableIdentities(connection, requestId, worker.experimentId);
-        CHECK(Scalar(
-                  connection,
-                  "SELECT identity_result||':'||signal_result||':'||"
-                  "outcome_status FROM experiment_admin_worker_outcome "
-                  "WHERE request_id=" + std::to_string(requestId)) ==
-              "process_missing:process_missing:completed");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT status FROM experiment WHERE "
-                  "experiment_id=700004") == "cancelled");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT active_request_id IS NULL FROM "
-                  "experiment_global_control WHERE singleton") == "t");
-        ResetCrashFixtures(connection);
-    }
 }
 
 void TestAccountedBeforeReconciliation(const std::string& connectionString,
@@ -2098,8 +1920,9 @@ void TestSelectiveResumeFromGlobalPause(
     pause.invocationIdentity = "selective-resume-pause-1";
     std::ostringstream pauseOutput;
     std::ostringstream pauseError;
-    CHECK(RunCommandWithProcessOperationsForTesting(
-              connectionString, pause, pauseOutput, pauseError, processes) == 0);
+    const int pauseResult = RunCommandWithProcessOperationsForTesting(
+        connectionString, pause, pauseOutput, pauseError, processes);
+    CHECK(pauseResult == 0);
     CHECK(pauseError.str().empty());
     CHECK(WaitUntil([&] {
         return processes.Observe(first.pid).stopped &&
@@ -2126,9 +1949,18 @@ void TestSelectiveResumeFromGlobalPause(
               connectionString, 700020, "selective-resume-dry-run",
               processes, output, true) == 0);
     CHECK(output.find("SCHEDULER_CONTROL_DRY_RUN") != std::string::npos);
-    CHECK(output.find("intended_signal=SIGCONT") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
     CHECK(processes.signals.empty());
     CHECK(processes.Observe(first.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text||':'||"
+              "worker_control_state||':'||"
+              "worker_global_pause_request_id::text "
+              "FROM experiment WHERE experiment_id=700020") ==
+          "paused:false:paused:" + std::to_string(firstPauseRequest));
     CHECK(Scalar(
               connection,
               "SELECT count(*)::text FROM experiment_admin_request "
@@ -2140,27 +1972,26 @@ void TestSelectiveResumeFromGlobalPause(
     CHECK(output.find("Use --yes to apply.") != std::string::npos);
     CHECK(processes.signals.empty());
     CHECK(processes.Observe(first.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text "
+              "FROM experiment WHERE experiment_id=700020") ==
+          "paused:false");
 
-    bool immediateSignalBoundaryReached = false;
-    InterleavingProcesses interleavingProcesses(
-        processes,
-        [&] {
-            immediateSignalBoundaryReached = true;
-        });
     CHECK(RunSelectiveResume(
               connectionString, 700020, "selective-resume-first",
-              interleavingProcesses, output) == 0);
-    CHECK(immediateSignalBoundaryReached);
-    CHECK(output.find("result=globally_suspended_worker_resumed") !=
-          std::string::npos);
-    CHECK(output.find("replay=0") != std::string::npos);
-    CHECK(output.find("signal_attempted=1") != std::string::npos);
-    CHECK(output.find("signal_result=signaled") != std::string::npos);
-    CHECK(output.find("target_count=1,"
-                      "successful_count=1,already_satisfied_count=0,"
-                      "missing_count=0,rejected_count=0,failed_count=0") !=
-          std::string::npos);
-    CHECK(WaitUntil([&] { return !processes.Observe(first.pid).stopped; }));
+              processes, output) == 0);
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=stopped") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=queued_for_admission") != std::string::npos);
+    CHECK(processes.signals.empty());
+
+    // Selective resume releases the paused experiment back to scheduler
+    // admission.  It deliberately does not SIGCONT the exact stopped worker.
+    CHECK(processes.Observe(first.pid).stopped);
     CHECK(processes.Observe(second.pid).stopped);
     CHECK(processes.Observe(third.pid).stopped);
     CHECK(Scalar(
@@ -2177,30 +2008,44 @@ void TestSelectiveResumeFromGlobalPause(
     }
     CHECK(Scalar(
               connection,
-              "SELECT worker_control_state||':'||"
-              "worker_global_pause_request_id::text FROM experiment "
-              "WHERE experiment_id=700020") ==
-          "running:" + std::to_string(firstPauseRequest));
+              "SELECT status||':'||resume_requested::text||':'||"
+              "worker_control_state||':'||"
+              "worker_global_pause_request_id::text||':'||"
+              "(active_scheduler_worker_attempt_id IS NOT NULL)::text "
+              "FROM experiment WHERE experiment_id=700020") ==
+          "pending:true:paused:" + std::to_string(firstPauseRequest) +
+              ":true");
 
     processes.signals.clear();
     CHECK(RunSelectiveResume(
               connectionString, 700020, "selective-resume-replay",
               processes, output) == 0);
-    CHECK(output.find("result=already_resumed") != std::string::npos);
-    CHECK(output.find("replay=1") != std::string::npos);
-    CHECK(output.find("signal_attempted=0") != std::string::npos);
-    CHECK(output.find("signal_result=signaled") != std::string::npos);
-    CHECK(output.find("target_count=1,"
-                      "successful_count=1,already_satisfied_count=0,"
-                      "missing_count=0,rejected_count=0,failed_count=0") !=
-          std::string::npos);
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=stopped") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=already_satisfied") != std::string::npos);
     CHECK(processes.signals.empty());
+    CHECK(processes.Observe(first.pid).stopped);
 
     CHECK(RunSelectiveResume(
               connectionString, 700021, "selective-resume-second",
               processes, output) == 0);
-    CHECK(WaitUntil([&] { return !processes.Observe(second.pid).stopped; }));
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=stopped") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=queued_for_admission") != std::string::npos);
+    CHECK(processes.signals.empty());
+    CHECK(processes.Observe(second.pid).stopped);
     CHECK(processes.Observe(third.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text "
+              "FROM experiment WHERE experiment_id=700021") ==
+          "pending:true");
 
     processes.signals.clear();
     Command resumeAll;
@@ -2213,24 +2058,26 @@ void TestSelectiveResumeFromGlobalPause(
               connectionString, resumeAll, resumeAllOutput, resumeAllError,
               processes) == 0);
     CHECK(resumeAllError.str().empty());
-    CHECK((processes.signals ==
-           std::vector<std::pair<int, int>>{
-               {*third.processGroupId, SIGCONT}}));
+    CHECK(processes.signals.empty());
     CHECK(resumeAllOutput.str().find(
-              "target_count=3,successful_count=1,"
-              "already_satisfied_count=2,missing_count=0,"
-              "rejected_count=0,failed_count=0") != std::string::npos);
+              "GLOBAL_EXPERIMENT_CONTROL_SUMMARY") != std::string::npos);
+    CHECK(resumeAllOutput.str().find(
+              "action=resume_all,status=completed") != std::string::npos);
+    CHECK(resumeAllOutput.str().find(
+              "signal_attempted=0") != std::string::npos);
+    CHECK(processes.Observe(first.pid).stopped);
+    CHECK(processes.Observe(second.pid).stopped);
+    CHECK(processes.Observe(third.pid).stopped);
     CHECK(Scalar(
               connection,
-              "SELECT count(*)::text||':'||"
-              "count(*) FILTER (WHERE signal_result='signaled')::text||':'||"
-              "count(*) FILTER (WHERE "
-              "signal_result='already_requested_state')::text "
-              "FROM experiment_admin_worker_outcome o "
-              "JOIN experiment_admin_request r USING(request_id) "
-              "WHERE r.invocation_identity='selective-resume-all'") ==
-          "3:1:2");
-    CHECK(WaitUntil([&] { return !processes.Observe(third.pid).stopped; }));
+              "SELECT string_agg("
+              "experiment_id::text||':'||status||':'||"
+              "resume_requested::text,',' ORDER BY experiment_id) "
+              "FROM experiment "
+              "WHERE experiment_id BETWEEN 700020 AND 700022") ==
+          "700020:pending:true,"
+          "700021:pending:true,"
+          "700022:pending:true");
     CHECK(Scalar(
               connection,
               "SELECT desired_state||':'||"
@@ -2264,7 +2111,19 @@ void TestSelectiveResumeFromGlobalPause(
     CHECK(RunSelectiveResume(
               connectionString, 700020, "selective-resume-before-repause",
               processes, output) == 0);
-    CHECK(WaitUntil([&] { return !processes.Observe(first.pid).stopped; }));
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=stopped") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=queued_for_admission") != std::string::npos);
+    CHECK(processes.signals.empty());
+    CHECK(processes.Observe(first.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text "
+              "FROM experiment WHERE experiment_id=700020") ==
+          "pending:true");
     pause.invocationIdentity = "selective-resume-pause-3";
     std::ostringstream thirdPauseOutput;
     CHECK(RunCommandWithProcessOperationsForTesting(
@@ -2278,17 +2137,28 @@ void TestSelectiveResumeFromGlobalPause(
     CHECK(thirdPauseRequest != secondPauseRequest);
     CHECK(Scalar(
               connection,
-              "SELECT bool_and(worker_global_pause_request_id=" +
-                  std::to_string(thirdPauseRequest) +
-                  ") FROM experiment "
-                  "WHERE experiment_id BETWEEN 700020 AND 700022") == "t");
+              "SELECT string_agg("
+              "experiment_id::text||':'||worker_global_pause_request_id::text,"
+              "',' ORDER BY experiment_id) "
+              "FROM experiment "
+              "WHERE experiment_id BETWEEN 700020 AND 700022") ==
+          "700020:" + std::to_string(thirdPauseRequest) +
+              ",700021:" + std::to_string(secondPauseRequest) +
+              ",700022:" + std::to_string(secondPauseRequest));
 
     processes.signals.clear();
     CHECK(RunSelectiveResume(
               connectionString, 700020,
               "selective-resume-before-cancel-all",
               processes, output) == 0);
-    CHECK(WaitUntil([&] { return !processes.Observe(first.pid).stopped; }));
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=stopped") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=queued_for_admission") != std::string::npos);
+    CHECK(processes.signals.empty());
+    CHECK(processes.Observe(first.pid).stopped);
     Command cancelAll;
     cancelAll.action = Action::CancelAll;
     cancelAll.cancellationMode = CancellationMode::Immediate;
@@ -2301,6 +2171,7 @@ void TestSelectiveResumeFromGlobalPause(
               connectionString, cancelAll, cancelOutput, cancelError,
               processes) == 0);
     CHECK(cancelError.str().empty());
+
     AssertGroupExited(first);
     AssertGroupExited(second);
     AssertGroupExited(third);
@@ -2325,16 +2196,27 @@ void TestSelectiveResumeFromGlobalPause(
     CHECK(RunSelectiveResume(
               connectionString, 700023, "selective-resume-lifecycle",
               processes, output) == 0);
-    CHECK(output.find("result=lifecycle_resumed") != std::string::npos);
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=none") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=queued_for_admission") != std::string::npos);
     CHECK(Scalar(
               connection,
-              "SELECT status FROM experiment WHERE experiment_id=700023") ==
-          "pending");
+              "SELECT status||':'||resume_requested::text "
+              "FROM experiment WHERE experiment_id=700023") ==
+          "pending:true");
     CHECK(processes.signals.empty());
+
     CHECK(RunSelectiveResume(
               connectionString, 700024, "selective-resume-ordinary-running",
-              processes, output) == 1);
-    CHECK(output.find("result=not_globally_suspended") != std::string::npos);
+              processes, output) == 0);
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=running") != std::string::npos);
+    CHECK(output.find("resume_requested=false") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=already_satisfied") != std::string::npos);
     CHECK(processes.signals.empty());
 
     ResetCrashFixtures(connection);
@@ -2354,16 +2236,22 @@ void TestSelectiveResumeFromGlobalPause(
     processes.signals.clear();
     CHECK(RunSelectiveResume(
               connectionString, 700025, "selective-resume-missing",
-              processes, output) == 1);
-    CHECK(output.find("result=process_missing") != std::string::npos);
-    CHECK(output.find("status=partial") != std::string::npos);
-    CHECK(output.find("missing_count=1") != std::string::npos);
+              processes, output) == 0);
+    CHECK(output.find("SCHEDULER_CONTROL_APPLIED") != std::string::npos);
+    CHECK(output.find("new_status=pending") != std::string::npos);
+    CHECK(output.find("resume_requested=true") != std::string::npos);
+    CHECK(output.find("worker_state=stopped") != std::string::npos);
+    CHECK(output.find("signal=none") != std::string::npos);
+    CHECK(output.find("result=queued_for_admission") != std::string::npos);
     CHECK(processes.signals.empty());
+    CHECK(!processes.Observe(missing.pid).exists);
     CHECK(Scalar(
               connection,
-              "SELECT (worker_pid IS NOT NULL)::text||':'||"
+              "SELECT status||':'||resume_requested::text||':'||"
+              "(worker_pid IS NOT NULL)::text||':'||"
               "(active_scheduler_worker_attempt_id IS NOT NULL)::text "
-              "FROM experiment WHERE experiment_id=700025") == "true:true");
+              "FROM experiment WHERE experiment_id=700025") ==
+          "pending:true:true:true");
     ResetCrashFixtures(connection);
 
     const ManagedWorker genericPredicateRace =
@@ -2391,28 +2279,30 @@ void TestSelectiveResumeFromGlobalPause(
               genericRaceError,
               processes) == 1);
     CHECK(genericRaceOutput.str().find(
-              "action=pause_all,status=partial,result=partial") !=
+              "action=pause_all,status=partial") !=
+          std::string::npos);
+    CHECK(genericRaceOutput.str().find(
+              "failed_count=1") !=
           std::string::npos);
     CHECK(!processes.Observe(genericPredicateRace.pid).stopped);
     CHECK(processes.signals.empty());
     CHECK(Scalar(
               connection,
-              "SELECT (c.active_request_id=r.request_id "
+              "SELECT (c.active_request_id IS NULL "
               "AND c.current_pause_request_id=r.request_id "
+              "AND c.desired_state='paused' "
               "AND e.worker_control_state='running' "
               "AND e.worker_global_pause_request_id IS NULL "
-              "AND r.application_lease_until>now() "
+              "AND r.application_lease_until IS NULL "
               "AND o.outcome_status='failed' "
               "AND o.signal_result='identity_validation_failed' "
               "AND o.detail LIKE '%exact%attempt%')::text "
-              "FROM experiment_global_control c "
-              "JOIN experiment_admin_request r "
-              "ON r.request_id=c.active_request_id "
+              "FROM experiment_admin_request r "
+              "JOIN experiment_global_control c ON c.singleton "
               "JOIN experiment_admin_worker_outcome o "
               "ON o.request_id=r.request_id "
               "JOIN experiment e ON e.experiment_id=o.experiment_id "
-              "WHERE c.singleton AND "
-              "r.invocation_identity='generic-pause-state-race'") ==
+              "WHERE r.invocation_identity='generic-pause-state-race'") ==
           "true");
     {
         pqxx::work transaction{connection};
@@ -2451,8 +2341,14 @@ void TestSelectiveResumeFromGlobalPause(
            std::vector<std::pair<int, int>>{
                {*genericPredicateRace.processGroupId, SIGSTOP}}));
     CHECK(genericRecoveryOutput.str().find(
-              "action=pause_all,status=completed,result=completed,replay=1,"
-              "signal_attempted=1") != std::string::npos);
+              "action=pause_all,status=completed") !=
+          std::string::npos);
+    CHECK(genericRecoveryOutput.str().find(
+              "stopped_workers=1") !=
+          std::string::npos);
+    CHECK(genericRecoveryOutput.str().find(
+              "failed_count=0") !=
+          std::string::npos);
     CHECK(Scalar(
               connection,
               "SELECT e.worker_control_state||':'||"
@@ -2501,7 +2397,7 @@ void TestSelectiveResumeFromGlobalPause(
               connectionString, changedDuringSignal.experimentId,
               "selective-resume-state-race",
               processes, output) == 1);
-    CHECK(output.find("result=stale_control_evidence") !=
+    CHECK(output.find("reason=stale_control_evidence") !=
           std::string::npos);
     CHECK(processes.signals.empty());
     CHECK(processes.Observe(changedDuringSignal.pid).stopped);
@@ -2521,10 +2417,6 @@ void TestSelectiveResumeFromGlobalPause(
             "WHERE experiment_id=$2;",
             changedDuringSignal.commandLine,
             changedDuringSignal.experimentId);
-        transaction.exec(
-            "UPDATE experiment_admin_request "
-            "SET application_lease_until=now()-interval '1 second' "
-            "WHERE invocation_identity='selective-resume-state-race';");
         transaction.commit();
     }
     processes.signals.clear();
@@ -2535,9 +2427,25 @@ void TestSelectiveResumeFromGlobalPause(
               "selective-resume-state-race-recovery",
               processes,
               stateRaceReplayOutput) == 0);
-    CHECK((processes.signals ==
-           std::vector<std::pair<int, int>>{
-               {*changedDuringSignal.processGroupId, SIGCONT}}));
+    CHECK(stateRaceReplayOutput.find(
+              "new_status=pending") != std::string::npos);
+    CHECK(stateRaceReplayOutput.find(
+              "resume_requested=true") != std::string::npos);
+    CHECK(stateRaceReplayOutput.find(
+              "worker_state=stopped") != std::string::npos);
+    CHECK(stateRaceReplayOutput.find(
+              "signal=none") != std::string::npos);
+    CHECK(stateRaceReplayOutput.find(
+              "result=queued_for_admission") != std::string::npos);
+    CHECK(processes.signals.empty());
+    CHECK(processes.Observe(changedDuringSignal.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text||':'||"
+              "worker_control_state||':'||"
+              "(active_scheduler_worker_attempt_id IS NOT NULL)::text "
+              "FROM experiment WHERE experiment_id=700027") ==
+          "pending:true:paused:true");
     CleanupWorker(changedDuringSignal, processes);
     ResetCrashFixtures(connection);
 
@@ -2551,11 +2459,8 @@ void TestSelectiveResumeFromGlobalPause(
               processes) == 0);
     CHECK(WaitUntil(
         [&] { return processes.Observe(identityMismatch.pid).stopped; }));
-    const long long identityPauseRequest = std::stoll(Scalar(
-        connection,
-        "SELECT current_pause_request_id::text "
-        "FROM experiment_global_control WHERE singleton"));
-    // Corruption-defense only: runtime privileges freeze this pause evidence.
+    // Corruption-defense only: runtime privileges normally preserve the exact
+    // experiment/attempt identity agreement established by pause.
     // Production-reachable replacement-process identity failures are covered
     // separately by the native process fixtures in RunRealProcessTests.
     {
@@ -2564,32 +2469,27 @@ void TestSelectiveResumeFromGlobalPause(
             "UPDATE experiment SET worker_executable='wrong-executable' "
             "WHERE experiment_id=$1;",
             identityMismatch.experimentId);
-        transaction.exec_params(
-            "UPDATE experiment_admin_worker_outcome "
-            "SET worker_executable='wrong-executable' "
-            "WHERE request_id=$1 AND experiment_id=$2;",
-            identityPauseRequest,
-            identityMismatch.experimentId);
         transaction.commit();
     }
     processes.signals.clear();
     CHECK(RunSelectiveResume(
               connectionString, 700026, "selective-resume-identity-failure",
               processes, output) == 1);
-    CHECK(output.find("result=identity_validation_failed") !=
-          std::string::npos);
-    CHECK(output.find("replay=0") != std::string::npos);
-    CHECK(output.find("signal_attempted=0") != std::string::npos);
-    CHECK(output.find("signal_result=identity_validation_failed") !=
-          std::string::npos);
-    CHECK(output.find("target_count=1,"
-                      "successful_count=0,already_satisfied_count=0,"
-                      "missing_count=0,rejected_count=1,failed_count=1") !=
+    CHECK(output.find("reason=stale_control_evidence") !=
           std::string::npos);
     CHECK(processes.signals.empty());
     CHECK(processes.Observe(identityMismatch.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_admin_request "
+              "WHERE invocation_identity="
+              "'selective-resume-identity-failure'") == "0");
+    CHECK(Scalar(
+              connection,
+              "SELECT active_request_id IS NULL "
+              "FROM experiment_global_control WHERE singleton") == "t");
     resumeAll.invocationIdentity =
-        "selective-resume-identity-unresolved-resume-all";
+        "selective-resume-identity-resume-all";
     std::ostringstream unresolvedResumeOutput;
     std::ostringstream unresolvedResumeError;
     CHECK(RunCommandWithProcessOperationsForTesting(
@@ -2597,26 +2497,29 @@ void TestSelectiveResumeFromGlobalPause(
               resumeAll,
               unresolvedResumeOutput,
               unresolvedResumeError,
-              processes) == 1);
-    CHECK(unresolvedResumeError.str().find(
-              "conflicting_administrative_request_active") !=
+              processes) == 0);
+    CHECK(unresolvedResumeError.str().empty());
+    CHECK(unresolvedResumeOutput.str().find(
+              "action=resume_all,status=completed") !=
           std::string::npos);
+    CHECK(unresolvedResumeOutput.str().find(
+              "signal_attempted=0") != std::string::npos);
     CHECK(Scalar(
               connection,
-              "SELECT current_pause_request_id::text "
-              "FROM experiment_global_control WHERE singleton") ==
-          std::to_string(identityPauseRequest));
-    CHECK(Scalar(
-              connection,
-              "SELECT worker_control_state||':'||"
-              "worker_global_pause_request_id::text "
+              "SELECT status||':'||resume_requested::text||':'||"
+              "worker_control_state||':'||"
+              "(worker_global_pause_request_id IS NULL)::text||':'||"
+              "(active_scheduler_worker_attempt_id IS NOT NULL)::text "
               "FROM experiment WHERE experiment_id=700026") ==
-          "paused:" + std::to_string(identityPauseRequest));
+          "pending:true:paused:true:true");
     CHECK(processes.Observe(identityMismatch.pid).stopped);
     CHECK(Scalar(
               connection,
-              "SELECT active_request_id IS NOT NULL "
-              "FROM experiment_global_control WHERE singleton") == "t");
+              "SELECT desired_state||':'||"
+              "(active_request_id IS NULL)::text||':'||"
+              "(current_pause_request_id IS NULL)::text "
+              "FROM experiment_global_control WHERE singleton") ==
+          "running:true:true");
     {
         pqxx::work transaction{connection};
         transaction.exec_params(
@@ -2624,19 +2527,13 @@ void TestSelectiveResumeFromGlobalPause(
             "WHERE experiment_id=$2;",
             identityMismatch.executable,
             identityMismatch.experimentId);
-        transaction.exec_params(
-            "UPDATE experiment_admin_worker_outcome SET worker_executable=$1 "
-            "WHERE request_id=$2 AND experiment_id=$3;",
-            identityMismatch.executable,
-            identityPauseRequest,
-            identityMismatch.experimentId);
         transaction.commit();
     }
     CleanupWorker(identityMismatch, processes);
     ResetCrashFixtures(connection);
 }
 
-void TestSelectiveLeaseTakeoverFencesStaleOwner(
+void TestConcurrentSelectiveResumeIsIdempotent(
     const std::string& selfPath,
     const std::string& connectionString,
     pqxx::connection& connection)
@@ -2663,78 +2560,54 @@ void TestSelectiveLeaseTakeoverFencesStaleOwner(
         connection,
         "SELECT current_pause_request_id::text "
         "FROM experiment_global_control WHERE singleton"));
-    const long long resumeRequest = SeedActiveSelectiveRequest(
-        connection, worker.experimentId, oldPauseRequest, "stale-owner");
-
-    int takeoverResult = -1;
-    int newerPauseResult = -1;
-    std::string takeoverOutput;
-    std::string newerPauseOutput;
-    std::optional<std::thread> competingTakeover;
-    AfterSignalProcesses interleaved(
-        processes,
-        [&] {
-            CHECK(WaitUntil(
-                [&] { return !processes.Observe(worker.pid).stopped; }));
-            competingTakeover.emplace([&] {
-                pqxx::connection competingConnection{
-                    connectionString};
-                pqxx::work transaction{competingConnection};
-                transaction.exec_params(
-                    "UPDATE experiment_admin_request "
-                    "SET application_lease_until="
-                    "now()-interval '1 second' "
-                    "WHERE request_id=$1 "
-                    "AND application_owner='stale-owner';",
-                    resumeRequest);
-                transaction.commit();
-                RecordingNativeProcesses competingProcesses;
-                takeoverResult = RunSelectiveResume(
-                    connectionString,
-                    worker.experimentId,
-                    "takeover-owner",
-                    competingProcesses,
-                    takeoverOutput);
-            });
-        });
-
-    std::string staleOutput;
-    const int staleResult = RunSelectiveResume(
-        connectionString,
-        worker.experimentId,
-        "stale-owner",
-        interleaved,
-        staleOutput);
-    CHECK(staleResult == 0 || staleResult == 1);
-    if (competingTakeover)
-    {
-        competingTakeover->join();
-    }
-    else
-    {
-        pqxx::work transaction{connection};
-        transaction.exec_params(
-            "UPDATE experiment_admin_request "
-            "SET application_lease_until=now()-interval '1 second' "
-            "WHERE request_id=$1;",
-            resumeRequest);
-        transaction.commit();
-        RecordingNativeProcesses competingProcesses;
-        takeoverResult = RunSelectiveResume(
+    processes.signals.clear();
+    int firstResult = -1;
+    int secondResult = -1;
+    std::string firstOutput;
+    std::string secondOutput;
+    std::thread firstResume([&] {
+        firstResult = RunSelectiveResume(
             connectionString,
             worker.experimentId,
-            "takeover-owner",
-            competingProcesses,
-            takeoverOutput);
-    }
-    CHECK(takeoverResult == 0);
-    CHECK(takeoverOutput.find("status=completed") !=
-          std::string::npos);
-    CHECK(takeoverOutput.find(
-              staleResult == 1
-                  ? "already_requested_state"
-                  : "already_resumed") !=
-          std::string::npos);
+            "concurrent-selective-resume-first",
+            processes,
+            firstOutput);
+    });
+    std::thread secondResume([&] {
+        secondResult = RunSelectiveResume(
+            connectionString,
+            worker.experimentId,
+            "concurrent-selective-resume-second",
+            processes,
+            secondOutput);
+    });
+    firstResume.join();
+    secondResume.join();
+    CHECK(firstResult == 0);
+    CHECK(secondResult == 0);
+    CHECK((firstOutput.find("result=queued_for_admission") !=
+               std::string::npos) !=
+          (secondOutput.find("result=queued_for_admission") !=
+               std::string::npos));
+    CHECK((firstOutput.find("result=already_satisfied") !=
+               std::string::npos) !=
+          (secondOutput.find("result=already_satisfied") !=
+               std::string::npos));
+    CHECK(processes.signals.empty());
+    CHECK(processes.Observe(worker.pid).stopped);
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text||':'||"
+              "worker_control_state||':'||"
+              "(active_scheduler_worker_attempt_id IS NOT NULL)::text "
+              "FROM experiment WHERE experiment_id=700030") ==
+          "pending:true:paused:true");
+    CHECK(Scalar(
+              connection,
+              "SELECT count(*)::text FROM experiment_admin_request "
+              "WHERE invocation_identity IN "
+              "('concurrent-selective-resume-first',"
+              "'concurrent-selective-resume-second')") == "0");
 
     Command newerPause;
     newerPause.action = Action::PauseAll;
@@ -2743,21 +2616,15 @@ void TestSelectiveLeaseTakeoverFencesStaleOwner(
         "selective-resume-owner-fence-new-pause";
     std::ostringstream output;
     std::ostringstream error;
-    newerPauseResult = RunCommandWithProcessOperationsForTesting(
+    const int newerPauseResult = RunCommandWithProcessOperationsForTesting(
         connectionString,
         newerPause,
         output,
         error,
         processes);
-    newerPauseOutput = output.str() + error.str();
     CHECK(newerPauseResult == 0);
-    if (staleResult == 1)
-        CHECK(staleOutput.find("administrative_request_ownership_lost") !=
-              std::string::npos);
-    else
-        CHECK(staleOutput.find("status=completed") !=
-              std::string::npos);
-    CHECK(newerPauseOutput.find("status=completed") != std::string::npos);
+    CHECK(error.str().empty());
+    CHECK(output.str().find("status=completed") != std::string::npos);
     const long long newerPauseRequest = std::stoll(Scalar(
         connection,
         "SELECT current_pause_request_id::text "
@@ -2765,20 +2632,11 @@ void TestSelectiveLeaseTakeoverFencesStaleOwner(
     CHECK(newerPauseRequest != oldPauseRequest);
     CHECK(Scalar(
               connection,
-              "SELECT application_owner||':'||status||':'||"
-              "successful_count::text||':'||already_satisfied_count::text "
-              "FROM experiment_admin_request WHERE request_id=" +
-                  std::to_string(resumeRequest)) ==
-          std::string(staleResult == 1
-                          ? "takeover-owner"
-                          : "stale-owner") +
-              ":completed:0:1");
-    CHECK(Scalar(
-              connection,
-              "SELECT worker_control_state||':'||"
+              "SELECT status||':'||resume_requested::text||':'||"
+              "worker_control_state||':'||"
               "worker_global_pause_request_id::text "
               "FROM experiment WHERE experiment_id=700030") ==
-          "paused:" + std::to_string(newerPauseRequest));
+          "paused:false:paused:" + std::to_string(newerPauseRequest));
     CHECK(processes.Observe(worker.pid).stopped);
 
     Command resumeAll;
@@ -2795,209 +2653,6 @@ void TestSelectiveLeaseTakeoverFencesStaleOwner(
               cleanupError,
               processes) == 0);
     CleanupWorker(worker, processes);
-    ResetCrashFixtures(connection);
-}
-
-void TestGenericReplacementReplayAndOwnerFence(
-    const std::string& selfPath,
-    const std::string& connectionString,
-    pqxx::connection& connection)
-{
-    RecordingNativeProcesses processes;
-    const ManagedWorker original =
-        SpawnWorker(selfPath, processes, 700035);
-    InsertRunningExperiment(connection, original);
-
-    Command pause;
-    pause.action = Action::PauseAll;
-    pause.confirmed = true;
-    pause.invocationIdentity = "replacement-replay-pause";
-    std::ostringstream pauseOutput;
-    std::ostringstream pauseError;
-    CHECK(RunCommandWithProcessOperationsForTesting(
-              connectionString,
-              pause,
-              pauseOutput,
-              pauseError,
-              processes) == 0);
-    CHECK(WaitUntil(
-        [&] { return processes.Observe(original.pid).stopped; }));
-    const long long pauseRequestId = std::stoll(Scalar(
-        connection,
-        "SELECT current_pause_request_id::text "
-        "FROM experiment_global_control WHERE singleton"));
-
-    std::mutex signalMutex;
-    std::condition_variable signalCondition;
-    bool signalDelivered = false;
-    bool releaseStaleOwner = false;
-    AfterSignalProcesses blockingProcesses(
-        processes,
-        [&] {
-            std::unique_lock<std::mutex> lock{signalMutex};
-            signalDelivered = true;
-            signalCondition.notify_all();
-            signalCondition.wait(
-                lock, [&] { return releaseStaleOwner; });
-        });
-
-    Command resume;
-    resume.action = Action::ResumeAll;
-    resume.confirmed = true;
-    resume.invocationIdentity = "replacement-replay-stale-owner";
-    int staleResult = -1;
-    std::string staleOutput;
-    std::thread staleInvocation(
-        [&] {
-            std::ostringstream output;
-            std::ostringstream error;
-            staleResult = RunCommandWithProcessOperationsForTesting(
-                connectionString,
-                resume,
-                output,
-                error,
-                blockingProcesses);
-            staleOutput = output.str() + error.str();
-        });
-    {
-        std::unique_lock<std::mutex> lock{signalMutex};
-        CHECK(signalCondition.wait_for(
-            lock,
-            std::chrono::seconds(3),
-            [&] { return signalDelivered; }));
-    }
-    CHECK(WaitUntil(
-        [&] { return !processes.Observe(original.pid).stopped; }));
-
-    const long long resumeRequestId = std::stoll(Scalar(
-        connection,
-        "SELECT active_request_id::text "
-        "FROM experiment_global_control WHERE singleton"));
-    {
-        std::lock_guard<std::mutex> lock{signalMutex};
-        releaseStaleOwner = true;
-    }
-    signalCondition.notify_all();
-    staleInvocation.join();
-    CHECK(staleResult == 0);
-    CHECK(staleOutput.find("status=completed") !=
-          std::string::npos);
-
-    CHECK(CancelWorker(
-              original,
-              false,
-              std::chrono::milliseconds(300),
-              processes).success);
-    AssertGroupExited(original);
-
-    const ManagedWorker replacement =
-        SpawnWorker(selfPath, processes, 700035);
-    {
-        pqxx::work transaction{connection};
-        transaction.exec(
-            "SELECT set_config("
-            "'expertadvisor.scheduler_protocol_generation','52',true);");
-        transaction.exec_params(
-            "UPDATE experiment SET status='running',phase=$1,worker_pid=$2,"
-            "worker_process_group_id=$3,worker_executable=$4,"
-            "worker_command_line=$5,worker_process_start_identity=$6,"
-            "worker_control_state='paused',"
-            "worker_global_pause_request_id=$8,worker_started_at=now(),"
-            "updated_at=now() WHERE experiment_id=$7;",
-            replacement.phase,
-            replacement.pid,
-            replacement.processGroupId,
-            replacement.executable,
-            replacement.commandLine,
-            replacement.processStartIdentity,
-            replacement.experimentId,
-            pauseRequestId);
-        transaction.exec_params(
-            "UPDATE experiment_admin_request SET status='applying',"
-            "completed_at=NULL,"
-            "application_owner='replacement-replay-stale-owner',"
-            "application_lease_until=now()-interval '1 second' "
-            "WHERE request_id=$1;",
-            resumeRequestId);
-        transaction.exec_params(
-            "UPDATE experiment_admin_worker_outcome "
-            "SET identity_result='not_checked',"
-            "requested_signal=NULL,signal_result='not_attempted',"
-            "outcome_status='planned' WHERE request_id=$1;",
-            resumeRequestId);
-        transaction.exec_params(
-            "UPDATE experiment_global_control "
-            "SET active_request_id=$1,current_pause_request_id=$2 "
-            "WHERE singleton;",
-            resumeRequestId,
-            pauseRequestId);
-        transaction.commit();
-    }
-    CHECK(PauseWorker(replacement, processes).success);
-    CHECK(WaitUntil(
-        [&] { return processes.Observe(replacement.pid).stopped; }));
-    processes.signals.clear();
-
-    Command takeover = resume;
-    takeover.invocationIdentity = "replacement-replay-takeover-owner";
-    std::ostringstream takeoverOutput;
-    std::ostringstream takeoverError;
-    CHECK(RunCommandWithProcessOperationsForTesting(
-              connectionString,
-              takeover,
-              takeoverOutput,
-              takeoverError,
-              processes) == 1);
-    CHECK(processes.signals.empty());
-    CHECK(processes.Observe(replacement.pid).stopped);
-    CHECK(takeoverOutput.str().find(
-              "action=resume_all,status=partial,result=partial,replay=1,"
-              "signal_attempted=0") != std::string::npos);
-    CHECK(takeoverOutput.str().find(
-              "worker_identity=experiment:700035,"
-              "identity_result=identity_validation_failed,"
-              "outcome_status=failed,"
-              "signal_result=identity_validation_failed,"
-              "requested_signal=,detail=") !=
-          std::string::npos);
-    CHECK(Scalar(
-              connection,
-              "SELECT application_owner||':'||status||':'||"
-              "(application_lease_until IS NULL)::text "
-              "FROM experiment_admin_request WHERE request_id=" +
-                  std::to_string(resumeRequestId)) ==
-          "replacement-replay-takeover-owner:partial:false");
-    CHECK(Scalar(
-              connection,
-              "SELECT worker_pid::text||':'||"
-              "worker_process_start_identity||':'||worker_command_line "
-              "FROM experiment_admin_worker_outcome WHERE request_id=" +
-                  std::to_string(resumeRequestId)) ==
-          std::to_string(original.pid) + ":" +
-              *original.processStartIdentity + ":" +
-              *original.commandLine);
-    CHECK(Scalar(
-              connection,
-              "SELECT active_request_id::text||':'||"
-              "current_pause_request_id::text "
-              "FROM experiment_global_control WHERE singleton") ==
-          std::to_string(resumeRequestId) + ":" +
-              std::to_string(pauseRequestId));
-    CHECK(Scalar(
-              connection,
-              "SELECT worker_global_pause_request_id::text "
-              "FROM experiment WHERE experiment_id=700035") ==
-          std::to_string(pauseRequestId));
-
-    CHECK(Scalar(
-              connection,
-              "SELECT application_owner||':'||status "
-              "FROM experiment_admin_request WHERE request_id=" +
-                  std::to_string(resumeRequestId)) ==
-          "replacement-replay-takeover-owner:partial");
-    CHECK(processes.Observe(replacement.pid).stopped);
-
-    CleanupWorker(replacement, processes);
     ResetCrashFixtures(connection);
 }
 
@@ -3078,141 +2733,48 @@ void TestSelectiveReplayAfterLifecycleTransition(
     const std::string& connectionString,
     pqxx::connection& connection)
 {
-    const std::vector<std::string> lifecycleStates{
-        "pending", "completed", "failed", "cancelled"};
+    (void)selfPath;
+    RecordingNativeProcesses processes;
+    const std::vector<std::string> terminalStates{
+        "completed", "failed", "cancelled"};
     long long experimentId = 700031;
-    for (const std::string& lifecycleState : lifecycleStates)
+    for (const std::string& terminalState : terminalStates)
     {
-        RecordingNativeProcesses processes;
-        const ManagedWorker worker =
-            SpawnWorker(selfPath, processes, experimentId);
-        InsertRunningExperiment(connection, worker);
-        Command pause;
-        pause.action = Action::PauseAll;
-        pause.confirmed = true;
-        pause.invocationIdentity =
-            "selective-resume-lifecycle-pause-" + lifecycleState;
-        std::ostringstream pauseOutput;
-        std::ostringstream pauseError;
-        CHECK(RunCommandWithProcessOperationsForTesting(
-                  connectionString,
-                  pause,
-                  pauseOutput,
-                  pauseError,
-                  processes) == 0);
-        CHECK(WaitUntil(
-            [&] { return processes.Observe(worker.pid).stopped; }));
-        const long long pauseRequest = std::stoll(Scalar(
-            connection,
-            "SELECT current_pause_request_id::text "
-            "FROM experiment_global_control WHERE singleton"));
-        const long long resumeRequest = SeedActiveSelectiveRequest(
-            connection,
-            experimentId,
-            pauseRequest,
-            "crashed-selective-owner");
-
-        CHECK(ResumeWorker(worker, processes).success);
-        CHECK(WaitUntil(
-            [&] { return !processes.Observe(worker.pid).stopped; }));
-        CHECK(CancelWorker(
-                  worker,
-                  false,
-                  std::chrono::milliseconds(300),
-                  processes).success);
-        AssertGroupExited(worker);
         {
             pqxx::work transaction{connection};
-            const long long attemptId = transaction.exec_params(
-                "SELECT active_scheduler_worker_attempt_id "
-                "FROM experiment WHERE experiment_id=$1;",
-                experimentId)[0][0].as<long long>();
-            const std::string attemptState =
-                lifecycleState == "completed" ? "completed" : "failed";
-            CHECK(transaction.exec_params(
-                "UPDATE experiment_scheduler_worker_attempt "
-                "SET lifecycle_state=$1,completed_at=now(),"
-                "last_observed_at=now() "
-                "WHERE worker_attempt_id=$2 "
-                "AND lifecycle_state='observed';",
-                attemptState,
-                attemptId).affected_rows() == 1);
-            CHECK(transaction.exec_params(
-                "UPDATE experiment SET status=$1,worker_pid=NULL,"
-                "worker_process_group_id=NULL,"
-                "active_scheduler_worker_attempt_id=NULL,updated_at=now() "
-                "WHERE experiment_id=$2 "
-                "AND active_scheduler_worker_attempt_id=$3;",
-                lifecycleState,
+            transaction.exec_params(
+                "INSERT INTO experiment(experiment_id,status,phase) "
+                "VALUES($1,$2,'train');",
                 experimentId,
-                attemptId).affected_rows() == 1);
+                terminalState);
             transaction.commit();
         }
 
-        processes.signals.clear();
         std::string replayOutput;
-        const int replayResult = RunSelectiveResume(
-            connectionString,
-            experimentId,
-            "recovery-owner-" + lifecycleState,
-            processes,
-            replayOutput);
-        CHECK(replayResult == 0);
+        CHECK(RunSelectiveResume(
+                  connectionString,
+                  experimentId,
+                  "selective-resume-terminal-replay-" + terminalState,
+                  processes,
+                  replayOutput) == 1);
+        CHECK(replayOutput.find(
+                  "reason=resume_requires_paused_status") !=
+              std::string::npos);
         CHECK(processes.signals.empty());
-        CHECK(replayOutput.find("result=worker_departed") !=
-              std::string::npos);
-        CHECK(replayOutput.find("replay=1") != std::string::npos);
-        CHECK(replayOutput.find("signal_attempted=0") !=
-              std::string::npos);
-        CHECK(replayOutput.find("target_count=1,"
-                                "successful_count=0,"
-                                "already_satisfied_count=0,"
-                                "missing_count=1,rejected_count=0,"
-                                "failed_count=0") != std::string::npos);
         CHECK(Scalar(
                   connection,
-                  "SELECT application_owner||':'||status||':'||"
-                  "(application_lease_until IS NULL)::text "
-                  "FROM experiment_admin_request WHERE request_id=" +
-                      std::to_string(resumeRequest)) ==
-              "recovery-owner-" + lifecycleState + ":completed:true");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT active_request_id IS NULL "
-                  "FROM experiment_global_control WHERE singleton") == "t");
-
-        Command resumeAll;
-        resumeAll.action = Action::ResumeAll;
-        resumeAll.confirmed = true;
-        resumeAll.invocationIdentity =
-            "selective-resume-departed-cleanup-" + lifecycleState;
-        std::ostringstream resumeOutput;
-        std::ostringstream resumeError;
-        const int resumeAllResult =
-            RunCommandWithProcessOperationsForTesting(
-                connectionString,
-                resumeAll,
-                resumeOutput,
-                resumeError,
-                processes);
-        CHECK(resumeAllResult == 0);
-        CHECK(resumeOutput.str().find(
-                  "target_count=1,successful_count=0,"
-                  "already_satisfied_count=0,missing_count=1,"
-                  "rejected_count=0,failed_count=0") !=
-              std::string::npos);
-        CHECK(Scalar(
-                  connection,
-                  "SELECT current_pause_request_id IS NULL "
-                  "FROM experiment_global_control WHERE singleton") == "t");
-        CHECK(Scalar(
-                  connection,
-                  "SELECT worker_global_pause_request_id IS NULL "
+                  "SELECT status||':'||resume_requested::text "
                   "FROM experiment WHERE experiment_id=" +
-                      std::to_string(experimentId)) == "t");
-        ResetCrashFixtures(connection);
+                      std::to_string(experimentId)) ==
+              terminalState + ":false");
+        CHECK(Scalar(
+                  connection,
+                  "SELECT count(*)::text FROM experiment_admin_request "
+                  "WHERE invocation_identity='selective-resume-terminal-replay-" +
+                      terminalState + "'") == "0");
         ++experimentId;
     }
+    ResetCrashFixtures(connection);
 }
 
 void TestPrimarySelectiveResumeAndCheckpointChildDeparture(
@@ -3248,9 +2810,9 @@ void TestPrimarySelectiveResumeAndCheckpointChildDeparture(
               pauseError,
               processes) == 0);
     CHECK(WaitUntil([&] {
-        return processes.Observe(primary.pid).stopped &&
-               processes.Observe(child.pid).stopped;
+        return processes.Observe(primary.pid).stopped;
     }));
+    CHECK(!processes.Observe(child.pid).stopped);
     const long long pauseRequest = std::stoll(Scalar(
         connection,
         "SELECT current_pause_request_id::text "
@@ -3261,7 +2823,7 @@ void TestPrimarySelectiveResumeAndCheckpointChildDeparture(
               "count(o.*)::text FROM experiment_admin_request r "
               "JOIN experiment_admin_worker_outcome o USING(request_id) "
               "WHERE r.request_id=" + std::to_string(pauseRequest) +
-                  " GROUP BY r.target_count") == "2:2");
+                  " GROUP BY r.target_count") == "1:1");
 
     processes.signals.clear();
     std::string selectiveOutput;
@@ -3271,24 +2833,25 @@ void TestPrimarySelectiveResumeAndCheckpointChildDeparture(
               "selective-resume-primary-only",
               processes,
               selectiveOutput) == 0);
-    CHECK((processes.signals ==
-           std::vector<std::pair<int, int>>{
-               {*primary.processGroupId, SIGCONT}}));
-    CHECK(WaitUntil(
-        [&] { return !processes.Observe(primary.pid).stopped; }));
-    CHECK(processes.Observe(child.pid).stopped);
+    CHECK(selectiveOutput.find("result=queued_for_admission") !=
+          std::string::npos);
+    CHECK(selectiveOutput.find("signal=none") != std::string::npos);
+    CHECK(processes.signals.empty());
+    CHECK(processes.Observe(primary.pid).stopped);
+    CHECK(!processes.Observe(child.pid).stopped);
     CHECK(Scalar(
               connection,
-              "SELECT e.worker_control_state||':'||"
+              "SELECT e.status||':'||e.resume_requested::text||':'||"
+              "e.worker_control_state||':'||"
               "e.worker_global_pause_request_id::text||':'||"
               "ce.worker_control_state||':'||"
-              "ce.worker_global_pause_request_id::text "
+              "(ce.worker_global_pause_request_id IS NULL)::text "
               "FROM experiment e "
               "JOIN experiment_checkpoint_eval ce "
               "ON ce.parent_experiment_id=e.experiment_id "
               "WHERE e.experiment_id=700040") ==
-          "running:" + std::to_string(pauseRequest) +
-              ":paused:" + std::to_string(pauseRequest));
+          "pending:true:paused:" + std::to_string(pauseRequest) +
+              ":running:true");
 
     CHECK(CancelWorker(
               child,
@@ -3335,9 +2898,8 @@ void TestPrimarySelectiveResumeAndCheckpointChildDeparture(
               processes) == 0);
     CHECK(processes.signals.empty());
     CHECK(resumeOutput.str().find(
-              "target_count=2,successful_count=0,"
-              "already_satisfied_count=1,missing_count=1,"
-              "rejected_count=0,failed_count=0") !=
+              "target_count=0,resume_requested_count=0,"
+              "signal_attempted=0") !=
           std::string::npos);
     CHECK(Scalar(
               connection,
@@ -3347,6 +2909,11 @@ void TestPrimarySelectiveResumeAndCheckpointChildDeparture(
               "JOIN experiment_checkpoint_eval ce "
               "ON ce.parent_experiment_id=e.experiment_id "
               "WHERE e.experiment_id=700040") == "t");
+    CHECK(Scalar(
+              connection,
+              "SELECT status||':'||resume_requested::text "
+              "FROM experiment WHERE experiment_id=700040") ==
+          "pending:true");
     CHECK(Scalar(
               connection,
               "SELECT desired_state||':'||"
@@ -3368,11 +2935,12 @@ void TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
          {CancellationMode::Immediate,
           CancellationMode::AfterNextCheckpoint})
     {
-        const bool afterCheckpoint =
+        const bool requestedAfterCheckpoint =
             mode == CancellationMode::AfterNextCheckpoint;
-        const long long experimentId = afterCheckpoint ? 700051 : 700050;
+        const long long experimentId =
+            requestedAfterCheckpoint ? 700051 : 700050;
         const long long checkpointEvalId =
-            afterCheckpoint ? 8700051 : 8700050;
+            requestedAfterCheckpoint ? 8700051 : 8700050;
         RecordingNativeProcesses processes;
         const ManagedWorker primary =
             SpawnWorker(selfPath, processes, experimentId);
@@ -3387,16 +2955,6 @@ void TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
                 checkpointEvalId);
         InsertRunningExperiment(connection, primary);
         InsertRunningCheckpointChild(connection, child);
-        if (afterCheckpoint)
-        {
-            pqxx::work transaction{connection};
-            transaction.exec_params(
-                "UPDATE experiment SET current_epoch=10,"
-                "checkpoint_interval=20,target_epochs=100 "
-                "WHERE experiment_id=$1;",
-                experimentId);
-            transaction.commit();
-        }
 
         Command pause;
         pause.action = Action::PauseAll;
@@ -3413,9 +2971,10 @@ void TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
                   pauseError,
                   processes) == 0);
         CHECK(WaitUntil([&] {
-            return processes.Observe(primary.pid).stopped &&
-                   processes.Observe(child.pid).stopped;
+            return processes.Observe(primary.pid).stopped;
         }));
+        CHECK(!processes.Observe(child.pid).stopped);
+
         std::string selectiveOutput;
         CHECK(RunSelectiveResume(
                   connectionString,
@@ -3424,9 +2983,10 @@ void TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
                       std::string{ToString(mode)},
                   processes,
                   selectiveOutput) == 0);
-        CHECK(WaitUntil(
-            [&] { return !processes.Observe(primary.pid).stopped; }));
-        CHECK(processes.Observe(child.pid).stopped);
+        CHECK(selectiveOutput.find("result=queued_for_admission") !=
+              std::string::npos);
+        CHECK(processes.Observe(primary.pid).stopped);
+        CHECK(!processes.Observe(child.pid).stopped);
 
         Command cancel;
         cancel.action = Action::CancelAll;
@@ -3444,142 +3004,39 @@ void TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
                   cancelOutput,
                   cancelError,
                   processes) == 0);
+        CHECK(cancelError.str().empty());
+        AssertGroupExited(primary);
         AssertGroupExited(child);
-
-        if (!afterCheckpoint)
-        {
-            CHECK(Scalar(
-                      connection,
-                      "SELECT worker_global_pause_request_id IS NULL "
-                      "FROM experiment WHERE experiment_id=" +
-                          std::to_string(experimentId)) == "t");
-            CHECK(Scalar(
-                      connection,
-                      "SELECT worker_global_pause_request_id IS NULL "
-                      "FROM experiment_checkpoint_eval "
-                      "WHERE checkpoint_eval_id=" +
-                          std::to_string(checkpointEvalId)) == "t");
-            AssertGroupExited(primary);
-            CHECK(cancelOutput.str().find(
-                      "target_count=2") !=
-                  std::string::npos);
-            CHECK(Scalar(
-                      connection,
-                      "SELECT bool_and(outcome_status='completed') "
-                      "FROM experiment_admin_worker_outcome o "
-                      "JOIN experiment_admin_request r USING(request_id) "
-                      "WHERE r.invocation_identity="
-                      "'selective-resume-cancel-mix-immediate'") == "t");
-            CHECK(Scalar(
-                      connection,
-                      "SELECT active_request_id IS NULL AND "
-                      "current_pause_request_id IS NULL "
-                      "FROM experiment_global_control WHERE singleton") == "t");
-        }
-        else
-        {
-            CHECK(Scalar(
-                      connection,
-                      "SELECT e.worker_global_pause_request_id IS NOT NULL "
-                      "AND ce.worker_global_pause_request_id IS NOT NULL "
-                      "FROM experiment e "
-                      "JOIN experiment_checkpoint_eval ce "
-                      "ON ce.checkpoint_eval_id=" +
-                          std::to_string(checkpointEvalId) +
-                          " WHERE e.experiment_id=" +
-                          std::to_string(experimentId)) == "t");
-            CHECK(processes.Observe(primary.pid).exists);
-            const long long cancelRequest = std::stoll(Scalar(
-                connection,
-                "SELECT active_request_id::text "
-                "FROM experiment_global_control WHERE singleton"));
-            CHECK(Scalar(
-                      connection,
-                      "SELECT status||':'||target_count::text||':'||"
-                      "successful_count::text||':'||"
-                      "already_satisfied_count::text "
-                      "FROM experiment_admin_request WHERE request_id=" +
-                          std::to_string(cancelRequest)) ==
-                  "pending:2:1:1");
-            {
-                pqxx::work transaction{connection};
-                transaction.exec_params(
-                    "UPDATE experiment_admin_request "
-                    "SET application_lease_until=now()-interval '1 second' "
-                    "WHERE request_id=$1;",
-                    cancelRequest);
-                transaction.commit();
-            }
-            Command replay = cancel;
-            replay.invocationIdentity =
-                "selective-resume-cancel-mix-recovery-owner";
-            std::ostringstream replayOutput;
-            std::ostringstream replayError;
-            CHECK(RunCommandWithProcessOperationsForTesting(
-                      connectionString,
-                      replay,
-                      replayOutput,
-                      replayError,
-                      processes) == 0);
-            CHECK(replayOutput.str().find(
-                      "GLOBAL_EXPERIMENT_CONTROL_RETRY,request_id=" +
-                      std::to_string(cancelRequest)) != std::string::npos);
-            CHECK(Scalar(
-                      connection,
-                      "SELECT application_owner||':'||status "
-                      "FROM experiment_admin_request WHERE request_id=" +
-                          std::to_string(cancelRequest)) ==
-                  "selective-resume-cancel-mix-recovery-owner:pending");
-
-            CHECK(CancelWorker(
-                      primary,
-                      false,
-                      std::chrono::milliseconds(300),
-                      processes).success);
-            AssertGroupExited(primary);
-            {
-                pqxx::work transaction{connection};
-                AcquireCoordinationLock(transaction);
-                transaction.exec_params(
-                    "UPDATE experiment SET status='cancelled',"
-                    "current_epoch=20,stopped_at_checkpoint_epoch=20,"
-                    "stopped_at_checkpoint_model_id=("
-                    "SELECT checkpoint_model_id "
-                    "FROM experiment_checkpoint_eval "
-                    "WHERE checkpoint_eval_id=$2),"
-                    "last_model_id=(SELECT checkpoint_model_id "
-                    "FROM experiment_checkpoint_eval "
-                    "WHERE checkpoint_eval_id=$2),"
-                    "worker_pid=NULL,worker_process_group_id=NULL,"
-                    "completed_at=now(),cancellation_completed_at=now(),"
-                    "updated_at=now() WHERE experiment_id=$1;",
-                    experimentId,
-                    checkpointEvalId);
-                CHECK(ReconcileActiveCancellation(
-                    transaction,
-                    "selective-resume-cancel-mix-scheduler-owner",
-                    true));
-                transaction.commit();
-            }
-            CHECK(Scalar(
-                      connection,
-                      "SELECT status||':'||target_count::text||':'||"
-                      "successful_count::text||':'||"
-                      "already_satisfied_count::text||':'||"
-                      "failed_count::text "
-                      "FROM experiment_admin_request WHERE request_id=" +
-                          std::to_string(cancelRequest)) ==
-                  "completed:2:1:1:0");
-            CHECK(Scalar(
-                      connection,
-                      "SELECT active_request_id IS NULL AND "
-                      "current_pause_request_id IS NULL "
-                      "FROM experiment_global_control WHERE singleton") == "t");
-        }
+        CHECK(cancelOutput.str().find("target_count=2") !=
+              std::string::npos);
+        CHECK(Scalar(
+                  connection,
+                  "SELECT e.status||':'||"
+                  "(e.worker_global_pause_request_id IS NULL)::text||':'||"
+                  "ce.status||':'||"
+                  "(ce.worker_global_pause_request_id IS NULL)::text "
+                  "FROM experiment e "
+                  "JOIN experiment_checkpoint_eval ce "
+                  "ON ce.checkpoint_eval_id=" +
+                      std::to_string(checkpointEvalId) +
+                      " WHERE e.experiment_id=" +
+                      std::to_string(experimentId)) ==
+              "cancelled:true:failed:true");
+        CHECK(Scalar(
+                  connection,
+                  "SELECT bool_and(outcome_status='completed') "
+                  "FROM experiment_admin_worker_outcome o "
+                  "JOIN experiment_admin_request r USING(request_id) "
+                  "WHERE r.invocation_identity='selective-resume-cancel-mix-" +
+                      std::string{ToString(mode)} + "'") == "t");
+        CHECK(Scalar(
+                  connection,
+                  "SELECT active_request_id IS NULL AND "
+                  "current_pause_request_id IS NULL "
+                  "FROM experiment_global_control WHERE singleton") == "t");
         ResetCrashFixtures(connection);
     }
 }
-
 void TestCancellationInspectionFailuresRemainRecoverable(
     const std::string& selfPath,
     const std::string& connectionString,
@@ -3676,7 +3133,7 @@ void TestCancellationInspectionFailuresRemainRecoverable(
                   "WHERE e.experiment_id=" +
                       std::to_string(failure.experimentId) +
                       " AND c.singleton") ==
-              "running:paused:" + std::to_string(pauseRequestId) + ":" +
+              "paused:paused:" + std::to_string(pauseRequestId) + ":" +
                   std::to_string(cancelRequestId) + ":" +
                   std::to_string(pauseRequestId) + ":" +
                   std::to_string(cancelRequestId));
@@ -3820,21 +3277,16 @@ void TestTerminalCompletedCheckpointReconciliation(
         "(SELECT count(*) FROM experiment_analysis_result "
         " WHERE experiment_id BETWEEN 700020 AND 700025)::text;");
 
-    // A later administrative process is also a reconciliation entry point.
-    // It must atomically retire the durable cancellation before applying the
-    // non-conflicting resume request.
-    RecordingNativeProcesses processes;
-    std::string resumeOutput;
-    CHECK(Replay(
-              connectionString,
-              ReplayCommand(
-                  Action::ResumeAll,
-                  "crash-window-resume-after-terminal-completed"),
-              processes,
-              resumeOutput) == 0);
-    CHECK(processes.signals.empty());
-    CHECK(resumeOutput.find(
-              "GLOBAL_EXPERIMENT_CONTROL_SUMMARY") != std::string::npos);
+    // Reconcile the durable cancellation directly. PauseAll/ResumeAll now
+    // use the scheduler priority-queue control path and are no longer
+    // administrative-request reconciliation entry points.
+    {
+        pqxx::work reconciliation{connection};
+        AcquireCoordinationLock(reconciliation);
+        CHECK(ReconcileActiveCancellationForTest(
+            reconciliation, requestId));
+        reconciliation.commit();
+    }
     CHECK(Scalar(
               connection,
               "SELECT status||':'||target_count::text||':'||"
@@ -3862,12 +3314,6 @@ void TestTerminalCompletedCheckpointReconciliation(
               "::text FROM experiment_admin_worker_outcome o "
               "WHERE request_id=" + std::to_string(requestId)) ==
           "6:6:6:true:true");
-    CHECK(Scalar(
-              connection,
-              "SELECT status FROM experiment_admin_request "
-              "WHERE invocation_identity="
-              "'crash-window-resume-after-terminal-completed'") ==
-          "completed");
     CHECK(Scalar(
               connection,
               "SELECT desired_state||':'||(active_request_id IS NULL)::text "
@@ -4771,20 +4217,10 @@ void TestLegacyInferenceUpgradeMatrix(
                   " GROUP BY r.completed_at;") ==
           terminalAudit);
 
-    RecordingNativeProcesses processes;
-    std::string output;
-    CHECK(Replay(
-              connectionString,
-              ReplayCommand(
-                  Action::ResumeAll,
-                  "crash-window-command-after-legacy-repair"),
-              processes,
-              output) == 0);
-    CHECK(Scalar(
-              connection,
-              "SELECT status FROM experiment_admin_request "
-              "WHERE invocation_identity="
-              "'crash-window-command-after-legacy-repair'") == "completed");
+    // Terminal cancellation reconciliation is already proven idempotent
+    // above. PauseAll/ResumeAll now use the scheduler priority-queue path
+    // and therefore are not generic post-reconciliation administrative
+    // commands for this legacy cancellation fixture.
     ResetCrashFixtures(connection);
 }
 
@@ -5370,15 +4806,15 @@ void TestProductionCheckpointStopOwnership(pqxx::connection& connection)
     ResetCrashFixtures(connection);
 }
 
-int RunDatabaseCrashWindowTests(const std::string& selfPath,
-                                const std::string& connectionString)
+int RunDatabaseLegacyControlTests(const std::string& selfPath,
+                                  const std::string& connectionString)
 {
     pqxx::connection connection{connectionString};
     ResetCrashFixtures(connection);
-    std::cout << "RUN TestPlanCommittedBeforeSignal" << std::endl;
-    TestPlanCommittedBeforeSignal(selfPath, connectionString, connection);
-    std::cout << "RUN TestAfterSignalBeforeAccounting" << std::endl;
-    TestAfterSignalBeforeAccounting(selfPath, connectionString, connection);
+    std::cout << "RUN TestCancellationAfterSignalBeforeAccounting"
+              << std::endl;
+    TestCancellationAfterSignalBeforeAccounting(
+        selfPath, connectionString, connection);
     std::cout << "RUN TestAccountedBeforeReconciliation" << std::endl;
     TestAccountedBeforeReconciliation(connectionString, connection);
     std::cout << "RUN TestTerminalCompletedCheckpointReconciliation" << std::endl;
@@ -5386,7 +4822,8 @@ int RunDatabaseCrashWindowTests(const std::string& selfPath,
         connectionString, connection);
     std::cout << "RUN TestUnresolvedCheckpointRemainsActive" << std::endl;
     TestUnresolvedCheckpointRemainsActive(connectionString, connection);
-    std::cout << "RUN TestImmediateAndCurrentBoundaryInferenceIdentity" << std::endl;
+    std::cout << "RUN TestImmediateAndCurrentBoundaryInferenceIdentity"
+              << std::endl;
     TestImmediateAndCurrentBoundaryInferenceIdentity(
         connectionString, connection);
     std::cout << "RUN TestTerminalInferenceReconciliation" << std::endl;
@@ -5395,14 +4832,20 @@ int RunDatabaseCrashWindowTests(const std::string& selfPath,
     TestLegacyInferenceUpgradeMatrix(connectionString, connection);
     std::cout << "RUN TestProductionCheckpointStopOwnership" << std::endl;
     TestProductionCheckpointStopOwnership(connection);
+    std::cout << "GlobalExperimentControlLegacyControlTests passed\n";
+    return 0;
+}
+
+int RunDatabasePriorityControlTests(const std::string& selfPath,
+                                    const std::string& connectionString)
+{
+    pqxx::connection connection{connectionString};
+    ResetCrashFixtures(connection);
     std::cout << "RUN TestSelectiveResumeFromGlobalPause" << std::endl;
     TestSelectiveResumeFromGlobalPause(
         selfPath, connectionString, connection);
-    std::cout << "RUN TestSelectiveLeaseTakeoverFencesStaleOwner" << std::endl;
-    TestSelectiveLeaseTakeoverFencesStaleOwner(
-        selfPath, connectionString, connection);
-    std::cout << "RUN TestGenericReplacementReplayAndOwnerFence" << std::endl;
-    TestGenericReplacementReplayAndOwnerFence(
+    std::cout << "RUN TestConcurrentSelectiveResumeIsIdempotent" << std::endl;
+    TestConcurrentSelectiveResumeIsIdempotent(
         selfPath, connectionString, connection);
     std::cout << "RUN TestSchedulerCancellationOwnerClaims" << std::endl;
     TestSchedulerCancellationOwnerClaims(
@@ -5410,16 +4853,21 @@ int RunDatabaseCrashWindowTests(const std::string& selfPath,
     std::cout << "RUN TestSelectiveReplayAfterLifecycleTransition" << std::endl;
     TestSelectiveReplayAfterLifecycleTransition(
         selfPath, connectionString, connection);
-    std::cout << "RUN TestPrimarySelectiveResumeAndCheckpointChildDeparture" << std::endl;
+    std::cout << "RUN TestPrimarySelectiveResumeAndCheckpointChildDeparture"
+              << std::endl;
     TestPrimarySelectiveResumeAndCheckpointChildDeparture(
         selfPath, connectionString, connection);
-    std::cout << "RUN TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild" << std::endl;
+    std::cout
+        << "RUN TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild"
+        << std::endl;
     TestCancellationWithSelectivelyReleasedPrimaryAndStoppedChild(
         selfPath, connectionString, connection);
-    std::cout << "RUN TestCancellationInspectionFailuresRemainRecoverable" << std::endl;
+    std::cout
+        << "RUN TestCancellationInspectionFailuresRemainRecoverable"
+        << std::endl;
     TestCancellationInspectionFailuresRemainRecoverable(
         selfPath, connectionString, connection);
-    std::cout << "GlobalExperimentControlCrashWindowTests passed\n";
+    std::cout << "GlobalExperimentControlPriorityControlTests passed\n";
     return 0;
 }
 
@@ -5674,8 +5122,11 @@ int main(int argc, char* argv[])
         RunSpawnFailureSelfTest(
             selfPath, SpawnFailureMode::FinalReadinessTimeout);
     if (argc == 3 &&
-        std::string{argv[1]} == "--database-crash-window-tests")
-        return RunDatabaseCrashWindowTests(selfPath, argv[2]);
+        std::string{argv[1]} == "--database-legacy-control-tests")
+        return RunDatabaseLegacyControlTests(selfPath, argv[2]);
+    if (argc == 3 &&
+        std::string{argv[1]} == "--database-priority-control-tests")
+        return RunDatabasePriorityControlTests(selfPath, argv[2]);
     const int result = RunRealProcessTests(selfPath);
     TestSpawnFailurePaths(selfPath);
     TestEmergencyCleanupPath(selfPath);

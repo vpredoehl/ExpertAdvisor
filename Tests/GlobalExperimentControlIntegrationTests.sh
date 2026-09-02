@@ -937,6 +937,8 @@ schema_psql gp_mig_selective \
     -f "${repo_root}/Database/migrations/051_scheduler_ownership_and_worker_attempts.sql"
 schema_psql gp_mig_selective \
     -f "${repo_root}/Database/migrations/052_scheduler_protocol_and_exact_attempt_hardening.sql"
+schema_psql gp_mig_selective \
+    -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
 schema_psql gp_mig_selective <<'SQL'
 UPDATE experiment_scheduler_protocol
 SET cutover_state='complete',
@@ -948,12 +950,15 @@ SET cutover_state='complete',
     updated_at=clock_timestamp()
 WHERE singleton AND cutover_state='pending';
 UPDATE experiment_scheduler_worker_attempt
-SET lifecycle_state='observed',
+SET lifecycle_state='stopped',
     last_observed_at=clock_timestamp(),
-    reconciliation_result='test_fixture_exact_identity_verified'
+    reconciliation_result='test_fixture_exact_identity_verified_and_stopped'
 WHERE experiment_id=990010
   AND ownership_origin='legacy_unverified'
   AND lifecycle_state='identity_ambiguous';
+UPDATE experiment
+SET status='paused',resume_requested=false,updated_at=clock_timestamp()
+WHERE experiment_id=990010 AND status='running';
 SQL
 migration_pause_request="$(
     schema_scalar gp_mig_selective \
@@ -984,27 +989,21 @@ migration_selective_output="$(
         LSTM_DB_NAME="${test_db}" "${binary}" \
         --resume-experiment=990010 --yes
 )"
-grep -q 'result=globally_suspended_worker_resumed.*replay=0.*signal_attempted=1' \
+grep -q 'new_status=pending.*resume_requested=true.*worker_state=stopped.*signal=none.*result=queued_for_admission' \
     <<<"${migration_selective_output}"
-migration_resume_request="$(
-    schema_scalar gp_mig_selective \
-        "SELECT request_id FROM experiment_admin_request
-         WHERE action='resume_experiment' AND target_experiment_id=990010"
-)"
+test "$(schema_scalar gp_mig_selective \
+    "SELECT status||':'||resume_requested::text FROM experiment
+     WHERE experiment_id=990010")" = "pending:true"
 migration_replay_output="$(
     PGOPTIONS="-c search_path=gp_mig_selective,public" \
         LSTM_DB_NAME="${test_db}" "${binary}" \
         --resume-experiment=990010 --yes
 )"
-grep -q "request_id=${migration_resume_request},action=resume_experiment,status=completed,result=already_resumed,replay=1,signal_attempted=0,target_count=1,successful_count=1" \
+grep -q 'new_status=pending.*resume_requested=true.*worker_state=stopped.*signal=none.*result=already_satisfied' \
     <<<"${migration_replay_output}"
-grep -q "worker_identity=experiment:990010,identity_result=validated,outcome_status=completed,signal_result=signaled,requested_signal=19" \
-    <<<"${migration_replay_output}"
-PGOPTIONS="-c search_path=gp_mig_selective,public" \
-    LSTM_DB_NAME="${test_db}" "${binary}" --resume-all-experiments --yes |
-    grep -q 'status=completed.*target_count=1.*already_satisfied_count=1'
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "ALTER ROLE pqxx IN DATABASE ${test_db} RESET search_path;"
+kill -CONT -- "-${migration_fixture_pgid}"
 kill -TERM -- "-${migration_fixture_pgid}"
 wait "${migration_fixture_pid}"
 migration_fixture_pid=""
@@ -1014,7 +1013,93 @@ migration_fixture_executable=""
 migration_fixture_persisted_executable=""
 drop_fixture_schema gp_mig_selective
 
-"${process_test_binary}" --database-crash-window-tests \
+"${process_test_binary}" --database-legacy-control-tests \
+    "dbname=${test_db}"
+
+# The tests above intentionally exercise legacy cancellation/reconciliation
+# behavior on the migration-052 schema. The current executable reads later
+# experiment-configuration columns, but replaying their historical migrations
+# is inappropriate here: those migrations also rebuild unrelated production
+# identity indexes and assume the complete production schema lineage.
+#
+# Reproduce only the cumulative experiment-row schema contract required by the
+# current executable, using the exact historical compatibility defaults. Then
+# execute migration 086 itself because its priority/stopped-attempt semantics
+# are the behavior under test.
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+ALTER TABLE experiment
+    ADD COLUMN IF NOT EXISTS donchian20_mode text
+        NOT NULL DEFAULT 'enabled',
+    ADD COLUMN IF NOT EXISTS feature_warmup_scope text
+        NOT NULL DEFAULT 'legacy_cold_boundary',
+    ADD COLUMN IF NOT EXISTS donchian_lookback integer
+        NOT NULL DEFAULT 20,
+    ADD COLUMN IF NOT EXISTS feature_ablation_mask text
+        NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS resume_expand_input_width boolean
+        NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS
+        operator_forced_final_inference_rerun_requested boolean
+        NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS training_objective_id text
+        NOT NULL DEFAULT 'legacy_first_hit_weighted_ce_v1',
+    ADD COLUMN IF NOT EXISTS training_objective_version integer
+        NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS loss_definition_version integer
+        NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS training_objective_canonical text
+        NOT NULL DEFAULT 'training_objective_configuration_v1;schema_version=1;objective_id=legacy_first_hit_weighted_ce_v1;objective_family=up_neutral_down_first_hit_classification;objective_version=1;loss_definition_version=1;mode=legacy_first_hit_classification;classification_loss=true_class_weighted_softmax_cross_entropy_v1;classification_target=up_neutral_down_return_high_low_first_hit_strict_threshold_up_tie_v1;class_index_order=down_0_neutral_1_up_2;class_weight_semantics=true_class_weight_multiplies_loss_and_all_logit_components_v1;class_weight_down=1;class_weight_neutral=1;class_weight_up=1;softmax_loss_probability_floor=1e-12;classification_logit_gradient_scale=0.1;shared_core_classification_gradient_scale=4;internal_loss_normalization=weighted_loss_sum_divided_by_true_class_weight_sum_v1;calculate_batch_return_normalization=weighted_loss_sum_divided_by_example_count_v1;gradient_normalization=all_calculate_batch_gradients_divided_by_true_class_weight_sum_v1;batch_window_boundary=overlapping_windows_do_not_cross_outer_tensor_batch_v1;optimizer_family=sgd;optimizer_update=parameter_minus_learning_rate_times_gradient_v1;learning_rate_contract=base_rate_and_parameter_group_multipliers_persisted_in_training_config_v1;gradient_clipping_mode=componentwise_after_normalization_before_update;gradient_clip_threshold=10;nonfinite_gradient_policy=skip_parameter_update_v1;weight_decay=none;gradient_accumulation_precision=core_gradient_accumulation_double_head_gradient_accumulation_float_loss_accumulation_double_v1;auxiliary_loss_mode=disabled;auxiliary_loss_coefficient=0;regression_target_definition=NULL;regression_normalization_identity=NULL;robust_loss_definition=NULL;robust_loss_delta=NULL;target_clipping_definition=none;shared_gradient_combination=classification_only_v1;',
+    ADD COLUMN IF NOT EXISTS training_objective_hash text
+        NOT NULL DEFAULT 'fnv1a64:65818f2e1fa1a324',
+    ADD COLUMN IF NOT EXISTS auxiliary_loss_mode text
+        NOT NULL DEFAULT 'disabled',
+    ADD COLUMN IF NOT EXISTS auxiliary_loss_coefficient double precision
+        NOT NULL DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS regression_target_definition text,
+    ADD COLUMN IF NOT EXISTS regression_normalization_identity text,
+    ADD COLUMN IF NOT EXISTS robust_loss_definition text,
+    ADD COLUMN IF NOT EXISTS robust_loss_delta double precision,
+    ADD COLUMN IF NOT EXISTS target_clipping_definition text
+        NOT NULL DEFAULT 'none',
+    ADD COLUMN IF NOT EXISTS objective_normalization_identity text
+        NOT NULL DEFAULT
+        'weighted_loss_sum_by_weight_sum_gradients__calculate_batch_return_by_example_count_v1';
+
+ALTER TABLE experiment
+    DROP CONSTRAINT IF EXISTS experiment_donchian20_mode_check;
+ALTER TABLE experiment
+    ADD CONSTRAINT experiment_donchian20_mode_check
+        CHECK (donchian20_mode IN ('enabled', 'zero_ablation'));
+
+ALTER TABLE experiment
+    DROP CONSTRAINT IF EXISTS experiment_feature_warmup_scope_check;
+ALTER TABLE experiment
+    ADD CONSTRAINT experiment_feature_warmup_scope_check
+        CHECK (feature_warmup_scope IN (
+            'legacy_cold_boundary',
+            'full_history_warmup'
+        ));
+
+ALTER TABLE experiment
+    DROP CONSTRAINT IF EXISTS experiment_donchian_lookback_check;
+ALTER TABLE experiment
+    ADD CONSTRAINT experiment_donchian_lookback_check
+        CHECK (donchian_lookback BETWEEN 1 AND 10000);
+
+ALTER TABLE experiment
+    DROP CONSTRAINT IF EXISTS experiment_resume_expand_input_width_source_check;
+ALTER TABLE experiment
+    ADD CONSTRAINT experiment_resume_expand_input_width_source_check
+        CHECK (
+            NOT resume_expand_input_width
+            OR resume_model_id IS NOT NULL
+        );
+SQL
+
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" \
+    -f "${repo_root}/Database/migrations/086_scheduler_pause_resume_priority.sql"
+
+"${process_test_binary}" --database-priority-control-tests \
     "dbname=${test_db}"
 
 run_control() {
@@ -1055,8 +1140,8 @@ run_control --resume-all-experiments --yes |
     grep -q 'status=completed.*target_count=0'
 test "$(scalar "SELECT desired_state FROM experiment_global_control")" = running
 
-# A live lease rejects a second applier. Once expired, a new process takes over
-# the durable request and completes only its still-planned work.
+# Priority-aware pause/resume-all rejects any active administrative request;
+# lease expiry does not transfer ownership into this control path.
 lease_request_id="$(
     scalar "INSERT INTO experiment_admin_request (
         action,invocation_identity,application_owner,application_lease_until,
@@ -1075,7 +1160,7 @@ run_control --pause-all-experiments --yes \
 lease_rejected=$?
 set -e
 test "${lease_rejected}" -ne 0
-grep -q 'administrative_request_application_in_progress' \
+grep -q "conflicting_administrative_request_active,request_id=${lease_request_id}" \
     "${test_tmp}/lease_rejected.out"
 test "$(scalar "SELECT application_owner FROM experiment_admin_request
     WHERE request_id=${lease_request_id}")" = lease-owner
@@ -1084,34 +1169,37 @@ psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "UPDATE experiment_admin_request
      SET application_lease_until=now()-interval '1 second'
      WHERE request_id=${lease_request_id};"
-run_control --pause-all-experiments --yes |
-    grep -q "request_id=${lease_request_id}.*status=completed"
-test "$(scalar "SELECT active_request_id IS NULL
-    FROM experiment_global_control WHERE singleton")" = t
-test "$(scalar "SELECT application_owner <> 'lease-owner'
-    FROM experiment_admin_request WHERE request_id=${lease_request_id}")" = t
+set +e
+run_control --pause-all-experiments --yes \
+    >"${test_tmp}/expired_lease_rejected.out" 2>&1
+expired_lease_rejected=$?
+set -e
+test "${expired_lease_rejected}" -ne 0
+grep -q "conflicting_administrative_request_active,request_id=${lease_request_id}" \
+    "${test_tmp}/expired_lease_rejected.out"
+test "$(scalar "SELECT application_owner FROM experiment_admin_request
+    WHERE request_id=${lease_request_id}")" = lease-owner
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "UPDATE experiment_global_control SET active_request_id=NULL
+     WHERE singleton AND active_request_id=${lease_request_id};
+     DELETE FROM experiment_admin_request
+     WHERE request_id=${lease_request_id};"
 
 run_control --resume-all-experiments --yes |
     grep -q 'status=completed.*target_count=0'
 test "$(scalar "SELECT desired_state FROM experiment_global_control")" = running
 
-# The production CLI routes lifecycle resume through the unified command while
-# an ordinary running row with no global-pause evidence remains unauthorized.
+# Selective resume queues paused lifecycle work for scheduler admission, while
+# an ordinary running row is already satisfied without a process signal.
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "INSERT INTO experiment(experiment_id,status,phase)
      VALUES (910000,'paused','train'),(910001,'running','train');"
 run_control --resume-experiment=910000 --yes |
-    grep -q 'result=lifecycle_resumed'
-test "$(scalar "SELECT status FROM experiment
-    WHERE experiment_id=910000")" = pending
-set +e
-run_control --resume-experiment=910001 --yes \
-    >"${test_tmp}/ordinary_running_resume.out" 2>&1
-ordinary_running_resume=$?
-set -e
-test "${ordinary_running_resume}" -ne 0
-grep -q 'result=not_globally_suspended' \
-    "${test_tmp}/ordinary_running_resume.out"
+    grep -q 'new_status=pending.*resume_requested=true.*worker_state=none.*signal=none.*result=queued_for_admission'
+test "$(scalar "SELECT status||':'||resume_requested::text
+    FROM experiment WHERE experiment_id=910000")" = pending:true
+run_control --resume-experiment=910001 --yes |
+    grep -q 'new_status=running.*resume_requested=false.*worker_state=none.*signal=none.*result=already_satisfied'
 psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
     "DELETE FROM experiment WHERE experiment_id IN (910000,910001);"
 

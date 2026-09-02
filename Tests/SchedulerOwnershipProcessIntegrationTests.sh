@@ -221,10 +221,11 @@ WHERE singleton=true AND cutover_state='complete';
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920064,'legacynopidfixture',4,0.0008,20,
-    '2020-01-01','2021-01-01','running','train','train',920064
+    '2020-01-01','2021-01-01','running','train','train',920064,75,5
 );
 WITH attempt AS (
     INSERT INTO experiment_scheduler_worker_attempt(
@@ -306,10 +307,11 @@ SELECT set_config(
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920065,'staleanalyzefixture',4,0.0008,20,
-    '2020-01-01','2021-01-01','completed','done','analyze',920065
+    '2020-01-01','2021-01-01','completed','done','analyze',920065,75,5
 );
 INSERT INTO model(model_id,experiment_id,name)
 VALUES(925065,920065,'stale-checkpoint-analyze-fixture');
@@ -566,26 +568,27 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
     worker_pid,worker_process_group_id,worker_process_start_identity,
-    worker_executable,worker_command_line,worker_started_at,duplicate_nonce
+    worker_executable,worker_command_line,worker_started_at,duplicate_nonce,
+    model_input_width,model_input_semantic_layout_version
 ) VALUES
     (920051,'fixturetrain',4,0.0008,20,'2020-01-01','2021-01-01',
      'running','train','train',:train_pid,:train_pgid,:'train_start',
      :'train_executable',
      :'train_executable'||' --managed-test-worker --self-session --scheduler-experiment-id=920051 --train',
-     clock_timestamp(),920051),
+     clock_timestamp(),920051,75,5),
     (920052,'fixtureinfer',4,0.0008,20,'2020-01-01','2021-01-01',
      'running','infer','infer',:infer_pid,:infer_pgid,:'infer_start',
      :'infer_executable',
      :'infer_executable'||' --managed-test-worker --self-session --scheduler-experiment-id=920052 --infer',
-     clock_timestamp(),920052),
+     clock_timestamp(),920052,75,5),
     (920053,'fixtureanalyze',4,0.0008,20,'2020-01-01','2021-01-01',
      'running','analyze','analyze',:analyze_pid,:analyze_pgid,:'analyze_start',
      :'analyze_executable',
      :'analyze_executable'||' --managed-test-worker --self-session --scheduler-experiment-id=920053 --analyze-experiment=920053',
-     clock_timestamp(),920053),
+     clock_timestamp(),920053,75,5),
     (920054,'fixturecheckpoint',4,0.0008,20,'2020-01-01','2021-01-01',
      'completed','done',NULL,NULL,NULL,NULL,NULL,NULL,
-     clock_timestamp(),920054);
+     clock_timestamp(),920054,75,5);
 INSERT INTO experiment_checkpoint_eval(
     checkpoint_eval_id,experiment_id,parent_experiment_id,
     checkpoint_epoch,checkpoint_model_id,symbol,prediction_horizon,
@@ -689,26 +692,27 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
     worker_pid,worker_process_group_id,worker_process_start_identity,
-    worker_executable,worker_command_line,worker_started_at,duplicate_nonce
+    worker_executable,worker_command_line,worker_started_at,duplicate_nonce,
+    model_input_width,model_input_semantic_layout_version
 ) VALUES
     (920061,'pidreusefixture',4,0.0008,20,
      '2020-01-01','2021-01-01','running','train','train',
      :reused_pid,:reused_pgid,'persisted-reused-start',
      :'reused_executable',
      :'reused_executable'||' --train --scheduler-experiment-id=920061',
-     clock_timestamp(),920061),
+     clock_timestamp(),920061,75,5),
     (920062,'executablemismatchfixture',4,0.0008,20,
      '2020-01-01','2021-01-01','running','train','train',
      :executable_pid,:executable_pgid,:'executable_start',
      '/missing/foreign-executable',
      '/missing/foreign-executable --train --scheduler-experiment-id=920062',
-     clock_timestamp(),920062),
+     clock_timestamp(),920062,75,5),
     (920063,'commandmismatchfixture',4,0.0008,20,
      '2020-01-01','2021-01-01','running','train','train',
      :command_pid,:command_pgid,:'command_start',
      :'command_executable',
      :'command_executable'||' --train --scheduler-experiment-id=999999',
-     clock_timestamp(),920063);
+     clock_timestamp(),920063,75,5);
 INSERT INTO experiment_scheduler_worker_attempt(
     launch_attempt_identity,experiment_id,worker_kind,lifecycle_phase,
     capacity_class,ownership_origin,lifecycle_state,worker_pid,
@@ -828,6 +832,12 @@ LSTM_DB_NAME="${test_db}" "${scheduler_binary}" \
 grep -q 'SCHEDULER_STATUS_OWNERSHIP,authority_state=active' \
     "${test_dir}/status.out"
 grep -Fq "canonical_executable_path=${scheduler_binary}" \
+    "${test_dir}/status.out"
+grep -Fq "SCHEDULER_STATUS_OWNERSHIP,authority_state=active" \
+    "${test_dir}/status.out"
+grep -Fq "scheduler_canonical_executable_path=${scheduler_binary}" \
+    "${test_dir}/status.out"
+grep -Fq "SCHEDULER_STATUS_EXECUTABLE_IDENTITY,status_reporter_executable_path=${scheduler_binary},scheduler_canonical_executable_path=${scheduler_binary},scheduler_observed_executable_path=${scheduler_binary},scheduler_identity_result=validated,scheduler_identity_match=1" \
     "${test_dir}/status.out"
 grep -q 'SCHEDULER_STATUS_GLOBAL_CAPACITY,capacity_class=train,consuming=1' \
     "${test_dir}/status.out"
@@ -976,18 +986,20 @@ SELECT set_config(
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920055,'schedulerlaunchfixture',4,0.0008,1,
-    '2020-01-01','2020-02-01','pending','train','train',920055
+    '2020-01-01','2020-02-01','pending','train','train',920055,75,5
 );
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920056,'neverlaunchedfixture',4,0.0008,1,
-    '2020-01-01','2020-02-01','running','train','train',920056
+    '2020-01-01','2020-02-01','running','train','train',920056,75,5
 );
 WITH owner AS (
     SELECT owner_scheduler_invocation_id AS scheduler_invocation_id,
@@ -1016,12 +1028,13 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,infer_start,infer_end,
     status,phase,current_operation,duplicate_nonce,last_model_id,
-    infer_log_path
+    infer_log_path,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920058,'finalanalysisfixture',4,0.0008,20,
     '2020-01-01','2020-02-01','2020-03-01','2020-04-01',
     'pending','analyze','analyze',920058,925058,
-    :'analysis_fixture_log'
+    :'analysis_fixture_log',75,5
 );
 INSERT INTO model(model_id,name,experiment_id)
 VALUES(925058,'exact-final-analysis-fixture',920058);
@@ -1141,11 +1154,12 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
     train_start,train_end,status,phase,current_operation,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920059,'parentcrashfixture',4,0.0008,1.0,1.0,1,1,
     '2020-01-01','2021-01-01','pending','train','train',
-    920059
+    920059,75,5
 );
 SQL
 set +e
@@ -1219,10 +1233,11 @@ SELECT set_config(
 INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     target_epochs,train_start,train_end,status,phase,current_operation,
-    duplicate_nonce
+    duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     920057,'stalereaperfixture',4,0.0008,1,
-    '2020-01-01','2020-02-01','pending','train','train',920057
+    '2020-01-01','2020-02-01','pending','train','train',920057,75,5
 );
 SQL
 (
@@ -1310,11 +1325,12 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
     train_start,train_end,infer_start,infer_end,status,phase,
-    current_operation,stop_after_checkpoint_epoch,duplicate_nonce
+    current_operation,stop_after_checkpoint_epoch,duplicate_nonce,
+    model_input_width,model_input_semantic_layout_version
 ) VALUES(
     920060,'checkpointstopfixture',4,0.0008,1.0,1.0,80,20,
     '2020-01-01','2021-01-01','2021-01-01','2022-01-01',
-    'pending','train','train',20,920060
+    'pending','train','train',20,920060,75,5
 );
 INSERT INTO model(experiment_id,name,comment)
 VALUES(920060,'checkpoint-stop-fixture-model',
@@ -1443,11 +1459,12 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
     train_start,train_end,infer_start,infer_end,status,phase,
-    current_operation,stop_after_checkpoint_epoch,duplicate_nonce
+    current_operation,stop_after_checkpoint_epoch,duplicate_nonce,
+    model_input_width,model_input_semantic_layout_version
 ) VALUES(
     920066,'checkpointrestartfixture',4,0.0008,1.0,1.0,80,20,
     '2020-01-01','2021-01-01','2021-01-01','2022-01-01',
-    'pending','train','train',20,920066
+    'pending','train','train',20,920066,75,5
 );
 INSERT INTO model(experiment_id,name,comment)
 VALUES(920066,'checkpoint-restart-fixture-model',
@@ -1562,13 +1579,14 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,target_epochs,
     train_start,train_end,status,phase,current_operation,worker_pid,
     worker_process_group_id,worker_process_start_identity,worker_executable,
-    worker_command_line,worker_started_at,duplicate_nonce
+    worker_command_line,worker_started_at,duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     930001,'reconcilefixture',4,0.0008,20,'2020-01-01','2021-01-01',
     'running','train','train',:pid,:pgid,:'start',:'executable',
     :'worker_link'||' --managed-test-worker --self-session '
       ||'--scheduler-experiment-id=930001 --ready-fd=9 --train '
-      ||'--scheduler-worker-attempt-id=990051',clock_timestamp(),930001
+      ||'--scheduler-worker-attempt-id=990051',clock_timestamp(),930001,75,5
 );
 INSERT INTO experiment_scheduler_worker_attempt(
     worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
@@ -1620,13 +1638,14 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,target_epochs,
     train_start,train_end,status,phase,current_operation,worker_pid,
     worker_process_group_id,worker_process_start_identity,worker_executable,
-    worker_command_line,worker_started_at,duplicate_nonce
+    worker_command_line,worker_started_at,duplicate_nonce,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     930002,'absentreconcilefixture',4,0.0008,20,'2020-01-01','2021-01-01',
     'running','train','train',:pid,:pgid,:'start',:'executable',
     :'worker_link'||' --managed-test-worker --self-session '
       ||'--scheduler-experiment-id=930002 --ready-fd=9 --train '
-      ||'--scheduler-worker-attempt-id=990052',clock_timestamp(),930002
+      ||'--scheduler-worker-attempt-id=990052',clock_timestamp(),930002,75,5
 );
 INSERT INTO experiment_scheduler_worker_attempt(
     worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,

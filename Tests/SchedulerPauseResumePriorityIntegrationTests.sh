@@ -103,11 +103,12 @@ INSERT INTO experiment(
     experiment_id,symbol,prediction_horizon,c_next_threshold,
     core_lr_mult,head_lr_mult,target_epochs,checkpoint_interval,
     train_start,train_end,status,phase,current_operation,duplicate_nonce,
-    scheduler_priority,updated_at
+    scheduler_priority,updated_at,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     :experiment_id,'priorityfixture',1,0.0008,1.0,1.0,2,1,
     '2020-01-01','2020-02-01','pending',:'phase',:'phase',
-    :experiment_id,:'priority',:'updated'::timestamptz
+    :experiment_id,:'priority',:'updated'::timestamptz,75,5
 );
 SQL
 }
@@ -194,11 +195,13 @@ INSERT INTO experiment(
     train_start,train_end,status,phase,current_operation,duplicate_nonce,
     scheduler_priority,worker_pid,worker_process_group_id,
     worker_process_start_identity,worker_executable,worker_command_line,
-    worker_control_state
+    worker_control_state,model_input_width,
+    model_input_semantic_layout_version
 ) VALUES(
     :experiment_id,'workerfixture',1,0.0008,1.0,1.0,2,1,
     '2020-01-01','2020-02-01','running','train','train',
-    :experiment_id,'low',:pid,:pgid,:'start',:'executable',:'command','running'
+    :experiment_id,'low',:pid,:pgid,:'start',:'executable',:'command','running',
+    75,5
 );
 INSERT INTO experiment_scheduler_worker_attempt(
     worker_attempt_id,launch_attempt_identity,experiment_id,worker_kind,
@@ -219,6 +222,11 @@ SQL
 
 launch_worker 861001 9861001
 persist_worker 0 861001 9861001
+run_cli --scheduler-status >"${test_dir}/managed-running-status.out"
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
+    "${test_dir}/managed-running-status.out"
+grep -q 'managed_train_workers=1.*managed_running_train_workers=1.*managed_paused_train_workers=0' \
+    "${test_dir}/managed-running-status.out"
 run_cli --pause-experiment=861001 --yes |
     grep -q 'new_status=paused,resume_requested=false,worker_state=stopped'
 for _ in {1..100}; do
@@ -235,6 +243,14 @@ test "$(scalar "SELECT e.status||':'||e.resume_requested::text||':'||
 test "$(scalar "SELECT count(*) FROM experiment_scheduler_worker_attempt
     WHERE capacity_class='train' AND lifecycle_state IN
     ('reserved','spawned','running','observed','identity_ambiguous')")" = 0
+kill -0 "${worker_pids[0]}"
+run_cli --scheduler-status >"${test_dir}/managed-paused-status.out"
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=stopped,lifecycle_status=paused,attempt_state=stopped,identity_result=validated,executable_identity_match=1" \
+    "${test_dir}/managed-paused-status.out"
+grep -q 'managed_train_workers=1.*managed_running_train_workers=0.*managed_paused_train_workers=1' \
+    "${test_dir}/managed-paused-status.out"
+! grep -q "SCHEDULER_STATUS_UNMANAGED_WORKER,pid=${worker_pids[0]}" \
+    "${test_dir}/managed-paused-status.out"
 
 launch_worker 861002 9861002
 persist_worker 1 861002 9861002
@@ -304,9 +320,14 @@ grep -q 'SCHEDULER_STOPPED_WORKER_ADMITTED,experiment_id=861001' \
 test "$(scalar "SELECT status||':'||resume_requested::text||':'||
         scheduler_priority FROM experiment WHERE experiment_id=861001")" = \
     "running:false:low"
+test "$(scalar "SELECT worker_pid FROM experiment
+    WHERE experiment_id=861001")" = "${worker_pids[0]}"
 test "$(scalar "SELECT status FROM experiment WHERE experiment_id=861003")" = \
     pending
 [[ "$(ps -o state= -p "${worker_pids[0]}" | tr -d ' ')" != T* ]]
+run_cli --scheduler-status >"${test_dir}/managed-resumed-status.out"
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[0]},kind=train,managed=1,authoritative=1,detected=1,execution_state=running,lifecycle_status=running,attempt_state=running,identity_result=validated,executable_identity_match=1" \
+    "${test_dir}/managed-resumed-status.out"
 
 # Repeated pause is reconciliatory, and a scheduler restart observes one
 # stopped exact attempt without consuming capacity or launching a duplicate.
@@ -359,10 +380,17 @@ psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
 launch_worker 861006 9861006
 persist_worker 2 861006 9861006
 run_cli --pause-experiment=861006 --yes >/dev/null
-run_cli --resume-experiment=861006 --yes >/dev/null
 kill -CONT -- "-${worker_pgids[2]}"
 kill -TERM -- "-${worker_pgids[2]}"
 wait "${worker_pids[2]}" || true
+run_cli --scheduler-status >"${test_dir}/paused-missing-status.out"
+grep -q "SCHEDULER_STATUS_WORKER,pid=${worker_pids[2]},kind=train,managed=0,authoritative=1,detected=0,execution_state=missing,lifecycle_status=paused,attempt_state=stopped,identity_result=process_missing" \
+    "${test_dir}/paused-missing-status.out"
+grep -q 'expected_missing_train_workers=1' \
+    "${test_dir}/paused-missing-status.out"
+! grep -q "SCHEDULER_STATUS_UNMANAGED_WORKER,pid=${worker_pids[2]}" \
+    "${test_dir}/paused-missing-status.out"
+run_cli --resume-experiment=861006 --yes >/dev/null
 run_cli --schedule-experiments --scheduler-once --recover-orphans-only \
     --max-train-procs=0 --max-infer-procs=0 --max-analyze-procs=0 \
     --scheduler-log-dir="${test_dir}/missing-reconcile-logs" \
