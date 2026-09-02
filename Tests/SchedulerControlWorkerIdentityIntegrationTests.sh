@@ -62,7 +62,7 @@ INSERT INTO experiment(
     worker_executable, worker_command_line, worker_started_at,
     current_operation, worker_control_state, worker_global_pause_request_id,
     started_at, completed_at, exit_code, error_message, updated_at,
-    duplicate_nonce
+    duplicate_nonce, model_input_width, model_input_semantic_layout_version
 ) VALUES
 (
     941001, 'eurusd', 4, 0.0008, 1, 1,
@@ -73,7 +73,7 @@ INSERT INTO experiment(
     clock_timestamp(), 'train', 'paused',
     (SELECT request_id FROM experiment_admin_request
      WHERE invocation_identity='scheduler-control-identity-test'),
-    clock_timestamp(), clock_timestamp(), 17, 'old failure', clock_timestamp(), 941001
+    clock_timestamp(), clock_timestamp(), 17, 'old failure', clock_timestamp(), 941001, 75, 5
 ),
 (
     941002, 'eurusd', 4, 0.0008, 1, 1,
@@ -84,7 +84,7 @@ INSERT INTO experiment(
     clock_timestamp(), 'infer', 'paused',
     (SELECT request_id FROM experiment_admin_request
      WHERE invocation_identity='scheduler-control-identity-test'),
-    clock_timestamp(), clock_timestamp(), 18, 'old inference failure', clock_timestamp(), 941002
+    clock_timestamp(), clock_timestamp(), 18, 'old inference failure', clock_timestamp(), 941002, 75, 5
 ),
 (
     941003, 'eurusd', 4, 0.0008, 1, 1,
@@ -95,7 +95,7 @@ INSERT INTO experiment(
     clock_timestamp(), 'analyze', 'paused',
     (SELECT request_id FROM experiment_admin_request
      WHERE invocation_identity='scheduler-control-identity-test'),
-    clock_timestamp(), clock_timestamp(), 19, 'old analysis failure', clock_timestamp(), 941003
+    clock_timestamp(), clock_timestamp(), 19, 'old analysis failure', clock_timestamp(), 941003, 75, 5
 ),
 (
     941004, 'eurusd', 4, 0.0008, 1, 1,
@@ -104,7 +104,7 @@ INSERT INTO experiment(
     941004, 941004, 'unrelated-start-941004', '/unrelated/LSTM_Release',
     '/unrelated/LSTM_Release --train --scheduler-experiment-id=941004',
     clock_timestamp(), 'train', 'running', NULL,
-    clock_timestamp(), clock_timestamp(), 99, 'unrelated', clock_timestamp(), 941004
+    clock_timestamp(), clock_timestamp(), 99, 'unrelated', clock_timestamp(), 941004, 75, 5
 );
 
 INSERT INTO experiment_scheduler_worker_attempt(
