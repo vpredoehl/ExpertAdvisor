@@ -77,6 +77,8 @@ CREATE TABLE experiment (
     phase text NOT NULL,
     last_model_id bigint,
     resume_model_id bigint,
+    stopped_at_checkpoint_epoch integer,
+    stopped_at_checkpoint_model_id bigint,
     duplicate_nonce bigint NOT NULL,
     donchian20_mode text NOT NULL,
     donchian_lookback integer NOT NULL,
@@ -125,7 +127,8 @@ CREATE TABLE matrix (
 CREATE TABLE experiment_checkpoint_eval (
     checkpoint_eval_id bigint PRIMARY KEY,
     parent_experiment_id bigint NOT NULL REFERENCES experiment(experiment_id),
-    checkpoint_model_id bigint NOT NULL REFERENCES model(model_id)
+    checkpoint_model_id bigint NOT NULL REFERENCES model(model_id),
+    checkpoint_epoch integer
 );
 
 CREATE TABLE inference_eval_result (

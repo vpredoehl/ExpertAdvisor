@@ -90,6 +90,14 @@ void PrintArm(std::ostringstream& output,
            << (configuration.featureAblationMask.empty()
                    ? "EMPTY" : configuration.featureAblationMask)
            << ",final_model_id=" << OptionalId(shared.finalModelId)
+           << ",resume_model_id="
+           << OptionalId(configuration.resumeModelId)
+           << ",resume_checkpoint_epoch="
+           << (arm.resumeCheckpointProvenance &&
+                       arm.resumeCheckpointProvenance->checkpointEpoch
+                   ? std::to_string(
+                         *arm.resumeCheckpointProvenance->checkpointEpoch)
+                   : "NULL")
            << ",model_input_width="
            << (shared.finalModelId ? std::to_string(configuration.inputWidth)
                                    : "NULL")

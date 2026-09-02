@@ -55,10 +55,27 @@ struct ExtendedScientificConfiguration
     bool operator==(const ExtendedScientificConfiguration&) const = default;
 };
 
+struct ResumeCheckpointProvenance
+{
+    long long resumeModelId = 0;
+    long long modelExperimentId = 0;
+    bool ownExperimentCheckpoint = false;
+    std::optional<int> checkpointEpoch;
+    bool operator==(const ResumeCheckpointProvenance&) const = default;
+};
+
 struct ArmEvidence
 {
     SharedEvidence::ArmEvidence authoritative;
     ExtendedScientificConfiguration extended;
+
+    // Loaded only when resume_model_id is present. This does not replace the
+    // shared final-model lineage validation; it lets the feature-ablation
+    // comparator distinguish a genuinely different initialization lineage
+    // from matched arms that each resumed from their own checkpoint at the
+    // same continuation epoch.
+    std::optional<ResumeCheckpointProvenance> resumeCheckpointProvenance;
+
     // Present when the exact FINAL inference resolver found a unique row,
     // even if the corresponding final analysis is still absent.
     std::optional<long long> exactFinalInferenceResultId;

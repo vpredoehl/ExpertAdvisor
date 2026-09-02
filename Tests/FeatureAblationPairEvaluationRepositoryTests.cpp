@@ -6,6 +6,7 @@
 #include "InferenceProfitabilityRepository.hpp"
 #include "TrainingObjective.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -331,6 +332,69 @@ int main()
     assert(output.str().find("treatment_minus_control=") !=
            std::string::npos);
     assert(output.str().find("read_only=true") != std::string::npos);
+    assert(DatabaseDigest(connection) == before);
+
+    // Different resume_model_id values are valid for feature-ablation pairs
+    // only when each identifies that arm's own checkpoint at the same epoch.
+    {
+        pqxx::read_transaction read{connection};
+        auto resumedControl =
+            Feature::LoadAuthoritativeArmEvidence(read, 990601);
+        auto resumedTreatment =
+            Feature::LoadAuthoritativeArmEvidence(read, 990602);
+
+        resumedControl.authoritative.configuration.resumeModelId = 9100601;
+        resumedTreatment.authoritative.configuration.resumeModelId = 9100602;
+        resumedControl.resumeCheckpointProvenance =
+            Feature::ResumeCheckpointProvenance{
+                9100601, 990601, true, 60};
+        resumedTreatment.resumeCheckpointProvenance =
+            Feature::ResumeCheckpointProvenance{
+                9100602, 990602, true, 60};
+
+        const auto matchedResume =
+            Feature::Compare(resumedControl, resumedTreatment);
+        assert(matchedResume.disposition ==
+               Feature::Disposition::ComparableComplete);
+        assert(matchedResume.invalidReasons.empty());
+
+        resumedTreatment.resumeCheckpointProvenance->checkpointEpoch = 40;
+        const auto mismatchedEpoch =
+            Feature::Compare(resumedControl, resumedTreatment);
+        assert(mismatchedEpoch.disposition ==
+               Feature::Disposition::IncompatibleConfiguration);
+        assert(std::find(
+                   mismatchedEpoch.invalidReasons.begin(),
+                   mismatchedEpoch.invalidReasons.end(),
+                   "resume_checkpoint_epoch_mismatch") !=
+               mismatchedEpoch.invalidReasons.end());
+
+        resumedTreatment.resumeCheckpointProvenance->checkpointEpoch = 60;
+        resumedTreatment.resumeCheckpointProvenance->
+            ownExperimentCheckpoint = false;
+        const auto unverifiedResume =
+            Feature::Compare(resumedControl, resumedTreatment);
+        assert(unverifiedResume.disposition ==
+               Feature::Disposition::IncompatibleConfiguration);
+        assert(std::find(
+                   unverifiedResume.invalidReasons.begin(),
+                   unverifiedResume.invalidReasons.end(),
+                   "resume_model_id_mismatch") !=
+               unverifiedResume.invalidReasons.end());
+
+        resumedTreatment.authoritative.configuration.resumeModelId =
+            std::nullopt;
+        resumedTreatment.resumeCheckpointProvenance = std::nullopt;
+        const auto freshVsResumed =
+            Feature::Compare(resumedControl, resumedTreatment);
+        assert(freshVsResumed.disposition ==
+               Feature::Disposition::IncompatibleConfiguration);
+        assert(std::find(
+                   freshVsResumed.invalidReasons.begin(),
+                   freshVsResumed.invalidReasons.end(),
+                   "resume_model_id_mismatch") !=
+               freshVsResumed.invalidReasons.end());
+    }
     assert(DatabaseDigest(connection) == before);
 
     output.str("");

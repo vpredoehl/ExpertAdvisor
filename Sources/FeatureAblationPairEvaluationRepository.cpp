@@ -19,6 +19,86 @@ std::optional<Value> OptionalValue(const pqxx::row& row,
     return row[column].as<Value>();
 }
 
+void LoadResumeCheckpointProvenance(
+    pqxx::transaction_base& transaction,
+    ArmEvidence& arm)
+{
+    const auto& configuration = arm.authoritative.configuration;
+    if (!configuration.resumeModelId) return;
+
+    const long long experimentId = configuration.experimentId;
+    const long long resumeModelId = *configuration.resumeModelId;
+
+    const pqxx::result ownership = transaction.exec(
+        "SELECT experiment_id FROM model WHERE model_id=$1;",
+        pqxx::params{resumeModelId});
+    if (ownership.size() != 1 ||
+        ownership[0]["experiment_id"].is_null())
+        throw PairedTrainingObjectiveEvaluation::EvidenceLoadError(
+            PairedTrainingObjectiveEvaluation::EvidenceLoadErrorKind::
+                ProvenanceContractFailure,
+            "experiment_" + std::to_string(experimentId) +
+                "_resume_model_identity_invalid");
+
+    ResumeCheckpointProvenance provenance;
+    provenance.resumeModelId = resumeModelId;
+    provenance.modelExperimentId =
+        ownership.one_row()["experiment_id"].as<long long>();
+
+    // Checkpoint-stop/resume records the authoritative continuation point
+    // directly on experiment. Prefer that identity: unlike
+    // experiment_checkpoint_eval, it exists even when checkpoint inference was
+    // disabled and the checkpoint was used only for stop/resume.
+    const pqxx::result stopped = transaction.exec(
+        "SELECT stopped_at_checkpoint_epoch,stopped_at_checkpoint_model_id "
+        "FROM experiment WHERE experiment_id=$1;",
+        pqxx::params{experimentId});
+
+    if (stopped.size() != 1)
+        throw PairedTrainingObjectiveEvaluation::EvidenceLoadError(
+            PairedTrainingObjectiveEvaluation::EvidenceLoadErrorKind::
+                ProvenanceContractFailure,
+            "experiment_" + std::to_string(experimentId) +
+                "_resume_checkpoint_experiment_identity_invalid");
+
+    const pqxx::row stoppedRow = stopped.one_row();
+    const auto stoppedEpoch = OptionalValue<int>(
+        stoppedRow, "stopped_at_checkpoint_epoch");
+    const auto stoppedModelId = OptionalValue<long long>(
+        stoppedRow, "stopped_at_checkpoint_model_id");
+
+    if (stoppedEpoch && stoppedModelId &&
+        *stoppedModelId == resumeModelId &&
+        *stoppedEpoch > 0)
+    {
+        provenance.checkpointEpoch = *stoppedEpoch;
+        provenance.ownExperimentCheckpoint =
+            provenance.modelExperimentId == experimentId;
+    }
+    else
+    {
+        // Retain checkpoint-evaluation provenance as a fail-closed fallback
+        // for workflows whose resume model was persisted through that path.
+        const pqxx::result checkpoints = transaction.exec(
+            "SELECT checkpoint_epoch FROM experiment_checkpoint_eval "
+            "WHERE parent_experiment_id=$1 AND checkpoint_model_id=$2 "
+            "ORDER BY checkpoint_eval_id;",
+            pqxx::params{experimentId, resumeModelId});
+
+        if (checkpoints.size() == 1 &&
+            !checkpoints.one_row()["checkpoint_epoch"].is_null())
+        {
+            provenance.checkpointEpoch =
+                checkpoints.one_row()["checkpoint_epoch"].as<int>();
+            provenance.ownExperimentCheckpoint =
+                provenance.modelExperimentId == experimentId &&
+                *provenance.checkpointEpoch > 0;
+        }
+    }
+
+    arm.resumeCheckpointProvenance = provenance;
+}
+
 } // namespace
 
 ArmEvidence LoadAuthoritativeArmEvidence(
@@ -29,6 +109,8 @@ ArmEvidence LoadAuthoritativeArmEvidence(
     arm.authoritative =
         PairedTrainingObjectiveEvaluation::LoadAuthoritativeArmEvidence(
             transaction, experimentId);
+
+    LoadResumeCheckpointProvenance(transaction, arm);
 
     const pqxx::result rows = transaction.exec(
         "SELECT training_objective_version,loss_definition_version,"

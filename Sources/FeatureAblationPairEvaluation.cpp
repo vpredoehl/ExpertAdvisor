@@ -152,13 +152,62 @@ void ValidateExperimentPair(const ScientificConfiguration& control,
     EA_COMPARE_FIELD(featureWarmupScope, "feature_warmup_scope_mismatch");
     EA_COMPARE_FIELD(donchianMode, "donchian_mode_mismatch");
     EA_COMPARE_FIELD(donchianLookback, "donchian_lookback_mismatch");
-    EA_COMPARE_FIELD(resumeModelId, "resume_model_id_mismatch");
     EA_COMPARE_FIELD(resumeExpandInputWidth,
                      "resume_expand_input_width_mismatch");
     EA_COMPARE_FIELD(experimentObjective, "training_objective_mismatch");
     EA_COMPARE_FIELD(runProvenance, "run_provenance_mismatch");
     if (control.experimentId == treatment.experimentId)
         Add(reasons, "experiment_id_reused");
+}
+
+bool ValidOwnCheckpointResume(
+    const FeatureAblationPairEvaluation::ArmEvidence& arm)
+{
+    const auto& configuration = arm.authoritative.configuration;
+    const auto& provenance = arm.resumeCheckpointProvenance;
+    return configuration.resumeModelId &&
+        provenance &&
+        provenance->resumeModelId == *configuration.resumeModelId &&
+        provenance->modelExperimentId == configuration.experimentId &&
+        provenance->ownExperimentCheckpoint &&
+        provenance->checkpointEpoch &&
+        *provenance->checkpointEpoch > 0;
+}
+
+void ValidateResumeCompatibility(
+    const FeatureAblationPairEvaluation::ArmEvidence& control,
+    const FeatureAblationPairEvaluation::ArmEvidence& treatment,
+    std::vector<std::string>& reasons)
+{
+    const auto& controlResume =
+        control.authoritative.configuration.resumeModelId;
+    const auto& treatmentResume =
+        treatment.authoritative.configuration.resumeModelId;
+
+    // Preserve the original behavior when the persisted initialization
+    // identity is literally equal, including fresh/fresh.
+    if (controlResume == treatmentResume) return;
+
+    // A fresh arm paired with a resumed arm is not scientifically equivalent.
+    if (!controlResume || !treatmentResume)
+    {
+        Add(reasons, "resume_model_id_mismatch");
+        return;
+    }
+
+    // Different model IDs are compatible only for the narrowly defined case
+    // where each ID is the arm's own persisted checkpoint and both checkpoints
+    // represent the same continuation epoch.
+    if (!ValidOwnCheckpointResume(control) ||
+        !ValidOwnCheckpointResume(treatment))
+    {
+        Add(reasons, "resume_model_id_mismatch");
+        return;
+    }
+
+    if (control.resumeCheckpointProvenance->checkpointEpoch !=
+        treatment.resumeCheckpointProvenance->checkpointEpoch)
+        Add(reasons, "resume_checkpoint_epoch_mismatch");
 }
 
 void ValidateFinalModelPair(const ScientificConfiguration& control,
@@ -429,6 +478,7 @@ ComparisonResult Compare(const FeatureAblationPairEvaluation::ArmEvidence& contr
     const auto& treatmentConfiguration = treatment.authoritative.configuration;
     ValidateExperimentPair(controlConfiguration, treatmentConfiguration,
                            result.invalidReasons);
+    ValidateResumeCompatibility(control, treatment, result.invalidReasons);
     ValidateExtendedPair(control.extended, treatment.extended,
                          result.invalidReasons);
     const bool validAblation = ValidateAblationIdentity(
