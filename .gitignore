@@ -42,3 +42,11 @@ screenlog.*
 # Python bytecode/cache
 __pycache__/
 *.py[cod]
+
+# Local Python virtual environments
+.venv/
+.venv.broken/
+.venv.broken-*/
+
+# Python dependency manifest is repository source, not scratch text.
+!requirements.txt

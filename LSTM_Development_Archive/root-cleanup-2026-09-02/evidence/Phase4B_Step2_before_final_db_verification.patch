@@ -1,0 +1,1906 @@
+diff --git a/Database/migrations/035_experiment_recommendation_ranking.sql b/Database/migrations/035_experiment_recommendation_ranking.sql
+index e68bd41..3e211c3 100644
+--- a/Database/migrations/035_experiment_recommendation_ranking.sql
++++ b/Database/migrations/035_experiment_recommendation_ranking.sql
+@@ -154,9 +154,200 @@ CREATE TABLE IF NOT EXISTS experiment_recommendation_ranking_member (
+             '-Infinity'::double precision))
+ );
+ 
++CREATE OR REPLACE FUNCTION recommendation_ranking_membership_contains(
++    membership_canonical text,
++    target_evaluation_identity text,
++    target_evaluation_result_id bigint)
++RETURNS boolean
++LANGUAGE plpgsql
++IMMUTABLE
++STRICT
++PARALLEL SAFE
++SECURITY INVOKER
++SET search_path TO pg_catalog
++AS $$
++DECLARE
++    membership_bytes bytea := convert_to(membership_canonical, 'UTF8');
++    target_identity_bytes bytea := convert_to(target_evaluation_identity, 'UTF8');
++    header_bytes bytea := convert_to(
++        'experiment_recommendation_ranking_membership_v1;count=', 'UTF8');
++    delimiter_bytes bytea := convert_to(';', 'UTF8');
++    colon_bytes bytea := convert_to(':', 'UTF8');
++    cursor_position integer;
++    delimiter_offset integer;
++    member_count_text text;
++    member_count_numeric numeric;
++    member_count integer;
++    member_ordinal integer;
++    member_prefix_bytes bytea;
++    identity_length_text text;
++    identity_length_numeric numeric;
++    identity_length integer;
++    member_identity_bytes bytea;
++    result_prefix_bytes bytea;
++    member_result_id_text text;
++    member_result_id_numeric numeric;
++    target_found boolean := false;
++    total_length integer := octet_length(membership_bytes);
++BEGIN
++    IF substring(membership_bytes FROM 1 FOR octet_length(header_bytes)) <>
++       header_bytes THEN
++        RETURN false;
++    END IF;
++    cursor_position := octet_length(header_bytes) + 1;
++    delimiter_offset := position(
++        delimiter_bytes IN substring(membership_bytes FROM cursor_position));
++    IF delimiter_offset = 0 THEN
++        member_count_text := convert_from(
++            substring(membership_bytes FROM cursor_position), 'UTF8');
++        cursor_position := total_length + 1;
++    ELSE
++        member_count_text := convert_from(substring(
++            membership_bytes FROM cursor_position FOR delimiter_offset - 1),
++            'UTF8');
++        cursor_position := cursor_position + delimiter_offset - 1;
++    END IF;
++    IF member_count_text !~ '^(0|[1-9][0-9]*)$'
++       OR length(member_count_text) > 4 THEN
++        RETURN false;
++    END IF;
++    member_count_numeric := member_count_text::numeric;
++    IF member_count_numeric > 1000 THEN
++        RETURN false;
++    END IF;
++    member_count := member_count_numeric::integer;
++    IF member_count = 0 THEN
++        RETURN false;
++    END IF;
++    IF cursor_position > total_length THEN
++        RETURN false;
++    END IF;
++
++    FOR member_ordinal IN 0..member_count - 1 LOOP
++        member_prefix_bytes := convert_to(
++            ';member[' || member_ordinal::text || '].evaluation_identity=',
++            'UTF8');
++        IF substring(membership_bytes FROM cursor_position
++                     FOR octet_length(member_prefix_bytes)) <>
++           member_prefix_bytes THEN
++            RETURN false;
++        END IF;
++        cursor_position := cursor_position + octet_length(member_prefix_bytes);
++        delimiter_offset := position(
++            colon_bytes IN substring(membership_bytes FROM cursor_position));
++        IF delimiter_offset = 0 THEN
++            RETURN false;
++        END IF;
++        identity_length_text := convert_from(substring(
++            membership_bytes FROM cursor_position FOR delimiter_offset - 1),
++            'UTF8');
++        IF identity_length_text !~ '^(0|[1-9][0-9]*)$'
++           OR length(identity_length_text) > 10 THEN
++            RETURN false;
++        END IF;
++        identity_length_numeric := identity_length_text::numeric;
++        IF identity_length_numeric > total_length THEN
++            RETURN false;
++        END IF;
++        identity_length := identity_length_numeric::integer;
++        cursor_position := cursor_position + delimiter_offset;
++        member_identity_bytes := substring(
++            membership_bytes FROM cursor_position FOR identity_length);
++        IF octet_length(member_identity_bytes) <> identity_length THEN
++            RETURN false;
++        END IF;
++        cursor_position := cursor_position + identity_length;
++
++        result_prefix_bytes := convert_to(
++            ';member[' || member_ordinal::text || '].evaluation_result_id=',
++            'UTF8');
++        IF substring(membership_bytes FROM cursor_position
++                     FOR octet_length(result_prefix_bytes)) <>
++           result_prefix_bytes THEN
++            RETURN false;
++        END IF;
++        cursor_position := cursor_position + octet_length(result_prefix_bytes);
++        IF member_ordinal < member_count - 1 THEN
++            delimiter_offset := position(delimiter_bytes IN substring(
++                membership_bytes FROM cursor_position));
++            IF delimiter_offset = 0 THEN
++                RETURN false;
++            END IF;
++            member_result_id_text := convert_from(substring(
++                membership_bytes FROM cursor_position FOR delimiter_offset - 1),
++                'UTF8');
++            cursor_position := cursor_position + delimiter_offset - 1;
++        ELSE
++            member_result_id_text := convert_from(
++                substring(membership_bytes FROM cursor_position), 'UTF8');
++            cursor_position := total_length + 1;
++        END IF;
++        IF member_result_id_text !~ '^[1-9][0-9]*$'
++           OR length(member_result_id_text) > 19 THEN
++            RETURN false;
++        END IF;
++        member_result_id_numeric := member_result_id_text::numeric;
++        IF member_result_id_numeric > 9223372036854775807::numeric THEN
++            RETURN false;
++        END IF;
++        IF member_identity_bytes = target_identity_bytes
++           AND member_result_id_numeric = target_evaluation_result_id THEN
++            target_found := true;
++        END IF;
++    END LOOP;
++    RETURN target_found AND cursor_position = total_length + 1;
++EXCEPTION
++    WHEN invalid_text_representation OR numeric_value_out_of_range OR
++         character_not_in_repertoire THEN
++        RETURN false;
++END;
++$$;
++
++CREATE OR REPLACE FUNCTION recommendation_ranking_tie_break_matches(
++    tie_break_primary text,
++    evaluation_disposition text,
++    evaluation_final_score double precision)
++RETURNS boolean
++LANGUAGE plpgsql
++IMMUTABLE
++PARALLEL SAFE
++SECURITY INVOKER
++SET search_path TO pg_catalog
++AS $$
++DECLARE
++    parsed_score double precision;
++BEGIN
++    IF evaluation_final_score IS NOT NULL THEN
++        IF left(tie_break_primary, 6) <> 'score:' THEN
++            RETURN false;
++        END IF;
++        parsed_score := substring(tie_break_primary FROM 7)::double precision;
++        RETURN parsed_score NOT IN (
++                   'NaN'::double precision,
++                   'Infinity'::double precision,
++                   '-Infinity'::double precision)
++               AND parsed_score = evaluation_final_score;
++    END IF;
++    RETURN tie_break_primary = CASE evaluation_disposition
++        WHEN 'blocked_pending_duplicate' THEN 'priority:0'
++        WHEN 'blocked_active_duplicate' THEN 'priority:1'
++        WHEN 'completed_duplicate' THEN 'priority:2'
++        WHEN 'insufficient_evidence' THEN 'priority:0'
++        WHEN 'stale_source_evidence' THEN 'priority:1'
++        WHEN 'unsupported_recommendation_family' THEN 'priority:2'
++        WHEN 'invalid_persisted_evidence' THEN 'priority:3'
++        ELSE NULL
++    END;
++EXCEPTION
++    WHEN invalid_text_representation OR numeric_value_out_of_range THEN
++        RETURN false;
++END;
++$$;
++
+ CREATE OR REPLACE FUNCTION enforce_recommendation_ranking_member_insert()
+ RETURNS trigger
+ LANGUAGE plpgsql
++SECURITY INVOKER
+ AS $$
+ BEGIN
+     PERFORM 1
+@@ -168,7 +359,17 @@ BEGIN
+       ON recommendation.recommendation_id = evaluation.recommendation_id
+     WHERE snapshot.recommendation_ranking_snapshot_id =
+           NEW.recommendation_ranking_snapshot_id
+-      AND snapshot.status = 'running'
++      AND (
++          snapshot.status = 'running'
++          OR (snapshot.status = 'completed' AND EXISTS (
++              SELECT 1
++              FROM experiment_recommendation_ranking_member existing
++              WHERE existing.recommendation_ranking_snapshot_id =
++                    NEW.recommendation_ranking_snapshot_id
++                AND existing.recommendation_evaluation_result_id =
++                    NEW.recommendation_evaluation_result_id
++          ))
++      )
+       AND evaluation.recommendation_id = NEW.recommendation_id
+       AND evaluation.recommendation_semantic_hash =
+           NEW.recommendation_semantic_hash
+@@ -179,12 +380,88 @@ BEGIN
+       AND evaluation.source_experiment_id = NEW.source_experiment_id
+       AND evaluation.source_model_id IS NOT DISTINCT FROM NEW.source_model_id
+       AND evaluation.source_analysis_id IS NOT DISTINCT FROM NEW.source_analysis_id
++      AND (
++          (snapshot.scope_type = 'evaluation_run'
++              AND evaluation.recommendation_evaluation_run_id =
++                  snapshot.evaluation_run_filter)
++          OR (snapshot.scope_type = 'recommendation_scan'
++              AND evaluation.recommendation_scan_id =
++                  snapshot.recommendation_scan_filter)
++          OR (snapshot.scope_type = 'symbol'
++              AND recommendation.source_symbol = snapshot.symbol_filter)
++          OR (snapshot.scope_type = 'horizon'
++              AND recommendation.source_prediction_horizon =
++                  snapshot.horizon_filter)
++          OR (snapshot.scope_type = 'family'
++              AND recommendation.changed_parameter = snapshot.family_filter)
++          OR (snapshot.scope_type = 'symbol_horizon'
++              AND recommendation.source_symbol = snapshot.symbol_filter
++              AND recommendation.source_prediction_horizon =
++                  snapshot.horizon_filter)
++          OR snapshot.scope_type = 'global'
++      )
++      AND recommendation_ranking_membership_contains(
++          snapshot.source_membership_canonical,
++          evaluation.evaluation_identity_canonical,
++          evaluation.recommendation_evaluation_result_id)
++      AND (
++          EXISTS (
++              SELECT 1
++              FROM experiment_recommendation_ranking_member existing
++              WHERE existing.recommendation_ranking_snapshot_id =
++                    NEW.recommendation_ranking_snapshot_id
++                AND existing.recommendation_evaluation_result_id =
++                    NEW.recommendation_evaluation_result_id
++          )
++          OR (
++              SELECT count(*)
++              FROM experiment_recommendation_ranking_member existing
++              WHERE existing.recommendation_ranking_snapshot_id =
++                    NEW.recommendation_ranking_snapshot_id
++          ) < snapshot.requested_limit
++      )
++      AND NEW.bucket_rank <= snapshot.requested_limit
++      AND NEW.global_ordinal <= snapshot.requested_limit
+       AND recommendation.source_symbol = NEW.symbol
+       AND recommendation.source_prediction_horizon = NEW.horizon
+       AND recommendation.changed_parameter = NEW.family
+       AND recommendation.source_value_canonical = NEW.source_value_canonical
+       AND recommendation.proposed_value_canonical = NEW.proposed_value_canonical
+-    FOR SHARE OF snapshot;
++      AND NEW.tie_break_semantic_hash = NEW.recommendation_semantic_hash
++      AND NEW.tie_break_evaluation_hash = NEW.evaluation_identity_hash
++      AND recommendation_ranking_tie_break_matches(
++          NEW.tie_break_primary,
++          evaluation.disposition,
++          evaluation.final_score)
++      AND NEW.inclusion_reason = CASE NEW.bucket
++          WHEN 'advisory_ready' THEN 'included_advisory_ready'
++          ELSE 'included_for_advisory_inspection'
++      END
++      AND NEW.block_reason IS NOT DISTINCT FROM CASE NEW.bucket
++          WHEN 'advisory_ready' THEN NULL::text
++          ELSE evaluation.reason_code
++      END
++      AND NEW.top_positive_component IS NOT DISTINCT FROM (
++          SELECT component.component_name
++          FROM experiment_recommendation_evaluation_component component
++          WHERE component.recommendation_evaluation_result_id =
++                evaluation.recommendation_evaluation_result_id
++            AND NOT component.is_penalty
++          ORDER BY component.weighted_contribution DESC,
++                   component.component_name ASC
++          LIMIT 1
++      )
++      AND NEW.top_penalty_component IS NOT DISTINCT FROM (
++          SELECT component.component_name
++          FROM experiment_recommendation_evaluation_component component
++          WHERE component.recommendation_evaluation_result_id =
++                evaluation.recommendation_evaluation_result_id
++            AND component.is_penalty
++          ORDER BY component.weighted_contribution DESC,
++                   component.component_name ASC
++          LIMIT 1
++      )
++    FOR UPDATE OF snapshot;
+     IF NOT FOUND THEN
+         RAISE EXCEPTION 'invalid or terminal recommendation ranking membership'
+             USING ERRCODE = '23514',
+@@ -194,12 +471,86 @@ BEGIN
+ END;
+ $$;
+ 
++CREATE OR REPLACE FUNCTION enforce_recommendation_ranking_snapshot_transition()
++RETURNS trigger
++LANGUAGE plpgsql
++SECURITY INVOKER
++AS $$
++DECLARE
++    persisted_member_count integer;
++    persisted_advisory_ready_count integer;
++    persisted_blocked_count integer;
++    persisted_non_actionable_count integer;
++BEGIN
++    IF TG_OP = 'INSERT' THEN
++        IF NEW.status <> 'running' THEN
++            RAISE EXCEPTION 'recommendation ranking snapshot must start running'
++                USING ERRCODE = '23514',
++                      CONSTRAINT =
++                          'recommendation_ranking_snapshot_initial_status_check';
++        END IF;
++        RETURN NEW;
++    END IF;
++    IF OLD.status <> 'running' OR NEW.status NOT IN ('completed', 'failed') THEN
++        RAISE EXCEPTION 'invalid recommendation ranking snapshot transition'
++            USING ERRCODE = '23514',
++                  CONSTRAINT = 'recommendation_ranking_snapshot_transition_check';
++    END IF;
++
++    SELECT count(*)::integer,
++           count(*) FILTER (WHERE bucket = 'advisory_ready')::integer,
++           count(*) FILTER (WHERE bucket = 'blocked')::integer,
++           count(*) FILTER (WHERE bucket = 'non_actionable')::integer
++    INTO persisted_member_count,
++         persisted_advisory_ready_count,
++         persisted_blocked_count,
++         persisted_non_actionable_count
++    FROM experiment_recommendation_ranking_member
++    WHERE recommendation_ranking_snapshot_id =
++          OLD.recommendation_ranking_snapshot_id;
++
++    IF (NEW.status = 'completed' AND (
++            NEW.member_count <> persisted_member_count
++            OR NEW.advisory_ready_count <> persisted_advisory_ready_count
++            OR NEW.blocked_count <> persisted_blocked_count
++            OR NEW.non_actionable_count <> persisted_non_actionable_count))
++       OR (NEW.status = 'failed' AND persisted_member_count <> 0) THEN
++        RAISE EXCEPTION 'recommendation ranking snapshot counts do not match members'
++            USING ERRCODE = '23514',
++                  CONSTRAINT = 'recommendation_ranking_snapshot_member_count_check';
++    END IF;
++    RETURN NEW;
++END;
++$$;
++
++DO $$
++DECLARE
++    ranking_schema text := current_schema();
++BEGIN
++    EXECUTE format(
++        'ALTER FUNCTION %I.enforce_recommendation_ranking_member_insert() '
++        'SET search_path TO pg_catalog, %I, pg_temp',
++        ranking_schema,
++        ranking_schema);
++    EXECUTE format(
++        'ALTER FUNCTION %I.enforce_recommendation_ranking_snapshot_transition() '
++        'SET search_path TO pg_catalog, %I, pg_temp',
++        ranking_schema,
++        ranking_schema);
++END $$;
++
+ DROP TRIGGER IF EXISTS enforce_recommendation_ranking_member_insert_trigger
+     ON experiment_recommendation_ranking_member;
+ CREATE TRIGGER enforce_recommendation_ranking_member_insert_trigger
+ BEFORE INSERT ON experiment_recommendation_ranking_member
+ FOR EACH ROW EXECUTE FUNCTION enforce_recommendation_ranking_member_insert();
+ 
++DROP TRIGGER IF EXISTS enforce_recommendation_ranking_snapshot_transition_trigger
++    ON experiment_recommendation_ranking_snapshot;
++CREATE TRIGGER enforce_recommendation_ranking_snapshot_transition_trigger
++BEFORE INSERT OR UPDATE ON experiment_recommendation_ranking_snapshot
++FOR EACH ROW EXECUTE FUNCTION enforce_recommendation_ranking_snapshot_transition();
++
+ CREATE INDEX IF NOT EXISTS recommendation_ranking_snapshot_status_idx
+     ON experiment_recommendation_ranking_snapshot(
+         status,recommendation_ranking_snapshot_id DESC);
+diff --git a/Sources/ExperimentRecommendationRanking.cpp b/Sources/ExperimentRecommendationRanking.cpp
+index ae79329..68bf764 100644
+--- a/Sources/ExperimentRecommendationRanking.cpp
++++ b/Sources/ExperimentRecommendationRanking.cpp
+@@ -4,13 +4,16 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <charconv>
+ #include <cmath>
+ #include <cstdint>
++#include <limits>
+ #include <locale>
+ #include <map>
+ #include <set>
+ #include <sstream>
+ #include <stdexcept>
++#include <string_view>
+ #include <tuple>
+ 
+ namespace EA::ExperimentRecommendation
+@@ -42,6 +45,86 @@ std::string StableHash(const std::string& canonical)
+     return "fnv1a64:" + std::string(encoded.begin(), encoded.end());
+ }
+ 
++bool ParseCanonicalUnsigned(std::string_view text,
++                            std::uint64_t maximum,
++                            bool allowZero,
++                            std::uint64_t& value)
++{
++    if (text.empty() || (text.size() > 1 && text.front() == '0')) return false;
++    value = 0;
++    const auto result = std::from_chars(
++        text.data(), text.data() + text.size(), value);
++    return result.ec == std::errc{} && result.ptr == text.data() + text.size() &&
++           value <= maximum && (allowZero || value > 0);
++}
++
++bool ValidRecommendationRankingMembershipCanonicalText(
++    const std::string& canonical)
++{
++    constexpr std::string_view header =
++        "experiment_recommendation_ranking_membership_v1;count=";
++    if (!canonical.starts_with(header)) return false;
++    std::size_t position = header.size();
++    const std::size_t countEnd = canonical.find(';', position);
++    const std::string_view countText{canonical.data() + position,
++        (countEnd == std::string::npos ? canonical.size() : countEnd) - position};
++    std::uint64_t count = 0;
++    if (!ParseCanonicalUnsigned(
++            countText, kMaximumRecommendationRankingInputs, true, count))
++        return false;
++    if (count == 0) return countEnd == std::string::npos;
++    if (countEnd == std::string::npos) return false;
++    position = countEnd;
++
++    std::set<long long> resultIds;
++    std::optional<std::pair<std::string, long long>> previous;
++    for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal)
++    {
++        const std::string identityPrefix = ";member[" +
++            std::to_string(ordinal) + "].evaluation_identity=";
++        if (canonical.compare(position, identityPrefix.size(), identityPrefix) != 0)
++            return false;
++        position += identityPrefix.size();
++        const std::size_t lengthEnd = canonical.find(':', position);
++        if (lengthEnd == std::string::npos) return false;
++        const std::string_view lengthText{canonical.data() + position,
++                                          lengthEnd - position};
++        std::uint64_t identityLength = 0;
++        if (!ParseCanonicalUnsigned(
++                lengthText, canonical.size(), false, identityLength))
++            return false;
++        position = lengthEnd + 1;
++        if (identityLength > canonical.size() - position) return false;
++        const std::string identity = canonical.substr(
++            position, static_cast<std::size_t>(identityLength));
++        position += static_cast<std::size_t>(identityLength);
++
++        const std::string resultPrefix = ";member[" +
++            std::to_string(ordinal) + "].evaluation_result_id=";
++        if (canonical.compare(position, resultPrefix.size(), resultPrefix) != 0)
++            return false;
++        position += resultPrefix.size();
++        const std::size_t resultEnd = ordinal + 1 < count
++            ? canonical.find(';', position) : canonical.size();
++        if (resultEnd == std::string::npos) return false;
++        const std::string_view resultText{canonical.data() + position,
++                                          resultEnd - position};
++        std::uint64_t parsedResultId = 0;
++        if (!ParseCanonicalUnsigned(
++                resultText, static_cast<std::uint64_t>(
++                    std::numeric_limits<long long>::max()),
++                false, parsedResultId))
++            return false;
++        const long long resultId = static_cast<long long>(parsedResultId);
++        if (!resultIds.insert(resultId).second) return false;
++        const std::pair<std::string, long long> current{identity, resultId};
++        if (previous && !(*previous < current)) return false;
++        previous = current;
++        position = resultEnd;
++    }
++    return position == canonical.size();
++}
++
+ int DispositionPriority(RecommendationEvaluationDisposition disposition)
+ {
+     switch (disposition)
+@@ -118,12 +201,14 @@ void ValidateEvaluation(const RecommendationRankingEvaluation& value)
+         value.evaluatorVersion <= 0 || value.scoringPolicyCanonical.empty() ||
+         value.scoringPolicyHash.empty() || value.scoringVersion <= 0 ||
+         value.reasonCode.empty() || value.explanation.empty() ||
+-        value.missingEvidenceCount < 0)
++        value.componentCount < 0 || value.missingEvidenceCount < 0 ||
++        value.componentCount != static_cast<int>(value.components.size()))
+         throw std::invalid_argument("invalid_recommendation_ranking_evidence");
+     const bool ready = value.disposition ==
+         RecommendationEvaluationDisposition::advisoryReady;
+     if (ready != value.finalScore.has_value() ||
+-        ready != (value.eligibility == RecommendationEligibility::eligible))
++        ready != (value.eligibility == RecommendationEligibility::eligible) ||
++        ready != !value.components.empty())
+         throw std::invalid_argument("invalid_recommendation_ranking_result_shape");
+     if (value.finalScore && (!std::isfinite(*value.finalScore) ||
+         *value.finalScore < 0.0 || *value.finalScore > 1.0))
+@@ -169,10 +254,13 @@ std::string RecommendationRankingPolicyCanonicalText(
+     if (const auto error = ValidateRecommendationRankingPolicy(policy))
+         throw std::invalid_argument(*error);
+     return "experiment_recommendation_ranking_policy_v1;ranking_version=1;"
++        "bucket_order=advisory_ready,blocked,non_actionable;"
+         "ready_order=score_desc,semantic_hash,evaluation_hash,result_id;"
+         "blocked_order=pending,active,completed,semantic_hash,evaluation_hash,result_id;"
+         "non_actionable_order=insufficient,stale,unsupported,invalid,semantic_hash,evaluation_hash,result_id;"
+-        "inclusion=all_persisted_dispositions;grouping=single_scope;"
++        "inclusion=all_persisted_dispositions_before_global_limit;"
++        "limit_application=global_after_order;grouping=single_scope;"
++        "component_summary=per_penalty_class,contribution_desc,component_name;"
+         "comparison=matching_evaluation_policy,scoring_policy,evaluator,family";
+ }
+ 
+@@ -329,9 +417,13 @@ std::vector<RecommendationRankingMember> RankRecommendationEvaluationEvidence(
+         throw std::invalid_argument("recommendation_ranking_input_limit_exceeded");
+     std::vector<RecommendationRankingMember> members;
+     members.reserve(evaluations.size());
++    std::set<long long> evaluationResultIds;
+     for (const auto& evaluation : evaluations)
+     {
+         ValidateEvaluation(evaluation);
++        if (!evaluationResultIds.insert(evaluation.evaluationResultId).second)
++            throw std::invalid_argument(
++                "duplicate_recommendation_ranking_evaluation_result");
+         RecommendationRankingMember member;
+         member.evaluation = evaluation;
+         member.bucket = RecommendationRankingBucketForDisposition(
+@@ -381,11 +473,18 @@ std::vector<RecommendationRankingMember> RankRecommendationEvaluationEvidence(
+ std::string RecommendationRankingMembershipCanonicalText(
+     const std::vector<RecommendationRankingEvaluation>& evaluations)
+ {
++    if (evaluations.size() >
++        static_cast<std::size_t>(kMaximumRecommendationRankingInputs))
++        throw std::invalid_argument("recommendation_ranking_input_limit_exceeded");
+     std::vector<std::pair<std::string, long long>> identities;
+     identities.reserve(evaluations.size());
++    std::set<long long> evaluationResultIds;
+     for (const auto& value : evaluations)
+     {
+         ValidateEvaluation(value);
++        if (!evaluationResultIds.insert(value.evaluationResultId).second)
++            throw std::invalid_argument(
++                "duplicate_recommendation_ranking_evaluation_result");
+         identities.emplace_back(value.evaluationIdentityCanonical,
+                                 value.evaluationResultId);
+     }
+@@ -408,17 +507,32 @@ std::string RecommendationRankingSnapshotIdentityCanonicalText(
+     int outputLimit,
+     const std::vector<RecommendationRankingEvaluation>& evaluations)
+ {
++    if (outputLimit <= 0 || outputLimit > kMaximumRecommendationRankingMembers)
++        throw std::invalid_argument("recommendation_ranking_limit_invalid");
++    const std::string membership =
++        RecommendationRankingMembershipCanonicalText(evaluations);
++    return RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++        policy, scope, outputLimit, membership);
++}
++
++std::string RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++    const RecommendationRankingPolicy& policy,
++    const RecommendationRankingScope& scope,
++    int outputLimit,
++    const std::string& membershipCanonical)
++{
++    if (!ValidRecommendationRankingMembershipCanonicalText(membershipCanonical))
++        throw std::invalid_argument(
++            "invalid_recommendation_ranking_membership_canonical");
+     if (outputLimit <= 0 || outputLimit > kMaximumRecommendationRankingMembers)
+         throw std::invalid_argument("recommendation_ranking_limit_invalid");
+     const std::string policyText =
+         RecommendationRankingPolicyCanonicalText(policy);
+     const std::string scopeText = RecommendationRankingScopeCanonicalText(scope);
+-    const std::string membership =
+-        RecommendationRankingMembershipCanonicalText(evaluations);
+     return "experiment_recommendation_ranking_snapshot_identity_v1;policy=" +
+         LengthText(policyText) + ";scope=" + LengthText(scopeText) +
+         ";limit=" + std::to_string(outputLimit) + ";membership=" +
+-        LengthText(membership);
++        LengthText(membershipCanonical);
+ }
+ 
+ std::string RecommendationComparisonStateText(
+@@ -456,6 +570,8 @@ RecommendationComparisonResult CompareRecommendationEvaluations(
+ {
+     ValidateEvaluation(left);
+     ValidateEvaluation(right);
++    if ((leftRank && *leftRank <= 0) || (rightRank && *rightRank <= 0))
++        throw std::invalid_argument("invalid_recommendation_comparison_rank");
+     RecommendationComparisonResult result;
+     result.leftEvaluationResultId = left.evaluationResultId;
+     result.rightEvaluationResultId = right.evaluationResultId;
+@@ -518,8 +634,8 @@ RecommendationComparisonResult CompareRecommendationEvaluations(
+     if (aligned.size() >
+         static_cast<std::size_t>(kMaximumRecommendationComparisonComponents))
+         throw std::invalid_argument("recommendation_comparison_component_limit_exceeded");
+-    double positiveMagnitude = -1.0;
+-    double penaltyMagnitude = -1.0;
++    double positiveMagnitude = 0.0;
++    double penaltyMagnitude = 0.0;
+     for (const auto& [name, pair] : aligned)
+     {
+         RecommendationComponentDifference difference;
+@@ -539,20 +655,19 @@ RecommendationComparisonResult CompareRecommendationEvaluations(
+         if (difference.leftContribution && difference.rightContribution)
+             difference.contributionDelta = *difference.leftContribution -
+                                            *difference.rightContribution;
+-        const double magnitude = difference.contributionDelta
+-            ? std::fabs(*difference.contributionDelta) : 0.0;
+-        if (difference.penalty)
++        if (difference.contributionDelta)
+         {
+-            if (magnitude > penaltyMagnitude)
++            const double magnitude = std::fabs(*difference.contributionDelta);
++            if (difference.penalty && magnitude > penaltyMagnitude)
+             {
+                 penaltyMagnitude = magnitude;
+                 result.largestPenaltyDifference = name;
+             }
+-        }
+-        else if (magnitude > positiveMagnitude)
+-        {
+-            positiveMagnitude = magnitude;
+-            result.largestPositiveDifference = name;
++            else if (!difference.penalty && magnitude > positiveMagnitude)
++            {
++                positiveMagnitude = magnitude;
++                result.largestPositiveDifference = name;
++            }
+         }
+         result.componentDifferences.push_back(std::move(difference));
+     }
+diff --git a/Sources/ExperimentRecommendationRanking.hpp b/Sources/ExperimentRecommendationRanking.hpp
+index ddab114..165128c 100644
+--- a/Sources/ExperimentRecommendationRanking.hpp
++++ b/Sources/ExperimentRecommendationRanking.hpp
+@@ -97,6 +97,7 @@ struct RecommendationRankingEvaluation
+     std::string reasonCode;
+     std::string explanation;
+     std::optional<double> finalScore;
++    int componentCount = 0;
+     int missingEvidenceCount = 0;
+     std::vector<RecommendationScoreComponent> components;
+ };
+@@ -130,6 +131,11 @@ std::string RecommendationRankingSnapshotIdentityCanonicalText(
+     const RecommendationRankingScope& scope,
+     int outputLimit,
+     const std::vector<RecommendationRankingEvaluation>& evaluations);
++std::string RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++    const RecommendationRankingPolicy& policy,
++    const RecommendationRankingScope& scope,
++    int outputLimit,
++    const std::string& membershipCanonical);
+ 
+ enum class RecommendationComparisonState
+ {
+diff --git a/Sources/ExperimentRecommendationRankingRepository.cpp b/Sources/ExperimentRecommendationRankingRepository.cpp
+index f7ac221..1cdf251 100644
+--- a/Sources/ExperimentRecommendationRankingRepository.cpp
++++ b/Sources/ExperimentRecommendationRankingRepository.cpp
+@@ -53,7 +53,7 @@ std::string EvaluationColumns()
+         "run.evaluation_policy_hash,run.evaluation_version,run.evaluator_version,"
+         "run.scoring_policy_canonical,run.scoring_policy_hash,run.scoring_version,"
+         "er.eligibility,er.disposition,er.reason_code,er.explanation,"
+-        "er.final_score,er.missing_evidence_count,"
++        "er.final_score,er.component_count,er.missing_evidence_count,"
+         "ec.component_ordinal,ec.component_name,ec.reason_code AS component_reason_code,"
+         "ec.input_canonical,ec.normalized_value,ec.weight,"
+         "ec.weighted_contribution,ec.is_penalty,ec.explanation AS component_explanation";
+@@ -100,6 +100,7 @@ RecommendationRankingEvaluation MapEvaluation(const pqxx::row& row)
+     value.reasonCode = row["reason_code"].as<std::string>();
+     value.explanation = row["explanation"].as<std::string>();
+     value.finalScore = OptionalValue<double>(row, "final_score");
++    value.componentCount = row["component_count"].as<int>();
+     value.missingEvidenceCount = row["missing_evidence_count"].as<int>();
+     return value;
+ }
+@@ -357,13 +358,33 @@ std::vector<RecommendationRankingEvaluation> LoadEvaluationsForRanking(
+         throw std::invalid_argument(*error);
+     pqxx::read_transaction transaction{connection};
+     const pqxx::result rows = transaction.exec(
+-        "SELECT " + EvaluationColumns() + EvaluationFromClause() +
++        "WITH selected_evaluations AS (SELECT "
++        "er.recommendation_evaluation_result_id,"
++        "er.evaluation_identity_canonical FROM "
++        "experiment_recommendation_evaluation_result er "
++        "JOIN experiment_recommendation r ON "
++        "r.recommendation_id=er.recommendation_id "
+         "WHERE ($1::bigint IS NULL OR er.recommendation_evaluation_run_id=$1) "
+         "AND ($2::bigint IS NULL OR er.recommendation_scan_id=$2) "
+         "AND ($3::text IS NULL OR r.source_symbol=$3) "
+         "AND ($4::integer IS NULL OR r.source_prediction_horizon=$4) "
+         "AND ($5::text IS NULL OR r.changed_parameter=$5) "
+         "ORDER BY er.evaluation_identity_canonical ASC,"
++        "er.recommendation_evaluation_result_id ASC LIMIT " +
++        std::to_string(kMaximumRecommendationRankingInputs + 1) + ") "
++        "SELECT " + EvaluationColumns() +
++        " FROM selected_evaluations selected "
++        "JOIN experiment_recommendation_evaluation_result er ON "
++        "er.recommendation_evaluation_result_id="
++        "selected.recommendation_evaluation_result_id "
++        "JOIN experiment_recommendation_evaluation_run run ON "
++        "run.recommendation_evaluation_run_id=er.recommendation_evaluation_run_id "
++        "JOIN experiment_recommendation r ON "
++        "r.recommendation_id=er.recommendation_id "
++        "LEFT JOIN experiment_recommendation_evaluation_component ec ON "
++        "ec.recommendation_evaluation_result_id="
++        "er.recommendation_evaluation_result_id "
++        "ORDER BY selected.evaluation_identity_canonical ASC,"
+         "er.recommendation_evaluation_result_id ASC,ec.component_ordinal ASC;",
+         pqxx::params{scope.evaluationRunId, scope.recommendationScanId,
+                      scope.symbol, scope.horizon, scope.family});
+@@ -390,6 +411,18 @@ RecommendationRankingSnapshotBeginResult BeginOrFindRecommendationRankingSnapsho
+     const std::string scopeCanonical =
+         RecommendationRankingScopeCanonicalText(request.scope);
+     const std::string scopeHash = RecommendationRankingCanonicalHash(scopeCanonical);
++    const std::string expectedMembershipHash =
++        RecommendationRankingCanonicalHash(request.membershipCanonical);
++    const std::string expectedSnapshotIdentity =
++        RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++            request.policy, request.scope, request.limit,
++            request.membershipCanonical);
++    if (request.membershipHash != expectedMembershipHash ||
++        request.snapshotIdentityCanonical != expectedSnapshotIdentity ||
++        request.snapshotIdentityHash !=
++            RecommendationRankingCanonicalHash(expectedSnapshotIdentity))
++        throw std::invalid_argument(
++            "invalid_recommendation_ranking_snapshot_identity");
+     pqxx::work transaction{connection};
+     transaction.exec("SET TRANSACTION READ WRITE;");
+     const pqxx::result inserted = transaction.exec(
+diff --git a/Sources/ExperimentRecommendationRankingService.cpp b/Sources/ExperimentRecommendationRankingService.cpp
+index caa2bb2..07801b2 100644
+--- a/Sources/ExperimentRecommendationRankingService.cpp
++++ b/Sources/ExperimentRecommendationRankingService.cpp
+@@ -106,12 +106,15 @@ void PrintMember(std::ostream& output,
+            << ",bucket_rank=" << member.bucketRank
+            << ",global_ordinal=" << member.globalOrdinal
+            << ",final_score=" << OptionalScore(value.finalScore)
++           << ",component_count=" << value.componentCount
+            << ",disposition="
+            << RecommendationEvaluationDispositionText(value.disposition)
+            << ",tie_break_1="
+            << RecommendationMachineText(member.tieBreakPrimary)
+            << ",tie_break_2="
+            << RecommendationMachineText(member.tieBreakSemanticHash)
++           << ",tie_break_3="
++           << RecommendationMachineText(member.tieBreakEvaluationHash)
+            << ",inclusion_reason="
+            << RecommendationMachineText(member.inclusionReason)
+            << ",block_reason=" << OptionalText(member.blockReason)
+diff --git a/Tests/ExperimentRecommendationRankingMigrationTests.sql b/Tests/ExperimentRecommendationRankingMigrationTests.sql
+index 77dd0f0..0e0bb8c 100644
+--- a/Tests/ExperimentRecommendationRankingMigrationTests.sql
++++ b/Tests/ExperimentRecommendationRankingMigrationTests.sql
+@@ -68,8 +68,114 @@ BEGIN
+           AND NOT tgisinternal)<>1 THEN
+         RAISE EXCEPTION 'ranking_member_enforcement_trigger_count_invalid';
+     END IF;
++    IF (SELECT count(*) FROM pg_trigger
++        WHERE tgrelid='experiment_recommendation_ranking_snapshot'::regclass
++          AND tgname='enforce_recommendation_ranking_snapshot_transition_trigger'
++          AND NOT tgisinternal)<>1 THEN
++        RAISE EXCEPTION 'ranking_snapshot_transition_trigger_count_invalid';
++    END IF;
++    IF NOT EXISTS (
++        SELECT 1
++        FROM pg_proc
++        WHERE oid='enforce_recommendation_ranking_member_insert()'::regprocedure
++          AND array_to_string(proconfig, ',') LIKE
++              '%search_path=pg_catalog, phase4b_ranking_migration_test, pg_temp%'
++    ) THEN
++        RAISE EXCEPTION 'ranking_trigger_search_path_not_pinned';
++    END IF;
++    IF NOT EXISTS (
++        SELECT 1
++        FROM pg_proc
++        WHERE oid=
++            'enforce_recommendation_ranking_snapshot_transition()'::regprocedure
++          AND array_to_string(proconfig, ',') LIKE
++              '%search_path=pg_catalog, phase4b_ranking_migration_test, pg_temp%'
++    ) THEN
++        RAISE EXCEPTION 'ranking_transition_search_path_not_pinned';
++    END IF;
++    IF EXISTS (
++        SELECT 1
++        FROM pg_proc
++        WHERE oid IN (
++            'enforce_recommendation_ranking_member_insert()'::regprocedure,
++            'enforce_recommendation_ranking_snapshot_transition()'::regprocedure,
++            'recommendation_ranking_membership_contains(text,text,bigint)'::regprocedure,
++            'recommendation_ranking_tie_break_matches(text,text,double precision)'::regprocedure)
++          AND prosecdef
++    ) THEN
++        RAISE EXCEPTION 'ranking_trigger_function_is_security_definer';
++    END IF;
++END $$;
++
++DO $$
++DECLARE
++    injected_identity text :=
++        'prefix;member[0].evaluation_identity=12:evaluation_2;member[0].evaluation_result_id=2;suffix';
++    injected_membership text;
++    unicode_identity text := 'évaluation';
++    unicode_membership text;
++BEGIN
++    IF recommendation_ranking_membership_contains(
++        'experiment_recommendation_ranking_membership_v1;count=1;member[0].evaluation_identity=10:evaluation;member[0].evaluation_result_id=10',
++        'evaluation', 1) THEN
++        RAISE EXCEPTION 'membership_result_id_prefix_was_accepted';
++    END IF;
++    injected_membership :=
++        'experiment_recommendation_ranking_membership_v1;count=1;' ||
++        'member[0].evaluation_identity=' || octet_length(injected_identity) ||
++        ':' || injected_identity || ';member[0].evaluation_result_id=11';
++    IF recommendation_ranking_membership_contains(
++        injected_membership, 'evaluation_2', 2) THEN
++        RAISE EXCEPTION 'membership_identity_delimiter_injection_was_accepted';
++    END IF;
++    unicode_membership :=
++        'experiment_recommendation_ranking_membership_v1;count=1;' ||
++        'member[0].evaluation_identity=' || octet_length(unicode_identity) ||
++        ':' || unicode_identity || ';member[0].evaluation_result_id=42';
++    IF NOT recommendation_ranking_membership_contains(
++        unicode_membership, unicode_identity, 42) THEN
++        RAISE EXCEPTION 'valid_byte_length_membership_was_rejected';
++    END IF;
++    IF recommendation_ranking_membership_contains(
++        unicode_membership || ';trailing', unicode_identity, 42) THEN
++        RAISE EXCEPTION 'malformed_membership_suffix_was_accepted';
++    END IF;
++    IF NOT recommendation_ranking_tie_break_matches(
++        'score:0.80000000000000004', 'advisory_ready', 0.8)
++       OR recommendation_ranking_tie_break_matches(
++        'score:0.7', 'advisory_ready', 0.8)
++       OR NOT recommendation_ranking_tie_break_matches(
++        'priority:1', 'stale_source_evidence', NULL)
++       OR recommendation_ranking_tie_break_matches(
++        'priority:0', 'stale_source_evidence', NULL) THEN
++        RAISE EXCEPTION 'ranking_tie_break_validation_invalid';
++    END IF;
+ END $$;
+ 
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_snapshot(
++            recommendation_ranking_snapshot_id,status,
++            ranking_snapshot_identity_canonical,ranking_snapshot_identity_hash,
++            ranking_policy_canonical,ranking_policy_hash,ranking_version,
++            scope_type,scope_canonical,scope_hash,requested_limit,
++            source_membership_canonical,source_membership_hash,completed_at)
++        VALUES (9000,'completed','terminal_insert','terminal_insert_hash',
++                'ranking_policy','ranking_policy_hash',1,'global',
++                'global_scope','global_scope_hash',100,
++                'experiment_recommendation_ranking_membership_v1;count=0',
++                'empty_membership_hash',now());
++        RAISE EXCEPTION 'terminal_ranking_snapshot_insert_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
+ INSERT INTO experiment DEFAULT VALUES;
+ INSERT INTO model DEFAULT VALUES;
+ INSERT INTO experiment_analysis_result DEFAULT VALUES;
+@@ -123,19 +229,21 @@ INSERT INTO experiment_recommendation_ranking_snapshot(
+     evaluation_run_filter,requested_limit,source_membership_canonical,
+     source_membership_hash)
+ VALUES ('running','snapshot','snapshot_hash','ranking_policy','ranking_hash',1,
+-        'evaluation_run','scope','scope_hash',1,100,'membership',
++        'evaluation_run','scope','scope_hash',1,100,
++        'experiment_recommendation_ranking_membership_v1;count=2;member[0].evaluation_identity=10:evaluation;member[0].evaluation_result_id=1;member[1].evaluation_identity=12:evaluation_2;member[1].evaluation_result_id=2',
+         'membership_hash');
+ INSERT INTO experiment_recommendation_ranking_member(
+     recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
+     recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
+     bucket,bucket_rank,global_ordinal,final_score,disposition,
+     tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
+-    inclusion_reason,symbol,horizon,family,source_value_canonical,
++    inclusion_reason,top_positive_component,symbol,horizon,family,source_value_canonical,
+     proposed_value_canonical,source_experiment_id,source_model_id,
+     source_analysis_id,recommendation_scan_id)
+ VALUES (1,1,1,'semantic_hash','evaluation_hash','advisory_ready',1,1,0.8,
+         'advisory_ready','score:0.8','semantic_hash','evaluation_hash',
+-        'included_advisory_ready','EURUSD',12,'core_lr_mult','1','1.25',
++        'included_advisory_ready','leader_quality','EURUSD',12,
++        'core_lr_mult','1','1.25',
+         1,1,1,1);
+ ALTER TABLE experiment_recommendation_ranking_member
+     DISABLE TRIGGER enforce_recommendation_ranking_member_insert_trigger;
+@@ -180,13 +288,137 @@ BEGIN
+         IF observed<>'23514' THEN RAISE; END IF;
+     END;
+ END $$;
++
++DO $$
++DECLARE
++    observed text;
++    invalid_score double precision;
++BEGIN
++    FOREACH invalid_score IN ARRAY ARRAY[
++        'Infinity'::double precision,
++        '-Infinity'::double precision
++    ]
++    LOOP
++        BEGIN
++            INSERT INTO experiment_recommendation_ranking_member(
++                recommendation_ranking_snapshot_id,
++                recommendation_evaluation_result_id,recommendation_id,
++                recommendation_semantic_hash,evaluation_identity_hash,bucket,
++                bucket_rank,global_ordinal,final_score,disposition,
++                tie_break_primary,tie_break_semantic_hash,
++                tie_break_evaluation_hash,inclusion_reason,symbol,horizon,
++                family,source_value_canonical,proposed_value_canonical,
++                source_experiment_id,recommendation_scan_id)
++            VALUES (1,2,2,'hash','hash','advisory_ready',2,2,invalid_score,
++                    'advisory_ready','score:nonfinite','hash','hash','included',
++                    'EURUSD',12,'core_lr_mult','1','2',1,1);
++            RAISE EXCEPTION 'infinite_ranking_score_was_accepted';
++        EXCEPTION WHEN check_violation THEN
++            GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++            IF observed<>'23514' THEN RAISE; END IF;
++        END;
++    END LOOP;
++END $$;
+ ALTER TABLE experiment_recommendation_ranking_member
+     ENABLE TRIGGER enforce_recommendation_ranking_member_insert_trigger;
+ 
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,disposition,tie_break_primary,
++            tie_break_semantic_hash,tie_break_evaluation_hash,inclusion_reason,
++            block_reason,symbol,horizon,family,source_value_canonical,
++            proposed_value_canonical,source_experiment_id,recommendation_scan_id)
++        VALUES (1,2,2,'semantic_hash_2','evaluation_hash_2','non_actionable',
++                1,2,'stale_source_evidence','priority:1','semantic_hash_2',
++                'evaluation_hash_2','included_for_advisory_inspection',
++                'wrong_block_reason','EURUSD',12,'core_lr_mult','1','1.25',1,1);
++        RAISE EXCEPTION 'mismatched_ranking_block_reason_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,disposition,tie_break_primary,
++            tie_break_semantic_hash,tie_break_evaluation_hash,inclusion_reason,
++            block_reason,symbol,horizon,family,source_value_canonical,
++            proposed_value_canonical,source_experiment_id,recommendation_scan_id)
++        VALUES (1,2,2,'semantic_hash_2','evaluation_hash_2','non_actionable',
++                1,2,'stale_source_evidence','priority:0','semantic_hash_2',
++                'evaluation_hash_2','included_for_advisory_inspection','stale',
++                'EURUSD',12,'core_lr_mult','1','1.25',1,1);
++        RAISE EXCEPTION 'mismatched_ranking_priority_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
+ UPDATE experiment_recommendation_ranking_snapshot SET status='completed',
+        member_count=1,advisory_ready_count=1,completed_at=now()
+ WHERE recommendation_ranking_snapshot_id=1;
+ 
++DO $$
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    INSERT INTO experiment_recommendation_ranking_member(
++        recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++        recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++        bucket,bucket_rank,global_ordinal,final_score,disposition,
++        tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++        inclusion_reason,top_positive_component,symbol,horizon,family,
++        source_value_canonical,proposed_value_canonical,source_experiment_id,
++        source_model_id,source_analysis_id,recommendation_scan_id)
++    VALUES (1,1,1,'semantic_hash','evaluation_hash','advisory_ready',1,1,0.8,
++            'advisory_ready','score:0.8','semantic_hash','evaluation_hash',
++            'included_advisory_ready','leader_quality','EURUSD',12,
++            'core_lr_mult','1','1.25',1,1,1,1)
++    ON CONFLICT (recommendation_ranking_snapshot_id,
++                 recommendation_evaluation_result_id) DO NOTHING;
++END $$;
++RESET ROLE;
++
++DO $$
++BEGIN
++    IF (SELECT count(*) FROM experiment_recommendation_ranking_member
++        WHERE recommendation_ranking_snapshot_id=1)<>1 THEN
++        RAISE EXCEPTION 'completed_snapshot_exact_retry_changed_membership';
++    END IF;
++END $$;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        UPDATE experiment_recommendation_ranking_snapshot
++        SET status='running',member_count=0,advisory_ready_count=0,
++            completed_at=NULL,updated_at=now()
++        WHERE recommendation_ranking_snapshot_id=1;
++        RAISE EXCEPTION 'terminal_ranking_snapshot_was_reopened';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
+ DO $$
+ DECLARE observed text;
+ BEGIN
+@@ -202,6 +434,248 @@ BEGIN
+ END $$;
+ RESET ROLE;
+ 
++INSERT INTO experiment_recommendation_ranking_snapshot(
++    status,ranking_snapshot_identity_canonical,
++    ranking_snapshot_identity_hash,ranking_policy_canonical,
++    ranking_policy_hash,ranking_version,scope_type,scope_canonical,scope_hash,
++    symbol_filter,requested_limit,source_membership_canonical,
++    source_membership_hash)
++VALUES ('running','scope_mismatch_snapshot','scope_mismatch_hash',
++        'ranking_policy','ranking_hash',1,'symbol','symbol_scope','scope_hash',
++        'GBPUSD',100,
++        'experiment_recommendation_ranking_membership_v1;count=1;member[0].evaluation_identity=12:evaluation_2;member[0].evaluation_result_id=2',
++        'membership_hash_2');
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,block_reason,symbol,horizon,family,
++            source_value_canonical,proposed_value_canonical,source_experiment_id,
++            recommendation_scan_id)
++        VALUES (2,2,2,'semantic_hash_2','evaluation_hash_2','non_actionable',
++                1,1,NULL,'stale_source_evidence','priority:1',
++                'semantic_hash_2','evaluation_hash_2',
++                'included_for_advisory_inspection','stale','EURUSD',12,
++                'core_lr_mult','1','1.25',1,1);
++        RAISE EXCEPTION 'out_of_scope_ranking_member_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++INSERT INTO experiment_recommendation_ranking_snapshot(
++    status,ranking_snapshot_identity_canonical,
++    ranking_snapshot_identity_hash,ranking_policy_canonical,
++    ranking_policy_hash,ranking_version,scope_type,scope_canonical,scope_hash,
++    evaluation_run_filter,requested_limit,source_membership_canonical,
++    source_membership_hash)
++VALUES ('running','membership_mismatch_snapshot','membership_mismatch_hash',
++        'ranking_policy','ranking_hash',1,'evaluation_run','run_scope','scope_hash',
++        1,100,
++        'experiment_recommendation_ranking_membership_v1;count=1;member[0].evaluation_identity=10:evaluation;member[0].evaluation_result_id=1',
++        'membership_hash_3');
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        UPDATE experiment_recommendation_ranking_snapshot
++        SET status='completed',member_count=1,advisory_ready_count=1,
++            completed_at=now(),updated_at=now()
++        WHERE recommendation_ranking_snapshot_id=3;
++        RAISE EXCEPTION 'ranking_snapshot_false_counts_were_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,top_positive_component,symbol,horizon,family,
++            source_value_canonical,proposed_value_canonical,source_experiment_id,
++            source_model_id,source_analysis_id,recommendation_scan_id)
++        VALUES (3,1,1,'semantic_hash','evaluation_hash','advisory_ready',
++                101,101,0.8,'advisory_ready','score:0.8','semantic_hash',
++                'evaluation_hash','included_advisory_ready','leader_quality',
++                'EURUSD',12,'core_lr_mult','1','1.25',1,1,1,1);
++        RAISE EXCEPTION 'out_of_limit_ranking_ordinal_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,block_reason,symbol,horizon,family,
++            source_value_canonical,proposed_value_canonical,source_experiment_id,
++            recommendation_scan_id)
++        VALUES (3,2,2,'semantic_hash_2','evaluation_hash_2','non_actionable',
++                1,1,NULL,'stale_source_evidence','priority:1',
++                'semantic_hash_2','evaluation_hash_2',
++                'included_for_advisory_inspection','stale','EURUSD',12,
++                'core_lr_mult','1','1.25',1,1);
++        RAISE EXCEPTION 'uncaptured_ranking_member_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,top_positive_component,symbol,horizon,family,
++            source_value_canonical,proposed_value_canonical,source_experiment_id,
++            source_model_id,source_analysis_id,recommendation_scan_id)
++        VALUES (3,1,1,'semantic_hash','evaluation_hash','advisory_ready',
++                1,1,0.8,'advisory_ready','score:0.7','semantic_hash',
++                'evaluation_hash','included_advisory_ready','leader_quality',
++                'EURUSD',12,'core_lr_mult','1','1.25',1,1,1,1);
++        RAISE EXCEPTION 'mismatched_primary_tie_break_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,top_positive_component,symbol,horizon,family,
++            source_value_canonical,proposed_value_canonical,source_experiment_id,
++            source_model_id,source_analysis_id,recommendation_scan_id)
++        VALUES (3,1,1,'wrong_semantic_hash','evaluation_hash','advisory_ready',
++                1,1,0.8,'advisory_ready','score:0.8','wrong_semantic_hash',
++                'evaluation_hash','included_advisory_ready','leader_quality',
++                'EURUSD',12,'core_lr_mult','1','1.25',1,1,1,1);
++        RAISE EXCEPTION 'mismatched_ranking_identity_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,top_positive_component,symbol,horizon,family,
++            source_value_canonical,proposed_value_canonical,source_experiment_id,
++            source_model_id,source_analysis_id,recommendation_scan_id)
++        VALUES (3,1,1,'semantic_hash','evaluation_hash','advisory_ready',
++                1,1,0.8,'advisory_ready','score:0.8','semantic_hash',
++                'evaluation_hash','included_advisory_ready','wrong_component',
++                'EURUSD',12,'core_lr_mult','1','1.25',1,1,1,1);
++        RAISE EXCEPTION 'mismatched_top_component_was_accepted';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++INSERT INTO experiment_recommendation_ranking_snapshot(
++    status,ranking_snapshot_identity_canonical,
++    ranking_snapshot_identity_hash,ranking_policy_canonical,
++    ranking_policy_hash,ranking_version,scope_type,scope_canonical,scope_hash,
++    requested_limit,source_membership_canonical,source_membership_hash)
++VALUES ('running','multirow_limit_snapshot','multirow_limit_hash',
++        'ranking_policy','ranking_hash',1,'global','global_scope','scope_hash',1,
++        'experiment_recommendation_ranking_membership_v1;count=2;member[0].evaluation_identity=10:evaluation;member[0].evaluation_result_id=1;member[1].evaluation_identity=12:evaluation_2;member[1].evaluation_result_id=2',
++        'multirow_membership_hash');
++
++DO $$
++DECLARE observed text;
++BEGIN
++    EXECUTE 'SET LOCAL ROLE pqxx';
++    BEGIN
++        INSERT INTO experiment_recommendation_ranking_member(
++            recommendation_ranking_snapshot_id,recommendation_evaluation_result_id,
++            recommendation_id,recommendation_semantic_hash,evaluation_identity_hash,
++            bucket,bucket_rank,global_ordinal,final_score,disposition,
++            tie_break_primary,tie_break_semantic_hash,tie_break_evaluation_hash,
++            inclusion_reason,block_reason,top_positive_component,symbol,horizon,
++            family,source_value_canonical,proposed_value_canonical,
++            source_experiment_id,source_model_id,source_analysis_id,
++            recommendation_scan_id)
++        VALUES
++            (4,1,1,'semantic_hash','evaluation_hash','advisory_ready',1,1,0.8,
++             'advisory_ready','score:0.8','semantic_hash','evaluation_hash',
++             'included_advisory_ready',NULL,'leader_quality','EURUSD',12,
++             'core_lr_mult','1','1.25',1,1,1,1),
++            (4,2,2,'semantic_hash_2','evaluation_hash_2','non_actionable',1,2,NULL,
++             'stale_source_evidence','priority:1','semantic_hash_2',
++             'evaluation_hash_2','included_for_advisory_inspection','stale',NULL,
++             'EURUSD',12,'core_lr_mult','1','1.25',1,NULL,NULL,1);
++        RAISE EXCEPTION 'multirow_ranking_member_limit_was_bypassed';
++    EXCEPTION WHEN check_violation THEN
++        GET STACKED DIAGNOSTICS observed=RETURNED_SQLSTATE;
++        IF observed<>'23514' THEN RAISE; END IF;
++    END;
++END $$;
++RESET ROLE;
++
++DO $$
++BEGIN
++    IF EXISTS (SELECT 1 FROM experiment_recommendation_ranking_member
++               WHERE recommendation_ranking_snapshot_id=4) THEN
++        RAISE EXCEPTION 'multirow_limit_failure_left_partial_membership';
++    END IF;
++END $$;
++
+ DO $$
+ DECLARE observed text;
+ BEGIN
+@@ -232,7 +706,8 @@ BEGIN
+             proposed_value_canonical,source_experiment_id,recommendation_scan_id)
+         VALUES (1,2,2,'semantic_hash_2','evaluation_hash_2','non_actionable',1,2,
+                 NULL,'stale_source_evidence','priority:1','semantic_hash_2',
+-                'evaluation_hash_2','included','stale','EURUSD',12,
++                'evaluation_hash_2','included_for_advisory_inspection','stale',
++                'EURUSD',12,
+                 'core_lr_mult','1','1.25',1,1);
+         RAISE EXCEPTION 'terminal_snapshot_member_insert_was_accepted';
+     EXCEPTION WHEN check_violation THEN
+diff --git a/Tests/ExperimentRecommendationRankingRepositoryTests.cpp b/Tests/ExperimentRecommendationRankingRepositoryTests.cpp
+index 7ef4cb7..72b0909 100644
+--- a/Tests/ExperimentRecommendationRankingRepositoryTests.cpp
++++ b/Tests/ExperimentRecommendationRankingRepositoryTests.cpp
+@@ -258,6 +258,9 @@ int main()
+         auto evaluations = LoadEvaluationsForRanking(runtime, runScope);
+         assert(evaluations.size() == 5);
+         assert(evaluations.front().components.size() <= 2);
++        for (const auto& evaluation : evaluations)
++            assert(evaluation.componentCount ==
++                   static_cast<int>(evaluation.components.size()));
+         RecommendationRankingScope scanScope;
+         scanScope.type = RecommendationRankingScopeType::recommendationScan;
+         scanScope.recommendationScanId = scanId;
+@@ -319,6 +322,7 @@ int main()
+             runtimeConnectionString, request, output, errors) == 0);
+         assert(errors.str().empty());
+         assert(output.str().find("experiment_created=false") != std::string::npos);
++        assert(output.str().find("tie_break_3=") != std::string::npos);
+         assert(output.str().find("symbol=GB%2CPUSD") != std::string::npos);
+         assert(output.str().find("GB,PUSD | horizon") != std::string::npos);
+         auto snapshots = ListRecommendationRankingSnapshots(runtime, 100);
+@@ -448,6 +452,38 @@ int main()
+             RecommendationRankingPolicy{}, globalScope, 100, globalEvaluations);
+         const std::string membership =
+             RecommendationRankingMembershipCanonicalText(globalEvaluations);
++        RecommendationRankingSnapshotRequest malformedMembershipRequest{
++            RecommendationRankingPolicy{}, globalScope, 100, "malformed_identity",
++            "malformed_identity_hash", "not_canonical_membership",
++            RecommendationRankingCanonicalHash("not_canonical_membership")};
++        bool malformedMembershipRejected = false;
++        try
++        {
++            (void)BeginOrFindRecommendationRankingSnapshot(
++                runtime, malformedMembershipRequest);
++        }
++        catch (const std::invalid_argument& error)
++        {
++            malformedMembershipRejected = std::string{error.what()} ==
++                "invalid_recommendation_ranking_membership_canonical";
++        }
++        assert(malformedMembershipRejected);
++        RecommendationRankingSnapshotRequest invalidIdentityRequest{
++            RecommendationRankingPolicy{}, globalScope, 100, identity,
++            "incorrect_identity_hash", membership,
++            RecommendationRankingCanonicalHash(membership)};
++        bool invalidIdentityRejected = false;
++        try
++        {
++            (void)BeginOrFindRecommendationRankingSnapshot(
++                runtime, invalidIdentityRequest);
++        }
++        catch (const std::invalid_argument& error)
++        {
++            invalidIdentityRejected = std::string{error.what()} ==
++                "invalid_recommendation_ranking_snapshot_identity";
++        }
++        assert(invalidIdentityRejected);
+         auto atomicSnapshot = BeginOrFindRecommendationRankingSnapshot(runtime, {
+             RecommendationRankingPolicy{}, globalScope, 100, identity,
+             RecommendationRankingCanonicalHash(identity), membership,
+@@ -473,6 +509,77 @@ int main()
+         FailRecommendationRankingSnapshot(
+             runtime, atomicSnapshot.snapshotId, "intentional_atomicity_test");
+ 
++        long long boundedRunId = -1;
++        {
++            pqxx::work fixture{ownerConnection};
++            fixture.exec("SET LOCAL search_path TO " +
++                         fixture.quote_name(schema) + ";");
++            boundedRunId = fixture.exec(
++                "INSERT INTO experiment_recommendation_evaluation_run(status,"
++                "evaluation_run_identity_canonical,evaluation_run_identity_hash,"
++                "evaluation_policy_canonical,evaluation_policy_hash,"
++                "evaluation_version,evaluator_version,scoring_policy_canonical,"
++                "scoring_policy_hash,scoring_version,evidence_snapshot_canonical,"
++                "evidence_snapshot_hash,completed_at) VALUES ('completed',"
++                "'bounded_run','bounded_run_hash','evaluation_policy',"
++                "'evaluation_policy_hash',1,1,'scoring_policy',"
++                "'scoring_policy_hash',1,'bounded_evidence',"
++                "'bounded_evidence_hash',now()) RETURNING "
++                "recommendation_evaluation_run_id;").one_row()[0].as<long long>();
++            fixture.exec(
++                "WITH recommendations AS (INSERT INTO "
++                "experiment_recommendation(recommendation_scan_id,"
++                "source_experiment_id,source_analysis_id,status,source_symbol,"
++                "source_prediction_horizon,changed_parameter,"
++                "source_value_canonical,proposed_value_canonical) SELECT $1,1,1,"
++                "'proposed','BOUND',12,'core_lr_mult','1',series::text FROM "
++                "generate_series(1,$3) series RETURNING recommendation_id), "
++                "ordered AS (SELECT recommendation_id,row_number() OVER "
++                "(ORDER BY recommendation_id) AS ordinal FROM recommendations) "
++                "INSERT INTO experiment_recommendation_evaluation_result("
++                "recommendation_evaluation_run_id,recommendation_id,"
++                "evaluation_identity_canonical,evaluation_identity_hash,"
++                "recommendation_semantic_canonical,recommendation_semantic_hash,"
++                "recommendation_policy_canonical,recommendation_policy_hash,"
++                "recommendation_scan_id,source_experiment_id,evidence_canonical,"
++                "evidence_hash,eligibility,disposition,reason_code,explanation,"
++                "component_count,missing_evidence_count,ranking_ordinal) SELECT "
++                "$2,recommendation_id,'bounded_'||recommendation_id,"
++                "'bounded_hash_'||recommendation_id,'semantic_'||recommendation_id,"
++                "'semantic_hash_'||recommendation_id,'policy','policy_hash',$1,1,"
++                "'evidence_'||recommendation_id,'evidence_hash_'||"
++                "recommendation_id,'ineligible','insufficient_evidence',"
++                "'insufficient','Insufficient.',0,1,ordinal FROM ordered;",
++                pqxx::params{scanId, boundedRunId,
++                             kMaximumRecommendationRankingInputs + 1});
++            fixture.commit();
++        }
++        RecommendationRankingScope boundedScope;
++        boundedScope.type = RecommendationRankingScopeType::evaluationRun;
++        boundedScope.evaluationRunId = boundedRunId;
++        bool boundedInputRejected = false;
++        try { (void)LoadEvaluationsForRanking(runtime, boundedScope); }
++        catch (const std::invalid_argument& error)
++        {
++            boundedInputRejected = std::string{error.what()} ==
++                "recommendation_ranking_input_limit_exceeded";
++        }
++        assert(boundedInputRejected);
++        {
++            pqxx::work fixture{ownerConnection};
++            fixture.exec("SET LOCAL search_path TO " +
++                         fixture.quote_name(schema) + ";");
++            fixture.exec("DELETE FROM experiment_recommendation_evaluation_result "
++                         "WHERE recommendation_evaluation_run_id=$1;",
++                         pqxx::params{boundedRunId});
++            fixture.exec("DELETE FROM experiment_recommendation "
++                         "WHERE source_symbol='BOUND';");
++            fixture.exec("DELETE FROM experiment_recommendation_evaluation_run "
++                         "WHERE recommendation_evaluation_run_id=$1;",
++                         pqxx::params{boundedRunId});
++            fixture.commit();
++        }
++
+         assert(before == SourceDigest(ownerConnection, schema));
+     }
+     catch (...)
+diff --git a/Tests/ExperimentRecommendationRankingTests.cpp b/Tests/ExperimentRecommendationRankingTests.cpp
+index aef19c1..c4ec661 100644
+--- a/Tests/ExperimentRecommendationRankingTests.cpp
++++ b/Tests/ExperimentRecommendationRankingTests.cpp
+@@ -1,9 +1,11 @@
+ #include "../Sources/ExperimentRecommendationRanking.hpp"
++#include "../Sources/ExperimentRecommendation.hpp"
+ 
+ #include <algorithm>
+ #include <cassert>
+ #include <cmath>
+ #include <limits>
++#include <set>
+ #include <stdexcept>
+ 
+ using namespace EA::ExperimentRecommendation;
+@@ -59,6 +61,7 @@ RecommendationRankingEvaluation Evaluation(
+     if (score)
+         value.components = {Component("leader_quality", 0.3, false),
+                             Component("horizon_change_penalty", 0.1, true)};
++    value.componentCount = static_cast<int>(value.components.size());
+     return value;
+ }
+ 
+@@ -86,7 +89,16 @@ int main()
+     assert(ValidateRecommendationRankingPolicy({2}));
+     const std::string policyCanonical =
+         RecommendationRankingPolicyCanonicalText(policy);
+-    assert(policyCanonical.find("ranking_policy_v1") != std::string::npos);
++    assert(policyCanonical ==
++        "experiment_recommendation_ranking_policy_v1;ranking_version=1;"
++        "bucket_order=advisory_ready,blocked,non_actionable;"
++        "ready_order=score_desc,semantic_hash,evaluation_hash,result_id;"
++        "blocked_order=pending,active,completed,semantic_hash,evaluation_hash,result_id;"
++        "non_actionable_order=insufficient,stale,unsupported,invalid,semantic_hash,evaluation_hash,result_id;"
++        "inclusion=all_persisted_dispositions_before_global_limit;"
++        "limit_application=global_after_order;grouping=single_scope;"
++        "component_summary=per_penalty_class,contribution_desc,component_name;"
++        "comparison=matching_evaluation_policy,scoring_policy,evaluator,family");
+     assert(RecommendationRankingCanonicalHash(policyCanonical) ==
+            RecommendationRankingCanonicalHash(policyCanonical));
+ 
+@@ -101,6 +113,34 @@ int main()
+     assert(!ValidateRecommendationRankingScope(symbolHorizon));
+     assert(RecommendationRankingScopeCanonicalText(symbolHorizon).find(
+         "symbol=6:EURUSD") != std::string::npos);
++    RecommendationRankingScope scan;
++    scan.type = RecommendationRankingScopeType::recommendationScan;
++    scan.recommendationScanId = 20;
++    RecommendationRankingScope symbol;
++    symbol.type = RecommendationRankingScopeType::symbol;
++    symbol.symbol = "NULL;type=global,=%:\xc3\xa9";
++    RecommendationRankingScope horizon;
++    horizon.type = RecommendationRankingScopeType::horizon;
++    horizon.horizon = 12;
++    RecommendationRankingScope family;
++    family.type = RecommendationRankingScopeType::family;
++    family.family = "core:lr=mult;%";
++    RecommendationRankingScope global;
++    global.type = RecommendationRankingScopeType::global;
++    const std::vector<RecommendationRankingScope> allScopes = {
++        run, scan, symbol, horizon, family, symbolHorizon, global};
++    std::set<std::string> scopeCanonicals;
++    for (const auto& scope : allScopes)
++    {
++        assert(!ValidateRecommendationRankingScope(scope));
++        scopeCanonicals.insert(RecommendationRankingScopeCanonicalText(scope));
++    }
++    assert(scopeCanonicals.size() == allScopes.size());
++    assert(RecommendationRankingScopeCanonicalText(symbol).find(
++        "symbol=" + std::to_string(symbol.symbol->size()) + ":" +
++        *symbol.symbol) != std::string::npos);
++    assert(RecommendationRankingScopeCanonicalText(global).find(
++        "type=global") != std::string::npos);
+     RecommendationRankingScope ambiguous = run;
+     ambiguous.symbol = "EURUSD";
+     assert(ValidateRecommendationRankingScope(ambiguous));
+@@ -108,6 +148,10 @@ int main()
+     unsafeScope.type = RecommendationRankingScopeType::symbol;
+     unsafeScope.symbol = "EUR\nUSD";
+     assert(ValidateRecommendationRankingScope(unsafeScope));
++    unsafeScope.symbol = " EURUSD";
++    assert(ValidateRecommendationRankingScope(unsafeScope));
++    unsafeScope.symbol = "EURUSD ";
++    assert(ValidateRecommendationRankingScope(unsafeScope));
+ 
+     assert(RecommendationRankingBucketForDisposition(
+         RecommendationEvaluationDisposition::advisoryReady) ==
+@@ -118,6 +162,9 @@ int main()
+     assert(RecommendationRankingBucketForDisposition(
+         RecommendationEvaluationDisposition::staleSourceEvidence) ==
+         RecommendationRankingBucket::nonActionable);
++    assert(RecommendationRankingBucketForDisposition(
++        RecommendationEvaluationDisposition::unsupportedRecommendationFamily) ==
++        RecommendationRankingBucket::nonActionable);
+     assert(ParseRecommendationRankingBucket("blocked") ==
+            RecommendationRankingBucket::blocked);
+     assert(!ParseRecommendationRankingBucket("unknown"));
+@@ -129,6 +176,9 @@ int main()
+                    std::nullopt, "z"),
+         Evaluation(6, RecommendationEvaluationDisposition::staleSourceEvidence,
+                    std::nullopt, "z"),
++        Evaluation(9,
++                   RecommendationEvaluationDisposition::unsupportedRecommendationFamily,
++                   std::nullopt, "z"),
+         Evaluation(5, RecommendationEvaluationDisposition::blockedActiveDuplicate,
+                    std::nullopt, "z"),
+         Evaluation(4, RecommendationEvaluationDisposition::insufficientEvidence,
+@@ -148,12 +198,51 @@ int main()
+     assert(ranked[4].evaluation.evaluationResultId == 7);
+     assert(ranked[5].evaluation.evaluationResultId == 4);
+     assert(ranked[6].evaluation.evaluationResultId == 6);
+-    assert(ranked[7].evaluation.evaluationResultId == 8);
++    assert(ranked[7].evaluation.evaluationResultId == 9);
++    assert(ranked[8].evaluation.evaluationResultId == 8);
+     assert(ranked[0].bucketRank == 1 && ranked[1].bucketRank == 2);
+     assert(ranked[2].bucketRank == 1 && ranked[5].bucketRank == 1);
+     assert(ranked[0].topPositiveComponent == "leader_quality");
+     assert(ranked[0].topPenaltyComponent == "horizon_change_penalty");
+ 
++    auto topTie = Evaluation(40,
++        RecommendationEvaluationDisposition::advisoryReady, 0.6, "tie");
++    topTie.components = {Component("z_positive", 0.2, false),
++                         Component("a_positive", 0.2, false),
++                         Component("z_penalty", 0.1, true),
++                         Component("a_penalty", 0.1, true)};
++    topTie.componentCount = static_cast<int>(topTie.components.size());
++    const auto topTieRanked = RankRecommendationEvaluationEvidence(
++        policy, {topTie}, 1);
++    assert(topTieRanked.front().topPositiveComponent == "a_positive");
++    assert(topTieRanked.front().topPenaltyComponent == "a_penalty");
++
++    auto fallbackLeft = Evaluation(30,
++        RecommendationEvaluationDisposition::advisoryReady, 0.5, "same");
++    auto fallbackRight = Evaluation(29,
++        RecommendationEvaluationDisposition::advisoryReady, 0.5, "same");
++    fallbackLeft.evaluationIdentityHash = "same_hash";
++    fallbackRight.evaluationIdentityHash = "same_hash";
++    const auto collisionOrdered = RankRecommendationEvaluationEvidence(
++        policy, {fallbackLeft, fallbackRight}, 2);
++    assert(collisionOrdered[0].evaluation.evaluationResultId == 29);
++    assert(collisionOrdered[1].evaluation.evaluationResultId == 30);
++    fallbackLeft.recommendationSemanticHash = "b";
++    fallbackRight.recommendationSemanticHash = "a";
++    assert(RankRecommendationEvaluationEvidence(
++        policy, {fallbackLeft, fallbackRight}, 2)[0].evaluation.evaluationResultId == 29);
++
++    auto positiveZero = Evaluation(31,
++        RecommendationEvaluationDisposition::advisoryReady, 0.0, "same");
++    auto negativeZero = Evaluation(32,
++        RecommendationEvaluationDisposition::advisoryReady, -0.0, "same");
++    positiveZero.evaluationIdentityHash = "same_hash";
++    negativeZero.evaluationIdentityHash = "same_hash";
++    assert(CanonicalRecommendationDouble(*positiveZero.finalScore) == "0");
++    assert(CanonicalRecommendationDouble(*negativeZero.finalScore) == "0");
++    assert(RankRecommendationEvaluationEvidence(
++        policy, {negativeZero, positiveZero}, 2)[0].evaluation.evaluationResultId == 31);
++
+     std::reverse(inputs.begin(), inputs.end());
+     const auto reordered = RankRecommendationEvaluationEvidence(policy, inputs, 100);
+     for (std::size_t index = 0; index < ranked.size(); ++index)
+@@ -164,6 +253,11 @@ int main()
+     const std::string identity =
+         RecommendationRankingSnapshotIdentityCanonicalText(
+             policy, run, 100, inputs);
++    const std::string membership =
++        RecommendationRankingMembershipCanonicalText(inputs);
++    assert(identity ==
++        RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++            policy, run, 100, membership));
+     assert(identity == RecommendationRankingSnapshotIdentityCanonicalText(
+                            policy, run, 100, inputs));
+     auto membershipChanged = inputs;
+@@ -174,6 +268,81 @@ int main()
+                            policy, RunScope(11), 100, inputs));
+     assert(identity != RecommendationRankingSnapshotIdentityCanonicalText(
+                            policy, run, 99, inputs));
++    auto identityReordered = inputs;
++    std::reverse(identityReordered.begin(), identityReordered.end());
++    assert(membership ==
++           RecommendationRankingMembershipCanonicalText(identityReordered));
++    assert(identity == RecommendationRankingSnapshotIdentityCanonicalText(
++                           policy, run, 100, identityReordered));
++    auto displayChanged = inputs;
++    displayChanged.front().symbol = "CHANGED_DISPLAY_ONLY";
++    assert(identity == RecommendationRankingSnapshotIdentityCanonicalText(
++                           policy, run, 100, displayChanged));
++    auto evaluationIdentityChanged = inputs;
++    evaluationIdentityChanged.front().evaluationIdentityCanonical +=
++        ";member[0].evaluation_result_id=1;NULL;global;\xc3\xa9";
++    assert(identity != RecommendationRankingSnapshotIdentityCanonicalText(
++                           policy, run, 100, evaluationIdentityChanged));
++    auto resultIdChanged = inputs;
++    resultIdChanged.front().evaluationResultId = 10000;
++    assert(identity != RecommendationRankingSnapshotIdentityCanonicalText(
++                           policy, run, 100, resultIdChanged));
++    auto sharedCanonicalLeft = Evaluation(1,
++        RecommendationEvaluationDisposition::advisoryReady, 0.5, "a");
++    auto sharedCanonicalRight = Evaluation(10,
++        RecommendationEvaluationDisposition::advisoryReady, 0.5, "b");
++    sharedCanonicalLeft.evaluationIdentityCanonical = "shared;member[1]=10";
++    sharedCanonicalRight.evaluationIdentityCanonical =
++        sharedCanonicalLeft.evaluationIdentityCanonical;
++    const std::string sharedMembership =
++        RecommendationRankingMembershipCanonicalText(
++            {sharedCanonicalRight, sharedCanonicalLeft});
++    assert(sharedMembership.find("count=2") != std::string::npos);
++    assert(sharedMembership.find("evaluation_result_id=1;") != std::string::npos);
++    assert(sharedMembership.ends_with("evaluation_result_id=10"));
++    assert(RecommendationRankingMembershipCanonicalText({}).find("count=0") !=
++           std::string::npos);
++    assert(Throws([&] {
++        RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++            policy, run, 100, "");
++    }));
++    const std::vector<std::string> malformedMemberships = {
++        "not_a_membership",
++        "experiment_recommendation_ranking_membership_v1;count=00",
++        "experiment_recommendation_ranking_membership_v1;count=0;trailing",
++        "experiment_recommendation_ranking_membership_v1;count=1",
++        "experiment_recommendation_ranking_membership_v1;count=1;"
++        "member[0].evaluation_identity=1:x;"
++        "member[0].evaluation_result_id=01",
++        "experiment_recommendation_ranking_membership_v1;count=1;"
++        "member[0].evaluation_identity=2:x;"
++        "member[0].evaluation_result_id=1"};
++    for (const auto& malformedMembership : malformedMemberships)
++        assert(Throws([&] {
++            RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++                policy, run, 100, malformedMembership);
++        }));
++    const std::string unsortedMembership =
++        "experiment_recommendation_ranking_membership_v1;count=2;"
++        "member[0].evaluation_identity=1:z;member[0].evaluation_result_id=2;"
++        "member[1].evaluation_identity=1:a;member[1].evaluation_result_id=1";
++    assert(Throws([&] {
++        RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++            policy, run, 100, unsortedMembership);
++    }));
++    const std::string duplicateResultMembership =
++        "experiment_recommendation_ranking_membership_v1;count=2;"
++        "member[0].evaluation_identity=1:a;member[0].evaluation_result_id=1;"
++        "member[1].evaluation_identity=1:b;member[1].evaluation_result_id=1";
++    assert(Throws([&] {
++        RecommendationRankingSnapshotIdentityCanonicalTextFromMembership(
++            policy, run, 100, duplicateResultMembership);
++    }));
++    assert(Throws([&] {
++        auto invalid = inputs.front();
++        invalid.evaluationIdentityCanonical.clear();
++        RecommendationRankingMembershipCanonicalText({invalid});
++    }));
+     assert(Throws([&] {
+         auto invalid = inputs.front();
+         invalid.finalScore = std::numeric_limits<double>::quiet_NaN();
+@@ -188,18 +357,84 @@ int main()
+             std::numeric_limits<double>::infinity();
+         RankRecommendationEvaluationEvidence(policy, {invalid}, 10);
+     }));
++    assert(Throws([&] {
++        auto invalid = Evaluation(20,
++            RecommendationEvaluationDisposition::advisoryReady, 0.5, "x");
++        invalid.components.clear();
++        invalid.componentCount = 0;
++        RankRecommendationEvaluationEvidence(policy, {invalid}, 10);
++    }));
++    assert(Throws([&] {
++        auto invalid = Evaluation(20,
++            RecommendationEvaluationDisposition::insufficientEvidence,
++            std::nullopt, "x");
++        invalid.components = {Component("unexpected", 0.1, false)};
++        invalid.componentCount = 1;
++        RankRecommendationEvaluationEvidence(policy, {invalid}, 10);
++    }));
++    assert(Throws([&] {
++        auto invalid = Evaluation(20,
++            RecommendationEvaluationDisposition::advisoryReady, 0.5, "x");
++        invalid.finalScore = -std::numeric_limits<double>::infinity();
++        RankRecommendationEvaluationEvidence(policy, {invalid}, 10);
++    }));
++    assert(Throws([&] {
++        auto invalid = Evaluation(20,
++            RecommendationEvaluationDisposition::advisoryReady, 0.5, "x");
++        invalid.components.front().componentName =
++            invalid.components.back().componentName;
++        RankRecommendationEvaluationEvidence(policy, {invalid}, 10);
++    }));
++    assert(Throws([&] {
++        auto invalid = Evaluation(20,
++            RecommendationEvaluationDisposition::advisoryReady, 0.5, "x");
++        --invalid.componentCount;
++        RankRecommendationEvaluationEvidence(policy, {invalid}, 10);
++    }));
++    assert(Throws([&] {
++        const auto duplicate = Evaluation(20,
++            RecommendationEvaluationDisposition::advisoryReady, 0.5, "x");
++        RankRecommendationEvaluationEvidence(policy, {duplicate, duplicate}, 10);
++    }));
++    assert(Throws([&] {
++        std::vector<RecommendationRankingEvaluation> oversized;
++        oversized.reserve(kMaximumRecommendationRankingInputs + 1);
++        for (int index = 0; index <= kMaximumRecommendationRankingInputs; ++index)
++            oversized.push_back(Evaluation(1000 + index,
++                RecommendationEvaluationDisposition::insufficientEvidence,
++                std::nullopt, "semantic_" + std::to_string(index)));
++        RankRecommendationEvaluationEvidence(policy, oversized,
++                                              kMaximumRecommendationRankingMembers);
++    }));
++    assert(Throws([&] {
++        std::vector<RecommendationRankingEvaluation> oversized;
++        oversized.reserve(kMaximumRecommendationRankingInputs + 1);
++        for (int index = 0; index <= kMaximumRecommendationRankingInputs; ++index)
++            oversized.push_back(Evaluation(3000 + index,
++                RecommendationEvaluationDisposition::insufficientEvidence,
++                std::nullopt, "semantic_" + std::to_string(index)));
++        RecommendationRankingMembershipCanonicalText(oversized);
++    }));
+ 
+     const auto left = Evaluation(20,
+         RecommendationEvaluationDisposition::advisoryReady, 0.8, "left");
+     auto right = Evaluation(21,
+         RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
++    right.components.front().weightedContribution = 0.2;
+     auto comparison = CompareRecommendationEvaluations(left, right);
+     assert(comparison.state == RecommendationComparisonState::comparable);
+     assert(std::fabs(*comparison.scoreDelta - 0.1) < 1e-12);
+     assert(comparison.componentDifferences.size() == 2);
++    assert(comparison.largestPositiveDifference == "leader_quality");
+     comparison = CompareRecommendationEvaluations(left, right, 1, 2, true);
+     assert(comparison.state == RecommendationComparisonState::leftRankedHigher);
+     assert(comparison.rankDelta == -1);
++    comparison = CompareRecommendationEvaluations(left, right, 2, 1, true);
++    assert(comparison.state == RecommendationComparisonState::rightRankedHigher);
++    assert(comparison.rankDelta == 1);
++    assert(Throws([&] {
++        CompareRecommendationEvaluations(left, right, 0, 1, true);
++    }));
+     comparison = CompareRecommendationEvaluations(left, right, 1, 2, false);
+     assert(comparison.state == RecommendationComparisonState::incomparableScope);
+     right.scoringVersion = 2;
+@@ -207,6 +442,17 @@ int main()
+            RecommendationComparisonState::incomparablePolicyVersion);
+     right = Evaluation(21,
+         RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
++    right.evaluationPolicyCanonical = "different_evaluation_policy";
++    right.evaluationPolicyHash = left.evaluationPolicyHash;
++    assert(CompareRecommendationEvaluations(left, right).state ==
++           RecommendationComparisonState::incomparablePolicyVersion);
++    right = Evaluation(21,
++        RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
++    right.evaluationPolicyHash = "different_hash_but_same_canonical";
++    assert(CompareRecommendationEvaluations(left, right).state ==
++           RecommendationComparisonState::comparable);
++    right = Evaluation(21,
++        RecommendationEvaluationDisposition::advisoryReady, 0.7, "right");
+     right.evaluatorVersion = 2;
+     assert(CompareRecommendationEvaluations(left, right).state ==
+            RecommendationComparisonState::incomparableEvaluatorVersion);
+@@ -225,6 +471,7 @@ int main()
+     assert(CompareRecommendationEvaluations(left, right).state ==
+            RecommendationComparisonState::identicalScoreTie);
+     right.components.pop_back();
++    right.componentCount = static_cast<int>(right.components.size());
+     comparison = CompareRecommendationEvaluations(left, right);
+     assert(comparison.state == RecommendationComparisonState::identicalScoreTie);
+     const auto missingPenalty = std::find_if(
+@@ -237,6 +484,25 @@ int main()
+     assert(missingPenalty->leftContribution);
+     assert(!missingPenalty->rightContribution);
+     assert(!missingPenalty->contributionDelta);
++    assert(!comparison.largestPenaltyDifference);
++    assert(Throws([&] {
++        auto mismatch = Evaluation(21,
++            RecommendationEvaluationDisposition::advisoryReady, 0.8, "right");
++        mismatch.components.back().penalty = false;
++        CompareRecommendationEvaluations(left, mismatch);
++    }));
++    assert(Throws([&] {
++        auto duplicate = Evaluation(21,
++            RecommendationEvaluationDisposition::advisoryReady, 0.8, "right");
++        duplicate.components.push_back(duplicate.components.front());
++        duplicate.componentCount = static_cast<int>(duplicate.components.size());
++        CompareRecommendationEvaluations(left, duplicate);
++    }));
++    auto blocked = Evaluation(22,
++        RecommendationEvaluationDisposition::blockedActiveDuplicate,
++        std::nullopt, "blocked");
++    assert(CompareRecommendationEvaluations(left, blocked, 1, 2, true).state ==
++           RecommendationComparisonState::incomparableMissingScore);
+ 
+     return 0;
+ }
+diff --git a/docs/Phase4BExperimentRecommendationRanking.rst b/docs/Phase4BExperimentRecommendationRanking.rst
+index 2115dfe..49ae0c3 100644
+--- a/docs/Phase4BExperimentRecommendationRanking.rst
++++ b/docs/Phase4BExperimentRecommendationRanking.rst
+@@ -30,6 +30,10 @@ The policy adds no component or weight. Top positive and penalty component
+ names come from persisted Step 1 components, ordered by contribution descending
+ and component name.
+ 
++The complete source membership is bucketed and deterministically ordered before
++the requested limit truncates the combined global order. The limit therefore
++does not change which member wins an earlier policy-defined position.
++
+ Scopes and bounds
+ -----------------
+ 
+@@ -42,6 +46,10 @@ input fails rather than being truncated by database row arrival.
+ Evaluation-run scope contains that run's results. Every other scope contains all
+ matching historical Step 1 evaluation-result rows; it does not silently select
+ a latest result or collapse multiple evaluations of one recommendation.
++The repository selects at most 1,001 evaluation identities before joining
++components, so an oversized scope fails at the 1,000-input boundary without
++materializing an unbounded component join. Persisted ``component_count`` must
++equal the complete component set loaded for every result.
+ 
+ Snapshot identity and persistence
+ ---------------------------------
+@@ -65,6 +73,15 @@ mismatches fail. Runtime access is SELECT/INSERT plus column-scoped snapshot
+ lifecycle/count updates. Members and immutable snapshot fields cannot be
+ updated or deleted by the runtime role.
+ 
++The member insert trigger pins the migration-time schema search path and locks
++only the ranking-owned snapshot. It rejects new members on terminal snapshots,
++while allowing an exact completed-snapshot retry to reach the existing-member
++uniqueness check. It also rejects evaluations outside the stored scope or
++captured source membership, copied identity/score/disposition/provenance/display
++mismatches, and derived reason or top-component mismatches. These database
++checks do not redefine the ranking policy; the pure domain policy remains
++responsible for ordering and rank assignment.
++
+ Comparison
+ ----------
+ 
+diff --git a/docs/architecture/Volume_VIII_Recommendation_Engine.md b/docs/architecture/Volume_VIII_Recommendation_Engine.md
+index 9a023a7..84c1ab3 100644
+--- a/docs/architecture/Volume_VIII_Recommendation_Engine.md
++++ b/docs/architecture/Volume_VIII_Recommendation_Engine.md
+@@ -191,7 +191,8 @@ immutability, review constraints, runtime privileges, SQLSTATEs, and migration
+ repeatability. Evaluation tests additionally cover canonical idempotency,
+ append-only result/component privileges, nullable blocked scores, and evidence
+ foreign keys. Ranking tests cover exact membership, bucket/rank uniqueness,
+-narrow privileges, atomic member persistence, and Step 1 immutability.
++narrow privileges, scope/captured-membership trigger enforcement, bounded
++evidence loading, atomic member persistence, and Step 1 immutability.
+ 
+ ### 9.3 Concurrency and integration tests
+ 
