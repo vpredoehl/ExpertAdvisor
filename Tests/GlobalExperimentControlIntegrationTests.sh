@@ -196,6 +196,8 @@ CREATE TABLE experiment_checkpoint_eval (
     phase text NOT NULL DEFAULT 'infer',
     worker_pid integer,
     infer_log_path text,
+    analysis_log_path text,
+    created_at timestamptz NOT NULL DEFAULT now(),
     started_at timestamptz,
     infer_started_at timestamptz,
     completed_at timestamptz,
@@ -482,6 +484,8 @@ CREATE TABLE experiment_checkpoint_eval (
     phase text NOT NULL DEFAULT 'infer',
     worker_pid integer,
     infer_log_path text,
+    analysis_log_path text,
+    created_at timestamptz NOT NULL DEFAULT now(),
     started_at timestamptz,
     infer_started_at timestamptz,
     completed_at timestamptz,
@@ -1188,6 +1192,104 @@ psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
 run_control --resume-all-experiments --yes |
     grep -q 'status=completed.*target_count=0'
 test "$(scalar "SELECT desired_state FROM experiment_global_control")" = running
+
+# A selective individual resume may queue one member of an active global-pause
+# generation, but the durable global gate still prevents scheduler admission.
+# Resume-all later retires the generation, releases the remaining owned member,
+# and leaves an independently paused experiment untouched. The selectively
+# resumed member retains resume priority and is the first dry-run train
+# admission once the global gate returns to running.
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "INSERT INTO experiment(
+         experiment_id,status,phase,scheduler_priority,resume_requested,updated_at
+     ) VALUES
+         (909010,'pending','train','normal',false,'2026-01-01 00:00:10+00'),
+         (909011,'pending','train','normal',false,'2026-01-01 00:00:11+00'),
+         (909012,'paused','train','normal',false,'2026-01-01 00:00:00+00');"
+
+run_control --pause-all-experiments --yes \
+    >"${test_tmp}/selective_global_pause.out"
+grep -q 'status=completed.*target_count=2' \
+    "${test_tmp}/selective_global_pause.out"
+selective_pause_request="$(
+    scalar "SELECT current_pause_request_id FROM experiment_global_control"
+)"
+test -n "${selective_pause_request}"
+test "$(scalar "SELECT desired_state FROM experiment_global_control")" = paused
+test "$(scalar "SELECT string_agg(
+    experiment_id||':'||status||':'||resume_requested::text||':'||
+    COALESCE(worker_global_pause_request_id::text,'NULL'),
+    ',' ORDER BY experiment_id) FROM experiment
+    WHERE experiment_id BETWEEN 909010 AND 909012")" = \
+    "909010:paused:false:${selective_pause_request},909011:paused:false:${selective_pause_request},909012:paused:false:NULL"
+
+run_control --resume-experiment=909010 --yes \
+    >"${test_tmp}/selective_global_individual_resume.out"
+grep -q 'new_status=pending.*resume_requested=true.*result=queued_for_admission' \
+    "${test_tmp}/selective_global_individual_resume.out"
+test "$(scalar "SELECT desired_state FROM experiment_global_control")" = paused
+test "$(scalar "SELECT status||':'||resume_requested::text||':'||
+    worker_global_pause_request_id::text FROM experiment
+    WHERE experiment_id=909010")" = \
+    "pending:true:${selective_pause_request}"
+
+run_control --schedule-experiments --scheduler-once --dry-run \
+    --max-train-procs=1 --max-infer-procs=1 --max-analyze-procs=1 \
+    >"${test_tmp}/selective_global_blocked_scheduler.out"
+grep -q 'SCHEDULER_START.*global_desired_state=paused' \
+    "${test_tmp}/selective_global_blocked_scheduler.out"
+! grep -q 'EXPERIMENT_CHILD_COMMAND.*experiment_id=909010' \
+    "${test_tmp}/selective_global_blocked_scheduler.out"
+test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
+    WHERE experiment_id=909010")" = pending:true
+
+run_control --resume-all-experiments --yes \
+    >"${test_tmp}/selective_global_resume_all.out"
+grep -q 'status=completed.*target_count=1.*resume_requested_count=1' \
+    "${test_tmp}/selective_global_resume_all.out"
+test "$(scalar "SELECT desired_state||':'||
+    COALESCE(current_pause_request_id::text,'NULL')
+    FROM experiment_global_control")" = running:NULL
+test "$(scalar "SELECT string_agg(
+    experiment_id||':'||status||':'||resume_requested::text||':'||
+    COALESCE(worker_global_pause_request_id::text,'NULL'),
+    ',' ORDER BY experiment_id) FROM experiment
+    WHERE experiment_id BETWEEN 909010 AND 909012")" = \
+    '909010:pending:true:NULL,909011:pending:true:NULL,909012:paused:false:NULL'
+
+# Add older high-priority ordinary pending work. resume_requested must still
+# dominate scheduler_priority and updated_at for resumed admission ordering.
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" -c \
+    "INSERT INTO experiment(
+         experiment_id,status,phase,scheduler_priority,resume_requested,updated_at
+     ) VALUES
+         (909013,'pending','train','high',false,'2025-01-01 00:00:00+00');"
+
+run_control --schedule-experiments --scheduler-once --dry-run \
+    --max-train-procs=1 --max-infer-procs=0 --max-analyze-procs=0 \
+    >"${test_tmp}/selective_global_released_scheduler.out"
+grep -q 'SCHEDULER_START.*global_desired_state=running' \
+    "${test_tmp}/selective_global_released_scheduler.out"
+grep -q 'EXPERIMENT_CHILD_COMMAND,experiment_id=909010,phase=train,dry_run=1' \
+    "${test_tmp}/selective_global_released_scheduler.out"
+! grep -q 'EXPERIMENT_CHILD_COMMAND,experiment_id=909013' \
+    "${test_tmp}/selective_global_released_scheduler.out"
+test "$(scalar "SELECT status||':'||resume_requested::text FROM experiment
+    WHERE experiment_id=909012")" = paused:false
+
+psql -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+DELETE FROM experiment_admin_worker_outcome
+WHERE experiment_id BETWEEN 909010 AND 909013;
+
+DELETE FROM experiment_scheduler_worker_attempt
+WHERE experiment_id BETWEEN 909010 AND 909013;
+
+DELETE FROM experiment_admin_request
+WHERE target_experiment_id BETWEEN 909010 AND 909013;
+
+DELETE FROM experiment
+WHERE experiment_id BETWEEN 909010 AND 909013;
+SQL
 
 # Selective resume queues paused lifecycle work for scheduler admission, while
 # an ordinary running row is already satisfied without a process signal.
