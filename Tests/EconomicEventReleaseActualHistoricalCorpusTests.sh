@@ -59,7 +59,8 @@ for migration in \
     072_economic_event.sql \
     081_economic_event_consensus.sql \
     082_economic_event_consensus_provider_provenance.sql \
-    088_economic_event_release_actual_provenance.sql; do
+    088_economic_event_release_actual_provenance.sql \
+    090_economic_event_actual_observation_provenance.sql; do
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
         --dbname="$DB_NAME" -f "$ROOT/Database/migrations/$migration" >/dev/null
 done
@@ -91,6 +92,8 @@ test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
     -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "1056"
 test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
     -tAc 'SELECT count(*) FROM economic_event_feature_release_actual;')" = "634"
+test "$(psql -X --host="$DB_HOST" --username="$DB_USER" --dbname="$DB_NAME" \
+    -tAc 'SELECT count(*) FROM economic_event_actual_observation;')" = "1056"
 
 SECOND_IMPORT="$(run_importer --commit --allow-disposable-write)"
 grep -Fq 'Decisions: {"duplicate_identical": 1056, "invalid_semantics": 27, "unsupported": 1}' \

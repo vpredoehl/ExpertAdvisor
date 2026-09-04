@@ -124,7 +124,7 @@ PRODUCTION_CONSENSUS_BEFORE="$(PGOPTIONS='-c default_transaction_read_only=on' \
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$PRODUCTION_DB" -tAc \
     "SELECT current_setting('transaction_read_only') || '|' || count(*) FROM economic_event_consensus;")"
-test "$PRODUCTION_CONSENSUS_BEFORE" = "on|1416"
+test "$PRODUCTION_CONSENSUS_BEFORE" = "on|1532"
 
 CANDIDATE_IDS="$(tail -n +2 "$CANDIDATES" | cut -d, -f1 | paste -sd, -)"
 PGOPTIONS='-c default_transaction_read_only=on' \
@@ -224,7 +224,9 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
                actual_value_low, actual_value_high,
                actual_canonical_value_low, actual_canonical_value_high,
                actual_unit, actual_scale, actual_qualifier, imported_at
-        FROM economic_event_consensus ORDER BY economic_event_id
+        FROM economic_event_consensus
+        WHERE consensus_source = 'OANDA'
+        ORDER BY economic_event_id
     ) TO '$CONSENSUS_SEED_FILE' CSV HEADER" >/dev/null
 
 database_must_not_exist "$WORKFLOW_DB"

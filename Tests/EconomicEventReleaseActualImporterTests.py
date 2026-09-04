@@ -199,6 +199,16 @@ class ReleaseActualImporterTests(unittest.TestCase):
                          "first_git_archive_admission_committer_timestamp")
         self.assertEqual(self.initial.actual_qualifier, "m/m")
 
+        observation = self.initial.provenance_observation_values(1)
+        self.assertEqual(observation["source_publication_at"], self.initial.available_at)
+        self.assertEqual(observation["observed_at"], self.initial.retrieved_at)
+        self.assertEqual(observation["source_publication_time_status"], "exact")
+        self.assertEqual(observation["availability_proof"], "source_publication")
+        self.assertEqual(observation["source_native_event_id"],
+                         self.initial.candidate_source_event_id)
+        self.assertIn(self.initial.source_artifact_sha256,
+                      str(observation["evidence_key"]))
+
     def test_causal_available_at_rejected_if_before_event(self) -> None:
         later_event = event(timestamp="2010-02-12T13:30:00.000001Z")
         decision = match_candidates([self.initial], [later_event])[0]
@@ -225,6 +235,9 @@ class ReleaseActualImporterTests(unittest.TestCase):
         decision = match_candidates([self.initial], [event()])[0]
         sql = build_insert_sql([decision])
         self.assertIn("INSERT INTO economic_event_release_actual", sql)
+        self.assertIn("INSERT INTO economic_event_actual_observation", sql)
+        self.assertIn("source_publication_at", sql)
+        self.assertIn("observed_at", sql)
         self.assertNotIn("UPDATE", sql)
         self.assertNotIn("ON CONFLICT", sql)
         self.assertTrue(sql.startswith("BEGIN;"))

@@ -230,6 +230,49 @@ class ReleaseActualCandidate:
             "actual_qualifier": self.actual_qualifier,
         }
 
+    def provenance_observation_values(
+        self, economic_event_id: int
+    ) -> dict[str, object]:
+        """Return the migration-090 append-only evidence representation.
+
+        ``available_at`` has already passed the source-specific direct
+        publication checks in this module.  It is therefore source
+        publication evidence here, while ``retrieved_at`` remains the first
+        system observation time.  Database ingestion time is intentionally
+        left to its independent column default.
+        """
+        return {
+            "economic_event_id": economic_event_id,
+            "source_name": self.source_agency,
+            "source_role": "authoritative",
+            "source_native_event_id": self.candidate_source_event_id,
+            "source_observation_id": self.source_observation_id,
+            "evidence_key": (
+                "artifact-sha256:" + self.source_artifact_sha256
+                + ":source-observation:" + self.source_observation_id
+            ),
+            "observation_kind": self.publication_state,
+            "revision_sequence": self.revision_sequence,
+            "source_publication_at": self.available_at,
+            "source_publication_time_status": "exact",
+            "observed_at": self.retrieved_at,
+            "availability_proof": "source_publication",
+            "source_url": self.source_url,
+            "source_artifact_path": self.source_artifact_path,
+            "source_artifact_sha256": self.source_artifact_sha256,
+            "semantic_contract": self.semantic_contract,
+            "source_provenance": dict(self.source_provenance),
+            "actual_raw": self.actual_raw,
+            "actual_value_kind": self.actual_value_kind,
+            "actual_value_low": self.actual_value_low,
+            "actual_value_high": self.actual_value_high,
+            "actual_canonical_value_low": self.actual_canonical_value_low,
+            "actual_canonical_value_high": self.actual_canonical_value_high,
+            "actual_unit": self.actual_unit,
+            "actual_scale": self.actual_scale,
+            "actual_qualifier": self.actual_qualifier,
+        }
+
 
 @dataclasses.dataclass(frozen=True)
 class Rejection:

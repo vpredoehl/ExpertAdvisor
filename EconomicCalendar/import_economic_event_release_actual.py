@@ -186,6 +186,18 @@ INSERT_COLUMNS = (
     "actual_scale", "actual_qualifier",
 )
 
+OBSERVATION_INSERT_COLUMNS = (
+    "economic_event_id", "source_name", "source_role",
+    "source_native_event_id", "source_observation_id", "evidence_key",
+    "observation_kind", "revision_sequence", "source_publication_at",
+    "source_publication_time_status", "observed_at", "availability_proof",
+    "source_url", "source_artifact_path", "source_artifact_sha256",
+    "semantic_contract", "source_provenance", "actual_raw",
+    "actual_value_kind", "actual_value_low", "actual_value_high",
+    "actual_canonical_value_low", "actual_canonical_value_high", "actual_unit",
+    "actual_scale", "actual_qualifier",
+)
+
 
 def build_insert_sql(decisions: Sequence[ImportDecision]) -> str:
     rows = sorted(
@@ -199,16 +211,31 @@ def build_insert_sql(decisions: Sequence[ImportDecision]) -> str:
     if not rows:
         return "BEGIN;\nCOMMIT;\n"
     values = []
+    observation_values = []
     for decision in rows:
         assert decision.matched_economic_event_id is not None
         persisted = decision.candidate.persisted_values(decision.matched_economic_event_id)
         values.append("(" + ",".join(sql_literal(persisted[column]) for column in INSERT_COLUMNS) + ")")
+        observation = decision.candidate.provenance_observation_values(
+            decision.matched_economic_event_id
+        )
+        observation_values.append(
+            "(" + ",".join(
+                sql_literal(observation[column])
+                for column in OBSERVATION_INSERT_COLUMNS
+            ) + ")"
+        )
     return (
         "BEGIN;\n"
         "INSERT INTO economic_event_release_actual (\n    "
         + ",\n    ".join(INSERT_COLUMNS)
         + "\n) VALUES\n"
         + ",\n".join(values)
+        + ";\n"
+        "INSERT INTO economic_event_actual_observation (\n    "
+        + ",\n    ".join(OBSERVATION_INSERT_COLUMNS)
+        + "\n) VALUES\n"
+        + ",\n".join(observation_values)
         + ";\nCOMMIT;\n"
     )
 

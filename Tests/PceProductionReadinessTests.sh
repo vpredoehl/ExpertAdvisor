@@ -45,6 +45,10 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$ADMIN_USER" \
     --dbname="$DB_NAME" \
     -f "$ROOT/Database/migrations/088_economic_event_release_actual_provenance.sql" \
     >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$ADMIN_USER" \
+    --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/090_economic_event_actual_observation_provenance.sql" \
+    >/dev/null
 
 object_state="$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
     --dbname="$DB_NAME" -Atc \
@@ -152,6 +156,9 @@ PY
 test "$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
     --dbname="$DB_NAME" -tAc \
     'SELECT count(*) FROM economic_event_release_actual;')" = "1"
+test "$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
+    --dbname="$DB_NAME" -tAc \
+    'SELECT count(*) FROM economic_event_actual_observation;')" = "1"
 test "$(psql -X --host="$DB_HOST" --username="$RUNTIME_USER" \
     --dbname="$DB_NAME" -tAc \
     'SELECT count(*) FROM economic_event_feature_release_actual;')" = "1"

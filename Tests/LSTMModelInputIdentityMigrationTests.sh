@@ -18,6 +18,17 @@ createdb "${test_db}"
 pg_dump -s -h 127.0.0.1 -U vjp -d LSTM |
     psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}"
 
+# Production already includes 089. Reconstruct only its immediate pre-089
+# experiment shape in the disposable clone before exercising the forward
+# migration and legacy-row compatibility contract.
+psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
+DROP TRIGGER experiment_model_input_identity_trigger ON experiment;
+DROP FUNCTION enforce_experiment_model_input_identity();
+ALTER TABLE experiment
+    DROP COLUMN model_input_width CASCADE,
+    DROP COLUMN model_input_semantic_layout_version CASCADE;
+SQL
+
 # This row exists before 089 and must retain the legacy NULL/NULL identity.
 psql -X -v ON_ERROR_STOP=1 -q -d "${test_db}" <<'SQL'
 INSERT INTO experiment(

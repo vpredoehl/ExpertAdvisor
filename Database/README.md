@@ -92,6 +92,14 @@ Economic-calendar enrichment persistence is created by:
   to persist its expected LSTM input width and append-only semantic-layout
   version. Partial identities and later identity mutation are rejected, and
   both fields participate in the existing experiment duplicate identity.
+- `090_economic_event_actual_observation_provenance.sql`: adds an immutable,
+  provider-neutral actual-observation ledger, conservatively retains the
+  already-certified migration-088 rows and unproved provider actual snapshots,
+  derives deterministic fail-closed first-release state, and exposes the
+  cutoff-aware `economic_event_first_release_actual_at(timestamptz)` read API.
+  It leaves the migration-088 feature view and width-75 model semantics
+  unchanged. The selection, PIT, importer, audit, and Phase-2 contracts are in
+  `EconomicCalendar/LSTM_EconomicEventFirstReleaseActualProvenance.md`.
 
 Experiment scheduling tables are created by:
 

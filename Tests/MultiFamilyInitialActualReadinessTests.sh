@@ -53,6 +53,11 @@ pg_dump --host="$DB_HOST" --username="$ADMIN_USER" --dbname="$SOURCE_DB" \
     | psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" \
         --username="$ADMIN_USER" --dbname="$DB_NAME" >/dev/null
 
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" \
+    --username="$ADMIN_USER" --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/090_economic_event_actual_observation_provenance.sql" \
+    >/dev/null
+
 run_preparer() {
     local output="$1"
     PGHOST="$DB_HOST" PGUSER="$ADMIN_USER" \
@@ -80,6 +85,9 @@ test "$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
     --dbname="$DB_NAME" -tAc 'SELECT count(*) FROM economic_event_release_actual;')" = "261"
 test "$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
     --dbname="$DB_NAME" -tAc 'SELECT count(*) FROM economic_event_feature_release_actual;')" = "261"
+test "$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
+    --dbname="$DB_NAME" -tAc \
+    "SELECT count(*) FROM economic_event_actual_observation WHERE source_role='authoritative';")" = "261"
 test "$(psql -X --host="$DB_HOST" --username="$ADMIN_USER" \
     --dbname="$DB_NAME" -tAc \
     "SELECT count(*) FROM economic_event_release_actual WHERE publication_state <> 'initial' OR revision_sequence <> 0;")" = "0"

@@ -1,5 +1,15 @@
 # Authoritative initial-actual ingestion and coverage audit
 
+Current migration-090 compatibility: newly generated import SQL writes both
+the legacy migration-088 row and its provider-neutral
+`economic_event_actual_observation` evidence row in the same transaction.
+Migration 090 must therefore be applied before executing newly generated SQL.
+Exact duplicate and immutable-conflict preflight remains anchored to the
+legacy row, so a retry emits neither insert. Previously certified SQL artifacts
+are not rewritten; migration 090 backfills their already-persisted 088 rows.
+The first-release selection and PIT contract are documented in
+`LSTM_EconomicEventFirstReleaseActualProvenance.md`.
+
 Phase 10 extends the fail-closed Phase 9 operator workflow for migration 088.
 It does not change the Phase 8 width-75 feature contract, apply migration 088
 to production, or write authoritative actuals to production.
