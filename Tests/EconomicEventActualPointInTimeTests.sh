@@ -48,7 +48,8 @@ for migration in \
     072_economic_event.sql \
     081_economic_event_consensus.sql \
     082_economic_event_consensus_provider_provenance.sql \
-    088_economic_event_release_actual_provenance.sql; do
+    088_economic_event_release_actual_provenance.sql \
+    090_economic_event_actual_observation_provenance.sql; do
     psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" \
         --username="$DB_USER" --dbname="$DB_NAME" \
         -f "$ROOT/Database/migrations/$migration" >/dev/null

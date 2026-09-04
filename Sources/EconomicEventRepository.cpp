@@ -154,13 +154,84 @@ EconomicEvent MapEconomicEvent(const pqxx::row& row)
         event.releaseActual = std::move(actual);
     }
 
+    const std::string pitState =
+        row["pit_first_release_provenance_state"].as<std::string>();
+    if (pitState == "provenance_unavailable")
+    {
+        event.firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::provenanceUnavailable;
+    }
+    else if (pitState == "ambiguous")
+    {
+        event.firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::ambiguous;
+    }
+    else if (pitState == "not_yet_available")
+    {
+        event.firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::notYetAvailable;
+    }
+    else if (pitState == "proven_first_release")
+    {
+        event.firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::provenFirstRelease;
+    }
+    else
+    {
+        throw std::runtime_error(
+            "economic_event_first_release_actual_unknown_pit_state:" +
+            pitState);
+    }
+
+    event.firstReleaseActualSelectionReason =
+        row["first_release_selection_reason"].as<std::string>();
+
+    if (!row["pit_first_release_actual_value_low"].is_null())
+    {
+        EconomicEventFirstReleaseActual actual;
+        actual.actual.valueKind = row[
+            "pit_first_release_actual_value_kind"].as<std::string>();
+        actual.actual.canonicalValueLow = row[
+            "pit_first_release_actual_value_low"].as<double>();
+        actual.actual.canonicalValueHigh = OptionalValue<double>(
+            row, "pit_first_release_actual_value_high");
+        actual.actual.unit = row[
+            "pit_first_release_actual_unit"].as<std::string>();
+        actual.actual.scale = row[
+            "pit_first_release_actual_scale"].as<double>();
+        actual.actual.qualifier = OptionalValue<std::string>(
+            row, "pit_first_release_actual_qualifier");
+        actual.provenAvailableAtUnixMicros = row[
+            "pit_first_release_proven_available_at_unix_micros"]
+                .as<std::int64_t>();
+        actual.sourceName =
+            row["pit_first_release_source_name"].as<std::string>();
+        actual.sourceNativeEventId = OptionalValue<std::string>(
+            row, "pit_first_release_source_native_event_id");
+        actual.sourceObservationId = row[
+            "pit_first_release_source_observation_id"].as<std::string>();
+        actual.evidenceKey =
+            row["pit_first_release_evidence_key"].as<std::string>();
+        event.firstReleaseActual = std::move(actual);
+    }
+
+    if ((event.firstReleaseActualState ==
+             EconomicEventFirstReleaseActualState::provenFirstRelease) !=
+        event.firstReleaseActual.has_value())
+    {
+        throw std::runtime_error(
+            "economic_event_first_release_actual_pit_state_value_mismatch");
+    }
+
     return event;
 }
 
 std::string EconomicEventProjection(
     std::string_view eventRelation,
     std::string_view consensusRelation,
-    std::string_view releaseActualRelation)
+    std::string_view releaseActualRelation,
+    std::string_view firstReleaseActualRelation,
+    std::string_view firstReleaseAssessmentRelation)
 {
     const std::string prefix = eventRelation.empty()
         ? std::string{}
@@ -171,6 +242,14 @@ std::string EconomicEventProjection(
     const std::string releaseActualPrefix = releaseActualRelation.empty()
         ? std::string{}
         : std::string{releaseActualRelation} + ".";
+    const std::string firstReleaseActualPrefix =
+        firstReleaseActualRelation.empty()
+            ? std::string{}
+            : std::string{firstReleaseActualRelation} + ".";
+    const std::string firstReleaseAssessmentPrefix =
+        firstReleaseAssessmentRelation.empty()
+            ? std::string{}
+            : std::string{firstReleaseAssessmentRelation} + ".";
 
     return
         prefix + "economic_event_id, " +
@@ -221,7 +300,40 @@ std::string EconomicEventProjection(
         releaseActualPrefix +
             "source_artifact_sha256 AS release_actual_source_artifact_sha256, " +
         releaseActualPrefix +
-            "semantic_contract AS release_actual_semantic_contract ";
+            "semantic_contract AS release_actual_semantic_contract, " +
+        firstReleaseActualPrefix + "first_release_actual_value_kind "
+            "AS pit_first_release_actual_value_kind, " +
+        firstReleaseActualPrefix + "first_release_actual_value_low "
+            "AS pit_first_release_actual_value_low, " +
+        firstReleaseActualPrefix + "first_release_actual_value_high "
+            "AS pit_first_release_actual_value_high, " +
+        firstReleaseActualPrefix + "first_release_actual_unit "
+            "AS pit_first_release_actual_unit, " +
+        firstReleaseActualPrefix + "first_release_actual_scale "
+            "AS pit_first_release_actual_scale, " +
+        firstReleaseActualPrefix + "first_release_actual_qualifier "
+            "AS pit_first_release_actual_qualifier, " +
+        "ROUND(EXTRACT(EPOCH FROM " + firstReleaseActualPrefix +
+            "proven_available_at) * 1000000)::bigint "
+            "AS pit_first_release_proven_available_at_unix_micros, " +
+        "CASE WHEN " + firstReleaseActualPrefix +
+            "economic_event_id IS NOT NULL THEN " +
+            firstReleaseActualPrefix + "provenance_state "
+            "WHEN " + firstReleaseAssessmentPrefix +
+            "provenance_state = 'proven_first_release' "
+            "THEN 'not_yet_available' ELSE " +
+            firstReleaseAssessmentPrefix + "provenance_state END "
+            "AS pit_first_release_provenance_state, " +
+        firstReleaseAssessmentPrefix + "selection_reason "
+            "AS first_release_selection_reason, " +
+        firstReleaseActualPrefix + "source_name "
+            "AS pit_first_release_source_name, " +
+        firstReleaseActualPrefix + "source_native_event_id "
+            "AS pit_first_release_source_native_event_id, " +
+        firstReleaseActualPrefix + "source_observation_id "
+            "AS pit_first_release_source_observation_id, " +
+        firstReleaseActualPrefix + "evidence_key "
+            "AS pit_first_release_evidence_key ";
 }
 
 std::vector<EconomicEvent> MapEconomicEvents(const pqxx::result& rows)
@@ -273,13 +385,17 @@ std::vector<EconomicEvent> LoadEconomicEvents(
     // depends on the active PostgreSQL session timezone.
     //
     const pqxx::result rows = transaction.exec(
-        "SELECT " + EconomicEventProjection("e", "c", "a") +
+        "SELECT " + EconomicEventProjection("e", "c", "a", "p", "f") +
         "FROM economic_event e "
         "LEFT JOIN economic_event_selected_consensus c "
         "USING (economic_event_id) "
         "LEFT JOIN economic_event_feature_release_actual a ON "
         "a.economic_event_id = e.economic_event_id "
         "AND a.available_at < $3::timestamptz "
+        "JOIN economic_event_first_release_actual f ON "
+        "f.economic_event_id = e.economic_event_id "
+        "LEFT JOIN economic_event_first_release_actual_at($3::timestamptz) p "
+        "ON p.economic_event_id = e.economic_event_id "
         "WHERE e.currency = $1 "
         "AND e.event_timestamp_utc >= $2::timestamptz "
         "AND e.event_timestamp_utc < $3::timestamptz "
@@ -344,13 +460,17 @@ std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
         "WHERE e.currency = $1 "
         "AND e.event_timestamp_utc >= $2::timestamptz "
         "AND e.event_timestamp_utc <= $3::timestamptz"
-        ") SELECT " + EconomicEventProjection("e", "c", "a") +
+        ") SELECT " + EconomicEventProjection("e", "c", "a", "p", "f") +
         "FROM selected_event e "
         "LEFT JOIN economic_event_selected_consensus c "
         "USING (economic_event_id) "
         "LEFT JOIN economic_event_feature_release_actual a ON "
         "a.economic_event_id = e.economic_event_id "
         "AND a.available_at < $3::timestamptz "
+        "JOIN economic_event_first_release_actual f ON "
+        "f.economic_event_id = e.economic_event_id "
+        "LEFT JOIN economic_event_first_release_actual_at($3::timestamptz) p "
+        "ON p.economic_event_id = e.economic_event_id "
         "ORDER BY e.event_timestamp_utc ASC, e.economic_event_id ASC;",
         pqxx::params{
             currency,

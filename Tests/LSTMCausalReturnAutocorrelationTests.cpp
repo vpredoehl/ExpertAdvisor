@@ -219,11 +219,11 @@ void TestTensorParityAblationAndHistoricalPrefix()
     static_assert(historicalLevelProximityCol == 47);
     static_assert(returnAutocorrelationCol == 48);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 71);
+    static_assert(feature_size == 73);
     static_assert(EA::kHistoricalLevelProximityModelInputWidth == 52);
     static_assert(EA::kReturnAutocorrelationModelInputWidth == 53);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 75);
+    static_assert(EA::kCurrentModelInputWidth == 77);
 
     const auto closes = ClosesForReturns(NegativeReturns());
     Tensor trainingTensor = TensorForCloses("autocorrelation-training", closes);

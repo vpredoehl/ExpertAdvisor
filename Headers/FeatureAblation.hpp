@@ -23,7 +23,7 @@ struct AblatableFeature
     std::size_t tensorColumn;
 };
 
-inline constexpr std::array<AblatableFeature, 19> kAblatableFeatures{{
+inline constexpr std::array<AblatableFeature, 21> kAblatableFeatures{{
     {"relative_tick_volume", relativeTickVolumeCol},
     {"rms_return_surprise", causalReturnSurpriseCol},
     {"volatility_regime", causalVolatilityRegimeCol},
@@ -46,6 +46,9 @@ inline constexpr std::array<AblatableFeature, 19> kAblatableFeatures{{
      authoritativeInitialSurpriseAbsCol},
     {"authoritative_initial_surprise_direction",
      authoritativeInitialSurpriseDirectionCol},
+    {"causal_first_release_surprise_available",
+     causalFirstReleaseSurpriseAvailableCol},
+    {"causal_first_release_surprise", causalFirstReleaseSurpriseCol},
     // directional_efficiency is the historic semantic name for the column
     // introduced as causalDirectionalPersistenceCol.
     // Kept in registry order at its physical location.
@@ -63,6 +66,11 @@ inline constexpr std::string_view
         "authoritative_initial_has_surprise,authoritative_initial_surprise,"
         "authoritative_initial_surprise_abs,"
         "authoritative_initial_surprise_direction";
+
+inline constexpr std::string_view
+    kCausalEconomicEventSurpriseAblationMaskText =
+        "causal_first_release_surprise_available,"
+        "causal_first_release_surprise";
 
 // The registry is deliberately split because the existing layout uses a legacy
 // implementation identifier for directional efficiency.

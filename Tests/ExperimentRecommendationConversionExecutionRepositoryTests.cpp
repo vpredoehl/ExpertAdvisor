@@ -351,7 +351,7 @@ int main()
                    "recommendation_conversion");
             assert(row["marker"].is_null());
             assert(row["model_input_width"].as<int>() == 51);
-            assert(row["model_input_semantic_layout_version"].as<int>() == 5);
+            assert(row["model_input_semantic_layout_version"].as<int>() == 6);
         }
 
         // A later review reversal does not duplicate or erase a completed

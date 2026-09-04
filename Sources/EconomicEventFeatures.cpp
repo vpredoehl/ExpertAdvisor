@@ -219,9 +219,37 @@ bool CompatibleScalarSurprise(
 }
 
 
+bool CompatibleCausalScalarSurprise(
+    const EconomicEventSelectedConsensus& selected,
+    const EconomicEventFirstReleaseActual& firstReleaseActual)
+{
+    const EconomicEventConsensusValue& forecast = selected.forecast;
+    const EconomicEventConsensusValue& actual = firstReleaseActual.actual;
+
+    return
+        ValidValueShape(actual) &&
+        forecast.valueKind == "scalar" &&
+        actual.valueKind == "scalar" &&
+        forecast.unit == actual.unit &&
+        forecast.scale == actual.scale &&
+        forecast.qualifier == actual.qualifier;
+}
+
+
 enum class SurpriseDisposition
 {
     missingActual,
+    notYetAvailable,
+    missingForecast,
+    incompatible,
+    available,
+};
+
+
+enum class CausalSurpriseDisposition
+{
+    provenanceUnavailable,
+    ambiguous,
     notYetAvailable,
     missingForecast,
     incompatible,
@@ -261,6 +289,66 @@ SurpriseDisposition SetSurprise(
     values.authoritativeInitialSurpriseDirection =
         normalized > 0.0F ? 1.0F : normalized < 0.0F ? -1.0F : 0.0F;
     return SurpriseDisposition::available;
+}
+
+
+template <typename MappedEvent>
+CausalSurpriseDisposition SetCausalFirstReleaseSurprise(
+    EconomicEventFeatureValues& values,
+    const MappedEvent& event,
+    std::int64_t informationCutoffUnixMicros)
+{
+    switch (event.firstReleaseActualState)
+    {
+        case EconomicEventFirstReleaseActualState::provenanceUnavailable:
+            return CausalSurpriseDisposition::provenanceUnavailable;
+        case EconomicEventFirstReleaseActualState::ambiguous:
+            return CausalSurpriseDisposition::ambiguous;
+        case EconomicEventFirstReleaseActualState::notYetAvailable:
+            return CausalSurpriseDisposition::notYetAvailable;
+        case EconomicEventFirstReleaseActualState::provenFirstRelease:
+            break;
+    }
+
+    if (!event.firstReleaseActual)
+        throw std::logic_error(
+            "economic_event_causal_surprise_proven_value_missing");
+    if (event.firstReleaseActual->provenAvailableAtUnixMicros >
+        informationCutoffUnixMicros)
+    {
+        return CausalSurpriseDisposition::notYetAvailable;
+    }
+    if (!event.selectedConsensus)
+        return CausalSurpriseDisposition::missingForecast;
+    if (!CompatibleCausalScalarSurprise(
+            *event.selectedConsensus, *event.firstReleaseActual))
+    {
+        return CausalSurpriseDisposition::incompatible;
+    }
+
+    const long double difference =
+        static_cast<long double>(
+            event.firstReleaseActual->actual.canonicalValueLow) -
+        static_cast<long double>(
+            event.selectedConsensus->forecast.canonicalValueLow);
+    const long double normalizationScale =
+        static_cast<long double>(EconomicEventNormalizationScale(
+            event.eventFamily,
+            event.selectedConsensus->forecast.unit));
+    const long double normalized = difference / normalizationScale;
+    if (!std::isfinite(normalized))
+        return CausalSurpriseDisposition::incompatible;
+
+    const float bounded = static_cast<float>(std::clamp(
+        normalized,
+        -static_cast<long double>(kEconomicEventCausalSurpriseClamp),
+        static_cast<long double>(kEconomicEventCausalSurpriseClamp)));
+    if (!std::isfinite(bounded))
+        return CausalSurpriseDisposition::incompatible;
+
+    values.causalFirstReleaseSurpriseAvailable = 1.0F;
+    values.causalFirstReleaseSurprise = bounded;
+    return CausalSurpriseDisposition::available;
 }
 
 
@@ -326,6 +414,8 @@ EconomicEventFeatureValues::Ordered() const noexcept
         authoritativeInitialSurprise,
         authoritativeInitialSurpriseAbs,
         authoritativeInitialSurpriseDirection,
+        causalFirstReleaseSurpriseAvailable,
+        causalFirstReleaseSurprise,
     };
 }
 
@@ -475,6 +565,30 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
                 *event.releaseActual};
         }
 
+        const bool hasPitActual = event.firstReleaseActual.has_value();
+        const bool stateIsProven = event.firstReleaseActualState ==
+            EconomicEventFirstReleaseActualState::provenFirstRelease;
+        if (hasPitActual != stateIsProven)
+        {
+            throw std::invalid_argument(
+                "economic_event_first_release_actual_pit_state_value_mismatch");
+        }
+        if (event.firstReleaseActual)
+        {
+            const auto& actual = *event.firstReleaseActual;
+            if (actual.provenAvailableAtUnixMicros <
+                    event.eventTimestampUnixMicros ||
+                actual.sourceName != event.sourceAgency ||
+                actual.sourceObservationId.empty() ||
+                actual.evidenceKey.empty() ||
+                actual.actual.unit.empty() ||
+                !ValidValueShape(actual.actual))
+            {
+                throw std::invalid_argument(
+                    "economic_event_first_release_actual_pit_invalid");
+            }
+        }
+
         events_.push_back(
             MappedEvent{
                 event.economicEventId,
@@ -485,7 +599,9 @@ EconomicEventFeatureEngine::EconomicEventFeatureEngine(
                 event.eventFamily,
                 event.eventImportance,
                 event.selectedConsensus,
-                std::move(releaseActual)});
+                std::move(releaseActual),
+                event.firstReleaseActualState,
+                event.firstReleaseActual});
 
         if (event.selectedConsensus)
         {
@@ -678,6 +794,31 @@ EconomicEventFeatureEngine::AdvanceCompletedBar(
         else if (relevantEvent->releaseActual)
         {
             ++diagnostics_.notYetAvailableInitialActualRowCount;
+        }
+
+        switch (SetCausalFirstReleaseSurprise(
+            values, *relevantEvent, informationCutoffUnixMicros))
+        {
+            case CausalSurpriseDisposition::provenanceUnavailable:
+                ++diagnostics_.causalSurpriseProvenanceUnavailableRowCount;
+                break;
+            case CausalSurpriseDisposition::ambiguous:
+                ++diagnostics_.causalSurpriseAmbiguousRowCount;
+                break;
+            case CausalSurpriseDisposition::notYetAvailable:
+                ++diagnostics_.causalSurpriseNotYetAvailableRowCount;
+                break;
+            case CausalSurpriseDisposition::missingForecast:
+                ++diagnostics_.causalSurpriseMissingConsensusRowCount;
+                break;
+            case CausalSurpriseDisposition::incompatible:
+                ++diagnostics_.causalSurpriseIncompatibleRowCount;
+                break;
+            case CausalSurpriseDisposition::available:
+                ++diagnostics_.causalSurpriseAvailableRowCount;
+                ++diagnostics_.causalFirstReleaseSourceRowCounts[
+                    relevantEvent->firstReleaseActual->sourceName];
+                break;
         }
     }
 

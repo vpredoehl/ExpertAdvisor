@@ -34,7 +34,7 @@ int main()
     static_assert(return_autocorrelation_feature_size == 49);
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
-    static_assert(feature_size == 71);
+    static_assert(feature_size == 73);
     static_assert(EA::kLegacyModelInputWidth == 36);
     static_assert(EA::kDonchianModelInputWidth == 38);
     static_assert(EA::kSessionPhaseModelInputWidth == 40);
@@ -54,7 +54,8 @@ int main()
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
     static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
-    static_assert(EA::kCurrentModelInputWidth == 75);
+    static_assert(EA::kEconomicEventReleaseActualModelInputWidth == 75);
+    static_assert(EA::kCurrentModelInputWidth == 77);
 
     std::vector<float> physicalTensor(feature_size, 0.0f);
     for (std::size_t i = 0; i < physicalTensor.size(); ++i)
@@ -340,6 +341,47 @@ int main()
          col <= authoritativeInitialSurpriseDirectionCol; ++col)
         assert(releaseActualControl[col] == 0.0f);
 
+    // Each Phase-2 channel has its own stable persisted ablation identity.
+    // Applying either mask changes only that one projected Tensor column.
+    for (const std::string& featureName : {
+             std::string{"causal_first_release_surprise_available"},
+             std::string{"causal_first_release_surprise"}})
+    {
+        const auto causalMask = EA::FeatureAblationMask::Parse(featureName);
+        assert(causalMask.CanonicalText() == featureName);
+        assert(causalMask.tensorColumns().size() == 1);
+        const std::size_t maskedColumn = causalMask.tensorColumns().front();
+        std::vector<float> causalControl(
+            EA::kCurrentModelInputWidth, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(
+            causalControl.data(), physicalTensor.data(), economicEvents,
+            causalMask);
+        for (std::size_t col = 0; col < feature_size; ++col)
+        {
+            assert(causalControl[col] ==
+                   (col == maskedColumn ? 0.0f : economicEventInput[col]));
+        }
+    }
+
+    bool causalMaskRejectedByWidth75 = false;
+    try
+    {
+        const auto width75 = EA::ResolveModelInputContract(
+            EA::kEconomicEventReleaseActualModelInputWidth,
+            physicalTensor.size());
+        const auto causalMask = EA::FeatureAblationMask::Parse(
+            "causal_first_release_surprise");
+        std::vector<float> historical(
+            EA::kEconomicEventReleaseActualModelInputWidth, -1.0f);
+        EA::CopyTensorFeaturesForModelInput(
+            historical.data(), physicalTensor.data(), width75, causalMask);
+    }
+    catch (const std::runtime_error&)
+    {
+        causalMaskRejectedByWidth75 = true;
+    }
+    assert(causalMaskRejectedByWidth75);
+
     bool releaseActualMaskRejectedByWidth71 = false;
     try
     {
@@ -486,7 +528,7 @@ int main()
     {
         unsupportedRejected =
             std::string{error.what()} ==
-            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75";
+            "MODEL_INPUT_WIDTH_UNSUPPORTED,model_n_in=39,supported=36:38:40:41:42:43:44:45:46:47:48:49:50:51:52:53:63:71:75:77";
     }
     assert(unsupportedRejected);
 

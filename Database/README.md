@@ -101,6 +101,13 @@ Economic-calendar enrichment persistence is created by:
   unchanged. The selection, PIT, importer, audit, and Phase-2 contracts are in
   `EconomicCalendar/LSTM_EconomicEventFirstReleaseActualProvenance.md`.
 
+The width-77/semantic-layout-6 causal surprise runtime consumes migration
+090's PIT function and persists its input identity through the existing
+migration-089 columns. Its append-only columns, normalization, missingness,
+resume-expansion, and ablation contracts are documented in
+`EconomicCalendar/LSTM_EconomicEventCausalSurpriseChannels.md`. No additional
+database object is required for the layout-6 transition.
+
 Experiment scheduling tables are created by:
 
 - `005_experiment_scheduler.sql`: `experiment`

@@ -20,7 +20,7 @@ namespace EA
 {
 
 inline constexpr int kModelInputSemanticMetaSchemaVersion = 1;
-inline constexpr int kModelInputSemanticLayoutVersion = 5;
+inline constexpr int kModelInputSemanticLayoutVersion = 6;
 inline constexpr int kInputWidthExpansionProvenanceSchemaVersion = 1;
 inline constexpr std::string_view kInputWidthExpansionInitializationPolicy =
     "zero";
@@ -36,13 +36,14 @@ struct ModelInputSemanticLayoutRegistryEntry
 // at the time a model is saved.  Append-only additions add a new entry whose
 // predecessor is the prior current version; old entries and their fixed
 // maximum widths must never be changed.
-inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 5>
+inline constexpr std::array<ModelInputSemanticLayoutRegistryEntry, 6>
     kModelInputSemanticLayoutRegistry{{
         {1, kHistoricalLevelProximityModelInputWidth, 0},
         {2, kReturnAutocorrelationModelInputWidth, 1},
         {3, kEconomicEventModelInputWidth, 2},
         {4, kEconomicEventConsensusModelInputWidth, 3},
         {5, kEconomicEventReleaseActualModelInputWidth, 4},
+        {6, kCausalEconomicEventSurpriseModelInputWidth, 5},
     }};
 
 static_assert(kModelInputSemanticLayoutRegistry.back().layoutVersion ==
@@ -185,7 +186,7 @@ struct AppendedTensorFeatureSemantic
 // FeatureLayout.hpp is the structural authority.  This registry supplies the
 // corresponding persisted semantic names for the append-only portion that can
 // be introduced by an expansion from any supported historical width.
-inline constexpr std::array<AppendedTensorFeatureSemantic, 39>
+inline constexpr std::array<AppendedTensorFeatureSemantic, 41>
     kAppendedTensorFeatureSemantics{{
         {donchianUpCol, "donchian_up"},
         {donchianDownCol, "donchian_down"},
@@ -233,6 +234,10 @@ inline constexpr std::array<AppendedTensorFeatureSemantic, 39>
          EA::EconomicCalendar::kEconomicEventFeatureNames[20]},
         {authoritativeInitialSurpriseDirectionCol,
          EA::EconomicCalendar::kEconomicEventFeatureNames[21]},
+        {causalFirstReleaseSurpriseAvailableCol,
+         EA::EconomicCalendar::kEconomicEventFeatureNames[22]},
+        {causalFirstReleaseSurpriseCol,
+         EA::EconomicCalendar::kEconomicEventFeatureNames[23]},
     }};
 
 constexpr bool AppendedTensorFeatureSemanticsAreUniqueAndOrdered()

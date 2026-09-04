@@ -121,15 +121,15 @@ int main()
     assert(postRelease[authoritativeInitialHasSurpriseCol] == 1.0F);
     assert(postRelease[authoritativeInitialSurpriseCol] != 0.0F);
 
-    // A newly initialized width-75 model consumes the same nonzero event row
+    // A newly initialized width-77 model consumes the same nonzero event row
     // through both production inference and training tensor-copy paths.
-    EA::LSTM freshWidth75{
+    EA::LSTM freshWidth77{
         tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
         EA::kCurrentModelInputWidth};
-    assert(freshWidth75.InputFeatureCount() == 75);
-    assert(freshWidth75.param.Shape()[0] ==
+    assert(freshWidth77.InputFeatureCount() == 77);
+    assert(freshWidth77.param.Shape()[0] ==
            EA::kCurrentModelInputWidth + hidden_size);
-    const auto freshProbabilities = freshWidth75.PredictNextDirectionProbs(
+    const auto freshProbabilities = freshWidth77.PredictNextDirectionProbs(
         tensor.GetWindow(tensor.begin() + 48));
     float probabilitySum = 0.0F;
     for (const float probability : freshProbabilities)
@@ -138,9 +138,9 @@ int main()
         probabilitySum += probability;
     }
     assert(std::fabs(probabilitySum - 1.0F) < 1.0e-5F);
-    const std::size_t freshUpdatesBefore = freshWidth75.optimizerUpdateCount;
-    (void)freshWidth75.CalculateBatch(tensor.GetBatchClamped(0), 0);
-    assert(freshWidth75.optimizerUpdateCount > freshUpdatesBefore);
+    const std::size_t freshUpdatesBefore = freshWidth77.optimizerUpdateCount;
+    (void)freshWidth77.CalculateBatch(tensor.GetBatchClamped(0), 0);
+    assert(freshWidth77.optimizerUpdateCount > freshUpdatesBefore);
 
     EA::LSTM source{
         tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
@@ -203,7 +203,7 @@ int main()
         " user=pqxx dbname=" + EnvironmentOr("LSTM_DB_NAME", "LSTM");
     pqxx::connection connection{connectionString};
 
-    long long freshWidth75ModelId = -1;
+    long long freshWidth77ModelId = -1;
     {
         pqxx::work transaction{connection};
         const long long experimentId = transaction.exec(
@@ -212,13 +212,13 @@ int main()
             "train_end,status,phase,duplicate_nonce,model_input_width,"
             "model_input_semantic_layout_version) VALUES "
             "('eurusdrmp',1,0.0,1,0,'2020-01-01','2021-01-01',"
-            "'pending','train',2090001,75,5) RETURNING experiment_id;")
+            "'pending','train',2090001,77,6) RETURNING experiment_id;")
             .one_row()[0].as<long long>();
-        freshWidth75ModelId = DBIO::PgModelIO::createModel(
-            transaction, "phase20-fresh-width75-event-smoke",
+        freshWidth77ModelId = DBIO::PgModelIO::createModel(
+            transaction, "phase2-fresh-width77-event-smoke",
             "nonzero authoritative economic-event fixture", experimentId);
         DBIO::PgModelIO::saveAll(
-            transaction, freshWidth75ModelId, freshWidth75, "eurusdrmp",
+            transaction, freshWidth77ModelId, freshWidth77, "eurusdrmp",
             "2020-01-01", "2021-01-01");
         transaction.commit();
     }
@@ -244,30 +244,30 @@ int main()
         },
         "EXPERIMENT_MODEL_INPUT_IDENTITY_MISMATCH");
 
-    EA::LSTM freshWidth75Reloaded{
+    EA::LSTM freshWidth77Reloaded{
         tensor, 1.0f, 0.0f, EA::LSTM::TargetType::UpNeutralDownReturn,
         EA::kCurrentModelInputWidth};
     {
         pqxx::work transaction{connection};
         transaction.exec("SET TRANSACTION READ ONLY;");
         DBIO::PgModelIO::loadAll(
-            transaction, freshWidth75ModelId, freshWidth75Reloaded);
+            transaction, freshWidth77ModelId, freshWidth77Reloaded);
         const auto meta = DBIO::PgModelIO::loadRequiredModelMeta(
-            transaction, freshWidth75ModelId);
+            transaction, freshWidth77ModelId);
         assert(meta.inputWidth == EA::kCurrentModelInputWidth);
         transaction.commit();
     }
-    AssertExact(freshWidth75.param, freshWidth75Reloaded.param);
-    AssertExact(freshWidth75.bias, freshWidth75Reloaded.bias);
+    AssertExact(freshWidth77.param, freshWidth77Reloaded.param);
+    AssertExact(freshWidth77.bias, freshWidth77Reloaded.bias);
     AssertExact(
-        freshWidth75.returnHeadDirWeight,
-        freshWidth75Reloaded.returnHeadDirWeight);
+        freshWidth77.returnHeadDirWeight,
+        freshWidth77Reloaded.returnHeadDirWeight);
     AssertExact(
-        freshWidth75.returnHeadDirBias,
-        freshWidth75Reloaded.returnHeadDirBias);
-    assert(freshWidth75.PredictNextDirectionProbs(
+        freshWidth77.returnHeadDirBias,
+        freshWidth77Reloaded.returnHeadDirBias);
+    assert(freshWidth77.PredictNextDirectionProbs(
                tensor.GetWindow(tensor.begin() + 48)) ==
-           freshWidth75Reloaded.PredictNextDirectionProbs(
+           freshWidth77Reloaded.PredictNextDirectionProbs(
                tensor.GetWindow(tensor.begin() + 48)));
 
     long long sourceModelId = -1;
@@ -404,7 +404,9 @@ int main()
             transaction, sourceModelId, "model_input_semantics_meta");
         assert(dims.n_rows == 1);
         assert(dims.n_cols == 2);
-        assert(values == std::vector<double>({1.0, 5.0}));
+        assert(values == std::vector<double>(
+            {1.0, static_cast<double>(
+                      EA::kModelInputSemanticLayoutVersion)}));
         transaction.commit();
     }
 

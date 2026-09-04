@@ -52,22 +52,28 @@ inline constexpr std::size_t kEconomicEventConsensusModelInputWidth =
     consensus_economic_event_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kEconomicEventReleaseActualModelInputWidth =
     economic_event_feature_size + kModelReturnFeatureCount;
+inline constexpr std::size_t kCausalEconomicEventSurpriseModelInputWidth =
+    causal_economic_event_surprise_feature_size + kModelReturnFeatureCount;
 inline constexpr std::size_t kPreEconomicEventModelInputWidth =
     kReturnAutocorrelationModelInputWidth;
 inline constexpr std::size_t kCurrentModelInputWidth =
-    kEconomicEventReleaseActualModelInputWidth;
+    kCausalEconomicEventSurpriseModelInputWidth;
 
 static_assert(kEconomicEventModelInputWidth ==
               kPreEconomicEventModelInputWidth +
               EA::EconomicCalendar::kPreConsensusEconomicEventFeatureWidth);
-static_assert(kCurrentModelInputWidth == kEconomicEventModelInputWidth +
+static_assert(kEconomicEventReleaseActualModelInputWidth ==
+              kEconomicEventModelInputWidth +
               EA::EconomicCalendar::kEconomicEventConsensusFeatureWidth +
               EA::EconomicCalendar::kEconomicEventReleaseActualFeatureWidth);
+static_assert(kCurrentModelInputWidth ==
+              kEconomicEventReleaseActualModelInputWidth +
+              EA::EconomicCalendar::kCausalEconomicEventSurpriseFeatureWidth);
 
 // Every persisted width whose Tensor portion has a registered, stable
 // semantic prefix.  Append-only feature additions must retain these entries
 // and append their new width.
-inline constexpr std::array<std::size_t, 19> kRegisteredModelInputWidths{{
+inline constexpr std::array<std::size_t, 20> kRegisteredModelInputWidths{{
     kLegacyModelInputWidth,
     kDonchianModelInputWidth,
     kSessionPhaseModelInputWidth,
@@ -87,6 +93,7 @@ inline constexpr std::array<std::size_t, 19> kRegisteredModelInputWidths{{
     kEconomicEventModelInputWidth,
     kEconomicEventConsensusModelInputWidth,
     kEconomicEventReleaseActualModelInputWidth,
+    kCausalEconomicEventSurpriseModelInputWidth,
 }};
 
 struct ModelInputContract
@@ -139,6 +146,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
         case kEconomicEventConsensusModelInputWidth:
             return {modelInputWidth, consensus_economic_event_feature_size, 0};
         case kEconomicEventReleaseActualModelInputWidth:
+            return {modelInputWidth, economic_event_feature_size, 0};
+        case kCausalEconomicEventSurpriseModelInputWidth:
             return {modelInputWidth, feature_size, 0};
         default:
             throw std::runtime_error(
@@ -162,7 +171,8 @@ inline ModelInputContract ContractForModelInputWidth(std::size_t modelInputWidth
                 ":" + std::to_string(kReturnAutocorrelationModelInputWidth) +
                 ":" + std::to_string(kEconomicEventModelInputWidth) +
                 ":" + std::to_string(kEconomicEventConsensusModelInputWidth) +
-                ":" + std::to_string(kEconomicEventReleaseActualModelInputWidth));
+                ":" + std::to_string(kEconomicEventReleaseActualModelInputWidth) +
+                ":" + std::to_string(kCausalEconomicEventSurpriseModelInputWidth));
     }
 }
 

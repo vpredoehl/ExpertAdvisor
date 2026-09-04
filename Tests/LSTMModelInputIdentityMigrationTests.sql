@@ -28,6 +28,28 @@ BEGIN
         75,5)
     RETURNING experiment_id INTO fixture_id;
 
+    -- Phase 2 uses the same migration-089 durable identity columns for the
+    -- append-only width-77/layout-6 generation. Historical width 75/layout 5
+    -- remains independently identifiable.
+    INSERT INTO experiment(
+        symbol,prediction_horizon,c_next_threshold,target_epochs,
+        checkpoint_interval,train_start,train_end,status,phase,
+        duplicate_nonce,donchian20_mode,feature_warmup_scope,
+        donchian_lookback,feature_ablation_mask,
+        model_input_width,model_input_semantic_layout_version)
+    VALUES(
+        'phase2causalsurprise',4,0.0008,1,0,'2020-01-01','2020-01-02',
+        'pending','train',2091001,'enabled','legacy_cold_boundary',20,'',
+        77,6);
+    IF NOT EXISTS (
+        SELECT 1 FROM experiment
+        WHERE symbol='phase2causalsurprise'
+          AND model_input_width=77
+          AND model_input_semantic_layout_version=6
+    ) THEN
+        RAISE EXCEPTION 'width-77 layout-6 identity was not persisted';
+    END IF;
+
     BEGIN
         UPDATE experiment SET model_input_width=71
         WHERE experiment_id=fixture_id;

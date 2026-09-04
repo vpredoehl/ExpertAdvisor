@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -113,8 +114,8 @@ int main()
             "'JOLTS Job Openings','2023-11-14','fixture/myfxbook.json',"
             "repeat('a',64),'myfxbook_jolts_gap_fill','fixture_match',"
             "'myfxbook_consensus_observation_v1',"
-            "'{\"provider\":\"MYFXBOOK\"}','4530000','parsed','scalar',"
-            "4530000,4530000,'count',1,'missing','missing' "
+            "'{\"provider\":\"MYFXBOOK\"}','4530','parsed','scalar',"
+            "4530,4530000,'count',1000,'missing','missing' "
             "FROM economic_event WHERE source_event_id='range-jolts';");
         write.exec(
             "INSERT INTO economic_event_release_actual ("
@@ -146,6 +147,33 @@ int main()
             "'bls_jolts_revision_actual_v1','{\"provider\":\"BLS\"}',"
             "'5100','scalar',5100,5100000,'count',1000 "
             "FROM economic_event WHERE source_event_id='range-jolts';");
+        // Production ingestion writes the legacy migration-088 row and the
+        // provider-neutral migration-090 observation in one transaction.
+        write.exec(
+            "INSERT INTO economic_event_actual_observation ("
+            "economic_event_id,source_name,source_role,source_native_event_id,"
+            "source_observation_id,evidence_key,observation_kind,"
+            "revision_sequence,source_publication_at,"
+            "source_publication_time_status,observed_at,ingested_at,"
+            "availability_proof,source_url,source_artifact_path,"
+            "source_artifact_sha256,semantic_contract,source_provenance,"
+            "actual_raw,actual_value_kind,actual_value_low,actual_value_high,"
+            "actual_canonical_value_low,actual_canonical_value_high,"
+            "actual_unit,actual_scale,actual_qualifier,legacy_release_actual_id"
+            ") SELECT a.economic_event_id,a.source_agency,'authoritative',"
+            "e.source_event_id,a.source_observation_id,"
+            "'range-test:' || a.economic_event_release_actual_id::text,"
+            "a.publication_state,a.revision_sequence,a.available_at,'exact',"
+            "a.retrieved_at,a.imported_at,'source_publication',a.source_url,"
+            "a.source_artifact_path,a.source_artifact_sha256,"
+            "a.semantic_contract,a.source_provenance,a.actual_raw,"
+            "a.actual_value_kind,a.actual_value_low,a.actual_value_high,"
+            "a.actual_canonical_value_low,a.actual_canonical_value_high,"
+            "a.actual_unit,a.actual_scale,a.actual_qualifier,"
+            "a.economic_event_release_actual_id "
+            "FROM economic_event_release_actual a "
+            "JOIN economic_event e USING (economic_event_id) "
+            "ORDER BY a.economic_event_release_actual_id;");
         write.commit();
     }
 
@@ -266,6 +294,61 @@ int main()
         "FROM economic_event_feature_release_actual") ==
            "bls:jolts:initial");
 
+    // The range loader calls the PIT function once at its maximum cutoff and
+    // carries the proved timestamp for per-bar inclusive gating. Immediately
+    // before publication it matches an empty direct PIT result; at the exact
+    // microsecond it matches the same deterministic first-release row.
+    const auto immediatelyBeforePit = LoadEconomicEventsForFeatureRange(
+        read, "USD", "2023-11-14 22:13:20+00",
+        "2023-11-14 22:28:20+00");
+    assert(immediatelyBeforePit.back().sourceEventId ==
+           std::optional<std::string>{"range-jolts"});
+    assert(immediatelyBeforePit.back().firstReleaseActualState ==
+           EconomicEventFirstReleaseActualState::notYetAvailable);
+    assert(!immediatelyBeforePit.back().firstReleaseActual);
+    assert(read.query_value<long long>(
+        "SELECT count(*) FROM economic_event_first_release_actual_at("
+        "'2023-11-14 22:28:20+00'::timestamptz) WHERE economic_event_id=("
+        "SELECT economic_event_id FROM economic_event WHERE "
+        "source_event_id='range-jolts')") == 0);
+
+    const auto exactlyAtPit = LoadEconomicEventsForFeatureRange(
+        read, "USD", "2023-11-14 22:13:20+00",
+        "2023-11-14 22:28:20.000001+00");
+    assert(exactlyAtPit.back().sourceEventId ==
+           std::optional<std::string>{"range-jolts"});
+    assert(exactlyAtPit.back().firstReleaseActualState ==
+           EconomicEventFirstReleaseActualState::provenFirstRelease);
+    assert(exactlyAtPit.back().firstReleaseActual);
+    assert(exactlyAtPit.back().firstReleaseActual->actual.canonicalValueLow ==
+           read.query_value<double>(
+               "SELECT first_release_actual_value_low FROM "
+               "economic_event_first_release_actual_at("
+               "'2023-11-14 22:28:20.000001+00'::timestamptz) WHERE "
+               "economic_event_id=(SELECT economic_event_id FROM "
+               "economic_event WHERE source_event_id='range-jolts')"));
+
+    // Even after revision publication, bulk retrieval continues to expose the
+    // immutable first release, while the audit-only canonical view advances.
+    const auto afterRevisionPit = LoadEconomicEventsForFeatureRange(
+        read, "USD", "2023-11-14 22:13:20+00",
+        "2023-11-16 00:00:00+00");
+    const auto joltsAfterRevision = std::find_if(
+        afterRevisionPit.begin(), afterRevisionPit.end(),
+        [](const EconomicEvent& event)
+        {
+            return event.sourceEventId ==
+                std::optional<std::string>{"range-jolts"};
+        });
+    assert(joltsAfterRevision != afterRevisionPit.end());
+    assert(joltsAfterRevision->firstReleaseActual);
+    assert(joltsAfterRevision->firstReleaseActual->actual.canonicalValueLow ==
+           5000000.0);
+    assert(read.query_value<double>(
+        "SELECT canonical_value_low FROM economic_event_first_release_actual "
+        "WHERE economic_event_id=(SELECT economic_event_id FROM economic_event "
+        "WHERE source_event_id='range-jolts')") == 5100000.0);
+
     constexpr std::int64_t firstBarStart = 1'700'000'000;
     EconomicEventFeatureEngine engine{events};
     const auto first = engine.AdvanceCompletedBar(At(firstBarStart));
@@ -282,6 +365,8 @@ int main()
     assert(first.authoritativeInitialSurprise == 0.0F);
     assert(first.authoritativeInitialSurpriseAbs == 0.0F);
     assert(first.authoritativeInitialSurpriseDirection == 0.0F);
+    assert(first.causalFirstReleaseSurpriseAvailable == 0.0F);
+    assert(first.causalFirstReleaseSurprise == 0.0F);
     assert(Near(first.inflationRecencyDecay,
                 std::exp(-4500.0 / 86400.0)));
     assert(Near(first.employmentRecencyDecay,
@@ -300,6 +385,8 @@ int main()
     assert(Near(second.authoritativeInitialSurprise, 0.047));
     assert(Near(second.authoritativeInitialSurpriseAbs, 0.047));
     assert(second.authoritativeInitialSurpriseDirection == 1.0F);
+    assert(second.causalFirstReleaseSurpriseAvailable == 1.0F);
+    assert(Near(second.causalFirstReleaseSurprise, 0.047));
 
     return 0;
 }

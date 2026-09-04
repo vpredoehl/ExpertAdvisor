@@ -56,6 +56,9 @@ psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
     --dbname="$DB_NAME" \
     -f "$ROOT/Database/migrations/088_economic_event_release_actual_provenance.sql" >/dev/null
+psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    -f "$ROOT/Database/migrations/090_economic_event_actual_observation_provenance.sql" >/dev/null
 
 if [[ -e "$ROOT/Database/migrations/083_economic_event_selected_consensus_release_semantics.sql" ]]; then
     printf 'unexpected migration 083 remains in deployment set\n' >&2
@@ -82,10 +85,11 @@ if [[ "$actual_feature_view_columns" != "$expected_feature_view_columns" ]]; the
     exit 5
 fi
 
-printf 'DISPOSABLE_SCHEMA_END=088\n'
+printf 'DISPOSABLE_SCHEMA_END=090\n'
 printf 'MIGRATION_083_APPLIED=false\n'
 printf 'SELECTED_CONSENSUS_VIEW_082_ONLY=true\n'
 printf 'FEATURE_RELEASE_ACTUAL_VIEW_088=true\n'
+printf 'FIRST_RELEASE_ACTUAL_PIT_API_090=true\n'
 
 LSTM_DB_HOST="$DB_HOST" LSTM_DB_USER="$DB_USER" LSTM_DB_NAME="$DB_NAME" \
     "$BIN"

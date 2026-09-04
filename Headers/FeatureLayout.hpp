@@ -128,6 +128,12 @@ inline constexpr std::size_t authoritativeInitialSurpriseAbsCol =
 inline constexpr std::size_t authoritativeInitialSurpriseDirectionCol =
     economicEventFeatureStartCol + static_cast<std::size_t>(
         EA::EconomicCalendar::EconomicEventFeatureIndex::authoritativeInitialSurpriseDirection);
+inline constexpr std::size_t causalFirstReleaseSurpriseAvailableCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::causalFirstReleaseSurpriseAvailable);
+inline constexpr std::size_t causalFirstReleaseSurpriseCol =
+    economicEventFeatureStartCol + static_cast<std::size_t>(
+        EA::EconomicCalendar::EconomicEventFeatureIndex::causalFirstReleaseSurprise);
 inline constexpr std::size_t pre_consensus_economic_event_feature_size =
     economicEventFeatureStartCol +
     EA::EconomicCalendar::kPreConsensusEconomicEventFeatureWidth;
@@ -138,8 +144,11 @@ inline constexpr std::size_t consensus_economic_event_feature_size =
 inline constexpr std::size_t economic_event_feature_size =
     consensus_economic_event_feature_size +
     EA::EconomicCalendar::kEconomicEventReleaseActualFeatureWidth;
+inline constexpr std::size_t causal_economic_event_surprise_feature_size =
+    economic_event_feature_size +
+    EA::EconomicCalendar::kCausalEconomicEventSurpriseFeatureWidth;
 inline constexpr std::size_t feature_size =
-    economic_event_feature_size;
+    causal_economic_event_surprise_feature_size;
 
 static_assert(economicEventFeatureStartCol ==
               return_autocorrelation_feature_size);
@@ -149,5 +158,7 @@ static_assert(relevantEventHasConsensusCol ==
               pre_consensus_economic_event_feature_size);
 static_assert(authoritativeInitialHasSurpriseCol ==
               consensus_economic_event_feature_size);
+static_assert(causalFirstReleaseSurpriseAvailableCol ==
+              economic_event_feature_size);
 
 #endif /* FeatureLayout_hpp */

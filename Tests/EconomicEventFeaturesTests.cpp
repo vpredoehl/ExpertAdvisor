@@ -117,6 +117,33 @@ void AttachInitialActual(
 }
 
 
+void AttachPitFirstReleaseActual(
+    EconomicEvent& event,
+    std::int64_t provenAvailableAtSeconds,
+    double actual,
+    std::string unit,
+    double sourceScale,
+    std::optional<std::string> qualifier = std::nullopt)
+{
+    EconomicEventFirstReleaseActual firstRelease;
+    firstRelease.actual = EconomicEventConsensusValue{
+        "scalar", actual, std::nullopt, std::move(unit), sourceScale,
+        std::move(qualifier)};
+    firstRelease.provenAvailableAtUnixMicros =
+        provenAvailableAtSeconds * 1000000LL;
+    firstRelease.sourceName = event.sourceAgency;
+    firstRelease.sourceObservationId =
+        "fixture:pit-first-release:" +
+        std::to_string(provenAvailableAtSeconds);
+    firstRelease.evidenceKey =
+        "fixture:pit-evidence:" +
+        std::to_string(provenAvailableAtSeconds);
+    event.firstReleaseActualState =
+        EconomicEventFirstReleaseActualState::provenFirstRelease;
+    event.firstReleaseActual = std::move(firstRelease);
+}
+
+
 bool Near(
     float actual,
     double expected,
@@ -157,6 +184,14 @@ void AssertAuthoritativeSurpriseZero(
 }
 
 
+void AssertCausalFirstReleaseSurpriseUnavailable(
+    const EconomicEventFeatureValues& values)
+{
+    assert(values.causalFirstReleaseSurpriseAvailable == 0.0F);
+    assert(values.causalFirstReleaseSurprise == 0.0F);
+}
+
+
 template <typename Function>
 void AssertInvalidArgument(Function&& function)
 {
@@ -183,7 +218,8 @@ int main()
     static_assert(kPreConsensusEconomicEventFeatureWidth == 10);
     static_assert(kEconomicEventConsensusFeatureWidth == 8);
     static_assert(kEconomicEventReleaseActualFeatureWidth == 4);
-    static_assert(kEconomicEventFeatureWidth == 22);
+    static_assert(kCausalEconomicEventSurpriseFeatureWidth == 2);
+    static_assert(kEconomicEventFeatureWidth == 24);
 
     // All eleven authoritative canonical families map explicitly.
     const std::array mappings{
@@ -508,13 +544,16 @@ int main()
         values.authoritativeInitialSurprise = 20.0F;
         values.authoritativeInitialSurpriseAbs = 21.0F;
         values.authoritativeInitialSurpriseDirection = 22.0F;
+        values.causalFirstReleaseSurpriseAvailable = 23.0F;
+        values.causalFirstReleaseSurprise = 24.0F;
 
         const std::array<float, kEconomicEventFeatureWidth> expected{
             1.0F, 2.0F, 3.0F, 4.0F, 5.0F,
             6.0F, 7.0F, 8.0F, 9.0F, 10.0F,
             11.0F, 12.0F, 13.0F, 14.0F,
             15.0F, 16.0F, 17.0F, 18.0F,
-            19.0F, 20.0F, 21.0F, 22.0F};
+            19.0F, 20.0F, 21.0F, 22.0F,
+            23.0F, 24.0F};
 
         assert(values.Ordered() == expected);
     }
@@ -859,6 +898,168 @@ int main()
         assert(values.relevantEventConsensusLow == 0.0F);
         assert(values.relevantEventConsensusHigh == 0.0F);
         AssertReservedSurpriseZero(values);
+    }
+
+    // Phase-1 PIT semantics are inclusive. A proved first release remains
+    // unavailable immediately before publication, appears exactly at its
+    // proven boundary, and remains the same afterward.
+    {
+        EconomicEvent event = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.2, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachPitFirstReleaseActual(
+            event, kBase + 1800, 0.5, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine engine{{event}};
+
+        const auto before = engine.AdvanceCompletedBar(At(kBase));
+        AssertCausalFirstReleaseSurpriseUnavailable(before);
+        const auto atBoundary =
+            engine.AdvanceCompletedBar(At(kBase + 900));
+        assert(atBoundary.causalFirstReleaseSurpriseAvailable == 1.0F);
+        assert(Near(atBoundary.causalFirstReleaseSurprise, 0.03));
+        const auto after =
+            engine.AdvanceCompletedBar(At(kBase + 1800));
+        assert(after.causalFirstReleaseSurpriseAvailable == 1.0F);
+        assert(after.causalFirstReleaseSurprise ==
+               atBoundary.causalFirstReleaseSurprise);
+        assert(engine.Diagnostics().causalSurpriseNotYetAvailableRowCount == 1);
+        assert(engine.Diagnostics().causalSurpriseAvailableRowCount == 2);
+    }
+
+    // Missing/provenance-unavailable, not-yet-available, and ambiguous states
+    // all fail closed, but remain independently visible in diagnostics.
+    {
+        EconomicEvent unavailable = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.2, std::nullopt,
+            "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine unavailableEngine{{unavailable}};
+        AssertCausalFirstReleaseSurpriseUnavailable(
+            unavailableEngine.AdvanceCompletedBar(At(kBase)));
+        assert(unavailableEngine.Diagnostics()
+                   .causalSurpriseProvenanceUnavailableRowCount == 1);
+
+        EconomicEvent notYet = unavailable;
+        notYet.firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::notYetAvailable;
+        EconomicEventFeatureEngine notYetEngine{{notYet}};
+        AssertCausalFirstReleaseSurpriseUnavailable(
+            notYetEngine.AdvanceCompletedBar(At(kBase)));
+        assert(notYetEngine.Diagnostics()
+                   .causalSurpriseNotYetAvailableRowCount == 1);
+
+        EconomicEvent ambiguous = unavailable;
+        ambiguous.firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::ambiguous;
+        EconomicEventFeatureEngine ambiguousEngine{{ambiguous}};
+        AssertCausalFirstReleaseSurpriseUnavailable(
+            ambiguousEngine.AdvanceCompletedBar(At(kBase)));
+        assert(ambiguousEngine.Diagnostics()
+                   .causalSurpriseAmbiguousRowCount == 1);
+    }
+
+    // A proved first release still has no usable surprise when the selected
+    // consensus association is absent.
+    {
+        EconomicEvent missingConsensus = EventAt(kBase, "BLS", "CPI");
+        AttachPitFirstReleaseActual(
+            missingConsensus, kBase, 0.4, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine engine{{missingConsensus}};
+        AssertCausalFirstReleaseSurpriseUnavailable(
+            engine.AdvanceCompletedBar(At(kBase)));
+        assert(engine.Diagnostics()
+                   .causalSurpriseMissingConsensusRowCount == 1);
+    }
+
+    // Genuine zero surprise differs from missing actual through the explicit
+    // availability channel.
+    {
+        EconomicEvent zero = ScalarConsensusEventAt(
+            kBase, "BEA", "GDP", "OANDA", 2.0, std::nullopt,
+            "percent", 1.0);
+        AttachPitFirstReleaseActual(
+            zero, kBase, 2.0, "percent", 1.0);
+        EconomicEventFeatureEngine zeroEngine{{zero}};
+        const auto values = zeroEngine.AdvanceCompletedBar(At(kBase));
+        assert(values.causalFirstReleaseSurpriseAvailable == 1.0F);
+        assert(values.causalFirstReleaseSurprise == 0.0F);
+
+        EconomicEvent missing = ScalarConsensusEventAt(
+            kBase, "BEA", "GDP", "OANDA", 2.0, std::nullopt,
+            "percent", 1.0);
+        EconomicEventFeatureEngine missingEngine{{missing}};
+        const auto missingValues =
+            missingEngine.AdvanceCompletedBar(At(kBase));
+        AssertCausalFirstReleaseSurpriseUnavailable(missingValues);
+        assert(values.Ordered() != missingValues.Ordered());
+    }
+
+    // Unit, scale, qualifier, and scalar/range shape must all agree. Phase 2
+    // intentionally defines no range midpoint or interval subtraction.
+    {
+        std::vector<EconomicEvent> incompatible;
+        for (const int kind : {0, 1, 2, 3, 4})
+        {
+            EconomicEvent event = ScalarConsensusEventAt(
+                kBase, "BLS", "CPI", "OANDA", 0.2, std::nullopt,
+                "percent", 1.0, "m/m");
+            AttachPitFirstReleaseActual(
+                event, kBase, 0.4, "percent", 1.0, "m/m");
+            if (kind == 0) event.firstReleaseActual->actual.unit = "count";
+            if (kind == 1) event.firstReleaseActual->actual.scale = 100.0;
+            if (kind == 2) event.firstReleaseActual->actual.qualifier = "y/y";
+            if (kind == 3)
+            {
+                event.firstReleaseActual->actual.valueKind = "range";
+                event.firstReleaseActual->actual.canonicalValueHigh = 0.5;
+            }
+            if (kind == 4)
+            {
+                event.selectedConsensus->forecast.valueKind = "range";
+                event.selectedConsensus->forecast.canonicalValueHigh = 0.3;
+            }
+            incompatible.push_back(std::move(event));
+        }
+        for (const auto& event : incompatible)
+        {
+            EconomicEventFeatureEngine engine{{event}};
+            AssertCausalFirstReleaseSurpriseUnavailable(
+                engine.AdvanceCompletedBar(At(kBase)));
+            assert(engine.Diagnostics().causalSurpriseIncompatibleRowCount == 1);
+        }
+    }
+
+    // Fixed family scaling is independent of future observations. Extreme
+    // finite values use the project's standard normalized-feature ±10 bound.
+    {
+        EconomicEvent historical = ScalarConsensusEventAt(
+            kBase, "BLS", "JOLTS", "MYFXBOOK", 4'500'000.0,
+            std::nullopt, "count", 1.0);
+        AttachPitFirstReleaseActual(
+            historical, kBase, 5'000'000.0, "count", 1.0);
+        EconomicEvent future = ScalarConsensusEventAt(
+            kBase + 86400, "BLS", "JOLTS", "MYFXBOOK", 1'000'000.0,
+            std::nullopt, "count", 1.0);
+        AttachPitFirstReleaseActual(
+            future, kBase + 86400, 9'000'000.0, "count", 1.0);
+
+        EconomicEventFeatureEngine historicalOnly{{historical}};
+        EconomicEventFeatureEngine withFuture{{historical, future}};
+        const auto baseline = historicalOnly.AdvanceCompletedBar(At(kBase));
+        const auto futureCorpus = withFuture.AdvanceCompletedBar(At(kBase));
+        assert(baseline.causalFirstReleaseSurpriseAvailable == 1.0F);
+        assert(Near(baseline.causalFirstReleaseSurprise, 0.05));
+        assert(baseline.Ordered() == futureCorpus.Ordered());
+
+        EconomicEvent extreme = ScalarConsensusEventAt(
+            kBase, "BLS", "CPI", "OANDA", 0.0, std::nullopt,
+            "percent", 1.0, "m/m");
+        AttachPitFirstReleaseActual(
+            extreme, kBase, 1.0e100, "percent", 1.0, "m/m");
+        EconomicEventFeatureEngine extremeEngine{{extreme}};
+        const auto extremeValues =
+            extremeEngine.AdvanceCompletedBar(At(kBase));
+        assert(extremeValues.causalFirstReleaseSurpriseAvailable == 1.0F);
+        assert(extremeValues.causalFirstReleaseSurprise == 10.0F);
     }
 
     // Separate instances produce byte-identical consensus and reserved-zero

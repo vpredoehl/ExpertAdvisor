@@ -72,6 +72,18 @@ EconomicEvent ProvenConsensusEventAt(std::int64_t seconds,
     releaseActual.sourceArtifactSha256 = std::string(64, 'a');
     releaseActual.semanticContract = "fixture_initial_actual_v1";
     event.releaseActual = std::move(releaseActual);
+
+    EconomicEventFirstReleaseActual firstReleaseActual;
+    firstReleaseActual.actual = EconomicEventConsensusValue{
+        "scalar", actual, std::nullopt, "percent", 1.0, std::nullopt};
+    firstReleaseActual.provenAvailableAtUnixMicros =
+        seconds * 1'000'000LL;
+    firstReleaseActual.sourceName = event.sourceAgency;
+    firstReleaseActual.sourceObservationId = "fixture:pit-initial";
+    firstReleaseActual.evidenceKey = "fixture:pit-evidence";
+    event.firstReleaseActualState =
+        EconomicEventFirstReleaseActualState::provenFirstRelease;
+    event.firstReleaseActual = std::move(firstReleaseActual);
     return event;
 }
 
@@ -145,22 +157,29 @@ int main()
     static_assert(economicEventFeatureStartCol == 49);
     static_assert(pre_consensus_economic_event_feature_size == 59);
     static_assert(consensus_economic_event_feature_size == 67);
-    static_assert(feature_size == 71);
+    static_assert(economic_event_feature_size == 71);
+    static_assert(feature_size == 73);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
     static_assert(EA::kEconomicEventModelInputWidth == 63);
     static_assert(EA::kEconomicEventConsensusModelInputWidth == 71);
-    static_assert(EA::kCurrentModelInputWidth == 75);
+    static_assert(EA::kEconomicEventReleaseActualModelInputWidth == 75);
+    static_assert(EA::kCurrentModelInputWidth == 77);
     static_assert(kEconomicEventFeatureNames.size() ==
                   kEconomicEventFeatureWidth);
     assert(kEconomicEventFeatureNames.front() == "inflation_event");
     assert(kEconomicEventFeatureNames[18] ==
            "authoritative_initial_has_surprise");
-    assert(kEconomicEventFeatureNames.back() ==
+    assert(kEconomicEventFeatureNames[21] ==
            "authoritative_initial_surprise_direction");
+    assert(kEconomicEventFeatureNames[22] ==
+           "causal_first_release_surprise_available");
+    assert(kEconomicEventFeatureNames.back() ==
+           "causal_first_release_surprise");
     static_assert(EA::kCurrentModelInputWidth ==
                   EA::kEconomicEventModelInputWidth +
                   kEconomicEventConsensusFeatureWidth +
-                  kEconomicEventReleaseActualFeatureWidth);
+                  kEconomicEventReleaseActualFeatureWidth +
+                  kCausalEconomicEventSurpriseFeatureWidth);
 
     // Pre-window state is reconstructed from authoritative prior rows. The
     // first requested bar has no occurrence indicator but has exact nonzero
@@ -228,6 +247,8 @@ int main()
     assert(Near(bar1[authoritativeInitialSurpriseCol], 0.05));
     assert(Near(bar1[authoritativeInitialSurpriseAbsCol], 0.05));
     assert(bar1[authoritativeInitialSurpriseDirectionCol] == 1.0F);
+    assert(bar1[causalFirstReleaseSurpriseAvailableCol] == 1.0F);
+    assert(Near(bar1[causalFirstReleaseSurpriseCol], 0.05));
     assert(bar2[consumerDemandEventCol] == 0.0F);  // future event cannot leak
     assert(bar3[consumerDemandEventCol] == 1.0F);
 
@@ -280,6 +301,18 @@ int main()
     assert(modelInput[authoritativeInitialSurpriseCol] ==
            bar1[authoritativeInitialSurpriseCol]);
 
+    // The historical width-75 projection remains the exact old 71-column
+    // Tensor prefix and cannot consume either v6 append.
+    const auto width75Contract = EA::ResolveModelInputContract(
+        EA::kEconomicEventReleaseActualModelInputWidth, feature_size);
+    assert(width75Contract.tensorFeatureCount == economic_event_feature_size);
+    std::array<float, EA::kEconomicEventReleaseActualModelInputWidth>
+        width75Input{};
+    EA::CopyTensorFeaturesForModelInput(
+        width75Input.data(), bar1.data(), width75Contract);
+    assert(std::memcmp(width75Input.data(), bar1.data(),
+                       economic_event_feature_size * sizeof(float)) == 0);
+
     const auto releaseActualMask = EA::FeatureAblationMask::Parse(
         std::string{EA::kEconomicEventReleaseActualAblationMaskText});
     assert(releaseActualMask.CanonicalText() ==
@@ -291,6 +324,17 @@ int main()
     for (std::size_t col = authoritativeInitialHasSurpriseCol;
          col <= authoritativeInitialSurpriseDirectionCol; ++col)
         assert(releaseControl[col] == 0.0F);
+
+    const auto causalSurpriseMask = EA::FeatureAblationMask::Parse(
+        std::string{EA::kCausalEconomicEventSurpriseAblationMaskText});
+    assert(causalSurpriseMask.CanonicalText() ==
+           EA::kCausalEconomicEventSurpriseAblationMaskText);
+    const auto causalControl = Project(bar1, causalSurpriseMask);
+    for (std::size_t col = 0; col < causalFirstReleaseSurpriseAvailableCol;
+         ++col)
+        assert(causalControl[col] == releaseTreatment[col]);
+    assert(causalControl[causalFirstReleaseSurpriseAvailableCol] == 0.0F);
+    assert(causalControl[causalFirstReleaseSurpriseCol] == 0.0F);
 
     const auto consensusControlMask = EA::FeatureAblationMask::Parse(
         std::string{EA::kEconomicEventConsensusAblationMaskText});

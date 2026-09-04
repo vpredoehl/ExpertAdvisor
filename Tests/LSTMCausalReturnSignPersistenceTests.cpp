@@ -109,10 +109,10 @@ void TestTensorIntegrationAndContracts()
 {
     static_assert(causalReturnSignPersistenceCol == 42);
     static_assert(return_autocorrelation_feature_size == 49);
-    static_assert(feature_size == 71);
+    static_assert(feature_size == 73);
     static_assert(EA::kCausalDirectionalPersistenceModelInputWidth == 46);
     static_assert(EA::kPreEconomicEventModelInputWidth == 53);
-    static_assert(EA::kCurrentModelInputWidth == 75);
+    static_assert(EA::kCurrentModelInputWidth == 77);
 
     Tensor tensor{"causal-return-sign-persistence"};
     for (std::size_t index = 0; index < 8; ++index)

@@ -59,6 +59,12 @@ INSERT INTO economic_event (
 ('USD','CPI','2024-05-01 13:30:00+00','BLS','bls:test:boundary',
  'https://www.bls.gov/test/boundary','April 2024',3,'exact',
  '2024-05-01','08:30:00','America/New_York'),
+('USD','CPI','2015-06-01 13:30:00+00','BLS','bls:test:proved-backfill',
+ 'https://www.bls.gov/test/proved-backfill','May 2015',3,'exact',
+ '2015-06-01','08:30:00','America/New_York'),
+('USD','CPI','2024-07-01 13:30:00+00','BLS','bls:test:corroborated',
+ 'https://www.bls.gov/test/corroborated','June 2024',3,'exact',
+ '2024-07-01','08:30:00','America/New_York'),
 ('USD','FOMC','2024-06-01 18:00:00+00','FEDERAL_RESERVE','federal_reserve:test:none',
  'https://www.federalreserve.gov/test/none',NULL,3,'exact',
  '2024-06-01','14:00:00','America/New_York');
@@ -209,6 +215,56 @@ SELECT economic_event_id,'BLS','authoritative',source_event_id,
        repeat('1',64),'fixture_percent_v1','{"provider":"BLS"}',
        '0.6%','scalar',0.6,0.6,'percent',1,NULL
 FROM economic_event WHERE source_event_id='bls:test:boundary';
+
+-- A later ingestion can retain direct proof of an exact historical
+-- publication instant. Visibility begins at that source instant, not in 2026.
+INSERT INTO economic_event_actual_observation (
+    economic_event_id,source_name,source_role,source_native_event_id,
+    source_observation_id,evidence_key,observation_kind,revision_sequence,
+    source_publication_at,source_publication_time_status,observed_at,
+    ingested_at,availability_proof,source_url,source_artifact_path,
+    source_artifact_sha256,semantic_contract,source_provenance,actual_raw,
+    actual_value_kind,actual_value_low,actual_canonical_value_low,actual_unit,
+    actual_scale,actual_qualifier
+)
+SELECT economic_event_id,'BLS','authoritative',source_event_id,
+       'bls:test:proved-backfill:initial','fixture:proved-backfill','initial',0,
+       event_timestamp_utc + interval '5 minutes','exact',
+       '2026-01-01 00:00:00+00','2026-01-02 00:00:00+00',
+       'source_publication',source_url,'fixture/bls-proved-backfill.html',
+       repeat('2',64),'fixture_percent_v1',
+       '{"provider":"BLS","historical_publication":"direct"}',
+       '0.4%','scalar',0.4,0.4,'percent',1,NULL
+FROM economic_event WHERE source_event_id='bls:test:proved-backfill';
+
+-- Same-value observations at the same earliest authoritative instant
+-- corroborate rather than make the selected first release ambiguous.
+INSERT INTO economic_event_actual_observation (
+    economic_event_id,source_name,source_role,source_native_event_id,
+    source_observation_id,evidence_key,observation_kind,revision_sequence,
+    source_publication_at,source_publication_time_status,observed_at,
+    ingested_at,availability_proof,source_url,source_artifact_path,
+    source_artifact_sha256,semantic_contract,source_provenance,actual_raw,
+    actual_value_kind,actual_value_low,actual_canonical_value_low,actual_unit,
+    actual_scale,actual_qualifier
+)
+SELECT economic_event_id,'BLS','authoritative',source_event_id,
+       'bls:test:corroborated:a','fixture:corroborated:a','initial',0,
+       event_timestamp_utc,'exact','2026-01-01 00:00:00+00',
+       '2026-01-02 00:00:00+00','source_publication',source_url,
+       'fixture/bls-corroborated-a.html',repeat('3',64),
+       'fixture_percent_v1','{"provider":"BLS","copy":"a"}'::jsonb,
+       '0.25%','scalar',0.25,0.25,'percent',1,'m/m'
+FROM economic_event WHERE source_event_id='bls:test:corroborated'
+UNION ALL
+SELECT economic_event_id,'BLS','authoritative',source_event_id,
+       'bls:test:corroborated:b','fixture:corroborated:b','initial',0,
+       event_timestamp_utc,'exact',timestamptz '2026-01-01 00:00:00+00',
+       timestamptz '2026-01-02 00:00:00+00','source_publication',source_url,
+       'fixture/bls-corroborated-b.html',repeat('4',64),
+       'fixture_percent_v1','{"provider":"BLS","copy":"b"}'::jsonb,
+       '0.25%','scalar',0.25,0.25,'percent',1,'m/m'
+FROM economic_event WHERE source_event_id='bls:test:corroborated';
 SQL
 
 psql -X -v ON_ERROR_STOP=1 --host="$DB_HOST" \
@@ -220,6 +276,8 @@ DECLARE
     late_event bigint;
     ambiguous_event bigint;
     boundary_event bigint;
+    proved_backfill_event bigint;
+    corroborated_event bigint;
 BEGIN
     SELECT economic_event_id INTO revision_event FROM economic_event
         WHERE source_event_id='bea:test:revision';
@@ -231,6 +289,10 @@ BEGIN
         WHERE source_event_id='bls:test:ambiguous';
     SELECT economic_event_id INTO boundary_event FROM economic_event
         WHERE source_event_id='bls:test:boundary';
+    SELECT economic_event_id INTO proved_backfill_event FROM economic_event
+        WHERE source_event_id='bls:test:proved-backfill';
+    SELECT economic_event_id INTO corroborated_event FROM economic_event
+        WHERE source_event_id='bls:test:corroborated';
 
     IF (SELECT count(*) FROM economic_event_actual_observation
         WHERE economic_event_id=revision_event) <> 2 THEN
@@ -295,6 +357,29 @@ BEGIN
         '2024-05-01 13:35:00.000001+00') WHERE economic_event_id=boundary_event) THEN
         RAISE EXCEPTION 'actual absent after availability boundary';
     END IF;
+
+    IF EXISTS (SELECT 1 FROM economic_event_first_release_actual_at(
+        '2015-06-01 13:34:59.999999+00')
+        WHERE economic_event_id=proved_backfill_event) THEN
+        RAISE EXCEPTION 'proved historical backfill leaked before source publication';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM economic_event_first_release_actual_at(
+        '2015-06-01 13:35:00+00')
+        WHERE economic_event_id=proved_backfill_event) THEN
+        RAISE EXCEPTION 'proved historical backfill followed ingestion time';
+    END IF;
+
+    IF (SELECT provenance_state FROM economic_event_first_release_actual
+        WHERE economic_event_id=corroborated_event) <> 'proven_first_release' OR
+       (SELECT selection_reason FROM economic_event_first_release_actual
+        WHERE economic_event_id=corroborated_event) <>
+          'corroborated_authoritative_initial_at_earliest_source_publication' OR
+       (SELECT first_release_source_observation_id
+        FROM economic_event_first_release_actual
+        WHERE economic_event_id=corroborated_event) <>
+          'bls:test:corroborated:a' THEN
+        RAISE EXCEPTION 'same-value corroboration was not deterministic';
+    END IF;
 END;
 $$;
 SQL
@@ -348,7 +433,7 @@ python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d["observations"
 SUMMARY="$(PGHOST="$DB_HOST" PGUSER="$ADMIN_USER" python3 \
     "$ROOT/EconomicCalendar/audit_economic_event_actual_provenance.py" \
     --db "$DB_NAME")"
-python3 -c 'import json,sys; d=json.load(sys.stdin); s=d["summary"]; assert s["proven_first_release"] == "3"; assert s["ambiguous"] == "1"; assert s["provenance_unavailable"] == "1"; assert s["events_with_multiple_actual_observations"] == "3"; assert s["canonical_differs_from_first_release"] == "1"' <<<"$SUMMARY"
+python3 -c 'import json,sys; d=json.load(sys.stdin); s=d["summary"]; assert s["proven_first_release"] == "5"; assert s["ambiguous"] == "1"; assert s["provenance_unavailable"] == "1"; assert s["events_with_multiple_actual_observations"] == "4"; assert s["canonical_differs_from_first_release"] == "1"' <<<"$SUMMARY"
 
 cleanup
 trap - EXIT

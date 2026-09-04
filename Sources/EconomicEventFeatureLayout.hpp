@@ -31,15 +31,19 @@ enum class EconomicEventFeatureIndex : std::size_t
     authoritativeInitialSurprise = 19,
     authoritativeInitialSurpriseAbs = 20,
     authoritativeInitialSurpriseDirection = 21,
+    causalFirstReleaseSurpriseAvailable = 22,
+    causalFirstReleaseSurprise = 23,
 };
 
 inline constexpr std::size_t kPreConsensusEconomicEventFeatureWidth = 10;
 inline constexpr std::size_t kEconomicEventConsensusFeatureWidth = 8;
 inline constexpr std::size_t kEconomicEventReleaseActualFeatureWidth = 4;
+inline constexpr std::size_t kCausalEconomicEventSurpriseFeatureWidth = 2;
 inline constexpr std::size_t kEconomicEventFeatureWidth =
     kPreConsensusEconomicEventFeatureWidth +
     kEconomicEventConsensusFeatureWidth +
-    kEconomicEventReleaseActualFeatureWidth;
+    kEconomicEventReleaseActualFeatureWidth +
+    kCausalEconomicEventSurpriseFeatureWidth;
 
 // Authoritative append-only names in the exact order returned by
 // EconomicEventFeatureValues::Ordered(). Persisted expansion provenance and
@@ -69,6 +73,8 @@ inline constexpr std::array<std::string_view, kEconomicEventFeatureWidth>
         "authoritative_initial_surprise",
         "authoritative_initial_surprise_abs",
         "authoritative_initial_surprise_direction",
+        "causal_first_release_surprise_available",
+        "causal_first_release_surprise",
     }};
 
 } // namespace EA::EconomicCalendar

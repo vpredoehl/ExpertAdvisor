@@ -43,6 +43,7 @@ inline constexpr std::chrono::seconds kEconomicEventRecencyTimeConstant{
 inline constexpr double kEconomicPercentNormalizationScale = 10.0;
 inline constexpr double kEconomicEmploymentNormalizationScale = 1'000'000.0;
 inline constexpr double kEconomicJoltsNormalizationScale = 10'000'000.0;
+inline constexpr double kEconomicEventCausalSurpriseClamp = 10.0;
 
 // Named fields are the authoritative public representation. Ordered() is the
 // stable append-only Tensor integration order used by both training and
@@ -87,6 +88,11 @@ struct EconomicEventFeatureValues
     float authoritativeInitialSurpriseAbs = 0.0F;
     float authoritativeInitialSurpriseDirection = 0.0F;
 
+    // Semantic-layout-v6 append. Availability is distinct from numeric zero;
+    // the value is sourced only from the Phase-1 PIT first-release API.
+    float causalFirstReleaseSurpriseAvailable = 0.0F;
+    float causalFirstReleaseSurprise = 0.0F;
+
     std::array<float, kEconomicEventFeatureWidth> Ordered() const noexcept;
 };
 
@@ -107,6 +113,13 @@ struct EconomicEventFeatureAvailabilityDiagnostics
     std::size_t incompatibleInitialActualRowCount = 0;
     std::size_t availableSurpriseRowCount = 0;
     std::map<std::string, std::size_t> initialActualSourceRowCounts;
+    std::size_t causalSurpriseProvenanceUnavailableRowCount = 0;
+    std::size_t causalSurpriseAmbiguousRowCount = 0;
+    std::size_t causalSurpriseNotYetAvailableRowCount = 0;
+    std::size_t causalSurpriseMissingConsensusRowCount = 0;
+    std::size_t causalSurpriseIncompatibleRowCount = 0;
+    std::size_t causalSurpriseAvailableRowCount = 0;
+    std::map<std::string, std::size_t> causalFirstReleaseSourceRowCounts;
     bool operator==(const EconomicEventFeatureAvailabilityDiagnostics&) const =
         default;
 };
@@ -163,6 +176,9 @@ private:
         int eventImportance = 0;
         std::optional<EconomicEventSelectedConsensus> selectedConsensus;
         std::optional<MappedReleaseActual> releaseActual;
+        EconomicEventFirstReleaseActualState firstReleaseActualState =
+            EconomicEventFirstReleaseActualState::provenanceUnavailable;
+        std::optional<EconomicEventFirstReleaseActual> firstReleaseActual;
     };
 
     std::vector<MappedEvent> events_;

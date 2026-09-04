@@ -52,6 +52,27 @@ struct EconomicEventReleaseActual
     std::string semanticContract;
 };
 
+enum class EconomicEventFirstReleaseActualState
+{
+    provenanceUnavailable,
+    ambiguous,
+    notYetAvailable,
+    provenFirstRelease,
+};
+
+// Phase-1 point-in-time result. The value and proven availability instant are
+// populated exclusively from economic_event_first_release_actual_at(cutoff).
+// The cutoff-independent assessment view supplies only state/reason metadata.
+struct EconomicEventFirstReleaseActual
+{
+    EconomicEventConsensusValue actual;
+    std::int64_t provenAvailableAtUnixMicros = 0;
+    std::string sourceName;
+    std::optional<std::string> sourceNativeEventId;
+    std::string sourceObservationId;
+    std::string evidenceKey;
+};
+
 struct EconomicEvent
 {
     long long economicEventId = 0;
@@ -86,6 +107,13 @@ struct EconomicEvent
     // authoritative initial observation with an explicit causal known-at
     // instant; persisted revisions are never selected into model features.
     std::optional<EconomicEventReleaseActual> releaseActual;
+
+    // Point-in-time state for the Phase-2 causal surprise channels. Missing,
+    // not-yet-available, and ambiguous provenance never carry an actual.
+    EconomicEventFirstReleaseActualState firstReleaseActualState =
+        EconomicEventFirstReleaseActualState::provenanceUnavailable;
+    std::string firstReleaseActualSelectionReason;
+    std::optional<EconomicEventFirstReleaseActual> firstReleaseActual;
 };
 
 bool EconomicEventSchemaExists(
@@ -104,9 +132,11 @@ std::vector<EconomicEvent> LoadEconomicEvents(
 // avoids an arbitrary recency lookback and remains one ordered database query.
 // The inclusive end boundary supplies consensus to the final completed bar
 // when a release occurs exactly at that bar's information cutoff.
-// Authoritative initial actuals are projected only when available_at is
-// strictly before endUtc; per-bar feature evaluation repeats that causal
-// check at each completed observation cutoff.
+// Legacy migration-088 authoritative initials are projected only when
+// available_at is strictly before endUtc, preserving width-75 behavior.
+// Phase-2 actuals are bulk-loaded exclusively through
+// economic_event_first_release_actual_at(endUtc); per-bar evaluation repeats
+// its inclusive proven_available_at boundary in memory.
 std::vector<EconomicEvent> LoadEconomicEventsForFeatureRange(
     pqxx::transaction_base& transaction,
     const std::string& currency,
