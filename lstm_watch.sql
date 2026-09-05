@@ -6,10 +6,13 @@ SELECT
     target_epochs AS target,
     status,
     phase,
+    scheduler_priority AS priority,
     worker_pid AS pid
 FROM experiment
 WHERE status = 'running'
-ORDER BY experiment_id;
+ORDER BY
+    CASE scheduler_priority WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+    experiment_id;
 
 SELECT
     experiment_id AS exp,
@@ -19,10 +22,13 @@ SELECT
     target_epochs AS target,
     status,
     phase,
+    scheduler_priority AS priority,
     worker_pid AS pid
 FROM experiment
 WHERE status = 'pending'
-ORDER BY experiment_id
+ORDER BY 
+    CASE scheduler_priority WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+    experiment_id
 LIMIT 7;
 
 SELECT
@@ -33,28 +39,35 @@ SELECT
     target_epochs AS target,
     status,
     phase,
+    scheduler_priority AS priority,
     worker_pid AS pid
 FROM experiment
 WHERE status = 'paused'
-ORDER BY experiment_id
+ORDER BY 
+    CASE scheduler_priority WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+    experiment_id
 LIMIT 7;
 
 SELECT
-    checkpoint_eval_id AS eval,
-    experiment_id AS exp,
-    symbol,
-    prediction_horizon AS h,
-    checkpoint_epoch AS epoch,
-    checkpoint_model_id AS model,
-    status,
-    phase,
-    worker_pid AS pid
-FROM experiment_checkpoint_eval
-WHERE status IN ('running','pending')
-  AND phase = 'infer'
+    ce.checkpoint_eval_id AS eval,
+    ce.experiment_id AS exp,
+    ce.symbol,
+    ce.prediction_horizon AS h,
+    ce.checkpoint_epoch AS epoch,
+    ce.checkpoint_model_id AS model,
+    ce.status,
+    ce.phase,
+    e.scheduler_priority AS priority,
+    ce.worker_pid AS pid
+FROM experiment_checkpoint_eval ce
+JOIN experiment e
+  ON e.experiment_id = ce.experiment_id
+WHERE ce.status IN ('running','pending')
+  AND ce.phase = 'infer'
 ORDER BY
-    CASE status WHEN 'running' THEN 1 ELSE 2 END,
-    checkpoint_eval_id;
+    CASE e.scheduler_priority WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+    CASE ce.status WHEN 'running' THEN 1 ELSE 2 END,
+    ce.checkpoint_eval_id;
 
 SELECT
     count(*) FILTER (
